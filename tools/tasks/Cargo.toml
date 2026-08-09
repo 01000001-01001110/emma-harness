@@ -1,0 +1,18 @@
+[package]
+name = "emma-tools-tasks"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+emma-tool-api.workspace = true
+# For `path::{root, resolve, display}` only. Containment must have exactly one
+# implementation in this workspace; a second one is a second thing to get wrong
+# and the two would disagree in precisely the cases that matter.
+emma-tools-fs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
