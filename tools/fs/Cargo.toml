@@ -5,6 +5,15 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
+globset.workspace = true
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
+walkdir.workspace = true
 emma-tool-api.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }

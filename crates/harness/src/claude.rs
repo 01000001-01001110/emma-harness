@@ -1,0 +1,271 @@
+//! Reading a `.claude/` directory as an Emma harness.
+//!
+//! Emma runs on the Anthropic API; it does not shell out to the `claude` binary
+//! and does not use the Agent SDK (`notes/claude-code-compatibility.md`). What
+//! remains is one cheap, useful thing: **recognise `.claude/` configuration when
+//! we find it**, so every skill and command already written for Claude Code
+//! works unchanged.
+//!
+//! `skills/<name>/SKILL.md` and `commands/<name>.md` are already the identical
+//! shape and are read by the same code as Emma's own. This file exists for the
+//! two things that are not identical: where the standing instructions live, and
+//! the spelling of the hooks block.
+//!
+//! **Two rules from the note are firm and are enforced here and in `discover`:**
+//! `.emma/` wins outright when both exist — never merged, because merging is how
+//! the answer to "where did this instruction come from" stops being a file — and
+//! a config naming a hook event Emma does not implement is a loud startup error,
+//! never a silent skip.
+//!
+//! **Where this file deliberately relaxes `deny_unknown_fields`, and why.**
+//! Emma's own `config.json` denies unknown fields everywhere: it is Emma's
+//! format, so a key Emma does not know is a typo. `settings.json` is *Claude
+//! Code's* format and legitimately carries `permissions`, `model`, `env`,
+//! `statusLine` and more that Emma has no opinion about. Denying those would
+//! mean Emma refuses to start in essentially every real Claude Code repository —
+//! a rule that fires on correct configuration is not a safety property, it is an
+//! outage. So the outer object is permissive and the **hooks block is strict**,
+//! which is where a silently-ignored key would cost something.
+
+use anyhow::{bail, Context, Result};
+use serde::Deserialize;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use crate::hooks::{HookDef, HookEvent};
+
+/// The subset of `settings.json` Emma reads. Unknown keys are ignored on
+/// purpose — see the module docs.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct Settings {
+    #[serde(default)]
+    hooks: BTreeMap<String, Vec<Group>>,
+}
+
+/// One matcher and the commands attached to it. Strict, because this is the
+/// security-relevant part: a misspelled `mathcer` here would produce a hook that
+/// guards every tool instead of one, and it would look like it was working.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Group {
+    #[serde(default)]
+    matcher: Option<String>,
+    #[serde(default)]
+    hooks: Vec<Entry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Entry {
+    #[serde(rename = "type")]
+    kind: String,
+    command: String,
+    /// Claude Code counts this in **seconds**. Emma's spine counts milliseconds.
+    #[serde(default)]
+    timeout: Option<u64>,
+}
+
+/// Anything in a command string that means a shell would have to interpret it.
+/// Emma execs an argv, so a string needing a shell cannot be honoured — see
+/// `translate_command`.
+const SHELL_METACHARACTERS: &[char] = &[
+    '|', '&', ';', '<', '>', '(', ')', '$', '`', '"', '\'', '*', '?', '\n',
+];
+
+impl Settings {
+    pub(crate) fn read(root: &Path) -> Result<(Self, String)> {
+        let path = root.join("settings.json");
+        if !path.is_file() {
+            return Ok((Self::default(), String::new()));
+        }
+        let raw = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        if raw.trim().is_empty() {
+            return Ok((Self::default(), raw));
+        }
+        let parsed = serde_json::from_str(&raw)
+            .with_context(|| format!("{} is malformed", path.display()))?;
+        Ok((parsed, raw))
+    }
+
+    /// Flatten Claude Code's event → groups → commands nesting into Emma's flat
+    /// `name → HookDef` map.
+    ///
+    /// Names are synthesised as `<Event>[g][h]` from the position in the file.
+    /// They are stable for a given file and they sort deterministically, which
+    /// is all the ordering contract requires; there is nothing in the source
+    /// format to name them after.
+    pub(crate) fn into_hook_defs(self, root: &Path) -> Result<BTreeMap<String, HookDef>> {
+        let mut out = BTreeMap::new();
+        for (event, groups) in self.hooks {
+            // The loud failure. Emma implements two events; the rest are real
+            // Claude Code events that would silently never fire here, and an
+            // operator who wrote a `Stop` guard would believe they had one.
+            HookEvent::parse(&event).with_context(|| {
+                format!("{}: hooks.{event}", root.join("settings.json").display())
+            })?;
+            for (g, group) in groups.into_iter().enumerate() {
+                for (h, entry) in group.hooks.into_iter().enumerate() {
+                    let name = format!("{event}[{g}][{h}]");
+                    if entry.kind != "command" {
+                        bail!(
+                            "{}: hook `{name}` has type `{}`; Emma runs command hooks only",
+                            root.join("settings.json").display(),
+                            entry.kind
+                        );
+                    }
+                    out.insert(
+                        name.clone(),
+                        HookDef {
+                            event: event.clone(),
+                            command: translate_command(root, &name, &entry.command)?,
+                            matcher: group.matcher.clone(),
+                            // Seconds there, milliseconds here.
+                            timeout_ms: entry.timeout.map(|s| s.saturating_mul(1_000)),
+                            text: None,
+                        },
+                    );
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// Turn a Claude Code hook command into a path Emma can exec, or refuse.
+///
+/// **This is the one place the two systems genuinely disagree, and Emma does not
+/// blink.** Claude Code's `command` is a shell string: it may pipe, expand
+/// variables, or name any executable on the box. Emma canonicalises a path,
+/// containment-checks it inside `hooks/`, and execs an argv with a cleared
+/// environment. Honouring a shell string would mean dropping every one of those,
+/// at the exact point where Emma is deciding whether to let a model run `Bash`.
+///
+/// So: `$CLAUDE_PROJECT_DIR/.claude/hooks/x.sh` and `.claude/hooks/x.sh` and
+/// `hooks/x.sh` all resolve. Anything else is a startup error that says what to
+/// do about it — which is the same ruling as the unimplemented event, for the
+/// same reason. A guard that cannot be honoured must not be quietly dropped.
+fn translate_command(root: &Path, name: &str, raw: &str) -> Result<String> {
+    let dir_name = root
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ".claude".into());
+    let mut rest = raw.trim();
+    for prefix in ["${CLAUDE_PROJECT_DIR}/", "$CLAUDE_PROJECT_DIR/"] {
+        if let Some(stripped) = rest.strip_prefix(prefix) {
+            rest = stripped;
+            break;
+        }
+    }
+    // `$CLAUDE_PROJECT_DIR` names the directory *containing* `.claude/`, so a
+    // path relative to it still carries the directory name.
+    let rest = rest
+        .strip_prefix(&format!("{dir_name}/"))
+        .unwrap_or(rest)
+        .trim_start_matches("./");
+
+    if rest.is_empty() || rest.contains(SHELL_METACHARACTERS) || rest.contains(' ') {
+        bail!(
+            "hook `{name}`: `{raw}` is a shell command. Emma execs a contained \
+             executable with a cleared environment and cannot honour a shell \
+             string without dropping that. Move it into {}/hooks/ and reference \
+             it by path",
+            root.display()
+        );
+    }
+    // `is_absolute()` alone is not enough: on Windows `/usr/bin/true` is a
+    // *relative* path, so a unix-authored config would fall through to the
+    // canonicalise-and-contain check and be refused for the wrong reason — with
+    // an error about a missing file rather than about containment. The rule is
+    // the same on both platforms, so the check has to be too.
+    let rooted = rest.starts_with('/')
+        || rest.starts_with('\\')
+        || rest.as_bytes().get(1) == Some(&b':');
+    if rooted || Path::new(rest).is_absolute() {
+        bail!(
+            "hook `{name}`: `{raw}` is an absolute path. Hook commands must live \
+             inside {}/hooks/ so the config cannot run arbitrary executables",
+            root.display()
+        );
+    }
+    Ok(rest.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Agents — Claude Code's nearest thing to a persona
+// ---------------------------------------------------------------------------
+
+/// The frontmatter fields Emma reads from `.claude/agents/<name>.md`. Permissive
+/// for the same reason `Settings` is: `model`, `color` and whatever else Claude
+/// Code grows are not Emma's business, and refusing to boot over them would make
+/// this compatibility feature an obstacle.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct AgentFront {
+    #[serde(default)]
+    pub(crate) tools: Option<Tools>,
+}
+
+/// Claude Code writes `tools` either as a YAML list or as one comma-separated
+/// string. Both are common in the wild; accepting one and silently ignoring the
+/// other would produce an empty allowlist, which under Emma's rules means "no
+/// tools at all" — a spectacular way to fail quietly.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum Tools {
+    List(Vec<String>),
+    Csv(String),
+}
+
+impl Tools {
+    pub(crate) fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::List(v) => v,
+            Self::Csv(s) => s
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect(),
+        }
+    }
+}
+
+/// Split an agent file into the frontmatter Emma reads and the body it puts in
+/// the prompt.
+///
+/// The frontmatter is **stripped**, and that is the one place the "nothing is
+/// trimmed or re-wrapped" rule is bent. It is bent knowingly: `model:` and
+/// `tools:` are configuration, and sending them to the model as standing
+/// instructions would be telling it about machinery it cannot use. A file with
+/// no frontmatter is all body, which is also the correct answer.
+pub(crate) fn split_agent(text: &str) -> (AgentFront, &str) {
+    let Some(rest) = text.strip_prefix("---\n") else {
+        return (AgentFront::default(), text);
+    };
+    let Some(end) = rest.find("\n---") else {
+        return (AgentFront::default(), text);
+    };
+    let front = serde_yaml::from_str(&rest[..end]).unwrap_or_default();
+    (front, rest[end + 4..].trim_start_matches('\n'))
+}
+
+/// The agent files available to select, by file stem, sorted.
+pub(crate) fn agents(root: &Path) -> Result<Vec<String>> {
+    let dir = root.join("agents");
+    let mut out = Vec::new();
+    if !dir.is_dir() {
+        return Ok(out);
+    }
+    for entry in std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
+        let path = entry?.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            out.push(path.file_stem().unwrap_or_default().to_string_lossy().into_owned());
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+pub(crate) fn agent_path(root: &Path, name: &str) -> PathBuf {
+    root.join("agents").join(format!("{name}.md"))
+}

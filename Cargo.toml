@@ -16,10 +16,19 @@ rust-version = "1.82"
 [workspace.dependencies]
 anyhow = "1"
 async-trait = "0.1"
+futures-util = "0.3"
+globset = "0.4"
+# rustls rather than the platform TLS stack: one code path on every machine the
+# agent runs on, and no OpenSSL to find at build time.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 sha2 = "0.10"
+regex = "1"
+tempfile = "3"
+thiserror = "2"
+walkdir = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "fs"] }
 tracing = "0.1"
 

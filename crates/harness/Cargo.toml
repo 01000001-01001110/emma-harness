@@ -5,5 +5,15 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+
+emma-tool-api.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

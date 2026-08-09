@@ -4,6 +4,22 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-anyhow.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+# `sync` for the event channel; the workspace set does not carry it because
+# nothing else here needs a channel.
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+
+[dev-dependencies]
+# The provider never depends on the tool layer at run time — it takes rendered
+# JSON. The dev-dependency exists only so a test can prove the seam: a real
+# `Registry`'s `wire_definitions()` goes out on the wire and a `tool_use` block
+# comes back naming a tool the registry can look up.
+anyhow.workspace = true
+emma-tool-api.workspace = true
+tokio = { workspace = true, features = ["net", "sync"] }
