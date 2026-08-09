@@ -1,4 +1,33 @@
 //! `Write` — refuses to clobber what it has not seen.
+//!
+//! This is the destructive move that looks like progress. An agent asked to
+//! "add a function to utils.rs" can satisfy the request by writing a file
+//! containing exactly that function, and the result reads as success — the
+//! tool returned `Ok`, the file exists, the function is in it. What is missing
+//! is everything that used to be there, and nothing in the transcript says so.
+//!
+//! **So the rule is a whole-file write requires a whole-file read, in this
+//! session.** Three ways that read can fail to license the write, each learned
+//! from a distinct way of losing work:
+//!
+//! - **Never read.** The model is writing from an assumption about what the
+//!   file contains. Refused.
+//! - **Read, but the file changed since** — length or mtime moved. Something
+//!   else edited it: the user in their editor, a formatter, a build step, a
+//!   concurrent agent. The model's picture is stale and overwriting silently
+//!   discards whatever arrived. Refused, and the error says so, because "read
+//!   it again" is a thing the model can actually act on.
+//! - **Read only in part** (offset or truncated). Paging through a large file
+//!   tells you about a window, not a file. Refused — though an anchored `Edit`
+//!   is fine, since it only claims to know the text it matched.
+//!
+//! Creating a file that does not exist yet needs no prior read: there is
+//! nothing to lose, and requiring a read of a missing file would be a rule
+//! that only ever produces confusion.
+//!
+//! The tracking lives in a `ReadTracker` shared with `Read` and `Edit` — see
+//! `session.rs` for what that costs and why `fs_tools()` is the only supported
+//! way to build these.
 
 use std::sync::Arc;
 

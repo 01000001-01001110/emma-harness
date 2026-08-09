@@ -1,4 +1,27 @@
 //! `Read` — bounded, and loud about it.
+//!
+//! A read has to be capped: a model handed a 40 MB log will spend the session's
+//! entire context on it and then reason about the wrong end. So the cap is not
+//! negotiable. What *is* a design decision is what happens when it bites.
+//!
+//! **Silent truncation is the failure worth engineering against.** A truncated
+//! file and a short file look identical to a model that was not told, and it
+//! will go on to state confident things about a function it never saw — the
+//! most expensive kind of wrong, because nothing about the answer looks
+//! uncertain. So truncation is reported twice: `ToolOutcome::truncated` for the
+//! runtime, and a line in the content itself, because the model reads the
+//! content and not the struct. Both, deliberately, until the contract makes
+//! that structural.
+//!
+//! **A partial read is tracked as partial.** `offset`/`limit` exist so the
+//! model can page through something large, but a file seen in part is not a
+//! file seen. `Write` refuses to overwrite on the strength of one — see
+//! `session.rs` — while `Edit` accepts it, because an anchored edit only claims
+//! to know the text it matched. That asymmetry is the whole reason completeness
+//! is recorded rather than just the fact of a read.
+//!
+//! Reading a file that exists and is empty **succeeds** and returns nothing.
+//! Emptiness is a result; only the machinery failing is an error.
 
 use std::path::Path;
 use std::sync::Arc;

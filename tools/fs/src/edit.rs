@@ -1,4 +1,31 @@
 //! `Edit` — an ambiguous anchor is a refusal, never a guess.
+//!
+//! `old_string` occurs three times and the model meant one of them. Every way
+//! of guessing which is wrong in a way that is hard to see afterwards: taking
+//! the first edits code the model was not looking at; taking the last is the
+//! same bug with different luck; editing all three is a refactor nobody asked
+//! for. All three return `Ok`, and the damage surfaces later as a test failure
+//! in a file the transcript never mentions.
+//!
+//! So a match count other than one is `BadArguments` **naming the count**, which
+//! is the part that makes it actionable — the model's next move is to extend
+//! the anchor with surrounding lines, and it can only choose that if it knows
+//! the anchor was ambiguous rather than absent. Zero matches and four matches
+//! are different problems and get different messages.
+//!
+//! **`replace_all` is a separate, explicit flag** rather than a fallback. The
+//! difference between "fix this one call site" and "rename every occurrence" is
+//! a decision, and it should be one the model states in the call rather than
+//! one it stumbles into because the tool was accommodating.
+//!
+//! **Not idempotent, and that is correct.** Running the same edit twice fails
+//! the second time, because after the first the anchor is gone. A tool that
+//! reported success for a no-op would be lying about what it did, and crash
+//! recovery reads `idempotent` to decide whether replaying is safe — here it is
+//! not, and saying so is the point.
+//!
+//! Unlike `Write`, a partial read *does* license an edit: an anchored change
+//! only claims to know the text it matched, which is text the model has seen.
 
 use std::sync::Arc;
 

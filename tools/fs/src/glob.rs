@@ -1,4 +1,24 @@
 //! `Glob` — matching nothing is an answer.
+//!
+//! A pattern that matches no files **succeeds** with an empty list. This is the
+//! contract's governing rule at its most literal: "there are no `.proto` files
+//! here" is a fact about the repository, and it is often exactly the fact the
+//! model was checking for. Returning an error would tell it the search could
+//! not be performed, which is a different thing entirely, and it would route
+//! around a problem that does not exist.
+//!
+//! **The walk does not follow symlinks.** Not for cycle safety — `walkdir`
+//! handles loops — but for containment. A directory symlink pointing outside
+//! the root would let a glob enumerate, and then a read reach, anything on the
+//! machine, without a single `..` appearing in the pattern. The containment
+//! check in `path.rs` guards the arguments; refusing to follow links is what
+//! guards the traversal. Both are needed, and the tests exercise the escape
+//! through a link rather than only the escape through a path.
+//!
+//! Results are sorted, so two identical calls return identical bytes. That
+//! matters more than it looks: the output rides in the conversation, the
+//! conversation rides in the cached prefix, and a set that reorders between
+//! calls would move prefix bytes for no reason.
 
 use emma_tool_api::{Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
 use globset::{Glob as GlobPattern, GlobMatcher};

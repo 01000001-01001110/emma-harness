@@ -1,4 +1,27 @@
 //! `Grep` — no hits is a successful search.
+//!
+//! "That symbol does not appear anywhere in this repository" is one of the most
+//! useful things a coding agent can learn, and it is the *result* of a search
+//! that worked. Reporting it as a failure would tell the model the search
+//! machinery was broken and invite it to try again differently, when the honest
+//! answer was already in hand. Only the machinery failing — an unreadable
+//! directory, a pattern that will not compile — is a `ToolError`.
+//!
+//! That distinction is why this tool exists alongside `Bash`. `rg pattern .`
+//! run through a shell answers "no matches" with **exit code 1**, and the
+//! difference between "no matches" and "ripgrep is not installed" is then a
+//! matter of parsing stderr. Here the two are structurally different outcomes.
+//!
+//! **Output modes exist because the useful answer is rarely the whole answer.**
+//! A count, a file list, or matching lines are three different questions, and
+//! forcing every one of them through "all matching lines" wastes context on the
+//! two occasions in three where the model wanted to know *where* to look next
+//! rather than what the lines said. `head_limit` bounds the rest, and hitting
+//! it is reported rather than silently applied — the same rule as `Read`, for
+//! the same reason.
+//!
+//! Like `Glob`, the walk does not follow symlinks: an out-of-root link would
+//! otherwise turn a search into an exfiltration path without a `..` in sight.
 
 use std::path::Path;
 
