@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>No Navigate Form</title></head>
+<body>
+<main>
+  <h1>Form that does not navigate</h1>
+  <form id="stay">
+    <input type="text" id="nn-name" name="name" required>
+    <button type="submit" id="nn-send">Submit</button>
+  </form>
+  <script>
+    document.getElementById('stay').addEventListener('submit', (e) => {
+      e.preventDefault();
+      document.getElementById('nn-name').value = 'NO_NAVIGATE_MARKER';
+    });
+  </script>
+</main>
+</body>
+</html>

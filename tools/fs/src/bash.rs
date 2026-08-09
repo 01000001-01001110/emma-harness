@@ -220,21 +220,36 @@ impl Bash {
             )));
         }
 
+        // A command that ran and exited non-zero is **not** a tool failure.
+        //
+        // The contract's rule — an error is a fact about the call, never about
+        // what the world contains — was written about the filesystem, and it
+        // did not survive first contact with exit-status-as-answer. `grep -q`
+        // answering "no" exits 1. `test -f` answering "it is not there" exits
+        // 1. `cargo test` answering "three of these fail" exits 101. Every one
+        // of those is the world answering the question that was asked, and
+        // reporting them as `Failed` tells the model its shell is broken and
+        // invites it to route around a problem it does not have.
+        //
+        // So the line is drawn at whether the command ran: could not spawn,
+        // timed out, or was killed is `Failed`; anything that started and
+        // finished is `Ok`, with the status stated in the content because the
+        // model's next move depends on both the number and what was printed.
+        //
+        // Resolved this way rather than as "Bash is the documented exception",
+        // because "except X" is how a rule stops being enforceable.
         let status = status.expect("status present when not timed out");
-        if !status.success() {
-            // The contract names a non-zero exit as `Failed`, and the output is
-            // carried into the message because the model's next move depends on
-            // what the command actually said, not on the number.
-            let code = status
-                .code()
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "a signal".into());
-            return Err(ToolError::Failed(format!(
-                "the command exited with {code}.\n{body}"
-            )));
-        }
+        let code = status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "a signal".into());
 
         let mut content = body;
+        if !status.success() {
+            // Stated first: a model that skims sees the outcome before the
+            // output, and a non-zero exit changes how the output should be read.
+            content = format!("exit status {code}\n{content}");
+        }
         if cut {
             content.push_str(&format!(
                 "\n[truncated: output cut at {MAX_STREAM_BYTES} bytes per stream]"

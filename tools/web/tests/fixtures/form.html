@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture Form</title></head>
+<body>
+<header><nav>Boilerplate nav that must not appear in digest text</nav></header>
+<main>
+  <h1>Fixture application form</h1>
+  <p>Main content paragraph the digest must keep.</p>
+  <form id="apply" action="/submit" method="post">
+    <label for="name">Full name</label>
+    <input type="text" id="name" name="name" required>
+    <label for="bio">Bio</label>
+    <textarea id="bio" name="bio"></textarea>
+    <!-- an UNKNOWN input type: browsers fall back to text, Enter still submits.
+         Must be treated as single-line (newline refused), not exempted. -->
+    <input type="textarea" id="tricky" name="tricky">
+    <label for="pw">Password</label>
+    <input type="password" id="pw" name="pw">
+    <label for="country">Country</label>
+    <select id="country" name="country">
+      <option value="us">United States</option>
+      <option value="ca">Canada</option>
+    </select>
+    <fieldset>
+      <legend>Work authorization</legend>
+      <label><input type="radio" name="auth" value="yes" id="auth-yes"> Authorized</label>
+      <label><input type="radio" name="auth" value="no" id="auth-no"> Not authorized</label>
+    </fieldset>
+    <label><input type="checkbox" id="remote_ok" name="remote_ok"> Open to remote</label>
+    <label for="resume">Resume</label>
+    <input type="file" id="resume" name="resume" accept=".pdf">
+    <div class="step-indicator">Step 1 of 3</div>
+    <button type="button" id="next-step">Next</button>
+    <button type="submit" id="send">Submit application</button>
+    <button type="button" id="reveal">Show more</button>
+  </form>
+  <div id="more" style="display:none"><p>Revealed section: EXTRA_CONTENT_MARKER</p></div>
+  <a href="/page2.html" id="next">Next page</a>
+  <script>
+    document.getElementById('reveal').addEventListener('click', () => {
+      document.getElementById('more').style.display = 'block';
+    });
+  </script>
+</main>
+<footer>Boilerplate footer</footer>
+</body>
+</html>

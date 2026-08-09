@@ -1,0 +1,335 @@
+//! `WebSearch` — Brave, returning a list of places to look.
+//!
+//! chromehand browses; it does not search. Something has to turn a question
+//! into URLs, and that is an index. Brave rather than the alternatives because
+//! it sells a plain JSON API keyed by a header, with no crawl of its own to
+//! respect and no scraping of somebody else's results page.
+//!
+//! **This tool does not answer questions and its description says so.** What
+//! comes back is a title, a URL and a one-line snippet the index wrote — a
+//! summary of a page, composed by a third party, optimised for a human
+//! deciding whether to click. A model that answers from snippets is quoting a
+//! search engine's paraphrase of a page nobody opened. The snippets are here
+//! to choose a `WebFetch` target with, and for nothing else.
+//!
+//! **No key means no tool.** tustle-agent registered a `web_search` with no
+//! key behind it; every turn that touched it died, and the model could not
+//! learn that the tool was decoration because a failed call looks the same as
+//! a hard problem. [`WebSearch::detect`] returns `Err` and the registry simply
+//! does not carry the tool.
+
+use emma_llm::ApiKey;
+use emma_tool_api::{Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
+use serde_json::{json, Value};
+
+use crate::args;
+use crate::credentials;
+
+const NAME: &str = "WebSearch";
+const KEYS: &[&str] = &["query", "count"];
+
+const API_URL: &str = "https://api.search.brave.com/res/v1/web/search";
+pub const DEFAULT_COUNT: u64 = 10;
+/// Brave's own per-request ceiling. Asking for more is silently clamped by the
+/// API, which would make the count in the result disagree with the request.
+pub const MAX_COUNT: u64 = 20;
+
+pub struct WebSearch {
+    key: ApiKey,
+    base_url: String,
+    client: reqwest::Client,
+}
+
+impl WebSearch {
+    /// Register only if a key exists — environment, then
+    /// `~/.emma/credentials.json`, never the project directory.
+    pub fn detect() -> Result<Self, String> {
+        match credentials::load_default() {
+            Some(key) => Ok(Self::with_key(key)),
+            None => Err(credentials::missing_message()),
+        }
+    }
+
+    pub fn with_key(key: ApiKey) -> Self {
+        Self {
+            key,
+            base_url: API_URL.to_string(),
+            client: reqwest::Client::new(),
+        }
+    }
+
+    /// Point at a loopback stub. Exists so the tests exercise the real
+    /// request-building and the real response-parsing rather than a seam that
+    /// only tests hold.
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = base_url.into();
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for WebSearch {
+    fn name(&self) -> &'static str {
+        NAME
+    }
+
+    fn description(&self) -> &str {
+        include_str!("descriptions/web_search.md")
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to search for, as a person would type it into a search box."
+                },
+                "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": format!("How many results to return. Default {DEFAULT_COUNT}, capped at {MAX_COUNT}.")
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": false
+        })
+    }
+
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            // See the crate docs. Reaches the network; changes nothing.
+            read_only: true,
+            idempotent: true,
+        }
+    }
+
+    fn validate_args(&self, args_v: &Value) -> Result<(), ToolError> {
+        args::deny_unknown(args_v, NAME, KEYS)?;
+        let query = args::req_str(args_v, NAME, "query")?;
+        if query.trim().is_empty() {
+            return Err(ToolError::BadArguments("WebSearch.query is empty".into()));
+        }
+        if let Some(0) = args::opt_u64(args_v, NAME, "count")? {
+            return Err(ToolError::BadArguments(
+                "WebSearch.count must be at least 1".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn invoke(
+        &self,
+        _ctx: &ToolCtx,
+        args_v: Value,
+    ) -> anyhow::Result<Result<ToolOutcome, ToolError>> {
+        Ok(self.run(args_v).await)
+    }
+}
+
+impl WebSearch {
+    async fn run(&self, args_v: Value) -> Result<ToolOutcome, ToolError> {
+        self.validate_args(&args_v)?;
+        let query = args::req_str(&args_v, NAME, "query")?.trim().to_string();
+        let count = args::opt_u64(&args_v, NAME, "count")?
+            .unwrap_or(DEFAULT_COUNT)
+            .min(MAX_COUNT);
+
+        let response = self
+            .client
+            .get(&self.base_url)
+            .query(&[("q", query.as_str()), ("count", &count.to_string())])
+            .header("Accept", "application/json")
+            .header("X-Subscription-Token", self.key.expose())
+            .send()
+            .await
+            .map_err(|e| ToolError::Failed(format!("the search request failed: {e}")))?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(classify_status(status.as_u16(), &body));
+        }
+
+        let parsed: Value = serde_json::from_str(&body).map_err(|e| {
+            ToolError::Failed(format!(
+                "the search API returned something that is not JSON: {e}"
+            ))
+        })?;
+        Ok(render(&query, &parsed))
+    }
+}
+
+/// HTTP status into the taxonomy the model routes on.
+fn classify_status(status: u16, body: &str) -> ToolError {
+    let detail = trim_body(body);
+    match status {
+        // The key is present and wrong, or the plan does not cover this
+        // endpoint. Either way no retry helps and no argument change helps —
+        // it is the machinery being unconfigured, which is what Unavailable
+        // means.
+        401 | 403 => ToolError::Unavailable(format!(
+            "the Brave Search key was rejected ({status}). Check {} or ~/.emma/credentials.json. {detail}",
+            credentials::ENV_VAR
+        )),
+        // Brave answers a malformed query with 422 rather than an empty result
+        // set, so this really is the arguments and not the world.
+        422 => ToolError::BadArguments(format!("Brave refused the query: {detail}")),
+        429 => ToolError::Failed(format!(
+            "the Brave Search rate limit was hit ({status}); this is temporary. {detail}"
+        )),
+        _ => ToolError::Failed(format!("the search API returned {status}. {detail}")),
+    }
+}
+
+fn trim_body(body: &str) -> String {
+    let flat: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() > 300 {
+        format!("{}…", flat.chars().take(299).collect::<String>())
+    } else {
+        flat
+    }
+}
+
+/// Results as markdown.
+///
+/// Zero results is a *result*: the query found nothing, which is a fact about
+/// the web and not a failure of the call. Turning it into an error would tell
+/// the model to retry a search that will keep succeeding at finding nothing.
+fn render(query: &str, parsed: &Value) -> ToolOutcome {
+    let results = parsed
+        .get("web")
+        .and_then(|w| w.get("results"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+
+    let mut out = format!("# Search: {query}\n\n");
+    if results.is_empty() {
+        out.push_str(
+            "No results. The query found nothing — this is an answer, not a failure. Try \
+             different words, or fetch a page directly if you already know where to look.\n",
+        );
+        return ToolOutcome::new(out).with_display(format!("{query} — no results"));
+    }
+
+    out.push_str(
+        "These are places to look, not an answer. The snippets are the search engine's \
+         summaries; use WebFetch on a URL before relying on what it says.\n\n",
+    );
+    for (i, r) in results.iter().enumerate() {
+        let title = strip_markup(
+            r.get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("(untitled)"),
+        );
+        let url = r.get("url").and_then(Value::as_str).unwrap_or("");
+        let snippet = strip_markup(r.get("description").and_then(Value::as_str).unwrap_or(""));
+        out.push_str(&format!("{}. **{title}**\n   {url}\n", i + 1));
+        if !snippet.is_empty() {
+            out.push_str(&format!("   {snippet}\n"));
+        }
+        out.push('\n');
+    }
+
+    ToolOutcome::new(out).with_display(format!(
+        "{query} — {} result{}",
+        results.len(),
+        if results.len() == 1 { "" } else { "s" }
+    ))
+}
+
+/// Brave wraps the matched query terms in `<strong>`, so every snippet arrives
+/// as HTML. Stripped rather than passed through: markup the model did not ask
+/// for reads as emphasis it should reproduce, and `&amp;` in a quoted title
+/// comes back out in the answer.
+fn strip_markup(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            c if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_empty_result_set_is_a_result() {
+        // The rule that governs every tool here. If this becomes an error, the
+        // model cannot tell "the search broke" from "nobody has written about
+        // this", and it will retry the first when it is looking at the second.
+        let outcome = render("obscure", &json!({ "web": { "results": [] } }));
+        assert!(
+            outcome.content.contains("No results"),
+            "{}",
+            outcome.content
+        );
+        assert!(!outcome.truncated);
+    }
+
+    #[test]
+    fn a_missing_web_block_is_also_a_result() {
+        // Brave omits `web` entirely for some queries rather than sending an
+        // empty array. Same fact, different shape.
+        let outcome = render("obscure", &json!({ "query": { "original": "obscure" } }));
+        assert!(
+            outcome.content.contains("No results"),
+            "{}",
+            outcome.content
+        );
+    }
+
+    #[test]
+    fn snippets_lose_their_markup() {
+        let outcome = render(
+            "rust",
+            &json!({ "web": { "results": [
+                { "title": "Rust &amp; you", "url": "https://r/", "description": "A <strong>rust</strong> guide" }
+            ] } }),
+        );
+        assert!(
+            outcome.content.contains("Rust & you"),
+            "{}",
+            outcome.content
+        );
+        assert!(
+            outcome.content.contains("A rust guide"),
+            "{}",
+            outcome.content
+        );
+        assert!(!outcome.content.contains("<strong>"), "{}", outcome.content);
+    }
+
+    #[test]
+    fn status_codes_land_in_the_right_class() {
+        assert_eq!(classify_status(401, "{}").kind(), "tool_unavailable");
+        assert_eq!(classify_status(403, "{}").kind(), "tool_unavailable");
+        assert_eq!(classify_status(422, "{}").kind(), "bad_arguments");
+        assert_eq!(classify_status(429, "{}").kind(), "tool_failed");
+        assert_eq!(classify_status(500, "{}").kind(), "tool_failed");
+    }
+
+    #[test]
+    fn a_rejected_key_never_appears_in_the_message() {
+        // The message names where the key comes from so a human can fix it,
+        // and must never name the key itself.
+        let msg = classify_status(401, "{\"error\":\"bad token\"}").to_string();
+        assert!(msg.contains("BRAVE_SEARCH_API_KEY"), "{msg}");
+    }
+}

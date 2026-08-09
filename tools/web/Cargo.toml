@@ -1,0 +1,47 @@
+[package]
+name = "emma-tools-web"
+version.workspace = true
+edition.workspace = true
+# Inherited from the fork's origin. chromehand ships no LICENSE file to copy;
+# its Cargo.toml is where the declaration lives. See VENDOR.md.
+license = "MIT"
+
+# The standalone CLI, kept from upstream. It is what the vendored integration
+# tests drive — they exercise policy refusals and the whole session loop
+# through a real process, which is how they were written and how they keep
+# meaning what they meant.
+[[bin]]
+name = "browser-miner"
+path = "src/bin/browser-miner.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+emma-tool-api.workspace = true
+# For `ApiKey`, `home_dir` and `credentials_path`. Reusing the LLM crate's
+# resolver rather than writing a second one is the point: the rule "a key never
+# comes from the project directory" holds because there is exactly one
+# implementation of where a key may live.
+emma-llm.workspace = true
+
+# The forked browser. `chromiumoxide` drives Chrome over CDP; `futures` is its
+# event-stream vocabulary; `url` and `regex` are the policy and digest
+# machinery. See VENDOR.md.
+chromiumoxide.workspace = true
+futures.workspace = true
+regex.workspace = true
+url.workspace = true
+
+# Detached Chrome spawning for session mode: on Windows a child launched the
+# ordinary way dies with its parent, which is exactly wrong for a session that
+# must outlive the command that opened it.
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "net"] }

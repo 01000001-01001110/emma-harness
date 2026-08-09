@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Shadow Fixture</title></head>
+<body>
+<main id="light-main">
+  <p>Light DOM paragraph.</p>
+  <div id="shadow-host"></div>
+  <div id="closed-host"></div>
+  <div id="marker-target"></div>
+</main>
+<script>
+  // Open shadow root with interactive elements.
+  const host = document.getElementById('shadow-host');
+  const shadow = host.attachShadow({mode: 'open'});
+  shadow.innerHTML = `
+    <a href="/page2.html" id="shadow-link">Shadow link</a>
+    <button id="shadow-button" type="button">Shadow button</button>
+    <input type="text" id="shadow-input" placeholder="Shadow input">
+    <div id="nested-host"></div>
+  `;
+  shadow.getElementById('shadow-button').addEventListener('click', () => {
+    document.getElementById('marker-target').textContent = 'SHADOW_CLICK_MARKER';
+  });
+
+  // Nested (2-level) open shadow root.
+  const nestedHost = shadow.getElementById('nested-host');
+  const nestedShadow = nestedHost.attachShadow({mode: 'open'});
+  nestedShadow.innerHTML = `<input type="text" id="nested-input" placeholder="Nested input">`;
+
+  // Closed shadow root: its contents must be invisible to the digest.
+  const closedHost = document.getElementById('closed-host');
+  const closedShadow = closedHost.attachShadow({mode: 'closed'});
+  closedShadow.innerHTML = `<button id="closed-button" type="button">Closed button</button>`;
+</script>
+</body>
+</html>

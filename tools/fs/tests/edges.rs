@@ -421,17 +421,24 @@ async fn bash_gets_a_shell_not_an_argv_exec() {
 #[tokio::test]
 async fn bash_reports_a_non_zero_exit_with_its_output() {
     let sandbox = Sandbox::new();
-    let error = sandbox
-        .err(
+    let outcome = sandbox
+        .ok(
             "Bash",
             json!({ "command": "echo out; echo problem >&2; exit 3" }),
         )
         .await;
-    assert_eq!(error.kind(), "tool_failed");
-    assert!(error.detail().contains("exited with 3"), "{error}");
+    // A command that ran and exited 3 answered the question. `grep -q` says
+    // "no" with exit 1; `cargo test` says "three failed" with 101. Reporting
+    // those as tool failures tells the model its shell is broken and invites it
+    // to route around a problem it does not have.
+    assert!(outcome.content.contains("exit status 3"), "{outcome:?}");
     assert!(
-        error.detail().contains("problem"),
-        "the model needs what the command said, not just the code: {error}"
+        outcome.content.contains("problem"),
+        "the model needs what the command said, not just the code: {outcome:?}"
+    );
+    assert!(
+        outcome.content.contains("out"),
+        "stdout must survive a non-zero exit: {outcome:?}"
     );
 }
 

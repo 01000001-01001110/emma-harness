@@ -6,6 +6,8 @@ members = [
     "crates/llm",
     "crates/emma",
     "tools/fs",
+    "tools/web",
+    "tools/tasks",
 ]
 
 [workspace.package]
@@ -16,6 +18,13 @@ rust-version = "1.82"
 [workspace.dependencies]
 anyhow = "1"
 async-trait = "0.1"
+# Chrome over the DevTools Protocol, for `tools/web`. The alternative to
+# driving a real browser is an HTTP client plus an HTML-to-markdown crate,
+# which returns an empty shell for every page built with JavaScript and a 406
+# for several that are worth reading. `futures` (not just `futures-util`) is
+# chromiumoxide's own event-stream vocabulary.
+chromiumoxide = "0.9"
+futures = "0.3"
 futures-util = "0.3"
 globset = "0.4"
 # rustls rather than the platform TLS stack: one code path on every machine the
@@ -26,13 +35,28 @@ serde_json = "1"
 serde_yaml = "0.9"
 sha2 = "0.10"
 regex = "1"
+# Reading a key without echoing it. The alternative is `stty -echo` on unix and
+# a PowerShell subprocess on Windows — two platform paths, spawned at the exact
+# moment a secret is on the wire, to avoid one small crate.
+rpassword = "7"
 tempfile = "3"
 thiserror = "2"
 walkdir = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "fs"] }
 tracing = "0.1"
+url = "2"
+# Windows only, and only for `tools/web`: a Chrome launched for a browser
+# session must survive the command that opened it, and on Windows an ordinary
+# child does not.
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+] }
 
 emma-tool-api = { path = "crates/tool-api" }
 emma-harness = { path = "crates/harness" }
 emma-llm = { path = "crates/llm" }
 emma-tools-fs = { path = "tools/fs" }
+emma-tools-web = { path = "tools/web" }
+emma-tools-tasks = { path = "tools/tasks" }

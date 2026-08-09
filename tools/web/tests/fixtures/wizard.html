@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Wizard Fixture</title>
+  <style>
+    .step { display: none; }
+    .step.active { display: block; }
+    .step-indicator { font-weight: bold; margin-bottom: 1rem; }
+    .nav { margin-top: 1rem; }
+    button:disabled, input:disabled, select:disabled { opacity: 0.5; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="step-indicator">Step 1 of 3</div>
+    <form action="/submit" method="get">
+      <div id="step-1" class="step active">
+        <label for="w-name">Name</label>
+        <input type="text" id="w-name" name="name" required>
+      </div>
+      <div id="step-2" class="step">
+        <label for="w-country">Country</label>
+        <select id="w-country" name="country" required>
+          <option value="">Choose a country</option>
+          <option value="us">United States</option>
+          <option value="ca">Canada</option>
+        </select>
+      </div>
+      <div id="step-3" class="step">
+        <label>
+          <input type="checkbox" id="w-agree" required>
+          I agree
+        </label>
+      </div>
+    </form>
+    <div class="nav">
+      <button type="button" id="back-to-1" style="display:none">Back</button>
+      <button type="button" id="to-step-2" disabled>Next</button>
+      <button type="button" id="to-step-3" style="display:none" disabled>Next</button>
+      <button type="submit" id="w-submit" style="display:none" disabled>Submit</button>
+    </div>
+  </main>
+  <script>
+    const indicator = document.querySelector('.step-indicator');
+    const nameInput = document.getElementById('w-name');
+    const countrySelect = document.getElementById('w-country');
+    const agreeCheckbox = document.getElementById('w-agree');
+    const next2 = document.getElementById('to-step-2');
+    const next3 = document.getElementById('to-step-3');
+    const backBtn = document.getElementById('back-to-1');
+    const submitBtn = document.getElementById('w-submit');
+
+    function setVisible(el, visible) {
+      el.style.display = visible ? 'inline-block' : 'none';
+    }
+
+    function showStep(n) {
+      document.querySelectorAll('.step').forEach((s) => s.classList.remove('active'));
+      document.getElementById('step-' + n).classList.add('active');
+      indicator.textContent = 'Step ' + n + ' of 3';
+
+      setVisible(next2, n === 1);
+      setVisible(next3, n === 2);
+      setVisible(backBtn, n === 2 || n === 3);
+      setVisible(submitBtn, n === 3);
+
+      updateButtons();
+    }
+
+    function updateButtons() {
+      const active = document.querySelector('.step.active');
+      const step = parseInt(active.id.replace('step-', ''), 10);
+      next2.disabled = step !== 1 || !nameInput.value.trim();
+      next3.disabled = step !== 2 || !countrySelect.value;
+      submitBtn.disabled = step !== 3 || !agreeCheckbox.checked;
+    }
+
+    nameInput.addEventListener('input', updateButtons);
+    countrySelect.addEventListener('change', updateButtons);
+    agreeCheckbox.addEventListener('change', updateButtons);
+
+    next2.addEventListener('click', () => showStep(2));
+    next3.addEventListener('click', () => showStep(3));
+    backBtn.addEventListener('click', () => {
+      const active = document.querySelector('.step.active');
+      const current = parseInt(active.id.replace('step-', ''), 10);
+      showStep(current - 1);
+    });
+
+    updateButtons();
+  </script>
+</body>
+</html>

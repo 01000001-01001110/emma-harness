@@ -1,0 +1,645 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Automate-and-Deploy/chromehand/blob/main/docs/schema/chromehand-output.schema.json",
+  "title": "chromehand (browser-miner) output contract",
+  "description": "Every invocation writes exactly ONE JSON object to stdout matching one of these shapes. THE NESTING SCAR: page content lives under `digest.*` (text, interactive, structured, meta); `page_title`, `http_status`, `looks_blocked`, and `evidence` are TOP-LEVEL. The first consumer misparsed this by assuming flat `text`/`links` — do not repeat it.",
+  "oneOf": [
+    { "$ref": "#/$defs/digestOutput" },
+    { "$ref": "#/$defs/sessionDigestOutput" },
+    { "$ref": "#/$defs/deltaOutput" },
+    { "$ref": "#/$defs/verifyOutput" },
+    { "$ref": "#/$defs/verifyBatchOutput" },
+    { "$ref": "#/$defs/sessionMgmtOutput" },
+    { "$ref": "#/$defs/actionOutput" },
+    { "$ref": "#/$defs/extractFormOutput" },
+    { "$ref": "#/$defs/fillOutput" },
+    { "$ref": "#/$defs/submitOutput" },
+    { "$ref": "#/$defs/extractJobsOutput" },
+    { "$ref": "#/$defs/errorOutput" }
+  ],
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "description": "Same evidence contract as the job-hunt .mjs miners. http_status comes from CDP Network events (main-document response) — observed, never guessed; null = unobserved, never fabricated.",
+      "required": ["source", "engine", "http_status", "fetch_timestamp"],
+      "properties": {
+        "source": { "const": "browser-render" },
+        "engine": {
+          "type": "string",
+          "description": "e.g. \"browser-miner/0.2.0 chromiumoxide\""
+        },
+        "api_endpoint": {
+          "type": "string",
+          "description": "URL of the observed main-document response (or the requested URL if unobserved)"
+        },
+        "http_status": { "type": ["integer", "null"] },
+        "fetch_timestamp": {
+          "type": "string",
+          "description": "RFC3339 UTC, seconds precision"
+        }
+      }
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["verified", "blocked", "failed"],
+      "description": "Liveness verdict, gate semantics. blocked = anti-bot challenge detected (looks_blocked), reported never evaded. verified = OBSERVED 2xx/3xx main-document status and not blocked. failed = everything else — including a rendered page whose status was never observed (never upgraded without evidence) and rendered 4xx/5xx pages."
+    },
+    "pageCommon": {
+      "type": "object",
+      "required": [
+        "command",
+        "url",
+        "final_url",
+        "http_status",
+        "page_title",
+        "contains_apply_button",
+        "looks_blocked",
+        "outcome",
+        "evidence"
+      ],
+      "properties": {
+        "url": { "type": "string", "description": "The URL as requested" },
+        "final_url": { "type": "string", "description": "After redirects" },
+        "http_status": {
+          "type": ["integer", "null"],
+          "description": "Main-document status via CDP; null = unobserved"
+        },
+        "page_title": { "type": "string" },
+        "contains_apply_button": { "type": "boolean" },
+        "looks_blocked": {
+          "type": "boolean",
+          "description": "Anti-bot challenge heuristics (Cloudflare interstitial title, captcha/verify-human/access-denied text). Honest answer, never evaded."
+        },
+        "outcome": { "$ref": "#/$defs/outcome" },
+        "evidence": { "$ref": "#/$defs/evidence" }
+      }
+    },
+    "interactiveElement": {
+      "type": "object",
+      "properties": {
+        "selector": {
+          "type": "string",
+          "description": "Stable selector and addressing scheme for every action verb. Plain CSS (id → name → bounded nth-of-type). May contain ' >>> ' hops to descend OPEN shadow roots, and ' ||| ' hops to enter SAME-ORIGIN iframes; both compose left-to-right and every action verb resolves them."
+        },
+        "in_content": {
+          "type": "boolean",
+          "description": "In the main-content root (vs page chrome)"
+        },
+        "in_shadow": {
+          "type": "boolean",
+          "description": "Inside an open shadow root; selector uses ' >>> '"
+        },
+        "in_frame": {
+          "type": "boolean",
+          "description": "Inside a same-origin iframe; selector uses ' ||| '"
+        }
+      }
+    },
+    "digestPayload": {
+      "type": "object",
+      "description": "The content block. THIS is where text/interactive/structured live — nested, not top-level.",
+      "required": ["text", "text_chars_total", "text_truncated", "interactive"],
+      "properties": {
+        "meta": {
+          "type": "object",
+          "properties": {
+            "title": { "type": ["string", "null"] },
+            "canonical": { "type": ["string", "null"] },
+            "description": { "type": ["string", "null"] },
+            "lang": { "type": ["string", "null"] }
+          }
+        },
+        "text": {
+          "type": "string",
+          "description": "Main-content text, boilerplate stripped, truncated to --max-text-chars (default 8000)"
+        },
+        "text_chars_total": {
+          "type": "integer",
+          "description": "Pre-truncation length; compare with text length to see what was cut"
+        },
+        "text_truncated": { "type": "boolean" },
+        "structured": {
+          "type": "object",
+          "properties": {
+            "json_ld": { "type": "array", "maxItems": 5 },
+            "tables": {
+              "type": "array",
+              "maxItems": 3,
+              "items": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "type": "array",
+                  "maxItems": 12,
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "interactive": {
+          "type": "object",
+          "required": ["forms", "fields", "buttons", "links"],
+          "properties": {
+            "forms": {
+              "type": "array",
+              "maxItems": 10,
+              "items": {
+                "allOf": [{ "$ref": "#/$defs/interactiveElement" }],
+                "properties": {
+                  "action": { "type": ["string", "null"] },
+                  "method": { "type": ["string", "null"] },
+                  "field_count": { "type": "integer" }
+                }
+              }
+            },
+            "fields": {
+              "type": "array",
+              "maxItems": 60,
+              "items": {
+                "allOf": [{ "$ref": "#/$defs/interactiveElement" }],
+                "properties": {
+                  "tag": { "type": "string" },
+                  "type": { "type": ["string", "null"] },
+                  "name": { "type": ["string", "null"] },
+                  "id": { "type": ["string", "null"] },
+                  "label": { "type": "string" },
+                  "required": { "type": "boolean" },
+                  "options": {
+                    "type": "array",
+                    "maxItems": 30,
+                    "items": { "type": "string" },
+                    "description": "Present for selects only"
+                  }
+                }
+              }
+            },
+            "buttons": {
+              "type": "array",
+              "maxItems": 40,
+              "items": {
+                "allOf": [{ "$ref": "#/$defs/interactiveElement" }],
+                "properties": {
+                  "label": { "type": "string" },
+                  "type": { "type": ["string", "null"] }
+                }
+              }
+            },
+            "links": {
+              "type": "array",
+              "maxItems": 120,
+              "description": "Visible links only, main-content links first (page chrome fills the remaining budget). in_content marks which.",
+              "items": {
+                "allOf": [{ "$ref": "#/$defs/interactiveElement" }],
+                "properties": {
+                  "text": { "type": "string" },
+                  "href": { "type": "string" },
+                  "in_content": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "frames_unreadable": {
+          "type": "array",
+          "maxItems": 10,
+          "description": "Cross-origin iframes whose content cannot be read without CDP frame attachment (not attempted this pass). Honest markers — never a content guess.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "selector": { "type": "string" },
+              "src": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "digestOutput": {
+      "allOf": [{ "$ref": "#/$defs/pageCommon" }],
+      "required": ["command", "digest", "economy"],
+      "properties": {
+        "command": { "const": "digest" },
+        "digest": { "$ref": "#/$defs/digestPayload" },
+        "economy": {
+          "type": "object",
+          "required": ["raw_html_chars", "digest_chars"],
+          "properties": {
+            "raw_html_chars": { "type": "integer" },
+            "digest_chars": { "type": "integer" }
+          },
+          "description": "Measured saving, not asserted"
+        }
+      }
+    },
+    "verifyOutput": {
+      "allOf": [{ "$ref": "#/$defs/pageCommon" }],
+      "properties": {
+        "command": { "const": "verify" },
+        "batch": { "const": false }
+      },
+      "not": { "required": ["batch"] },
+      "description": "Single-URL verify: digest minus the payload — liveness signals only"
+    },
+    "verifyBatchResult": {
+      "oneOf": [
+        { "$ref": "#/$defs/verifyOutput" },
+        {
+          "type": "object",
+          "description": "A URL that never rendered: policy refusal or navigation failure. Always carries `error` (rendered results never do — that is the discriminator).",
+          "required": ["command", "url", "outcome", "error"],
+          "properties": {
+            "command": { "const": "verify" },
+            "url": { "type": "string" },
+            "outcome": { "const": "failed" },
+            "policy_refused": { "type": "boolean" },
+            "error": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "verifyBatchOutput": {
+      "type": "object",
+      "required": [
+        "command",
+        "batch",
+        "file",
+        "results",
+        "verified",
+        "blocked",
+        "failed",
+        "stopped_early",
+        "skipped",
+        "evidence"
+      ],
+      "properties": {
+        "command": { "const": "verify" },
+        "batch": { "const": true },
+        "file": { "type": "string", "description": "The input --file path" },
+        "results": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/verifyBatchResult" },
+          "description": "Input order preserved"
+        },
+        "verified": { "type": "integer" },
+        "blocked": { "type": "integer" },
+        "failed": {
+          "type": "integer",
+          "description": "Includes policy-refused and navigation-failed URLs"
+        },
+        "stopped_early": {
+          "type": "boolean",
+          "description": "true when the browser-miner.stop kill-switch file appeared mid-run; unprocessed URLs are listed in skipped, never silently dropped"
+        },
+        "skipped": { "type": "array", "items": { "type": "string" } },
+        "evidence": {
+          "type": "object",
+          "required": ["source", "engine", "fetch_timestamp"]
+        }
+      }
+    },
+    "sessionDigestOutput": {
+      "type": "object",
+      "description": "digest --session S: the full digest of the CURRENT page state. A content read, not a navigation — http_status is null and there is NO `outcome` field (no main-document status is observable in-session; use the prior navigate result for liveness evidence).",
+      "required": [
+        "command",
+        "session",
+        "digest",
+        "economy",
+        "note",
+        "evidence"
+      ],
+      "properties": {
+        "command": { "const": "digest" },
+        "session": { "type": "string" },
+        "http_status": { "const": null },
+        "digest": { "$ref": "#/$defs/digestPayload" },
+        "economy": { "type": "object" },
+        "note": { "type": "string" }
+      },
+      "not": {
+        "anyOf": [{ "required": ["outcome"] }, { "required": ["delta"] }]
+      }
+    },
+    "deltaOutput": {
+      "type": "object",
+      "description": "digest --session S --delta: only what changed since the previous --delta on this session (snapshot stored beside the session file). First call has delta.baseline=true and returns the full digest. Diff is keyed by stable selector. text is included only when text_changed. No fabrication: a missing snapshot is an explicit baseline, never a guess.",
+      "required": ["command", "session", "delta", "evidence"],
+      "properties": {
+        "command": { "const": "digest" },
+        "session": { "type": "string" },
+        "final_url": { "type": "string" },
+        "page_title": { "type": "string" },
+        "digest": {
+          "$ref": "#/$defs/digestPayload",
+          "description": "Present on the baseline call only"
+        },
+        "delta": {
+          "type": "object",
+          "required": ["baseline"],
+          "properties": {
+            "baseline": { "type": "boolean" },
+            "note": { "type": "string" },
+            "added": { "type": "array", "maxItems": 60 },
+            "added_truncated": { "type": "boolean" },
+            "removed": {
+              "type": "array",
+              "maxItems": 60,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "selector": { "type": "string" },
+                  "kind": { "type": "string" }
+                }
+              }
+            },
+            "removed_truncated": { "type": "boolean" },
+            "changed": {
+              "type": "array",
+              "maxItems": 60,
+              "items": {
+                "type": "object",
+                "description": "current element + `was` object with the prior differing fields"
+              }
+            },
+            "changed_truncated": { "type": "boolean" },
+            "text_changed": { "type": "boolean" },
+            "text": {
+              "type": "string",
+              "description": "Current main text, present only when text_changed is true"
+            },
+            "text_chars_total": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "sessionMgmtOutput": {
+      "type": "object",
+      "description": "session open/list/close. open records the CDP-unauthenticated-on-localhost warning verbatim; the page target persists between commands (Chrome itself is the session daemon).",
+      "required": ["command", "action", "evidence"],
+      "properties": {
+        "command": { "const": "session" },
+        "action": { "enum": ["open", "list", "close"] },
+        "id": { "type": "string" },
+        "pid": { "type": "integer" },
+        "ws_url": { "type": "string" },
+        "target_id": { "type": "string" },
+        "session_file": {
+          "type": "string",
+          "description": "Path to the recorded session file (session open)"
+        },
+        "headful": { "type": "boolean" },
+        "attached": {
+          "type": "boolean",
+          "description": "true = connected to a user-started Chrome (ADR-2 attach mode); close never kills it"
+        },
+        "managed": {
+          "type": "boolean",
+          "description": "true = binary launched this throwaway Chrome; close kills it. Attached sessions are managed:false and pid:0"
+        },
+        "warning": { "type": "string" },
+        "sessions": { "type": "array" },
+        "closed": { "type": "array" }
+      }
+    },
+    "actionOutput": {
+      "type": "object",
+      "description": "Session action verbs. navigate carries an OBSERVED http_status + outcome; back/forward report http_status null (cache/bfcache — unobservable, never invented) and no outcome; wait-for's timeout is a RESULT ({met:false}, exit 0); click refuses submit-type controls (exit 2 — submission is P4's two-key verb); type refuses password fields (exit 2) and reports the field's live re-read value; screenshot reports the written file.",
+      "required": ["command", "evidence"],
+      "properties": {
+        "command": {
+          "enum": [
+            "navigate",
+            "back",
+            "forward",
+            "wait-for",
+            "click",
+            "type",
+            "select",
+            "screenshot"
+          ]
+        },
+        "session": { "type": "string" },
+        "final_url": { "type": "string" },
+        "page_title": { "type": "string" },
+        "looks_blocked": { "type": "boolean" },
+        "http_status": { "type": ["integer", "null"] },
+        "outcome": { "$ref": "#/$defs/outcome" },
+        "met": { "type": "boolean" },
+        "waited_ms": { "type": "integer" },
+        "condition": {
+          "type": "object",
+          "description": "wait-for: which condition was waited on (selector/text/url_pattern/network_idle)"
+        },
+        "navigated": {
+          "type": "boolean",
+          "description": "back/forward: whether a history entry existed to move to"
+        },
+        "reason": { "type": "string" },
+        "clicked": { "type": "boolean" },
+        "control": { "type": "object" },
+        "selector": { "type": "string" },
+        "requested": { "type": "string" },
+        "now_contains": { "type": "string" },
+        "ok": { "type": "boolean" },
+        "value": { "type": "string" },
+        "out": { "type": "string" },
+        "bytes": { "type": "integer" }
+      }
+    },
+    "extractFormOutput": {
+      "type": "object",
+      "description": "extract-form (P3): the digest's field inventory, deepened. Radio/checkbox groups collapse to one logical field (kind: radio_group/checkbox_group) with per-option selectors; labels resolve label[for] -> wrapping label -> aria -> placeholder; `group` carries the fieldset legend; password fields appear in the INVENTORY with fill_refused (typing into them is what's refused); wizard signals (step indicators, next/prev buttons) are heuristic hints, honestly named `likely`.",
+      "required": ["command", "form", "evidence"],
+      "properties": {
+        "command": { "const": "extract-form" },
+        "session": { "type": "string" },
+        "url": { "type": "string" },
+        "final_url": { "type": "string" },
+        "form": {
+          "type": "object",
+          "required": ["forms", "fields", "widgets", "wizard"],
+          "properties": {
+            "forms": {
+              "type": "array",
+              "items": {
+                "properties": {
+                  "action": { "type": ["string", "null"] },
+                  "method": { "type": ["string", "null"] },
+                  "selector": { "type": "string" },
+                  "field_count": { "type": "integer" },
+                  "submit_controls": { "type": "array" }
+                }
+              }
+            },
+            "fields": {
+              "type": "array",
+              "maxItems": 120,
+              "items": {
+                "properties": {
+                  "kind": { "type": "string" },
+                  "name": { "type": ["string", "null"] },
+                  "label": { "type": "string" },
+                  "group": { "type": ["string", "null"] },
+                  "required": { "type": "boolean" },
+                  "visible": { "type": "boolean" },
+                  "selector": { "type": "string" },
+                  "options": { "type": "array" },
+                  "accept": { "type": ["string", "null"] },
+                  "autocomplete": { "type": ["string", "null"] },
+                  "value": {
+                    "type": ["string", "null"],
+                    "description": "Current live value (text/select/file); lets an agent read wizard state back across steps"
+                  },
+                  "checked": {
+                    "type": "boolean",
+                    "description": "Current live state for checkbox/radio fields"
+                  },
+                  "fill_refused": { "type": "string" }
+                }
+              }
+            },
+            "widgets": {
+              "type": "array",
+              "maxItems": 20,
+              "description": "ARIA custom widgets (combobox/listbox/slider/switch/spinbutton) that are not native inputs"
+            },
+            "wizard": {
+              "type": "object",
+              "properties": {
+                "likely": { "type": "boolean" },
+                "indicators": { "type": "array" },
+                "nav_buttons": { "type": "array" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "fillOutput": {
+      "type": "object",
+      "description": "fill (P4): per-field filled-state results, every field re-read LIVE from the DOM ({requested, now_contains, ok}). Unmatched selectors and password refusals are per-field results, never silent skips. fill has NO submit code path — the note says so on every output.",
+      "required": [
+        "command",
+        "session",
+        "fields_requested",
+        "fields_ok",
+        "results",
+        "note",
+        "evidence"
+      ],
+      "properties": {
+        "command": { "const": "fill" },
+        "session": { "type": "string" },
+        "url": { "type": "string" },
+        "fields_requested": { "type": "integer" },
+        "fields_ok": { "type": "integer" },
+        "results": {
+          "type": "array",
+          "items": {
+            "required": ["selector", "ok"],
+            "properties": {
+              "selector": { "type": "string" },
+              "requested": { "type": "string" },
+              "now_contains": {
+                "type": "string",
+                "description": "Live DOM re-read; selects report 'Visible Text [value]', checkboxes 'checked'/'unchecked', file inputs the file name"
+              },
+              "ok": { "type": "boolean" },
+              "error": { "type": ["string", "null"] },
+              "refused": {
+                "type": "string",
+                "description": "Present on structural refusals (password fields)"
+              }
+            }
+          }
+        },
+        "note": { "type": "string" },
+        "screenshot": { "type": "object" }
+      }
+    },
+    "submitOutput": {
+      "type": "object",
+      "description": "submit (P4, two-key rule). mode 'observe' (default): needs a --headful session; the HUMAN clicks, the binary watches for the outcome and reports {submitted, final_url} — a quiet timeout means nothing was submitted. mode 'auto': ONLY when the agent passed --yes-actually-submit AND the user set allow_auto_submit (optionally domain-scoped) in data/browser-miner-config.json; every auto-submit is appended to data/browser-miner-submit-log.jsonl. Either key missing -> exit 2 naming the missing key.",
+      "required": ["command", "session", "mode", "submitted", "evidence"],
+      "properties": {
+        "command": { "const": "submit" },
+        "session": { "type": "string" },
+        "mode": { "enum": ["observe", "auto"] },
+        "selector": { "type": "string" },
+        "submitted": { "type": "boolean" },
+        "url_before": { "type": "string" },
+        "final_url": { "type": "string" },
+        "url_changed": { "type": "boolean" },
+        "page_title": {},
+        "submit_log": { "type": "string" },
+        "note": { "type": "string" }
+      }
+    },
+    "extractJobsOutput": {
+      "type": "object",
+      "description": "extract-jobs (application layer): per-site deterministic DOM adapters emitting mine-boards-shaped candidates verbatim from the DOM. adapter_stale:true is the honesty signal — the page rendered but the adapter matched zero nodes (site changed). Blocked pages are looks_blocked:true, never adapter_stale.",
+      "required": [
+        "command",
+        "adapter",
+        "source_kind",
+        "adapter_stale",
+        "jobs",
+        "evidence"
+      ],
+      "properties": {
+        "command": { "const": "extract-jobs" },
+        "url": { "type": "string" },
+        "final_url": { "type": "string" },
+        "adapter": { "type": "string" },
+        "source_kind": { "const": "browser" },
+        "page_title": { "type": "string" },
+        "looks_blocked": { "type": "boolean" },
+        "adapter_stale": { "type": "boolean" },
+        "total_on_page": { "type": "integer" },
+        "jobs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "mine-boards candidate: fields the DOM states; absent = null, never invented",
+            "properties": {
+              "company": { "type": ["string", "null"] },
+              "title": { "type": ["string", "null"] },
+              "url": { "type": ["string", "null"] },
+              "apply_url": { "type": ["string", "null"] },
+              "location": { "type": ["string", "null"] },
+              "remote": { "type": ["boolean", "null"] },
+              "updated_at": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "filters": {
+          "type": "object",
+          "properties": {
+            "keywords": { "type": "array", "items": { "type": "string" } },
+            "remote_only": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "errorOutput": {
+      "type": "object",
+      "description": "Exit 2 (usage / policy_refused, on stderr for usage) or exit 3 (browser/timeout failures, on stdout)",
+      "required": ["error"],
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "usage",
+            "bad_input",
+            "policy_refused",
+            "browser",
+            "timeout",
+            "serialize"
+          ]
+        },
+        "detail": { "type": "string" },
+        "evidence": { "type": "object" }
+      }
+    }
+  }
+}
