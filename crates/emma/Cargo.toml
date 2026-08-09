@@ -1,0 +1,11 @@
+[package]
+name = "emma"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "emma"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true

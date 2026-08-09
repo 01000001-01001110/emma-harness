@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tool-api",
+    "crates/harness",
+    "crates/llm",
+    "crates/emma",
+    "tools/fs",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+
+[workspace.dependencies]
+anyhow = "1"
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "fs"] }
+tracing = "0.1"
+
+emma-tool-api = { path = "crates/tool-api" }
+emma-harness = { path = "crates/harness" }
+emma-llm = { path = "crates/llm" }
+emma-tools-fs = { path = "tools/fs" }

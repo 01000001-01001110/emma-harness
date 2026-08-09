@@ -74,10 +74,19 @@ Claude Code works without being rewritten. See
 
 ## The model
 
-Two backends. Point Emma at the Anthropic API with a key, or at the `claude`
-binary already installed on your machine so it runs against your existing
-subscription. The tradeoffs are not symmetric and the second one has a real
-design question attached — [notes/claude-code-compatibility.md] has it.
+The Anthropic API, directly. Emma owns its loop, so it needs a model it can
+drive rather than a runtime that drives itself — the `claude` CLI and the
+Agent SDK were investigated and dropped for that reason, recorded in
+[notes/claude-code-compatibility.md].
+
+Set the key once:
+
+```
+$ emma auth
+```
+
+It is stored under your home directory, readable only by you, and never in the
+project you are working on.
 
 [tustle-agent]: ../tustle-agent
 [notes/what-emma-inherits.md]: notes/what-emma-inherits.md
