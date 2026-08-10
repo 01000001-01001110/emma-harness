@@ -1,0 +1,117 @@
+# Builds and publishes binaries. Tag pushes only.
+#
+# There is no `push:` on branches and no `workflow_dispatch:` by design. A
+# release is a claim that a specific commit is worth running, and a tag is how a
+# person makes that claim. A workflow that also fires on every push produces
+# artifacts nobody asked for, and the useful signal — "this build is a release"
+# — stops meaning anything.
+#
+#   git tag -a v0.1.0 -m "…" && git push origin v0.1.0
+#
+# The tests gate the release. A tagged commit that fails its suite must not
+# produce a binary: shipping first and checking afterwards is how a broken
+# artifact ends up on a machine that trusted the tag.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # needed to create the release and upload assets
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # One gate for the whole release, run once rather than per-platform. The suite
+  # is platform-independent; running it three times would triple the wall clock
+  # to re-learn the same answer.
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # --no-fail-fast because cargo stops at the first failing target, and a
+      # run that reports two failures while fourteen targets never ran reads as
+      # a smaller problem than it is.
+      - name: test
+        run: cargo test --workspace --no-fail-fast
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: emma.exe
+            asset: emma-x86_64-windows.exe
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin: emma
+            asset: emma-x86_64-linux
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bin: emma
+            asset: emma-aarch64-macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: build
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin emma
+
+      # Certifies the artifact rather than the build step. A compile that
+      # succeeded and a binary that runs are different facts, and `--version` is
+      # the cheapest command that proves the second.
+      - name: the binary runs
+        shell: bash
+        run: ./target/${{ matrix.target }}/release/${{ matrix.bin }} --version
+
+      - name: name it for the platform
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Draft, deliberately. The tag says a commit is worth releasing; a person
+      # still reads the notes and decides to publish. This is the human gate on
+      # the last irreversible step, and it costs one click.
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: dist/*
+          fail_on_unmatched_files: true
