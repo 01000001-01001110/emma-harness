@@ -73,6 +73,20 @@ fn call<'a>(args: &'a serde_json::Value) -> HookCall<'a> {
     }
 }
 
+/// Puts `ANTHROPIC_API_KEY` back on drop, including on the panic path a failing
+/// assertion takes. Restoring at the end of the test body would not survive the
+/// failure it exists to be honest about.
+struct Restore(Option<std::ffi::OsString>);
+
+impl Drop for Restore {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(v) => std::env::set_var("ANTHROPIC_API_KEY", v),
+            None => std::env::remove_var("ANTHROPIC_API_KEY"),
+        }
+    }
+}
+
 const DENY: (&str, &str) = (
     r#"echo '{"decision":"deny","reason":"after hours"}'"#,
     r#"echo {"decision":"deny","reason":"after hours"}"#,
@@ -275,7 +289,15 @@ async fn context_is_additive() {
 /// not be able to call a model or a paid API as us.
 #[tokio::test]
 async fn the_child_environment_carries_no_api_key() {
+    // The variable has to be set on *this* process — the whole point is that the
+    // child does not inherit what the parent holds — so this is the one test in
+    // the crate that cannot avoid touching process-wide state. It can avoid
+    // leaving it there: without the restore below, every test that ran afterwards
+    // in this binary inherited a fake key, and any of them that grew a dependency
+    // on the real one would have failed for a reason nobody could find.
+    let previous = std::env::var_os("ANTHROPIC_API_KEY");
     std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-should-not-be-inherited");
+    let _restore = Restore(previous);
 
     let root = scratch("env").join(".emma");
     let dump = root.join("env.txt");
@@ -405,10 +427,19 @@ async fn the_engine_caps_the_timeout_config_asks_for() {
     let started = std::time::Instant::now();
     let v = h.run_hooks(HookEvent::PreToolUse, &call(&args)).await;
     assert!(v.denied.is_some());
+    // Both ends, because each one alone is nearly free to pass. An upper bound of
+    // twenty seconds against a ten-second cap is satisfied by a cap that regressed
+    // to nineteen; and an upper bound alone is satisfied by a hook that never
+    // spawned at all, which denies instantly. The window is the cap.
+    let elapsed = started.elapsed();
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(20),
-        "config asked for ten minutes and the engine must have refused it: {:?}",
-        started.elapsed()
+        elapsed < std::time::Duration::from_secs(13),
+        "config asked for ten minutes and the engine must have refused it: {elapsed:?}"
+    );
+    assert!(
+        elapsed > std::time::Duration::from_secs(8),
+        "this returned before the cap, so it is not the cap being measured — a \
+         hook that failed to spawn denies in a millisecond: {elapsed:?}"
     );
 }
 

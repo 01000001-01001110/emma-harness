@@ -82,7 +82,12 @@ pub fn model(name: Option<String>) -> Result<()> {
 /// Load the harness, apply the tool allowlist, and report — without calling a
 /// model, which is the whole point. Everything that can fail at startup fails
 /// here, where the message is the only output rather than a preamble to one.
-pub fn config_check(harness: &Harness, tools: &Registry, cwd: &Path) -> Result<()> {
+pub fn config_check(
+    harness: &Harness,
+    tools: &Registry,
+    cwd: &Path,
+    unavailable: &[String],
+) -> Result<()> {
     let snapshot = harness.snapshot();
     println!("cwd            {}", cwd.display());
     println!("harness        {}", snapshot["root"].as_str().unwrap_or("?"));
@@ -103,6 +108,13 @@ pub fn config_check(harness: &Harness, tools: &Registry, cwd: &Path) -> Result<(
     );
     println!("config         {}", harness.config_hash);
     println!("tools          {}", tools.names().join(", "));
+    // The tools that were built and then left out because this machine cannot
+    // run them. This is the one command whose job is to answer "why can it not
+    // do X", and a capability absent for a fixable reason — no browser, no
+    // search key — is exactly the question it is asked.
+    for line in unavailable {
+        println!("               {line}");
+    }
     println!("tool schema    {}", tools.schema_hash());
     println!("skills         {}", or_none(&harness.skill_names().join(", ")));
     println!(

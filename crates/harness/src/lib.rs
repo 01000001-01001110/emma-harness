@@ -9,7 +9,8 @@
 //! rule applies to `.emma/` only (`select_persona`); a persona's `tools` list is
 //! a real filter rather than an assertion that removes nothing
 //! (`select_tools`); and `deny_unknown_fields` stops at the outer level of
-//! `.claude/settings.json` (`claude.rs`). The through-line is that the earlier
+//! `.claude/settings.json` and at `.claude/` skill frontmatter (`claude.rs`,
+//! `ClaudeFront`). The through-line is that the earlier
 //! tool surface was read-only by construction while Emma's writes files and runs
 //! commands, so several rules that were merely tidy there are load-bearing here
 //! — and one that was safe there would be an outage here.
@@ -33,6 +34,11 @@
 //! `.emma/` only, persona files that nothing selects → refuse, because an empty
 //! harness is a statement and an unselected one is an accident. That last rule
 //! deliberately does not extend to `.claude/agents/`; `select_persona` says why.
+//!
+//! "Absent" is decided in `discover_in`, and a directory existing is not enough
+//! to make it present: in the home directory a `.emma/` holding only credentials
+//! is walked past rather than adopted, because `emma api` creates it and nobody
+//! chose it. There it is the absent case, not the empty one.
 //!
 //! The reasoning, because the edges follow from it: an agent booted with the
 //! wrong prompt does not crash. It acts fluently and confidently, attributed to
@@ -152,6 +158,24 @@ pub fn discover() -> Result<PathBuf> {
 /// configuration system becomes impossible to reason about, because the answer
 /// to "where did this instruction come from" stops being a file.
 pub fn discover_from(start: &Path, overridden: Option<PathBuf>) -> Result<PathBuf> {
+    discover_in(start, overridden, home_dir())
+}
+
+/// The same walk with the home directory threaded in as well, so the result does
+/// not depend on the environment of the process that called it.
+///
+/// It exists because `discover_from` did not thread it and every test of the
+/// home-scope rules below therefore either mutated `HOME` — shared state in a
+/// binary cargo runs threaded — or walked out of its scratch directory into the
+/// developer's real home and answered differently on different machines. Both of
+/// those happened, and the second one is how the `~/.emma/` defect below was
+/// found. `discover_from` is kept and delegates here; it is the signature the
+/// binary calls.
+pub fn discover_in(
+    start: &Path,
+    overridden: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> Result<PathBuf> {
     if let Some(p) = overridden {
         if p.is_dir() {
             return Ok(p);
@@ -160,38 +184,77 @@ pub fn discover_from(start: &Path, overridden: Option<PathBuf>) -> Result<PathBu
         // configuration nobody asked for.
         bail!("{ROOT_ENV}=`{}` is not a directory", p.display());
     }
-    let home = home_dir();
+    let home = home.map(|h| real(&h));
     let mut searched = Vec::new();
     for dir in start.ancestors() {
+        // The home directory gets different rules, and this is the comparison
+        // that decides whether they apply. It canonicalises both sides rather
+        // than comparing bytes, because "is this the same directory" is a
+        // question for the filesystem and not for a string: case is only one of
+        // the ways two spellings of one directory differ, alongside a trailing
+        // separator, a `..` in the middle, a Windows 8.3 short name, and a home
+        // reached through a symlink. A case-insensitive compare would fix the one
+        // that bit us — `C:\Users\Owner` against `C:\Users\owner`, which left the
+        // skip below inert and adopted the user's global `.claude/` — and leave
+        // the rest. `real` falls back to the path as given when it cannot ask, so
+        // a home that does not exist is still compared, just exactly.
+        let at_home = home.as_deref() == Some(real(dir).as_path());
+
         // `~/.claude/` is Claude Code's **user-scope** configuration — global
         // permissions, global agents, global skills, for a different program.
         // Adopting it as this project's harness would hand Emma standing
         // instructions from a directory the user never associated with this
         // project, which is the "booted on the wrong prompt" failure arriving
-        // through the front door. It is skipped.
-        //
-        // `~/.emma/` is not skipped: that one is Emma's, and a user who creates
-        // it has chosen a default harness for Emma deliberately.
-        //
-        // The skip also keeps `~/.claude/` out of `searched`, so the refusal
-        // below never names a directory Emma would not have used — an error
-        // listing a path it declined to consider reads as a bug in the search.
-        //
-        // The comparison is plain path equality, so it is exact: a `$HOME` that
-        // does not match the ancestor byte for byte — a different spelling of
-        // the same directory on Windows, say — leaves the skip inert and the
-        // walk adopts whatever it finds.
-        let names: &[&str] = if home.as_deref() == Some(dir) {
+        // through the front door. It is skipped, and skipped so completely that
+        // it never reaches `searched`: an error listing a path Emma declined to
+        // consider reads as a bug in the search.
+        let names: &[&str] = if at_home {
             &[ROOT_DIR_NAME]
         } else {
             &[ROOT_DIR_NAME, CLAUDE_DIR_NAME]
         };
         for name in names {
             let candidate = dir.join(name);
-            if candidate.is_dir() {
+            // `~/.emma/` is Emma's own, so it is eligible — but only when it
+            // holds something a person put there on purpose.
+            //
+            // It used to be eligible for existing, and `emma api` creates it:
+            // storing a credential wrote `~/.emma/credentials.json`, and from
+            // that moment every project without a harness of its own adopted the
+            // home directory and booted with no instructions, no persona and the
+            // full write-capable tool surface. Nobody chose that; it was the side
+            // effect of saving a key. **The thing that makes a directory a
+            // harness has to be the thing a person put there on purpose** —
+            // `config.json` or `personas/`. Credentials and `sessions/` are
+            // Emma's bookkeeping and say nothing about how Emma is configured.
+            //
+            // Note what this is *not*: it is not the empty-harness boot. An
+            // `~/.emma/` holding only credentials is not a harness at all, the
+            // walk goes past it, and the operator gets the absent-harness
+            // refusal rather than a silent boot on nothing.
+            let eligible = !at_home || configured_by_hand(&candidate);
+            if candidate.is_dir() && eligible {
                 return Ok(candidate);
             }
-            searched.push(format!("  {}", candidate.display()));
+            searched.push(match candidate.is_dir() {
+                // Named anyway, and named with the reason. The operator can see
+                // the directory; a refusal that omitted it would read as a search
+                // that never looked.
+                true => format!(
+                    "  {} (present, but holds no config.json or personas/, so it is \
+                     not a harness)",
+                    candidate.display()
+                ),
+                false => format!("  {}", candidate.display()),
+            });
+        }
+        // The home directory is the top of the search. Above it are `C:\Users`
+        // and `/home` — directories that belong to the machine rather than to any
+        // project, so a harness adopted from one of them is the same wrong-prompt
+        // boot with a longer walk. It also keeps discovery's answer a function of
+        // the tree the caller named.
+        if at_home {
+            break;
         }
     }
     // No compiled-in fallback prompt, on purpose: an agent that boots without
@@ -200,6 +263,26 @@ pub fn discover_from(start: &Path, overridden: Option<PathBuf>) -> Result<PathBu
         "no `{ROOT_DIR_NAME}/` or `{CLAUDE_DIR_NAME}/` found. Searched, nearest first:\n{}",
         searched.join("\n")
     )
+}
+
+/// What makes a directory in the home directory a harness rather than a place
+/// Emma keeps its own files. Deliberately narrow: these are the two things that
+/// only exist because someone wrote them.
+///
+/// The three files that turn up in `~/.emma/` and are **not** counted:
+/// `credentials.json` and `sessions/`, which Emma writes for itself, and
+/// `settings.json`, which is the person's own model preference and whose own
+/// module doc says it is deliberately not the harness. A personal default for
+/// one field is not a statement about what Emma should be told.
+fn configured_by_hand(dir: &Path) -> bool {
+    dir.join("config.json").is_file() || dir.join("personas").is_dir()
+}
+
+/// The filesystem's own answer for a path, for comparing two of them. Falls back
+/// to the path as given when the path does not exist or cannot be read, which
+/// makes the comparison exact again rather than wrong.
+fn real(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Read rather than pulled from a crate: this is used for one comparison and a
@@ -410,7 +493,7 @@ impl Harness {
             instructions,
             persona,
             config_hash: hash::short(&raw),
-            skills: load_skills(&root, &spine_path, block.skills.as_deref())?,
+            skills: load_skills(&root, &spine_path, flavor, block.skills.as_deref())?,
             commands: load_commands(&root)?,
             hooks: hooks::resolve(&root, &spine_path, &hook_defs, block.hooks.as_deref())?,
             tools: block.tools,
@@ -747,13 +830,10 @@ fn read_layer(path: &Path) -> Result<Option<String>> {
 /// Only `name` and `description` are read. A skill is markdown; anything the
 /// runtime must branch on belongs in the spine.
 ///
-/// Both are required and `deny_unknown_fields` is on, so this is strict in both
-/// directions: a `SKILL.md` missing either, or carrying any third key, fails the
-/// load and takes the whole boot with it. That is the right answer for a skill
-/// written for Emma, where a stray key is a typo. It is a sharper edge than it
-/// looks for a `.claude/skills/` directory, where files in the wild routinely
-/// carry `allowed-tools`, `version`, `model-role` and a licence header above the
-/// frontmatter — none of which Emma reads, all of which stop it starting.
+/// **Strict for `.emma/`.** Both fields are required and `deny_unknown_fields`
+/// is on, so a `SKILL.md` missing either — or carrying any third key — fails the
+/// load and takes the boot with it. In Emma's own format an unknown key can only
+/// be the user's typo, and this is the attribute that catches it.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Front {
@@ -761,7 +841,42 @@ struct Front {
     description: String,
 }
 
-fn load_skills(root: &Path, spine_path: &Path, elected: Option<&[String]>) -> Result<Vec<SkillDef>> {
+/// The same two fields, read from a `.claude/skills/` file, where the rest of the
+/// frontmatter is somebody else's business.
+///
+/// **The ruling, and it is the `settings.json` argument one level down.** Real
+/// skills on a working machine carry `model-role`, `version` and
+/// `allowed-tools`; under the strict struct above, every one of them took the
+/// whole boot down. A rule that fires on correct configuration is an outage, not
+/// a safety property — and unlike `.emma/`, an unrecognised key here is not a
+/// typo in Emma's format, it is a key Emma has no opinion about in someone
+/// else's. So unknown keys are ignored, and a file that cannot be read at all is
+/// skipped with a warning rather than taken as a reason not to start.
+///
+/// `name` and `description` stay required, because they are not decoration: they
+/// are the catalogue line the model chooses the skill from, and a skill with no
+/// name cannot be asked for.
+#[derive(Deserialize)]
+struct ClaudeFront {
+    name: String,
+    description: String,
+}
+
+impl From<ClaudeFront> for Front {
+    fn from(f: ClaudeFront) -> Self {
+        Self {
+            name: f.name,
+            description: f.description,
+        }
+    }
+}
+
+fn load_skills(
+    root: &Path,
+    spine_path: &Path,
+    flavor: Flavor,
+    elected: Option<&[String]>,
+) -> Result<Vec<SkillDef>> {
     let dir = root.join("skills");
     // A `BTreeMap` keyed on the front-matter name gives the sorted catalogue the
     // prompt prefix needs, whatever order the directory iterated in.
@@ -777,7 +892,23 @@ fn load_skills(root: &Path, spine_path: &Path, elected: Option<&[String]>) -> Re
             }
             let text = std::fs::read_to_string(&path)
                 .with_context(|| format!("reading {}", path.display()))?;
-            let (front, body) = split_skill(&text, &path)?;
+            let (front, body) = match (split_skill(&text, &path, flavor), flavor) {
+                (Ok(v), _) => v,
+                // Emma's own format: a file this loader cannot read is a mistake
+                // in a file the operator wrote for Emma, and it stops the boot
+                // like every other one.
+                (Err(e), Flavor::Emma) => return Err(e),
+                // A foreign format. The skill is unusable either way; the choice
+                // is only whether it costs the operator this skill or every
+                // skill. It is named on stderr rather than dropped, because a
+                // catalogue quietly one shorter than the directory is the kind of
+                // gap nobody notices until the model cannot find a skill that is
+                // plainly there.
+                (Err(e), Flavor::Claude) => {
+                    eprintln!("emma: skipping skill {}: {e:#}", path.display());
+                    continue;
+                }
+            };
             found.insert(
                 front.name.clone(),
                 SkillDef::new(front.name, front.description, body),
@@ -801,17 +932,47 @@ fn load_skills(root: &Path, spine_path: &Path, elected: Option<&[String]>) -> Re
     Ok(out.into_values().collect())
 }
 
-fn split_skill(text: &str, path: &Path) -> Result<(Front, String)> {
+fn split_skill(text: &str, path: &Path, flavor: Flavor) -> Result<(Front, String)> {
     let named = |what: &str| format!("{}: {what}", path.display());
+    let text = match flavor {
+        Flavor::Emma => text,
+        Flavor::Claude => after_licence_header(text),
+    };
     let rest = text
         .strip_prefix("---\n")
         .with_context(|| named("expected YAML frontmatter"))?;
     let end = rest
         .find("\n---")
         .with_context(|| named("frontmatter is not closed"))?;
-    let front: Front =
-        serde_yaml::from_str(&rest[..end]).with_context(|| named("bad frontmatter"))?;
+    let front: Front = match flavor {
+        Flavor::Emma => serde_yaml::from_str(&rest[..end]),
+        Flavor::Claude => serde_yaml::from_str::<ClaudeFront>(&rest[..end]).map(Front::from),
+    }
+    .with_context(|| named("bad frontmatter"))?;
     Ok((front, rest[end + 4..].trim_start().to_string()))
+}
+
+/// Step over an HTML comment before the frontmatter, `.claude/` only.
+///
+/// A licence header above the `---` is common enough to be worth handling rather
+/// than skipping: the file is well-formed, it simply does not open with its own
+/// first line, and refusing it would drop a skill for a reason the operator can
+/// do nothing about. It steps over comments and blank lines and nothing else — a
+/// file with real prose above its frontmatter is not a skill with a header, it is
+/// a file whose frontmatter is somewhere in the middle, and guessing at that is
+/// how a parser starts reading text nobody meant as configuration.
+///
+/// Not covered: a `---\r\n` opener, or a byte-order mark. Both would still be
+/// skipped-with-a-warning rather than fatal, which is the property that mattered.
+fn after_licence_header(text: &str) -> &str {
+    let mut rest = text.trim_start();
+    while let Some(body) = rest.strip_prefix("<!--") {
+        let Some(end) = body.find("-->") else {
+            return rest;
+        };
+        rest = body[end + 3..].trim_start();
+    }
+    rest
 }
 
 fn load_commands(root: &Path) -> Result<BTreeMap<String, String>> {

@@ -79,11 +79,26 @@ async fn run(cli: cli::Cli) -> Result<()> {
     if let Some(skill) = Skill::new(harness.clone()) {
         registry.register(Arc::new(skill) as Arc<dyn Tool>);
     }
+    // The web surface, under the same rule and for the same reason. `web_tools`
+    // resolves Chrome and the Brave key *first* and returns only what can
+    // actually work: tustle-agent shipped a `web_search` that registered with no
+    // key and failed on every call, and the model had no way to learn the tool
+    // was decoration. What it left out is kept and reported below rather than
+    // dropped, because a capability that silently is not there is the same trap
+    // one step quieter.
+    //
+    // Both of these declare `reaches_network: true`, which is what makes
+    // registering them a decision rather than a default: the approval gate asks
+    // a human for each new host, once per session. See `approval.rs`.
+    let web = emma_tools_web::web_tools();
+    for tool in web.tools {
+        registry.register(tool);
+    }
     // Consumes the registry: the unfiltered one must not survive the call.
     let tools = harness.select_tools(registry)?;
 
     if cli.command == Command::ConfigCheck {
-        return emma::commands::config_check(&harness, &tools, &cwd);
+        return emma::commands::config_check(&harness, &tools, &cwd, &web.skipped);
     }
 
     let opts = cli.opts;
@@ -98,6 +113,12 @@ async fn run(cli: cli::Cli) -> Result<()> {
         (false, true) => (Gate::Unattended, Asker::Scripted(Default::default())),
         (false, false) => (Gate::Ask, Asker::Terminal(LineSource::stdin().into())),
     };
+    // After the terminal exists, because this is the first thing a user needs
+    // when a page read they expected does not happen: the tool is absent, and
+    // here is the sentence saying which one and why.
+    for line in &web.skipped {
+        term.note(line);
+    }
     if gate == Gate::SkipAll {
         // Loud, every run, before anything happens. A bypass nobody is
         // reminded of is a bypass somebody left on.

@@ -92,6 +92,7 @@ impl Tool for Stub {
         ToolMeta {
             read_only: true,
             idempotent: true,
+            reaches_network: false,
         }
     }
     async fn invoke(

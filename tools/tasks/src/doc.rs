@@ -19,9 +19,23 @@
 //! to *decide* to preserve a line it does not understand; a line it did not
 //! recognise as a checkbox becomes a `Line::Raw` holding the original string,
 //! and `Raw` has no other rendering. A tolerant parser eventually is not
-//! tolerant; one that never re-renders what it did not touch always is. There
-//! are exactly two exceptions and both are written down: a task line the caller
-//! changed, and a duplicate handle (see `assign_ids`).
+//! tolerant; one that never re-renders what it did not touch always is.
+//!
+//! **A line the agent does touch keeps its own bytes too.** Ticking a box
+//! overwrites the glyph and nothing else; stamping a handle inserts it after
+//! the last word and nothing else. The spaces somebody left after the bullet,
+//! the tab they indented a note with, the trailing whitespace nobody can see —
+//! all of it survives a write, because none of it is what the call was about.
+//! Tidying it would be a smaller version of the failure this whole format
+//! exists to prevent, and a person who finds their line reformatted has no
+//! reason to believe the next one will not be moved.
+//!
+//! **There is exactly one place a line is re-emitted canonically, and it is
+//! where preserving is meaningless**: a call that changes the task's *words*.
+//! New text leaves no original spacing to keep, so the line comes back with one
+//! space between bullet, box, text and handle. See `TaskLine::render`. A
+//! duplicate handle (see `assign_ids`) is the one other line a caller did not
+//! name that can change, and it changes only the handle, in place.
 //!
 //! **The shape of the file, in reading order.** [`Status`] is the three-way
 //! glyph and its wire spelling; `TaskLine` is a parsed checkbox and `Line::Raw`
@@ -59,6 +73,9 @@
 //! **Nothing is ever reordered, and nothing completed is ever deleted.** See
 //! `descriptions/task_update.md` for why cleanup is a tick rather than a
 //! deletion.
+
+use std::collections::BTreeSet;
+use std::ops::Range;
 
 // region: The file a person opens
 // ---------------------------------------------------------------------------
@@ -166,6 +183,25 @@ impl Status {
     }
 }
 
+/// What a call changed about a line, which is what decides how much of the
+/// line it is allowed to rewrite.
+///
+/// Three flags rather than one `dirty` bit, because the answer differs: a
+/// status change knows the byte it wants, a stamp knows the offset it wants,
+/// and only new text has no original left to preserve.
+#[derive(Debug, Clone, Copy, Default)]
+struct Edit {
+    status: bool,
+    handle: bool,
+    text: bool,
+}
+
+impl Edit {
+    fn any(self) -> bool {
+        self.status || self.handle || self.text
+    }
+}
+
 #[derive(Debug, Clone)]
 struct TaskLine {
     indent: String,
@@ -182,32 +218,76 @@ struct TaskLine {
     /// file does not silently become mixed-ending on the next write.
     eol: &'static str,
     original: String,
-    dirty: bool,
+    /// Byte offsets into `original`: the status glyph, the end of the last
+    /// word of the text, and the `` `#a3f1` `` handle if the line came with
+    /// one. They are what let a change be *spliced* into the human's own bytes
+    /// instead of the line being rebuilt around it. All three are meaningless
+    /// on a line `create` synthesised, which has no original and is rendered
+    /// from its fields.
+    glyph_at: usize,
+    text_end: usize,
+    handle_at: Option<Range<usize>>,
+    edit: Edit,
 }
 
 impl TaskLine {
-    /// Untouched lines take the early return and are the original bytes. The
-    /// formatted branch is only ever reached for a line a call actually
-    /// changed, and it is canonical rather than faithful: the human's indent
-    /// and bullet are carried through, but the spacing *inside* the line is
-    /// normalised to one space and the text is the trimmed text. That is a
-    /// deliberate trade — the alternative is retaining offsets into a string
-    /// whose middle is being replaced — and it is bounded to the one line the
-    /// caller named. Anything that followed the handle cannot be lost here,
-    /// because `split_id` only recognises a handle at the very end of the line.
+    /// Untouched lines take the early return and are the original bytes.
+    ///
+    /// Beyond that the rule is the same one the file rests on, one level down:
+    /// change the bytes the call was about and leave every other byte alone.
+    /// A status change overwrites one character in place; a stamp inserts the
+    /// handle after the last word. The indent, the bullet, the spaces the
+    /// person left between them, and any trailing whitespace all survive,
+    /// because none of them is being spliced.
+    ///
+    /// **New text is the one exception, and it is the whole of it.** When the
+    /// words themselves change there is no original spacing left to preserve —
+    /// the offsets describe a string whose middle is being replaced — so the
+    /// line is re-emitted canonically: one space between bullet, box, text and
+    /// handle, and the text trimmed. Bounded to a line the caller named and to
+    /// a call that asked for different words. A line `create` made takes the
+    /// same branch, having never been anything else.
+    ///
+    /// Anything that followed the handle cannot be lost either way, because
+    /// `split_id` only recognises a handle at the very end of the line.
     fn render(&self) -> String {
-        if !self.dirty {
+        if !self.edit.any() {
             return self.original.clone();
         }
-        format!(
-            "{}{} [{}] {} `#{}`{}",
-            self.indent,
-            self.bullet,
-            self.status.glyph(),
-            self.text,
-            self.id,
-            self.eol
-        )
+        if self.edit.text {
+            return format!(
+                "{}{} [{}] {} `#{}`{}",
+                self.indent,
+                self.bullet,
+                self.status.glyph(),
+                self.text,
+                self.id,
+                self.eol
+            );
+        }
+
+        let mut out = self.original.clone();
+        // Splice from the far end inwards, so no offset ever has to be
+        // adjusted for an earlier edit. It happens not to matter today — the
+        // glyph is one byte replaced by one byte — but a rule that depends on
+        // that is a rule waiting for the first splice that changes a length.
+        if self.edit.handle {
+            let handle = format!("`#{}`", self.id);
+            match &self.handle_at {
+                Some(at) => out.replace_range(at.clone(), &handle),
+                None => out.insert_str(self.text_end, &format!(" {handle}")),
+            }
+        }
+        if self.edit.status {
+            // One byte wide, and a char boundary: `split_checkbox` only
+            // accepts a glyph with `]` at the next byte, which proves the
+            // glyph is a single ASCII character.
+            out.replace_range(
+                self.glyph_at..self.glyph_at + 1,
+                self.status.glyph().encode_utf8(&mut [0u8; 4]),
+            );
+        }
+        out
     }
 }
 
@@ -304,6 +384,17 @@ impl Doc {
     pub fn create(&mut self, text: &str, status: Status) -> String {
         let text = text.trim().to_string();
         let id = self.unique_id(&text);
+
+        // A file with nothing in it but whitespace is treated as absent and
+        // gains the preamble, because the preamble is the only place the human
+        // is told the file is theirs to edit. This happens *before* the line is
+        // built, because the preamble is LF and the line takes its ending from
+        // the document: reading the ending off a blank-but-CRLF file would give
+        // it a `\r` the preamble around it does not have.
+        if self.lines.is_empty() || self.is_blank() {
+            self.lines = PREAMBLE.split('\n').map(|s| Line::Raw(s.into())).collect();
+        }
+
         let line = TaskLine {
             indent: String::new(),
             bullet: "-".into(),
@@ -313,18 +404,17 @@ impl Doc {
             stamped: true,
             eol: self.eol(),
             original: String::new(),
-            dirty: true,
+            // A synthesised line has no original bytes to splice into, so the
+            // offsets are unused and it renders from its fields.
+            glyph_at: 0,
+            text_end: 0,
+            handle_at: None,
+            edit: Edit {
+                text: true,
+                ..Edit::default()
+            },
         };
 
-        // A file with nothing in it but whitespace is treated as absent and
-        // gains the preamble, because the preamble is the only place the human
-        // is told the file is theirs to edit. The preamble is LF whatever
-        // `eol()` decided above, so a file that was blank *and* CRLF comes back
-        // with LF preamble lines and a CRLF task line. Stated rather than
-        // hidden; there is no human text in a blank file to be lost by it.
-        if self.lines.is_empty() || self.is_blank() {
-            self.lines = PREAMBLE.split('\n').map(|s| Line::Raw(s.into())).collect();
-        }
         let at = self.insertion_point();
         self.lines.insert(at, Line::Task(line));
         id
@@ -346,8 +436,13 @@ impl Doc {
         if let Some(new) = text {
             t.text = new.trim().to_string();
         }
+        // Each flag names what the call actually changed. Status alone rewrites
+        // one glyph; a line that already carried its handle does not need it
+        // written again; only new words forfeit the original bytes.
+        t.edit.status |= status.is_some();
+        t.edit.text |= text.is_some();
+        t.edit.handle |= !t.stamped;
         t.stamped = true;
-        t.dirty = true;
         true
     }
 
@@ -356,17 +451,17 @@ impl Doc {
     /// ever stamps — a read never writes, which is what keeps `TaskList`
     /// genuinely read-only.
     ///
-    /// It is append-only: marking the line dirty makes `TaskLine::render`
-    /// re-emit it with `` `#id` `` after the text, and the text itself is
-    /// copied through. Along with the duplicate-handle rewrite in `assign_ids`
-    /// this is one of the two ways a line the caller did not name can change,
-    /// and both only ever add or replace a handle.
+    /// It is append-only in the literal sense: `TaskLine::render` inserts
+    /// `` `#id` `` after the last word and leaves the rest of the line as the
+    /// bytes it arrived as. Along with the duplicate-handle rewrite in
+    /// `assign_ids` this is one of the two ways a line the caller did not name
+    /// can change, and both only ever add or replace a handle.
     pub fn stamp_ids(&mut self) {
         for line in &mut self.lines {
             if let Line::Task(t) = line {
                 if !t.stamped {
                     t.stamped = true;
-                    t.dirty = true;
+                    t.edit.handle = true;
                 }
             }
         }
@@ -479,36 +574,64 @@ impl Doc {
 // ---------------------------------------------------------------------------
 
 fn parse_line(raw: &str) -> Line {
-    let body = raw.strip_suffix('\r').unwrap_or(raw);
-    let eol = if body.len() == raw.len() { "" } else { "\r" };
-    match split_checkbox(body) {
-        Some((indent, bullet, glyph, rest)) => {
-            let (text, id) = split_id(rest);
+    let bare = raw.strip_suffix('\r').unwrap_or(raw);
+    let eol = if bare.len() == raw.len() { "" } else { "\r" };
+    match split_checkbox(bare) {
+        Some(box_) => {
+            let tail = split_id(box_.body);
+            // Offsets measured against `bare` are equally valid against `raw`:
+            // the only difference between them is a `\r` at the far end, past
+            // everything named here.
+            let text_end = box_.body_at + tail.text.len();
+            let handle_at = tail
+                .handle
+                .map(|h| box_.body_at + h.start..box_.body_at + h.end);
             Line::Task(TaskLine {
-                indent,
-                bullet,
-                status: Status::from_glyph(glyph),
-                text,
-                id: id.clone().unwrap_or_default(),
-                stamped: id.is_some(),
+                indent: box_.indent,
+                bullet: box_.bullet,
+                status: Status::from_glyph(box_.glyph),
+                text: tail.text,
+                id: tail.id.clone().unwrap_or_default(),
+                stamped: tail.id.is_some(),
                 eol,
                 original: raw.to_string(),
-                dirty: false,
+                glyph_at: box_.glyph_at,
+                text_end,
+                handle_at,
+                edit: Edit::default(),
             })
         }
         None => Line::Raw(raw.to_string()),
     }
 }
 
-/// `  - [x] text` → (indent, bullet, glyph, text). Ordered and unordered
-/// bullets both, because a hand-written list is as likely to be `1.` as `-`.
+/// A recognised checkbox, and where its parts sit in the line.
+///
+/// The offsets are carried out with the parts rather than recovered later by
+/// searching, because searching for the box again is a second, subtly
+/// different parser — and the two would disagree on exactly the odd line this
+/// whole module exists to protect.
+struct Checkbox<'a> {
+    indent: String,
+    bullet: String,
+    glyph: char,
+    /// Byte offset of the glyph itself, for a status change to overwrite.
+    glyph_at: usize,
+    /// The text and any handle, and where that begins.
+    body: &'a str,
+    body_at: usize,
+}
+
+/// `  - [x] text` → indent, bullet, glyph and text, with offsets. Ordered and
+/// unordered bullets both, because a hand-written list is as likely to be `1.`
+/// as `-`.
 ///
 /// Everything here is a reason to say no. Recognising too much is the
 /// expensive direction: a sentence promoted to a task acquires a handle on the
 /// next write, and a handle appearing in the middle of somebody's paragraph is
 /// the file editing them rather than the other way round. Returning `None`
 /// only costs a task the human has to restate.
-fn split_checkbox(line: &str) -> Option<(String, String, char, &str)> {
+fn split_checkbox(line: &str) -> Option<Checkbox<'_>> {
     let indent = indent_of(line).to_string();
     let rest = &line[indent.len()..];
 
@@ -544,7 +667,16 @@ fn split_checkbox(line: &str) -> Option<(String, String, char, &str)> {
     if body.len() == after.len() - 3 && !body.is_empty() {
         return None; // `[x]text` with no separating space is prose, not a task
     }
-    Some((indent, bullet, glyph, body))
+    // `after` and `body` are both suffixes of `line`, so their lengths give
+    // their positions in it.
+    Some(Checkbox {
+        indent,
+        bullet,
+        glyph,
+        glyph_at: line.len() - after.len() + 1,
+        body,
+        body_at: line.len() - body.len(),
+    })
 }
 
 fn indent_of(line: &str) -> &str {
@@ -556,6 +688,29 @@ fn indent_of(line: &str) -> &str {
     &line[..n]
 }
 
+/// The words, the handle, and where the handle sat.
+///
+/// `text` is always a prefix of the input — only ever a suffix is trimmed off —
+/// which is what makes `text.len()` an offset as well as a length, and so the
+/// place a stamp inserts a handle.
+struct Tail {
+    text: String,
+    id: Option<String>,
+    /// The whole `` `#a3f1` ``, backticks included, so a re-derived handle
+    /// replaces the old one rather than being appended beside it.
+    handle: Option<Range<usize>>,
+}
+
+impl Tail {
+    fn bare(text: &str) -> Self {
+        Self {
+            text: text.to_string(),
+            id: None,
+            handle: None,
+        }
+    }
+}
+
 /// Split a trailing `` `#a3f1` `` handle off the text. Only at the very end,
 /// so a `#hashtag` or an inline `` `#code` `` mid-sentence is left alone.
 ///
@@ -563,25 +718,26 @@ fn indent_of(line: &str) -> &str {
 /// because everything that is not a handle has to survive as part of the task's
 /// own words. `derive_id` only ever emits four digits; the accepted range is
 /// wider than the emitted one.
-fn split_id(text: &str) -> (String, Option<String>) {
+fn split_id(text: &str) -> Tail {
     let trimmed = text.trim_end();
     let Some(head) = trimmed.strip_suffix('`') else {
-        return (trimmed.to_string(), None);
+        return Tail::bare(trimmed);
     };
     let Some(open) = head.rfind('`') else {
-        return (trimmed.to_string(), None);
+        return Tail::bare(trimmed);
     };
     let candidate = &head[open + 1..];
     let Some(hex) = candidate.strip_prefix('#') else {
-        return (trimmed.to_string(), None);
+        return Tail::bare(trimmed);
     };
     if hex.is_empty() || hex.len() > 8 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return (trimmed.to_string(), None);
+        return Tail::bare(trimmed);
     }
-    (
-        head[..open].trim_end().to_string(),
-        Some(hex.to_ascii_lowercase()),
-    )
+    Tail {
+        text: head[..open].trim_end().to_string(),
+        id: Some(hex.to_ascii_lowercase()),
+        handle: Some(open..trimmed.len()),
+    }
 }
 
 // endregion: Recognising a task
@@ -616,18 +772,37 @@ fn derive_id(text: &str, salt: u32) -> String {
 /// using. Salting rather than counting keeps the id opaque: a handle that read
 /// as `#0001`, `#0002` would invite somebody to renumber them.
 ///
-/// The bound is honest about what it is: 16 bits is 65,536 handles, so a single
-/// file holding that many tasks would exhaust the space and reach the panic.
-/// The panic is preferred to a silent duplicate, which is the failure `TaskGet`
-/// cannot see.
+/// **The space is 16 bits — 65,536 handles — and a file can exhaust it.** That
+/// takes 65,536 tasks in one `tasks.md`, which is not a file anybody is
+/// reading, but "nobody would" is not the same as "cannot" and this used to
+/// claim the latter. Exhaustion panics, because the alternative is a duplicate
+/// handle and `TaskGet` cannot see a duplicate: it would answer confidently
+/// about the wrong task.
+///
+/// The exhaustion check is up front rather than after the loop. Once every
+/// handle is taken no salt can succeed, so a loop that discovered it by running
+/// out would grind through four billion attempts first and read as a hang
+/// rather than as an error.
 fn first_free_id(text: &str, taken: &[String]) -> String {
+    const SPACE: usize = 1 << 16;
+    // The distinct count is only paid for on the one branch where the space
+    // could conceivably be full; `taken.len()` alone is the cheap gate.
+    if taken.len() >= SPACE && taken.iter().collect::<BTreeSet<_>>().len() >= SPACE {
+        panic!("all 65536 task handles in this file are in use; it cannot hold another task");
+    }
     for salt in 0..u32::MAX {
         let id = derive_id(text, salt);
         if !taken.iter().any(|t| t == &id) {
             return id;
         }
     }
-    unreachable!("16 bits of id space cannot be exhausted by one file")
+    // Not provably unreachable: the space has a free handle, but nothing here
+    // proves FNV-1a reaches it within 2^32 salts. Saying so beats an
+    // `unreachable!` that would be a claim about a hash function.
+    panic!(
+        "no free task handle found in 2^32 attempts, with {} in use",
+        taken.len()
+    )
 }
 
 /// Fill in ids after parsing, in document order.
@@ -647,8 +822,9 @@ fn assign_ids(lines: &mut [Line]) {
             continue;
         }
         if t.stamped {
-            // Collided. It needs a new handle written down, so it is dirty.
-            t.dirty = true;
+            // Collided. The new handle replaces the old one where it sits;
+            // nothing else about the line changes.
+            t.edit.handle = true;
         }
         let id = first_free_id(&t.text, &taken);
         taken.push(id.clone());
@@ -743,6 +919,61 @@ mod tests {
             let doc = Doc::parse(line);
             assert!(doc.tasks().is_empty(), "{line} parsed as a task");
         }
+    }
+
+    /// The one line a call named is still the human's line. A status change
+    /// rewrites one byte; everything they typed around it — the spaces they
+    /// left after the bullet, after the bracket, and at the end of the line —
+    /// is the same bytes it arrived as.
+    #[test]
+    fn changing_a_status_rewrites_the_glyph_and_nothing_else() {
+        let src = "-   [ ]   review   the spec   `#a1b2`   \n";
+        let mut doc = Doc::parse(src);
+        assert!(doc.update("a1b2", Some(Status::Completed), None));
+        assert_eq!(doc.render(), "-   [x]   review   the spec   `#a1b2`   \n");
+    }
+
+    /// Stamping is append-only in the strict sense: the handle goes in after
+    /// the last word and every other byte of the line, trailing whitespace
+    /// included, is left where the person put it.
+    #[test]
+    fn stamping_inserts_a_handle_and_disturbs_nothing_else() {
+        let mut doc = Doc::parse("  *  [~]  ship  it  \n");
+        let id = doc.tasks()[0].id.clone();
+        doc.stamp_ids();
+        assert_eq!(doc.render(), format!("  *  [~]  ship  it `#{id}`  \n"));
+    }
+
+    /// The documented exception, asserted so it stays the only one: new words
+    /// mean there is no original spacing left to preserve, and the line is
+    /// re-emitted canonically.
+    #[test]
+    fn changing_the_text_is_the_one_place_a_line_is_canonicalised() {
+        let mut doc = Doc::parse("-   [ ]   old   words   `#a1b2`   \n");
+        assert!(doc.update("a1b2", None, Some("new words")));
+        assert_eq!(doc.render(), "- [ ] new words `#a1b2`\n");
+    }
+
+    /// A blank file is replaced by the LF preamble, so the task line appended
+    /// to it has to be LF too — reading the ending off the document *before*
+    /// that replacement produces one CRLF line in an otherwise LF file.
+    #[test]
+    fn a_blank_crlf_file_does_not_come_back_half_crlf() {
+        let mut doc = Doc::parse("\r\n");
+        doc.create("the first task", Status::Pending);
+        let out = doc.render();
+        assert!(!out.contains('\r'), "mixed endings: {out:?}");
+    }
+
+    /// The id space is 16 bits and a file can exhaust it. What must not happen
+    /// is a duplicate handle, which `TaskGet` cannot see; what must also not
+    /// happen is the salt loop grinding through four billion attempts to say
+    /// so.
+    #[test]
+    #[should_panic(expected = "65536")]
+    fn an_exhausted_id_space_says_so_rather_than_grinding() {
+        let taken: Vec<String> = (0..0x1_0000).map(|i| format!("{i:04x}")).collect();
+        first_free_id("one more task", &taken);
     }
 
     /// A *modified* line is the only place the ending can be lost, because an

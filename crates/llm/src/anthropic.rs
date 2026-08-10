@@ -1139,12 +1139,12 @@ mod tests {
         let (turn, _) = run(&s, request(), Mode::Batch).await;
         let msg = turn.unwrap_err().to_string();
         assert!(msg.contains("ANTHROPIC_API_KEY"), "{msg}");
-        // The sentence this crate composes, before the binary rewrites it. The
-        // command a user actually runs is `emma api`; see the note on
-        // `LlmError::Unauthorized` and `emma::commands::rename_auth`. This
-        // assertion is what makes the pair change together — edit the message
-        // and this goes red before the rewrite goes quietly stale.
-        assert!(msg.contains("emma auth"), "{msg}");
+        // The command a user actually runs. This crate used to compose
+        // `emma auth` and let `emma::commands::rename_auth` patch it on the way
+        // out; the string is now correct at the source, so the rewrite has
+        // nothing to do.
+        assert!(msg.contains("emma api"), "{msg}");
+        assert!(!msg.contains("emma auth"), "{msg}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1175,6 +1175,58 @@ mod tests {
         // …and the provider itself cannot print it either.
         let p = format!("{:?}", provider(&s));
         assert!(!p.contains(TEST_KEY), "{p}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_mid_stream_error_frame_never_contains_the_key() {
+        // The path `a_formatted_error_never_contains_the_key` cannot reach.
+        // `Assembly::apply` is a free function the key was never handed to, so
+        // nothing here can scrub at construction; a gateway that echoes the
+        // auth header into an SSE `error` frame is putting it straight into an
+        // `LlmError` that gets printed and logged.
+        let body = format!(
+            "data: {}\n\n",
+            json!({
+                "type": "error",
+                "error": { "message": format!("upstream rejected x-api-key: {TEST_KEY}") }
+            })
+        );
+        let s = stub(vec![Reply::sse(body)]).await;
+        let (turn, _) = run(&s, request(), Mode::Stream).await;
+        let err = turn.unwrap_err();
+
+        let shown = format!("{err}");
+        assert!(!shown.contains(TEST_KEY), "key leaked into Display: {shown}");
+        assert!(shown.contains("[redacted]"), "{shown}");
+        let debugged = format!("{err:?}");
+        assert!(
+            !debugged.contains(TEST_KEY),
+            "key leaked into Debug: {debugged}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_error_shaped_batch_body_never_contains_the_key() {
+        // HTTP 200 with an error-shaped body: `classify` is never reached, so
+        // `turn_from_message` builds the `Api` variant — again with no key in
+        // scope to scrub with.
+        let body = json!({
+            "type": "error",
+            "error": { "message": format!("upstream rejected x-api-key: {TEST_KEY}") }
+        })
+        .to_string();
+        let s = stub(vec![Reply::json(body)]).await;
+        let (turn, _) = run(&s, request(), Mode::Batch).await;
+        let err = turn.unwrap_err();
+
+        let shown = format!("{err}");
+        assert!(!shown.contains(TEST_KEY), "key leaked into Display: {shown}");
+        assert!(shown.contains("[redacted]"), "{shown}");
+        let debugged = format!("{err:?}");
+        assert!(
+            !debugged.contains(TEST_KEY),
+            "key leaked into Debug: {debugged}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1392,6 +1444,7 @@ mod tests {
             fn meta(&self) -> ToolMeta {
                 ToolMeta {
                     read_only: true,
+                    reaches_network: false,
                     idempotent: true,
                 }
             }

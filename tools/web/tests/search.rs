@@ -259,4 +259,36 @@ async fn a_search_reaching_nothing_at_all_is_a_failure_not_a_crash() {
     assert_eq!(err.kind(), "tool_failed", "{err}");
 }
 
+#[test]
+fn websearch_declares_egress_and_names_the_provider_and_the_query() {
+    // `read_only` is honest — nothing on this machine changes — and it is
+    // exactly why the second axis has to be true: a search is an arbitrary
+    // string the model chose, sent to a third party, and it reads as a read.
+    let tool = WebSearch::with_key(ApiKey::new(TEST_KEY));
+    assert!(tool.meta().read_only);
+    assert!(tool.meta().reaches_network);
+
+    let t = tool
+        .network_target(&json!({ "query": "  tokio select  " }))
+        .expect("a query has a destination");
+    assert_eq!(t.host, "api.search.brave.com");
+    // The query, because the query *is* what leaves. A prompt naming only the
+    // provider cannot tell a search for a crate from a search for a secret.
+    assert!(t.detail.contains("tokio select"), "{}", t.detail);
+}
+
+#[tokio::test]
+async fn the_host_gated_is_the_host_contacted() {
+    // The target comes from `base_url` rather than a constant, so a run
+    // pointed at a stub is approved for the stub. Gating the host it *would*
+    // have contacted would mean the grant and the connection disagree — which
+    // is the one property a per-host grant cannot afford to lose.
+    let s = stub(200, results_body(), 1).await;
+    let tool = WebSearch::with_key(ApiKey::new(TEST_KEY)).with_base_url(s.url.clone());
+    let t = tool
+        .network_target(&json!({ "query": "x" }))
+        .expect("a query has a destination");
+    assert_eq!(t.host, "127.0.0.1");
+}
+
 // endregion: What goes out, and what comes back

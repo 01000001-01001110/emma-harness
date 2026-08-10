@@ -1,21 +1,18 @@
 //! Emma's web surface: `WebFetch` and `WebSearch`.
 //!
-//! **Nothing in this crate is reachable from Emma.** `tools/web` is a
-//! `[workspace] members` entry that the binary does not depend on: there is no
-//! reference to `emma_tools_web`, `WebFetch` or `WebSearch` anywhere under
-//! `crates/`, `crates/emma/Cargo.toml` does not list this crate, and
-//! `main.rs` registers the filesystem tools, the task tools and `Skill` and
-//! stops. The code below compiles and its tests pass; the model has never
-//! called either tool, because neither is in any registry. Read every
-//! "registers", "the model", and "the approval gate" in this crate as
-//! describing what *would* happen once a caller exists.
+//! Both are registered by `crates/emma/src/main.rs` through [`web_tools`],
+//! which returns only the ones that can actually work on this machine.
 //!
-//! That is a deferral, not an oversight. The gate a tool must pass to run
-//! unattended keys entirely on [`emma_tool_api::ToolMeta::read_only`], and the
-//! last paragraph of this comment is the reason that single boolean cannot yet
-//! answer for a tool that talks to the outside. Wiring these two through a
-//! one-bit gate would decide that open question by accident, so the fork
-//! landed and the decision it waits on did not.
+//! This crate sat unreachable for a while, and deliberately: the approval gate
+//! keyed entirely on [`emma_tool_api::ToolMeta::read_only`], one boolean that
+//! cannot express both "may not write" and "may not talk to the outside", and
+//! wiring these two through it would have decided that question by accident.
+//! The decision was made rather than dodged — `ToolMeta` gained a second axis,
+//! [`emma_tool_api::ToolMeta::reaches_network`], and the gate consults the two
+//! separately. Both tools declare it, both answer
+//! [`emma_tool_api::Tool::network_target`] with the host they are about to
+//! reach, and a human grants a host once per session. The last paragraph of
+//! this comment is the argument that shape came out of.
 //!
 //! The names are Claude Code's, exactly, so a hook matcher or an allow-list
 //! written for one works for the other.
@@ -26,30 +23,28 @@
 //! Chrome and returns what it says. A model that answers from search snippets
 //! is quoting a search engine's summary of a page it never opened.
 //!
-//! **Neither tool would be registered unless it can work.** tustle-agent
-//! shipped a `web_search` that registered with no API key and failed on every
-//! call; a turn that touched it died, and the model had no way to learn that
-//! the tool was decoration. So [`web_tools`] resolves the browser and the key
-//! *first* and returns only what is usable, plus the reasons for anything it
-//! left out so the omission can be reported rather than being silent. That
-//! function is the intended entry point and currently has no caller — the
-//! discipline is built and waiting, not exercised.
+//! **Neither tool is registered unless it can work.** tustle-agent shipped a
+//! `web_search` that registered with no API key and failed on every call; a
+//! turn that touched it died, and the model had no way to learn that the tool
+//! was decoration. So [`web_tools`] resolves the browser and the key *first*
+//! and returns only what is usable, plus the reasons for anything it left out,
+//! which `main.rs` prints so the omission is reported rather than silent.
 //!
-//! **`read_only` cannot answer for these two, and that is why they are not
-//! wired.** Both tools reach the network — one of them by driving a browser —
-//! and both declare `read_only: true`. That declaration is honest about what
-//! the gate actually asks, which is "can this change local state": nothing is
-//! written inside the working directory, nothing is submitted, no form is
-//! filled. But egress is a different risk — it is how a prompt-injected page
-//! turns a read tool into an exfiltration channel, and every local-damage
-//! check still passes while it happens. One boolean cannot express both "may
-//! not write" and "may not talk to the outside". Flipping these to
-//! `read_only: false` was considered and refused: a gate that fires on every
-//! page read trains the operator to click through it, which costs the gate on
-//! `Write` too. The proposed answer is a second axis on `ToolMeta` — most
-//! usefully a human-granted per-domain grant rather than a per-call prompt —
-//! and it is proposed, not decided. See `ToolMeta::read_only`'s own doc, which
-//! records the same open question from the other side.
+//! **`read_only` cannot answer for these two on its own.** Both reach the
+//! network — one by driving a browser — and both declare `read_only: true`.
+//! That declaration is honest about what the bit asks, which is "can this
+//! change local state": nothing is written inside the working directory,
+//! nothing is submitted, no form is filled. But egress is a different risk —
+//! it is how a prompt-injected page turns a read tool into an exfiltration
+//! channel, and every local-damage check still passes while it happens. One
+//! boolean cannot express both "may not write" and "may not talk to the
+//! outside". Flipping these to `read_only: false` was considered and refused:
+//! a gate that fires on every page read trains the operator to click through
+//! it, which costs the gate on `Write` too. What landed instead is a second
+//! axis with a *per-host, session-scoped* grant — asked once per host, never
+//! per call, and outliving nothing. See `ToolMeta::reaches_network`, which
+//! records what that axis does and, more usefully, what it does not: it gates
+//! where bytes go and says nothing about trusting what comes back.
 
 use std::sync::Arc;
 
@@ -80,9 +75,9 @@ pub struct WebSurface {
 /// an absent tool is one the model can reason about, where a present and
 /// broken one is not.
 ///
-/// No caller: nothing in `crates/` invokes this. It is the seam a future
-/// registration would go through, and the detection it performs is why that
-/// registration can be safe when it happens.
+/// Called once, at startup, by `crates/emma/src/main.rs`. The detection it
+/// performs is the reason that registration is safe: everything it returns has
+/// already been checked against this machine.
 pub fn web_tools() -> WebSurface {
     let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
     let mut skipped = Vec::new();
@@ -109,9 +104,7 @@ mod tests {
         // entire instruction manual a model gets for a tool, and nothing at
         // registration time checks that either says anything: a tool with a
         // stub description registers cleanly and is simply unusable. Deleting
-        // this test loses the only place that is caught. It matters more here
-        // than elsewhere precisely because these two are not wired up yet —
-        // there is no live turn that would notice the omission first.
+        // this test loses the only place that is caught.
         let tools: Vec<Arc<dyn Tool>> = vec![
             Arc::new(fetch::WebFetch::new()),
             Arc::new(search::WebSearch::with_key(emma_llm::ApiKey::new("k"))),

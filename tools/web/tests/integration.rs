@@ -385,7 +385,15 @@ fn session_loop_click_type_select_refusals_history() {
     // STRUCTURAL REFUSALS — submit control and password field
     let (code, j, _) = r(&["click", "--selector", "#send"]);
     assert_eq!(code, 2, "submit-typed control must be refused");
-    assert!(j["detail"].as_str().unwrap().contains("submit"));
+    let detail = j["detail"].as_str().unwrap();
+    assert!(detail.contains("submit"));
+    // The refusal redirects the user to the `submit` verb, so it must not also
+    // tell them that verb is missing: `forms::submit` is implemented, wired
+    // into this same binary, and covered three tests down this file.
+    assert!(
+        !detail.contains("not built") && !detail.contains("does not exist"),
+        "click's refusal must not claim `submit` is unbuilt: {detail}"
+    );
     let (code, j, _) = r(&["type", "--selector", "#pw", "--text", "hunter2"]);
     assert_eq!(code, 2, "password field must be refused");
     assert!(j["detail"].as_str().unwrap().contains("password"));

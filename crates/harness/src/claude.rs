@@ -13,10 +13,12 @@
 //! the spelling of the hooks block. It also carries `agents/`, which is the
 //! nearest thing Claude Code has to a persona.
 //!
-//! One caveat the note's "works unchanged" does not carry: skill frontmatter is
-//! parsed strictly, so a `SKILL.md` with keys beyond `name` and `description`
-//! fails the load rather than being read partially. `Front` in `lib.rs` states
-//! the case.
+//! Skill frontmatter found under `.claude/` is read permissively — unknown keys
+//! are ignored and a file that cannot be parsed is skipped with a warning rather
+//! than taking the boot down. It was strict, and real skills carrying
+//! `model-role`, `version` or `allowed-tools` meant Emma would not start at all;
+//! `ClaudeFront` in `lib.rs` argues the ruling. `.emma/`'s own skills stay
+//! strict, because there an unknown key is a typo in Emma's format.
 //!
 //! **Two rules from the note are firm and are enforced here and in `discover`:**
 //! `.emma/` wins outright when both exist — never merged, because merging is how
@@ -85,8 +87,23 @@ struct Entry {
 /// Anything in a command string that means a shell would have to interpret it.
 /// Emma execs an argv, so a string needing a shell cannot be honoured — see
 /// `translate_command`.
+///
+/// Whitespace is handled separately and as a class rather than listed here. It
+/// used to be one explicit `' '` check beside this set, which left the tab out:
+/// `hooks/guard.sh\t--strict` walked past the refusal and failed further down as
+/// a missing file, so the operator got the right verdict with the wrong sentence
+/// pointing at the wrong problem. Every character that separates arguments has
+/// to be caught by the same rule, or the next one to be forgotten is the next
+/// one added.
+///
+/// The rest are the shell's own operators: redirection and pipes, command and
+/// variable substitution, quoting, globbing and brace/tilde expansion, history
+/// and comments, and `%` for Windows' own expansion. A filename containing one
+/// of these is refused; renaming a hook script is cheaper than deciding at
+/// startup which of them a shell would have acted on.
 const SHELL_METACHARACTERS: &[char] = &[
-    '|', '&', ';', '<', '>', '(', ')', '$', '`', '"', '\'', '*', '?', '\n',
+    '|', '&', ';', '<', '>', '(', ')', '$', '`', '"', '\'', '*', '?', '[', ']', '{', '}', '~', '#',
+    '!', '%', '=',
 ];
 
 impl Settings {
@@ -181,7 +198,10 @@ fn translate_command(root: &Path, name: &str, raw: &str) -> Result<String> {
         .unwrap_or(rest)
         .trim_start_matches("./");
 
-    if rest.is_empty() || rest.contains(SHELL_METACHARACTERS) || rest.contains(' ') {
+    if rest.is_empty()
+        || rest.contains(SHELL_METACHARACTERS)
+        || rest.contains(char::is_whitespace)
+    {
         bail!(
             "hook `{name}`: `{raw}` is a shell command. Emma execs a contained \
              executable with a cleared environment and cannot honour a shell \

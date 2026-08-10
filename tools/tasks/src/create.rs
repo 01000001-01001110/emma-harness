@@ -175,6 +175,7 @@ impl Tool for TaskCreate {
             // names TaskCreate and TaskUpdate in an `EXEMPT` list, with the
             // whole argument written above it.
             read_only: false,
+            reaches_network: false,
             // Called twice with the same list, you get the list twice. Nothing
             // here deduplicates by text, because two genuinely identical steps
             // in a plan are a thing that happens.

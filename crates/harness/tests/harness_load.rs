@@ -53,6 +53,89 @@ fn the_env_override_wins_over_the_walk() {
     assert_eq!(found, far);
 }
 
+/// **The one that was found by the suite going red rather than by reading the
+/// code.** `emma api` writes `~/.emma/credentials.json`, which makes `~/.emma/`
+/// exist — and from that moment every project without a harness of its own
+/// adopted it, booting with no instructions, no persona and the full
+/// write-capable tool surface. The user did not choose a default harness; they
+/// stored a credential.
+///
+/// So the rule: the thing that makes a directory a harness has to be the thing a
+/// person put there on purpose. In the home directory that means `config.json`
+/// or `personas/`; a `credentials.json` or a `sessions/` directory is Emma's own
+/// bookkeeping and says nothing about how Emma should be configured.
+#[test]
+fn a_home_emma_holding_only_credentials_is_not_a_harness() {
+    let home = scratch("home-credentials");
+    write(&home.join(".emma/credentials.json"), r#"{"key":"sk-ant-x"}"#);
+    std::fs::create_dir_all(home.join(".emma/sessions")).expect("mkdir");
+    let deep = home.join("code/scratch");
+    std::fs::create_dir_all(&deep).expect("mkdir");
+
+    let err = emma_harness::discover_in(&deep, None, Some(home.clone()))
+        .expect_err("storing an API key must not create a harness");
+    let msg = err.to_string();
+    // Not a harness at all, rather than an empty one: the refusal has to be the
+    // absent-harness sentence, or an operator reads "0 bytes, empty harness" and
+    // believes their configuration was found and was blank.
+    assert!(msg.contains("no `.emma/`"), "{msg}");
+    assert!(
+        msg.contains(&deep.join(".emma").display().to_string()),
+        "the refusal still has to name what it searched: {msg}"
+    );
+    // And it must not pretend it never looked: the directory is right there, and
+    // an operator who can see it deserves to be told why it was passed over.
+    assert!(
+        msg.contains(&home.join(".emma").display().to_string()),
+        "the one directory the operator will point at must be accounted for: {msg}"
+    );
+}
+
+/// The other half, and without it the rule above is satisfied by never honouring
+/// `~/.emma/` at all — which would quietly delete a feature people use.
+#[test]
+fn a_home_emma_a_person_configured_is_still_a_harness() {
+    let home = scratch("home-configured");
+    write(&home.join(".emma/credentials.json"), r#"{"key":"sk-ant-x"}"#);
+    write(&home.join(".emma/config.json"), "{}");
+    let deep = home.join("code/scratch");
+    std::fs::create_dir_all(&deep).expect("mkdir");
+
+    let found = emma_harness::discover_in(&deep, None, Some(home.clone()))
+        .expect("a config.json is a person's statement of intent");
+    assert_eq!(found, home.join(".emma"));
+
+    // `personas/` says the same thing by itself.
+    let home = scratch("home-personas");
+    write(&home.join(".emma/personas/a/rules.md"), "rules");
+    let deep = home.join("code/scratch");
+    std::fs::create_dir_all(&deep).expect("mkdir");
+    let found = emma_harness::discover_in(&deep, None, Some(home.clone())).expect("personas/");
+    assert_eq!(found, home.join(".emma"));
+}
+
+/// The home directory is the top of the search. Above it are `C:\Users` and
+/// `/home` — directories that belong to the machine rather than to any project,
+/// and a harness adopted from one of them is the wrong-prompt boot with a longer
+/// walk. It is also what makes every test in this file independent of the
+/// developer's own home: without it the walk climbs out of the temp directory
+/// and into whatever the box happens to have.
+#[test]
+fn the_walk_stops_at_the_home_directory() {
+    let above = scratch("above-home");
+    std::fs::create_dir_all(above.join(".claude")).expect("mkdir");
+    let home = above.join("user");
+    let deep = home.join("code");
+    std::fs::create_dir_all(&deep).expect("mkdir");
+
+    let err = emma_harness::discover_in(&deep, None, Some(home))
+        .expect_err("nothing above the home directory is a project harness");
+    assert!(
+        !err.to_string().contains(&above.join(".claude").display().to_string()),
+        "it must not claim to have looked above home: {err}"
+    );
+}
+
 /// An override pointing nowhere must not quietly fall back to the walk — that
 /// would boot the agent on configuration nobody asked for.
 #[test]
@@ -75,11 +158,19 @@ fn an_override_pointing_at_nothing_refuses_rather_than_falling_back() {
 // here pins down which one and what the refusal has to say.
 // ---------------------------------------------------------------------------
 
+/// The home directory is threaded rather than read, and that is the point of the
+/// test as much as the refusal is. Written against the process's real `$HOME` it
+/// walked out of the temp directory and into whatever the developer happened to
+/// have in their home — so it passed on a machine where nobody had ever run
+/// `emma api` and failed on one where somebody had. A test whose answer depends
+/// on the box it runs on is not testing the code.
 #[test]
 fn an_absent_harness_refuses_to_start_and_names_what_it_searched() {
-    let deep = scratch("absent").join("x/y");
+    let base = scratch("absent");
+    let deep = base.join("x/y");
     std::fs::create_dir_all(&deep).expect("mkdir");
-    let err = emma_harness::discover_from(&deep, None).expect_err("absent must refuse");
+    let err = emma_harness::discover_in(&deep, None, Some(base))
+        .expect_err("absent must refuse");
     let msg = err.to_string();
     assert!(msg.contains(".emma"), "{msg}");
     assert!(
@@ -201,13 +292,21 @@ fn a_selected_persona_with_no_directory_names_itself() {
 /// from the configuration that produced it.
 #[test]
 fn one_file_in_means_those_exact_bytes_out() {
-    let text = "# Rules\n\n- one\n-  two   \n\n\ntrailing space   \nend\n";
+    // The CRLF line is deliberate and the assertion about it runs the other way
+    // round from the obvious one. The previous version asserted the assembled
+    // prompt held no `\r` against an input that contained none — against a
+    // single-file assembly that is a straight copy, so the assertion could not
+    // fail whatever the code did. What is actually at stake is that assembly does
+    // not *touch* line endings: a loader that helpfully normalised CRLF to LF
+    // would give a file two different hashes depending on the machine that
+    // checked it out, which is precisely the attribution the hash exists for.
+    let text = "# Rules\r\n\n- one\n-  two   \n\n\ntrailing space   \nend\n";
     let h = Harness::load(one_persona("byte-exact", text)).expect("load");
     assert_eq!(h.instructions, text, "assembly normalised something");
     assert_eq!(h.instructions_hash(), emma_harness::hash::short(text));
     assert!(
-        !h.instructions.contains('\r'),
-        "CR in the assembled prompt — the hash is now platform-dependent"
+        h.instructions.contains("\r\n"),
+        "the CRLF the file was written with did not survive assembly"
     );
 }
 

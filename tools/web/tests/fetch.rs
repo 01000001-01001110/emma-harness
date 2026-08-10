@@ -120,16 +120,48 @@ async fn a_real_page_renders_as_markdown() {
 
 #[test]
 fn webfetch_declares_itself_read_only_and_writes_nothing_here() {
-    // `emma::approval` decides whether to interrupt a human purely from this
-    // field, so it has to be true rather than merely declared — and no gate
-    // has ever consulted it for this tool, because WebFetch is not registered.
-    // The claim is checked here so that flipping the declaration is a
-    // deliberate act with a test to answer to, rather than something noticed
-    // the first time a page read runs unattended. What makes it true: WebFetch
-    // reaches the network and drives a browser but has no path that writes
+    // `emma::approval` decides whether to interrupt a human from these two
+    // fields, so they have to be true rather than merely declared. What makes
+    // `read_only` true: WebFetch drives a browser but has no path that writes
     // inside the working directory — the Chrome profile lives in the system
-    // temp directory and is removed on teardown.
+    // temp directory and is removed on teardown. What makes `reaches_network`
+    // true is the entire tool.
+    //
+    // The second one is the load-bearing claim now. Flip it to false and every
+    // page this tool reads happens without anybody being asked, because
+    // `read_only: true` is the arm the gate reaches next.
     let meta = WebFetch::new().meta();
     assert!(meta.read_only);
+    assert!(meta.reaches_network);
     assert!(meta.idempotent);
+}
+
+#[test]
+fn webfetch_names_the_host_the_gate_will_grant_against() {
+    // The gate asks the tool because it must not learn that this tool keeps
+    // its destination in an argument called `url`. This is the answering half,
+    // and it is the only place the URL is parsed for that purpose.
+    let t = WebFetch::new()
+        .network_target(&json!({ "url": " https://Docs.RS/tokio/latest " }))
+        .expect("a well-formed URL has a host");
+    // Lowercased and trimmed, because the grant is a `HashSet` key: two
+    // spellings of one host would prompt twice for a host already approved.
+    assert_eq!(t.host, "docs.rs");
+    // …and the human is shown the errand, not just the destination.
+    assert!(t.detail.contains("https://Docs.RS/tokio/latest"), "{}", t.detail);
+}
+
+#[test]
+fn a_url_with_no_host_names_no_target_and_is_therefore_refused() {
+    // `None` is fail-closed at the gate: a tool that declares egress and names
+    // nothing is denied. These are the same URLs chromehand refuses anyway —
+    // the wrong outcome would be for them to be the ones that slip past unasked.
+    for bad in ["not a url", "file:///etc/passwd", ""] {
+        assert!(
+            WebFetch::new()
+                .network_target(&json!({ "url": bad }))
+                .is_none(),
+            "{bad} named a host"
+        );
+    }
 }

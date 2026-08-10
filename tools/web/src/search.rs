@@ -1,7 +1,7 @@
 //! `WebSearch` — Brave, returning a list of places to look.
 //!
-//! Not registered anywhere, and so never yet called by a model — see the crate
-//! docs for why. What follows describes the tool as built.
+//! Registered when a key can be found — see [`crate::web_tools`] — and gated
+//! by `emma::approval` on the provider's host, once per session.
 //!
 //! chromehand browses; it does not search. Something has to turn a question
 //! into URLs, and that is an index. Brave rather than the alternatives because
@@ -18,13 +18,13 @@
 //! **No key means no tool.** A keyless search tool fails on every call, and
 //! the model cannot learn that it is decoration, because a failed call looks
 //! exactly like a hard problem — see the crate docs for where that was learned.
-//! [`WebSearch::detect`] returns `Err` instead, and a registry
-//! built from [`crate::web_tools`] would simply not carry the tool. The key is
+//! [`WebSearch::detect`] returns `Err` instead, and the registry
+//! built from [`crate::web_tools`] simply does not carry the tool. The key is
 //! resolved once at construction rather than per call, so "no key" is a fact
 //! about the surface and never a runtime surprise.
 
 use emma_llm::ApiKey;
-use emma_tool_api::{Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
+use emma_tool_api::{NetworkTarget, Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
 use serde_json::{json, Value};
 
 use crate::args;
@@ -114,10 +114,33 @@ impl Tool for WebSearch {
 
     fn meta(&self) -> ToolMeta {
         ToolMeta {
-            // See the crate docs. Reaches the network; changes nothing.
+            // Changes nothing on this machine…
             read_only: true,
+            // …and the query itself is the payload. This is the tool the
+            // exfiltration argument in `ToolMeta::reaches_network` is written
+            // about most directly: a search is an arbitrary string the model
+            // chose, sent to a third party, and it reads as a read.
+            reaches_network: true,
             idempotent: true,
         }
+    }
+
+    /// The search provider's own host, and the query going to it.
+    ///
+    /// Genuinely where the bytes go: this tool has one destination, and it is
+    /// the host in `base_url` rather than a constant, so a run pointed at a
+    /// stub is gated on the stub it will actually contact and never on the
+    /// host it would have contacted.
+    ///
+    /// The `detail` is the query verbatim, because the query *is* the thing
+    /// leaving the machine. A prompt saying "WebSearch wants to reach
+    /// api.search.brave.com" and not what it is asking about is a prompt that
+    /// cannot distinguish a search for a crate name from a search for the
+    /// contents of a file.
+    fn network_target(&self, args_v: &Value) -> Option<NetworkTarget> {
+        let query = args_v.get("query")?.as_str()?.trim();
+        let host = url::Url::parse(&self.base_url).ok()?.host_str()?.to_string();
+        Some(NetworkTarget::new(host, format!("search for: {query}")))
     }
 
     fn validate_args(&self, args_v: &Value) -> Result<(), ToolError> {

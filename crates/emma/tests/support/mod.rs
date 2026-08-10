@@ -11,8 +11,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use emma_llm::{AssistantTurn, Event, LlmError, Mode, Provider, Request, ToolCall, Usage};
-use emma_tool_api::{Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
+use emma_llm::{
+    AssistantTurn, Event, LlmError, Message, Mode, Provider, Request, ToolCall, Usage,
+};
+use emma_tool_api::{NetworkTarget, Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
@@ -110,6 +112,19 @@ impl Fake {
             })
             .unwrap_or_default()
     }
+
+    /// Every message the last request carried, history first, then query — the
+    /// exact list that went on the wire.
+    ///
+    /// [`Fake::last_query`] renders the same thing to a string for a
+    /// `contains` assertion. This one keeps the values, because the fold in
+    /// `session.rs` claims to reproduce them and "some substring survived" is
+    /// not that claim.
+    pub fn last_messages(&self) -> Vec<Message> {
+        let seen = self.seen.lock().unwrap();
+        let last = seen.last().expect("the model was never called");
+        last.history.iter().chain(last.query.iter()).cloned().collect()
+    }
 }
 
 #[async_trait::async_trait]
@@ -173,30 +188,42 @@ impl Provider for Fake {
 // ---------------------------------------------------------------------------
 // Tools
 //
-// One tool with three knobs — its name, whether it claims `read_only`, and
-// whether it fails — plus a counter, because most assertions here are about
-// whether the tool ran at all rather than what it returned.
+// One tool with four knobs — its name, whether it claims `read_only`, which
+// host it reaches if any, and whether it fails — plus a counter, because most
+// assertions here are about whether the tool ran at all rather than what it
+// returned.
 // ---------------------------------------------------------------------------
 
 pub struct TestTool {
     name: &'static str,
     read_only: bool,
+    /// `Some` makes this a tool that declares egress and names its
+    /// destination, which is the only shape the gate will grant.
+    host: Option<&'static str>,
     fails: bool,
     calls: Arc<AtomicUsize>,
 }
 
 impl TestTool {
     pub fn ok(name: &'static str, read_only: bool) -> (Arc<dyn Tool>, Arc<AtomicUsize>) {
-        Self::build(name, read_only, false)
+        Self::build(name, read_only, None, false)
     }
 
     pub fn failing(name: &'static str, read_only: bool) -> (Arc<dyn Tool>, Arc<AtomicUsize>) {
-        Self::build(name, read_only, true)
+        Self::build(name, read_only, None, true)
+    }
+
+    /// A tool that changes nothing locally and reaches one host — the shape
+    /// `WebFetch` and `WebSearch` have, and the shape that would run silently
+    /// if the gate asked only about writing.
+    pub fn reaching(name: &'static str, host: &'static str) -> (Arc<dyn Tool>, Arc<AtomicUsize>) {
+        Self::build(name, true, Some(host), false)
     }
 
     fn build(
         name: &'static str,
         read_only: bool,
+        host: Option<&'static str>,
         fails: bool,
     ) -> (Arc<dyn Tool>, Arc<AtomicUsize>) {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -204,6 +231,7 @@ impl TestTool {
             Arc::new(Self {
                 name,
                 read_only,
+                host,
                 fails,
                 calls: calls.clone(),
             }),
@@ -229,8 +257,14 @@ impl Tool for TestTool {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             read_only: self.read_only,
+            reaches_network: self.host.is_some(),
             idempotent: true,
         }
+    }
+
+    fn network_target(&self, _args: &Value) -> Option<NetworkTarget> {
+        self.host
+            .map(|h| NetworkTarget::new(h, format!("reach {h} about something")))
     }
 
     async fn invoke(

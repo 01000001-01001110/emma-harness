@@ -91,6 +91,7 @@ impl Tool for Write {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             read_only: false,
+            reaches_network: false,
             // Writing the same bytes twice leaves the same file. The mtime
             // moves, which nothing here consults.
             idempotent: true,

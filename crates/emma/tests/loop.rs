@@ -46,6 +46,33 @@ async fn drive(
     goal: &Goal,
     log: &SessionLog,
 ) -> Outcome {
+    let mut out = drive_goals(
+        root,
+        cwd,
+        tools,
+        approvals,
+        provider,
+        budgets,
+        std::slice::from_ref(goal),
+        log,
+    )
+    .await;
+    out.pop().unwrap()
+}
+
+/// The same thing for more than one goal on one `Agent`, which is the only way
+/// to exercise the history it carries between them.
+#[allow(clippy::too_many_arguments)]
+async fn drive_goals(
+    root: &Path,
+    cwd: &Path,
+    tools: Registry,
+    approvals: &Approvals,
+    provider: &Fake,
+    budgets: Budgets,
+    goals: &[Goal],
+    log: &SessionLog,
+) -> Vec<Outcome> {
     // `load_selecting` rather than `load`: the latter reads `EMMA_PERSONA` from
     // the process environment, and a test whose result depends on the
     // developer's shell is a test that passes for the wrong reason.
@@ -66,7 +93,11 @@ async fn drive(
         caching: Caching::On,
         mode: Mode::Batch,
     });
-    agent.run_goal(goal).await
+    let mut out = Vec::new();
+    for goal in goals {
+        out.push(agent.run_goal(goal).await);
+    }
+    out
 }
 
 fn goal() -> Goal {
@@ -424,6 +455,108 @@ async fn a_hook_denial_overrides_every_approval() {
     );
 }
 
+/// The second axis, driven through the real loop rather than through `decide`.
+/// A tool that changes nothing locally still cannot reach a host nobody
+/// approved, and under `-p` there is nobody — so the model has to be told which
+/// host it was, or its only options are to guess or to give up silently.
+#[tokio::test]
+async fn the_gate_denies_a_network_read_with_nobody_to_ask_and_the_model_is_told_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let (fetcher, fetch_calls) = TestTool::reaching("Fetcher", "docs.rs");
+    let fake = Fake::new(vec![
+        call("Fetcher", json!({ "x": "1" })),
+        text("understood.\n\nGOAL COMPLETE"),
+    ]);
+
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![fetcher]),
+        &Approvals::unattended(),
+        &fake,
+        budgets(),
+        &goal(),
+        &SessionLog::none(),
+    )
+    .await;
+
+    assert_eq!(out.ending, Ending::Done);
+    assert_eq!(
+        fetch_calls.load(Ordering::SeqCst),
+        0,
+        "a read-only tool reached the network with nobody to approve the host"
+    );
+    let seen = fake.transcript();
+    assert!(seen.contains("docs.rs"), "the host was not named: {seen}");
+    assert!(seen.contains("-p"), "the model was not told why: {seen}");
+}
+
+/// The grant, end to end: one `y`, two fetches to the same host, both run. A
+/// second prompt would find the scripted queue empty and fail this — which is
+/// the point, because a prompt per page is the thing that teaches somebody to
+/// answer without reading.
+#[tokio::test]
+async fn one_yes_covers_a_host_for_the_rest_of_the_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let (fetcher, fetch_calls) = TestTool::reaching("Fetcher", "docs.rs");
+    let fake = Fake::new(vec![
+        call("Fetcher", json!({ "x": "1" })),
+        call("Fetcher", json!({ "x": "2" })),
+        text("GOAL COMPLETE"),
+    ]);
+
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![fetcher]),
+        &Approvals::new(Gate::Ask, Asker::Scripted(vec![Answer::Yes].into())),
+        &fake,
+        budgets(),
+        &goal(),
+        &SessionLog::none(),
+    )
+    .await;
+
+    assert_eq!(out.ending, Ending::Done);
+    assert_eq!(fetch_calls.load(Ordering::SeqCst), 2);
+}
+
+/// The safety inversion again, on the new axis. A hook is policy; a session
+/// grant — even the blanket one `--dangerously-skip-permissions` gives — is
+/// convenience, and convenience does not outrank policy on either axis.
+#[tokio::test]
+async fn a_hook_denial_outranks_a_network_grant() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = harness_denying(dir.path(), "Fetcher");
+    let (fetcher, fetch_calls) = TestTool::reaching("Fetcher", "docs.rs");
+    let fake = Fake::new(vec![
+        call("Fetcher", json!({ "x": "1" })),
+        text("understood.\n\nGOAL COMPLETE"),
+    ]);
+
+    drive(
+        &root,
+        dir.path(),
+        registry(vec![fetcher]),
+        // The loudest possible approval, which also skips the host question.
+        &Approvals::new(Gate::SkipAll, Asker::Scripted(Default::default())),
+        &fake,
+        budgets(),
+        &goal(),
+        &SessionLog::none(),
+    )
+    .await;
+
+    assert_eq!(
+        fetch_calls.load(Ordering::SeqCst),
+        0,
+        "a PreToolUse denial was approved away on the network axis"
+    );
+    assert!(fake.transcript().contains("blocked_by_policy"));
+}
+
 /// …and the same hook must not block a tool it does not match, or the test
 /// above would pass for a harness that denies everything.
 #[tokio::test]
@@ -613,6 +746,85 @@ async fn the_assistant_turn_is_echoed_back_exactly_as_it_arrived() {
     let last = fake.last_query();
     assert!(last.contains("\"type\":\"tool_use\""), "{last}");
     assert!(last.contains("marker-value"), "{last}");
+}
+
+/// The claim the session format makes: what was sent can be read back out of
+/// the file. Byte equality against the messages the provider actually received,
+/// because the thing resume needs is not "roughly this conversation" — a
+/// reassembled thinking block is rejected, so anything short of the same values
+/// is a run that dies on its first call.
+///
+/// The script covers every shape the query can take: a successful call, a
+/// failure block, a kick, and a second round of tool use.
+#[tokio::test]
+async fn the_log_folds_back_to_the_messages_that_were_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let (fine, _) = TestTool::ok("Fine", true);
+    let (boom, _) = TestTool::failing("Boom", true);
+    let fake = Fake::new(vec![
+        call("Fine", json!({ "x": "1" })),
+        call("Boom", json!({ "x": "2" })),
+        text("I am not sure this is finished."),
+        call("Fine", json!({ "x": "3" })),
+        text("done\n\nGOAL COMPLETE"),
+    ]);
+    let log = SessionLog::open(dir.path(), "roundtrip").unwrap();
+
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![fine, boom]),
+        &Approvals::unattended(),
+        &fake,
+        budgets(),
+        &goal(),
+        &log,
+    )
+    .await;
+
+    assert_eq!(out.ending, Ending::Done);
+    assert_eq!(out.kicks, 1);
+    let folded = emma::session::fold(log.path()).unwrap();
+    // Stated as a number as well as compared, so a fold that returned nothing
+    // against a provider that was sent nothing could not pass.
+    assert_eq!(folded.len(), 9, "{folded:#?}");
+    assert_eq!(folded, fake.last_messages());
+}
+
+/// A session is more than one goal, and the loop collapses a finished one to
+/// the goal and the answer before the next one starts. A fold that rebuilt only
+/// the current goal would hand back a shorter list than was sent every time
+/// somebody typed a second goal at the prompt.
+#[tokio::test]
+async fn the_fold_carries_a_finished_goal_forward_the_way_the_loop_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let (fine, _) = TestTool::ok("Fine", true);
+    let fake = Fake::new(vec![
+        text("the first one was already true.\n\nGOAL COMPLETE"),
+        call("Fine", json!({ "x": "1" })),
+        text("and now the second.\n\nGOAL COMPLETE"),
+    ]);
+    let log = SessionLog::open(dir.path(), "two-goals").unwrap();
+
+    let out = drive_goals(
+        &root,
+        dir.path(),
+        registry(vec![fine]),
+        &Approvals::unattended(),
+        &fake,
+        budgets(),
+        &[Goal::new("first goal"), Goal::new("second goal")],
+        &log,
+    )
+    .await;
+
+    assert_eq!(out[0].ending, Ending::Done);
+    assert_eq!(out[1].ending, Ending::Done);
+    let folded = emma::session::fold(log.path()).unwrap();
+    assert_eq!(folded.len(), 5, "{folded:#?}");
+    assert_eq!(folded, fake.last_messages());
 }
 
 // endregion: The record

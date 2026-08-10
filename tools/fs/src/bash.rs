@@ -124,6 +124,16 @@ impl Tool for Bash {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             read_only: false,
+            // False, and this is the one declaration in the workspace that
+            // wants its argument attached: `Bash` can obviously `curl`. It
+            // says false because the axis is about tools whose purpose is
+            // egress, and because `read_only: false` already gates every call
+            // here behind a prompt that shows the command itself — which is
+            // strictly more information than a host name. Declaring true would
+            // oblige `network_target` to name a destination, and naming one
+            // means parsing shell to find it: an arms race with every quoting
+            // trick there is, losing quietly. See `ToolMeta::reaches_network`.
+            reaches_network: false,
             idempotent: false,
         }
     }

@@ -143,13 +143,10 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
             // Ambiguous only in principle: `--model X` is always the one-run
             // override wherever it appears, and `emma model X` — the bare word,
             // in first position — is the persisted setting. Different spellings,
-            // different meanings, so position never has to disambiguate them.
-            // Which is why the two arms below are identical: the guard was
-            // written for a distinction the spellings already make, and the
-            // second arm handles every case the first one does.
-            "--model" if command.is_none() && words.is_empty() && !started(&command) => {
-                opts.model = Some(value("--model")?)
-            }
+            // different meanings, so position never has to disambiguate them,
+            // and this arm needs no guard. There used to be a guarded copy of it
+            // above this one; the guard was written for a distinction the
+            // spellings already make, and it selected the same body.
             "--model" => opts.model = Some(value("--model")?),
             "--session-dir" => opts.session_dir = Some(PathBuf::from(value("--session-dir")?)),
             "--max-iterations" => opts.budgets.max_iterations = number(&value("--max-iterations")?)?,
@@ -206,10 +203,6 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
 /// A subcommand is only a subcommand in first position.
 fn fresh(command: &Option<Command>, words: &[String]) -> bool {
     command.is_none() && words.is_empty()
-}
-
-fn started(command: &Option<Command>) -> bool {
-    command.is_some()
 }
 
 fn done(command: Command, opts: Opts) -> Result<Cli, String> {

@@ -102,6 +102,7 @@ impl Tool for Edit {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             read_only: false,
+            reaches_network: false,
             // Deliberately false. Running the same edit twice fails the second
             // time, because the anchor is gone — which is the correct
             // behaviour and precisely why it is not idempotent.

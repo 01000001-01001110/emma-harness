@@ -84,6 +84,7 @@ impl Tool for TaskList {
     fn meta(&self) -> ToolMeta {
         ToolMeta {
             read_only: true,
+            reaches_network: false,
             idempotent: true,
         }
     }

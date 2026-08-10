@@ -1,8 +1,8 @@
 //! `WebFetch` — one page, rendered in real Chrome, returned as markdown.
 //!
-//! Not registered anywhere, and so never yet called by a model — see the crate
-//! docs for why the wiring is deferred rather than missed. What follows
-//! describes the tool as built.
+//! Registered when a browser can be found — see [`crate::web_tools`] — and
+//! gated per host by `emma::approval`, which asks this tool where it is going
+//! rather than reading its arguments.
 //!
 //! **Why a browser rather than an HTTP client and an html-to-markdown crate.**
 //! Three reasons, in order of how often they bite. A large share of the pages
@@ -33,11 +33,13 @@
 //! a separate decision with its own approval story, and folding it into "add
 //! web tools" is how such a thing gets decided by accident. chromehand already
 //! gates those verbs behind a user-owned domain allowlist and a two-key rule
-//! for auto-submit; neither has an equivalent in Emma's approval flow yet.
+//! for auto-submit. Emma's own gate now grants per host, which is the same
+//! shape one level up — and still not an approval story for submitting a form,
+//! which is a decision about what may be *sent*, not about where.
 
 use std::path::PathBuf;
 
-use emma_tool_api::{Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
+use emma_tool_api::{NetworkTarget, Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
 use serde_json::{json, Value};
 
 use crate::args;
@@ -160,18 +162,37 @@ impl Tool for WebFetch {
 
     fn meta(&self) -> ToolMeta {
         ToolMeta {
-            // Reaches the network and drives a browser, but cannot modify the
-            // working directory, submit a form, or run anything the model
-            // chose. The throwaway Chrome profile lives in the system temp
-            // directory and is removed on teardown. See the crate docs: the
-            // field cannot express "may not write" and "may not talk to the
-            // outside" at once, the gate asks the first question, and the
-            // second one is the reason this tool is not wired up yet.
+            // Drives a browser, but cannot modify the working directory,
+            // submit a form, or run anything the model chose. The throwaway
+            // Chrome profile lives in the system temp directory and is removed
+            // on teardown. `read_only` asks "can this damage this machine" and
+            // the honest answer is no.
             read_only: true,
+            // …and the whole of the risk this tool carries is on the other
+            // axis. See [`WebFetch::network_target`], which is what the
+            // approval gate grants against.
+            reaches_network: true,
             // Two reads of the same URL have the same effect as one — none.
             // Not a claim that the page will say the same thing twice.
             idempotent: true,
         }
+    }
+
+    /// The host in the URL the model asked for.
+    ///
+    /// Parsed here rather than in the gate: `emma::approval` must not learn
+    /// that this tool's destination lives in an argument called `url`, or
+    /// "adding a tool is a crate plus one registry line" stops being true.
+    ///
+    /// A URL that will not parse, or one with no host, yields `None` — which
+    /// the gate treats as a refusal rather than a pass. That is the right way
+    /// round: the URLs that fail to parse here are the same ones chromehand
+    /// would refuse anyway, and they must not be the ones that slip through
+    /// unasked.
+    fn network_target(&self, args_v: &Value) -> Option<NetworkTarget> {
+        let url = args_v.get("url")?.as_str()?.trim();
+        let parsed = url::Url::parse(url).ok()?;
+        Some(NetworkTarget::new(parsed.host_str()?, format!("read {url}")))
     }
 
     fn validate_args(&self, args_v: &Value) -> Result<(), ToolError> {

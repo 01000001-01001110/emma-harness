@@ -11,11 +11,14 @@
 //! approval — reaches the model as a `tool_result` with `is_error` set and the
 //! turn continues. The one thing that ends a goal is a budget or the user.
 //!
-//! **Writing is gated and reading is not.** `ToolMeta::read_only` decides, a
-//! `PreToolUse` hook outranks the human, and nothing grants a permission that
-//! outlives the process. See [`approval`], which is the most consequential file
-//! here: a tool surface that can write is a different safety problem from one
-//! that cannot, and Emma's can.
+//! **Writing is gated, reading is not, and leaving the machine is gated
+//! separately.** `ToolMeta::read_only` decides the first, `reaches_network` the
+//! third — two axes because writing is a risk the model takes deliberately and
+//! egress is how a prompt-injected page turns a read tool into an exfiltration
+//! channel. A `PreToolUse` hook outranks the human on both, and nothing grants a
+//! permission that outlives the process. See [`approval`], which is the most
+//! consequential file here: a tool surface that can write is a different safety
+//! problem from one that cannot, and Emma's can.
 //!
 //! **The map.** [`agent`] is the loop and holds both properties above.
 //! [`approval`] is the gate it consults, and [`goal`] is what it holds across

@@ -158,35 +158,62 @@ impl ToolOutcome {
 ///
 /// In tustle-agent the equivalent struct had a `needs_approval` field that
 /// nothing ever read — a declaration pretending to be a mechanism. It was
-/// deliberately not ported. Here `read_only` is load-bearing: it is what
-/// `emma::approval` consults to decide whether to ask a human, and each tool
-/// crate carries a test that runs its `read_only` tools against a populated
-/// sandbox and asserts the tree is unchanged afterwards
-/// (`tools/fs/tests/read_only.rs`, `tools/tasks/tests/tools.rs`) — plus a pin
-/// on *which* tools claim it, so a new claim is noticed rather than merely
-/// unexercised. If that stops being true, the gate has quietly stopped
-/// protecting anything.
+/// deliberately not ported. Here `read_only` and `reaches_network` are both
+/// load-bearing: they are the two questions `emma::approval` asks, separately,
+/// before deciding whether to interrupt a human. Each tool crate carries a test
+/// that runs its `read_only` tools against a populated sandbox and asserts the
+/// tree is unchanged afterwards (`tools/fs/tests/read_only.rs`,
+/// `tools/tasks/tests/tools.rs`) — plus a pin on *which* tools claim it, so a
+/// new claim is noticed rather than merely unexercised. If that stops being
+/// true, the gate has quietly stopped protecting anything.
+///
+/// **There is deliberately no `Default`.** Adding a field here breaks every
+/// construction site in the workspace, and that is the feature: a tool must
+/// *state* each of these rather than inherit it. The predecessor added a
+/// defaulted field and thereby granted a safety property to every tool written
+/// afterwards, chosen by nobody, noticed by no review.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolMeta {
     /// Cannot change local state: no file written, no process spawned.
     ///
-    /// **This is one bit doing at most one job, and the network is not it.**
-    /// The field has previously been documented as "cannot reach the network"
-    /// as well, and that reading is not true of the tools as they are:
-    /// `WebFetch` and `WebSearch` in `tools/web` declare `read_only: true` and
-    /// both talk to the outside — one of them by driving a browser. The
-    /// declaration is honest about what the gate asks, which is "can this
-    /// change something", and neither can. But egress is a different risk from
-    /// writing: it is how a prompt-injected page turns a read tool into an
-    /// exfiltration channel, and every local-damage check still passes. One
-    /// boolean cannot express both "may not write" and "may not talk to the
-    /// outside". Flipping the web tools to `read_only: false` was considered
-    /// and refused — a gate that fires on every page read trains the operator
-    /// to click through it, which costs the gate on `Write` too. This is an
-    /// open question with a proposed answer (a second axis, most usefully a
-    /// per-domain human grant), not a settled one; until it lands, treat this
-    /// field as "cannot damage local state" and nothing more.
+    /// **One bit doing one job, and the network is not it.** This field has
+    /// previously been documented as "cannot reach the network" as well, and
+    /// that reading was never true of the tools as they are: `WebFetch` and
+    /// `WebSearch` declare `read_only: true` and both talk to the outside — one
+    /// of them by driving a browser. The declaration is honest about what this
+    /// bit asks, which is "can this damage this machine", and neither can.
+    /// Egress is asked by [`ToolMeta::reaches_network`] instead, because it is
+    /// a different risk with a different answer: flipping the web tools to
+    /// `read_only: false` was considered and refused, since a gate that fires
+    /// on every page read trains the operator to click through it and costs the
+    /// gate on `Write` too.
     pub read_only: bool,
+    /// Sends bytes off this machine, by construction.
+    ///
+    /// The second axis, and the reason it exists: **writing is a risk the model
+    /// takes deliberately; egress is how a prompt-injected page turns a read
+    /// tool into an exfiltration channel.** A model that reads an attacker's
+    /// page and then "searches" for the contents of a `.env` has written
+    /// nothing and destroyed nothing, and passes every local-damage check on
+    /// the way out. `emma::approval` gates this per host, granted once per
+    /// session by a human — not per call, which would be the same
+    /// click-through trainer by another route.
+    ///
+    /// **What it does not cover, and none of these are oversights.**
+    ///
+    /// - *What comes back.* An approved host is a destination the user chose,
+    ///   not a source they trust. The page is still attacker-controlled text
+    ///   arriving in the model's context, and nothing here reads it.
+    /// - *A tool that reaches the network incidentally.* `Bash` can `curl`, and
+    ///   declares `false`. It is not exempt: `read_only: false` already means
+    ///   every `Bash` call is shown to a human as the command itself, so its
+    ///   egress is approved at the same moment and with more information than a
+    ///   host name. Declaring `true` would demand a destination it cannot name
+    ///   without parsing shell, which is an arms race, not a gate.
+    /// - *Enforcement.* Like `read_only`, this is a declaration. Nothing stops
+    ///   a lying tool from opening a socket; what stops it is that the tool
+    ///   crates own tests asserting their declarations hold.
+    pub reaches_network: bool,
     /// Running it twice with the same arguments has the same effect as once.
     ///
     /// Declared by every tool and, as of today, **read by nothing** — Emma has
@@ -198,6 +225,46 @@ pub struct ToolMeta {
     /// (`Edit` is deliberately not idempotent, and says so), not because
     /// something consults it.
     pub idempotent: bool,
+}
+
+/// Where one call is about to send bytes, and what errand it is running.
+///
+/// Produced by the tool, never derived by the gate. The alternative — the
+/// approval loop reaching into `args["url"]` and parsing it — has been tried
+/// twice in this project's history in other forms (a hard-coded `query`
+/// argument check, and inferring retrieval from an empty `chunks` array) and
+/// both times it made "adding a tool is a crate plus one registry line" false.
+/// The gate asks; the tool answers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkTarget {
+    /// The host bytes leave for, lowercased and without a trailing dot.
+    ///
+    /// A host and never a URL, because this is the unit a session grant is
+    /// keyed on: granting per URL is a prompt per page, which is the
+    /// click-through trainer the whole design is arranged to avoid.
+    pub host: String,
+    /// One line naming the errand, for the human reading the prompt — the URL,
+    /// the query. A prompt that names a host and not what is being sent there
+    /// is a prompt nobody can evaluate, and an unevaluatable prompt
+    /// manufactures consent.
+    pub detail: String,
+}
+
+impl NetworkTarget {
+    /// Normalises the host so the gate's `HashSet` and the tool agree on what
+    /// "the same host" means. `Docs.RS.` and `docs.rs` are one grant; `docs.rs`
+    /// and `www.docs.rs` are deliberately two, because deciding they are the
+    /// same is a policy nobody asked for.
+    pub fn new(host: impl AsRef<str>, detail: impl Into<String>) -> Self {
+        Self {
+            host: host
+                .as_ref()
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase(),
+            detail: detail.into(),
+        }
+    }
 }
 
 /// What a tool is told about the call it is serving.
@@ -243,6 +310,21 @@ pub trait Tool: Send + Sync {
     fn input_schema(&self) -> serde_json::Value;
 
     fn meta(&self) -> ToolMeta;
+
+    /// Where this particular call would send bytes, if anywhere.
+    ///
+    /// Answered by the tool because the approval gate must not learn what any
+    /// tool's arguments look like — see [`NetworkTarget`] for the two times
+    /// that went wrong here. `None` is the default and is right for every tool
+    /// that declares `reaches_network: false`.
+    ///
+    /// **`None` from a tool that declares `reaches_network: true` is a
+    /// refusal, not a pass.** The gate cannot grant a destination nobody
+    /// named, so it denies the call and says so. Fail-closed, because the
+    /// alternative is that a tool which forgets to answer gets silent egress.
+    fn network_target(&self, _args: &serde_json::Value) -> Option<NetworkTarget> {
+        None
+    }
 
     /// Cheap, synchronous, no I/O. Anything requiring the filesystem belongs
     /// in `invoke` and comes back as `BadArguments`.
@@ -335,8 +417,10 @@ impl Registry {
 // ---------------------------------------------------------------------------
 // Tests
 //
-// Both of these guard the taxonomy rather than the prose: `kind` is what the
-// model routes on, and every variant must keep carrying its detail.
+// Two guard the taxonomy rather than the prose: `kind` is what the model
+// routes on, and every variant must keep carrying its detail. The third guards
+// the one piece of normalisation in this file, because the approval gate keys a
+// session grant on the string it produces.
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -350,6 +434,23 @@ mod tests {
         // classes silently changes meaning.
         assert_eq!(ToolError::Failed("anything".into()).kind(), "tool_failed");
         assert_eq!(ToolError::Failed(String::new()).kind(), "tool_failed");
+    }
+
+    #[test]
+    fn a_host_is_normalised_so_one_grant_covers_one_host() {
+        // The gate keys a session grant on this string. If two spellings of one
+        // host produce two keys, the second fetch to a host the user already
+        // approved prompts again — and a prompt that fires when it should not
+        // is how the operator learns to answer without reading.
+        assert_eq!(NetworkTarget::new("Docs.RS.", "x").host, "docs.rs");
+        assert_eq!(NetworkTarget::new("  docs.rs ", "x").host, "docs.rs");
+        // …and the mirror image, which is the part worth pinning: a subdomain
+        // is a different host and a different grant. Collapsing them would be
+        // a policy, and nobody asked for it.
+        assert_ne!(
+            NetworkTarget::new("www.docs.rs", "x").host,
+            NetworkTarget::new("docs.rs", "x").host
+        );
     }
 
     #[test]

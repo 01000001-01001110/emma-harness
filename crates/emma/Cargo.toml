@@ -30,6 +30,10 @@ emma-llm.workspace = true
 emma-tool-api.workspace = true
 emma-tools-fs.workspace = true
 emma-tools-tasks.workspace = true
+# The web surface. It costs a Chrome dependency at build time and registers
+# nothing at run time unless a browser and a key are actually there — see
+# `web_tools`, and the registration in `main.rs` that reports what it left out.
+emma-tools-web.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

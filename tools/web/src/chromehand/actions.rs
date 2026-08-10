@@ -5,7 +5,7 @@
 //! user-owned allowlist — reading the web is ordinary, acting on it is opt-in.
 //!
 //! Structural refusals: `click` refuses submit-type controls (submission is
-//! P4's two-key `submit`, not built); `type` refuses password fields — the
+//! P4's two-key `submit`); `type` refuses password fields — the
 //! action vocabulary has no code path into credentials.
 
 use std::time::Duration;
@@ -391,7 +391,7 @@ async fn interaction_gate(c: &Connected, pol: &Policy) -> Result<(), String> {
 
 /// `click --session S --selector CSS` — bounded interaction for non-submitting
 /// controls. Submit-typed controls are refused (exit 2): submission is P4's
-/// two-key `submit` verb, which does not exist yet.
+/// two-key `submit` verb, which is where it belongs.
 pub async fn click(
     c: &Connected,
     pol: &Policy,
@@ -433,7 +433,7 @@ pub async fn click(
         .unwrap_or(false)
     {
         return Err(format!(
-            "refused: {} is a submit-type control — submission requires the `submit` verb (P4, two-key rule), which is not built. click handles non-submitting controls only",
+            "refused: {} is a submit-type control — submission requires the `submit` verb (P4, two-key rule). click handles non-submitting controls only",
             selector
         ));
     }

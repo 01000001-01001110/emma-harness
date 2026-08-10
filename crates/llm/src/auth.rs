@@ -38,7 +38,14 @@ pub struct ApiKey(String);
 
 impl ApiKey {
     pub fn new(key: impl Into<String>) -> Self {
-        Self(key.into())
+        let key = key.into();
+        // The one place every key in this process is built, which is what makes
+        // it the place to register it for scrubbing. `LlmError`'s formatting
+        // consults that list, so a message assembled somewhere the key was
+        // never passed — a mid-stream `error` frame, an error-shaped batch body
+        // — still cannot print it. See the note on `LlmError`'s impls.
+        crate::remember_secret(&key);
+        Self(key)
     }
 
     pub fn expose(&self) -> &str {
@@ -64,12 +71,11 @@ impl fmt::Debug for ApiKey {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
-    // `emma auth` is not the command; `emma api` is. This crate is a library
-    // and does not get to name the binary's verbs, so the substitution happens
-    // once at the printing boundary in `emma::commands::rename_auth`. Editing
-    // this sentence without editing that one leaves a stuck user pointed at a
-    // command that does not exist.
-    #[error("no API key found. Set {ENV_VAR}, or run `emma auth` to store one at {path}")]
+    // This used to say `emma auth`, with `emma::commands::rename_auth`
+    // rewriting the word at the printing boundary. That was a workaround for a
+    // wrong string: the command is `emma api`, so the string says `emma api`
+    // and the rewrite is now a no-op that can be deleted.
+    #[error("no API key found. Set {ENV_VAR}, or run `emma api` to store one at {path}")]
     Missing { path: PathBuf },
 
     #[error(
@@ -143,20 +149,38 @@ pub fn home_dir() -> Option<PathBuf> {
 /// The environment wins because that is how CI and one-off overrides work, and
 /// because a user who exports a key expects it to be the one used.
 pub fn resolve(env_key: Option<&str>, home: &Path) -> Result<ApiKey, AuthError> {
-    if let Some(key) = env_key.map(str::trim).filter(|k| !k.is_empty()) {
-        return Ok(ApiKey::new(key));
+    match from_env(env_key) {
+        Some(key) => Ok(key),
+        None => load_file(&credentials_path(home)),
     }
-    load_file(&credentials_path(home))
+}
+
+/// The environment half of the precedence rule, written once.
+///
+/// An exported-but-empty variable is not a key: `ANTHROPIC_API_KEY=` in a
+/// forgotten `.env` must fall through to the stored file rather than
+/// authenticate with `""` and get a 401 the user cannot explain.
+fn from_env(env_key: Option<&str>) -> Option<ApiKey> {
+    env_key
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(ApiKey::new)
 }
 
 /// [`resolve`] against the real environment and the real home directory.
+///
+/// The env check happens here rather than by handing the variable straight to
+/// [`resolve`], because `resolve` needs a home and this function may not have
+/// one: a machine that will not say where `$HOME` is can still run on an
+/// exported key, and demanding the home first would turn that into `NoHome`.
+/// Both halves of the rule are still written once — the trim-and-empty test in
+/// [`from_env`], the file lookup in [`resolve`].
 pub fn load_default() -> Result<ApiKey, AuthError> {
     let env_key = std::env::var(ENV_VAR).ok();
-    if let Some(key) = env_key.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
-        return Ok(ApiKey::new(key));
+    if let Some(key) = from_env(env_key.as_deref()) {
+        return Ok(key);
     }
-    let home = home_dir().ok_or(AuthError::NoHome)?;
-    load_file(&credentials_path(&home))
+    resolve(None, &home_dir().ok_or(AuthError::NoHome)?)
 }
 
 fn load_file(path: &Path) -> Result<ApiKey, AuthError> {
@@ -364,10 +388,10 @@ mod tests {
         let home = Home::new("missing");
         let msg = resolve(None, home.path()).unwrap_err().to_string();
         assert!(msg.contains("ANTHROPIC_API_KEY"), "{msg}");
-        // As composed here. `emma::commands::rename_auth` turns this into
-        // `emma api` at the point it is printed — see the note on
-        // `AuthError::Missing`.
-        assert!(msg.contains("emma auth"), "{msg}");
+        // The command a user actually runs, named correctly at composition
+        // rather than patched at the printing boundary.
+        assert!(msg.contains("emma api"), "{msg}");
+        assert!(!msg.contains("emma auth"), "{msg}");
     }
 
     #[test]

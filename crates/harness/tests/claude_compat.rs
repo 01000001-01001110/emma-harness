@@ -140,10 +140,10 @@ fn the_nearest_ancestor_wins_before_the_directory_name_does() {
 /// scenario where nothing looks wrong: Emma run from anywhere outside a
 /// configured repository, on a box where `~/.claude/` almost certainly exists.
 ///
-/// Unlike the override, `$HOME` is read from the process rather than threaded
-/// in, so this test has to set it and put it back. That is shared mutable state
-/// in a binary the harness runs threaded, and it is the one place in this crate
-/// where a test does what `discover_from`'s own docs argue tests should not.
+/// The home directory is threaded in rather than set on the process. The earlier
+/// version of this test set `HOME` and `USERPROFILE` and put them back, which is
+/// shared mutable state in a binary cargo runs threaded — and `discover_from`'s
+/// own docs argue that a race in a test is a green light nobody earned.
 #[test]
 fn the_users_global_claude_directory_is_not_a_project_harness() {
     let home = scratch("fake-home");
@@ -151,32 +151,45 @@ fn the_users_global_claude_directory_is_not_a_project_harness() {
     let deep = home.join("code/project");
     std::fs::create_dir_all(&deep).expect("mkdir");
 
-    // `discover_from` consults the real home, so point the walk at a tree whose
-    // top *is* the home it will be compared against.
-    let previous = (std::env::var_os("HOME"), std::env::var_os("USERPROFILE"));
-    std::env::set_var("HOME", &home);
-    std::env::set_var("USERPROFILE", &home);
-    let result = emma_harness::discover_from(&deep, None);
-    match previous.0 {
-        Some(v) => std::env::set_var("HOME", v),
-        None => std::env::remove_var("HOME"),
-    }
-    match previous.1 {
-        Some(v) => std::env::set_var("USERPROFILE", v),
-        None => std::env::remove_var("USERPROFILE"),
+    let err = emma_harness::discover_in(&deep, None, Some(home.clone()))
+        .expect_err("the global .claude/ must not be adopted");
+    assert!(
+        !err.to_string().contains(&home.join(".claude").display().to_string()),
+        "it should not even claim to have looked there: {err}"
+    );
+}
+
+/// The skip above was a byte-wise `PathBuf` comparison, and on Windows the same
+/// directory has more than one spelling. A `$HOME` of `C:\Users\Owner` against a
+/// walked ancestor of `C:\Users\owner` did not match, so the skip never fired and
+/// the user's global `.claude/` was adopted as the project harness — silently,
+/// which is the entire failure the skip exists to prevent.
+///
+/// The two spellings have to differ, or the test cannot see the bug: written the
+/// obvious way it sets the home to the exact string it walks from, and every
+/// comparison in the world passes that.
+#[test]
+fn the_skip_survives_a_differently_cased_home() {
+    let home = scratch("FakeHome-CASED");
+    std::fs::create_dir_all(home.join(".claude")).expect("mkdir");
+    let deep = home.join("code/project");
+    std::fs::create_dir_all(&deep).expect("mkdir");
+
+    // A different spelling of the same directory — which only exists as such on a
+    // case-insensitive filesystem. Where the filesystem is case-sensitive these
+    // really are two directories and there is nothing to assert.
+    let other = std::path::PathBuf::from(home.to_string_lossy().to_lowercase());
+    if !other.is_dir() || other == home {
+        eprintln!("case-sensitive filesystem: nothing to test");
+        return;
     }
 
-    // The walk continues past the fake home into the real one, so assert the
-    // thing that matters rather than that it found nothing at all: the user's
-    // global `.claude/` was not the answer, and was not even claimed as looked at.
-    let global = home.join(".claude");
-    match result {
-        Ok(found) => assert_ne!(found, global, "the global .claude/ must not be adopted"),
-        Err(e) => assert!(
-            !e.to_string().contains(&global.display().to_string()),
-            "it should not even claim to have looked there: {e}"
-        ),
-    }
+    let err = emma_harness::discover_in(&deep, None, Some(other))
+        .expect_err("a differently-spelled $HOME is still $HOME");
+    assert!(
+        !err.to_string().contains(&home.join(".claude").display().to_string()),
+        "the skip went inert under a differently-cased home: {err}"
+    );
 }
 
 // endregion: Discovery and precedence
@@ -287,6 +300,82 @@ fn an_agent_may_write_its_tools_as_a_yaml_list() {
     );
     let h = Harness::load_selecting(&root, Flavor::Claude, Some("r".into())).expect("load");
     assert_eq!(h.tools(), Some(["Read".to_string(), "Bash".to_string()].as_slice()));
+}
+
+/// **The compatibility promise, at the level below `settings.json`.** Real
+/// skills in the wild carry `model-role`, `version` and `allowed-tools`, none of
+/// which Emma reads — and under `deny_unknown_fields` every one of them took the
+/// whole boot down. That is the same argument that made the outer level of
+/// `settings.json` permissive, reached the opposite way: a rule that fires on
+/// correct configuration is an outage, not a safety property.
+#[test]
+fn a_claude_skill_may_carry_keys_emma_does_not_read() {
+    let base = scratch("claude-skill-extra");
+    let root = base.join(".claude");
+    write(
+        &root.join("skills/adr/SKILL.md"),
+        "---\nname: adr\ndescription: Write an ADR.\nmodel-role: planner\nversion: 2\n\
+         allowed-tools: Read, Write\n---\n\n# how to write one\n",
+    );
+    let h = Harness::load(&root).expect("a real Claude Code skill must not stop the boot");
+    assert_eq!(h.skill_names(), vec!["adr"]);
+    assert_eq!(h.skill("adr").expect("found").description, "Write an ADR.");
+}
+
+/// A licence header above the frontmatter is common enough to be worth handling
+/// rather than skipping: the file is well-formed, it just does not open with its
+/// own first line.
+#[test]
+fn a_claude_skill_may_open_with_a_licence_comment() {
+    let base = scratch("claude-skill-comment");
+    let root = base.join(".claude");
+    write(
+        &root.join("skills/debug/SKILL.md"),
+        "<!-- Copyright (c) somebody. MIT. -->\n\
+         ---\nname: debug\ndescription: Debug a failure.\n---\n\nbody\n",
+    );
+    let h = Harness::load(&root).expect("load");
+    assert_eq!(h.skill_names(), vec!["debug"]);
+    assert_eq!(h.skill("debug").expect("found").body, "body\n");
+}
+
+/// The other side of permissive, and the reason it is a skip rather than a
+/// shrug: a file this loader genuinely cannot read is not silently dropped, it is
+/// named on stderr — but it does not take the boot, and above all it does not
+/// take the skills beside it.
+#[test]
+fn an_unreadable_claude_skill_is_skipped_rather_than_fatal() {
+    let base = scratch("claude-skill-bad");
+    let root = base.join(".claude");
+    write(&root.join("skills/broken/SKILL.md"), "no frontmatter at all\n");
+    write(
+        &root.join("skills/alsobroken/SKILL.md"),
+        "---\ndescription: no name\n---\nbody\n",
+    );
+    with_skill(&root, "good", "Still here.", "body");
+
+    let h = Harness::load(&root).expect("one bad skill must not cost the whole harness");
+    assert_eq!(
+        h.skill_names(),
+        vec!["good"],
+        "the readable skill beside the broken ones still has to load"
+    );
+}
+
+/// And `.emma/` stays strict, which is what the permissiveness above costs.
+/// There an unknown key is the user's typo in Emma's own format, and
+/// `deny_unknown_fields` is doing real work.
+#[test]
+fn an_emma_skill_with_an_unknown_key_still_fails_the_load() {
+    let root = one_persona("emma-skill-strict", "rules");
+    write(
+        &root.join("skills/typo/SKILL.md"),
+        "---\nname: typo\ndescription: d\nmodle: opus\n---\nbody\n",
+    );
+    let err = Harness::load(&root).expect_err("a typo in Emma's own format is a load error");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("SKILL.md"), "{msg}");
+    assert!(msg.contains("modle"), "the error must name the key: {msg}");
 }
 
 /// The line between the two flavours' persona rules. Emma does not refuse over
@@ -401,6 +490,28 @@ fn a_shell_string_command_is_refused_rather_than_quietly_run() {
     assert!(
         msg.contains("hooks/"),
         "the refusal must say what to do instead: {msg}"
+    );
+}
+
+/// The same refusal, one character out. The detection was a metacharacter set
+/// plus an explicit space, so a tab-separated command walked straight past it and
+/// failed later as a missing file — the right refusal, at the wrong place, with
+/// the wrong sentence. Whitespace is whitespace.
+#[test]
+fn a_tab_separated_command_is_a_shell_string_too() {
+    let base = scratch("claude-tab");
+    let root = base.join(".claude");
+    std::fs::create_dir_all(root.join("hooks")).expect("mkdir");
+    write(
+        &root.join("settings.json"),
+        "{\"hooks\":{\"PreToolUse\":[{\"hooks\":[{\"type\":\"command\",\
+         \"command\":\"hooks/guard.sh\\t--strict\"}]}]}}",
+    );
+    let err = Harness::load(&root).expect_err("a tab does not make it not a shell string");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("shell command"),
+        "wrong refusal — it fell through to the file check: {msg}"
     );
 }
 

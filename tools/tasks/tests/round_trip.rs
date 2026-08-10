@@ -139,6 +139,61 @@ async fn a_task_with_no_handle_gains_one_without_losing_its_words() {
     );
 }
 
+/// Written the way a tired person writes at 5pm: spaces where the tool would
+/// put one, trailing whitespace nobody can see, a note indented with a tab, and
+/// CRLF because it was saved on Windows. Every task already carries a handle,
+/// so the only line the write has any business touching is the one named — and
+/// on that line the only byte it has any business changing is the glyph.
+///
+/// This asserts on the whole file rather than on the ticked line, because the
+/// failure it guards is a *tidy-up*: the shapes it would smooth away are the
+/// ones nobody thinks to name.
+const UNTIDY: &str = "# Tasks\r\n\
+                      \r\n\
+                      -   [ ]   review   the spec   `#a1b2`   \r\n\
+                      \tthe note I wrote under it   \r\n\
+                      \x20 *  [~]  ship  it  `#c3d4`\r\n\
+                      \r\n\
+                      trailing prose   \r\n";
+
+#[tokio::test]
+async fn ticking_an_untidy_line_changes_the_glyph_and_nothing_else() {
+    let project = Project::new();
+    project.hand_write(UNTIDY);
+
+    project
+        .ok("TaskUpdate", json!({ "id": "a1b2", "status": "completed" }))
+        .await;
+
+    // One `[ ]` in the fixture, and it is the line named by the call.
+    let expected = UNTIDY.replace("[ ]", "[x]");
+    assert_eq!(project.read_tasks(), expected);
+}
+
+/// The other half of the same rule, for the write that touches lines the call
+/// did not name: stamping adds a handle and leaves the rest of the line as the
+/// person typed it, trailing spaces included.
+#[tokio::test]
+async fn stamping_appends_a_handle_and_leaves_the_spacing_alone() {
+    let project = Project::new();
+    project.hand_write("-   [ ]   review   the spec   \r\n");
+
+    project
+        .ok("TaskCreate", json!({ "tasks": ["anything"] }))
+        .await;
+
+    let after = project.read_tasks();
+    // `split('\n')` rather than `lines()`: the `\r` is part of what is being
+    // asserted, and `lines()` would eat it.
+    let stamped = after
+        .split('\n')
+        .find(|l| l.contains("review"))
+        .expect("the human's task is gone");
+    let (head, tail) = stamped.split_once(" `#").expect("no handle appended");
+    assert_eq!(head, "-   [ ]   review   the spec");
+    assert_eq!(&tail[4..], "`   \r", "{stamped:?}");
+}
+
 // endregion: The agent writes, the human's file survives
 
 // region: The human edits, the agent copes

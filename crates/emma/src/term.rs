@@ -159,10 +159,24 @@ impl Term {
     }
 
     pub fn prompt_question(&self, tool: &str) {
+        self.question(&format!(
+            "  allow? [y]es  [n]o  [a]lways {tool} this session: "
+        ));
+    }
+
+    /// The network question, worded so the grant on offer is the one the answer
+    /// actually gives: a host for the session, not a tool and not one call.
+    /// There is no third option, because a wider network grant is not offered.
+    pub fn prompt_network_question(&self, host: &str) {
+        self.question(&format!(
+            "  allow? [y]es — and {host} again this session  [n]o: "
+        ));
+    }
+
+    fn question(&self, q: &str) {
         if !self.enabled {
             return;
         }
-        let q = format!("  allow? [y]es  [n]o  [a]lways {tool} this session: ");
         // Whichever stream the commentary is on, so the question is never
         // separated from the thing it is asking about.
         if self.quiet {
@@ -265,6 +279,8 @@ fn summarise_args(name: &str, args: &serde_json::Value) -> String {
         "Glob" => one_line(s("pattern")),
         "Grep" => one_line(s("pattern")),
         "Skill" => one_line(s("name")),
+        "WebFetch" => one_line(s("url")),
+        "WebSearch" => one_line(s("query")),
         _ => one_line(args.to_string()),
     }
 }

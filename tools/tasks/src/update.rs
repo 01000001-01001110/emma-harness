@@ -84,6 +84,7 @@ impl Tool for TaskUpdate {
             // call the model makes most often, and it is exempted by name in
             // `crates/emma/src/approval.rs` rather than by lying here.
             read_only: false,
+            reaches_network: false,
             // Setting a status to what it already is leaves the same file.
             // Unlike Edit there is no anchor to consume, so a replay is safe.
             idempotent: true,

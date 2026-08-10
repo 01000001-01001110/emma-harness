@@ -273,6 +273,7 @@ dependencies = [
  "emma-tool-api",
  "emma-tools-fs",
  "emma-tools-tasks",
+ "emma-tools-web",
  "rpassword",
  "serde",
  "serde_json",

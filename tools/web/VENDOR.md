@@ -37,12 +37,24 @@ cleanly.
   provenance record nobody amends is worse than none, because the next person
   cherry-picking trusts it.
 
-The audit deliberately did **not** change any user-facing string, so one
-upstream defect survives here verbatim and is recorded rather than fixed:
-`actions.rs` states in both a doc comment and a refusal a user reads that the
-`submit` verb "is not built", while `forms.rs` implements it, the CLI wires it,
-and three integration tests cover it. Fixing that is an upstream change to
-cherry-pick, not a local edit.
+**One user-facing string was corrected on 2026-08-10** (findings D4).
+`actions.rs` told the user, in a refusal they read, that submission "requires
+the `submit` verb (P4, two-key rule), **which is not built**" — while
+`forms::submit` is implemented, dispatched by `browser-miner.rs` from the same
+argv `match` as `click`, and covered by three integration tests. The refusal
+itself is correct and stays; only the false clause went.
+
+Three strings in `src/chromehand/actions.rs` — the module doc, the `click` doc
+comment, and the refusal — plus a two-line assertion added to the vendored
+`tests/integration.rs::session_loop_click_type_select_refusals_history` that
+fails on the old wording. **No behaviour changed**: the allowlist gate, the
+submit-control precheck and the two-key rule are untouched.
+
+**The defect is upstream and unfixed there.** Canonical `src/actions.rs` carries
+the same claim against its own `forms.rs`. Fix it in canonical and this
+divergence can be dropped at the next cherry-pick — that is the cheaper
+direction, since the fork's edit exists only because the message is wrong in
+both places.
 
 **Exit codes became a type.** Upstream signalled outcome by process exit —
 `0` result, `2` bad input or policy refusal, `3` browser failure. In-process

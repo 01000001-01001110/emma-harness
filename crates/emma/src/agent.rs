@@ -278,11 +278,19 @@ impl<'a> Agent<'a> {
 
     pub async fn run_goal(&mut self, goal: &Goal) -> Outcome {
         let started = Instant::now();
+        // Composed before it is logged, because the record carries the opening
+        // message verbatim as well as the goal text. `opening` is built from the
+        // `DoneCheck` in force, and the log names that check but does not hold
+        // it — so a fold that tried to re-derive this string would have to keep
+        // a name-to-`impl` table in step with `goal.rs` forever. Storing the
+        // bytes costs a few hundred of them once per goal.
+        let opening = goal.opening(self.s.done);
         self.s.log.append(
             "goal",
             json!({
                 "session_id": self.s.session_id,
                 "text": goal.text,
+                "opening": opening,
                 "instructions_hash": self.s.harness.instructions_hash(),
                 "tool_schema_hash": self.s.tools.schema_hash(),
                 "model": self.s.provider.model_id(),
@@ -292,7 +300,7 @@ impl<'a> Agent<'a> {
         self.s.term.goal_started(&goal.text);
 
         let tool_defs = self.s.tools.wire_definitions();
-        let mut query: Vec<Message> = vec![Message::user(goal.opening(self.s.done))];
+        let mut query: Vec<Message> = vec![Message::user(opening)];
         let mut tokens = 0i64;
         let mut iterations = 0u32;
         let mut kicks = 0u32;
@@ -353,12 +361,31 @@ impl<'a> Agent<'a> {
                     "goal_total_so_far": tokens,
                 }),
             );
+            // One record per turn, whatever the turn contained — a turn that is
+            // nothing but tool calls has empty text and used to be written
+            // nowhere, which left the fold with a hole exactly where the tool
+            // traffic is.
+            //
+            // `raw_content` is the provider's own array and is the only field
+            // resume can use: rebuilding a turn from `text` invalidates
+            // thinking-block signatures, so a fold that had to do that would
+            // produce a message list the API rejects. `text` stays beside it
+            // even though every byte of it is also inside the array, for two
+            // reasons — the file is an audit trail somebody reads with `grep`,
+            // where one plain line beats a JSON array of escaped blocks, and
+            // the fold itself reads `text` to collapse a finished goal into the
+            // one-line answer `history` carries between goals.
             if !turn.text.trim().is_empty() {
                 last_text = turn.text.clone();
-                self.s
-                    .log
-                    .append("assistant", json!({ "turn_id": turn_id, "text": turn.text }));
             }
+            self.s.log.append(
+                "assistant",
+                json!({
+                    "turn_id": turn_id,
+                    "text": turn.text,
+                    "raw_content": turn.raw_content,
+                }),
+            );
             if tokens > self.s.budgets.max_tokens {
                 break Ending::Tokens;
             }
@@ -380,16 +407,22 @@ impl<'a> Agent<'a> {
                 }
                 kicks += 1;
                 tool_calls_since_kick = 0;
+                // `text` is the composed message, not a second copy of `why`:
+                // `why` is the reason for a human reading the file, and the
+                // message is what the model was sent — the two differ by the
+                // restated goal and the list of what has already failed, and it
+                // is the message the fold has to put back.
+                let kick_text = goal::kick(goal, &why, &tail(&failed_ever, 5));
                 self.s.log.append(
                     "kick",
-                    json!({ "turn_id": turn_id, "n": kicks, "why": why }),
+                    json!({ "turn_id": turn_id, "n": kicks, "why": why, "text": kick_text }),
                 );
                 self.s.term.note(&format!(
                     "not done yet — nudge {kicks}/{}",
                     self.s.budgets.max_kicks
                 ));
                 query.push(Message::assistant(turn.raw_content.clone()));
-                query.push(Message::user(goal::kick(goal, &why, &tail(&failed_ever, 5))));
+                query.push(Message::user(kick_text));
                 continue;
             }
 
@@ -516,11 +549,15 @@ impl<'a> Agent<'a> {
     ) -> (Value, bool, Option<String>) {
         let label = format!("{}({})", call.name, compact(&call.input));
         let fail = |kind: &str, detail: String| {
-            (
-                failure_block(&call.id, &call.name, kind, &detail),
-                false,
-                Some(label.clone()),
-            )
+            let block = failure_block(&call.id, &call.name, kind, &detail);
+            // A failure block is a block that was sent, so it is recorded under
+            // the same kind as a successful one — the fold rebuilds the user
+            // turn from these and would otherwise reconstruct a turn that
+            // answers only the calls that worked, which the API rejects. The
+            // record immediately above this one (`tool_failed`, `denied`,
+            // `tool_unknown`, …) is the prose a human reads; this is the wire.
+            self.log_result_block(turn_id, call, &block, None);
+            (block, false, Some(label.clone()))
         };
 
         let Some(tool) = self.s.tools.get(&call.name) else {
@@ -647,11 +684,6 @@ impl<'a> Agent<'a> {
         self.s
             .term
             .tool_result(outcome.display.as_deref(), &content, false);
-        self.s.log.append(
-            "tool_result",
-            json!({ "turn_id": turn_id, "id": call.id, "tool": call.name,
-                    "content": content, "truncated": outcome.truncated }),
-        );
         // Anthropic's wire shape, built here rather than by the provider — as is
         // the one in `failure_block`. That is the whole of what makes this loop
         // Anthropic-only: OpenAI expresses a result as a separate message with
@@ -661,11 +693,32 @@ impl<'a> Agent<'a> {
         // Note that `raw_content` cannot simply be deleted in that refactor: it
         // exists because thinking-block signatures do not survive reassembly, so
         // the loop has to keep handing back bytes it does not interpret.
-        (
-            json!({ "type": "tool_result", "tool_use_id": call.id, "content": content }),
-            true,
-            None,
-        )
+        let block = json!({ "type": "tool_result", "tool_use_id": call.id, "content": content });
+        self.log_result_block(turn_id, call, &block, Some(outcome.truncated));
+        (block, true, None)
+    }
+
+    /// The one record that says what answered a `tool_use`.
+    ///
+    /// It carries the block rather than the rendered content string, because
+    /// the string alone cannot be turned back into a message: the block also
+    /// carries the `tool_use_id` that pairs it with its call, and `is_error`
+    /// when it failed. The content is still in there and still greppable — it
+    /// is one JSON string deeper than it used to be, which is the price of the
+    /// record being sufficient rather than merely readable. It is not stored
+    /// twice; a tool's output is the largest thing in this file.
+    fn log_result_block(
+        &self,
+        turn_id: &str,
+        call: &ToolCall,
+        block: &Value,
+        truncated: Option<bool>,
+    ) {
+        self.s.log.append(
+            "tool_result",
+            json!({ "turn_id": turn_id, "id": call.id, "tool": call.name,
+                    "block": block, "truncated": truncated }),
+        );
     }
 
     async fn run_post_hooks(

@@ -34,7 +34,10 @@ pub mod auth;
 mod retry;
 
 use async_trait::async_trait;
+use auth::ENV_VAR;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -318,64 +321,153 @@ pub trait Provider: Send + Sync {
 // ---------------------------------------------------------------------------
 // Errors, and keeping the key out of them
 //
-// One variant per thing a user can act on, plus the two scrubbing helpers every
-// message passes through on the way out.
+// One variant per thing a user can act on, the process-wide scrub list that
+// makes redaction a property of the type rather than of each call site, and the
+// helpers every message passes through on the way out.
 // ---------------------------------------------------------------------------
 
 /// What went wrong, phrased so the message alone tells the user what to do.
 ///
-/// Provider text reaches the user *redacted* wherever the key is in scope: the
-/// [`AnthropicProvider`] scrubs every body and transport error before building
-/// the variant, so a proxy or misconfigured gateway echoing the auth header
-/// back cannot put it in a log line. See [`redact`]. Two paths do not scrub,
-/// because they are free functions the key was never handed to: the `Api`
-/// error built from an `error` frame mid-stream, and the one built from an
-/// error-shaped batch body. Both carry provider prose, so a key echoed there
-/// would survive.
-#[derive(Debug, thiserror::Error)]
+/// **No formatting of this type can contain an API key.** That is enforced at
+/// the one place every variant leaves the type — the `Display` and `Debug`
+/// impls below, which render the sentence and then run it through
+/// [`scrub_secrets`]. See the note on those impls for why the guarantee lives
+/// there rather than at each construction site, and for what it does not cover.
 pub enum LlmError {
-    #[error("no API key: {0}")]
-    Auth(#[from] AuthError),
+    Auth(AuthError),
 
-    // The command that stores a key is `emma api`, not `emma auth`. This crate
-    // does not know that — it is a library, and the binary's verb is not its to
-    // name — so `emma::commands::rename_auth` rewrites the word at the one
-    // boundary where the sentence is printed. If this string changes, that
-    // rewrite goes stale silently and the user is told to run a command that
-    // does not exist. Change both or neither.
-    #[error(
-        "the API rejected this key (HTTP 401). Check ANTHROPIC_API_KEY, or run `emma auth` to \
-         store a working one. Provider said: {message}"
-    )]
+    // The command that stores a key is `emma api`. This crate used to say
+    // `emma auth` and rely on `emma::commands::rename_auth` to rewrite the word
+    // at the printing boundary; that was a workaround for a wrong string, and
+    // the string is now right. `rename_auth` is therefore a no-op in practice
+    // and can be deleted once nothing else depends on it.
     Unauthorized { message: String },
 
-    #[error(
-        "the API key is valid but not allowed to do this (HTTP 403) — check the key's workspace \
-         and model permissions. Provider said: {message}"
-    )]
     Forbidden { message: String },
 
-    #[error("rate limited (HTTP 429){retry_hint}. Provider said: {message}")]
     RateLimited {
         retry_after: Option<Duration>,
         retry_hint: String,
         message: String,
     },
 
-    #[error("the API rejected the request as invalid (HTTP 400): {message}")]
     BadRequest { message: String },
 
-    #[error("the API is unavailable (HTTP {status}): {message}")]
     Unavailable { status: u16, message: String },
 
-    #[error("the API returned HTTP {status}: {message}")]
     Api { status: u16, message: String },
 
-    #[error("could not reach the API: {0}")]
     Transport(String),
 
-    #[error("the API sent a response this client could not read: {0}")]
     Protocol(String),
+}
+
+impl From<AuthError> for LlmError {
+    fn from(e: AuthError) -> Self {
+        Self::Auth(e)
+    }
+}
+
+impl std::error::Error for LlmError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Auth(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl LlmError {
+    /// The sentence, before scrubbing. Private, and the *only* caller is the
+    /// pair of impls below — a raw message must never escape by another route.
+    fn sentence(&self) -> String {
+        match self {
+            Self::Auth(e) => format!("no API key: {e}"),
+            Self::Unauthorized { message } => format!(
+                "the API rejected this key (HTTP 401). Check {ENV_VAR}, or run `emma api` to \
+                 store a working one. Provider said: {message}"
+            ),
+            Self::Forbidden { message } => format!(
+                "the API key is valid but not allowed to do this (HTTP 403) — check the key's \
+                 workspace and model permissions. Provider said: {message}"
+            ),
+            Self::RateLimited {
+                retry_hint,
+                message,
+                ..
+            } => format!("rate limited (HTTP 429){retry_hint}. Provider said: {message}"),
+            Self::BadRequest { message } => {
+                format!("the API rejected the request as invalid (HTTP 400): {message}")
+            }
+            Self::Unavailable { status, message } => {
+                format!("the API is unavailable (HTTP {status}): {message}")
+            }
+            Self::Api { status, message } => format!("the API returned HTTP {status}: {message}"),
+            Self::Transport(e) => format!("could not reach the API: {e}"),
+            Self::Protocol(e) => format!("the API sent a response this client could not read: {e}"),
+        }
+    }
+
+    fn variant(&self) -> &'static str {
+        match self {
+            Self::Auth(_) => "Auth",
+            Self::Unauthorized { .. } => "Unauthorized",
+            Self::Forbidden { .. } => "Forbidden",
+            Self::RateLimited { .. } => "RateLimited",
+            Self::BadRequest { .. } => "BadRequest",
+            Self::Unavailable { .. } => "Unavailable",
+            Self::Api { .. } => "Api",
+            Self::Transport(_) => "Transport",
+            Self::Protocol(_) => "Protocol",
+        }
+    }
+}
+
+// The redaction lives here, in the impls, rather than at each site that builds
+// a variant.
+//
+// The reason is that construction sites are where the guarantee kept failing.
+// `AnthropicProvider` holds the key and scrubbed what it built; `Assembly::apply`
+// and `turn_from_message` are free functions the key was never handed to, so
+// they built `Api` variants out of raw provider prose — and the class-level
+// promise on `LlmError` read as held while two paths did not hold it, until an
+// audit went looking.
+// Threading the key into those two functions would fix those two, and the third
+// one somebody adds next year would leak again, silently, exactly as these did.
+// Formatting is the one thing every variant from every site must pass through
+// to reach a terminal or a log, so putting the scrub here makes the property
+// structural rather than a habit each new call site has to remember.
+//
+// `Debug` is hand-written for the same reason: `unwrap_err()` in a test and
+// `{:?}` in a log both print it, and a derived `Debug` would print the fields
+// raw. It prints the variant name plus the redacted sentence, which is the
+// structure a reader of `{:?}` actually wants.
+//
+// **What this does not cover.**
+//
+// - Reading a field directly. `err.message` is `pub` and still carries the
+//   provider's bytes verbatim on the two paths above; only formatting is
+//   guarded. `AnthropicProvider::classify` therefore still scrubs at
+//   construction as well, so the stored field is clean on the path where a key
+//   is in scope.
+// - A key this process never wrapped in [`ApiKey`]. The scrub list is fed by
+//   `ApiKey::new`, which every key Emma resolves goes through; a caller that
+//   builds an auth header from a bare `String` is not covered.
+// - An echo that is not byte-identical. A gateway that base64s, truncates or
+//   re-cases the key defeats a substring replace, here and in [`redact`].
+// - Forgetting. The list is process-wide and append-only, which is right for a
+//   CLI that holds one key for its lifetime and is state a long-lived host
+//   would have to think about.
+impl fmt::Display for LlmError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&scrub_secrets(&self.sentence()))
+    }
+}
+
+impl fmt::Debug for LlmError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}({})", self.variant(), scrub_secrets(&self.sentence()))
+    }
 }
 
 impl LlmError {
@@ -407,6 +499,59 @@ pub(crate) fn redact(text: &str, key: &str) -> String {
         return text.to_string();
     }
     text.replace(key, "[redacted]")
+}
+
+/// Every key this process has wrapped in an [`ApiKey`], so that a message built
+/// somewhere the key was never passed can still be scrubbed on the way out.
+///
+/// Process-wide because the alternative is threading the key into every free
+/// function that might one day format an error, which is the arrangement that
+/// already failed twice. Append-only and never read except to scrub.
+///
+/// **Both accessors below recover a poisoned guard** rather than treating
+/// poison as a failure, and the reason is specific to what is behind the lock.
+///
+/// Poison means some thread panicked while holding the guard. It says nothing
+/// about the data — and a `Vec<String>` cannot be left in a state that is
+/// unsafe to read. The only region a panic can interrupt is between the
+/// membership check and the `push` below, and the worst outcome of that is a
+/// key missing from the list, which is what a fresh `ApiKey::new` puts back.
+/// There is no invariant here for poison to have broken.
+///
+/// The alternative is what this code did first, and it was a bug: propagating
+/// the poison meant one unrelated panic anywhere in the process turned
+/// redaction off for every error printed for the rest of the run — a security
+/// control degrading silently to no control, on a condition nobody observes.
+/// If the data here ever grows an invariant that a panic *could* break, this
+/// must fail closed — redact everything — rather than go back to passing the
+/// text through.
+fn secrets() -> &'static RwLock<Vec<String>> {
+    static SECRETS: OnceLock<RwLock<Vec<String>>> = OnceLock::new();
+    SECRETS.get_or_init(|| RwLock::new(Vec::new()))
+}
+
+/// Called by [`ApiKey::new`] — the one constructor every key in this process
+/// passes through.
+///
+/// Short strings are ignored. A scrub list is a substring replace over every
+/// error message the user ever sees, so an entry like `"x"` would corrupt them
+/// all; a real key is far longer than this floor, and a "key" that is not is
+/// not one worth protecting.
+pub(crate) fn remember_secret(key: &str) {
+    const MIN_LEN: usize = 8;
+    if key.len() < MIN_LEN {
+        return;
+    }
+    let mut list = secrets().write().unwrap_or_else(|e| e.into_inner());
+    if !list.iter().any(|k| k == key) {
+        list.push(key.to_string());
+    }
+}
+
+/// [`redact`] against every key this process knows about.
+pub(crate) fn scrub_secrets(text: &str) -> String {
+    let list = secrets().read().unwrap_or_else(|e| e.into_inner());
+    list.iter().fold(text.to_string(), |acc, k| redact(&acc, k))
 }
 
 /// Cut a provider body down to something that fits on a terminal line without
@@ -460,6 +605,55 @@ mod tests {
         let out = redact(&text, key);
         assert!(!out.contains(key), "{out}");
         assert_eq!(out.matches("[redacted]").count(), 2);
+    }
+
+    #[test]
+    fn a_poisoned_scrub_list_still_redacts() {
+        // A panic anywhere while the list is held poisons it for the rest of
+        // the process. If that turned redaction off, one unrelated panic would
+        // silently disable a security control for every error printed
+        // afterwards — the failure class this whole change exists to remove.
+        const FAKE: &str = "sk-ant-api03-POISONEDLOCKFIXTURE";
+        let _key = ApiKey::new(FAKE);
+
+        // The panic is deliberate and its message is noise; keep it off stderr
+        // so a passing run does not read like a failing one.
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let poisoner = std::thread::spawn(|| {
+            let _guard = secrets().write().unwrap();
+            panic!("poison the scrub list");
+        });
+        assert!(poisoner.join().is_err(), "the poisoner must have panicked");
+        std::panic::set_hook(hook);
+        assert!(secrets().read().is_err(), "the lock must now be poisoned");
+
+        // Registering after the poison must still work, and formatting must
+        // still scrub — both directions of the lock.
+        const LATER: &str = "sk-ant-api03-REGISTEREDAFTERTHEPOISON";
+        let _later = ApiKey::new(LATER);
+        let err = LlmError::Protocol(format!("gateway said x-api-key={FAKE} then {LATER}"));
+
+        let shown = format!("{err}");
+        assert!(!shown.contains(FAKE), "{shown}");
+        assert!(!shown.contains(LATER), "{shown}");
+        assert!(!format!("{err:?}").contains(FAKE), "{err:?}");
+    }
+
+    #[test]
+    fn no_variant_can_print_a_key_whoever_built_it() {
+        // Deliberately a variant nothing in `anthropic` scrubs, built here with
+        // no provider involved: the point is that the guarantee belongs to the
+        // type, so a site that never saw the key — including one written after
+        // this test — cannot leak it.
+        const FAKE: &str = "sk-ant-api03-NOTAREALKEYJUSTAFIXTURE";
+        let _key = ApiKey::new(FAKE);
+        let err = LlmError::Protocol(format!("gateway said x-api-key={FAKE}"));
+
+        let shown = format!("{err}");
+        assert!(!shown.contains(FAKE), "{shown}");
+        assert!(shown.contains("[redacted]"), "{shown}");
+        assert!(!format!("{err:?}").contains(FAKE), "{err:?}");
     }
 
     #[test]
