@@ -77,10 +77,28 @@ use crate::term::Term;
 /// network that will never answer is caught by neither.
 #[derive(Debug, Clone, Copy)]
 pub struct Budgets {
+    /// A ceiling, not a tripwire: tested before the call, so a run never makes
+    /// more than this many. The asymmetry with `max_tokens` below is real and
+    /// is why the two are worded differently to the user.
     pub max_iterations: u32,
     /// Billable tokens across the whole goal — see `Usage::billable_total_tokens`,
     /// never the bare `input_tokens`, which reports only the uncached remainder
     /// and under-counts a cached turn by up to ~10x.
+    ///
+    /// **A tripwire, not a ceiling.** It is tested *after* each call, so the
+    /// call that crosses it is paid for in full: a 500,000 budget stopped a
+    /// real run at 579,565, and the overshoot is bounded only by how large one
+    /// request can be. The name reads like a limit and the behaviour is not
+    /// one, so [`Ending::Tokens`] says which it is in words.
+    ///
+    /// Making it a true ceiling would mean gating on an estimate of the request
+    /// before sending it, and the only estimator here is the packer's
+    /// `chars / 4`, documented in `emma-llm` as under-counting what the
+    /// provider bills. A gate built on it is wrong in both directions — it
+    /// refuses calls that would have fit, and still overshoots on the ones it
+    /// lets through — while *sounding* exact. An honest tripwire beats a
+    /// dishonest ceiling, and the number the user is shown is the number that
+    /// was actually spent either way.
     pub max_tokens: i64,
     pub wall_clock: Duration,
     pub max_kicks: u32,
@@ -144,7 +162,17 @@ impl Ending {
                  nothing further to do here."
                 .into(),
             Self::Iterations => format!("stopped: hit the {} model-call limit.", b.max_iterations),
-            Self::Tokens => format!("stopped: hit the {} token budget.", b.max_tokens),
+            // Deliberately not "hit the N token budget", which is what it used
+            // to say and which reads as "stopped at N". It does not stop at N.
+            // See `Budgets::max_tokens`: the check runs after the call, so the
+            // spend reported beside this sentence is larger — by 79,565 on the
+            // run that prompted the rewording — and a sentence that implies
+            // otherwise contradicts the number printed next to it.
+            Self::Tokens => format!(
+                "stopped: went past the {} token budget, which is checked after each call — so \
+                 the call that crossed it is included in the total below.",
+                b.max_tokens
+            ),
             Self::Deadline => format!("stopped: hit the {}s time limit.", b.wall_clock.as_secs()),
             Self::Interrupted => "interrupted. The partial turn is in the session log.".into(),
             Self::Provider(e) => format!("stopped: {e}"),
@@ -1032,6 +1060,30 @@ mod tests {
                 "{ending:?} does not name its limit: {m}"
             );
         }
+    }
+
+    #[test]
+    fn the_token_budget_is_described_as_the_tripwire_it_is() {
+        // Written from a real run: 500,000 budget, 579,565 spent, reported as
+        // "stopped: hit the 500000 token budget. — 9 calls, 579565 tokens".
+        // Both numbers were true and the sentence between them was not: it
+        // reads as a ceiling the run stopped at, and the run stopped 79,565
+        // tokens past it because the check runs after the call that crossed it.
+        //
+        // The budget stays a tripwire — see `Budgets::max_tokens` for why the
+        // alternative is worse — so this asserts on the only thing left, which
+        // is that the wording admits it.
+        let m = Ending::Tokens.message(&Budgets::default());
+        assert!(m.contains("500000"), "the budget is not named: {m}");
+        assert!(
+            m.contains("after"),
+            "the message does not say when the check runs, so it still reads as a ceiling: {m}"
+        );
+        // `iterations` is genuinely a ceiling — it is tested before the call —
+        // and must keep saying so, because the two now word differently on
+        // purpose and a tidy-up that unified them would make one of them lie.
+        let i = Ending::Iterations.message(&Budgets::default());
+        assert!(i.contains("limit"), "{i}");
     }
 }
 

@@ -573,6 +573,11 @@ async fn grep_rejects_a_malformed_regex_and_an_unknown_mode() {
 /// been started. Those coincide when the tests run and diverge in real use, so
 /// this is the test that catches a `Command` built without `current_dir` — a
 /// failure that would look like the agent reading somebody else's directory.
+///
+/// It is also the cheapest proof that whatever `resolve_shell` picked can
+/// actually run something, which on Windows now means Git for Windows rather
+/// than the WSL launcher: under WSL this printed a `/mnt/e/...` view of a
+/// directory Emma had contained as `E:\...`, and the two only agreed by luck.
 #[tokio::test]
 async fn bash_runs_a_command_in_the_working_directory() {
     let sandbox = Sandbox::new();
@@ -637,6 +642,17 @@ async fn bash_reports_a_non_zero_exit_with_its_output() {
 /// half — a timeout that fires the error but does not stop waiting still hangs
 /// the agent for the full `sleep 30`, and every assertion about the message
 /// would pass while the session was unusable.
+///
+/// **This test takes ~30s of wall clock, and that is not the tool hanging.**
+/// The `err(..)` call returns in well under a second — that is what the elapsed
+/// assertion measures. What costs 30s is the *binary shutting down*: `sleep` is
+/// a separate executable under a real POSIX shell, killing the shell orphans
+/// it, it keeps the stdout pipe open for its full 30s, and the abandoned drain
+/// task holds a blocking-pool thread the runtime waits on at shutdown. It cost
+/// 2s while the shell was WSL — where killing the interop stub tore the whole
+/// command down — so switching to Git for Windows is what made it visible. The
+/// grandchild-outlives-the-kill case is the realistic one (any build tool does
+/// this), so it is kept rather than traded for a faster suite.
 #[tokio::test]
 async fn bash_kills_a_command_that_outruns_its_timeout() {
     let sandbox = Sandbox::new();
@@ -742,6 +758,68 @@ async fn bash_refuses_an_empty_command() {
     let sandbox = Sandbox::new();
     let error = sandbox.err("Bash", json!({ "command": "   " })).await;
     assert_eq!(error.kind(), "bad_arguments");
+}
+
+/// The model is told which shell it is driving in the result, not in the
+/// description — because the description is hashed into `tool_schema_hash`, and
+/// a description that varied with whichever shell a machine happened to have
+/// would make that hash machine-dependent and the attribution meaningless. So
+/// the fact moves to run time, where it costs nothing and can be exact.
+///
+/// Asserted on a real spawn rather than on `resolve_shell()` alone: the banner
+/// has to describe the shell that actually ran, and a banner assembled from a
+/// second, independent resolution could disagree with it.
+#[tokio::test]
+async fn bash_names_the_shell_that_ran_in_the_result() {
+    let sandbox = Sandbox::new();
+    let outcome = sandbox.ok("Bash", json!({ "command": "echo hi" })).await;
+    let first = outcome.content.lines().next().unwrap_or_default();
+    assert!(first.starts_with("shell: "), "{outcome:?}");
+    let shell = emma_tools_fs::resolve_shell().expect("a shell resolved");
+    assert_eq!(first, shell.banner(), "{outcome:?}");
+    assert!(outcome.content.contains("hi"), "{outcome:?}");
+}
+
+/// The banner must not displace the exit status, and the status must still be
+/// the thing a skimming model sees before the output.
+#[tokio::test]
+async fn the_banner_sits_above_the_exit_status_not_instead_of_it() {
+    let sandbox = Sandbox::new();
+    let outcome = sandbox
+        .ok("Bash", json!({ "command": "echo out; exit 3" }))
+        .await;
+    let mut lines = outcome.content.lines();
+    assert!(lines.next().unwrap_or_default().starts_with("shell: "));
+    assert_eq!(lines.next().unwrap_or_default(), "exit status 3");
+    assert!(outcome.content.contains("out"), "{outcome:?}");
+}
+
+/// Whoever debugs "why did my command behave oddly" needs to see which shell
+/// ran it without reading source, so the resolution is a public function rather
+/// than something buried in `run`. This is the contract the command that prints
+/// it is written against.
+#[test]
+fn the_resolved_shell_is_inspectable_from_outside() {
+    let shell = emma_tools_fs::resolve_shell().expect("this box has a shell");
+    assert!(shell.path.is_file(), "{shell}");
+    assert_eq!(shell.kind, emma_tools_fs::ShellKind::Posix);
+    // The live half of the WSL ruling, and the only place it can be checked
+    // against a real machine: on Windows the automatic answer must not be the
+    // launcher in the system directory, which is what a first-hit-on-PATH
+    // search returns on a stock box.
+    if cfg!(windows) {
+        let lower = shell.path.to_string_lossy().to_lowercase();
+        assert!(
+            !lower.contains(r"\system32\") && !lower.contains(r"\windowsapps\"),
+            "the automatic choice is the WSL launcher: {shell}"
+        );
+    }
+    let described = shell.to_string();
+    assert!(described.contains("posix"), "{described}");
+    assert!(
+        described.contains(&shell.path.display().to_string()),
+        "{described}"
+    );
 }
 
 // endregion: Bash

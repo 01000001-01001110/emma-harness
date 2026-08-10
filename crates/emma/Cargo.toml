@@ -35,6 +35,16 @@ emma-tools-tasks.workspace = true
 # `web_tools`, and the registration in `main.rs` that reports what it left out.
 emma-tools-web.workspace = true
 
+# The pinned frame asks the platform two questions and asks nothing else of it:
+# how big is the window, and will this console honour VT escape sequences. Both
+# are one syscall; a terminal crate would be several thousand lines and an
+# opinion about input handling, which `term.rs` deliberately does not want.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Console"] }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

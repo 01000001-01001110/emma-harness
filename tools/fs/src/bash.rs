@@ -23,8 +23,47 @@
 //! `cwd` *argument* is contained — it must resolve inside the root — which is a
 //! guard on the argument only, not on what the command then does with it.
 //!
+//! **Which shell, and why it is stated rather than searched for.** The search
+//! used to be "the first `bash` on `PATH`". On a stock Windows box that is
+//! `C:\Windows\System32\bash.exe`, the WSL launcher — and a real run showed it:
+//! `pwd` came back `/mnt/e/Projects/emma` for a directory Emma had resolved and
+//! contained as `C:\src\emma`, with `.wslconfig` warnings mixed into the
+//! tool output. The two agreed only because WSL happened to translate the
+//! directory. Measured on the same box, when it *cannot* translate — a `subst`
+//! drive, a UNC path — WSL starts in the user's home directory instead, prints
+//! nothing, and exits 0. That is a command running outside the root the
+//! operator approved, reported as a success, which is a hole rather than
+//! something the model can route around: nothing in the result says it
+//! happened. So WSL is refused, with the reasoning, rather than translated for.
+//!
+//! The order, which is the contract:
+//!
+//! 1. `EMMA_SHELL`, if set to anything but whitespace — an absolute path, or
+//!    one of `sh`, `bash`, `pwsh`, `powershell`. If what it names is not there,
+//!    the call is `Unavailable` and says where it looked. It never falls back:
+//!    a tool that runs a different shell than the one you asked for is worse
+//!    than one that stops.
+//! 2. `/bin/sh`, on unix.
+//! 3. A native POSIX `bash` then `sh` — the Git for Windows locations first,
+//!    then `PATH`, skipping the WSL launcher wherever it appears.
+//! 4. Nothing. **PowerShell, WSL and `cmd.exe` are never chosen
+//!    automatically.** PowerShell is a deliberate opt-in rather than a fallback
+//!    because the model writes POSIX — pipes, `2>&1`, `&&` — on the strength of
+//!    being told it has a shell, and Windows PowerShell 5.1 has no `&&` at all.
+//!    Auto-selecting it would turn every such command into a wrong answer
+//!    shaped like the command's own output. Named explicitly it works fine, and
+//!    the model is told what it has.
+//!
+//! Told how? **In the result, not in the description.** The description is
+//! hashed into `tool_schema_hash`, which is how anyone tells which tool surface
+//! produced a given answer; a description that named the local shell would make
+//! that hash a property of the machine. So the description says one thing true
+//! everywhere, and every result carries `shell: <kind> — <path>` on its first
+//! line. The model learns exactly what it is driving, at run time, and adapts —
+//! which is what it is good at, and cheaper than any compatibility shim.
+//!
 //! **Exit status is not failure.** A command that started and finished is `Ok`,
-//! carrying `exit status <n>` as the first line of its content; only
+//! carrying `exit status <n>` directly under the shell banner; only
 //! could-not-spawn, timed-out and killed are `Failed`. The reasoning is recorded
 //! at the point in `run` that implements it, below.
 //!
@@ -39,8 +78,15 @@
 //! status the tool now reports correctly. All three agree as of 2026-08-10.
 //! **A contract change is not landed until it has reached the copy the model
 //! is shown.**
+//!
+//! The description moved once more the same day, for the same class of reason:
+//! it promised `sh -c`, which is false under PowerShell and false about `&&` in
+//! particular. It now says the shell varies and that the result names it. That
+//! moves `tool_schema_hash` — deliberately, once, to wording true on every
+//! platform, which is what keeps the hash a property of the tool surface rather
+//! than of the box it happened to run on.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -112,7 +158,7 @@ impl Tool for Bash {
         json!({
             "type": "object",
             "properties": {
-                "command": { "type": "string", "description": "Shell command line, run with sh -c." },
+                "command": { "type": "string", "description": "Shell command line. The shell that ran it is named on the first line of the result." },
                 "timeout_ms": {
                     "type": "integer",
                     "minimum": 1,
@@ -205,9 +251,9 @@ impl Bash {
             }
         };
 
-        let shell = find_shell()?;
-        let mut cmd = tokio::process::Command::new(&shell);
-        cmd.arg("-c")
+        let shell = resolve_shell()?;
+        let mut cmd = tokio::process::Command::new(&shell.path);
+        cmd.args(shell.args())
             .arg(command)
             .current_dir(&cwd)
             .stdin(Stdio::null())
@@ -225,7 +271,10 @@ impl Bash {
         }
 
         let mut child = cmd.spawn().map_err(|e| {
-            ToolError::Unavailable(format!("{} could not be started: {e}", shell.display()))
+            ToolError::Unavailable(format!(
+                "{} could not be started: {e}",
+                shell.path.display()
+            ))
         })?;
         let stdout = child.stdout.take().expect("stdout piped");
         let stderr = child.stderr.take().expect("stderr piped");
@@ -278,7 +327,8 @@ impl Bash {
         // that hung after printing where it hung is telling you where it hung.
         if timed_out {
             return Err(ToolError::Failed(format!(
-                "the command was killed after {timeout_ms}ms.\n{body}"
+                "the command was killed after {timeout_ms}ms.\n{}\n{body}",
+                shell.banner()
             )));
         }
 
@@ -312,6 +362,12 @@ impl Bash {
             // output, and a non-zero exit changes how the output should be read.
             content = format!("exit status {code}\n{content}");
         }
+        // Above the status, on every call, because the model is not told which
+        // shell it has anywhere else — see `Shell::banner`. Every call rather
+        // than once per session: there is no session state here to hang "once"
+        // on, a resumed or compacted conversation would lose the one mention,
+        // and the cost is one short line against a 64 KiB cap.
+        content = format!("{}\n{content}", shell.banner());
         if cut {
             content.push_str(&format!(
                 "\n[truncated: output cut at {MAX_STREAM_BYTES} bytes per stream]"
@@ -324,13 +380,13 @@ impl Bash {
 
 // endregion: Running the command
 
-// region: Output, and finding a shell
+// region: Output
 // ---------------------------------------------------------------------------
-// Output, and finding a shell
+// Output
 //
-// How the two streams are turned into one readable body, how they are read
-// without deadlocking the child, and the refusal that happens when there is no
-// POSIX shell to run anything with.
+// How the two streams are turned into one readable body, and how they are read
+// without deadlocking the child. Choosing the shell used to live here too; it
+// outgrew the corner and is its own region below.
 // ---------------------------------------------------------------------------
 
 /// stderr is labelled rather than interleaved. Interleaving is what a terminal
@@ -380,33 +436,617 @@ async fn drain<R: tokio::io::AsyncRead + Unpin>(mut reader: R, cap: usize) -> (V
     (kept, cut)
 }
 
-/// A POSIX shell, or an honest refusal.
+// endregion: Output
+
+// region: Which shell
+// ---------------------------------------------------------------------------
+// Which shell
+//
+// A stated order and an explicit override, rather than a scan that takes
+// whatever exists first. The order is in the module doc because a user has to
+// be able to predict it without reading this; what is here is the mechanism
+// and the two refusals.
+// ---------------------------------------------------------------------------
+
+/// The override. An environment variable rather than a config key because it
+/// needs no plumbing, is settable per-run without editing a file, and is the
+/// same shape as `SHELL` and `CHROME` — the things it sits next to.
 ///
-/// On Windows this looks for `bash` on `PATH` — Git for Windows or WSL — and
-/// deliberately does not fall back to `cmd.exe`. Silently running a command
-/// written for `sh` under a shell with different quoting, different globbing
-/// and different operators would produce wrong results that look like the
-/// command's own output. `Unavailable` says "I cannot do this", which is
-/// exactly what the variant is for.
-pub fn find_shell() -> Result<PathBuf, ToolError> {
-    if cfg!(unix) {
-        let sh = PathBuf::from("/bin/sh");
-        if sh.exists() {
-            return Ok(sh);
+/// Deliberately absent from [`ENV_ALLOWLIST`]: it selects Emma's shell and has
+/// no business being visible to the commands that shell runs.
+pub const OVERRIDE_ENV: &str = "EMMA_SHELL";
+
+/// Where a POSIX shell lives on Windows when somebody installed one on purpose.
+/// Searched *before* `PATH`, which is the whole fix: WSL's launcher is on
+/// `PATH` ahead of Git for Windows on a stock box, so ordering by `PATH` alone
+/// picks the one shell whose filesystem Emma cannot reason about.
+const WINDOWS_POSIX_DIRS: &[(&str, &str)] = &[
+    ("ProgramFiles", r"Git\bin"),
+    ("ProgramW6432", r"Git\bin"),
+    ("ProgramFiles(x86)", r"Git\bin"),
+    ("LOCALAPPDATA", r"Programs\Git\bin"),
+    ("ProgramFiles", r"Git\usr\bin"),
+];
+
+/// Directory names Windows keeps the WSL launcher in. `bash.exe` in any of them
+/// is the interop stub, not a shell — see [`wsl_refusal`].
+const WSL_DIRS: &[&str] = &["system32", "syswow64", "sysnative", "windowsapps"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellKind {
+    Posix,
+    PowerShell,
+    Wsl,
+}
+
+impl ShellKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Posix => "posix",
+            Self::PowerShell => "powershell",
+            Self::Wsl => "wsl",
         }
     }
-    let exe = if cfg!(windows) { "bash.exe" } else { "sh" };
-    if let Some(paths) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            let candidate = dir.join(exe);
-            if candidate.is_file() {
-                return Ok(candidate);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellSource {
+    Override,
+    Default,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shell {
+    pub path: PathBuf,
+    pub kind: ShellKind,
+    pub source: ShellSource,
+}
+
+impl Shell {
+    /// The arguments before the command line.
+    ///
+    /// `-Command` spelled out rather than `-c`. Both work — that was checked
+    /// on Windows PowerShell 5.1 rather than assumed, after an earlier comment
+    /// here confidently claimed 5.1 rejects the short form — but `-c` is an
+    /// abbreviation resolved against every parameter starting with `c`, and it
+    /// stays unambiguous only as long as nobody adds another one.
+    ///
+    /// The two that are load-bearing: `-NoProfile`, because a user's profile
+    /// is arbitrary code that would otherwise run before every tool call —
+    /// slow, and a source of state that no cap or allowlist here covers; and
+    /// `-NonInteractive`, so a cmdlet that wants to prompt fails instead of
+    /// waiting on a stdin that is `/dev/null` until the timeout.
+    fn args(&self) -> &'static [&'static str] {
+        match self.kind {
+            ShellKind::Posix => &["-c"],
+            ShellKind::PowerShell => &["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"],
+            // Never reached: `resolve_with` refuses before constructing one.
+            ShellKind::Wsl => &["-c"],
+        }
+    }
+
+    /// The one line prepended to every result.
+    ///
+    /// This exists because the *description* cannot say it. The description is
+    /// hashed into `tool_schema_hash`, which is how anyone tells which tool
+    /// surface produced a given answer; a description that named the local
+    /// shell would make that hash a property of the machine and the attribution
+    /// would stop meaning anything. So the description stays true everywhere
+    /// and says nothing machine-specific, and the machine-specific fact arrives
+    /// here, in the result, where it is exact and costs forty bytes.
+    pub fn banner(&self) -> String {
+        format!("shell: {} — {}", self.kind.label(), self.path.display())
+    }
+}
+
+impl std::fmt::Display for Shell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let source = match self.source {
+            ShellSource::Override => OVERRIDE_ENV,
+            ShellSource::Default => "default",
+        };
+        write!(
+            f,
+            "{} shell at {} ({source})",
+            self.kind.label(),
+            self.path.display()
+        )
+    }
+}
+
+/// Everything the decision depends on, passed in rather than read.
+///
+/// The point is that the order and both refusals are then a pure function of a
+/// directory list and an "does this exist" predicate, so every branch is
+/// testable on any box without a shell installed and without the answer
+/// depending on what this particular machine has.
+struct ShellEnv<'a> {
+    windows: bool,
+    /// Searched before `PATH`. See [`WINDOWS_POSIX_DIRS`].
+    preferred_dirs: Vec<PathBuf>,
+    path_dirs: Vec<PathBuf>,
+    exists: &'a dyn Fn(&Path) -> bool,
+}
+
+/// The resolved shell, or an honest refusal — against the real environment.
+///
+/// Public because "which shell ran my command" must be answerable without
+/// reading this file. `Bash` calls it per invocation; a `/shell`-style command
+/// elsewhere in the harness can call the same function and print
+/// `Shell::to_string()`.
+pub fn resolve_shell() -> Result<Shell, ToolError> {
+    let exists = |p: &Path| p.is_file();
+    let env = ShellEnv {
+        windows: cfg!(windows),
+        preferred_dirs: windows_posix_dirs(),
+        path_dirs: std::env::var_os("PATH")
+            .map(|p| std::env::split_paths(&p).collect())
+            .unwrap_or_default(),
+        exists: &exists,
+    };
+    resolve_with(std::env::var(OVERRIDE_ENV).ok().as_deref(), &env)
+}
+
+fn windows_posix_dirs() -> Vec<PathBuf> {
+    if !cfg!(windows) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (var, suffix) in WINDOWS_POSIX_DIRS {
+        if let Some(base) = std::env::var_os(var) {
+            let dir = PathBuf::from(base).join(suffix);
+            if !out.contains(&dir) {
+                out.push(dir);
             }
         }
     }
-    Err(ToolError::Unavailable(
-        "no POSIX shell is available; Bash needs sh (or bash on Windows) on PATH".into(),
+    out
+}
+
+/// What a path *is*, from its name alone.
+///
+/// Name-based rather than probe-based on purpose: this runs before anything is
+/// spawned, and a decision that required executing the candidate to find out
+/// what it was would have already run it.
+fn classify(path: &Path) -> ShellKind {
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if stem == "pwsh" || stem == "powershell" {
+        return ShellKind::PowerShell;
+    }
+    if stem == "wsl" {
+        return ShellKind::Wsl;
+    }
+    let parent = path
+        .parent()
+        .map(|p| p.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let in_system_dir = parent
+        .rsplit(['\\', '/'])
+        .next()
+        .is_some_and(|leaf| WSL_DIRS.contains(&leaf));
+    if in_system_dir {
+        return ShellKind::Wsl;
+    }
+    ShellKind::Posix
+}
+
+/// The refusal that carries the reasoning, because "no" without "why" here
+/// sends people to the one workaround that reopens the hole.
+///
+/// WSL is a separate filesystem namespace. Emma resolves and contains `cwd` as
+/// a Windows path; the shell would receive a directory it can only see through
+/// a translation Emma is not doing. When that translation succeeds the two
+/// agree by luck; when it fails — measured on this box with a `subst` drive and
+/// with a UNC path — WSL starts in the user's home directory instead, prints no
+/// warning and exits 0. That is a command running outside the root the operator
+/// approved, reported as a success. It is a hole rather than something the
+/// model can route around, because nothing in the result says it happened.
+fn wsl_refusal(path: &Path) -> ToolError {
+    ToolError::Unavailable(format!(
+        "{} is the WSL launcher, and Emma will not run commands through it. WSL is a \
+         separate filesystem namespace: Emma resolves and contains `cwd` as a Windows \
+         path, and when WSL cannot translate the directory it was started in it silently \
+         starts in the user's home directory instead — so containment would mean one \
+         thing to Emma and another to the shell. Install Git for Windows (Emma looks in \
+         Program Files\\Git\\bin) or set {OVERRIDE_ENV} to a native shell, or run Emma \
+         itself inside WSL, where the root is a WSL path and containment means one thing \
+         again.",
+        path.display()
     ))
 }
 
-// endregion: Output, and finding a shell
+/// The documented order, in one function.
+///
+/// 1. [`OVERRIDE_ENV`], if set to anything but whitespace.
+/// 2. `/bin/sh` on unix.
+/// 3. A native POSIX `bash`/`sh`: the Git for Windows locations, then `PATH`.
+/// 4. Nothing. PowerShell, WSL and `cmd.exe` are never chosen automatically.
+fn resolve_with(over: Option<&str>, env: &ShellEnv<'_>) -> Result<Shell, ToolError> {
+    if let Some(spec) = over.map(str::trim).filter(|s| !s.is_empty()) {
+        return resolve_override(spec, env);
+    }
+    if !env.windows {
+        let sh = PathBuf::from("/bin/sh");
+        if (env.exists)(&sh) {
+            return Ok(default_shell(sh));
+        }
+    }
+    // Only ever `bash` and `sh`. `cmd.exe` is not a fallback for the same
+    // reason WSL is not: a command written for `sh` run under a shell with
+    // different quoting, globbing and operators produces wrong answers that
+    // look like the command's own output.
+    for name in names_for(if env.windows { "bash" } else { "sh" }, env) {
+        for dir in env.preferred_dirs.iter().chain(env.path_dirs.iter()) {
+            let candidate = dir.join(&name);
+            // Skipped rather than merely ranked below Git bash: on a box
+            // without Git, ranking alone still ends at WSL.
+            if (env.exists)(&candidate) && classify(&candidate) == ShellKind::Posix {
+                return Ok(default_shell(candidate));
+            }
+        }
+    }
+    if env.windows {
+        for name in names_for("sh", env) {
+            for dir in env.preferred_dirs.iter().chain(env.path_dirs.iter()) {
+                let candidate = dir.join(&name);
+                if (env.exists)(&candidate) && classify(&candidate) == ShellKind::Posix {
+                    return Ok(default_shell(candidate));
+                }
+            }
+        }
+    }
+    Err(nothing_found(env))
+}
+
+fn default_shell(path: PathBuf) -> Shell {
+    let kind = classify(&path);
+    Shell {
+        path,
+        kind,
+        source: ShellSource::Default,
+    }
+}
+
+fn resolve_override(spec: &str, env: &ShellEnv<'_>) -> Result<Shell, ToolError> {
+    // A bare `wsl` is refused before any lookup, so the message is the same
+    // whether or not the launcher happens to be installed.
+    if spec.eq_ignore_ascii_case("wsl") {
+        return Err(wsl_refusal(Path::new("wsl")));
+    }
+    let looks_like_path = spec.contains(['/', '\\']) || Path::new(spec).is_absolute();
+    let found = if looks_like_path {
+        let p = PathBuf::from(spec);
+        (env.exists)(&p).then_some(p)
+    } else {
+        names_for(spec, env)
+            .into_iter()
+            .flat_map(|name| {
+                env.preferred_dirs
+                    .iter()
+                    .chain(env.path_dirs.iter())
+                    .map(move |d| d.join(&name))
+            })
+            .find(|c| (env.exists)(c))
+    };
+    let Some(path) = found else {
+        // Refuse rather than fall back. A tool that silently runs a shell other
+        // than the one you named is worse than one that stops: the command
+        // still produces output, and the output is wrong in a way that reads as
+        // the command's own answer.
+        let where_looked = if looks_like_path {
+            "no file at that path".to_string()
+        } else {
+            format!("looked in: {}", dir_list(env))
+        };
+        return Err(ToolError::Unavailable(format!(
+            "{OVERRIDE_ENV} names \"{spec}\", and no such shell was found ({where_looked}). \
+             Set {OVERRIDE_ENV} to an absolute path, or to one of: sh, bash, pwsh, \
+             powershell — or unset it to take the default."
+        )));
+    };
+    let kind = classify(&path);
+    if kind == ShellKind::Wsl {
+        return Err(wsl_refusal(&path));
+    }
+    Ok(Shell {
+        path,
+        kind,
+        source: ShellSource::Override,
+    })
+}
+
+/// Filenames to try for a shell named `name`, `.exe` included on Windows.
+fn names_for(name: &str, env: &ShellEnv<'_>) -> Vec<String> {
+    let mut out = vec![name.to_string()];
+    if env.windows {
+        let with_exe = format!("{name}.exe");
+        out.insert(0, with_exe);
+    }
+    out
+}
+
+fn dir_list(env: &ShellEnv<'_>) -> String {
+    let dirs: Vec<String> = env
+        .preferred_dirs
+        .iter()
+        .chain(env.path_dirs.iter())
+        .map(|d| d.display().to_string())
+        .collect();
+    if dirs.is_empty() {
+        "no directories to search".into()
+    } else {
+        dirs.join(", ")
+    }
+}
+
+/// The refusal when the search comes up empty. It names what was looked for and
+/// where, and both opt-ins, because the alternative is a user reconstructing
+/// this function from the outside.
+fn nothing_found(env: &ShellEnv<'_>) -> ToolError {
+    let what = if env.windows {
+        "bash.exe, sh.exe"
+    } else {
+        "sh"
+    };
+    ToolError::Unavailable(format!(
+        "no POSIX shell is available. Emma looked for {what} in: {}. Set {OVERRIDE_ENV} to \
+         the absolute path of the shell you want. PowerShell is never chosen automatically \
+         — {OVERRIDE_ENV}=powershell (or pwsh) selects it, and the shell that ran is named \
+         on the first line of every Bash result.",
+        dir_list(env)
+    ))
+}
+
+// endregion: Which shell
+
+// region: Resolution tests
+// ---------------------------------------------------------------------------
+// Resolution tests
+//
+// The order, the override and the refusals are decided from a list of
+// directories and an "does this exist" predicate, so all of it is testable
+// without a shell installed and without the answer depending on this box. The
+// tests that genuinely need a shell to run are in `tests/edges.rs`.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod shell_tests {
+    use super::*;
+
+    /// A fake filesystem: only these paths exist.
+    fn env<'a>(
+        windows: bool,
+        preferred: &[&str],
+        path: &[&str],
+        exists: &'a dyn Fn(&Path) -> bool,
+    ) -> ShellEnv<'a> {
+        ShellEnv {
+            windows,
+            preferred_dirs: preferred.iter().map(PathBuf::from).collect(),
+            path_dirs: path.iter().map(PathBuf::from).collect(),
+            exists,
+        }
+    }
+
+    fn only(files: &[&str]) -> impl Fn(&Path) -> bool {
+        let set: Vec<String> = files.iter().map(|f| f.to_lowercase()).collect();
+        move |p: &Path| set.contains(&p.to_string_lossy().to_lowercase())
+    }
+
+    /// The whole point of the exercise. WSL's `bash.exe` is first on `PATH` on
+    /// a stock Windows box, so a search that takes the first hit takes it — and
+    /// then the command runs in a filesystem namespace Emma's containment check
+    /// has never heard of. Git for Windows is preferred *and* WSL is skipped
+    /// rather than merely ranked below it, because on a box without Git the
+    /// ranking alone would still fall through to WSL.
+    #[test]
+    fn windows_prefers_git_bash_and_never_falls_through_to_wsl() {
+        let files = only(&[
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Windows\System32\bash.exe",
+        ]);
+        let e = env(
+            true,
+            &[r"C:\Program Files\Git\bin"],
+            &[r"C:\Windows\System32"],
+            &files,
+        );
+        let shell = resolve_with(None, &e).expect("git bash");
+        assert_eq!(
+            shell.path,
+            PathBuf::from(r"C:\Program Files\Git\bin\bash.exe")
+        );
+        assert_eq!(shell.kind, ShellKind::Posix);
+
+        // Git gone, WSL still there: a refusal, not WSL.
+        let only_wsl = only(&[r"C:\Windows\System32\bash.exe"]);
+        let e = env(true, &[], &[r"C:\Windows\System32"], &only_wsl);
+        let err = resolve_with(None, &e).expect_err("wsl must not be chosen");
+        assert_eq!(err.kind(), "tool_unavailable");
+        assert!(err.detail().contains(OVERRIDE_ENV), "{err}");
+    }
+
+    /// The refusal has to name what was looked for, or the user is left
+    /// reverse-engineering the search — the failure this change exists to end.
+    #[test]
+    fn the_refusal_names_what_it_looked_for() {
+        let none = only(&[]);
+        let e = env(true, &[r"C:\Program Files\Git\bin"], &[r"C:\bin"], &none);
+        let err = resolve_with(None, &e).expect_err("nothing exists");
+        let d = err.detail();
+        assert!(d.contains("bash"), "{d}");
+        assert!(d.contains(r"C:\Program Files\Git\bin"), "{d}");
+        assert!(d.contains(OVERRIDE_ENV), "{d}");
+    }
+
+    #[test]
+    fn unix_takes_bin_sh_before_anything_on_path() {
+        let files = only(&["/bin/sh", "/opt/weird/sh"]);
+        let e = env(false, &[], &["/opt/weird"], &files);
+        let shell = resolve_with(None, &e).expect("sh");
+        assert_eq!(shell.path, PathBuf::from("/bin/sh"));
+        assert_eq!(shell.source, ShellSource::Default);
+    }
+
+    /// An absolute path in the override is taken as given. This is the escape
+    /// hatch for every shell nobody thought to name.
+    #[test]
+    fn an_override_naming_a_path_wins() {
+        let files = only(&["/bin/sh", "/usr/local/bin/dash"]);
+        let e = env(false, &[], &["/bin"], &files);
+        let shell = resolve_with(Some("/usr/local/bin/dash"), &e).expect("dash");
+        assert_eq!(shell.path, PathBuf::from("/usr/local/bin/dash"));
+        assert_eq!(shell.source, ShellSource::Override);
+    }
+
+    /// The refusal that matters most: a tool that silently runs a different
+    /// shell than the one you named is worse than one that stops.
+    #[test]
+    fn an_override_naming_a_missing_shell_refuses_rather_than_substituting() {
+        let files = only(&["/bin/sh"]);
+        let e = env(false, &[], &["/bin"], &files);
+        let err = resolve_with(Some("/opt/fish"), &e).expect_err("must not fall back");
+        assert_eq!(err.kind(), "tool_unavailable");
+        assert!(err.detail().contains("/opt/fish"), "{err}");
+        assert!(err.detail().contains(OVERRIDE_ENV), "{err}");
+    }
+
+    /// PowerShell is reachable, but only because somebody asked for it by name.
+    #[test]
+    fn powershell_is_opt_in_and_never_a_default() {
+        let files = only(&[
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            r"C:\Program Files\Git\bin\bash.exe",
+        ]);
+        let dirs = [
+            r"C:\Windows\System32\WindowsPowerShell\v1.0",
+            r"C:\Program Files\Git\bin",
+        ];
+        let e = env(true, &[], &dirs, &files);
+        assert_eq!(
+            resolve_with(None, &e).expect("default").kind,
+            ShellKind::Posix,
+            "PowerShell must never be picked by a search"
+        );
+        let shell = resolve_with(Some("powershell"), &e).expect("opt in");
+        assert_eq!(shell.kind, ShellKind::PowerShell);
+        assert_eq!(shell.source, ShellSource::Override);
+        // `-c` under PowerShell is `-Command`'s abbreviation on pwsh and
+        // nothing at all on Windows PowerShell 5.1. Getting this wrong turns
+        // every call into a usage message.
+        assert!(shell.args().contains(&"-Command"), "{:?}", shell.args());
+        assert!(shell.args().contains(&"-NoProfile"), "{:?}", shell.args());
+    }
+
+    /// Asking for WSL by name is refused, and the refusal explains why rather
+    /// than just saying no. See the module doc: the containment check and the
+    /// shell would be talking about different filesystems, and when WSL cannot
+    /// translate the directory it was handed it starts in the user's home
+    /// **with exit 0** — a command running outside the approved root, silently.
+    #[test]
+    fn wsl_is_refused_even_when_asked_for_by_name() {
+        let files = only(&[r"C:\Windows\System32\bash.exe"]);
+        let e = env(true, &[], &[r"C:\Windows\System32"], &files);
+        for spec in ["wsl", r"C:\Windows\System32\bash.exe"] {
+            let err = resolve_with(Some(spec), &e).expect_err("wsl is refused");
+            assert_eq!(err.kind(), "tool_unavailable", "{spec}");
+            assert!(err.detail().to_lowercase().contains("wsl"), "{spec}: {err}");
+            assert!(
+                err.detail().contains("containment") || err.detail().contains("namespace"),
+                "the refusal must say why: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_wsl_launcher_is_recognised_wherever_windows_keeps_it() {
+        for wsl in [
+            r"C:\Windows\System32\bash.exe",
+            r"C:\Windows\Sysnative\bash.exe",
+            r"C:\Users\a\AppData\Local\Microsoft\WindowsApps\bash.exe",
+            r"C:\Windows\System32\wsl.exe",
+        ] {
+            assert_eq!(classify(Path::new(wsl)), ShellKind::Wsl, "{wsl}");
+        }
+        for posix in [
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\msys64\usr\bin\sh.exe",
+            "/bin/sh",
+            "/usr/bin/bash",
+        ] {
+            assert_eq!(classify(Path::new(posix)), ShellKind::Posix, "{posix}");
+        }
+        for ps in [
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+        ] {
+            assert_eq!(classify(Path::new(ps)), ShellKind::PowerShell, "{ps}");
+        }
+    }
+
+    /// An empty or whitespace override is treated as unset rather than as a
+    /// shell named "". `EMMA_SHELL=` in a shell profile is a common way to
+    /// *clear* a variable, and refusing it would be a confusing dead end.
+    #[test]
+    fn a_blank_override_means_unset() {
+        let files = only(&["/bin/sh"]);
+        let e = env(false, &[], &[], &files);
+        assert_eq!(
+            resolve_with(Some("   "), &e).expect("blank is unset").path,
+            PathBuf::from("/bin/sh")
+        );
+    }
+
+    /// The other half of that answer, stated as a rule the next edit has to
+    /// pass. Everything the model is shown *before* the call is hashed into
+    /// `tool_schema_hash`, and that hash is how anyone tells which tool surface
+    /// produced a given answer. The moment a shell path or a per-platform
+    /// sentence gets formatted into the description or the schema, the hash
+    /// varies by machine and the attribution stops meaning anything — a
+    /// regression nothing else here would catch, because the tool would work
+    /// perfectly on every box and simply disagree with all the others.
+    #[test]
+    fn nothing_machine_specific_reaches_the_hashed_surface() {
+        use emma_tool_api::Tool;
+        let bash = Bash::new();
+        let surface = format!("{}\n{}", bash.description(), bash.input_schema());
+        for token in [
+            "/bin/sh",
+            "bash.exe",
+            "Program Files",
+            "System32",
+            "WSL",
+            "wsl",
+            "sh -c",
+            OVERRIDE_ENV,
+        ] {
+            assert!(
+                !surface.contains(token),
+                "{token:?} is machine- or shell-specific and must not be in the hashed surface"
+            );
+        }
+        // And the positive half: it has to actually tell the model where the
+        // answer is, or removing the claim was just removing information.
+        assert!(surface.contains("first line"), "{surface}");
+    }
+
+    /// The banner is the whole answer to "the description cannot say which
+    /// shell this is without the schema hash becoming machine-dependent": the
+    /// shell is named in the result instead, at run time.
+    #[test]
+    fn the_banner_names_the_kind_and_the_path() {
+        let shell = Shell {
+            path: PathBuf::from("/bin/sh"),
+            kind: ShellKind::Posix,
+            source: ShellSource::Default,
+        };
+        assert!(shell.banner().contains("posix"));
+        assert!(shell.banner().contains("/bin/sh"));
+        assert_eq!(shell.banner().lines().count(), 1);
+    }
+}
+
+// endregion: Resolution tests

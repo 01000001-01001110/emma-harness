@@ -27,6 +27,10 @@ chromiumoxide = "0.9"
 futures = "0.3"
 futures-util = "0.3"
 globset = "0.4"
+# Unix only, and only to ask how big the window is (`TIOCGWINSZ`). Windows
+# answers the same question through the console API, which is already a
+# dependency; this is the other half of one question, not a platform layer.
+libc = "0.2"
 # rustls rather than the platform TLS stack: one code path on every machine the
 # agent runs on, and no OpenSSL to find at build time.
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }

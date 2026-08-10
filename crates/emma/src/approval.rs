@@ -416,7 +416,15 @@ impl Approvals {
     /// nothing at all.
     pub async fn read_line(&self) -> Option<String> {
         match &self.asker {
-            Asker::Terminal(lines) => lines.lock().await.next().await,
+            Asker::Terminal(lines) => {
+                let mut lines = lines.lock().await;
+                // Same rule as the gate, for the same reason. A `y` left over
+                // from an approval — or from a turn that aborted before it was
+                // consumed — became a goal on the first real run, and Emma
+                // dutifully spent a budget working on it.
+                lines.drain();
+                lines.next().await
+            }
             Asker::Scripted(_) => None,
         }
     }
@@ -432,6 +440,17 @@ impl Approvals {
             }
             Asker::Terminal(lines) => {
                 let mut lines = lines.lock().await;
+                // Anything typed before the question existed cannot be an
+                // answer to it. Dropped here rather than consumed, because the
+                // line most likely to be waiting is a `y` aimed at the previous
+                // question — and approving an unseen command is the failure
+                // this whole file exists to prevent.
+                let stale = lines.drain();
+                if stale > 0 {
+                    term.note(&format!(
+                        "ignoring {stale} line(s) typed before this question — answer it below"
+                    ));
+                }
                 loop {
                     match question {
                         Question::Tool => term.prompt_question(name),

@@ -207,11 +207,36 @@ async fn run(cli: cli::Cli) -> Result<()> {
         None => SessionLog::none(),
     };
     if !opts.print {
+        // The top row of the frame, when there is one. Model, directory and
+        // transcript path only: they are fixed for the process, and a permanent
+        // row is the wrong place for anything that can go stale. Spend changes
+        // every turn and is reported after each goal instead.
+        term.set_status(provider.model_id(), &cwd, log.path());
         term.note(&format!(
             "{}  session {}",
             provider.model_id(),
             log.path().display()
         ));
+        // What the interactive session understands, said once, because none of
+        // it is guessable. `/exit` and `/quit` have always worked and were
+        // documented nowhere; the harness's own commands are whatever the user
+        // put in `.emma/commands/`, so they are listed rather than described.
+        //
+        // Repeated in the frame's bottom row, which is where the eye actually
+        // goes — this line is the fallback path's copy of the same fact, and it
+        // is cheap enough to print in both.
+        term.note("/exit or /quit ends the session · Ctrl-C interrupts a running goal");
+        let commands = harness.command_names();
+        if !commands.is_empty() {
+            term.note(&format!(
+                "commands (from commands/ in this project's harness): {}",
+                commands
+                    .iter()
+                    .map(|c| format!("/{c}"))
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            ));
+        }
     }
 
     let interrupt = Interrupt::new();
@@ -255,9 +280,15 @@ async fn run(cli: cli::Cli) -> Result<()> {
     let mut next = seed;
     let mut last = Ending::Done;
     loop {
+        // Whether this line came from a person at the prompt or from the
+        // command line. Only the first is second-guessed: `emma goal "init"` is
+        // somebody stating a goal in the one place goals are unambiguous, and
+        // intercepting it would be overruling them.
+        let mut from_the_prompt = false;
         let raw = match next.take() {
             Some(text) => text,
             None => {
+                from_the_prompt = true;
                 term.goal_prompt();
                 match approvals.read_line().await {
                     Some(line) if line.trim().is_empty() => continue,
@@ -268,6 +299,21 @@ async fn run(cli: cli::Cli) -> Result<()> {
         };
         if matches!(raw.trim(), "/exit" | "/quit") {
             break;
+        }
+        // One of Emma's own command lines, typed where goals go. Answered for
+        // free rather than handed to the model, which previously went and found
+        // out what `init` does the expensive way. See `cli::typed_at_the_prompt`
+        // for why the match is as narrow as it is.
+        if from_the_prompt {
+            match cli::typed_at_the_prompt(&raw) {
+                cli::Typed::Goal => {}
+                cli::Typed::Elsewhere(say) | cli::Typed::Answer(say) => {
+                    for line in say.lines() {
+                        term.note(line);
+                    }
+                    continue;
+                }
+            }
         }
         // Expanded at intake, so the model never learns commands exist.
         let text = match harness.expand_command(raw.trim()) {
@@ -294,6 +340,13 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // A goal that did not finish must not look like one that did to whatever
     // ran `emma -p` in a script.
     if opts.print && last != Ending::Done {
+        // `process::exit` runs no destructors, so `Term`'s would not run here.
+        // `-p` never draws a frame and this call is therefore a no-op today —
+        // it is here because "the exit path that skips Drop" is exactly the
+        // shape that leaves somebody's shell with a scroll region set, and the
+        // next person to make this branch reachable interactively should not
+        // have to notice that.
+        emma::term::restore_terminal();
         std::process::exit(1);
     }
     Ok(())

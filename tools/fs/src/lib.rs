@@ -72,7 +72,7 @@ pub mod session;
 pub mod walk;
 pub mod write;
 
-pub use bash::Bash;
+pub use bash::{resolve_shell, Bash, Shell, ShellKind, ShellSource};
 pub use edit::Edit;
 pub use glob::Glob;
 pub use grep::Grep;

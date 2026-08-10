@@ -55,6 +55,23 @@ OPTIONS
   -h, --help                   this.
   -V, --version                version.
 
+THE INTERACTIVE SESSION
+  A goal at the prompt runs until it is done or a budget stops it, then the
+  prompt comes back. Between goals and during one:
+
+    /exit, /quit               end the session.
+    Ctrl-C                     interrupt the goal that is running.
+    /<name>                    expand a command from commands/ in .emma/ (or
+                               .claude/). `emma config check` lists the ones
+                               this directory has; the session lists them at
+                               startup. An unknown /word is just text.
+
+  On a terminal that supports it, Emma frames the window: a status row on top,
+  the transcript scrolling between, and the prompt pinned to the bottom row so
+  an approval question cannot scroll away under the output that follows it.
+  Anything else — a pipe, a redirect, a console without VT processing, or
+  EMMA_NO_FRAME set — gets plain lines instead, with nothing else different.
+
 APPROVAL
   Read, Glob and Grep run silently. Write, Edit and Bash ask, showing the
   command, the diff, or the path and size. Answering 'a' allows that one tool
@@ -269,6 +286,99 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
     Ok(Cli { command, opts })
 }
 
+// endregion: The parser
+
+// region: A command typed at the goal prompt
+// ---------------------------------------------------------------------------
+// A command typed at the goal prompt
+//
+// The `>` prompt takes goals, and everything else Emma understands is a
+// command line. Somebody who types one at the prompt has confused the two, and
+// until now the loop was correct and expensive about it: `init` is a
+// perfectly good goal, so the model went and found out what `init` does — nine
+// model calls, 580,000 tokens, one `Bash` call running `emma.exe init` to read
+// the refusal this file could have quoted.
+//
+// So the answer is given here, for free. The hazard is the opposite mistake:
+// "initialise the auth module" is a real goal and intercepting it would refuse
+// work somebody asked for, which is worse than the bug. Hence the matching is
+// deliberately narrow — the *whole* trimmed line, optionally with a leading
+// `emma`, against the vocabulary this file actually parses, with only the
+// arguments those commands actually take.
+// ---------------------------------------------------------------------------
+
+/// What to print instead of spending a turn.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Typed {
+    /// Not a command. Send it to the model, unchanged.
+    Goal,
+    /// A command that runs before the session does. Nothing about running it
+    /// now would be true, so the answer is what to do instead.
+    Elsewhere(String),
+    /// A command that costs nothing to answer here, already answered.
+    Answer(String),
+}
+
+/// Recognise one of Emma's own command lines typed at the goal prompt.
+///
+/// The four setup commands are handled *before the async runtime* on purpose
+/// (see `main.rs`), and by the time this prompt exists the harness, the model
+/// and the key for this session are already resolved. Running one now would
+/// either do nothing visible or change a file this process has finished
+/// reading — so the honest answer is the sentence, not the side effect.
+/// `--help` and `--version` are pure text and are simply printed; making
+/// somebody leave the session to read the help is its own small insult.
+pub fn typed_at_the_prompt(line: &str) -> Typed {
+    let line = line.trim();
+    // `emma init` pasted as if into a shell is at least as likely as bare
+    // `init`, and `emma.exe` is what a Windows user copies out of their own
+    // terminal history.
+    let rest = line
+        .strip_prefix("emma.exe ")
+        .or_else(|| line.strip_prefix("emma "))
+        .unwrap_or(line)
+        .trim();
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    // Flags are matched with their case intact, because `parse` matches them
+    // that way: `-V` is the version and `-v` is nothing at all. Recognising a
+    // spelling the real parser rejects would be inventing a command, and the
+    // instruction here is to document what exists.
+    match (words.first().copied(), words.len()) {
+        (Some("-h" | "--help"), 1) => return Typed::Answer(HELP.to_string()),
+        (Some("-V" | "--version"), 1) => {
+            return Typed::Answer(format!("emma {}", env!("CARGO_PKG_VERSION")))
+        }
+        _ => {}
+    }
+    // Subcommands are words rather than flags, and `Init` at a prompt is the
+    // same mistake as `init`. Nothing below is echoed back, so the original
+    // spelling is not needed past this point.
+    let head = words.first().map(|w| w.to_ascii_lowercase());
+    let name = match (head.as_deref(), words.len()) {
+        (Some("init"), 1) => "init",
+        // One argument at most, and it is never repeated back: the argument to
+        // `api` is an API key, and a key echoed into a terminal is a key in
+        // somebody's scrollback and in this session's transcript.
+        (Some("api"), 1 | 2) => "api",
+        (Some("model"), 1 | 2) => "model",
+        (Some("config"), 2) if words[1].eq_ignore_ascii_case("check") => "config check",
+        // Everything else is a goal, including `init the database`, `model the
+        // API surface` and every sentence that merely starts with one of these
+        // words. The length checks above are what make that true.
+        _ => return Typed::Goal,
+    };
+    Typed::Elsewhere(format!(
+        "`{name}` is an emma command, not a goal — and it runs before a session starts. This one \
+         already has its harness, model and key loaded, so running it now would either change \
+         nothing you can see or change something this session would not pick up. Use /exit, then \
+         run `emma {name}` in your shell."
+    ))
+}
+
+// endregion: A command typed at the goal prompt
+
+// region: The parser's helpers
+
 /// A subcommand is only a subcommand in first position.
 fn fresh(command: &Option<Command>, words: &[String]) -> bool {
     command.is_none() && words.is_empty()
@@ -283,7 +393,7 @@ fn number<T: std::str::FromStr>(raw: &str) -> Result<T, String> {
         .map_err(|_| format!("`{raw}` is not a number. See `emma --help`."))
 }
 
-// endregion: The parser
+// endregion: The parser's helpers
 
 // region: Tests
 // ---------------------------------------------------------------------------
@@ -432,6 +542,99 @@ mod tests {
             Command::Run(Some("init the repo".into()))
         );
         assert!(p(&["init", "please"]).unwrap_err().contains("no arguments"));
+    }
+
+    // -----------------------------------------------------------------------
+    // A command typed at the goal prompt
+    //
+    // Two tests, and the second one is the important one. Missing an
+    // interception costs tokens; making one that should not have happened
+    // refuses work somebody asked for, and they have no way to insist.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn a_setup_command_typed_at_the_prompt_is_answered_rather_than_investigated() {
+        // The run this is written from: `emma init` at the `>` prompt, nine
+        // model calls, 36,363 paths globbed, one `Bash` call executing
+        // `emma.exe init` to read a refusal, 580,000 tokens.
+        for line in [
+            "init",
+            "emma init",
+            "emma.exe init",
+            "  emma init  ",
+            "Init",
+            "api",
+            "api sk-ant-not-a-real-key",
+            "model",
+            "model claude-x",
+            "config check",
+            "emma config check",
+        ] {
+            match typed_at_the_prompt(line) {
+                Typed::Elsewhere(say) => {
+                    assert!(say.contains("/exit"), "{line}: {say}");
+                    // The argument is never repeated. `api <key>` is the case
+                    // that matters: an echoed key is a key in the scrollback
+                    // and in the session transcript.
+                    assert!(!say.contains("sk-ant"), "{line}: a key was echoed back");
+                }
+                other => panic!("`{line}` was not recognised: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_goal_that_merely_starts_with_a_command_word_is_still_a_goal() {
+        // The false positive is the expensive mistake in the other direction:
+        // every one of these is somebody's actual work, and there is no way
+        // for them to overrule a refusal.
+        for line in [
+            "initialise the auth module",
+            "init the database schema and seed it",
+            "model the API surface",
+            "config check the deploy script",
+            "api", // handled above
+            "write an api client",
+            "emma should init a new crate",
+            "",
+        ] {
+            let verdict = typed_at_the_prompt(line);
+            if line == "api" {
+                continue;
+            }
+            assert_eq!(verdict, Typed::Goal, "`{line}` was intercepted");
+        }
+    }
+
+    #[test]
+    fn help_and_version_are_answered_in_place() {
+        // No reason to make somebody leave the session to read the help, and
+        // the help is the only place the session's own vocabulary is written
+        // down.
+        match typed_at_the_prompt("--help") {
+            Typed::Answer(text) => assert!(text.contains("/exit"), "{text}"),
+            other => panic!("{other:?}"),
+        }
+        match typed_at_the_prompt("emma --version") {
+            Typed::Answer(text) => assert!(text.starts_with("emma "), "{text}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(typed_at_the_prompt("-V"), Typed::Answer(_)));
+        // `-v` is not a spelling `parse` accepts, so it is not one this
+        // recognises either. Answering it here would document a flag that does
+        // not exist — the same defect as a hint pointing at a dead command,
+        // wearing a friendlier face.
+        assert_eq!(typed_at_the_prompt("-v"), Typed::Goal);
+    }
+
+    #[test]
+    fn the_help_documents_the_way_out_of_the_session() {
+        // The defect: `/exit` and `/quit` have worked since the loop was
+        // written and were documented nowhere a user looks, so the owner went
+        // looking for the exit command and could not find one.
+        assert!(HELP.contains("/exit"), "the help does not say how to leave");
+        assert!(HELP.contains("/quit"));
+        assert!(HELP.contains("Ctrl-C"));
     }
 
     #[test]

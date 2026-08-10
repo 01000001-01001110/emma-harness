@@ -1,7 +1,11 @@
 Run a shell command.
 
-The command is passed to `sh -c`, so pipes, redirection, `&&` and shell globbing
-all work. It runs in the working directory (or in `cwd`, which must be a
+The command is passed to a shell. **Which shell varies by machine, and every
+result names it on the first line**, as `shell: <kind> — <path>`. POSIX is
+the normal case, so pipes, redirection, `&&` and globbing work; an operator can
+select PowerShell instead, and PowerShell does not have `&&`. Read the first
+line before assuming the syntax, and if a command fails on syntax, look at it
+again. The command runs in the working directory (or in `cwd`, which must be a
 subdirectory of it).
 
 - `timeout_ms` defaults to 120000 and is capped at 600000. On timeout the
