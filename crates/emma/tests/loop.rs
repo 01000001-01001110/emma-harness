@@ -603,7 +603,13 @@ async fn the_hook_matcher_is_what_decides_which_calls_are_blocked() {
 async fn the_kick_fires_when_the_model_stops_without_claiming_completion() {
     let dir = tempfile::tempdir().unwrap();
     let root = empty_harness(dir.path());
+    let (fine, _) = TestTool::ok("Fine", true);
+    // The tool call is load-bearing, not scenery: a goal in which the model
+    // never touched a tool is a conversation, and the loop now ends it as one
+    // rather than nudging it. What is under test here is the *other* case —
+    // work started, then stopped short of the completion line.
     let fake = Fake::new(vec![
+        call("Fine", json!({})),
         text("Here is what I found. The middleware calls the legacy helper."),
         text("Ported it and the tests pass.\n\nGOAL COMPLETE"),
     ]);
@@ -612,7 +618,7 @@ async fn the_kick_fires_when_the_model_stops_without_claiming_completion() {
     let out = drive(
         &root,
         dir.path(),
-        registry(vec![]),
+        registry(vec![fine]),
         &Approvals::unattended(),
         &fake,
         budgets(),
@@ -642,15 +648,17 @@ async fn the_kick_is_bounded_by_its_budget() {
     let dir = tempfile::tempdir().unwrap();
     let root = empty_harness(dir.path());
     let (fine, _) = TestTool::ok("Fine", true);
-    // Tool use between the stops, so the stall rule is not what stops this —
-    // the count is.
+    // Tool use before the first stop and between every pair of stops, so
+    // neither the answer rule nor the stall rule is what ends this — the count
+    // is. That is what makes the `kicks == 2` assertion below mean something.
     let fake = Fake::new(vec![
+        call("Fine", json!({})),
         text("thinking about it"),
         call("Fine", json!({})),
         text("still thinking"),
         call("Fine", json!({})),
         text("nearly there"),
-        text("this one would be the fourth kick"),
+        text("this one would be the third kick"),
     ]);
     let mut b = budgets();
     b.max_kicks = 2;
@@ -669,8 +677,8 @@ async fn the_kick_is_bounded_by_its_budget() {
 
     assert_eq!(out.ending, Ending::KicksExhausted);
     assert_eq!(out.kicks, 2);
-    // The bound is real: the sixth scripted turn was never asked for.
-    assert_eq!(fake.calls(), 5);
+    // The bound is real: the seventh scripted turn was never asked for.
+    assert_eq!(fake.calls(), 6);
 }
 
 /// The second bound, and the one that catches a model arguing with the loop
@@ -679,11 +687,18 @@ async fn the_kick_is_bounded_by_its_budget() {
 /// times, on the one case where the model has already said everything it has.
 /// The `kicks == 1` assertion is the load-bearing one — it proves the stall
 /// rule fired rather than the count running out.
+///
+/// **This is the real stall and it must survive the answer rule below.** The
+/// tool call at the top is what makes it one: work was started and then
+/// abandoned mid-goal. Take the tool call away and this becomes a
+/// conversational turn, which is a different ending and a different test.
 #[tokio::test]
-async fn a_model_that_stops_twice_without_touching_a_tool_is_believed() {
+async fn a_model_that_abandons_started_work_twice_is_believed() {
     let dir = tempfile::tempdir().unwrap();
     let root = empty_harness(dir.path());
+    let (fine, _) = TestTool::ok("Fine", true);
     let fake = Fake::new(vec![
+        call("Fine", json!({})),
         text("I think this is already done."),
         text("As I said, there is nothing to change."),
     ]);
@@ -692,7 +707,7 @@ async fn a_model_that_stops_twice_without_touching_a_tool_is_believed() {
     let out = drive(
         &root,
         dir.path(),
-        registry(vec![]),
+        registry(vec![fine]),
         &Approvals::unattended(),
         &fake,
         b,
@@ -703,7 +718,108 @@ async fn a_model_that_stops_twice_without_touching_a_tool_is_believed() {
 
     assert_eq!(out.ending, Ending::Stalled);
     assert_eq!(out.kicks, 1);
-    assert_eq!(fake.calls(), 2);
+    assert_eq!(fake.calls(), 3);
+}
+
+/// The owner typed `hello` and was told his exchange stalled.
+///
+/// A turn that used no tool, claimed no completion, and followed no tool use
+/// anywhere in the goal is an answer. Kicking it costs a second model call to
+/// discover that nobody was working, and then reports a perfectly good reply as
+/// a failure — wrong twice, and wrong in the direction that makes a person
+/// distrust every other ending the loop reports.
+///
+/// The two counters are the assertion. `calls == 1` proves no kick was sent —
+/// the fix has to be *not asking*, not asking and then relabelling the answer.
+#[tokio::test]
+async fn a_conversational_turn_is_answered_not_stalled() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let (fine, fine_calls) = TestTool::ok("Fine", true);
+    let fake = Fake::new(vec![
+        text("Hello. I am Emma. Tell me what you want changed and I will work on it."),
+        text("this turn must never be asked for"),
+    ]);
+
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![fine]),
+        &Approvals::unattended(),
+        &fake,
+        budgets(),
+        &goal(),
+        &SessionLog::none(),
+    )
+    .await;
+
+    assert_eq!(out.ending, Ending::Answered);
+    assert_eq!(out.kicks, 0, "a turn that attempted no work was kicked");
+    assert_eq!(fake.calls(), 1, "the kick was sent anyway");
+    assert_eq!(fine_calls.load(Ordering::SeqCst), 0);
+    // The answer survives as the outcome text, because it is the whole point of
+    // the turn — an ending that threw it away would be the same defect quieter.
+    assert!(out.text.contains("I am Emma"), "{}", out.text);
+}
+
+/// The narrowness of the answer rule, stated as a test. One tool call anywhere
+/// in the goal is enough to make every later stop a stall again, however
+/// conversational the wording of it is.
+///
+/// Without this assertion the obvious simplification — "did *this turn* use a
+/// tool" instead of "has *this goal* used one" — passes every other test in
+/// this file while quietly deleting the stall rule.
+#[tokio::test]
+async fn one_tool_call_earlier_in_the_goal_is_enough_to_make_a_stop_a_stall() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let (fine, _) = TestTool::ok("Fine", true);
+    let fake = Fake::new(vec![
+        call("Fine", json!({})),
+        text("Hello. There is nothing for me to do here."),
+        text("As I said."),
+    ]);
+
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![fine]),
+        &Approvals::unattended(),
+        &fake,
+        budgets(),
+        &goal(),
+        &SessionLog::none(),
+    )
+    .await;
+
+    assert_eq!(out.ending, Ending::Stalled);
+    assert_eq!(out.kicks, 1);
+}
+
+/// A model that claims completion on its first breath is done, not "answered".
+/// The answer rule is checked after the verdict for exactly this reason, and an
+/// ordering mistake here would swallow every one-shot goal into a new ending
+/// nothing downstream treats as success.
+#[tokio::test]
+async fn a_first_turn_that_claims_completion_is_still_done() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let fake = Fake::new(vec![text("Nothing needed changing.\n\nGOAL COMPLETE")]);
+
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![]),
+        &Approvals::unattended(),
+        &fake,
+        budgets(),
+        &goal(),
+        &SessionLog::none(),
+    )
+    .await;
+
+    assert_eq!(out.ending, Ending::Done);
+    assert_eq!(out.kicks, 0);
 }
 
 // endregion: The goal, and the kick

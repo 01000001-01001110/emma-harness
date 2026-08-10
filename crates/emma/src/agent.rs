@@ -126,6 +126,21 @@ pub enum Ending {
     /// The model stopped twice with no tool call in between. It has answered
     /// the kick; asking again is the loop arguing with itself.
     Stalled,
+    /// The model answered and never attempted any work.
+    ///
+    /// Not a failure, and the distinction is the whole point. A goal-holding
+    /// loop that treats "hello" as a goal spends a model call discovering that
+    /// nobody was working, then tells the user their perfectly good exchange
+    /// stalled. A turn that used no tool, made no claim of completion, and
+    /// followed no tool use anywhere in the goal is a *conversational* turn:
+    /// there is no work in flight to nudge back into motion, and a kick would
+    /// be the loop asking a question nobody asked it to hold.
+    ///
+    /// The line between this and [`Stalled`](Self::Stalled) is tool use, not
+    /// wording. A model that ran a command, stopped, was kicked, and stopped
+    /// again having done nothing did abandon work in progress, and that is
+    /// still a stall.
+    Answered,
     Iterations,
     Tokens,
     Deadline,
@@ -140,6 +155,7 @@ impl Ending {
             Self::Done => "done",
             Self::KicksExhausted => "kicks_exhausted",
             Self::Stalled => "stalled",
+            Self::Answered => "answered",
             Self::Iterations => "iterations",
             Self::Tokens => "tokens",
             Self::Deadline => "deadline",
@@ -161,6 +177,13 @@ impl Ending {
             Self::Stalled => "stopped: the model stopped twice without using a tool, so it has \
                  nothing further to do here."
                 .into(),
+            // Deliberately not phrased as a stop. Nothing went wrong, nothing
+            // was abandoned, and the answer itself is already on the screen
+            // above this line — so this says what kind of turn it was and
+            // claims nothing else.
+            Self::Answered => {
+                "answered — no tools were needed, so there was no goal to hold.".into()
+            }
             Self::Iterations => format!("stopped: hit the {} model-call limit.", b.max_iterations),
             // Deliberately not "hit the N token budget", which is what it used
             // to say and which reads as "stopped at N". It does not stop at N.
@@ -407,6 +430,7 @@ impl<'a> Agent<'a> {
         // cache: `history` carries a breakpoint that would be byte-stable for
         // the rest of the session, and a restored prefix sitting in `query`
         // does not get it. That is a bill, and a wrong split is an outage.
+        let resuming_a_goal_in_flight = !resumed.messages.is_empty();
         let mut query: Vec<Message> = open_query(resumed.messages, opening);
         let mut tokens = resumed.tokens;
         let mut iterations = resumed.iterations;
@@ -419,6 +443,18 @@ impl<'a> Agent<'a> {
         // answered by a human typing a new goal. Reading the budget here would
         // end every resumed run on its first stop, reported as `Stalled`.
         let mut kicked = false;
+        // Whether this goal has ever attempted work. It is what separates a
+        // conversational turn from a stall — see [`Ending::Answered`] — and it
+        // is deliberately per *goal* rather than per turn: a model that ran a
+        // command and then stopped talking has abandoned something, however
+        // chatty the sentence it stopped on.
+        //
+        // A resumed run starts as though it had, because a resume only ever
+        // continues a goal that was already in flight. The error this refuses
+        // to make is the asymmetric one: mistaking a stall for an answer ends a
+        // real goal early and silently, while mistaking an answer for a stall
+        // costs one model call and is what the loop did before today.
+        let mut worked = resuming_a_goal_in_flight;
         // Cleared whenever any tool succeeds — see the module comment. This is
         // "nothing has changed since this failed", not "this failed once".
         let mut failed_now: HashSet<String> = resumed.failed_now.into_iter().collect();
@@ -526,6 +562,21 @@ impl<'a> Agent<'a> {
                 if tool_calls_since_kick == 0 && kicked {
                     break Ending::Stalled;
                 }
+                // Nothing was ever attempted. There is no work in flight to
+                // nudge back into motion, so this is a reply, and the run ends
+                // reporting it rather than spending a model call to discover
+                // that nobody was working.
+                //
+                // The order of these three is the whole rule and none of it is
+                // spare. After the verdict, so a first turn that claims
+                // completion is still `Done`. After the stall rule, so a model
+                // that was already nudged is judged by the rule written about
+                // being nudged. Which leaves this one meaning exactly what it
+                // says: no tool has been called in this goal, and nothing has
+                // been asked of the model that it has not already answered.
+                if !worked {
+                    break Ending::Answered;
+                }
                 if kicks >= self.s.budgets.max_kicks {
                     break Ending::KicksExhausted;
                 }
@@ -557,6 +608,10 @@ impl<'a> Agent<'a> {
             let mut results = Vec::new();
             for call in &turn.tool_calls {
                 tool_calls_since_kick += 1;
+                // Set on the attempt rather than on success: a model whose only
+                // tool call was denied at the gate is still mid-task, and the
+                // stop that follows is a stall to be nudged, not a greeting.
+                worked = true;
                 let (block, succeeded, label) =
                     self.run_tool_call(call, &turn_id, &failed_now).await;
                 if succeeded {

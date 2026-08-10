@@ -456,7 +456,14 @@ impl Approvals {
                         Question::Tool => term.prompt_question(name),
                         Question::Network(host) => term.prompt_network_question(host),
                     }
-                    let line = lines.next().await?;
+                    let line = lines.next().await;
+                    // Before anything else is printed, and on both arms. The
+                    // terminal echoed the user's return itself; nothing in this
+                    // process can see that happen, so the input box has to be
+                    // told, or every repaint after this one erases a row too
+                    // high and walks up the screen. See `Term::prompt_answered`.
+                    term.prompt_answered(line.as_deref());
+                    let line = line?;
                     match line.trim().to_ascii_lowercase().as_str() {
                         "y" | "yes" => return Some(Answer::Yes),
                         // Empty is *not* yes. A user who hits return to get

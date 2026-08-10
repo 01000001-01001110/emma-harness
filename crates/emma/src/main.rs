@@ -207,25 +207,26 @@ async fn run(cli: cli::Cli) -> Result<()> {
         None => SessionLog::none(),
     };
     if !opts.print {
-        // The top row of the frame, when there is one. Model, directory and
-        // transcript path only: they are fixed for the process, and a permanent
-        // row is the wrong place for anything that can go stale. Spend changes
-        // every turn and is reported after each goal instead.
+        // The run's identity, once, as an ordinary line that scrolls away like
+        // any other. Model, directory and transcript path only: they are fixed
+        // for the process, which is the entire reason they can be stated once
+        // and left. Spend changes every turn and is reported after each goal.
+        //
+        // There is no pinned status row and this is not one pretending. A fixed
+        // row costs a scroll region, a scroll region costs scrollback, and the
+        // owner's first complaint was that he could not scroll.
         term.set_status(provider.model_id(), &cwd, log.path());
-        term.note(&format!(
-            "{}  session {}",
-            provider.model_id(),
-            log.path().display()
-        ));
         // What the interactive session understands, said once, because none of
         // it is guessable. `/exit` and `/quit` have always worked and were
         // documented nowhere; the harness's own commands are whatever the user
         // put in `.emma/commands/`, so they are listed rather than described.
         //
-        // Repeated in the frame's bottom row, which is where the eye actually
-        // goes — this line is the fallback path's copy of the same fact, and it
-        // is cheap enough to print in both.
-        term.note("/exit or /quit ends the session · Ctrl-C interrupts a running goal");
+        // Skipped when the input box is drawn, because the hint under it says
+        // the same thing and keeps saying it — a line that scrolls away is the
+        // fallback path's copy of a fact the box carries permanently.
+        if !term.framed() {
+            term.note("/exit or /quit ends the session · Ctrl-C interrupts a running goal");
+        }
         let commands = harness.command_names();
         if !commands.is_empty() {
             term.note(&format!(
@@ -290,7 +291,13 @@ async fn run(cli: cli::Cli) -> Result<()> {
             None => {
                 from_the_prompt = true;
                 term.goal_prompt();
-                match approvals.read_line().await {
+                // `read_line` drains before it waits — a line typed before this
+                // prompt existed cannot answer it — and the terminal echoes the
+                // return itself, which `prompt_answered` is what tells the
+                // input box about. Both happen before the line is looked at.
+                let line = approvals.read_line().await;
+                term.prompt_answered(line.as_deref());
+                match line {
                     Some(line) if line.trim().is_empty() => continue,
                     Some(line) => line,
                     None => break,
@@ -339,7 +346,10 @@ async fn run(cli: cli::Cli) -> Result<()> {
 
     // A goal that did not finish must not look like one that did to whatever
     // ran `emma -p` in a script.
-    if opts.print && last != Ending::Done {
+    // `Answered` counts with `Done`. A question put to `emma -p` and answered
+    // is the script getting what it asked for; exiting non-zero on it would
+    // make every `emma -p "what does this do?"` look like a failed run.
+    if opts.print && !matches!(last, Ending::Done | Ending::Answered) {
         // `process::exit` runs no destructors, so `Term`'s would not run here.
         // `-p` never draws a frame and this call is therefore a no-op today —
         // it is here because "the exit path that skips Drop" is exactly the

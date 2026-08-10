@@ -204,9 +204,12 @@ async fn a_resumed_run_inherits_the_nudges_the_first_one_used() {
     b.max_kicks = 1;
     let log = SessionLog::open(dir.path(), "sess-0000000000001-1").unwrap();
 
-    // Tool use between the two stops, so the first run ends on the kick count
-    // rather than on the stall rule.
+    // Tool use before the first stop and between the two stops, so the first
+    // run ends on the kick count rather than on the stall rule or the answer
+    // rule — both of which would end it a turn earlier and prove nothing about
+    // the count.
     let first = Fake::new(vec![
+        call("Fine", json!({})),
         text("thinking about it"),
         call("Fine", json!({})),
         text("still thinking"),
