@@ -96,25 +96,48 @@ impl Goal {
         Self { text: text.into() }
     }
 
-    /// The user message that opens a goal: the goal itself, plus whatever the
-    /// active [`DoneCheck`] needs the model to know.
+    /// The user message that opens a goal: **the user's words, and nothing
+    /// else.**
     ///
-    /// The contract comes from the check rather than from here, because a
-    /// contract that describes a rule the loop is not applying is worse than no
-    /// contract — it teaches the model a completion ritual that decides
-    /// nothing.
+    /// This used to prepend "Work toward this goal. You have tools; use them
+    /// rather than describing what you would do" and append the completion
+    /// contract. Both are true of every goal, which is precisely why neither
+    /// belongs here — see [`standing_contract`], which now carries them in the
+    /// system prompt.
     ///
-    /// Stated once, at the start, rather than repeated in every kick: it sits
-    /// in `query`, after the cached prefix, and re-sending it on each iteration
-    /// would be the same bytes at a different offset every time.
-    pub fn opening(&self, check: &dyn DoneCheck) -> String {
-        format!(
-            "Work toward this goal. You have tools; use them rather than describing what you \
-             would do.\n\nGoal:\n{}\n\n{}",
-            self.text.trim(),
-            check.contract()
-        )
+    /// The reason it moved is what a preamble does to a message that is not a
+    /// work order. Typing `Hello` produced a model that ran `pwd && ls -la`
+    /// and listed the task file before saying hello, at a cost of 22,083
+    /// tokens — correct behaviour, given it had been handed a greeting wrapped
+    /// in an instruction to go and do something. **A preamble applied to every
+    /// input is an instruction the user did not write and cannot see.**
+    ///
+    /// What the user typed is now what the model reads.
+    pub fn opening(&self) -> String {
+        self.text.trim().to_string()
     }
+}
+
+/// The framing that used to be prepended to every goal, now stated once in the
+/// system prompt.
+///
+/// Appended to the harness instructions at request assembly rather than kept in
+/// a file, because the [`DoneCheck`] decides the completion half and the
+/// harness cannot know which check a run selected. A contract describing a rule
+/// the loop is not applying is worse than no contract — it teaches a completion
+/// ritual that decides nothing — so it comes from the check, as it always did.
+///
+/// Being in `instructions` rather than in the first user message is also the
+/// cheaper place for it: identical on every goal of every session, so it sits
+/// in the stable cache prefix and is paid for once instead of riding in `query`
+/// where nothing can cache it.
+pub fn standing_contract(check: &dyn DoneCheck) -> String {
+    format!(
+        "\n\nYou work by using the tools you have rather than describing what you would do — \
+         read the file, make the edit, run the command. When a request needs no tools, such as \
+         a question or a greeting, simply answer it.\n\n{}",
+        check.contract()
+    )
 }
 
 // endregion: The goal
@@ -271,13 +294,28 @@ mod tests {
             }
         }
 
+        // The opening is the user's words and nothing else. A greeting that
+        // arrives wrapped in "work toward this goal" is a work order the user
+        // did not type, and the model rightly obeys it.
         let goal = Goal::new("port the middleware");
-        let opening = goal.opening(&Never);
-        assert!(opening.contains("port the middleware"));
-        assert!(opening.contains("This goal is never done."));
-        assert!(!opening.contains(MARKER), "the unused contract leaked in");
+        assert_eq!(goal.opening(), "port the middleware");
+        assert!(!goal.opening().contains(MARKER), "the contract leaked in");
+        assert!(
+            !goal.opening().to_lowercase().contains("work toward"),
+            "a preamble leaked into the user's message"
+        );
 
-        assert!(goal.opening(&MarkerClaim).contains(MARKER));
+        // The framing did not disappear — it moved to the system prompt, and it
+        // still comes from the check in force rather than from here, so a
+        // contract the loop is not applying cannot be taught to the model.
+        let standing = standing_contract(&Never);
+        assert!(standing.contains("This goal is never done."));
+        assert!(!standing.contains(MARKER), "the unused contract leaked in");
+        assert!(standing_contract(&MarkerClaim).contains(MARKER));
+
+        // And the half that made `Hello` cost 22,083 tokens: tools are for
+        // when the request needs them.
+        assert!(standing.to_lowercase().contains("greeting"));
     }
 
     #[tokio::test]

@@ -36,10 +36,21 @@ fn what_init_writes_boots_as_a_harness() {
         !harness.is_empty(),
         "init wrote a harness with no instructions in it"
     );
+    // Not "does it mention tools" any more. That sentence moved out of the
+    // persona and into `goal::standing_contract`, because it is true of every
+    // goal of every run and a fact the engine owns — the persona's job is to
+    // say who this agent is and how it should work, which is the part a user
+    // edits. The two asserted the same thing for a while, and the engine and
+    // its configuration both claiming one rule is the drift this repository
+    // keeps finding.
     assert!(
-        harness.instructions.contains("tools"),
-        "the instructions do not tell the model it has tools: {}",
+        harness.instructions.to_lowercase().contains("agent"),
+        "the persona does not say what this agent is: {}",
         harness.instructions
+    );
+    assert!(
+        emma::goal::standing_contract(&emma::goal::MarkerClaim).contains("tools"),
+        "nothing tells the model it has tools"
     );
 
     // …and the report names what was written and what to type next.

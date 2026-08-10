@@ -8,3 +8,6 @@
 
 # Hook scratch: subagent and validation logs, regenerated per session.
 /memory
+
+# The agent maintains this while it works. Session state, not source.
+.emma/tasks/

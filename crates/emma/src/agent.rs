@@ -397,7 +397,7 @@ impl<'a> Agent<'a> {
         // it — so a fold that tried to re-derive this string would have to keep
         // a name-to-`impl` table in step with `goal.rs` forever. Storing the
         // bytes costs a few hundred of them once per goal.
-        let opening = goal.opening(self.s.done);
+        let opening = goal.opening();
         // Taken before the record is written, so `resumed` is the only place a
         // resume can influence this goal and it can influence it exactly once.
         let resumed = self.resumed.take().unwrap_or_default();
@@ -488,7 +488,16 @@ impl<'a> Agent<'a> {
             let turn_id = format!("turn-{}", self.turn_seq);
 
             let request = Request {
-                instructions: self.s.harness.instructions.clone(),
+                // The harness prompt, then the framing that is true of every
+                // goal. It goes here rather than into the opening message
+                // because a preamble on the user's words is an instruction
+                // they did not write — and because identical bytes on every
+                // call belong in the cached prefix, not in `query`.
+                instructions: format!(
+                    "{}{}",
+                    self.s.harness.instructions,
+                    goal::standing_contract(self.s.done)
+                ),
                 tools: tool_defs.clone(),
                 history: self.history.clone(),
                 query: query.clone(),
