@@ -13,6 +13,14 @@ use emma_llm::Caching;
 
 use crate::agent::Budgets;
 
+// region: The help text
+// ---------------------------------------------------------------------------
+// The help text
+//
+// The only description of the approval model most people will read, which is
+// why it states the gate's rules rather than just listing the flags.
+// ---------------------------------------------------------------------------
+
 pub const HELP: &str = "\
 emma — an agent that holds a goal.
 
@@ -48,6 +56,17 @@ APPROVAL
   for the rest of the process and no longer — there is no permission that
   outlives the run. A PreToolUse hook that denies cannot be approved away.
 ";
+
+// endregion: The help text
+
+// region: What a command line becomes
+// ---------------------------------------------------------------------------
+// What a command line becomes
+//
+// Command and options are separate because the options apply to a run and the
+// command decides whether there is one. Four of the six commands never reach
+// the loop at all.
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -88,6 +107,17 @@ pub struct Cli {
     pub opts: Opts,
 }
 
+// endregion: What a command line becomes
+
+// region: The parser
+// ---------------------------------------------------------------------------
+// The parser
+//
+// One pass, then the cross-flag rules at the end — `--yes` only with `-p`, and
+// `-p` only with a goal. Both are checked after the loop rather than inside it
+// because neither can be decided until every argument has been seen.
+// ---------------------------------------------------------------------------
+
 pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
     let mut it = args.into_iter();
     let mut opts = Opts::default();
@@ -110,10 +140,14 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
                 short_yes = true;
             }
             "--no-cache" => opts.caching = Caching::Off,
+            // Ambiguous only in principle: `--model X` is always the one-run
+            // override wherever it appears, and `emma model X` — the bare word,
+            // in first position — is the persisted setting. Different spellings,
+            // different meanings, so position never has to disambiguate them.
+            // Which is why the two arms below are identical: the guard was
+            // written for a distinction the spellings already make, and the
+            // second arm handles every case the first one does.
             "--model" if command.is_none() && words.is_empty() && !started(&command) => {
-                // Ambiguous only in principle: `emma --model X` before any
-                // subcommand is the one-run override, and `emma model X` is the
-                // persisted setting. Different words, different meanings.
                 opts.model = Some(value("--model")?)
             }
             "--model" => opts.model = Some(value("--model")?),
@@ -186,6 +220,17 @@ fn number<T: std::str::FromStr>(raw: &str) -> Result<T, String> {
     raw.parse()
         .map_err(|_| format!("`{raw}` is not a number. See `emma --help`."))
 }
+
+// endregion: The parser
+
+// region: Tests
+// ---------------------------------------------------------------------------
+// Tests
+//
+// The cross-flag rule and the subcommand-in-first-position rule get a test
+// each, because both are the kind of thing a later refactor tidies away
+// without noticing what it was for.
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -283,3 +328,5 @@ mod tests {
         assert!(p(&["--model"]).is_err());
     }
 }
+
+// endregion: Tests

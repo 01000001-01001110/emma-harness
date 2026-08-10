@@ -26,6 +26,11 @@
 //!
 //! Unlike `Write`, a partial read *does* license an edit: an anchored change
 //! only claims to know the text it matched, which is text the model has seen.
+//!
+//! The order of checks in `run` is itself a decision: the read-state refusal
+//! comes before the file is opened, so a model editing a file it has never
+//! looked at is told exactly that rather than being told its anchor was not
+//! found. Two different problems, two different next moves.
 
 use std::sync::Arc;
 
@@ -35,6 +40,15 @@ use serde_json::{json, Value};
 use crate::args;
 use crate::path;
 use crate::session::{ReadState, ReadTracker};
+
+// region: The tool surface
+// ---------------------------------------------------------------------------
+// The tool surface
+//
+// The schema, the honest `idempotent: false`, and the two refusals decidable
+// from the arguments alone — an empty anchor and an anchor identical to its
+// replacement. Both are caught here so neither needs a file to exist.
+// ---------------------------------------------------------------------------
 
 const NAME: &str = "Edit";
 const KEYS: &[&str] = &["file_path", "old_string", "new_string", "replace_all"];
@@ -126,6 +140,18 @@ impl Tool for Edit {
     }
 }
 
+// endregion: The tool surface
+
+// region: The anchored edit
+// ---------------------------------------------------------------------------
+// The anchored edit
+//
+// Read state first, then the file, then the match count — three refusals in the
+// order that gives the model the most useful of them. Only after all three does
+// anything get written, and the sighting recorded afterwards carries the
+// completeness of the read that licensed the edit rather than upgrading it.
+// ---------------------------------------------------------------------------
+
 impl Edit {
     fn run(&self, ctx: &ToolCtx, args_v: Value) -> Result<ToolOutcome, ToolError> {
         self.validate_args(&args_v)?;
@@ -162,8 +188,15 @@ impl Edit {
         let before = std::fs::read_to_string(&file)
             .map_err(|e| ToolError::Failed(format!("{raw} could not be read for editing: {e}")))?;
 
+        // `str::matches` counts non-overlapping occurrences left to right, which
+        // is the same walk `replacen`/`replace` below will make — so the count
+        // reported in the error is the count that would have been changed, not
+        // an estimate of it.
         let hits = before.matches(old).count();
         match (hits, replace_all) {
+            // Zero is refused whatever `replace_all` says: "change all of them"
+            // is not satisfied by changing none, and silently succeeding here
+            // would let the model believe an edit landed that never did.
             (0, _) => {
                 return Err(ToolError::BadArguments(format!(
                     "old_string was not found in {raw}; it must match byte for byte, \
@@ -206,3 +239,5 @@ impl Edit {
         Ok(ToolOutcome::new(format!("{shown}: {what}")).with_display(format!("{shown}: {what}")))
     }
 }
+
+// endregion: The anchored edit

@@ -10,30 +10,57 @@
 //! **Emptiness is a result.** A read of an empty file, a glob that matches
 //! nothing and a grep with no hits all succeed. The only errors are facts about
 //! the call — a path outside the root, an anchor that occurs twice, a shell
-//! that is not installed. `Bash` is the one place this rubs: the contract names
-//! a non-zero exit as `Failed`, so `grep -q` answering "no" reads as a failure,
-//! which is why the description points at `Grep` instead.
+//! that is not installed.
+//!
+//! `Bash` is where that rule had to be restated rather than merely applied. An
+//! exit status is not the machinery reporting on itself; it is usually the
+//! answer. `grep -q` says "no" with exit 1, `test -f` says "not there" with
+//! exit 1, `cargo test` says "three of these fail" with 101. The module doc
+//! here once said a non-zero exit was `Failed`, which made all three tool
+//! failures — the exact confusion the rule exists to prevent, and worse inside
+//! the loop, where a failed tool is not invoked twice in one turn: one honest
+//! `grep -q` miss would have poisoned `Bash` for the rest of the turn. The line
+//! is drawn at whether the command *ran*. Could-not-spawn, timed-out and killed
+//! are `Failed`; anything that started and finished is `Ok`, with
+//! `exit status <n>` as the first line of the content. See [`bash`], which is
+//! where that reasoning is recorded in full. It was deliberately not resolved
+//! as "`Bash` is the documented exception", because "except X" is how a rule
+//! starts becoming folklore.
 //!
 //! **Nothing escapes the root.** `ToolCtx::cwd` is canonicalised once per call
 //! and every path is resolved and contained against it — including paths that
 //! do not exist yet, and including symlinks that point outward. See
-//! [`path::resolve`]. The exception is `Bash`, which starts in the root but is
-//! a shell and can walk out of it; that is stated plainly rather than implied
+//! [`path::resolve`], which also lists the escape this cannot catch. The
+//! exception is `Bash`, which starts in the root but is a shell and can walk
+//! out of it; that is stated plainly in its description rather than implied
 //! away.
 //!
-//! **Two tools share mutable state, deliberately.** `Read`, `Write` and `Edit`
-//! hold the same [`session::ReadTracker`] so that `Write` can refuse to clobber
-//! a file nobody has looked at. Nothing in the `Tool` trait carries session
-//! state, so it lives in the tool structs behind an `Arc` and the invariant is
-//! not expressible in the type system — which is why [`fs_tools`] is the only
-//! supported way to build the set. Constructing a `Write` with a tracker its
-//! `Read` does not share produces a `Write` that never refuses anything, and it
-//! compiles.
+//! **Three tools share mutable state, deliberately.** `Read`, `Write` and
+//! `Edit` hold the same [`session::ReadTracker`] so that `Write` can refuse to
+//! clobber a file nobody has looked at. Nothing in the `Tool` trait carries
+//! session state, so it lives in the tool structs behind an `Arc` and the
+//! invariant is not expressible in the type system — which is why [`fs_tools`]
+//! is the only supported way to build the set. Constructing a `Write` with a
+//! tracker its `Read` does not share produces a `Write` that never refuses
+//! anything, and it compiles. That is a known defect rather than a solved
+//! problem; it is recorded on `ToolCtx` in `tool-api` as well.
+//!
+//! Half these tools are read-only and half are not, and the difference is
+//! load-bearing: `emma::approval` gates on `ToolMeta::read_only`, so `Read`,
+//! `Glob` and `Grep` run silently while `Write`, `Edit` and `Bash` prompt. The
+//! declarations are checked rather than trusted — see `tests/read_only.rs`.
 
 use std::sync::Arc;
 
 use emma_tool_api::Tool;
 
+// One module per tool, plus four that exist so the tools cannot disagree with
+// each other: `args` (one spelling for every malformed-call message), `path`
+// (the containment check), `walk` (the one directory traversal `Glob` and
+// `Grep` share) and `session` (the read tracker). `args` is private because it
+// is only a way of writing the same error twice; the rest are public because
+// `path` in particular is used from outside — `tools/tasks` resolves against
+// the same containment.
 mod args;
 pub mod bash;
 pub mod edit;

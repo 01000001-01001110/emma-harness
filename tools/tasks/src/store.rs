@@ -124,6 +124,12 @@ pub fn replace_if_unchanged(file: &Path, stamp: Stamp, text: &str) -> Result<(),
     write_atomically(file, text).map_err(|_| Collision)
 }
 
+/// Write to a sibling and rename over the target.
+///
+/// The rename is the whole point: a reader that opens the file at any instant
+/// sees a complete version, never a half-written one. On failure the temp file
+/// is removed, because a `tasks.md.tmp` left in somebody's repository is a bug
+/// report — the concurrency suite asserts none is left behind.
 fn write_atomically(file: &Path, text: &str) -> std::io::Result<()> {
     let parent = file.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(parent)?;
@@ -140,6 +146,10 @@ fn write_atomically(file: &Path, text: &str) -> std::io::Result<()> {
     }
 }
 
+/// FNV-1a over the whole file. Not cryptographic and does not need to be: the
+/// other writer is a person saving in an editor, not something trying to forge
+/// a matching digest. What it has to do is change when any byte changes, which
+/// is the property mtime does not reliably have.
 fn hash(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in bytes {

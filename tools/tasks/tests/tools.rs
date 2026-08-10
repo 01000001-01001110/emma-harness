@@ -1,12 +1,26 @@
 //! The four tools, and the edges where each could have done something
 //! plausible and wrong instead.
+//!
+//! `round_trip.rs` covers the human's file surviving; `concurrency.rs` covers
+//! two writers; `containment.rs` covers where the file may live. This file
+//! covers the contract each tool advertises to the model: which argument
+//! shapes are accepted, which failures are `BadArguments` rather than empty
+//! results, and — the two that would be silent — that the readers write
+//! nothing and that an id handed out by one tool is accepted by the others.
 
 mod support;
 
 use serde_json::json;
 use support::{fingerprint, ids, Project};
 
-// ------------------------------------------------------------- create
+// region: Writing a plan down
+// ---------------------------------------------------------------------------
+// Writing a plan down
+//
+// `TaskCreate` takes the whole plan in one call, so the edges are the argument
+// shapes it accepts and the guarantee that a list with one bad entry writes
+// none of it.
+// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn create_makes_the_file_and_returns_ids() {
@@ -34,6 +48,10 @@ async fn create_makes_the_file_and_returns_ids() {
     assert!(file.starts_with("# Tasks\n"), "{file}");
 }
 
+/// The two accepted shapes are one branch and one test here against a required
+/// wrapper the model would get wrong occasionally forever. Delete this and the
+/// object form can rot without anything going red, because the string form is
+/// what every other test in this file uses.
 #[tokio::test]
 async fn create_accepts_objects_with_a_status() {
     let project = Project::new();
@@ -46,6 +64,10 @@ async fn create_accepts_objects_with_a_status() {
     assert!(project.read_tasks().contains("- [~] port it"));
 }
 
+/// `blocked` is the status a model reaches for and this format does not have,
+/// so it is the realistic bad argument rather than a made-up one. The second
+/// assertion is the one that matters: validation happens before anything
+/// touches the disk, so a rejected call leaves no half-written file behind.
 #[tokio::test]
 async fn create_refuses_a_status_that_is_not_one() {
     let project = Project::new();
@@ -63,6 +85,10 @@ async fn create_refuses_a_status_that_is_not_one() {
     );
 }
 
+/// Catches the failure a stateless writer makes: rendering the document it was
+/// handed instead of the one on disk, so the second call replaces the first
+/// call's work. Order is asserted as well as presence, because a list that
+/// arrives in a different order than it was planned in is a different plan.
 #[tokio::test]
 async fn create_appends_rather_than_replacing() {
     let project = Project::new();
@@ -80,8 +106,21 @@ async fn create_appends_rather_than_replacing() {
     );
 }
 
-// ---------------------------------------------------------------- get
+// endregion: Writing a plan down
 
+// region: Naming one task
+// ---------------------------------------------------------------------------
+// Naming one task
+//
+// `TaskGet` is where the human's notes reach the model, and where an id that is
+// not in the file has to read as a bad argument rather than as an empty result
+// — otherwise the model's repair is to create the task again.
+// ---------------------------------------------------------------------------
+
+/// Notes are the whole reason `TaskGet` exists as a separate call from
+/// `TaskList`. Without this, the notes could quietly stop being collected and
+/// every other test would still pass — `TaskList` deliberately never shows
+/// them, so nothing else in the suite would notice.
 #[tokio::test]
 async fn get_returns_the_task_and_its_notes() {
     let project = Project::new();
@@ -98,6 +137,10 @@ async fn get_returns_the_task_and_its_notes() {
     );
 }
 
+/// The file shows `` `#a1b2` `` and `TaskList` prints `#a1b2`, so a model will
+/// pass the hash back roughly half the time. Rejecting one of the two forms
+/// would be a lookup failure that looks exactly like a deleted task, and the
+/// model's repair for a deleted task is to create it again.
 #[tokio::test]
 async fn get_accepts_the_handle_with_or_without_its_hash() {
     let project = Project::new();
@@ -118,6 +161,11 @@ async fn get_for_an_unknown_id_is_an_argument_error() {
     assert!(error.detail().contains("ffff"), "{error}");
 }
 
+/// The pairing that keeps the two error classes apart. A missing file is not
+/// the machinery being absent — `Unavailable` would tell the model to stop
+/// using the tool — and it is not `Ok` either, because an id was named and is
+/// not there. The count in the message is what tells it which of the two it is
+/// actually looking at.
 #[tokio::test]
 async fn get_against_a_missing_file_is_an_unknown_id_not_a_broken_tool() {
     let project = Project::new();
@@ -129,8 +177,20 @@ async fn get_against_a_missing_file_is_an_unknown_id_not_a_broken_tool() {
     );
 }
 
-// --------------------------------------------------------------- list
+// endregion: Naming one task
 
+// region: What the loop reads every turn
+// ---------------------------------------------------------------------------
+// What the loop reads every turn
+//
+// `TaskList` lands in the context window over and over, so two things are
+// defended here: the open-by-default filter that keeps settled work out of it,
+// and `read_only` being a fact rather than a declaration.
+// ---------------------------------------------------------------------------
+
+/// Two failures at once. Emptiness is a result, so this must be `Ok` — and the
+/// obvious implementation of "make sure the file exists first" would create it,
+/// which would make `read_only: true` a lie on the tool the loop calls most.
 #[tokio::test]
 async fn list_on_a_missing_file_is_ok_and_empty() {
     let project = Project::new();
@@ -142,6 +202,10 @@ async fn list_on_a_missing_file_is_ok_and_empty() {
     );
 }
 
+/// The default is the whole reason completed tasks can be kept forever. If it
+/// flipped to `all`, nothing would break and no other test would fail — the
+/// file would simply grow into the context window, one settled task per turn,
+/// until a long run stopped fitting.
 #[tokio::test]
 async fn list_defaults_to_open_and_all_says_otherwise() {
     let project = Project::new();
@@ -161,6 +225,9 @@ async fn list_defaults_to_open_and_all_says_otherwise() {
     assert!(all.content.contains("#0003"), "{all:?}");
 }
 
+/// Guards the last arm of `keep`, which routes every filter that is not `open`
+/// or `all` through the wire spellings. A typo there matches nothing and looks
+/// exactly like a project with no in-progress work.
 #[tokio::test]
 async fn list_filters_by_a_single_status() {
     let project = Project::new();
@@ -173,6 +240,11 @@ async fn list_filters_by_a_single_status() {
     assert!(!active.content.contains("#0001"), "{active:?}");
 }
 
+/// A filter matching nothing is the world's answer to the question asked, not
+/// a failed call — the same line `Grep` draws when it finds no lines. Turning
+/// it into an error would also reach the loop's memo of failed calls, which
+/// refuses an identical call until something else succeeds: a perfectly good
+/// "none" would make the same question unaskable.
 #[tokio::test]
 async fn list_with_nothing_matching_is_ok_not_an_error() {
     let project = Project::new();
@@ -181,6 +253,9 @@ async fn list_with_nothing_matching_is_ok_not_an_error() {
     assert!(outcome.content.contains("no pending"), "{outcome:?}");
 }
 
+/// The other half of the previous test. Without validation an unknown filter
+/// would fall through `keep` and return an empty list, telling the model there
+/// is no work rather than that it asked the wrong question.
 #[tokio::test]
 async fn list_refuses_a_filter_that_is_not_a_status() {
     let project = Project::new();
@@ -212,8 +287,23 @@ async fn the_readers_touch_nothing() {
     );
 }
 
-// ------------------------------------------------------------- update
+// endregion: What the loop reads every turn
 
+// region: Ticking a box, and the round trip
+// ---------------------------------------------------------------------------
+// Ticking a box, and the round trip
+//
+// Completion happens in place, rewording keeps the handle, and a failed update
+// writes nothing at all. The last two cross the whole surface: an id one tool
+// hands out must be one the others accept, and `open_count` is the only thing
+// here the model never touches.
+// ---------------------------------------------------------------------------
+
+/// The format decision, asserted as an exact file rather than a `contains`.
+/// Every rejected alternative — move to a `## Done` section, delete the line,
+/// re-render the document from parsed tasks — passes a `contains` check and
+/// fails this one. The neighbour is in the fixture for the same reason: a
+/// writer that re-emits every line would leave it byte-identical only by luck.
 #[tokio::test]
 async fn update_marks_completion_in_place() {
     let project = Project::new();
@@ -230,6 +320,11 @@ async fn update_marks_completion_in_place() {
     );
 }
 
+/// Rewording is the operation that would most plausibly drop the handle, since
+/// the new text arrives without one. If it did, the task would be
+/// unaddressable by the id the model is holding and would acquire a fresh
+/// derived one on the next read — the same task, twice, under two names.
+/// The status is `[~]` in the fixture to catch a rewrite that resets it.
 #[tokio::test]
 async fn update_can_reword_without_losing_the_handle() {
     let project = Project::new();
@@ -246,6 +341,11 @@ async fn update_can_reword_without_losing_the_handle() {
     );
 }
 
+/// The failure this catches is subtle: `store::edit` stamps ids and renders
+/// before it writes, so an implementation that returned the error *after* the
+/// write would still report failure while having silently stamped every
+/// unstamped task in the file. The fingerprint is of the whole tree, so a
+/// rewrite producing identical-length content still fails it.
 #[tokio::test]
 async fn update_for_an_unknown_id_is_an_argument_error_and_writes_nothing() {
     let project = Project::new();
@@ -263,6 +363,9 @@ async fn update_for_an_unknown_id_is_an_argument_error_and_writes_nothing() {
     );
 }
 
+/// A tool that reports success for a no-op is lying about what it did, and the
+/// model reads that as "the status is now what I meant" when it never said what
+/// it meant. Refusing costs one turn and names the missing argument.
 #[tokio::test]
 async fn update_that_would_change_nothing_is_refused() {
     let project = Project::new();
@@ -294,6 +397,12 @@ async fn a_task_created_can_be_got_listed_and_updated_by_the_id_it_returned() {
     assert!(all.content.contains(&format!("[x] #{id}")), "{all:?}");
 }
 
+/// `open_count` is not reachable through the tool surface, so nothing else in
+/// the suite exercises it — and it is what `goal.rs` consults to decide whether
+/// to keep asking. Note what the first assertion establishes: a project with no
+/// file has zero open tasks and no error, so a loop that has not created a list
+/// yet is indistinguishable from one that finished it. That is exactly why the
+/// function's own doc says it must never be the sole done-check.
 #[tokio::test]
 async fn open_count_answers_the_loops_question_without_a_tool_call() {
     let project = Project::new();
@@ -310,3 +419,5 @@ async fn open_count_answers_the_loops_question_without_a_tool_call() {
         .await;
     assert_eq!(emma_tools_tasks::open_count(project.root()).unwrap(), 1);
 }
+
+// endregion: Ticking a box, and the round trip

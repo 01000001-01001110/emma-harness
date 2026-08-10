@@ -33,8 +33,20 @@
 
 use serde_json::Value;
 
+// region: What gets cut, and how much
+// ---------------------------------------------------------------------------
+// What gets cut, and how much
+//
+// Two budgets and the struct that reports them. Everything cut is announced —
+// `truncated` is true if anything was dropped anywhere, chromehand's own text
+// cap included, because silent truncation is indistinguishable from a short
+// page and the model will reason confidently about what it never saw.
+// ---------------------------------------------------------------------------
+
 /// Links are the part of the inventory that survives, and this is where the
-/// budget goes. Sixty is roughly a page of navigation plus its content links.
+/// budget goes. Fifty is roughly a page of navigation plus its content links.
+/// chromehand's own in-page cap is higher (120), so this is the second of two
+/// budgets and the one that usually binds.
 const MAX_LINKS: usize = 50;
 /// JSON-LD is often the densest true statement on a page (a job posting, a
 /// product, an article's byline) and often a marketing blob. Capped, not cut.
@@ -48,11 +60,30 @@ pub struct Rendered {
     pub display: String,
 }
 
+// endregion: What gets cut, and how much
+
+// region: The page, in reading order
+// ---------------------------------------------------------------------------
+// The page, in reading order
+//
+// One long function, deliberately, because the order of the sections IS the
+// design: provenance, then a block-page warning if there is one, then the
+// prose, then structure, links, and what the page offers to do. Splitting it
+// into a renderer per section would hide the sequencing, which is the part
+// that had to be got right.
+// ---------------------------------------------------------------------------
+
 /// Render a `digest` output object.
 ///
 /// `Err` here means the JSON was not a digest at all — a contract breach worth
 /// surfacing as a failure. Every honest negative (no text, blocked, a rendered
 /// 404) renders successfully and says so in the prose.
+///
+/// The one non-obvious consequence: this renderer requires the `digest` key,
+/// which [`crate::chromehand::verify_url`] deliberately omits. A verify result
+/// is not renderable here and is not meant to be — `WebFetch` calls
+/// `digest_url` and nothing else. Pointing this at a verify output would read
+/// as a browser fault when the truth is that the wrong command was run.
 pub fn render(v: &Value) -> Result<Rendered, String> {
     let digest = v
         .get("digest")
@@ -264,6 +295,18 @@ pub fn render(v: &Value) -> Result<Rendered, String> {
     })
 }
 
+// endregion: The page, in reading order
+
+// region: Rendering text a hostile page wrote
+// ---------------------------------------------------------------------------
+// Rendering text a hostile page wrote
+//
+// Titles, link labels and table cells are all authored by the page, and all of
+// them land inside markdown that has its own syntax. The consistent choice
+// here is to escape the character that would break the line rather than drop
+// it — a pipe or a bracket is frequently the data.
+// ---------------------------------------------------------------------------
+
 fn status_line(v: &Value) -> String {
     let outcome = str_at(v, "outcome").unwrap_or("unknown");
     match v.get("http_status").and_then(Value::as_i64) {
@@ -339,6 +382,18 @@ fn cell(v: &Value) -> String {
     // character is often the data (a path, a shell snippet, a units column).
     one_line(v.as_str().unwrap_or("")).replace('|', "\\|")
 }
+
+// endregion: Rendering text a hostile page wrote
+
+// region: Tests
+// ---------------------------------------------------------------------------
+// Tests
+//
+// Every one of these defends a case where the wrong output is plausible rather
+// than obviously broken: an empty page reading as a complaint, a cut that was
+// not announced, a warning buried below the prose it warns about, a status
+// invented because none was observed.
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -448,3 +503,5 @@ mod tests {
         assert!(r.is_err(), "a non-digest rendered as a page");
     }
 }
+
+// endregion: Tests

@@ -24,6 +24,16 @@ use futures::StreamExt;
 
 use crate::chromehand::digest::now_iso;
 
+// region: The session record
+// ---------------------------------------------------------------------------
+// The session record
+//
+// A session is a file on disk, not an object in memory — that is what lets one
+// command open a browser and a later command act on it. Note `validate_id`:
+// the id becomes a path component, so it is constrained to hex before any path
+// is built from it, and every read and write goes through that check.
+// ---------------------------------------------------------------------------
+
 pub const SESSION_DIR: &str = ".browser-miner";
 pub const DEFAULT_SESSION_TTL_SECS: u64 = 30 * 60;
 const CDP_SECURITY_WARNING: &str = "This session's CDP websocket is unauthenticated on localhost: while it lives, any local process can puppet the browser. Isolated throwaway profile; close promptly (session close).";
@@ -90,6 +100,16 @@ fn write_session(s: &SessionFile) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
+// endregion: The session record
+
+// region: Delta snapshots
+// ---------------------------------------------------------------------------
+// Delta snapshots
+//
+// The baseline `digest --delta` diffs against, stored beside the session file
+// and keyed to the same id so closing a session leaves nothing behind.
+// ---------------------------------------------------------------------------
+
 /// Snapshot path for `digest --session <id> --delta`.
 /// Lives beside the session file: `.browser-miner/session-<id>.digest.json`.
 pub fn digest_snapshot_path(id: &str) -> PathBuf {
@@ -116,6 +136,17 @@ pub fn write_digest_snapshot(id: &str, v: &serde_json::Value) -> Result<(), Stri
     )
     .map_err(|e| e.to_string())
 }
+
+// endregion: Delta snapshots
+
+// region: Spawning a Chrome that outlives the command
+// ---------------------------------------------------------------------------
+// Spawning a Chrome that outlives the command
+//
+// The awkward part of the whole design, and the Windows handle-inheritance
+// scar below is the reason it is written in raw CreateProcessW rather than
+// three lines of std::process. Read that comment before touching any of this.
+// ---------------------------------------------------------------------------
 
 /// Kill a process by pid, cross-platform, best-effort.
 fn kill_pid(pid: u32) {
@@ -212,6 +243,18 @@ fn spawn_chrome_detached(chrome: &Path, args: &[String]) -> Result<u32, String> 
         Ok(pid)
     }
 }
+
+// endregion: Spawning a Chrome that outlives the command
+
+// region: Opening a session
+// ---------------------------------------------------------------------------
+// Opening a session
+//
+// Two ways in, and the difference between them is who owns the browser.
+// `open` spawns one and records `managed: true`, which is a licence to kill it
+// later. `open_attach` connects to the user's own Chrome and records
+// `managed: false`, which is a standing instruction never to.
+// ---------------------------------------------------------------------------
 
 /// `session open [--headful]` — spawn detached Chrome, record the session.
 /// chromiumoxide's Browser::launch kills its child on drop (kill_on_drop), so
@@ -396,6 +439,18 @@ pub async fn open_attach(connection_url: &str) -> Result<serde_json::Value, Stri
     }))
 }
 
+// endregion: Opening a session
+
+// region: Reconnecting for one verb
+// ---------------------------------------------------------------------------
+// Reconnecting for one verb
+//
+// Every session command is a fresh process that connects, acts and drops the
+// websocket without closing the browser — `disconnect` is the load-bearing
+// half of that and the reason a session survives at all. The TTL is enforced
+// here, on contact, since there is no daemon to expire anything on a timer.
+// ---------------------------------------------------------------------------
+
 /// A live, reconnected session handle for the action verbs.
 pub struct Connected {
     pub browser: Browser,
@@ -510,6 +565,18 @@ pub async fn connect_direct(connection_url: &str) -> Result<Connected, String> {
     })
 }
 
+// endregion: Reconnecting for one verb
+
+// region: Closing and listing
+// ---------------------------------------------------------------------------
+// Closing and listing
+//
+// Teardown, and the one rule it must never break: an attached session's Chrome
+// belongs to the user, so closing removes the record and stops there. Only a
+// managed session gets the polite CDP close, the hard kill and the profile
+// directory removed.
+// ---------------------------------------------------------------------------
+
 /// `session close <id>` / `session close --all`.
 pub async fn close(id_or_all: &str) -> serde_json::Value {
     let ids: Vec<String> = if id_or_all == "--all" {
@@ -600,3 +667,5 @@ pub fn list(ttl_secs: u64) -> serde_json::Value {
         "evidence": { "source": "browser-render", "fetch_timestamp": now_iso() }
     })
 }
+
+// endregion: Closing and listing

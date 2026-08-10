@@ -76,6 +76,11 @@ impl ReadTracker {
             .insert((session.to_string(), path.to_path_buf()), sighting);
     }
 
+    /// The arm order is the priority order, and it matters. A file read only in
+    /// part *and* changed since reports `Stale`, not `Partial`, because that is
+    /// the more urgent thing to say: re-reading fixes both, whereas being told
+    /// "you only saw part of it" would send the model to `Edit` against text
+    /// that may no longer be there.
     pub fn state(&self, session: &str, path: &Path) -> ReadState {
         let key = (session.to_string(), path.to_path_buf());
         let seen = self.seen.lock().expect("read tracker mutex");
@@ -87,9 +92,13 @@ impl ReadTracker {
         }
     }
 
-    /// Forget a path — used after a delete or rename would make the stamp
-    /// meaningless. Kept public because the alternative is callers reaching
-    /// into the map.
+    /// Forget a path, for when a delete or a rename has made the stamp
+    /// meaningless.
+    ///
+    /// **Nothing calls this today** — there is no delete or move tool yet — so
+    /// it is surface without a user, recorded as such rather than described as
+    /// though it were wired up. It is public because the alternative when such
+    /// a tool arrives is a caller reaching into the map.
     pub fn forget(&self, session: &str, path: &Path) {
         self.seen
             .lock()

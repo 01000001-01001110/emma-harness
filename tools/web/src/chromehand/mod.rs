@@ -1,11 +1,9 @@
 //! chromehand, in-process.
 //!
-//! Forked from `a sibling checkout` at commit `9c93827` (2026-08-09) — Alan's own
-//! project, MIT, still canonical and still independent. See `VENDOR.md` for
-//! what changed and what was dropped. The five modules below are upstream's
-//! verbatim, with `crate::x` rewritten to `crate::chromehand::x` and nothing
-//! else touched, so a later cherry-pick from canonical stays a mechanical
-//! operation.
+//! The five modules below are upstream's verbatim, with `crate::x` rewritten
+//! to `crate::chromehand::x` and nothing else touched. Keep them that way: a
+//! cherry-pick from canonical stays a mechanical operation only for as long as
+//! that holds. `VENDOR.md` records the fork point and what was dropped.
 //!
 //! **What this file is for.** Upstream had no library: `main` owned argv, the
 //! Chrome lifecycle, and every exit. Everything in that shape that is not
@@ -34,6 +32,16 @@ use futures::StreamExt;
 
 pub use digest::{DEFAULT_MAX_TEXT_CHARS, DEFAULT_TIMEOUT_MS};
 pub use policy::Policy;
+
+// region: Failure as a value
+// ---------------------------------------------------------------------------
+// Failure as a value
+//
+// The whole of the libification, in one type. Upstream signalled outcome by
+// process exit; in-process the same three facts have to survive as something a
+// caller can match on, and the classification has to stay in one place because
+// it is done by reading prose.
+// ---------------------------------------------------------------------------
 
 /// Everything that is not a result.
 ///
@@ -98,8 +106,17 @@ pub fn classify(err: String) -> MinerError {
     MinerError::Browser(err)
 }
 
-/// How a page should be read. Upstream's flags, minus the ones that only made
-/// sense as argv.
+// endregion: Failure as a value
+
+// region: How a page is read
+// ---------------------------------------------------------------------------
+// How a page is read
+//
+// Upstream's flags, minus the ones that only made sense as argv. Two of the
+// five carry a decision rather than a preference — see each field.
+// ---------------------------------------------------------------------------
+
+/// How a page should be read.
 #[derive(Debug, Clone)]
 pub struct DigestOptions {
     pub timeout_ms: u64,
@@ -126,6 +143,17 @@ impl Default for DigestOptions {
     }
 }
 
+// endregion: How a page is read
+
+// region: The two commands
+// ---------------------------------------------------------------------------
+// The two commands
+//
+// Everything Emma needs from a browser, and everything the CLI's stateless
+// paths call. Both have the same shape — check policy, launch, probe, tear
+// down, assemble — and both are `Ok` for every honest negative.
+// ---------------------------------------------------------------------------
+
 /// Render one page and return the digest JSON — the same object upstream
 /// printed on stdout, matching `docs/schema/chromehand-output.schema.json`.
 ///
@@ -140,6 +168,11 @@ pub async fn digest_url(url: &str, opts: &DigestOptions) -> Result<serde_json::V
     let pol = load_policy(opts)?;
     pol.check(url).map_err(MinerError::Refused)?;
 
+    // Policy runs before Chrome starts, so a refusal costs nothing and cannot
+    // leave a browser behind. Below, note that `probed` is bound rather than
+    // `?`-ed: teardown must happen on the failure path too, so the result is
+    // held, the browser is torn down, and only then is the error propagated.
+    // Swapping those two lines is the leak this shape exists to prevent.
     let browser = LaunchedBrowser::launch(opts.user_agent.as_deref()).await?;
     let probed = digest::probe_page(&browser.browser, url, opts.timeout_ms).await;
     browser.teardown().await;
@@ -154,6 +187,9 @@ pub async fn digest_url(url: &str, opts: &DigestOptions) -> Result<serde_json::V
 }
 
 /// Liveness only — upstream's `verify <url>`, digest minus the payload.
+///
+/// Reached from the CLI only. No Emma tool calls it, and `digest_md` cannot
+/// render its output, which is missing the `digest` key by design.
 pub async fn verify_url(url: &str, opts: &DigestOptions) -> Result<serde_json::Value, MinerError> {
     let pol = load_policy(opts)?;
     pol.check(url).map_err(MinerError::Refused)?;
@@ -170,6 +206,16 @@ pub async fn verify_url(url: &str, opts: &DigestOptions) -> Result<serde_json::V
         opts.max_text_chars,
     ))
 }
+
+// endregion: The two commands
+
+// region: The allowlist the library will not guess
+// ---------------------------------------------------------------------------
+// The allowlist the library will not guess
+//
+// One function, and the single sharpest divergence from upstream. It is short
+// because the decision is the whole content.
+// ---------------------------------------------------------------------------
 
 /// **The library never picks an allowlist up off the working directory.**
 ///
@@ -191,6 +237,18 @@ pub fn load_policy(opts: &DigestOptions) -> Result<Policy, MinerError> {
         }),
     }
 }
+
+// endregion: The allowlist the library will not guess
+
+// region: Launch and teardown
+// ---------------------------------------------------------------------------
+// Launch and teardown
+//
+// A Chrome, an event-pump task and a directory on disk, which have to live and
+// die together. Upstream could rely on `main` to clean up; a library cannot,
+// and the two fixes for that — an owning struct, and a profile path unique per
+// launch rather than per process — are the reason this section exists.
+// ---------------------------------------------------------------------------
 
 /// A throwaway Chrome plus the two things that must be cleaned up with it: the
 /// event-pump task, and the profile directory on disk.
@@ -287,3 +345,5 @@ fn chrome_absent_message(detail: &impl std::fmt::Display) -> String {
          executable path"
     )
 }
+
+// endregion: Launch and teardown

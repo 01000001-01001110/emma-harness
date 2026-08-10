@@ -1,13 +1,21 @@
 //! `WebFetch` — one page, rendered in real Chrome, returned as markdown.
 //!
+//! Not registered anywhere, and so never yet called by a model — see the crate
+//! docs for why the wiring is deferred rather than missed. What follows
+//! describes the tool as built.
+//!
 //! **Why a browser rather than an HTTP client and an html-to-markdown crate.**
 //! Three reasons, in order of how often they bite. A large share of the pages
 //! worth reading are JavaScript shells that serve an empty `<div>` to `curl`.
 //! A further share refuse plain fetches outright — WorkAtAStartup answers a
 //! bare request with 406 and renders fine in Chrome. And what comes back is
 //! not a DOM dump: chromehand strips boilerplate and pre-extracts the
-//! interactive inventory, measured 4.6–5.9× smaller than the raw HTML on live
-//! pages, so the saving is in the model's context and not just on the wire.
+//! interactive inventory, which upstream measured at 4.6–5.9× smaller than the
+//! raw HTML on live pages, so the saving is in the model's context and not
+//! just on the wire. That figure is upstream's and is not reproducible here —
+//! the live-network bench that produced it stayed in canonical. What this fork
+//! keeps is the raw material for the comparison: every digest carries
+//! `economy.raw_html_chars` alongside `economy.digest_chars`.
 //!
 //! The cost is honest: this spawns Chrome, and Chrome is heavy. A stateless
 //! read is two to three seconds of launch before any bytes are read. That is
@@ -16,12 +24,16 @@
 //! owner.
 //!
 //! **What this tool cannot do, deliberately.** It reads. It does not click,
-//! type, fill or submit. That code is vendored (`crate::chromehand::actions`,
-//! `::forms`) and it is not reachable from here, because a browser that can
-//! submit a form inside an agent loop is a different decision with a different
-//! approval story — chromehand already gates it behind a user-owned domain
-//! allowlist and a two-key rule for auto-submit, and neither of those has a
-//! place in Emma's approval flow yet.
+//! type, fill or submit. `WebFetch::run` calls exactly one thing —
+//! [`chromehand::digest_url`] — and that function's only verbs are launch,
+//! probe, tear down. The interaction code is vendored whole in
+//! `crate::chromehand::actions` and `::forms` and is reachable only from the
+//! `browser-miner` CLI, where a human is the one typing. The scope decision
+//! was `digest` only: a browser that can submit a form inside an agent loop is
+//! a separate decision with its own approval story, and folding it into "add
+//! web tools" is how such a thing gets decided by accident. chromehand already
+//! gates those verbs behind a user-owned domain allowlist and a two-key rule
+//! for auto-submit; neither has an equivalent in Emma's approval flow yet.
 
 use std::path::PathBuf;
 
@@ -31,6 +43,16 @@ use serde_json::{json, Value};
 use crate::args;
 use crate::chromehand::{self, DigestOptions, MinerError};
 use crate::digest_md;
+
+// region: Limits, and where the allowlist may live
+// ---------------------------------------------------------------------------
+// Limits, and where the allowlist may live
+//
+// The caps the model can move within, and the one file that can restrict what
+// it may reach. Home, never the project directory — a file inside the
+// repository silently changing which domains are reachable is the same class
+// of surprise as a credentials file being picked up from there.
+// ---------------------------------------------------------------------------
 
 const NAME: &str = "WebFetch";
 const KEYS: &[&str] = &["url", "max_chars"];
@@ -51,18 +73,33 @@ fn home_allowlist() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+// endregion: Limits, and where the allowlist may live
+
+// region: The tool
+// ---------------------------------------------------------------------------
+// The tool
+//
+// Construction, the schema and description the model would read, and the run
+// path. Note how little happens in `run`: validate, clamp, call, render. The
+// tool is thin because the judgement lives in chromehand and the honesty lives
+// in the renderer.
+// ---------------------------------------------------------------------------
+
 pub struct WebFetch {
     allowlist: Option<PathBuf>,
 }
 
 impl WebFetch {
-    /// Register only if a browser exists.
+    /// Construct only if a browser exists — the constructor a registration
+    /// would call.
     ///
-    /// The check builds a `BrowserConfig`, which is where chromiumoxide
-    /// resolves the Chrome executable — so it fails now, at startup, with a
-    /// message a human can act on, rather than on the model's first fetch. A
-    /// registered tool that cannot work is worse than an absent one: the model
-    /// plans around it and loses the turn.
+    /// The check builds a `BrowserConfig` and throws the result away. That
+    /// looks pointless and is not: building the config is where chromiumoxide
+    /// resolves the Chrome executable, so the failure surfaces here, at
+    /// startup, with a message a human can act on, rather than on a first
+    /// fetch several turns into a task. A tool that is present and cannot work
+    /// is worse than an absent one — the model plans around it and loses the
+    /// turn discovering otherwise.
     pub fn detect() -> Result<Self, String> {
         chromiumoxide::browser::BrowserConfig::builder()
             .build()
@@ -125,9 +162,11 @@ impl Tool for WebFetch {
         ToolMeta {
             // Reaches the network and drives a browser, but cannot modify the
             // working directory, submit a form, or run anything the model
-            // chose. See the crate docs: the field cannot express "may not
-            // write" and "may not talk to the outside" at once, and the
-            // approval gate asks the first question.
+            // chose. The throwaway Chrome profile lives in the system temp
+            // directory and is removed on teardown. See the crate docs: the
+            // field cannot express "may not write" and "may not talk to the
+            // outside" at once, the gate asks the first question, and the
+            // second one is the reason this tool is not wired up yet.
             read_only: true,
             // Two reads of the same URL have the same effect as one — none.
             // Not a claim that the page will say the same thing twice.
@@ -189,6 +228,16 @@ impl WebFetch {
     }
 }
 
+// endregion: The tool
+
+// region: chromehand's failures into Emma's
+// ---------------------------------------------------------------------------
+// chromehand's failures into Emma's
+//
+// The seam the whole tool exists to get right, kept to one function so the
+// three classes cannot drift apart across call sites.
+// ---------------------------------------------------------------------------
+
 /// chromehand's failure taxonomy, into Emma's.
 ///
 /// This is the seam the whole tool exists to get right, so it is one function
@@ -208,6 +257,17 @@ fn map_error(e: MinerError) -> ToolError {
         MinerError::Unavailable(m) => ToolError::Unavailable(m),
     }
 }
+
+// endregion: chromehand's failures into Emma's
+
+// region: Tests
+// ---------------------------------------------------------------------------
+// Tests
+//
+// The mapping and the argument checks — everything decidable without a
+// browser. The cases that need one are in `tests/fetch.rs` and
+// `tests/integration.rs`.
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -249,3 +309,5 @@ mod tests {
         assert_eq!(err(json!({})).kind(), "bad_arguments");
     }
 }
+
+// endregion: Tests

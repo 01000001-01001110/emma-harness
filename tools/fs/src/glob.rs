@@ -15,10 +15,14 @@
 //! guards the traversal. Both are needed, and the tests exercise the escape
 //! through a link rather than only the escape through a path.
 //!
-//! Results are sorted, so two identical calls return identical bytes. That
-//! matters more than it looks: the output rides in the conversation, the
-//! conversation rides in the cached prefix, and a set that reorders between
-//! calls would move prefix bytes for no reason.
+//! Results come back newest first — modification time descending, path as the
+//! tiebreak — so the most recently touched work is what the model reads before
+//! it runs out of attention, and so two calls over an unchanged tree return
+//! identical bytes. The determinism matters more than it looks: the output
+//! rides in the conversation, the conversation rides in the cached prefix, and
+//! a set that reordered between calls would move prefix bytes for no reason.
+//! The tiebreak is what supplies it — mtime alone leaves files written in the
+//! same instant free to swap places.
 
 use emma_tool_api::{Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
 use globset::{Glob as GlobPattern, GlobMatcher};
@@ -27,6 +31,14 @@ use serde_json::{json, Value};
 use crate::args;
 use crate::path;
 use crate::walk;
+
+// region: The tool surface
+// ---------------------------------------------------------------------------
+// The tool surface
+//
+// The result cap, the schema, and the pattern compiled once in `validate_args`
+// so a malformed glob is refused before any tree is walked.
+// ---------------------------------------------------------------------------
 
 const NAME: &str = "Glob";
 const KEYS: &[&str] = &["pattern", "path"];
@@ -95,6 +107,20 @@ impl Tool for Glob {
     }
 }
 
+// endregion: The tool surface
+
+// region: Matching, and the walk
+// ---------------------------------------------------------------------------
+// Matching, and the walk
+//
+// One compiler shared with `Grep`, which also takes a glob, so both tools mean
+// the same thing by a pattern and report the same words when one is malformed.
+// Then the search itself: walk, match on the relative path, order, cap.
+// ---------------------------------------------------------------------------
+
+/// `pub(crate)` because `Grep`'s `glob` parameter compiles through here too.
+/// One implementation is the point — two would eventually disagree about what
+/// `**` means, and the model would have to know which tool it was talking to.
 pub(crate) fn compile(pattern: &str) -> Result<GlobMatcher, ToolError> {
     GlobPattern::new(pattern)
         .map(|g| g.compile_matcher())
@@ -133,6 +159,12 @@ impl Glob {
             .collect();
         walk::sort_newest_first(&mut hits);
 
+        // Two independent truncations, and the message below has to distinguish
+        // them. `capped` means more matched than are being returned; the walk's
+        // own `truncated` means the traversal stopped early, so `total` is how
+        // many matched *before* the ceiling rather than how many exist. Either
+        // one makes the answer incomplete, and both are stated in the content
+        // as well as in the flag, because the model reads the content.
         let total = hits.len();
         let capped = total > MAX_RESULTS;
         hits.truncate(MAX_RESULTS);
@@ -173,3 +205,5 @@ impl Glob {
         })
     }
 }
+
+// endregion: Matching, and the walk

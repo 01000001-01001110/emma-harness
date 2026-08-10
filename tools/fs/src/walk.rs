@@ -16,6 +16,12 @@ pub const MAX_VISITED: usize = 200_000;
 /// Never descended into. Not a general ignore mechanism — the object store is
 /// large, opaque and never what anyone meant, and anything more clever belongs
 /// in a config file rather than compiled in.
+///
+/// Notably absent: `target`, `node_modules`, and anything else `.gitignore`
+/// would list. Reading a build artefact is a legitimate thing for a coding
+/// agent to want, and a hidden ignore list is a search that lies about what it
+/// searched. The visit ceiling below is what keeps a large tree affordable,
+/// and it says so when it fires.
 const SKIP_DIRS: &[&str] = &[".git"];
 
 pub struct Walked {
@@ -44,6 +50,11 @@ pub fn files(root: &Path) -> Walked {
                     .is_some_and(|n| SKIP_DIRS.contains(&n)))
         });
 
+    // `visited` counts entries the walker yielded — directories, unreadable
+    // entries and files alike — which is the quantity the ceiling is meant to
+    // bound, because the traversal is what costs, not the matching. Counting
+    // only returned files would let a tree of a million empty directories run
+    // unbounded while the counter stayed at zero.
     for entry in walker {
         visited += 1;
         if visited > MAX_VISITED {

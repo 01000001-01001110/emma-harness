@@ -15,6 +15,10 @@ use emma_tools_tasks::store::{self, Collision};
 use serde_json::json;
 use support::Project;
 
+/// The guard itself, at the level it is implemented. `replace_if_unchanged` is
+/// public precisely so a test can hand it a stamp that has gone stale — the
+/// retry loop above it never surfaces one, so through the tool surface this
+/// failure is invisible until the day it eats somebody's line.
 #[tokio::test]
 async fn a_write_that_arrived_after_the_read_is_not_clobbered() {
     let project = Project::new();
@@ -42,6 +46,10 @@ async fn a_write_that_arrived_after_the_read_is_not_clobbered() {
     );
 }
 
+/// Detecting the collision is only half the job; a `Collision` that surfaced as
+/// an error would make every concurrent save a failed tool call. The assertion
+/// on `attempts` is what stops this passing vacuously — without it, an
+/// implementation that never collided at all would look identical.
 #[tokio::test]
 async fn the_retry_re_applies_the_change_to_what_it_found() {
     let project = Project::new();

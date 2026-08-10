@@ -57,6 +57,10 @@ async fn run(cli: cli::Cli) -> Result<()> {
     let harness = Arc::new(Harness::boot()?);
 
     let mut registry = Registry::new();
+    // The tracker is dropped on purpose. `fs_tools` hands it back for callers
+    // that want to inspect or reset it, which a binary does not; Read, Write and
+    // Edit already hold their own clones of the one shared instance, so the
+    // read-before-write rule survives this binding going out of scope.
     let (fs, _tracker) = emma_tools_fs::fs_tools();
     for tool in fs {
         registry.register(tool);

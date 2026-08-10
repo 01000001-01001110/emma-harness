@@ -3,13 +3,20 @@
 //! Emma runs on the Anthropic API; it does not shell out to the `claude` binary
 //! and does not use the Agent SDK (`notes/claude-code-compatibility.md`). What
 //! remains is one cheap, useful thing: **recognise `.claude/` configuration when
-//! we find it**, so every skill and command already written for Claude Code
-//! works unchanged.
+//! we find it**, so a skill or command already written for Claude Code can be
+//! used without being rewritten.
 //!
-//! `skills/<name>/SKILL.md` and `commands/<name>.md` are already the identical
-//! shape and are read by the same code as Emma's own. This file exists for the
-//! two things that are not identical: where the standing instructions live, and
-//! the spelling of the hooks block.
+//! `skills/<name>/SKILL.md` and `commands/<name>.md` are the same shape and are
+//! read by the same code as Emma's own — see `load_skills` and `load_commands`
+//! in `lib.rs`, neither of which appears here. This file exists for the two
+//! things that are not the same shape: where the standing instructions live, and
+//! the spelling of the hooks block. It also carries `agents/`, which is the
+//! nearest thing Claude Code has to a persona.
+//!
+//! One caveat the note's "works unchanged" does not carry: skill frontmatter is
+//! parsed strictly, so a `SKILL.md` with keys beyond `name` and `description`
+//! fails the load rather than being read partially. `Front` in `lib.rs` states
+//! the case.
 //!
 //! **Two rules from the note are firm and are enforced here and in `discover`:**
 //! `.emma/` wins outright when both exist — never merged, because merging is how
@@ -33,6 +40,16 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::hooks::{HookDef, HookEvent};
+
+// region: settings.json, and translating a hook command
+// ---------------------------------------------------------------------------
+// settings.json, and translating a hook command
+//
+// Claude Code's spelling of the hooks block, flattened into Emma's. This is the
+// half of the file where the two systems disagree rather than merely differ:
+// permissive at the outer level because the format is not Emma's, strict inside
+// the hooks block because that is Emma's security surface.
+// ---------------------------------------------------------------------------
 
 /// The subset of `settings.json` Emma reads. Unknown keys are ignored on
 /// purpose — see the module docs.
@@ -191,8 +208,15 @@ fn translate_command(root: &Path, name: &str, raw: &str) -> Result<String> {
     Ok(rest.to_string())
 }
 
+// endregion: settings.json, and translating a hook command
+
+// region: Agents — Claude Code's nearest thing to a persona
 // ---------------------------------------------------------------------------
 // Agents — Claude Code's nearest thing to a persona
+//
+// One file carrying two things Emma wants: a prompt layer and a tool allowlist.
+// Permissive frontmatter throughout, because an agent file is written for a
+// program with more settings than Emma has.
 // ---------------------------------------------------------------------------
 
 /// The frontmatter fields Emma reads from `.claude/agents/<name>.md`. Permissive
@@ -269,3 +293,5 @@ pub(crate) fn agents(root: &Path) -> Result<Vec<String>> {
 pub(crate) fn agent_path(root: &Path, name: &str) -> PathBuf {
     root.join("agents").join(format!("{name}.md"))
 }
+
+// endregion: Agents — Claude Code's nearest thing to a persona

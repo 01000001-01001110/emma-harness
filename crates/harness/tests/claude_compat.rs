@@ -6,12 +6,27 @@
 //! Claude Code works unchanged. The point of these tests is that it works
 //! unchanged *or says so* — a compatibility layer that half-reads a file is
 //! worse than one that refuses it, because the operator cannot tell.
+//!
+//! Read the refusals here as the feature, not as gaps in it. Every `expect_err`
+//! below is a case where Claude Code would have done something Emma cannot do
+//! safely, and the ruling is always the same: say so at boot rather than
+//! approximate it at the first tool call.
 
 mod support;
 
 use emma_harness::{Flavor, Harness, HookCall, HookEvent};
 use std::path::Path;
 use support::*;
+
+// region: Writing a .claude/ directory to disk
+// ---------------------------------------------------------------------------
+// Writing a `.claude/` directory to disk
+//
+// The same two helpers `harness_hooks.rs` uses, with one difference that
+// matters: `script` returns the bare filename rather than `hooks/<file>`,
+// because a `settings.json` command is written the way Claude Code writes it
+// and `translate_command` is the thing under test.
+// ---------------------------------------------------------------------------
 
 fn script(dir: &Path, name: &str, unix: &str, windows: &str) -> String {
     std::fs::create_dir_all(dir).expect("mkdir hooks");
@@ -46,10 +61,22 @@ fn call<'a>(args: &'a serde_json::Value) -> HookCall<'a> {
     }
 }
 
+// endregion: Writing a .claude/ directory to disk
+
+// region: Discovery and precedence
 // ---------------------------------------------------------------------------
 // Discovery and precedence
+//
+// Which directory becomes the harness when there is more than one candidate,
+// and the one candidate that is never eligible. Every question here is settled
+// before a byte of configuration is read, which is the only way the answer to
+// "where did this instruction come from" stays a single file.
 // ---------------------------------------------------------------------------
 
+/// The whole feature in one assertion: a repository that has only ever been
+/// configured for Claude Code boots Emma without anyone adding a file. Delete
+/// this and `.claude/` recognition regresses to "load it if you name it", which
+/// nobody would.
 #[test]
 fn a_claude_directory_is_discovered_like_an_emma_one() {
     let base = scratch("claude-discover");
@@ -108,7 +135,15 @@ fn the_nearest_ancestor_wins_before_the_directory_name_does() {
 
 /// `~/.claude/` is Claude Code's user-scope configuration for a different
 /// program. Adopting it as this project's harness would hand Emma standing
-/// instructions from a directory the user never associated with this project.
+/// instructions from a directory the user never associated with this project —
+/// "booted on the wrong prompt" arriving through the front door, in the one
+/// scenario where nothing looks wrong: Emma run from anywhere outside a
+/// configured repository, on a box where `~/.claude/` almost certainly exists.
+///
+/// Unlike the override, `$HOME` is read from the process rather than threaded
+/// in, so this test has to set it and put it back. That is shared mutable state
+/// in a binary the harness runs threaded, and it is the one place in this crate
+/// where a test does what `discover_from`'s own docs argue tests should not.
 #[test]
 fn the_users_global_claude_directory_is_not_a_project_harness() {
     let home = scratch("fake-home");
@@ -144,10 +179,23 @@ fn the_users_global_claude_directory_is_not_a_project_harness() {
     }
 }
 
+// endregion: Discovery and precedence
+
+// region: What maps
 // ---------------------------------------------------------------------------
 // What maps
+//
+// The parts of a `.claude/` directory Emma can read as its own: `CLAUDE.md` as
+// standing instructions, skills and commands through the identical loader, and
+// `agents/` as the nearest thing to a persona — including the place where the
+// persona rules deliberately diverge.
 // ---------------------------------------------------------------------------
 
+/// In `.claude/` the prompt is `CLAUDE.md`, not a persona — which is why the
+/// unselected-persona refusal cannot apply here. Both locations are read and the
+/// order is fixed, for the same reason `.emma/` assembly has a fixed order: a
+/// prompt whose bytes depend on filesystem iteration has a hash that means
+/// nothing.
 #[test]
 fn claude_md_becomes_the_standing_instructions() {
     let base = scratch("claude-md");
@@ -163,6 +211,10 @@ fn claude_md_becomes_the_standing_instructions() {
     assert_eq!(h.snapshot()["flavor"], "claude");
 }
 
+/// Not a translation layer — literally the same loader, which is what makes the
+/// compatibility claim cheap enough to be worth having. If these ever diverge,
+/// the two directory flavours become two formats to keep in step, and this test
+/// is where that shows up.
 #[test]
 fn skills_and_commands_are_read_by_the_same_code() {
     let base = scratch("claude-skills");
@@ -195,6 +247,11 @@ fn unselected_agents_do_not_refuse_the_boot() {
     assert_eq!(h.instructions, "RULES");
 }
 
+/// Two things travel out of one file and both can fail quietly. Frontmatter
+/// reaching the prompt would tell the model about machinery it cannot use; the
+/// `tools:` line failing to reach `select_tools` would leave an agent declaring
+/// two read-only tools with a shell in hand. The last assertion is the one that
+/// makes the allowlist a boundary rather than a note.
 #[test]
 fn a_selected_agent_supplies_a_prompt_layer_and_its_allowlist() {
     let base = scratch("claude-agent-selected");
@@ -232,6 +289,10 @@ fn an_agent_may_write_its_tools_as_a_yaml_list() {
     assert_eq!(h.tools(), Some(["Read".to_string(), "Bash".to_string()].as_slice()));
 }
 
+/// The line between the two flavours' persona rules. Emma does not refuse over
+/// an agent nobody selected, but selecting one that is not there is still a
+/// mistake — and starting anyway would run on `CLAUDE.md` alone while the
+/// operator believed they had the agent's prompt.
 #[test]
 fn selecting_an_agent_that_does_not_exist_refuses() {
     let base = scratch("claude-agent-missing");
@@ -243,8 +304,16 @@ fn selecting_an_agent_that_does_not_exist_refuses() {
     assert!(msg.contains("ghost") && msg.contains("real"), "{msg}");
 }
 
+// endregion: What maps
+
+// region: settings.json
 // ---------------------------------------------------------------------------
 // settings.json
+//
+// Permissive outside the hooks block and strict within it, which is one
+// sentence and five tests because both halves fail invisibly. Too strict and
+// Emma refuses to start in a normal repository; too loose and a shell string or
+// a misspelled matcher becomes a guard that is not there.
 // ---------------------------------------------------------------------------
 
 /// The outer object is permissive on purpose: `permissions`, `model` and
@@ -262,6 +331,11 @@ fn settings_keys_emma_has_no_opinion_about_are_ignored() {
     assert!(h.persona.is_none());
 }
 
+/// End to end through the format translation: Claude Code's event → groups →
+/// commands nesting, the `$CLAUDE_PROJECT_DIR` prefix, and `timeout` in seconds
+/// all have to survive into a hook that actually denies. The second half is the
+/// part that fails silently if the translation drops the matcher — a hook that
+/// guards every tool instead of `Bash` still passes the first half.
 #[tokio::test]
 async fn a_settings_json_hook_resolves_and_fires() {
     let base = scratch("claude-hook");
@@ -330,6 +404,11 @@ fn a_shell_string_command_is_refused_rather_than_quietly_run() {
     );
 }
 
+/// A perfectly ordinary Claude Code hook, and Emma cannot honour it: containment
+/// means hooks live under `hooks/`, and an absolute path is by definition outside
+/// it. `/usr/bin/true` is deliberately a unix path — Windows would not call it
+/// absolute, so `translate_command` checks the shape itself rather than asking
+/// the platform, and this is the test that keeps it doing so.
 #[test]
 fn an_absolute_hook_command_is_refused() {
     let base = scratch("claude-abs");
@@ -358,3 +437,5 @@ fn an_unknown_key_inside_the_hooks_block_is_still_an_error() {
     assert!(msg.contains("settings.json"), "{msg}");
     assert!(msg.contains("mathcer"), "the error must name the key: {msg}");
 }
+
+// endregion: settings.json

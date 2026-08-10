@@ -29,7 +29,24 @@ impl TaskCreate {
     }
 }
 
+// region: The two argument shapes
+// ---------------------------------------------------------------------------
+// The two argument shapes
+//
+// A plain string or an object with `text` and an optional `status`. Accepting
+// both is one branch and one test here, against a required wrapper the model
+// would get wrong occasionally forever.
+// ---------------------------------------------------------------------------
+
 /// One requested task, already validated.
+///
+/// `parse_one` runs twice per call — once from `validate_args` over the whole
+/// list, once from `run` to build these. That is deliberate: `validate_args` is
+/// part of the `Tool` contract and callers may invoke it alone, so it cannot be
+/// the thing that produces the value, and `run` cannot assume it was called.
+/// Parsing is pure and the lists are short, so the duplicate work buys a
+/// guarantee — nothing reaches `store::edit` until every entry in the list is
+/// good, so a plan with a bad fourth entry writes none of the first three.
 struct Requested {
     text: String,
     status: Status,
@@ -95,6 +112,17 @@ fn parse_one(value: &Value, at: usize) -> Result<Requested, ToolError> {
     }
 }
 
+// endregion: The two argument shapes
+
+// region: The tool
+// ---------------------------------------------------------------------------
+// The tool
+//
+// Validate the whole list, resolve the path, append the batch inside one
+// guarded read-modify-write, and report the ids so the model can address what
+// it just wrote.
+// ---------------------------------------------------------------------------
+
 #[async_trait::async_trait]
 impl Tool for TaskCreate {
     fn name(&self) -> &'static str {
@@ -140,6 +168,12 @@ impl Tool for TaskCreate {
 
     fn meta(&self) -> ToolMeta {
         ToolMeta {
+            // Declared honestly. This writes a file, and saying otherwise to
+            // skip the approval prompt would break the invariant `read_only`
+            // carries for every tool, not just this one. The prompt is dodged
+            // where dodging it belongs instead: `crates/emma/src/approval.rs`
+            // names TaskCreate and TaskUpdate in an `EXEMPT` list, with the
+            // whole argument written above it.
             read_only: false,
             // Called twice with the same list, you get the list twice. Nothing
             // here deduplicates by text, because two genuinely identical steps
@@ -181,6 +215,10 @@ impl TaskCreate {
             .map(|(at, v)| parse_one(v, at))
             .collect::<Result<_, _>>()?;
 
+        // The whole batch goes inside one `edit`, so the list arrives on disk
+        // in one rename. The closure re-runs from scratch on a collision, which
+        // is why it appends to whatever `doc` it is handed rather than to one
+        // captured outside — and why `made` is built fresh each time.
         let file = store::tasks_path(ctx)?;
         let created: Vec<TaskView> = store::edit(&file, |doc: &mut Doc| {
             let mut made = Vec::new();
@@ -208,3 +246,5 @@ impl TaskCreate {
         )
     }
 }
+
+// endregion: The tool

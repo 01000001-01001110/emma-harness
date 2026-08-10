@@ -33,10 +33,30 @@ use crate::chromehand::digest::now_iso;
 use crate::chromehand::policy::Policy;
 use crate::chromehand::session::Connected;
 
+// region: The user's own files
+// ---------------------------------------------------------------------------
+// The user's own files
+//
+// Two paths, both relative to the process's working directory, and both
+// meaningful only for the CLI: the config holding the second key, and the log
+// every auto-submit is appended to. The config's whole point is that it
+// belongs to the user, so no agent may write it on their behalf.
+// ---------------------------------------------------------------------------
+
 pub const USER_CONFIG_PATH: &str = "data/browser-miner-config.json";
 pub const SUBMIT_LOG_PATH: &str = "data/browser-miner-submit-log.jsonl";
 
-// ─── extract-form ───────────────────────────────────────────────────────────
+// endregion: The user's own files
+
+// region: extract-form
+// ---------------------------------------------------------------------------
+// extract-form
+//
+// The digest's field inventory, deepened: real label resolution, fieldset
+// grouping, radio and checkbox groups collapsed to one logical field, ARIA
+// widgets, and wizard-step signals. A deterministic DOM walk — nothing here is
+// inferred by a model.
+// ---------------------------------------------------------------------------
 
 const EXTRACT_FORM_JS: &str = r##"
 (() => {
@@ -249,7 +269,19 @@ pub async fn extract_form(page: &chromiumoxide::Page) -> Result<serde_json::Valu
     serde_json::from_str(&raw).map_err(|e| format!("extract-form parse: {}", e))
 }
 
-// ─── fill ───────────────────────────────────────────────────────────────────
+// endregion: extract-form
+
+// region: fill
+// ---------------------------------------------------------------------------
+// fill
+//
+// Values in, keyed by the stable selectors extract-form handed out. The rule
+// that shapes every branch below: fill NEVER submits. It types like a user so
+// client-side validation fires, then re-reads each field from the live DOM and
+// reports what is actually there rather than what was sent. Password fields
+// and newline-into-single-line values are refused per field, and the rest of
+// the form still fills — a refusal is recorded, not fatal.
+// ---------------------------------------------------------------------------
 
 #[derive(serde::Deserialize)]
 pub struct FillSpec {
@@ -718,7 +750,21 @@ pub async fn fill(
     Ok(out)
 }
 
-// ─── submit (two-key rule) ──────────────────────────────────────────────────
+// endregion: fill
+
+// region: submit, and the two-key rule
+// ---------------------------------------------------------------------------
+// submit, and the two-key rule
+//
+// The only code here that can cause something irreversible to happen on
+// somebody else's server, and it is gated twice over. Auto-submit needs BOTH
+// the calling agent's `--yes-actually-submit` AND `allow_auto_submit` in the
+// user's own config file — one key each, held by different parties, and an
+// agent that could turn both would be holding no gate at all. Without the
+// flag, `submit` is observe mode: it requires a headful session and waits for
+// the human to click. Either way the attempt is logged, and `submitted` is
+// only ever claimed on an observed URL change rather than on a click landing.
+// ---------------------------------------------------------------------------
 
 #[derive(Default)]
 struct UserConfig {
@@ -934,3 +980,5 @@ pub async fn submit(
         "evidence": evidence()
     }))
 }
+
+// endregion: submit, and the two-key rule

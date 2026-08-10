@@ -5,13 +5,27 @@
 //! repositories; a key written next to the code is a key that gets committed,
 //! and the first person to notice is usually the scanner that finds it in a
 //! public push. That is why nothing here resolves a path relative to the
-//! current directory — the home path is computed, not searched upward.
+//! current directory — the home path is computed, not searched upward, and
+//! `a_credentials_file_in_the_project_directory_is_ignored` below plants a
+//! real `credentials.json` in a scratch cwd and asserts it is not found.
+//!
+//! The file holds exactly one key, under the name `api_key`, because Anthropic
+//! is the only provider. A second provider needs this keyed by provider; the
+//! shape here is not it.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub const ENV_VAR: &str = "ANTHROPIC_API_KEY";
+
+// region: A key that cannot print itself
+// ---------------------------------------------------------------------------
+// A key that cannot print itself
+//
+// The wrapper exists so that reading the secret is a visible act. Everything
+// about it is subtraction: no `Display`, and a `Debug` that shows nothing.
+// ---------------------------------------------------------------------------
 
 /// An API key that cannot be printed by accident.
 ///
@@ -38,8 +52,23 @@ impl fmt::Debug for ApiKey {
     }
 }
 
+// endregion: A key that cannot print itself
+
+// region: Failures, each carrying its own fix
+// ---------------------------------------------------------------------------
+// Failures, each carrying its own fix
+//
+// A missing or unusable key is the most common way a run ends before it starts,
+// so every variant here names the file and the command that resolves it.
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
+    // `emma auth` is not the command; `emma api` is. This crate is a library
+    // and does not get to name the binary's verbs, so the substitution happens
+    // once at the printing boundary in `emma::commands::rename_auth`. Editing
+    // this sentence without editing that one leaves a stuck user pointed at a
+    // command that does not exist.
     #[error("no API key found. Set {ENV_VAR}, or run `emma auth` to store one at {path}")]
     Missing { path: PathBuf },
 
@@ -73,6 +102,17 @@ pub enum AuthError {
         source: std::io::Error,
     },
 }
+
+// endregion: Failures, each carrying its own fix
+
+// region: Where the key comes from
+// ---------------------------------------------------------------------------
+// Where the key comes from
+//
+// Environment first, then `~/.emma/credentials.json`. Every path is computed
+// from a home directory that is passed in, which is what makes "never the
+// project directory" a property rather than an intention.
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Credentials {
@@ -149,9 +189,20 @@ fn load_file(path: &Path) -> Result<ApiKey, AuthError> {
     Ok(ApiKey::new(creds.api_key))
 }
 
+// endregion: Where the key comes from
+
+// region: Owner-only on disk
+// ---------------------------------------------------------------------------
+// Owner-only on disk
+//
+// Writing and checking the permission bits, each with a Unix implementation
+// and a Windows one that says plainly what it does not do.
+// ---------------------------------------------------------------------------
+
 /// Write the credentials file with owner-only permissions, creating the
-/// directory if needed. This is what an `emma auth` command calls; the command
-/// itself is not built here.
+/// directory if needed. This is what `emma api` calls; the command itself
+/// lives in `crates/emma/src/commands.rs`, which is also where the key is read
+/// from a pipe or a no-echo prompt rather than an argument.
 pub fn store(home: &Path, key: &ApiKey) -> Result<PathBuf, AuthError> {
     let path = credentials_path(home);
     let dir = path.parent().expect("credentials path always has a parent");
@@ -217,6 +268,17 @@ fn check_permissions(path: &Path) -> Result<(), AuthError> {
 fn check_permissions(_path: &Path) -> Result<(), AuthError> {
     Ok(())
 }
+
+// endregion: Owner-only on disk
+
+// region: Tests
+// ---------------------------------------------------------------------------
+// Tests
+//
+// Each one pins a property this module claims: the key never prints, the
+// environment wins but an empty variable does not, a loose file is refused, and
+// a `credentials.json` sitting in the project directory is not found.
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -302,6 +364,9 @@ mod tests {
         let home = Home::new("missing");
         let msg = resolve(None, home.path()).unwrap_err().to_string();
         assert!(msg.contains("ANTHROPIC_API_KEY"), "{msg}");
+        // As composed here. `emma::commands::rename_auth` turns this into
+        // `emma api` at the point it is printed — see the note on
+        // `AuthError::Missing`.
         assert!(msg.contains("emma auth"), "{msg}");
     }
 
@@ -361,3 +426,5 @@ mod tests {
         assert_eq!(mode, 0o600, "created {mode:o}");
     }
 }
+
+// endregion: Tests

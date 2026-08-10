@@ -1,9 +1,9 @@
 //! The approval gate.
 //!
-//! tustle-agent's tool surface was read-only by construction: the worst a
-//! rogue turn could do was read something it was entitled to read. Emma writes
-//! files and runs commands, which inverts that property, and this file is the
-//! thing standing in its place.
+//! A tool surface that is read-only by construction bounds the worst a rogue
+//! turn can do to reading something it was entitled to read, and needs no gate
+//! to achieve it. Emma writes files and runs commands, which inverts that
+//! property, and this file is the thing standing in its place.
 //!
 //! **The rules, in the order they are applied, because the order is the
 //! design.**
@@ -46,6 +46,15 @@ use tokio::sync::Mutex;
 
 use crate::term::{LineSource, Term};
 
+// region: The exemption
+// ---------------------------------------------------------------------------
+// The exemption
+//
+// The one place the gate is deliberately weakened, given its own section so it
+// cannot be read past. Everything below this exists to make the gate hard to
+// weaken; this is the exception, with the argument attached.
+// ---------------------------------------------------------------------------
+
 /// Writers that do not prompt, and the whole argument for each one.
 ///
 /// **This is a hole in the gate, written as a list so that it is findable and
@@ -78,6 +87,17 @@ use crate::term::{LineSource, Term};
 /// consulted, so an operator can still block these; and every call, exempt or
 /// not, is written to the session log.
 const EXEMPT: &[&str] = &["TaskCreate", "TaskUpdate"];
+
+// endregion: The exemption
+
+// region: Answers, verdicts and gates
+// ---------------------------------------------------------------------------
+// Answers, verdicts and gates
+//
+// The vocabulary the gate decides in: what a human said, what the gate
+// concluded, which mode it is running in, and where answers come from. The
+// three modes are the whole policy surface — there is no fourth.
+// ---------------------------------------------------------------------------
 
 /// What a human answered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,12 +143,28 @@ pub enum Asker {
     Scripted(Mutex<Vec<Answer>>),
 }
 
+// endregion: Answers, verdicts and gates
+
+// region: The gate
+// ---------------------------------------------------------------------------
+// The gate
+//
+// `decide` is the file. Its arms are in a deliberate order — read-only, the
+// exemption, the bypass, the session allowance, then unattended — and every
+// path that does not allow returns a sentence the model can act on.
+// ---------------------------------------------------------------------------
+
 pub struct Approvals {
     gate: Gate,
     asker: Asker,
     session_allowed: Mutex<HashSet<String>>,
-    /// Everything the gate decided, for the report at the end of a run and for
-    /// tests that need to assert a prompt happened at all.
+    /// Everything the gate decided, in order, read back through
+    /// [`Approvals::decisions`].
+    ///
+    /// No caller in this workspace calls `decisions` today, so this is
+    /// currently write-only. The record a run actually depends on is the
+    /// session log, which the loop writes on every denial and every call it
+    /// lets through.
     seen: Mutex<Vec<(String, Verdict)>>,
 }
 
@@ -257,6 +293,16 @@ impl Approvals {
     }
 }
 
+// endregion: The gate
+
+// region: What the human is shown
+// ---------------------------------------------------------------------------
+// What the human is shown
+//
+// A prompt is only worth the information in it. One arm per writing tool, and
+// a diff that is the tool's own arguments rather than a computed one.
+// ---------------------------------------------------------------------------
+
 /// What the human is shown. The whole point of the gate.
 ///
 /// One arm per tool that can change something, because a generic JSON dump is
@@ -327,6 +373,17 @@ fn diff(old: &str, new: &str) -> String {
     push('+', new, &mut out, &mut shown);
     out.trim_end().to_string()
 }
+
+// endregion: What the human is shown
+
+// region: Tests
+// ---------------------------------------------------------------------------
+// Tests
+//
+// `decide` is exercised directly, and the exemption test is written about what
+// is *not* on the list — the hazard is a future edit adding a tool that writes
+// the user's source tree.
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -473,3 +530,5 @@ mod tests {
         assert!(p.contains('…'));
     }
 }
+
+// endregion: Tests

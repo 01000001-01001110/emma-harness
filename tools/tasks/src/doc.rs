@@ -15,6 +15,23 @@
 //! disappears they stop reading the file, and a task list nobody reads is
 //! theatre.
 //!
+//! The safety here is structural rather than careful. Nothing in the parser has
+//! to *decide* to preserve a line it does not understand; a line it did not
+//! recognise as a checkbox becomes a `Line::Raw` holding the original string,
+//! and `Raw` has no other rendering. A tolerant parser eventually is not
+//! tolerant; one that never re-renders what it did not touch always is. There
+//! are exactly two exceptions and both are written down: a task line the caller
+//! changed, and a duplicate handle (see `assign_ids`).
+//!
+//! **The shape of the file, in reading order.** [`Status`] is the three-way
+//! glyph and its wire spelling; `TaskLine` is a parsed checkbox and `Line::Raw`
+//! is everything else; [`Doc`] is the vector of those plus the operations the
+//! tools need — `tasks`, `get`, `open_count`, `create`, `update`, `stamp_ids`.
+//! Below `Doc` sit the free functions that do the actual recognising:
+//! `parse_line` and `split_checkbox` decide what is a task, `split_id` pulls
+//! the handle off the end, and `derive_id` / `first_free_id` / `assign_ids`
+//! hand out the handles.
+//!
 //! **Status lives in the checkbox glyph, and nowhere else.** `[ ]` pending,
 //! `[~]` in progress, `[x]` done. The obvious alternative — `## In progress` /
 //! `## Done` sections — was rejected: making a heading authoritative means
@@ -43,6 +60,15 @@
 //! `descriptions/task_update.md` for why cleanup is a tick rather than a
 //! deletion.
 
+// region: The file a person opens
+// ---------------------------------------------------------------------------
+// The file a person opens
+//
+// Where the list lives and what greets somebody who opens it for the first
+// time. Both are addressed to the human rather than to the model, which is the
+// reason this is markdown at all.
+// ---------------------------------------------------------------------------
+
 /// Fixed, because the path is the interface. A configurable location would
 /// mean two agents in one project maintaining two lists neither knows about.
 pub const RELATIVE_PATH: &str = ".emma/tasks/tasks.md";
@@ -68,6 +94,26 @@ const PREAMBLE: &str = "\
 
 ";
 
+// endregion: The file a person opens
+
+// region: The document model
+// ---------------------------------------------------------------------------
+// The document model
+//
+// A vector of lines, not a vector of tasks. `TaskLine` is a checkbox the parser
+// recognised and `Line::Raw` is everything else, held as the bytes it arrived
+// as. `TaskView` is the flattened shape the tools hand to the model.
+// ---------------------------------------------------------------------------
+
+/// Three states, and the list is closed.
+///
+/// "Blocked" was asked for and refused. It is a relation, not a state: the
+/// moment it exists as a variant it asks "blocked by what?", and this format
+/// has nowhere to put the answer — there are no links between lines, only
+/// lines. A status that cannot carry its own object degrades into a task
+/// sitting at `[!]` forever with the reason living in somebody's head. A
+/// blocked task is a pending task with a note underneath it saying what it is
+/// waiting for, and notes are already preserved verbatim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Pending,
@@ -140,6 +186,15 @@ struct TaskLine {
 }
 
 impl TaskLine {
+    /// Untouched lines take the early return and are the original bytes. The
+    /// formatted branch is only ever reached for a line a call actually
+    /// changed, and it is canonical rather than faithful: the human's indent
+    /// and bullet are carried through, but the spacing *inside* the line is
+    /// normalised to one space and the text is the trimmed text. That is a
+    /// deliberate trade — the alternative is retaining offsets into a string
+    /// whose middle is being replaced — and it is bounded to the one line the
+    /// caller named. Anything that followed the handle cannot be lost here,
+    /// because `split_id` only recognises a handle at the very end of the line.
     fn render(&self) -> String {
         if !self.dirty {
             return self.original.clone();
@@ -179,6 +234,16 @@ pub struct Doc {
     lines: Vec<Line>,
 }
 
+// endregion: The document model
+
+// region: Round-tripping
+// ---------------------------------------------------------------------------
+// Round-tripping
+//
+// Parse, change one thing, render. The property everything else rests on: what
+// comes out equals what went in, apart from the lines a call actually named.
+// ---------------------------------------------------------------------------
+
 impl Doc {
     /// A file that does not exist is an empty document, not an error. The
     /// project has no tasks yet; that is a fact about the world.
@@ -195,6 +260,10 @@ impl Doc {
         Self { lines }
     }
 
+    /// The inverse of `parse`: rejoin on `\n` and let each line carry its own
+    /// `\r`. A `Raw` line still has its carriage return inside its bytes and a
+    /// `TaskLine` keeps it in `eol`, so a CRLF file stays CRLF and a mixed file
+    /// stays mixed exactly as it arrived, line by line.
     pub fn render(&self) -> String {
         let mut out = String::new();
         for (i, line) in self.lines.iter().enumerate() {
@@ -247,6 +316,12 @@ impl Doc {
             dirty: true,
         };
 
+        // A file with nothing in it but whitespace is treated as absent and
+        // gains the preamble, because the preamble is the only place the human
+        // is told the file is theirs to edit. The preamble is LF whatever
+        // `eol()` decided above, so a file that was blank *and* CRLF comes back
+        // with LF preamble lines and a CRLF task line. Stated rather than
+        // hidden; there is no human text in a blank file to be lost by it.
         if self.lines.is_empty() || self.is_blank() {
             self.lines = PREAMBLE.split('\n').map(|s| Line::Raw(s.into())).collect();
         }
@@ -276,9 +351,16 @@ impl Doc {
         true
     }
 
-    /// Give every task a durable handle. Called once before any save: it is the
-    /// only thing that touches a line the caller did not ask about, and it is
-    /// append-only — the human's own words are copied through untouched.
+    /// Give every task a durable handle. `store::edit` calls this once per
+    /// attempt, immediately before rendering, so a save is the only thing that
+    /// ever stamps — a read never writes, which is what keeps `TaskList`
+    /// genuinely read-only.
+    ///
+    /// It is append-only: marking the line dirty makes `TaskLine::render`
+    /// re-emit it with `` `#id` `` after the text, and the text itself is
+    /// copied through. Along with the duplicate-handle rewrite in `assign_ids`
+    /// this is one of the two ways a line the caller did not name can change,
+    /// and both only ever add or replace a handle.
     pub fn stamp_ids(&mut self) {
         for line in &mut self.lines {
             if let Line::Task(t) = line {
@@ -385,6 +467,17 @@ impl Doc {
     }
 }
 
+// endregion: Round-tripping
+
+// region: Recognising a task
+// ---------------------------------------------------------------------------
+// Recognising a task
+//
+// Everything below is a reason to say no. A line promoted to a task acquires a
+// handle on the next write, so over-recognising edits the human's prose; the
+// cost of under-recognising is a task they have to restate.
+// ---------------------------------------------------------------------------
+
 fn parse_line(raw: &str) -> Line {
     let body = raw.strip_suffix('\r').unwrap_or(raw);
     let eol = if body.len() == raw.len() { "" } else { "\r" };
@@ -409,6 +502,12 @@ fn parse_line(raw: &str) -> Line {
 
 /// `  - [x] text` → (indent, bullet, glyph, text). Ordered and unordered
 /// bullets both, because a hand-written list is as likely to be `1.` as `-`.
+///
+/// Everything here is a reason to say no. Recognising too much is the
+/// expensive direction: a sentence promoted to a task acquires a handle on the
+/// next write, and a handle appearing in the middle of somebody's paragraph is
+/// the file editing them rather than the other way round. Returning `None`
+/// only costs a task the human has to restate.
 fn split_checkbox(line: &str) -> Option<(String, String, char, &str)> {
     let indent = indent_of(line).to_string();
     let rest = &line[indent.len()..];
@@ -431,6 +530,11 @@ fn split_checkbox(line: &str) -> Option<(String, String, char, &str)> {
         return None; // no space after the bullet: not a list item
     }
 
+    // Exactly one character between the brackets, checked on bytes. This looks
+    // like it could split a multi-byte character below, and it cannot: a UTF-8
+    // continuation byte is 0x80..=0xBF and a lead byte is >= 0xC2, so neither
+    // can be `]` (0x5D). Byte 2 being `]` therefore proves byte 1 is a single
+    // ASCII character, which is what makes `after[1..2]` safe.
     let bytes = after.as_bytes();
     if bytes.first() != Some(&b'[') || bytes.get(2) != Some(&b']') {
         return None;
@@ -454,6 +558,11 @@ fn indent_of(line: &str) -> &str {
 
 /// Split a trailing `` `#a3f1` `` handle off the text. Only at the very end,
 /// so a `#hashtag` or an inline `` `#code` `` mid-sentence is left alone.
+///
+/// The shape has to be exact — backticks, a `#`, and one to eight hex digits —
+/// because everything that is not a handle has to survive as part of the task's
+/// own words. `derive_id` only ever emits four digits; the accepted range is
+/// wider than the emitted one.
 fn split_id(text: &str) -> (String, Option<String>) {
     let trimmed = text.trim_end();
     let Some(head) = trimmed.strip_suffix('`') else {
@@ -475,6 +584,17 @@ fn split_id(text: &str) -> (String, Option<String>) {
     )
 }
 
+// endregion: Recognising a task
+
+// region: Ids
+// ---------------------------------------------------------------------------
+// Ids
+//
+// A handle is an annotation, not a requirement: an unstamped task's id is
+// derived from its own words, which is what lets a read hand out an id without
+// writing one. Stamping makes it survive rewording as well.
+// ---------------------------------------------------------------------------
+
 /// FNV-1a over the task's own words. Derived rather than random so that a task
 /// with no handle still has a stable id across two calls that never wrote the
 /// file — which is what lets `TaskList` stay read-only and still hand the model
@@ -492,6 +612,14 @@ fn derive_id(text: &str, salt: u32) -> String {
     format!("{:04x}", h & 0xffff)
 }
 
+/// The derived id, re-salted until it is one this document is not already
+/// using. Salting rather than counting keeps the id opaque: a handle that read
+/// as `#0001`, `#0002` would invite somebody to renumber them.
+///
+/// The bound is honest about what it is: 16 bits is 65,536 handles, so a single
+/// file holding that many tasks would exhaust the space and reach the panic.
+/// The panic is preferred to a silent duplicate, which is the failure `TaskGet`
+/// cannot see.
 fn first_free_id(text: &str, taken: &[String]) -> String {
     for salt in 0..u32::MAX {
         let id = derive_id(text, salt);
@@ -528,6 +656,18 @@ fn assign_ids(lines: &mut [Line]) {
     }
 }
 
+// endregion: Ids
+
+// region: Tests
+// ---------------------------------------------------------------------------
+// Tests
+//
+// The format's own guarantees, at the level they are implemented. Every one of
+// these is a decision from the module doc made falsifiable: bytes back
+// unchanged, the glyph outranking the heading, a handle outliving its words,
+// prose staying prose, and CRLF staying CRLF.
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -542,6 +682,9 @@ mod tests {
         assert_eq!(Doc::parse(no_newline).render(), no_newline);
     }
 
+    /// The fixture is adversarial on purpose: a pending task under a `## Done`
+    /// heading. Any implementation that ever grew section awareness reads this
+    /// as completed, which is the whole reason sections were rejected.
     #[test]
     fn the_glyph_is_the_status_and_the_heading_is_not() {
         let doc = Doc::parse("## Done\n\n- [ ] not actually done\n");
@@ -549,6 +692,10 @@ mod tests {
         assert_eq!(doc.open_count(), 1);
     }
 
+    /// The handle is only worth being visible if it outlives the words around
+    /// it. Every word changes here, so an id derived from the text at render
+    /// time rather than carried would come out different and the model's
+    /// reference would break on the call that changed the least.
     #[test]
     fn a_handle_survives_a_rewording_and_a_reworded_task_keeps_it() {
         let mut doc = Doc::parse("- [ ] the old words entirely `#beef`\n");
@@ -573,6 +720,11 @@ mod tests {
         assert_ne!(ids[0], ids[1], "TaskGet would have been ambiguous");
     }
 
+    /// Note attachment decides two things at once: what `TaskGet` returns, and
+    /// where `create` inserts. The fixture separates the two tasks with a blank
+    /// line and unindented prose, so a rule that ran to the next task instead
+    /// of stopping at the blank line would hand task `b` somebody else's note
+    /// and drop new tasks below unrelated paragraphs.
     #[test]
     fn notes_belong_to_the_task_above_them() {
         let doc = Doc::parse("- [ ] a\n  see src/x.rs\n\nunrelated prose\n- [ ] b\n");
@@ -580,6 +732,11 @@ mod tests {
         assert!(doc.tasks()[1].notes.is_empty());
     }
 
+    /// Three near-misses, one per rejection in `split_checkbox`: a checkbox not
+    /// at the start of the line, a bullet with no space after it, and brackets
+    /// with nothing between them. Recognising any of these promotes a sentence
+    /// to a task, and the next write stamps a handle into the middle of
+    /// somebody's paragraph.
     #[test]
     fn prose_that_looks_like_a_checkbox_is_left_as_prose() {
         for line in ["not a task [ ] here", "-[ ] no space", "- [] too short"] {
@@ -588,6 +745,10 @@ mod tests {
         }
     }
 
+    /// A *modified* line is the only place the ending can be lost, because an
+    /// untouched line carries its `\r` inside its original bytes and cannot get
+    /// this wrong. Without this, every agent run on a Windows checkout would
+    /// convert one line per update and produce a diff nobody asked for.
     #[test]
     fn crlf_stays_crlf() {
         let src = "- [ ] one `#0001`\r\n";
@@ -596,3 +757,5 @@ mod tests {
         assert_eq!(doc.render(), "- [x] one `#0001`\r\n");
     }
 }
+
+// endregion: Tests

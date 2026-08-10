@@ -1,8 +1,18 @@
 //! The harness: a `.emma/` directory on disk, resolved once at startup into a
 //! value the turn loop consumes.
 //!
-//! Ported from tustle-agent, where the design was argued out and paid for. The
-//! reasoning below is that reasoning; only the names have moved.
+//! Most of the reasoning below was argued out and paid for in an earlier design
+//! and carried over intact. Four things were deliberately not carried over,
+//! because they were wrong for Emma rather than merely differently named, and
+//! each is documented at the code that changed: discovery no longer walks into
+//! `~/.claude/` (`discover_from`); the "persona files nothing selects → refuse"
+//! rule applies to `.emma/` only (`select_persona`); a persona's `tools` list is
+//! a real filter rather than an assertion that removes nothing
+//! (`select_tools`); and `deny_unknown_fields` stops at the outer level of
+//! `.claude/settings.json` (`claude.rs`). The through-line is that the earlier
+//! tool surface was read-only by construction while Emma's writes files and runs
+//! commands, so several rules that were merely tidy there are load-bearing here
+//! — and one that was safe there would be an outage here.
 //!
 //! **The discipline this crate exists to enforce.** The loop gets a struct. It
 //! never reads a file, never learns that a persona was selected, never learns
@@ -19,9 +29,10 @@
 //!
 //! **The boot states, and they are not open here:** absent → refuse to start,
 //! naming every path searched; present but empty → boot and answer nothing;
-//! malformed → refuse to start, naming the file and the problem; persona files
-//! that nothing selects → refuse, because an empty harness is a statement and an
-//! unselected one is an accident.
+//! malformed → refuse to start, naming the file and the problem; and, in
+//! `.emma/` only, persona files that nothing selects → refuse, because an empty
+//! harness is a statement and an unselected one is an accident. That last rule
+//! deliberately does not extend to `.claude/agents/`; `select_persona` says why.
 //!
 //! The reasoning, because the edges follow from it: an agent booted with the
 //! wrong prompt does not crash. It acts fluently and confidently, attributed to
@@ -33,10 +44,15 @@
 //! the empty case needs no code is the proof the harness is separable from the
 //! engine.
 //!
-//! **Hashing.** Nothing here trims, normalises or re-wraps a file it read, so
-//! with one file present the assembled prompt is that file's bytes. That
-//! property is what lets a prompt's hash be compared across a refactor and mean
-//! something.
+//! **Hashing.** No prompt layer is trimmed, normalised or re-wrapped, so with
+//! one file present the assembled prompt is that file's bytes. That property is
+//! what lets a prompt's hash be compared across a refactor and mean something.
+//! The rule is about the prompt specifically, and two things outside it do get
+//! adjusted: a skill body is taken from after the frontmatter with leading
+//! whitespace stripped (`split_skill`), and a command body is trimmed at both
+//! ends (`load_commands`). Neither is always-on prompt text — a skill body
+//! arrives only when the model loads it, and a command body is text a person
+//! typed a `/name` to summon.
 //!
 //! **Two directory names.** Emma also recognises `.claude/`, so skills and
 //! commands already written for Claude Code work unchanged. `.emma/` wins
@@ -56,6 +72,15 @@ use crate::hooks::{HookDef, ResolvedHook};
 pub use crate::hooks::{HookCall, HookEvent, HookOutcome, HookResult, HookRun, HookVerdict};
 
 use emma_tool_api::Registry;
+
+// region: The names, and the two flavours
+// ---------------------------------------------------------------------------
+// The names, and the two flavours
+//
+// The four strings the outside world uses to reach the harness, and the enum
+// that records which of the two directory layouts was found. Everything below
+// branches on `Flavor`, so it is declared before anything that reads it.
+// ---------------------------------------------------------------------------
 
 pub const ROOT_DIR_NAME: &str = ".emma";
 /// Also discovered, and read as a harness. Claude Code's directory.
@@ -100,8 +125,15 @@ impl Flavor {
     }
 }
 
+// endregion: The names, and the two flavours
+
+// region: Discovery
 // ---------------------------------------------------------------------------
 // Discovery
+//
+// Answering one question — which directory is the harness — before anything is
+// read from it. The security of the whole crate starts here, because a wrong
+// answer boots Emma on a prompt nobody chose.
 // ---------------------------------------------------------------------------
 
 /// Find the harness the way git finds `.git`: walk up from the working
@@ -136,10 +168,19 @@ pub fn discover_from(start: &Path, overridden: Option<PathBuf>) -> Result<PathBu
         // Adopting it as this project's harness would hand Emma standing
         // instructions from a directory the user never associated with this
         // project, which is the "booted on the wrong prompt" failure arriving
-        // through the front door. It is skipped, and the refusal says so.
+        // through the front door. It is skipped.
         //
         // `~/.emma/` is not skipped: that one is Emma's, and a user who creates
         // it has chosen a default harness for Emma deliberately.
+        //
+        // The skip also keeps `~/.claude/` out of `searched`, so the refusal
+        // below never names a directory Emma would not have used — an error
+        // listing a path it declined to consider reads as a bug in the search.
+        //
+        // The comparison is plain path equality, so it is exact: a `$HOME` that
+        // does not match the ancestor byte for byte — a different spelling of
+        // the same directory on Windows, say — leaves the skip inert and the
+        // walk adopts whatever it finds.
         let names: &[&str] = if home.as_deref() == Some(dir) {
             &[ROOT_DIR_NAME]
         } else {
@@ -171,8 +212,15 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+// endregion: Discovery
+
+// region: The spine — .emma/config.json
 // ---------------------------------------------------------------------------
 // The spine — `.emma/config.json`
+//
+// The one file in the harness that is configuration rather than prompt text.
+// It is strict everywhere, because it is Emma's own format and a key Emma does
+// not recognise in it can only be a typo.
 // ---------------------------------------------------------------------------
 
 /// `deny_unknown_fields` throughout: a typo'd key is a load error, not a
@@ -210,8 +258,15 @@ struct PersonaBlock {
     hooks: Option<Vec<String>>,
 }
 
+// endregion: The spine — .emma/config.json
+
+// region: Skills
 // ---------------------------------------------------------------------------
 // Skills
+//
+// Prompt text the model asks for by name rather than carries all the time. The
+// harness resolves the pool; the loading of a body is a tool call, and lives in
+// the binary.
 // ---------------------------------------------------------------------------
 
 /// One skill, resolved by the harness.
@@ -243,8 +298,15 @@ impl SkillDef {
     }
 }
 
+// endregion: Skills
+
+// region: The resolved value
 // ---------------------------------------------------------------------------
 // The resolved value
+//
+// `Harness` and its whole public surface — everything the turn loop is allowed
+// to know about configuration. Nothing here reads a file; by this point the
+// directory has already become a value.
 // ---------------------------------------------------------------------------
 
 /// What the loop consumes. Everything here is already decided.
@@ -418,8 +480,8 @@ impl Harness {
 
     /// Apply the allowlist to a registry, consuming it.
     ///
-    /// **This is a real filter, and in tustle-agent it was not.** There the same
-    /// field validated that each named tool existed and then removed nothing —
+    /// **This is a real filter, and in the predecessor it was not.** There the
+    /// same field validated that each named tool existed and then removed nothing —
     /// four sentences of documentation, three of them warning the reader it was
     /// not access control. That was survivable because every tool there was a
     /// read-only search. Emma runs `Bash` and `Write`. An operator who writes
@@ -515,8 +577,15 @@ impl Harness {
     }
 }
 
+// endregion: The resolved value
+
+// region: Loading
 // ---------------------------------------------------------------------------
 // Loading
+//
+// The private half: the filesystem reads and the refusals. Every function here
+// either produces a value the section above can hold or fails the boot, and the
+// choice between those two is the design decision in each one.
 // ---------------------------------------------------------------------------
 
 fn read_if_present(path: &Path) -> Result<String> {
@@ -677,6 +746,14 @@ fn read_layer(path: &Path) -> Result<Option<String>> {
 
 /// Only `name` and `description` are read. A skill is markdown; anything the
 /// runtime must branch on belongs in the spine.
+///
+/// Both are required and `deny_unknown_fields` is on, so this is strict in both
+/// directions: a `SKILL.md` missing either, or carrying any third key, fails the
+/// load and takes the whole boot with it. That is the right answer for a skill
+/// written for Emma, where a stray key is a typo. It is a sharper edge than it
+/// looks for a `.claude/skills/` directory, where files in the wild routinely
+/// carry `allowed-tools`, `version`, `model-role` and a licence header above the
+/// frontmatter — none of which Emma reads, all of which stop it starting.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Front {
@@ -755,3 +832,5 @@ fn load_commands(root: &Path) -> Result<BTreeMap<String, String>> {
     }
     Ok(out)
 }
+
+// endregion: Loading

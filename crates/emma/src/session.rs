@@ -1,16 +1,16 @@
 //! Session persistence: one JSONL file per session under `~/.emma/sessions/`.
 //!
-//! **The choice, and the argument for it.** tustle-agent used SQLite and was
-//! right to: it had an HTTP server, concurrent turns from concurrent requests,
-//! and a crash-recovery fold that had to decide whether a tool with a side
-//! effect had already run. Rebuilding that fold on a text file would be a
-//! mistake.
+//! **The choice, and the argument for it.** SQLite is the right answer for a
+//! system with an HTTP server, concurrent turns from concurrent requests, and a
+//! crash-recovery fold that has to decide whether a tool with a side effect had
+//! already run. Rebuilding that fold on a text file would be a mistake.
 //!
 //! Emma has none of those. One process, one user, one writer, no recovery
 //! requirement — a crashed run is re-run, because the thing it was doing is in
 //! the user's working tree where they can see it. What is actually needed is an
-//! append-only record that survives `kill -9` mid-write and that `emma
-//! --resume` can fold back into a message list. That is a file with one JSON
+//! append-only record that survives `kill -9` mid-write and that a future
+//! resume could fold back into a message list. (There is no resume flag today;
+//! `cli.rs` has no such option.) That is a file with one JSON
 //! object per line: a truncated final line is the only damage a crash can do,
 //! and it is skipped on read. SQLite would add a dependency, a schema, a
 //! migration story and a binary file the user cannot `grep`, to buy durability
@@ -29,12 +29,21 @@
 //!   spend last week". Folding every JSONL file to answer that is fine at a
 //!   hundred sessions and absurd at ten thousand.
 //!
-//! **Resume, which is not built here but is what the format is for.** Every
-//! assistant turn is stored as its `raw_content` verbatim, and every tool
-//! result as the exact block that was sent. Replaying a session is therefore a
-//! fold that reads `assistant` and `tool_results` records in order — no
-//! reconstruction, and in particular no reassembly of thinking blocks, which
-//! this model family rejects when modified.
+//! **Resume is not built, and the records as written today would not support
+//! it.** What is stored is a human-readable audit trail, not a replayable
+//! transcript: an `assistant` record carries `turn.text` only, and a
+//! `tool_result` record carries the rendered content string rather than the
+//! `{"type":"tool_result", …}` block that was actually sent. See
+//! `Agent::run_goal` and `Agent::run_tool_call` in `agent.rs` for the full list
+//! of record kinds.
+//!
+//! The gap that matters for a future resume is `raw_content`. The loop echoes
+//! the provider's own content array back on the next call because thinking-block
+//! signatures do not survive reassembly — and that array is never written here,
+//! so a fold over this file cannot reproduce it. Storing `raw_content` verbatim
+//! is therefore the first change resume needs, not an optimisation on top of
+//! one; reconstructing an assistant turn from its text would produce exactly
+//! the modified blocks this model family rejects.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;

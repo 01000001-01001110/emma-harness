@@ -43,6 +43,19 @@ Anything below here is my own notes, leave it alone.
 | demo | Friday |
 ";
 
+// region: The agent writes, the human's file survives
+// ---------------------------------------------------------------------------
+// The agent writes, the human's file survives
+//
+// One fixture written the way a person writes, three calls the agent makes.
+// Everything the person put there has to still be there afterwards — including
+// the shapes nobody thought to name.
+// ---------------------------------------------------------------------------
+
+/// The load-bearing one. It asserts over *every* line of the fixture rather
+/// than a chosen few, so a writer that drops a shape nobody thought to name —
+/// the table, the numbered bullet, the blank line inside a note block — fails
+/// here without anyone having predicted which shape it would be.
 #[tokio::test]
 async fn every_hand_written_line_survives_an_update() {
     let project = Project::new();
@@ -95,6 +108,11 @@ async fn creating_a_task_keeps_the_notes_the_order_and_the_trailing_prose() {
     assert!(after.find("## This week") < after.find("## Someday"));
 }
 
+/// Stamping is the only time a write touches lines the call did not name, so
+/// it is the one place a bulk rewrite could quietly restyle the file. Hence the
+/// bullets: the `1.` and `*` lines are asserted with their original markers
+/// still attached, and the negative assertion catches a stamp that re-rendered
+/// the human's `*` as the writer's `-`.
 #[tokio::test]
 async fn a_task_with_no_handle_gains_one_without_losing_its_words() {
     let project = Project::new();
@@ -120,6 +138,17 @@ async fn a_task_with_no_handle_gains_one_without_losing_its_words() {
         "{after}"
     );
 }
+
+// endregion: The agent writes, the human's file survives
+
+// region: The human edits, the agent copes
+// ---------------------------------------------------------------------------
+// The human edits, the agent copes
+//
+// The other direction, and the one with no lock behind it. A person ticks a
+// box, prunes a done line, or starts from a file with no tasks in it at all.
+// None of those may read to the agent as machinery failing.
+// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn a_hand_ticked_box_is_read_as_completed() {
@@ -152,6 +181,11 @@ async fn a_task_deleted_by_hand_is_simply_gone() {
     assert!(list.content.contains("#0002"), "{list:?}");
 }
 
+/// A file with no tasks in it takes the branch that has no last task to append
+/// after, and it must not be mistaken for an empty file and replaced by the
+/// preamble. The trailing-newline assertion guards the off-by-one in
+/// `insertion_point`: appending past the file's final empty line leaves a file
+/// that does not end in a newline, and every later append compounds it.
 #[tokio::test]
 async fn a_file_of_pure_prose_gains_a_task_and_keeps_the_prose() {
     let project = Project::new();
@@ -166,3 +200,5 @@ async fn a_file_of_pure_prose_gains_a_task_and_keeps_the_prose() {
     assert!(after.contains("- [ ] the first task `#"), "{after}");
     assert!(after.ends_with('\n'), "{after:?}");
 }
+
+// endregion: The human edits, the agent copes

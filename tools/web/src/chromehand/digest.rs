@@ -13,6 +13,18 @@ use chromiumoxide::cdp::browser_protocol::network::{
 use futures::StreamExt;
 use tokio::task::JoinHandle;
 
+// region: Readable extraction
+// ---------------------------------------------------------------------------
+// Readable extraction
+//
+// One long string of JavaScript, and the largest single thing in the crate.
+// Every budget in it is deliberate: a digest that does not fit a context
+// window is not a digest. The comments inside are scars — a truncated selector
+// path that clicked the wrong element, hidden elements whose selectors could
+// not be acted on, page chrome that ate the whole link budget before the
+// article appeared.
+// ---------------------------------------------------------------------------
+
 pub const DEFAULT_TIMEOUT_MS: u64 = 45_000;
 pub const DEFAULT_MAX_TEXT_CHARS: usize = 8_000;
 
@@ -260,6 +272,17 @@ const DIGEST_JS: &str = r##"
 })()
 "##;
 
+// endregion: Readable extraction
+
+// region: Timestamps without a date crate
+// ---------------------------------------------------------------------------
+// Timestamps without a date crate
+//
+// Evidence needs an RFC3339 instant and nothing else, so the civil-date
+// arithmetic is inlined rather than pulling in a dependency. Seconds
+// precision, UTC, no parsing, no formatting options.
+// ---------------------------------------------------------------------------
+
 pub fn now_iso() -> String {
     // RFC3339 UTC without pulling in chrono: seconds precision is enough
     // for evidence timestamps (mine-boards uses toISOString()).
@@ -283,6 +306,19 @@ pub fn now_iso() -> String {
     let y = if mth <= 2 { y + 1 } else { y };
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, mth, d, h, m, s)
 }
+
+// endregion: Timestamps without a date crate
+
+// region: Rendering one page
+// ---------------------------------------------------------------------------
+// Rendering one page
+//
+// Navigate, settle, extract — and the care here is all about honesty of
+// evidence. The response listener is attached BEFORE the navigation so the
+// HTTP status is observed rather than inferred, a soft block that renders is
+// not treated as a failed navigation, and the page is closed on every path
+// including the timeout.
+// ---------------------------------------------------------------------------
 
 /// Everything one rendered page yields, before output assembly.
 pub struct Probe {
@@ -458,6 +494,19 @@ async fn navigate_and_extract(
     ))
 }
 
+// endregion: Rendering one page
+
+// region: Blocked pages, and the liveness verdict
+// ---------------------------------------------------------------------------
+// Blocked pages, and the liveness verdict
+//
+// Two small functions carrying the project's governing rule. A challenge page
+// is detected and reported, never evaded and never dressed up as a failure.
+// `verified` requires an OBSERVED 2xx/3xx — a page that rendered without one
+// is `failed`, because upgrading it would be a guess wearing the word
+// "verified".
+// ---------------------------------------------------------------------------
+
 /// Shared block-page phrasebook. HEURISTIC phrases are not yet live-certified;
 /// they are logged honestly as `looks_blocked: true` rather than evaded.
 pub fn looks_blocked(title: &str, text_lower: &str, final_url: &str) -> bool {
@@ -489,6 +538,18 @@ pub fn outcome(looks_blocked: bool, http_status: Option<i64>) -> &'static str {
         _ => "failed",
     }
 }
+
+// endregion: Blocked pages, and the liveness verdict
+
+// region: The output contract
+// ---------------------------------------------------------------------------
+// The output contract
+//
+// The one function that builds the JSON object everything downstream reads,
+// matching `docs/schema/chromehand-output.schema.json`. Text is the last thing
+// truncated because every other section was already bounded in-page, and both
+// copies of the page title are capped — a title is text a hostile page chose.
+// ---------------------------------------------------------------------------
 
 /// Assemble the output contract from a probe. `include_digest` = digest
 /// command (verify omits the payload, keeps the liveness signals).
@@ -563,6 +624,19 @@ pub fn assemble(
     }
     out
 }
+
+// endregion: The output contract
+
+// region: Session deltas
+// ---------------------------------------------------------------------------
+// Session deltas
+//
+// What changed on the page since the last look, so a long session does not
+// re-send the whole digest every turn. Elements are keyed by their stable
+// selector, which is what makes a click that reveals content show up as an
+// addition rather than as everything having moved. Each list is capped with an
+// honest `*_truncated` flag beside it.
+// ---------------------------------------------------------------------------
 
 /// Per-category item budget for `digest --delta`.
 const DELTA_BUDGET: usize = 60;
@@ -760,6 +834,17 @@ pub fn compute_delta(
     (snapshot, out)
 }
 
+// endregion: Session deltas
+
+// region: Waiting for the network to go quiet
+// ---------------------------------------------------------------------------
+// Waiting for the network to go quiet
+//
+// Timestamp-of-last-event rather than a count of requests in flight, and the
+// distinction is the whole function: counters drift permanently the first time
+// an event pair is missed, whereas a timestamp cannot.
+// ---------------------------------------------------------------------------
+
 /// Wait until the network has been quiet for `quiet_ms`, or until `cap_ms`
 /// has elapsed. Robust implementation: track the timestamp of the LAST network
 /// event seen (RequestWillBeSent / LoadingFinished). Never counts in-flight
@@ -815,6 +900,19 @@ pub async fn settle_network_quiet(page: &chromiumoxide::Page, quiet_ms: u64, cap
     quiet_met
 }
 
+// endregion: Waiting for the network to go quiet
+
+// region: Tests
+// ---------------------------------------------------------------------------
+// Tests
+//
+// The block phrasebook, entry by entry, and one structural assertion about the
+// extraction script itself: the display-restore must sit in a `finally`. That
+// last one is checked by reading the source string because the alternative is
+// a live browser, and the property — an in-session digest leaves the DOM as it
+// found it — is what every later click depends on.
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::{looks_blocked, DIGEST_JS};
@@ -867,3 +965,5 @@ mod tests {
         assert!(looks_blocked("", "", "https://www.google.com/sorry/index"));
     }
 }
+
+// endregion: Tests

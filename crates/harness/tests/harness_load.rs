@@ -11,10 +11,17 @@ mod support;
 use emma_harness::{Flavor, Harness};
 use support::*;
 
+// region: Discovery
 // ---------------------------------------------------------------------------
 // Discovery
+//
+// Finding the harness at all. These defend the walk itself and the override
+// that replaces it; the rule about which directories the walk refuses to enter
+// is in `claude_compat.rs`, beside the directory it refuses.
 // ---------------------------------------------------------------------------
 
+/// Without this, Emma is only usable from the one directory that holds `.emma/`
+/// — which is not where anyone stands while working in a repository.
 #[test]
 fn discovery_walks_up_like_git_finds_dot_git() {
     let base = scratch("discover");
@@ -31,6 +38,9 @@ fn discovery_walks_up_like_git_finds_dot_git() {
     );
 }
 
+/// The override has to beat a `.emma/` sitting right where the walk starts, or
+/// it is not an override — it is a fallback, and the caller who set it would get
+/// the project's configuration while believing they had replaced it.
 #[test]
 fn the_env_override_wins_over_the_walk() {
     let base = scratch("override");
@@ -54,8 +64,15 @@ fn an_override_pointing_at_nothing_refuses_rather_than_falling_back() {
     assert!(err.to_string().contains("EMMA_ROOT"), "{err}");
 }
 
+// endregion: Discovery
+
+// region: The boot states
 // ---------------------------------------------------------------------------
 // The boot states
+//
+// The four answers to "there is a directory, now what": absent, empty,
+// malformed, and configured-but-ambiguous. Three of them refuse, and each test
+// here pins down which one and what the refusal has to say.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -154,6 +171,11 @@ fn persona_files_that_nothing_selects_refuse_to_start() {
     assert!(format!("{err:#}").contains("assistant"), "{err:#}");
 }
 
+/// The mirror of the case above. There the operator wrote a prompt nothing
+/// selects; here they selected a prompt nobody wrote. Both end with Emma running
+/// on instructions the operator did not intend, so both refuse — and the refusal
+/// has to name the persona, or the operator is left guessing which of the two
+/// spellings in their config was wrong.
 #[test]
 fn a_selected_persona_with_no_directory_names_itself() {
     let root = scratch("missing-persona").join(".emma");
@@ -162,8 +184,15 @@ fn a_selected_persona_with_no_directory_names_itself() {
     assert!(format!("{err:#}").contains("ghost"), "{err:#}");
 }
 
+// endregion: The boot states
+
+// region: Assembly
 // ---------------------------------------------------------------------------
 // Assembly
+//
+// Turning layers into one prompt. Every test here is really about the hash: if
+// assembly normalises anything, or if its order can move, a prompt digest stops
+// identifying a prompt and every logged action loses its attribution.
 // ---------------------------------------------------------------------------
 
 /// The property the whole hashing story rests on: one file in means those exact
@@ -218,6 +247,10 @@ fn absent_and_empty_layers_are_skipped_without_a_stray_separator() {
     assert_eq!(h.instructions, "SHARED\n\nOWN");
 }
 
+/// The interaction between the two rules above. `_shared/` holds prompt text and
+/// nothing selects it, so a naive reading of "unselected persona content refuses"
+/// would make the shared layer — the one directory guaranteed to exist in a
+/// multi-persona harness — permanently unbootable on its own.
 #[test]
 fn shared_is_reserved_and_is_never_a_persona() {
     let root = scratch("shared-reserved").join(".emma");
@@ -228,10 +261,24 @@ fn shared_is_reserved_and_is_never_a_persona() {
     assert!(h.is_empty());
 }
 
+// endregion: Assembly
+
+// region: Skills and commands
 // ---------------------------------------------------------------------------
 // Skills and commands
+//
+// The two things that extend Emma without extending the loop. A skill is text
+// the model may ask for; a command is text a person summons at intake. Neither
+// may leak into the always-on prompt, and neither may be resolved by a name
+// that does not exist.
 // ---------------------------------------------------------------------------
 
+/// Two failures in one. The catalogue entry must come from the frontmatter and
+/// the body must not, because a skill body in the always-on prompt is the
+/// context blow-up the whole load-on-demand design exists to avoid — and it
+/// would be invisible, since the prompt would simply be larger and still work.
+/// The hash is over the body alone, so a tool result can attribute a load to the
+/// exact text the model was handed.
 #[test]
 fn only_name_and_description_are_needed_to_offer_a_skill() {
     let root = one_persona("skills", "rules");
@@ -307,8 +354,15 @@ fn commands_expand_at_intake_and_unknown_ones_pass_through() {
     );
 }
 
+// endregion: Skills and commands
+
+// region: The tool allowlist
 // ---------------------------------------------------------------------------
 // The tool allowlist
+//
+// The one part of the harness that is a permission boundary rather than a
+// prompt. These four tests are what stand between `"tools": ["Read","Grep"]`
+// meaning something and it being a comment.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -333,7 +387,7 @@ fn a_persona_naming_an_unregistered_tool_fails_the_load() {
     );
 }
 
-/// The change from tustle-agent, and the reason for it. There this field
+/// The change from the predecessor, and the reason for it. There this field
 /// asserted and filtered nothing, which was survivable because every tool was a
 /// read-only search. Emma runs `Bash` and `Write`.
 #[test]
@@ -375,6 +429,9 @@ fn selection_keeps_registry_order_so_the_prompt_prefix_is_stable() {
     assert_eq!(selected.names(), vec!["Read", "Grep"]);
 }
 
+/// The other half of the allowlist, and the half that fails silently if it
+/// breaks: a filter that treated "no list" as "the empty list" would leave the
+/// model with no tools and no error to explain it.
 #[test]
 fn no_allowlist_means_every_registered_tool() {
     let h = Harness::load(one_persona("no-allowlist", "rules")).expect("load");
@@ -383,10 +440,21 @@ fn no_allowlist_means_every_registered_tool() {
     assert_eq!(selected.names(), vec!["Read", "Bash"]);
 }
 
+// endregion: The tool allowlist
+
+// region: Identity
 // ---------------------------------------------------------------------------
 // Identity
+//
+// What the harness says about itself to a log or a terminal. Hashes and names
+// travel; prompt text does not.
 // ---------------------------------------------------------------------------
 
+/// The snapshot is logged at startup and printed by `config check`, so anything
+/// it carries ends up in terminals and log files. Prompt and skill text leaking
+/// into it would be a second copy free to drift from the first, and a paste of a
+/// `config check` would stop being safe to share. The hash is what identifies
+/// the prompt; the prompt itself never appears.
 #[test]
 fn the_snapshot_reports_identity_and_never_prompt_text() {
     let root = one_persona("snapshot", "SECRET-PROMPT-TEXT");
@@ -399,3 +467,5 @@ fn the_snapshot_reports_identity_and_never_prompt_text() {
     assert_eq!(h.snapshot()["flavor"], "emma");
     assert_eq!(Flavor::of(&h.root), Flavor::Emma);
 }
+
+// endregion: Identity

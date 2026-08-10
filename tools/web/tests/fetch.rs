@@ -56,12 +56,17 @@ async fn loopback_is_refused() {
 
 #[tokio::test]
 async fn a_url_that_is_not_a_url_is_an_argument_error() {
+    // Unparseable input must never reach the launcher. If it did, the model
+    // would be told Chrome failed for a string that was never a URL.
     let e = err(json!({ "url": "not a url at all" })).await;
     assert_eq!(e.kind(), "bad_arguments", "{e}");
 }
 
 #[tokio::test]
 async fn an_unknown_parameter_is_refused_rather_than_ignored() {
+    // Delete this and a misspelled parameter is silently dropped, which the
+    // model reads as "that option had no effect" and concludes the behaviour
+    // is impossible rather than that it typed the key wrong.
     let e = err(json!({ "url": "https://example.com", "depth": 3 })).await;
     assert_eq!(e.kind(), "bad_arguments", "{e}");
     assert!(e.detail().contains("depth"), "{e}");
@@ -115,10 +120,15 @@ async fn a_real_page_renders_as_markdown() {
 
 #[test]
 fn webfetch_declares_itself_read_only_and_writes_nothing_here() {
-    // The approval gate reads this field, so it must be true rather than
-    // merely declared. WebFetch reaches the network and drives a browser, but
-    // it has no path that writes inside the working directory: the Chrome
-    // profile lives in the system temp directory and is removed on teardown.
+    // `emma::approval` decides whether to interrupt a human purely from this
+    // field, so it has to be true rather than merely declared — and no gate
+    // has ever consulted it for this tool, because WebFetch is not registered.
+    // The claim is checked here so that flipping the declaration is a
+    // deliberate act with a test to answer to, rather than something noticed
+    // the first time a page read runs unattended. What makes it true: WebFetch
+    // reaches the network and drives a browser but has no path that writes
+    // inside the working directory — the Chrome profile lives in the system
+    // temp directory and is removed on teardown.
     let meta = WebFetch::new().meta();
     assert!(meta.read_only);
     assert!(meta.idempotent);

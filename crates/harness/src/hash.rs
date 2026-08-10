@@ -4,6 +4,10 @@
 //! a shared crate would be a dependency edge bought for six lines. The
 //! truncation to sixteen hex characters is not security — nothing here
 //! authenticates — it is so a digest fits in a log line a human reads.
+//!
+//! `short` is what the rest of the crate calls, and the only caller of
+//! `sha256_hex` in this workspace; the untruncated form is exposed beside it so
+//! that wanting the whole digest never means reaching for a second sha2.
 
 use sha2::{Digest, Sha256};
 

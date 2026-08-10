@@ -16,8 +16,12 @@ use emma_tool_api::{Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
+// region: The model
 // ---------------------------------------------------------------------------
 // The model
+//
+// A `Provider` that answers from a script instead of a network, and records
+// every request it was sent so a test can assert what the model was told.
 // ---------------------------------------------------------------------------
 
 /// One scripted assistant turn.
@@ -86,8 +90,12 @@ impl Fake {
             .join("\n")
     }
 
-    /// The last request only — for asserting that something is *absent* from
-    /// the most recent prompt rather than from the whole run.
+    /// The last request only, where [`Fake::transcript`] is every request.
+    ///
+    /// The distinction is what makes an assertion specific: `transcript` proves
+    /// the model was told something at some point in the run, and this proves
+    /// it is in the message that was actually sent back on the final call —
+    /// which is the claim behind the `raw_content` test.
     pub fn last_query(&self) -> String {
         self.seen
             .lock()
@@ -159,8 +167,15 @@ impl Provider for Fake {
     }
 }
 
+// endregion: The model
+
+// region: Tools
 // ---------------------------------------------------------------------------
 // Tools
+//
+// One tool with three knobs — its name, whether it claims `read_only`, and
+// whether it fails — plus a counter, because most assertions here are about
+// whether the tool ran at all rather than what it returned.
 // ---------------------------------------------------------------------------
 
 pub struct TestTool {
@@ -232,8 +247,15 @@ impl Tool for TestTool {
     }
 }
 
+// endregion: Tools
+
+// region: A harness on disk
 // ---------------------------------------------------------------------------
 // A harness on disk
+//
+// Real `.emma/` directories in a temporary directory, loaded by the real
+// `Harness`. The hook one dispatches a real process, which is why it has a
+// platform split.
 // ---------------------------------------------------------------------------
 
 /// An empty `.emma/` — the boot state where Emma has no standing instructions.
@@ -298,3 +320,5 @@ pub fn registry(tools: Vec<Arc<dyn Tool>>) -> emma_tool_api::Registry {
     }
     r
 }
+
+// endregion: A harness on disk

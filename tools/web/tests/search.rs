@@ -15,6 +15,16 @@ use emma_tools_web::WebSearch;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+// region: The loopback stub
+// ---------------------------------------------------------------------------
+// The loopback stub
+//
+// A real socket serving canned replies, recording the request line and headers
+// so the tests can assert on what actually went out. `connection: close` and
+// one reply per connection keep each request its own socket, which is what
+// makes `last()` unambiguous.
+// ---------------------------------------------------------------------------
+
 struct Seen {
     target: String,
     headers: Vec<(String, String)>,
@@ -106,6 +116,18 @@ fn results_body() -> String {
     .to_string()
 }
 
+// endregion: The loopback stub
+
+// region: What goes out, and what comes back
+// ---------------------------------------------------------------------------
+// What goes out, and what comes back
+//
+// The request side — the key in a header and never the URL, the count clamped
+// before it is sent — and the response side, where every status has to land in
+// the class that routes the caller correctly. The secret-leak assertions are
+// negative ones: the key must appear in neither the target nor any error.
+// ---------------------------------------------------------------------------
+
 #[tokio::test]
 async fn results_come_back_as_markdown_and_the_key_travels_in_the_header() {
     let s = stub(200, results_body(), 1).await;
@@ -194,6 +216,9 @@ async fn a_rejected_key_is_unavailable_not_a_failure() {
 
 #[tokio::test]
 async fn a_server_error_is_a_failure_the_model_can_route_around() {
+    // The counterpart to the 401 above, and the pair is the point: if both
+    // landed in the same class the model would either retry a bad key forever
+    // or give up on a Brave outage that would have cleared on the next call.
     let s = stub(500, "upstream exploded".into(), 1).await;
     let tool = WebSearch::with_key(ApiKey::new(TEST_KEY)).with_base_url(s.url.clone());
 
@@ -233,3 +258,5 @@ async fn a_search_reaching_nothing_at_all_is_a_failure_not_a_crash() {
         .expect_err("a dead endpoint is not a result");
     assert_eq!(err.kind(), "tool_failed", "{err}");
 }
+
+// endregion: What goes out, and what comes back

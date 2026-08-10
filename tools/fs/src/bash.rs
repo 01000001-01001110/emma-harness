@@ -19,7 +19,19 @@
 //! What the shell choice does cost is honesty about containment: `cwd` is where
 //! the command starts, not a wall it is held behind. `cd ..` leaves. That is
 //! stated in the description rather than papered over, because a boundary the
-//! operator believes in and that does not hold is worse than no boundary.
+//! operator believes in and that does not hold is worse than no boundary. The
+//! `cwd` *argument* is contained — it must resolve inside the root — which is a
+//! guard on the argument only, not on what the command then does with it.
+//!
+//! **Exit status is not failure.** The ruling and the reasoning are recorded at
+//! the point in `run` that implements it, below. One thing to know before
+//! reading further: `descriptions/bash.md`, which is what the model is actually
+//! shown, still describes a non-zero exit as a failure. That text predates the
+//! ruling and now contradicts the code. It is left alone here because the
+//! description is part of the tool's wire surface and changing it changes the
+//! registry's schema hash, so it is a deliberate edit rather than a drive-by
+//! one — but it is wrong, and it is wrong in the direction that teaches the
+//! model to avoid `Bash` for exactly the commands it should be using it for.
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -31,6 +43,15 @@ use tokio::io::AsyncReadExt;
 
 use crate::args;
 use crate::path;
+
+// region: The tool surface
+// ---------------------------------------------------------------------------
+// The tool surface
+//
+// The caps, the environment allowlist, and what the model is shown and allowed
+// to say. Everything here is decidable without touching the filesystem, which
+// is why `validate_args` can live in it.
+// ---------------------------------------------------------------------------
 
 const NAME: &str = "Bash";
 const KEYS: &[&str] = &["command", "timeout_ms", "cwd"];
@@ -131,11 +152,27 @@ impl Tool for Bash {
     }
 }
 
+// endregion: The tool surface
+
+// region: Running the command
+// ---------------------------------------------------------------------------
+// Running the command
+//
+// Spawn, drain, wait, and then decide what the result was. The ordering in here
+// is load-bearing in three places — drains started before the wait, the kill
+// bounded, and the exit-status ruling at the end — and each is commented where
+// it happens.
+// ---------------------------------------------------------------------------
+
 impl Bash {
     async fn run(&self, ctx: &ToolCtx, args_v: Value) -> Result<ToolOutcome, ToolError> {
         self.validate_args(&args_v)?;
         let root = path::root(ctx)?;
         let command = args::req_str(&args_v, NAME, "command")?;
+        // An over-large timeout is clamped rather than refused. Zero is refused
+        // in `validate_args`, because zero is a mistake with no plausible
+        // meaning, whereas "wait an hour" is a real intention the engine simply
+        // will not honour past its own ceiling.
         let timeout_ms = args::opt_u64(&args_v, NAME, "timeout_ms")?
             .unwrap_or(DEFAULT_TIMEOUT_MS)
             .min(MAX_TIMEOUT_MS);
@@ -205,6 +242,10 @@ impl Bash {
 
         // Bounded again: a grandchild holding the pipe open outlives the kill,
         // and waiting on it forever would turn a timeout into a hang.
+        // Losing the race here discards whatever had been drained and reports
+        // both streams as cut. That loses output, which is the lesser harm: the
+        // alternative is a `Bash` call that never returns, and "cut" is at
+        // least true of a result assembled from nothing.
         let ((out, out_cut), (err, err_cut)) =
             match tokio::time::timeout(Duration::from_secs(5), drains).await {
                 Ok(Ok(pair)) => pair,
@@ -214,6 +255,10 @@ impl Bash {
         let body = render(&out, &err);
         let cut = out_cut || err_cut;
 
+        // A timeout is one of the three genuine failures — the command did not
+        // finish, so there is no status to report and nothing answered. The
+        // output produced before the kill still goes in the message: a build
+        // that hung after printing where it hung is telling you where it hung.
         if timed_out {
             return Err(ToolError::Failed(format!(
                 "the command was killed after {timeout_ms}ms.\n{body}"
@@ -260,6 +305,23 @@ impl Bash {
     }
 }
 
+// endregion: Running the command
+
+// region: Output, and finding a shell
+// ---------------------------------------------------------------------------
+// Output, and finding a shell
+//
+// How the two streams are turned into one readable body, how they are read
+// without deadlocking the child, and the refusal that happens when there is no
+// POSIX shell to run anything with.
+// ---------------------------------------------------------------------------
+
+/// stderr is labelled rather than interleaved. Interleaving is what a terminal
+/// shows and it is not reconstructible here — the two pipes arrive
+/// independently — so a merged view would invent an ordering that did not
+/// happen. Both empty is `(no output)` rather than an empty string, because a
+/// command that printed nothing and a call that lost its output should not read
+/// the same.
 fn render(out: &[u8], err: &[u8]) -> String {
     let out = String::from_utf8_lossy(out);
     let err = String::from_utf8_lossy(err);
@@ -271,6 +333,14 @@ fn render(out: &[u8], err: &[u8]) -> String {
     }
 }
 
+/// Reads to end of stream and keeps only the first `cap` bytes.
+///
+/// The `continue` past the cap is the point of the whole function: it keeps
+/// consuming and discarding rather than returning. Stopping would leave the
+/// pipe buffer full and the child blocked forever on a write nobody is reading,
+/// so every noisy command would run to its full timeout instead of finishing.
+/// Keeping the *head* rather than the tail is the deliberate half of that — the
+/// first error is usually the real one, and the rest is cascade.
 async fn drain<R: tokio::io::AsyncRead + Unpin>(mut reader: R, cap: usize) -> (Vec<u8>, bool) {
     let mut kept = Vec::new();
     let mut chunk = [0u8; 8192];
@@ -321,3 +391,5 @@ pub fn find_shell() -> Result<PathBuf, ToolError> {
         "no POSIX shell is available; Bash needs sh (or bash on Windows) on PATH".into(),
     ))
 }
+
+// endregion: Output, and finding a shell

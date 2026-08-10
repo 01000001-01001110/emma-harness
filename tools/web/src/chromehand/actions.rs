@@ -19,6 +19,16 @@ use crate::chromehand::digest::{self, now_iso};
 use crate::chromehand::policy::Policy;
 use crate::chromehand::session::Connected;
 
+// region: Selectors that pierce shadow roots and frames
+// ---------------------------------------------------------------------------
+// Selectors that pierce shadow roots and frames
+//
+// A CSS selector cannot cross a shadow boundary or an iframe document, so the
+// digest emits two delimiters of its own and this is the resolver that reads
+// them back. Every verb below goes through it, which is why it is a string of
+// JavaScript rather than a Rust function.
+// ---------------------------------------------------------------------------
+
 /// In-page helper for resolving selectors that pierce open shadow roots
 /// (` >>> `) and same-origin iframe documents (` ||| `). The two delimiters
 /// compose left-to-right in a single resolver. Cross-origin frames and closed
@@ -99,6 +109,17 @@ function __bmResolveMeta(selector) {
 }
 "##;
 
+// endregion: Selectors that pierce shadow roots and frames
+
+// region: Evidence, and the snapshot every verb returns
+// ---------------------------------------------------------------------------
+// Evidence, and the snapshot every verb returns
+//
+// Shared output furniture. Each verb answers "where are we now, and does it
+// look like a block page" from the same small snapshot rather than a full
+// digest, so an action result stays cheap and an agent re-reads deliberately.
+// ---------------------------------------------------------------------------
+
 /// wait_for_navigation can block forever when no observable navigation
 /// happens (bfcache restores, same-document changes) — always bound it.
 pub async fn bounded_nav_wait(page: &Page, ms: u64) {
@@ -155,6 +176,18 @@ pub async fn mini_digest(page: &Page) -> serde_json::Value {
         "looks_blocked": looks_blocked
     })
 }
+
+// endregion: Evidence, and the snapshot every verb returns
+
+// region: Read verbs
+// ---------------------------------------------------------------------------
+// Read verbs
+//
+// Moving around a page and waiting for it to settle. These follow the ordinary
+// URL policy and need no allowlist — reading the web is ordinary. The
+// recurring discipline is that an unobserved HTTP status stays null rather
+// than being inferred, and a wait that times out is a result, not an error.
+// ---------------------------------------------------------------------------
 
 /// `navigate --session S <url>` — full navigation with observed main-document
 /// status (listener attached BEFORE goto, evidence not guesswork).
@@ -336,6 +369,19 @@ pub async fn wait_for(
         "evidence": evidence()
     }))
 }
+
+// endregion: Read verbs
+
+// region: Interaction verbs, and what they refuse
+// ---------------------------------------------------------------------------
+// Interaction verbs, and what they refuse
+//
+// Acting on a page rather than reading it, and the safety hardening worth
+// having. Three rules, each enforced before anything is touched: a user-owned
+// allowlist is required at all; `click` refuses submit-typed controls; `type`
+// refuses password fields and refuses a newline into a single-line input,
+// because Enter there is a form submission by another name.
+// ---------------------------------------------------------------------------
 
 /// Interaction-verb gate: allowlist REQUIRED, current page URL must pass.
 async fn interaction_gate(c: &Connected, pol: &Policy) -> Result<(), String> {
@@ -604,6 +650,17 @@ pub async fn select(
     Ok(out)
 }
 
+// endregion: Interaction verbs, and what they refuse
+
+// region: Capturing the current state
+// ---------------------------------------------------------------------------
+// Capturing the current state
+//
+// The two ways to record where a session has got to. Both read; neither
+// navigates, which is why the in-session digest has no liveness verdict to
+// report and says so rather than reusing a stale one.
+// ---------------------------------------------------------------------------
+
 /// `screenshot (--session S | <url>) --out f.png` — evidence capture.
 pub async fn screenshot(page: &Page, out_path: &str) -> Result<serde_json::Value, String> {
     let params = ScreenshotParams::builder().full_page(true).build();
@@ -647,3 +704,5 @@ pub async fn session_digest(
     annotate_attached(&mut out, c.attached);
     Ok(out)
 }
+
+// endregion: Capturing the current state

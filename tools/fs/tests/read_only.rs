@@ -1,11 +1,18 @@
 //! The test that turns `ToolMeta::read_only` from a declaration into a fact.
 //!
-//! In tustle-agent the equivalent field was declared and read by nothing. Here
-//! the approval gate consults it, so the field being wrong is the difference
-//! between a prompt appearing and a file being silently overwritten. This test
-//! runs every `read_only` tool against a populated sandbox — with arguments
-//! chosen to be as provocative as the schema allows — and asserts the tree is
-//! byte-for-byte identical afterwards.
+//! In tustle-agent the equivalent field, `needs_approval`, was declared by
+//! every tool and read by nothing — a declaration wearing the costume of a
+//! mechanism, which is why it was not carried across and why this file exists.
+//! Here the approval gate consults `read_only`, so the field being wrong is the
+//! difference between a prompt appearing and a file being silently
+//! overwritten. This test runs every
+//! `read_only` tool against a populated sandbox — with arguments chosen to be
+//! as provocative as the schema allows — and asserts the tree is byte-for-byte
+//! identical afterwards.
+//!
+//! That is what makes the declaration a fact rather than a claim. Delete this
+//! file and `read_only` degrades back into the thing it replaced: something
+//! every tool asserts about itself and nothing ever checks.
 
 mod support;
 

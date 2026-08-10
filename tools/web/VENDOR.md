@@ -16,16 +16,33 @@ possible instead of archaeological.
 **Libification.** Upstream is binary-only: `main.rs` owned argv parsing, the
 Chrome lifecycle (`launch_browser`/`teardown`), and every exit. Here the
 lifecycle and the one command Emma needs live in [`chromehand::digest_url`],
-and `src/bin/browser-miner.rs` is a thin CLI over it. Nothing inside the
-vendored modules moved; the sole edit to those five files is `crate::x` →
-`crate::chromehand::x`, applied mechanically.
+and `src/bin/browser-miner.rs` is a thin CLI over it. **No executable code
+inside the vendored modules moved**: the only change to their code is
+`crate::x` → `crate::chromehand::x`, applied mechanically.
 
-**One unavoidable whitespace divergence.** `cargo fmt` runs over the whole
-workspace, so the vendored files — `tests/integration.rs` most visibly — are
-now formatted to Emma's settings rather than upstream's. A cherry-pick will
-need `cargo fmt` run over it before the diff reads cleanly. Exempting the
-directory was the alternative and it is worse: a corner of the workspace that
-the formatter does not touch is a corner that quietly drifts.
+**Two divergences that are comments and whitespace only.** Neither changes
+behaviour, and both mean a cherry-pick needs a pass before its diff reads
+cleanly.
+
+- `cargo fmt` runs over the whole workspace, so the vendored files —
+  `tests/integration.rs` most visibly — are formatted to Emma's settings rather
+  than upstream's. Exempting the directory was the alternative and it is worse:
+  a corner of the workspace the formatter does not touch is a corner that
+  quietly drifts.
+- **Comments were audited and rewritten on 2026-08-10**, and `// region:` /
+  `// endregion:` folding markers were added, in `actions.rs`, `digest.rs`,
+  `forms.rs` and `session.rs`. `policy.rs` was not touched. This paragraph
+  exists because the first version of this file claimed the code edit was the
+  _sole_ edit, which stopped being true the moment that pass ran — and a
+  provenance record nobody amends is worse than none, because the next person
+  cherry-picking trusts it.
+
+The audit deliberately did **not** change any user-facing string, so one
+upstream defect survives here verbatim and is recorded rather than fixed:
+`actions.rs` states in both a doc comment and a refusal a user reads that the
+`submit` verb "is not built", while `forms.rs` implements it, the CLI wires it,
+and three integration tests cover it. Fixing that is an upstream change to
+cherry-pick, not a local edit.
 
 **Exit codes became a type.** Upstream signalled outcome by process exit —
 `0` result, `2` bad input or policy refusal, `3` browser failure. In-process

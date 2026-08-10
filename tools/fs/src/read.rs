@@ -22,6 +22,13 @@
 //!
 //! Reading a file that exists and is empty **succeeds** and returns nothing.
 //! Emptiness is a result; only the machinery failing is an error.
+//!
+//! Three separate things count as truncation and any of them sets the flag:
+//! there are lines after the window, the byte cap bit before the line cap did,
+//! or some single line was too long to show whole. `render` collects all three
+//! reasons and states each one it hit, because "truncated" on its own does not
+//! tell the model whether to page forward, narrow the range, or stop expecting
+//! the rest of a line.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -32,6 +39,15 @@ use serde_json::{json, Value};
 use crate::args;
 use crate::path;
 use crate::session::ReadTracker;
+
+// region: The tool surface
+// ---------------------------------------------------------------------------
+// The tool surface
+//
+// The three caps, the schema, and the tracker this tool shares with `Write` and
+// `Edit`. The caps are consts because they are quoted back to the model in two
+// other places, and a number written out three times starts disagreeing.
+// ---------------------------------------------------------------------------
 
 const NAME: &str = "Read";
 const KEYS: &[&str] = &["file_path", "offset", "limit"];
@@ -116,6 +132,17 @@ impl Tool for Read {
     }
 }
 
+// endregion: The tool surface
+
+// region: Reading, and what gets recorded
+// ---------------------------------------------------------------------------
+// Reading, and what gets recorded
+//
+// The call itself, and the sighting it leaves behind. The sighting is the part
+// with consequences elsewhere: it is what later licenses or refuses a `Write`,
+// so whether this read counts as complete is decided here and nowhere else.
+// ---------------------------------------------------------------------------
+
 impl Read {
     fn run(&self, ctx: &ToolCtx, args_v: Value) -> Result<ToolOutcome, ToolError> {
         self.validate_args(&args_v)?;
@@ -155,6 +182,18 @@ impl Read {
     }
 }
 
+// endregion: Reading, and what gets recorded
+
+// region: Rendering, and saying what was cut
+// ---------------------------------------------------------------------------
+// Rendering, and saying what was cut
+//
+// Line numbering, the three independent caps, and the note that admits to each
+// one that fired. This half is where silent truncation would live if it were
+// going to, so every early exit either returns a complete answer or says it is
+// not one.
+// ---------------------------------------------------------------------------
+
 fn render(root: &Path, file: &Path, text: &str, offset: usize, limit: usize) -> ToolOutcome {
     let shown = path::display(root, file);
     if text.is_empty() {
@@ -165,6 +204,9 @@ fn render(root: &Path, file: &Path, text: &str, offset: usize, limit: usize) -> 
     }
 
     let total = text.lines().count();
+    // Reading past the end is not an error either. The model paging through a
+    // file will eventually ask for a window that is not there, and the useful
+    // answer is the line count, not a refusal.
     if offset > total {
         return ToolOutcome::new(String::new()).with_display(format!(
             "{shown}: offset {offset} is past the last line ({total})"
@@ -185,6 +227,10 @@ fn render(root: &Path, file: &Path, text: &str, offset: usize, limit: usize) -> 
             byte_capped = true;
             break;
         }
+        // `last` advances only for a line that was actually emitted, which is
+        // why the break happens before the push. The continuation offset
+        // reported below is `last + 1`, so a line counted here but dropped by
+        // the cap would tell the model to resume one line past what it saw.
         out.push_str(&rendered);
         last = number;
     }
@@ -222,6 +268,10 @@ fn render(root: &Path, file: &Path, text: &str, offset: usize, limit: usize) -> 
     ToolOutcome::new(out).with_display(format!("{shown}: {total} lines"))
 }
 
+/// Taken in `char`s, so a multi-byte character is never cut in half. The peek
+/// at the next char is what distinguishes a line of exactly `max_chars` from
+/// one that was actually clipped — taking and comparing lengths would call the
+/// first one truncated and set the flag that stops `Write` from working.
 fn clip(line: &str, max_chars: usize) -> (String, bool) {
     let mut chars = line.chars();
     let head: String = chars.by_ref().take(max_chars).collect();
@@ -231,3 +281,5 @@ fn clip(line: &str, max_chars: usize) -> (String, bool) {
         (format!("{head} … [line clipped]"), true)
     }
 }
+
+// endregion: Rendering, and saying what was cut

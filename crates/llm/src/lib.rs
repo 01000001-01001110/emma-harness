@@ -1,11 +1,26 @@
 //! The model boundary.
 //!
 //! Emma's loop sees `Request` in and `AssistantTurn` out, and nothing else.
-//! Provider types stay behind this trait so a second provider — or a fake one
-//! in a test — costs a `impl Provider` and no change anywhere else.
+//! Provider types stay behind the [`Provider`] trait, which is what lets the
+//! loop's whole test suite drive a scripted fake — `Fake` in
+//! `crates/emma/tests/support` — with no socket and no key.
 //!
 //! Rust has no official Anthropic SDK, so [`anthropic`] speaks the Messages
 //! API over raw HTTP, which is the documented path for unsupported languages.
+//! It is the only provider that exists today; a second one is planned and not
+//! built.
+//!
+//! **The abstraction is type-clean and still leaks the Anthropic wire shape,
+//! and it is worth knowing where.** Two places, both outside this crate: the
+//! loop builds its own `{"type":"tool_result","tool_use_id":…}` blocks, and it
+//! pushes [`AssistantTurn::raw_content`] back verbatim. A second provider is
+//! therefore a refactor rather than a file — OpenAI differs in kind, with tool
+//! calls in a `tool_calls` array and each result as its own `role:"tool"`
+//! message. Note what that refactor must *not* do: delete `raw_content`.
+//! Thinking-block signatures do not survive reassembly, so a turn rebuilt from
+//! `text` + `tool_calls` makes the *next* call fail. The shape that works is to
+//! make it opaque — the loop stores whatever the provider returned and hands it
+//! back without knowing what is in it.
 //!
 //! **The one shape that must not drift.** A `Request` names its four parts in
 //! prefix order — instructions, tools, history, query — because the provider's
@@ -27,9 +42,19 @@ pub use anthropic::{AnthropicProvider, DEFAULT_MODEL};
 pub use auth::{ApiKey, AuthError};
 pub use retry::Retry;
 
-/// Who a message came from. Only these two cross the boundary: mid-conversation
-/// `system` messages are an operator channel Emma does not have, and letting
-/// the loop construct one would put a per-turn byte ahead of the history.
+// region: The request, in prefix order
+// ---------------------------------------------------------------------------
+// The request, in prefix order
+//
+// Everything that goes out: who spoke, how hard the model should work, whether
+// to ask for cache breakpoints, and the four-part `Request` whose field order
+// is the prefix order the cache depends on.
+// ---------------------------------------------------------------------------
+
+/// Who a message came from. Only these two, because the Messages API accepts
+/// only these two in `messages`: instructions travel in the top-level `system`
+/// field, which is where the prefix ordering above needs them anyway. There is
+/// no third variant to add later without changing where the stable bytes sit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
@@ -152,6 +177,17 @@ impl Request {
     }
 }
 
+// endregion: The request, in prefix order
+
+// region: The turn that comes back
+// ---------------------------------------------------------------------------
+// The turn that comes back
+//
+// The typed result of one model call, identical whether the bytes arrived as
+// one JSON body or as a stream. `Usage` carries the caching scar; `raw_content`
+// carries the blocks that must be echoed back untouched.
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
@@ -224,6 +260,16 @@ pub struct AssistantTurn {
     pub raw_content: serde_json::Value,
 }
 
+// endregion: The turn that comes back
+
+// region: The trait, and what it narrates in flight
+// ---------------------------------------------------------------------------
+// The trait, and what it narrates in flight
+//
+// `Provider` is the whole boundary. `Event` and `Mode` are how a caller chooses
+// between watching a call happen and simply waiting for it.
+// ---------------------------------------------------------------------------
+
 /// Anything worth showing a human while the call is in flight.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
@@ -266,17 +312,37 @@ pub trait Provider: Send + Sync {
     ) -> Result<AssistantTurn, LlmError>;
 }
 
+// endregion: The trait, and what it narrates in flight
+
+// region: Errors, and keeping the key out of them
+// ---------------------------------------------------------------------------
+// Errors, and keeping the key out of them
+//
+// One variant per thing a user can act on, plus the two scrubbing helpers every
+// message passes through on the way out.
+// ---------------------------------------------------------------------------
+
 /// What went wrong, phrased so the message alone tells the user what to do.
 ///
-/// Every variant that carries provider text carries it *redacted*: the key is
-/// scrubbed before construction, so a proxy or misconfigured gateway echoing
-/// the auth header back cannot put it in a log line. See
-/// [`redact`].
+/// Provider text reaches the user *redacted* wherever the key is in scope: the
+/// [`AnthropicProvider`] scrubs every body and transport error before building
+/// the variant, so a proxy or misconfigured gateway echoing the auth header
+/// back cannot put it in a log line. See [`redact`]. Two paths do not scrub,
+/// because they are free functions the key was never handed to: the `Api`
+/// error built from an `error` frame mid-stream, and the one built from an
+/// error-shaped batch body. Both carry provider prose, so a key echoed there
+/// would survive.
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
     #[error("no API key: {0}")]
     Auth(#[from] AuthError),
 
+    // The command that stores a key is `emma api`, not `emma auth`. This crate
+    // does not know that — it is a library, and the binary's verb is not its to
+    // name — so `emma::commands::rename_auth` rewrites the word at the one
+    // boundary where the sentence is printed. If this string changes, that
+    // rewrite goes stale silently and the user is told to run a command that
+    // does not exist. Change both or neither.
     #[error(
         "the API rejected this key (HTTP 401). Check ANTHROPIC_API_KEY, or run `emma auth` to \
          store a working one. Provider said: {message}"
@@ -358,6 +424,17 @@ pub(crate) fn trim_body(body: &str) -> String {
     format!("{}…", &body[..end])
 }
 
+// endregion: Errors, and keeping the key out of them
+
+// region: Tests
+// ---------------------------------------------------------------------------
+// Tests
+//
+// The three claims worth pinning at this level: billable input counts all three
+// fields, redaction replaces every occurrence rather than the first, and the
+// retryable set is exactly what it says.
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,3 +477,5 @@ mod tests {
         assert!(LlmError::Transport("connection reset".into()).retryable());
     }
 }
+
+// endregion: Tests

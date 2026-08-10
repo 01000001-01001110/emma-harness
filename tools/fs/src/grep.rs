@@ -13,12 +13,12 @@
 //! matter of parsing stderr. Here the two are structurally different outcomes.
 //!
 //! **Output modes exist because the useful answer is rarely the whole answer.**
-//! A count, a file list, or matching lines are three different questions, and
-//! forcing every one of them through "all matching lines" wastes context on the
-//! two occasions in three where the model wanted to know *where* to look next
-//! rather than what the lines said. `head_limit` bounds the rest, and hitting
-//! it is reported rather than silently applied — the same rule as `Read`, for
-//! the same reason.
+//! A count, a file list, and matching lines are three different questions.
+//! "Where is this defined" and "how widely is this used" both want a shape of
+//! answer that fits in a line or two; forcing them through "every matching
+//! line" spends context on text the model was not asking about. `head_limit`
+//! bounds the rest, and hitting it is reported rather than silently applied —
+//! the same rule as `Read`, for the same reason.
 //!
 //! Like `Glob`, the walk does not follow symlinks: an out-of-root link would
 //! otherwise turn a search into an exfiltration path without a `..` in sight.
@@ -33,6 +33,14 @@ use crate::args;
 use crate::glob::compile as compile_glob;
 use crate::path;
 use crate::walk;
+
+// region: The tool surface
+// ---------------------------------------------------------------------------
+// The tool surface
+//
+// The caps, the schema, and the checks that need no filesystem — a regex or a
+// glob that will not compile, and a mode that is not one of the three.
+// ---------------------------------------------------------------------------
 
 const NAME: &str = "Grep";
 const KEYS: &[&str] = &[
@@ -127,6 +135,17 @@ impl Tool for Grep {
     }
 }
 
+// endregion: The tool surface
+
+// region: Modes and patterns
+// ---------------------------------------------------------------------------
+// Modes and patterns
+//
+// The three questions a search can be asked, parsed from a string rather than
+// taken as a boolean pair, so an unrecognised mode is a refusal naming the
+// three that exist instead of a silent fallback to the default.
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Content,
@@ -153,6 +172,17 @@ fn build_regex(pattern: &str, insensitive: bool) -> Result<regex::Regex, ToolErr
         .build()
         .map_err(|e| ToolError::BadArguments(format!("{pattern} is not a valid regex: {e}")))
 }
+
+// endregion: Modes and patterns
+
+// region: The search
+// ---------------------------------------------------------------------------
+// The search
+//
+// Choose the candidate files, read each one, and count separately what was
+// found and what is being shown. The distinction between those two counts is
+// what keeps a capped search from reading like a complete one.
+// ---------------------------------------------------------------------------
 
 impl Grep {
     fn run(&self, ctx: &ToolCtx, args_v: Value) -> Result<ToolOutcome, ToolError> {
@@ -181,6 +211,13 @@ impl Grep {
             }
         };
 
+        // `path` may name a single file, in which case there is nothing to walk
+        // and it is the only candidate. Note the rough edge this leaves: the
+        // `glob` filter below matches against the path relative to `base`, and
+        // when `base` *is* the file that relative path is empty, so passing
+        // `path` and `glob` together for one file matches nothing. Naming one
+        // file and then filtering the set of one is a redundant call, which is
+        // why it has not bitten, but it is a real asymmetry rather than a rule.
         let single_file = base_meta.map(|m| m.is_file()).unwrap_or(false);
         let (candidates, walk_truncated) = if single_file {
             (vec![base.clone()], false)
@@ -199,8 +236,18 @@ impl Grep {
                 }
             })
             .collect();
+        // Sorted by path, not by mtime as `Glob` is: a grep result is read as a
+        // list of places, and neighbouring files sitting together is worth more
+        // than recency. Either way it must be deterministic, for the same
+        // cached-prefix reason.
         candidates.sort();
 
+        // `total_hits` and `files_with_hits` count every match in the tree,
+        // whatever the mode and whatever `head_limit` allowed through, so the
+        // summary can say how much was found rather than how much was shown.
+        // `lines` is the shown part; when the two diverge, `capped` is set and
+        // the difference is stated. Counting only what was returned is how a
+        // capped search comes to look like a complete one.
         let mut lines: Vec<String> = Vec::new();
         let mut files_with_hits = 0usize;
         let mut total_hits = 0usize;
@@ -288,6 +335,17 @@ impl Grep {
     }
 }
 
+// endregion: The search
+
+// region: What counts as searchable
+// ---------------------------------------------------------------------------
+// What counts as searchable
+//
+// Two filters that silently drop content, which is why both are stated here:
+// a file too large to be what "search the project" meant, and a file that is
+// not text. Neither fails the call.
+// ---------------------------------------------------------------------------
+
 /// `None` for anything that is not searchable text. Skipping is right: a binary
 /// file is not a failed search, it is a file with no lines, and one JPEG in a
 /// tree must not fail the whole call.
@@ -301,6 +359,8 @@ fn readable_text(file: &Path) -> Option<String> {
         .and_then(|b| String::from_utf8(b).ok())
 }
 
+/// Counted and taken in `char`s rather than bytes, so a multi-byte character
+/// cannot be cut in half and produce output that is not valid UTF-8.
 fn clip(line: &str) -> String {
     const MAX: usize = 400;
     if line.chars().count() <= MAX {
@@ -309,3 +369,5 @@ fn clip(line: &str) -> String {
     let head: String = line.chars().take(MAX).collect();
     format!("{head} … [line clipped]")
 }
+
+// endregion: What counts as searchable

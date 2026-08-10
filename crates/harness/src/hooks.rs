@@ -4,9 +4,16 @@
 //! skills, commands, the spine — really is "file reads, one serde struct". This
 //! is not. A hook runs a program at the highest-privilege point of the turn, so
 //! it canonicalises and containment-checks the path, refuses a non-executable
-//! file, clears the environment down to an allowlist, hashes the executable it
-//! is about to run, anchors the matcher, bounds the wall clock, caps both pipes,
-//! and decides what a malformed answer means. That is a subprocess supervisor.
+//! file (on unix, where there is an executable bit to check), clears the
+//! environment down to a six-name allowlist, hashes the executable it is about
+//! to run, anchors the matcher, bounds the wall clock, caps both pipes, and
+//! decides what a malformed answer means. That is a subprocess supervisor.
+//!
+//! Everything in that list except the timeout and the pipe caps happens in
+//! `resolve`, at load. A hook that cannot be run safely stops the boot rather
+//! than failing at the moment it was needed, which is the same ruling as every
+//! other refusal in this crate: the honest answer to an ambiguous configuration
+//! is not to start.
 //!
 //! So the split is not bookkeeping: the two files fail for different reasons.
 //! `lib.rs` growing means configuration is sprouting behaviour. This file
@@ -21,7 +28,7 @@
 //! record it wants to keep, which is what lets every test in this crate run
 //! without a process around it.
 //!
-//! **Emma's stake is higher than tustle-agent's was.** There the tool surface
+//! **Emma's stake is higher than the predecessor's was.** There the tool surface
 //! was read-only by construction, so a `PreToolUse` hook guarded a search. Here
 //! it guards `Bash` and `Write`. Every check below was already justified; none
 //! of them is now optional.
@@ -35,6 +42,15 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::hash;
 
+// region: The caps, and the environment a hook is given
+// ---------------------------------------------------------------------------
+// The caps, and the environment a hook is given
+//
+// The bounds the engine imposes no matter what config asks for, and the six
+// variables a hook process inherits. These are the numbers a reviewer wants
+// first, so they are the first thing in the file.
+// ---------------------------------------------------------------------------
+
 const DEFAULT_HOOK_TIMEOUT_MS: u64 = 5_000;
 /// Hook time is spent inside the user's own patience, so the engine caps what
 /// config may ask for. A hook is a gate, not a job runner. Config asking for
@@ -44,8 +60,9 @@ const MAX_HOOK_TIMEOUT_MS: u64 = 10_000;
 const HOOK_OUTPUT_CAP: u64 = 64 * 1024;
 const HOOK_REASON_CAP: usize = 400;
 
-/// The environment a hook is given, and all of it. `SYSTEMROOT` and `COMSPEC`
-/// are Windows process-creation requirements, not policy.
+/// The environment a hook is given, and all of it — six names. `SYSTEMROOT` and
+/// `COMSPEC` are Windows process-creation requirements, not policy; the other
+/// four are what a small program needs to find its interpreter and behave.
 ///
 /// This process holds `ANTHROPIC_API_KEY`. A hook is operator-authored, but it
 /// is still a separate program running at the highest-privilege point of the
@@ -54,8 +71,15 @@ const HOOK_REASON_CAP: usize = 400;
 /// next to itself.
 const HOOK_ENV_ALLOWLIST: &[&str] = &["PATH", "HOME", "LANG", "TMPDIR", "SYSTEMROOT", "COMSPEC"];
 
+// endregion: The caps, and the environment a hook is given
+
+// region: Declaration — the hooks block of .emma/config.json
 // ---------------------------------------------------------------------------
 // Declaration — the `hooks` block of `.emma/config.json`
+//
+// What an operator is allowed to write, and the closed set of events they may
+// attach it to. `HookDef` is the unvalidated form straight off the file;
+// `ResolvedHook` further down is what survived every check.
 // ---------------------------------------------------------------------------
 
 /// `deny_unknown_fields`, like everything in Emma's own spine: a misspelled
@@ -126,8 +150,17 @@ impl ResolvedHook {
     }
 }
 
+// endregion: Declaration — the hooks block of .emma/config.json
+
+// region: The call, and what a hook may answer
 // ---------------------------------------------------------------------------
 // The call, and what a hook may answer
+//
+// Both directions of the contract with an external process: exactly what a hook
+// is told, and exactly what it is allowed to say back. Every type here is a
+// boundary — widening one hands an operator-authored program more of Emma's
+// insides, which is why they are declared together rather than beside their
+// users.
 // ---------------------------------------------------------------------------
 
 /// Everything a hook is told about a call.
@@ -210,8 +243,15 @@ struct HookReply {
     context: Option<String>,
 }
 
+// endregion: The call, and what a hook may answer
+
+// region: Dispatch
 // ---------------------------------------------------------------------------
 // Dispatch
+//
+// Running the thing: the fail-closed/fail-open split in `run`, then the
+// supervision of one child process in `invoke` and `exec`. This is the part
+// that executes at the highest-privilege point of the turn.
 // ---------------------------------------------------------------------------
 
 /// Run every hook attached to `event` that matches this call, in hook-name
@@ -375,8 +415,15 @@ async fn exec(
     Ok((child.wait().await?.code(), out, err))
 }
 
+// endregion: Dispatch
+
+// region: Resolution — every check that can be made before a hook ever runs
 // ---------------------------------------------------------------------------
 // Resolution — every check that can be made before a hook ever runs
+//
+// Load time, where a hook that cannot be run safely stops the boot instead of
+// failing at the moment it was needed. Everything here answers the same
+// question: is there any way to know now that this will not work?
 // ---------------------------------------------------------------------------
 
 pub(crate) fn resolve(
@@ -418,6 +465,12 @@ pub(crate) fn resolve(
                 dir.display()
             )));
         }
+        // Unix only, because there is no executable bit on Windows to consult —
+        // a `.cmd` or `.exe` is runnable by extension. The check is not the
+        // containment boundary, which is the `starts_with` above and applies
+        // everywhere; it catches the operator who wrote a hook and forgot to
+        // `chmod +x` it, which would otherwise surface as a spawn failure at the
+        // first tool call and — `PreToolUse` being fail-closed — as a denial.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -448,3 +501,5 @@ pub(crate) fn resolve(
     }
     Ok(out)
 }
+
+// endregion: Resolution — every check that can be made before a hook ever runs

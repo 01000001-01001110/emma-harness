@@ -14,7 +14,20 @@
 //! **Writing is gated and reading is not.** `ToolMeta::read_only` decides, a
 //! `PreToolUse` hook outranks the human, and nothing grants a permission that
 //! outlives the process. See [`approval`], which is the most consequential file
-//! here: tustle-agent's tool surface could not write, and Emma's can.
+//! here: a tool surface that can write is a different safety problem from one
+//! that cannot, and Emma's can.
+//!
+//! **The map.** [`agent`] is the loop and holds both properties above.
+//! [`approval`] is the gate it consults, and [`goal`] is what it holds across
+//! turns — the goal text, the done-check trait, and the kick. Around those:
+//! [`cli`] parses the arguments, [`commands`] is the three subcommands that run
+//! without a model call, [`settings`] and [`skill`] read the user's preferences
+//! and the harness's skills, [`session`] writes the transcript, and [`term`] is
+//! everything the person at the keyboard sees. `main.rs` only wires them
+//! together.
+//!
+//! Anthropic is the only provider. The wire shape a second one would have to
+//! displace is called out where it is built, in `agent.rs`.
 
 pub mod agent;
 pub mod approval;

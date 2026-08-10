@@ -1,9 +1,28 @@
 //! Scratch directories and a fake tool registry, shared by the test binaries.
+//!
+//! Everything the harness does is a function of a directory on disk, so every
+//! test starts by building one. These helpers exist so a test reads as the
+//! configuration it is about rather than as a page of `create_dir_all` — the
+//! interesting line in a load test should be the JSON, not the scaffolding.
+//!
+//! Directories are left behind rather than cleaned up: a failing test is much
+//! easier to diagnose with the tree it failed on still sitting in the temp
+//! directory, and the names are unique enough that nothing accumulates on top of
+//! anything else.
 
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+// region: Scratch harnesses on disk
+// ---------------------------------------------------------------------------
+// Scratch harnesses on disk
+//
+// Building the directory a test is about. `one_persona` and `with_skill` cover
+// the two shapes almost every test needs, so a test that builds its tree by
+// hand is signalling that its tree is the interesting part.
+// ---------------------------------------------------------------------------
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -39,13 +58,23 @@ pub fn with_skill(root: &Path, name: &str, description: &str, body: &str) {
     );
 }
 
+// endregion: Scratch harnesses on disk
+
+// region: A registry of tools that do nothing, for the allowlist tests
 // ---------------------------------------------------------------------------
 // A registry of tools that do nothing, for the allowlist tests
+//
+// `select_tools` takes a `Registry`, so the allowlist tests need one — but they
+// are about which tools come out and in what order, never about what a tool
+// does. `Stub` is the smallest thing that satisfies the trait.
 // ---------------------------------------------------------------------------
 
 use emma_tool_api::{Registry, Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
 use std::sync::Arc;
 
+/// A tool that is nothing but a name. The allowlist tests are about which tools
+/// survive `select_tools` and in what order, so behaviour would only be
+/// something else that could break them; `invoke` is never called.
 pub struct Stub(pub &'static str);
 
 #[async_trait::async_trait]
@@ -81,3 +110,5 @@ pub fn registry(names: &[&'static str]) -> Registry {
     }
     r
 }
+
+// endregion: A registry of tools that do nothing, for the allowlist tests

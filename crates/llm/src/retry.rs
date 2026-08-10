@@ -6,7 +6,11 @@
 //!    400 is the request being wrong, and sending it again is a slower way to
 //!    get the same error.
 //! 2. Believe `retry-after` when the provider sends one. Backing off less than
-//!    asked earns another 429; backing off more wastes the user's time.
+//!    asked earns another 429; backing off more wastes the user's time. In
+//!    practice that means 429 only: the header is parsed on every response but
+//!    it is carried on [`LlmError::RateLimited`] alone, so a 5xx that happens
+//!    to send one still backs off on the curve. That is the case the API
+//!    documents sending it for; widening it would be guessing.
 //! 3. Cap the attempts, and make each one visible. An invisible retry is a
 //!    forty-second silence, and a user watching a silent terminal has no way to
 //!    tell it from a hang — they hit Ctrl-C, and the work is lost.
@@ -37,8 +41,11 @@ impl Default for Retry {
 }
 
 impl Retry {
-    /// Off. Useful in tests that assert a failure is surfaced rather than
-    /// retried, and for callers that do their own scheduling.
+    /// Off — one attempt, no retry. For a caller that does its own scheduling,
+    /// or a test that wants a failure surfaced rather than absorbed. Nothing in
+    /// the tree calls it today; the provider tests build a `Retry` with
+    /// millisecond delays instead, because they want the retry path exercised
+    /// and not skipped.
     pub fn none() -> Self {
         Self {
             max_attempts: 1,

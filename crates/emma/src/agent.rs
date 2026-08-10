@@ -1,8 +1,7 @@
 //! The loop: send, receive, run tools, repeat, and hold the goal across turns.
 //!
-//! Ported in shape from tustle-agent's `turn.rs`. The citations, the evidence
-//! gate and the refusal composition are left there; four properties came
-//! across, and each of them is here because it was paid for.
+//! Four properties govern this file, and each of them is here because it was
+//! paid for somewhere else first.
 //!
 //! **A tool failure is a `tool_result`, never an abort.** Every failure class —
 //! unknown tool, bad arguments, `ToolError`, hook denial, refused approval —
@@ -12,8 +11,8 @@
 //! model never learned anything had failed.
 //!
 //! **A call that failed is not repeated identically until something else has
-//! succeeded.** Not "never again this turn", which is what tustle-agent could
-//! afford with one read-only search tool. Emma's whole working rhythm is *run
+//! succeeded.** Not "never again this turn", which is affordable only when the
+//! whole tool surface is one read-only search. Emma's working rhythm is *run
 //! the tests, see them fail, fix a file, run the tests again* — a memo keyed on
 //! the call alone would forbid the second run, which is the one that proves the
 //! fix. So the memo clears the moment any tool succeeds: an identical retry is
@@ -58,6 +57,15 @@ use crate::approval::{Approvals, Verdict};
 use crate::goal::{self, Done, DoneCheck, Goal};
 use crate::session::SessionLog;
 use crate::term::Term;
+
+// region: Budgets and endings
+// ---------------------------------------------------------------------------
+// Budgets and endings
+//
+// What a run is allowed to spend, and every way it is allowed to stop. Kept
+// together because they are two halves of one statement: each budget has an
+// ending that names it, and every ending is reported to the user in words.
+// ---------------------------------------------------------------------------
 
 /// Everything a run is bounded by.
 ///
@@ -155,6 +163,16 @@ pub struct Outcome {
     pub kicks: u32,
 }
 
+// endregion: Budgets and endings
+
+// region: Ctrl-C
+// ---------------------------------------------------------------------------
+// Ctrl-C
+//
+// The one thing besides a budget that ends a goal, and the only piece of this
+// file that is shared with a signal handler.
+// ---------------------------------------------------------------------------
+
 /// Ctrl-C, shared between the signal handler and everything that can be waiting.
 ///
 /// A flag as well as a notification: the flag is what an iteration boundary
@@ -202,6 +220,17 @@ impl Interrupt {
         });
     }
 }
+
+// endregion: Ctrl-C
+
+// region: The loop
+// ---------------------------------------------------------------------------
+// The loop
+//
+// Everything the module doc is about: send, receive, run tools, repeat. The
+// four properties are enforced across `run_goal` and `run_tool_call` — read
+// those two together, because the memo one is split between them.
+// ---------------------------------------------------------------------------
 
 pub struct Setup<'a> {
     pub provider: &'a dyn Provider,
@@ -623,6 +652,15 @@ impl<'a> Agent<'a> {
             json!({ "turn_id": turn_id, "id": call.id, "tool": call.name,
                     "content": content, "truncated": outcome.truncated }),
         );
+        // Anthropic's wire shape, built here rather than by the provider — as is
+        // the one in `failure_block`. That is the whole of what makes this loop
+        // Anthropic-only: OpenAI expresses a result as a separate message with
+        // `role: "tool"` and a `tool_call_id`, not as a block inside a user
+        // message, so a second provider is a refactor of these two sites plus
+        // the `raw_content` passthrough, not a new file beside `anthropic.rs`.
+        // Note that `raw_content` cannot simply be deleted in that refactor: it
+        // exists because thinking-block signatures do not survive reassembly, so
+        // the loop has to keep handing back bytes it does not interpret.
         (
             json!({ "type": "tool_result", "tool_use_id": call.id, "content": content }),
             true,
@@ -669,6 +707,17 @@ impl<'a> Agent<'a> {
 
 }
 
+// endregion: The loop
+
+// region: The memo key, and what the model is shown
+// ---------------------------------------------------------------------------
+// The memo key, and what the model is shown
+//
+// Four small functions the loop leans on: what makes two calls identical, the
+// shape a failure takes on the wire, and two ways of shortening an argument
+// so it fits somewhere it has to fit.
+// ---------------------------------------------------------------------------
+
 /// What makes two calls "the same call". Name plus arguments, canonically
 /// rendered — so `Bash(ls)` and `Bash(ls)` collide and `Bash(ls a)` does not.
 fn memo_key(call: &ToolCall) -> String {
@@ -710,6 +759,16 @@ fn compact(args: &Value) -> String {
 fn tail(v: &[String], n: usize) -> Vec<String> {
     v.iter().rev().take(n).rev().cloned().collect()
 }
+
+// endregion: The memo key, and what the model is shown
+
+// region: Tests
+// ---------------------------------------------------------------------------
+// Tests
+//
+// The pure pieces only. Everything that needs a provider, a harness and a
+// registry is driven end to end from `tests/loop.rs`.
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -758,3 +817,5 @@ mod tests {
         }
     }
 }
+
+// endregion: Tests

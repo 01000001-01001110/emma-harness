@@ -53,6 +53,10 @@ const STORED: &str = r#"{ "api_key": "sk-ant-x", "brave_search_api_key": "BSA-fr
 
 #[test]
 fn the_key_is_read_from_the_home_credentials_file() {
+    // The path that lets a user configure the key once instead of exporting a
+    // variable into every shell. If it breaks, WebSearch silently stops being
+    // constructible for everyone who is not using the environment — and the
+    // symptom is an absent tool, which looks like a design choice.
     let home = Dir::new("home");
     home.store(STORED);
     let key = credentials::resolve(None, home.path()).expect("no key found");
@@ -61,6 +65,9 @@ fn the_key_is_read_from_the_home_credentials_file() {
 
 #[test]
 fn the_environment_beats_the_stored_file() {
+    // Precedence is what makes a one-off override possible without editing the
+    // stored file. Reverse it and a user who exports a key to test something
+    // is quietly authenticating as whoever the file says.
     let home = Dir::new("env");
     home.store(STORED);
     assert_eq!(

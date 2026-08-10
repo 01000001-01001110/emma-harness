@@ -38,6 +38,9 @@ pub fn counts(tasks: &[TaskView]) -> String {
     format!("{pending} pending, {active} in progress, {done} completed")
 }
 
+/// The tasks, one per line, in document order. Order is the file's, never
+/// sorted: the sequence a person put the tasks in is information, and reordering
+/// it in the output would tell the model something the file does not say.
 pub fn block(tasks: &[TaskView]) -> String {
     tasks.iter().map(line).collect::<Vec<_>>().join("\n")
 }

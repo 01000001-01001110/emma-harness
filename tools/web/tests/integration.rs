@@ -8,9 +8,8 @@
 //! Chrome must be installed (same requirement as the binary itself). No
 //! network access: everything is served from 127.0.0.1.
 //!
-//! **Vendored with the fork** from `a sibling checkout` commit `9c93827`
-//! (2026-08-09) — see `VENDOR.md`. These are the tests that lock the safety
-//! hardening in place: the localhost and scheme refusals, the allowlist
+//! **Vendored with the fork** — see `VENDOR.md`. These are the tests that lock
+//! the safety hardening in place: the localhost and scheme refusals, the allowlist
 //! requirement on interaction verbs, `click` refusing submit controls, `type`
 //! and `fill` refusing password fields and newline injection, and the two-key
 //! auto-submit rule. None of that is reachable from an Emma tool in this pass
@@ -25,6 +24,17 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::process::Command;
+
+// region: The fixture server
+// ---------------------------------------------------------------------------
+// The fixture server
+//
+// Scaffolding, and more of it than usual for a reason: this suite drives a
+// real Chrome against a real socket, so the server has to survive what a
+// browser actually does — speculative connections that send nothing, POST
+// bodies split across writes. Both of those cost a debugging session and the
+// comments below are what remains of them.
+// ---------------------------------------------------------------------------
 
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_browser-miner")
@@ -159,7 +169,17 @@ fn allowlist_file(dir: &std::path::Path) -> String {
     p.display().to_string()
 }
 
-// ── policy refusals: no Chrome, no network ──────────────────────────────────
+// endregion: The fixture server
+
+// region: Policy refusals, before Chrome starts
+// ---------------------------------------------------------------------------
+// Policy refusals: no Chrome, no network
+//
+// The cheapest and most important tests in the file. Each one asserts that a
+// URL the tool may not touch is rejected by policy alone — no browser is
+// launched, nothing is requested — and that the refusal exits 2 rather than 3,
+// because a refusal is a decision and not a malfunction.
+// ---------------------------------------------------------------------------
 
 #[test]
 fn policy_refuses_localhost_without_allow_local() {
@@ -189,16 +209,35 @@ fn policy_refuses_domain_not_in_allowlist() {
 
 #[test]
 fn interaction_verbs_require_allowlist() {
-    // No allowlist anywhere: click must refuse BEFORE needing a live session?
-    // (session connect happens first, so use a bogus session — the refusal we
-    // assert here is the missing-session exit-2, and the allowlist rule is
-    // asserted in the live loop test below.)
+    // Read the name with care: what this actually pins is that an interaction
+    // verb naming a session that does not exist exits 2 rather than 0 or 3 —
+    // session connect happens before the allowlist check, so the refusal
+    // observed here is the missing session, not the missing allowlist. The
+    // allowlist rule itself is asserted against a live session in
+    // `interaction_without_allowlist_refused_on_live_session` below. Both are
+    // needed; neither covers the other.
     let (code, _, _) = run(&["click", "--session", "nonexistent", "--selector", "#x"]);
     assert_eq!(code, 2);
 }
 
-// ── full loop against the fixture server (needs Chrome) ─────────────────────
+// endregion: Policy refusals, before Chrome starts
 
+// region: Reading a page, and driving a session
+// ---------------------------------------------------------------------------
+// The full loop against the fixture server (needs Chrome)
+//
+// From here down every test launches a real browser. This first group covers
+// the stateless read and then the session loop end to end — navigate, wait,
+// digest, click, type, select, back, screenshot — plus the delta path that
+// makes a long session affordable. Between them they prove that state persists
+// across processes, which is the entire premise of session mode.
+// ---------------------------------------------------------------------------
+
+/// The path Emma's `WebFetch` would actually take, one layer down: launch,
+/// render, extract, tear down. Note the password assertion — the field is
+/// INVENTORIED and that is correct. Refusing to report that a login form
+/// exists would make the page read dishonest; what is refused is typing into
+/// it, which `session_loop_click_type_select_refusals_history` covers.
 #[test]
 fn stateless_digest_and_verify_on_fixture() {
     let (port, _h) = serve_fixtures();
@@ -470,6 +509,20 @@ fn digest_delta_session() {
     let _ = run(&["session", "close", &id]);
     let _ = std::fs::remove_file(format!(".browser-miner/session-{}.digest.json", id));
 }
+
+// endregion: Reading a page, and driving a session
+
+// region: Forms, shadow roots and frames
+// ---------------------------------------------------------------------------
+// Forms, shadow roots and frames
+//
+// The parts of a real page that a naive extractor silently misses. Shadow
+// roots and same-origin frames are invisible to an ordinary `querySelector`,
+// so these assert both that their contents are found AND that the selectors
+// handed back can be acted on afterwards — an inventory listing something
+// unreachable is worse than not listing it. Closed roots stay absent, which is
+// correct rather than a gap.
+// ---------------------------------------------------------------------------
 
 #[test]
 fn extract_form_fill_and_submit_two_key() {
@@ -828,6 +881,23 @@ fn same_origin_iframe_digest_and_actions() {
     let _ = run(&["session", "close", &id]);
 }
 
+// endregion: Forms, shadow roots and frames
+
+// region: The two-key rule, and the allowlist on a live session
+// ---------------------------------------------------------------------------
+// The two-key rule, and the allowlist on a live session
+//
+// The gates that stand between an agent and something irreversible happening
+// on somebody else's server. Both halves are needed: that both keys together
+// do permit a submit, and that either one alone does not — and separately,
+// that a live session with no allowlist refuses to be interacted with at all.
+// ---------------------------------------------------------------------------
+
+/// The positive half of the two-key rule: with BOTH keys turned, a submit
+/// really does submit, and it is logged. The refusals are cheap to keep
+/// correct; a gate that refuses everything, including the case it was built to
+/// permit, passes every refusal test and is still broken. This test and the
+/// domain-scoping half below are what stop the rule from being decorative.
 #[test]
 fn submit_auto_with_both_keys_submits_and_logs() {
     let (port, _h) = serve_fixtures();
@@ -973,6 +1043,19 @@ fn interaction_without_allowlist_refused_on_live_session() {
 
     let _ = run(&["session", "close", &id]);
 }
+
+// endregion: The two-key rule, and the allowlist on a live session
+
+// region: A multi-step form, and the user's own Chrome
+// ---------------------------------------------------------------------------
+// A multi-step form, and the user's own Chrome
+//
+// The two longest scenarios. The wizard walks three steps forward and back
+// again and re-reads every value, which is the only way to prove that state
+// really survives — a single step proves nothing a fresh page load would not.
+// Attach mode proves the opposite kind of property: that closing a session
+// Emma did not open leaves the user's browser untouched.
+// ---------------------------------------------------------------------------
 
 #[test]
 fn wizard_loop_state_persists_across_steps() {
@@ -1124,6 +1207,13 @@ fn wizard_loop_state_persists_across_steps() {
     let _ = run(&["session", "close", &id]);
 }
 
+/// Attach mode drives Chrome the user started, as the user's own logged-in
+/// identity, so the rule it must never break is that closing an attached
+/// session leaves that Chrome running. This test proves it the only way that
+/// means anything: it closes the attached session and then uses the underlying
+/// browser again. It also holds the consent banner to the stderr contract —
+/// the banner is the user's one warning, and a banner nothing asserts on is a
+/// banner that can quietly stop printing.
 #[test]
 fn attach_mode_opt_in_and_safe_close() {
     let (port, _h) = serve_fixtures();
@@ -1226,6 +1316,23 @@ fn attach_mode_opt_in_and_safe_close() {
     assert_eq!(cl["closed"][0]["closed"], true);
     assert_eq!(cl["closed"][0]["managed"], true);
 }
+
+// endregion: A multi-step form, and the user's own Chrome
+
+// region: Newline injection, and the honest negative
+// ---------------------------------------------------------------------------
+// Newline injection, and the honest negative
+//
+// A newline typed into a single-line input is a form submission by another
+// name, so both `type` and `fill` refuse it — and `#tricky` is the case worth
+// reading, an `<input type="textarea">` whose unknown type falls back to text
+// while looking exempt. A textarea still accepts newlines, which is what stops
+// the rule from being a blanket ban.
+//
+// The last two are the governing rule from the other direction: a submit that
+// did not navigate must not claim it succeeded, and a page that answered with
+// a challenge is a result rather than a failure.
+// ---------------------------------------------------------------------------
 
 #[test]
 fn type_rejects_newline_in_single_line_input_and_allows_textarea() {
@@ -1460,6 +1567,18 @@ fn a_blocked_page_is_a_result_not_a_failure() {
     assert!(d.get("digest").is_some(), "the payload is still returned");
 }
 
+// endregion: Newline injection, and the honest negative
+
+// region: Exactness, cleanup, and caps
+// ---------------------------------------------------------------------------
+// Exactness, cleanup, and caps
+//
+// The quiet failures. A substring match reporting `ok: true` for a field that
+// actually holds "AdaLovelace"; a temp profile nobody removes; a session id
+// used as a path component; a page title with no ceiling. None of these break
+// a run outright, which is exactly why each needs a test rather than a reader.
+// ---------------------------------------------------------------------------
+
 #[test]
 fn type_ok_requires_exact_match() {
     let (port, _h) = serve_fixtures();
@@ -1502,6 +1621,10 @@ fn type_ok_requires_exact_match() {
     let _ = run(&["session", "close", &id]);
 }
 
+/// Sessions spawn Chrome with a throwaway profile directory that nothing else
+/// will ever clean up — `close` is the only path that removes it. Without this
+/// test the leak is invisible: every other session test still passes while the
+/// temp directory fills with abandoned profiles.
 #[test]
 fn session_profile_dir_is_removed_on_close() {
     let (code, s, raw) = run(&["session", "open"]);
@@ -1524,6 +1647,11 @@ fn session_profile_dir_is_removed_on_close() {
     );
 }
 
+/// Session ids reach the filesystem as a path component. This is the test that
+/// keeps `../../etc` from becoming one: the id is validated to hex before any
+/// path is built, and the assertion that no session directory was created is
+/// the load-bearing half — an exit code alone would not prove the traversal
+/// never happened.
 #[test]
 fn invalid_session_id_refused_before_path_use() {
     let dir = std::env::temp_dir().join(format!("bm-test-session-id-{}", std::process::id()));
@@ -1543,6 +1671,10 @@ fn invalid_session_id_refused_before_path_use() {
     );
 }
 
+/// A page title is attacker-controlled text that lands in two places in the
+/// output. Both are capped; this checks both, because capping `page_title` and
+/// forgetting `digest.meta.title` leaves the same unbounded string one key
+/// deeper.
 #[test]
 fn page_title_is_capped() {
     let (port, _h) = serve_fixtures();
@@ -1562,3 +1694,5 @@ fn page_title_is_capped() {
         "digest meta title must be capped at 300 chars"
     );
 }
+
+// endregion: Exactness, cleanup, and caps

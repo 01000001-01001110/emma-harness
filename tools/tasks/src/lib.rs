@@ -25,6 +25,15 @@
 //! **Done-detection.** [`open_count`] answers "is anything still outstanding?"
 //! without going through a tool call, for a loop that wants to ask cheaply and
 //! often. It is evidence, not proof — see the note on that function.
+//!
+//! **The crate, in layers.** [`doc`] is the format and the parser and holds
+//! every round-tripping decision; [`store`] is the file, the stale-read guard
+//! and the atomic replace; [`render`] is how a task reads back to the model;
+//! `args` extracts and rejects arguments. On top of those sit the four tools,
+//! one per file — [`create`], [`get`], [`list`], [`update`] — each of which is
+//! a thin shell: validate, resolve the path, call into `store`, format the
+//! result. The reasoning lives in `doc` and `store`; the tool files mostly
+//! record why their particular errors are the kind of error they are.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -92,6 +101,11 @@ mod tests {
         assert_eq!(names, ["TaskCreate", "TaskGet", "TaskList", "TaskUpdate"]);
     }
 
+    /// The description is what the model reads and the schema is what it fills
+    /// in, so both are behaviour rather than documentation. This catches the
+    /// half-finished tool — a stub sentence, a parameter with no description, a
+    /// schema declaring nothing required — none of which any functional test
+    /// would notice, because every functional test passes correct arguments.
     #[test]
     fn every_tool_ships_a_real_description_and_schema() {
         for tool in task_tools() {
@@ -121,6 +135,13 @@ mod tests {
         }
     }
 
+    /// Pins the honest declaration in both directions. The approval gate keys
+    /// on `read_only`, so a writer that quietly flipped to `true` would stop
+    /// prompting and this would go red — that is the point, and it is why the
+    /// prompt for the two writers is dodged by naming them in
+    /// `crates/emma/src/approval.rs` instead of by editing `meta()` here.
+    /// `tests/tools.rs` proves the other direction, that the two claiming
+    /// `read_only` genuinely touch nothing.
     #[test]
     fn only_the_readers_claim_read_only() {
         let mut claimed: Vec<&str> = task_tools()

@@ -38,6 +38,15 @@ use crate::args;
 use crate::path;
 use crate::session::{ReadState, ReadTracker};
 
+// region: The tool surface
+// ---------------------------------------------------------------------------
+// The tool surface
+//
+// Two parameters and no options. There is deliberately no `force` and no
+// `create_only`: the refusal below is the tool's reason to exist, and a flag
+// that turns it off is a flag a model under pressure will find.
+// ---------------------------------------------------------------------------
+
 const NAME: &str = "Write";
 const KEYS: &[&str] = &["file_path", "content"];
 
@@ -104,6 +113,18 @@ impl Tool for Write {
     }
 }
 
+// endregion: The tool surface
+
+// region: The refusal, and the write
+// ---------------------------------------------------------------------------
+// The refusal, and the write
+//
+// Order is the whole design of this function: contain the path, decide whether
+// anything is at risk, refuse if the read does not license the overwrite, and
+// only then create directories and touch the disk. Nothing before the refusal
+// changes the filesystem, which is what makes a refusal actually a refusal.
+// ---------------------------------------------------------------------------
+
 impl Write {
     fn run(&self, ctx: &ToolCtx, args_v: Value) -> Result<ToolOutcome, ToolError> {
         self.validate_args(&args_v)?;
@@ -113,6 +134,10 @@ impl Write {
 
         let target = path::resolve(&root, raw)?;
 
+        // `symlink_metadata`, so a dangling symlink counts as something that
+        // exists and the read requirement applies to it. `resolve` has already
+        // canonicalised any link whose target is real, so a link pointing out
+        // of the root never reaches this line at all — it was refused as a path.
         let existing = std::fs::symlink_metadata(&target);
         let existed = match &existing {
             Ok(m) if m.is_dir() => {
@@ -151,6 +176,10 @@ impl Write {
             }
         }
 
+        // Creating the parents is safe to do unconditionally because `target`
+        // is already contained: every directory made here is inside the root by
+        // construction. Doing it after the refusal check and not before means a
+        // refused write leaves no directories behind either.
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
                 ToolError::Failed(format!(
@@ -176,3 +205,5 @@ impl Write {
         .with_display(format!("{verb} {shown}")))
     }
 }
+
+// endregion: The refusal, and the write

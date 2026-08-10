@@ -80,6 +80,9 @@ impl Tool for TaskUpdate {
 
     fn meta(&self) -> ToolMeta {
         ToolMeta {
+            // Honest, for the reason spelled out in `create.rs`: this is the
+            // call the model makes most often, and it is exempted by name in
+            // `crates/emma/src/approval.rs` rather than by lying here.
             read_only: false,
             // Setting a status to what it already is leaves the same file.
             // Unlike Edit there is no anchor to consume, so a replay is safe.

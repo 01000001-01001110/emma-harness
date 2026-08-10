@@ -12,6 +12,9 @@ use emma_tool_api::ToolCtx;
 use serde_json::json;
 use support::Project;
 
+/// The positive control. Without it, a containment bug that refused everything
+/// would still pass the two tests below, and "the tool never writes anywhere"
+/// is not the property being claimed.
 #[tokio::test]
 async fn the_file_resolves_inside_the_working_root() {
     let project = Project::new();

@@ -1,6 +1,13 @@
 //! Argument extraction, shared so that every tool rejects a malformed call in
 //! the same words. The model learns the shape of one error message and can
 //! then read all of them.
+//!
+//! Every message names the tool, the parameter, and what was actually supplied
+//! — models correct a typed mistake reliably and guess at an untyped one. Two
+//! conventions run through the whole file: an explicit JSON `null` is treated
+//! as absent rather than as a wrong type, because that is what a model emits
+//! when it means "not this time"; and everything here is pure, so it can run in
+//! `validate_args` before any filesystem is touched.
 
 use serde_json::Value;
 

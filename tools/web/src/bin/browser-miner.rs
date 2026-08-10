@@ -1,16 +1,26 @@
 //! `browser-miner` — the standalone CLI over Emma's fork of chromehand.
 //!
-//! Upstream (`a sibling checkout`, commit `9c93827`) had only this: argv in, one
-//! JSON object on stdout, an exit code for the verdict. Here the work lives in
-//! `emma_tools_web::chromehand` and this file is the thin shell that turns
-//! argv into a call and a [`MinerError`] back into an exit code — kept so
-//! standalone use still works, and so the vendored integration tests can go on
-//! exercising the whole stack through a real process.
+//! Upstream had only this: argv in, one JSON object on stdout, an exit code
+//! for the verdict. Here the work lives in `emma_tools_web::chromehand` and
+//! this file is the thin shell that turns argv into a call and a
+//! [`MinerError`] back into an exit code — kept so standalone use still works,
+//! and so the vendored integration tests can go on exercising the whole stack
+//! through a real process.
 //!
-//! Exit codes are upstream's, unchanged, because 22 vendored tests assert
-//! them: `0` = a result *including honest negatives* (a blocked page, a
-//! rendered 404, a `wait-for` that timed out) · `2` = bad input, a policy
-//! refusal, or an expired session · `3` = browser failure.
+//! Exit codes are upstream's, unchanged, because the 22 integration tests —
+//! 21 vendored, one written for the fork — assert them directly: `0` = a
+//! result *including honest negatives* (a blocked page, a rendered 404, a
+//! `wait-for` that timed out) · `2` = bad input, a policy refusal, or an
+//! expired session · `3` = browser failure. This is the only place in the
+//! crate where those integers still exist. In the library the same taxonomy is
+//! [`MinerError`], and [`quit`] below is the single point of translation.
+//!
+//! Note what this CLI does *not* share with Emma's tools: it calls
+//! [`Policy::load`] itself, keeping upstream's fall back to a
+//! `data/browser-allowlist.json` under the process's working directory. That
+//! is right for a program a user runs from their own project and wrong for a
+//! library — see [`emma_tools_web::chromehand::load_policy`] for the other
+//! half of that decision.
 //!
 //! Gone with the fork: `verify --file` (the batch harness and its
 //! `browser-miner.stop` kill switch) and `extract-jobs` (the job-board
@@ -21,6 +31,15 @@ use emma_tools_web::chromehand::{
     actions, digest, forms, policy::Policy, session, DigestOptions, LaunchedBrowser, MinerError,
     DEFAULT_MAX_TEXT_CHARS, DEFAULT_TIMEOUT_MS,
 };
+
+// region: One JSON object, and an exit code
+// ---------------------------------------------------------------------------
+// One JSON object, and an exit code
+//
+// Every path out of this program goes through one of these. They all print a
+// single JSON object and none of them return, which is what keeps the exit
+// contract auditable: there is nowhere else a code can be chosen.
+// ---------------------------------------------------------------------------
 
 fn usage() -> ! {
     eprintln!(
@@ -95,6 +114,18 @@ fn quit(e: MinerError) -> ! {
 fn die(err: String) -> ! {
     quit(emma_tools_web::chromehand::classify(err))
 }
+
+// endregion: One JSON object, and an exit code
+
+// region: Argv
+// ---------------------------------------------------------------------------
+// Argv
+//
+// A hand-rolled parser rather than a dependency, and one flat `Opts` covering
+// every verb's flags rather than a type per command. Unknown `--flags` fall
+// through to `usage`; bare positionals accumulate, and the first one that
+// looks like an http(s) URL is taken as the target.
+// ---------------------------------------------------------------------------
 
 #[derive(Default)]
 struct Opts {
@@ -217,6 +248,17 @@ fn parse_opts(args: &[String]) -> Opts {
     o
 }
 
+// endregion: Argv
+
+// region: Attach mode
+// ---------------------------------------------------------------------------
+// Attach mode
+//
+// Driving the Chrome the user already has open, as the user's own logged-in
+// identity. Everything here exists to make that a deliberate act: a banner
+// they cannot miss, and a connection target that must be loopback.
+// ---------------------------------------------------------------------------
+
 /// ADR-2 consent banner: printed to stderr before ANY attach action.
 fn print_attach_banner() {
     eprintln!("ATTACH MODE: acting through YOUR running Chrome as your logged-in identity.");
@@ -257,6 +299,17 @@ fn resolve_attach(o: &Opts) -> Result<Option<String>, String> {
         (None, None) => Ok(None),
     }
 }
+
+// endregion: Attach mode
+
+// region: The command table
+// ---------------------------------------------------------------------------
+// The command table
+//
+// One match over the verb. The shared preamble above it is deliberate
+// ordering: session id validated, attach resolved, policy loaded — all before
+// any verb runs, so a malformed invocation costs no browser.
+// ---------------------------------------------------------------------------
 
 #[tokio::main]
 async fn main() {
@@ -664,3 +717,5 @@ async fn main() {
         _ => usage(),
     }
 }
+
+// endregion: The command table

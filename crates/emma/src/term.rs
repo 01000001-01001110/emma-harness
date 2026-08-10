@@ -17,6 +17,15 @@ use std::io::{IsTerminal, Write};
 
 use tokio::sync::mpsc;
 
+// region: The terminal
+// ---------------------------------------------------------------------------
+// The terminal
+//
+// Every write to the screen goes through one of these methods. The split that
+// matters is `delta`/`text` on stdout against `side` on stderr under `-p`, so
+// a script can pipe the answer without filtering the commentary out of it.
+// ---------------------------------------------------------------------------
+
 const DIM: &str = "\x1b[2m";
 const BOLD: &str = "\x1b[1m";
 const RED: &str = "\x1b[31m";
@@ -174,6 +183,16 @@ impl Term {
     }
 }
 
+// endregion: The terminal
+
+// region: The one place stdin is read
+// ---------------------------------------------------------------------------
+// The one place stdin is read
+//
+// A single reader behind a channel. The goal prompt and the approval prompt
+// both want lines, and two readers on one stdin race for them.
+// ---------------------------------------------------------------------------
+
 /// The one place stdin is read.
 ///
 /// A single reader, fed by a blocking thread, because the goal prompt and the
@@ -211,6 +230,16 @@ impl LineSource {
     }
 }
 
+// endregion: The one place stdin is read
+
+// region: The banner argument
+// ---------------------------------------------------------------------------
+// The banner argument
+//
+// Which single argument identifies a tool call on one line. Per tool rather
+// than by rule, so a `Write` never puts its content on the screen.
+// ---------------------------------------------------------------------------
+
 /// The one argument worth putting on the tool's own line.
 ///
 /// Chosen per tool rather than "the first string field": a `Write` whose banner
@@ -240,6 +269,17 @@ fn summarise_args(name: &str, args: &serde_json::Value) -> String {
     }
 }
 
+// endregion: The banner argument
+
+// region: Tests
+// ---------------------------------------------------------------------------
+// Tests
+//
+// Only `summarise_args`, because it is the only thing here that decides
+// something. The rest writes to a stream, and asserting on that would be
+// asserting on `println!`.
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,3 +303,5 @@ mod tests {
         assert!(out.chars().count() <= 89, "{}", out.chars().count());
     }
 }
+
+// endregion: Tests

@@ -73,10 +73,18 @@ fn goal() -> Goal {
     Goal::new("make it work")
 }
 
+// region: Failures are observations
 // ---------------------------------------------------------------------------
 // Failures are observations
+//
+// The loop's first property: no failure class ends a goal. These three cover
+// the failure reaching the model at all, and both halves of the memo rule.
 // ---------------------------------------------------------------------------
 
+/// The property the whole crate is arranged around. Delete this and a
+/// regression that turns a `ToolError` back into an early return is invisible:
+/// the run still ends, the user still gets an ending, and the only symptom is a
+/// model that never learns its call failed and a goal abandoned mid-work.
 #[tokio::test]
 async fn a_tool_failure_reaches_the_model_and_the_goal_continues() {
     let dir = tempfile::tempdir().unwrap();
@@ -110,6 +118,10 @@ async fn a_tool_failure_reaches_the_model_and_the_goal_continues() {
     assert!(seen.contains("is_error"), "{seen}");
 }
 
+/// One half of the memo rule. Without it, a model that has found a call it
+/// likes and an argument it does not can spend the entire iteration budget
+/// re-issuing the identical call, and every symptom points at the budget rather
+/// than at the loop.
 #[tokio::test]
 async fn a_failed_call_is_not_repeated_with_the_same_arguments() {
     let dir = tempfile::tempdir().unwrap();
@@ -176,10 +188,22 @@ async fn a_failed_call_may_be_repeated_once_something_else_has_succeeded() {
     assert_eq!(boom_calls.load(Ordering::SeqCst), 2);
 }
 
+// endregion: Failures are observations
+
+// region: Budgets
 // ---------------------------------------------------------------------------
 // Budgets
+//
+// The only things allowed to end a goal, besides done-detection and the user.
+// Both tests here assert the arithmetic as well as the ending, because an
+// ending with the wrong number behind it still looks like success.
 // ---------------------------------------------------------------------------
 
+/// The budget has to be checked *before* the call, not after it. An
+/// off-by-one that tests it afterwards still terminates, so nothing looks
+/// broken — it just bills one extra model call on every run that hits the cap.
+/// The `fake.calls()` assertion is what notices; `out.iterations` alone would
+/// not.
 #[tokio::test]
 async fn the_iteration_budget_stops_the_loop() {
     let dir = tempfile::tempdir().unwrap();
@@ -255,10 +279,23 @@ async fn the_token_budget_stops_the_loop_and_the_run_is_charged_for_what_it_spen
     assert_eq!(finished["tokens"], 20);
 }
 
+// endregion: Budgets
+
+// region: The gate
 // ---------------------------------------------------------------------------
 // The gate
+//
+// Approval as the loop sees it, rather than as `approval.rs` tests it in
+// isolation: the ordering of hook, gate and tool, driven end to end. The last
+// two are the pair — a hook denial that cannot be approved away, and the same
+// hook not touching a call it does not match.
 // ---------------------------------------------------------------------------
 
+/// Two failures at once, and the second is the quiet one. If `-p` ever starts
+/// letting writers through, `emma -p` becomes a way to get unattended writes
+/// without saying so. If it denies them without telling the model why, the tool
+/// looks to the model like it silently did nothing, and the usual response to
+/// that is to try it again.
 #[tokio::test]
 async fn the_gate_denies_a_writer_with_nobody_to_ask_and_the_model_is_told_why() {
     let dir = tempfile::tempdir().unwrap();
@@ -292,6 +329,10 @@ async fn the_gate_denies_a_writer_with_nobody_to_ask_and_the_model_is_told_why()
     assert!(seen.contains("-p"), "the model was not told why: {seen}");
 }
 
+/// The other side of the gate, and the reason the gate is usable at all. If
+/// reads ever start needing approval, the interactive prompt fires several
+/// times a minute and gets answered without being read — which costs the
+/// prompts on `Write`, `Edit` and `Bash` too.
 #[tokio::test]
 async fn a_read_only_tool_is_never_gated() {
     let dir = tempfile::tempdir().unwrap();
@@ -317,6 +358,9 @@ async fn a_read_only_tool_is_never_gated() {
     assert_eq!(reader_calls.load(Ordering::SeqCst), 1);
 }
 
+/// The positive control for the three tests above it. Without this one, a gate
+/// that denied absolutely everything would pass every other approval test in
+/// this file.
 #[tokio::test]
 async fn a_human_yes_lets_a_writer_through() {
     let dir = tempfile::tempdir().unwrap();
@@ -404,10 +448,21 @@ async fn the_hook_matcher_is_what_decides_which_calls_are_blocked() {
     assert_eq!(other_calls.load(Ordering::SeqCst), 1);
 }
 
+// endregion: The gate
+
+// region: The goal, and the kick
 // ---------------------------------------------------------------------------
 // The goal, and the kick
+//
+// What makes this a loop rather than a conversation, and the two independent
+// bounds that stop the kick firing forever — the count, and the stall rule.
 // ---------------------------------------------------------------------------
 
+/// The difference between Emma and a chat client, asserted. Delete it and the
+/// loop can regress to stopping when the model stops — which is not a crash,
+/// not an error, and looks exactly like success. The transcript assertions
+/// matter as much as the ending: a kick that does not restate the goal leaves
+/// "continue" meaning "try the last thing again".
 #[tokio::test]
 async fn the_kick_fires_when_the_model_stops_without_claiming_completion() {
     let dir = tempfile::tempdir().unwrap();
@@ -442,6 +497,10 @@ async fn the_kick_fires_when_the_model_stops_without_claiming_completion() {
     assert!(records.iter().any(|r| r["kind"] == "kick"));
 }
 
+/// The kick is the one mechanism here that can argue back, so it needs a bound
+/// that does not depend on the model cooperating. Without this the failure is a
+/// goal that never ends until the iteration or token budget catches it — paid
+/// for in full, and reported as the wrong limit.
 #[tokio::test]
 async fn the_kick_is_bounded_by_its_budget() {
     let dir = tempfile::tempdir().unwrap();
@@ -479,7 +538,11 @@ async fn the_kick_is_bounded_by_its_budget() {
 }
 
 /// The second bound, and the one that catches a model arguing with the loop
-/// without spending the kick budget on it.
+/// without spending the kick budget on it. What breaks without it is not a
+/// hang but a waste: three full model calls to be told the same thing three
+/// times, on the one case where the model has already said everything it has.
+/// The `kicks == 1` assertion is the load-bearing one — it proves the stall
+/// rule fired rather than the count running out.
 #[tokio::test]
 async fn a_model_that_stops_twice_without_touching_a_tool_is_believed() {
     let dir = tempfile::tempdir().unwrap();
@@ -507,14 +570,26 @@ async fn a_model_that_stops_twice_without_touching_a_tool_is_believed() {
     assert_eq!(fake.calls(), 2);
 }
 
+// endregion: The goal, and the kick
+
+// region: The record
 // ---------------------------------------------------------------------------
 // The record
+//
+// What goes back to the provider on the next call, byte for byte.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn the_assistant_turn_is_echoed_back_exactly_as_it_arrived() {
     // Thinking-block signatures do not survive reassembly, so the content array
     // that comes out of the provider is the content array that goes back in.
+    //
+    // The failure this catches is a helpful refactor: rebuilding the assistant
+    // message from `text` and `tool_calls`, which reads as tidier and produces
+    // an array the API rejects on the *next* call — so the symptom lands one
+    // step away from the change that caused it. Asserting on `last_query`
+    // rather than the whole transcript is what makes it specific: the block has
+    // to be intact in the message that was actually sent back.
     let dir = tempfile::tempdir().unwrap();
     let root = empty_harness(dir.path());
     let (fine, _) = TestTool::ok("Fine", true);
@@ -539,3 +614,5 @@ async fn the_assistant_turn_is_echoed_back_exactly_as_it_arrived() {
     assert!(last.contains("\"type\":\"tool_use\""), "{last}");
     assert!(last.contains("marker-value"), "{last}");
 }
+
+// endregion: The record

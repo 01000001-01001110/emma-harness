@@ -1,5 +1,8 @@
 //! `WebSearch` — Brave, returning a list of places to look.
 //!
+//! Not registered anywhere, and so never yet called by a model — see the crate
+//! docs for why. What follows describes the tool as built.
+//!
 //! chromehand browses; it does not search. Something has to turn a question
 //! into URLs, and that is an index. Brave rather than the alternatives because
 //! it sells a plain JSON API keyed by a header, with no crawl of its own to
@@ -12,11 +15,13 @@
 //! search engine's paraphrase of a page nobody opened. The snippets are here
 //! to choose a `WebFetch` target with, and for nothing else.
 //!
-//! **No key means no tool.** tustle-agent registered a `web_search` with no
-//! key behind it; every turn that touched it died, and the model could not
-//! learn that the tool was decoration because a failed call looks the same as
-//! a hard problem. [`WebSearch::detect`] returns `Err` and the registry simply
-//! does not carry the tool.
+//! **No key means no tool.** A keyless search tool fails on every call, and
+//! the model cannot learn that it is decoration, because a failed call looks
+//! exactly like a hard problem — see the crate docs for where that was learned.
+//! [`WebSearch::detect`] returns `Err` instead, and a registry
+//! built from [`crate::web_tools`] would simply not carry the tool. The key is
+//! resolved once at construction rather than per call, so "no key" is a fact
+//! about the surface and never a runtime surprise.
 
 use emma_llm::ApiKey;
 use emma_tool_api::{Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
@@ -24,6 +29,15 @@ use serde_json::{json, Value};
 
 use crate::args;
 use crate::credentials;
+
+// region: The tool
+// ---------------------------------------------------------------------------
+// The tool
+//
+// Construction, the schema, and the request. The key travels in a header and
+// never in the query string — a key in a URL ends up in every proxy log
+// between here and Brave, and in this crate's own error messages.
+// ---------------------------------------------------------------------------
 
 const NAME: &str = "WebSearch";
 const KEYS: &[&str] = &["query", "count"];
@@ -41,8 +55,10 @@ pub struct WebSearch {
 }
 
 impl WebSearch {
-    /// Register only if a key exists — environment, then
-    /// `~/.emma/credentials.json`, never the project directory.
+    /// Construct only if a key exists — environment, then
+    /// `~/.emma/credentials.json`, never the project directory. The constructor
+    /// a registration would call; see [`crate::credentials`] for the order and
+    /// the exclusion.
     pub fn detect() -> Result<Self, String> {
         match credentials::load_default() {
             Some(key) => Ok(Self::with_key(key)),
@@ -160,6 +176,17 @@ impl WebSearch {
     }
 }
 
+// endregion: The tool
+
+// region: HTTP status into the taxonomy the model routes on
+// ---------------------------------------------------------------------------
+// HTTP status into the taxonomy the model routes on
+//
+// Which class a status lands in decides what the caller does next: stop and
+// tell a human, rewrite the query, or try again. Getting one wrong sends the
+// model to retry the single thing that cannot work.
+// ---------------------------------------------------------------------------
+
 /// HTTP status into the taxonomy the model routes on.
 fn classify_status(status: u16, body: &str) -> ToolError {
     let detail = trim_body(body);
@@ -190,6 +217,18 @@ fn trim_body(body: &str) -> String {
         flat
     }
 }
+
+// endregion: HTTP status into the taxonomy the model routes on
+
+// region: Results as markdown
+// ---------------------------------------------------------------------------
+// Results as markdown
+//
+// The rendering, and the two sentences it always carries: that zero results is
+// an answer, and that these are places to look rather than the answer itself.
+// Both are written into the output rather than left to the tool description,
+// because the description is read once and the output is read every time.
+// ---------------------------------------------------------------------------
 
 /// Results as markdown.
 ///
@@ -243,6 +282,14 @@ fn render(query: &str, parsed: &Value) -> ToolOutcome {
 /// as HTML. Stripped rather than passed through: markup the model did not ask
 /// for reads as emphasis it should reproduce, and `&amp;` in a quoted title
 /// comes back out in the answer.
+///
+/// Order matters and is worth reading twice: tags are removed first, entities
+/// decoded second. An entity-encoded bracket in the page's own text therefore
+/// survives into the output as a character instead of being re-read as the
+/// start of a tag. The tag stripper is a two-state scan rather than a regex,
+/// so an unbalanced `<` swallows the rest of the string — Brave's own markup
+/// is well-formed, and the alternative is a parser for a field that exists to
+/// bold three words.
 fn strip_markup(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut in_tag = false;
@@ -264,6 +311,17 @@ fn strip_markup(s: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
+
+// endregion: Results as markdown
+
+// region: Tests
+// ---------------------------------------------------------------------------
+// Tests
+//
+// Rendering and classification, with no socket involved. The wire itself — the
+// header, the clamp, the transport failure — is covered against a loopback
+// stub in `tests/search.rs`.
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -318,6 +376,10 @@ mod tests {
 
     #[test]
     fn status_codes_land_in_the_right_class() {
+        // Each of these routes the caller somewhere different: unavailable
+        // means stop and tell the human, bad_arguments means rewrite the
+        // query, failed means it may be worth trying again. Collapse any two
+        // and the model retries the one thing that cannot work.
         assert_eq!(classify_status(401, "{}").kind(), "tool_unavailable");
         assert_eq!(classify_status(403, "{}").kind(), "tool_unavailable");
         assert_eq!(classify_status(422, "{}").kind(), "bad_arguments");
@@ -333,3 +395,5 @@ mod tests {
         assert!(msg.contains("BRAVE_SEARCH_API_KEY"), "{msg}");
     }
 }
+
+// endregion: Tests

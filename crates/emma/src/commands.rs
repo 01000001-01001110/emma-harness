@@ -2,7 +2,10 @@
 //! without a model call, and therefore the three things worth reaching for when
 //! something is wrong.
 //!
-//! All of them write to `~/.emma/` and none of them writes to the project.
+//! `api` and `model` write under `~/.emma/`; `config check` writes nothing at
+//! all. None of the three touches the project directory — Emma runs inside
+//! repositories, and a file it creates next to someone's code is a file their
+//! next `git add .` publishes.
 
 use std::io::IsTerminal;
 use std::path::Path;

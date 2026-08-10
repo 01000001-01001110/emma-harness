@@ -48,6 +48,16 @@ pub const DEFAULT_MODEL: &str = "claude-opus-5";
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const API_VERSION: &str = "2023-06-01";
 
+// region: Cache breakpoints
+// ---------------------------------------------------------------------------
+// Cache breakpoints
+//
+// The size gate and the three places a marker may land: the system anchor, the
+// end of history, and the end of an in-flight tool round-trip. Every one of
+// them is conditional on clearing the provider's minimum, because below it a
+// marker is accepted, does nothing, and still costs.
+// ---------------------------------------------------------------------------
+
 /// Smallest prefix `claude-opus-5` will cache at all. Below it a
 /// `cache_control` marker is accepted and silently does nothing, so sending one
 /// buys request overhead and no entry — hence the size gate on every
@@ -165,6 +175,17 @@ fn messages_field(req: &Request, prefix_chars: usize) -> Result<Vec<Value>, LlmE
     }
     Ok(rendered)
 }
+
+// endregion: Cache breakpoints
+
+// region: The provider: rendering, classifying, retrying
+// ---------------------------------------------------------------------------
+// The provider: rendering, classifying, retrying
+//
+// One struct holding the key, the model and the retry policy, and the path a
+// call takes through it: render the body, send it, turn a non-success status
+// into a typed error, and decide whether to send it again.
+// ---------------------------------------------------------------------------
 
 pub struct AnthropicProvider {
     http: reqwest::Client,
@@ -405,6 +426,17 @@ impl Provider for AnthropicProvider {
     }
 }
 
+// endregion: The provider: rendering, classifying, retrying
+
+// region: Assembling a streamed turn
+// ---------------------------------------------------------------------------
+// Assembling a streamed turn
+//
+// The SSE state machine. Frames arrive as fragments of indexed blocks; this
+// rebuilds them into the same content array batch mode receives in one piece,
+// including the blocks it does not understand.
+// ---------------------------------------------------------------------------
+
 /// Blocks under assembly, keyed by the index the API assigns them, so the
 /// reconstructed turn is in the order it was sent regardless of frame arrival.
 #[derive(Default)]
@@ -428,6 +460,12 @@ enum Partial {
     /// A block type this client does not know how to build. Kept verbatim from
     /// `content_block_start` so it still round-trips back to the API — dropping
     /// an unknown block would silently corrupt the turn on replay.
+    ///
+    /// This variant exists because of a bug found by porting: tustle-agent's
+    /// equivalent match arm was `_ => {}`, so every block that was not `text`
+    /// or `tool_use` — thinking blocks among them — was dropped on the floor
+    /// and never reached the content echoed back on the next call. The failure
+    /// is invisible until a turn depends on the block being there.
     Opaque(Value),
 }
 
@@ -530,6 +568,10 @@ impl Assembly {
                 }
                 let u = ev.get("usage");
                 let out = pick(u, "output_tokens");
+                // Guarded rather than assigned: `pick` cannot tell "absent"
+                // from "zero", so an unguarded write would let a
+                // `message_delta` carrying only a stop reason erase the count
+                // that `message_start` established.
                 if out != 0 {
                     self.usage.output_tokens = out;
                 }
@@ -576,6 +618,11 @@ impl Assembly {
 /// A tool call whose arguments did not parse is a fault, not an empty call:
 /// invoking a tool with `{}` because the JSON was truncated would run the wrong
 /// action with default arguments.
+///
+/// The empty-string case is not that case and is deliberately `{}`: a
+/// `tool_use` block that carried no `input_json_delta` at all is a call to a
+/// tool that takes no arguments, not a truncated one. Truncation leaves a
+/// partial fragment behind, and a fragment does not parse.
 fn parse_tool_input(json: &str) -> Result<Value, LlmError> {
     if json.trim().is_empty() {
         return Ok(json!({}));
@@ -583,6 +630,16 @@ fn parse_tool_input(json: &str) -> Result<Value, LlmError> {
     serde_json::from_str(json)
         .map_err(|e| LlmError::Protocol(format!("tool arguments were not valid JSON: {e}")))
 }
+
+// endregion: Assembling a streamed turn
+
+// region: From content blocks to a typed turn
+// ---------------------------------------------------------------------------
+// From content blocks to a typed turn
+//
+// The one place text and tool calls are extracted from content, so batch and
+// streaming cannot drift apart in what they report.
+// ---------------------------------------------------------------------------
 
 fn str_at(v: &Value, key: &str) -> String {
     v.get(key)
@@ -657,6 +714,8 @@ fn turn_from_content(
     })
 }
 
+// endregion: From content blocks to a typed turn
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,6 +723,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    // region: stub
     // ---------------------------------------------------------------- stub --
     //
     // A loopback HTTP server rather than an injectable transport. The choice is
@@ -817,6 +877,9 @@ mod tests {
 
     const TEST_KEY: &str = "sk-ant-api03-TESTKEYTESTKEYTESTKEY";
 
+    // endregion: stub
+
+    // region: fixtures
     // ------------------------------------------------------------ fixtures --
 
     /// One assistant turn: a thinking block, some text, and two tool calls.
@@ -904,6 +967,9 @@ mod tests {
         }
     }
 
+    // endregion: fixtures
+
+    // region: tests
     // --------------------------------------------------------------- tests --
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1073,6 +1139,11 @@ mod tests {
         let (turn, _) = run(&s, request(), Mode::Batch).await;
         let msg = turn.unwrap_err().to_string();
         assert!(msg.contains("ANTHROPIC_API_KEY"), "{msg}");
+        // The sentence this crate composes, before the binary rewrites it. The
+        // command a user actually runs is `emma api`; see the note on
+        // `LlmError::Unauthorized` and `emma::commands::rename_auth`. This
+        // assertion is what makes the pair change together — edit the message
+        // and this goes red before the rewrite goes quietly stale.
         assert!(msg.contains("emma auth"), "{msg}");
     }
 
@@ -1354,4 +1425,6 @@ mod tests {
             }
         }
     }
+
+    // endregion: tests
 }

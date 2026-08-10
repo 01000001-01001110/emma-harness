@@ -70,6 +70,14 @@
 //! that a goal genuinely needing a fourth nudge stops one step early — and says
 //! which limit stopped it, so the user can raise it.
 
+// region: The goal
+// ---------------------------------------------------------------------------
+// The goal
+//
+// The text a run is held to, and the message that opens it. The opening pulls
+// its contract from the check in force rather than stating one here.
+// ---------------------------------------------------------------------------
+
 /// The line [`MarkerClaim`] accepts as a claim of completion.
 ///
 /// Deliberately two plain words on their own line rather than a token like
@@ -108,6 +116,17 @@ impl Goal {
         )
     }
 }
+
+// endregion: The goal
+
+// region: Done-detection
+// ---------------------------------------------------------------------------
+// Done-detection
+//
+// The trait, and the one implementation. The module doc argues through the
+// four candidate authorities and why this is the one that got built; what is
+// here is the smallest of them plus the seam for replacing it.
+// ---------------------------------------------------------------------------
 
 /// The answer to "is this goal met?", and why not when it is not.
 ///
@@ -174,6 +193,16 @@ pub fn claims_done(text: &str) -> bool {
     })
 }
 
+// endregion: Done-detection
+
+// region: The kick
+// ---------------------------------------------------------------------------
+// The kick
+//
+// What the model is told when it stopped and the goal is not met. Composed
+// here; bounded in the loop, which owns the two limits.
+// ---------------------------------------------------------------------------
+
 /// Compose the kick: why it is not done, the goal restated, and what has
 /// already broken.
 ///
@@ -194,6 +223,17 @@ pub fn kick(goal: &Goal, why: &str, failed: &[String]) -> String {
     }
     s
 }
+
+// endregion: The kick
+
+// region: Tests
+// ---------------------------------------------------------------------------
+// Tests
+//
+// The two edges that decide whether a goal ends: a marker that is a claim
+// versus a mention of one, and an opening that carries the contract of the
+// check actually in force.
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -262,3 +302,5 @@ mod tests {
         assert!(text.contains("cargo build --release"));
     }
 }
+
+// endregion: Tests

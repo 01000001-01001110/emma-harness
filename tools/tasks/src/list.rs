@@ -11,6 +11,15 @@
 //! **No tasks is `Ok`.** An empty list is what the world contains, not a
 //! failure of the call. The content still carries a sentence rather than being
 //! the empty string, because "" is indistinguishable from a tool that broke.
+//!
+//! **`read_only: true` here is a fact, not a courtesy.** `run` calls
+//! `store::load` and never `store::edit`, so nothing on this path can stamp a
+//! handle or create the file — listing a project that has no `tasks.md` leaves
+//! it with no `tasks.md`. That is only possible because an unstamped task's id
+//! is derived from its text rather than assigned, so this can hand the model an
+//! id for a task the file has never been written to name. The approval gate
+//! consults `read_only`, so the declaration has to hold; `tests/tools.rs`
+//! fingerprints the whole tree around a list call to prove it does.
 
 use emma_tool_api::{Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
 use serde_json::{json, Value};
@@ -33,6 +42,12 @@ impl TaskList {
     }
 }
 
+/// `open` and `all` are filter words with no status behind them; everything
+/// else in `FILTERS` is a status spelled exactly as the wire spelling, so the
+/// last arm needs no table of its own. A word that is not a status keeps
+/// nothing, which would read to the model as an empty list rather than as an
+/// error — `validate_args` rejects it before `run` gets here, and that is the
+/// only reason this arm can be this quiet.
 fn keep(filter: &str, task: &TaskView) -> bool {
     match filter {
         "all" => true,
