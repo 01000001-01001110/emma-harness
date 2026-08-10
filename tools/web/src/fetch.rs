@@ -192,7 +192,10 @@ impl Tool for WebFetch {
     fn network_target(&self, args_v: &Value) -> Option<NetworkTarget> {
         let url = args_v.get("url")?.as_str()?.trim();
         let parsed = url::Url::parse(url).ok()?;
-        Some(NetworkTarget::new(parsed.host_str()?, format!("read {url}")))
+        Some(NetworkTarget::new(
+            parsed.host_str()?,
+            format!("read {url}"),
+        ))
     }
 
     fn validate_args(&self, args_v: &Value) -> Result<(), ToolError> {

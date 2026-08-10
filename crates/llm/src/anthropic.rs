@@ -1196,7 +1196,10 @@ mod tests {
         let err = turn.unwrap_err();
 
         let shown = format!("{err}");
-        assert!(!shown.contains(TEST_KEY), "key leaked into Display: {shown}");
+        assert!(
+            !shown.contains(TEST_KEY),
+            "key leaked into Display: {shown}"
+        );
         assert!(shown.contains("[redacted]"), "{shown}");
         let debugged = format!("{err:?}");
         assert!(
@@ -1220,7 +1223,10 @@ mod tests {
         let err = turn.unwrap_err();
 
         let shown = format!("{err}");
-        assert!(!shown.contains(TEST_KEY), "key leaked into Display: {shown}");
+        assert!(
+            !shown.contains(TEST_KEY),
+            "key leaked into Display: {shown}"
+        );
         assert!(shown.contains("[redacted]"), "{shown}");
         let debugged = format!("{err:?}");
         assert!(

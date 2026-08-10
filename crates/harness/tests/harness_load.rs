@@ -67,7 +67,10 @@ fn the_env_override_wins_over_the_walk() {
 #[test]
 fn a_home_emma_holding_only_credentials_is_not_a_harness() {
     let home = scratch("home-credentials");
-    write(&home.join(".emma/credentials.json"), r#"{"key":"sk-ant-x"}"#);
+    write(
+        &home.join(".emma/credentials.json"),
+        r#"{"key":"sk-ant-x"}"#,
+    );
     std::fs::create_dir_all(home.join(".emma/sessions")).expect("mkdir");
     let deep = home.join("code/scratch");
     std::fs::create_dir_all(&deep).expect("mkdir");
@@ -96,7 +99,10 @@ fn a_home_emma_holding_only_credentials_is_not_a_harness() {
 #[test]
 fn a_home_emma_a_person_configured_is_still_a_harness() {
     let home = scratch("home-configured");
-    write(&home.join(".emma/credentials.json"), r#"{"key":"sk-ant-x"}"#);
+    write(
+        &home.join(".emma/credentials.json"),
+        r#"{"key":"sk-ant-x"}"#,
+    );
     write(&home.join(".emma/config.json"), "{}");
     let deep = home.join("code/scratch");
     std::fs::create_dir_all(&deep).expect("mkdir");
@@ -131,7 +137,8 @@ fn the_walk_stops_at_the_home_directory() {
     let err = emma_harness::discover_in(&deep, None, Some(home))
         .expect_err("nothing above the home directory is a project harness");
     assert!(
-        !err.to_string().contains(&above.join(".claude").display().to_string()),
+        !err.to_string()
+            .contains(&above.join(".claude").display().to_string()),
         "it must not claim to have looked above home: {err}"
     );
 }
@@ -169,8 +176,7 @@ fn an_absent_harness_refuses_to_start_and_names_what_it_searched() {
     let base = scratch("absent");
     let deep = base.join("x/y");
     std::fs::create_dir_all(&deep).expect("mkdir");
-    let err = emma_harness::discover_in(&deep, None, Some(base))
-        .expect_err("absent must refuse");
+    let err = emma_harness::discover_in(&deep, None, Some(base)).expect_err("absent must refuse");
     let msg = err.to_string();
     assert!(msg.contains(".emma"), "{msg}");
     assert!(
@@ -230,7 +236,10 @@ fn an_unknown_spine_key_is_a_load_error_not_a_shrug() {
     let err = Harness::load(&root).expect_err("unknown keys must fail the load");
     let msg = format!("{err:#}");
     assert!(msg.contains("config.json"), "{msg}");
-    assert!(msg.contains("persona"), "the error must name the key: {msg}");
+    assert!(
+        msg.contains("persona"),
+        "the error must name the key: {msg}"
+    );
 }
 
 /// The same attribute, one level down. A `mathcer` typo would produce a hook
@@ -248,7 +257,10 @@ fn an_unknown_hook_key_is_a_load_error_too() {
     assert!(msg.contains("config.json"), "{msg}");
     // Naming the key is what separates this from the load failing for the
     // unrelated reason that `hooks/x` does not exist — which it also does not.
-    assert!(msg.contains("mathcer"), "the error must name the key: {msg}");
+    assert!(
+        msg.contains("mathcer"),
+        "the error must name the key: {msg}"
+    );
 }
 
 /// Persona content nothing selects is the silent-drop case: an operator wrote a
@@ -319,7 +331,10 @@ fn assembly_order_is_shared_then_persona() {
         r#"{"default_persona":"assistant","personas":{"assistant":{}}}"#,
     );
     write(&root.join("personas/_shared/rules.md"), "SHARED-RULES");
-    write(&root.join("personas/_shared/business.md"), "SHARED-BUSINESS");
+    write(
+        &root.join("personas/_shared/business.md"),
+        "SHARED-BUSINESS",
+    );
     write(&root.join("personas/assistant/rules.md"), "OWN-RULES");
     write(&root.join("personas/assistant/soul.md"), "OWN-SOUL");
     let h = Harness::load(&root).expect("load");
@@ -381,7 +396,12 @@ fn shared_is_reserved_and_is_never_a_persona() {
 #[test]
 fn only_name_and_description_are_needed_to_offer_a_skill() {
     let root = one_persona("skills", "rules");
-    with_skill(&root, "marketing-audit", "Run the audit.", "# the long body");
+    with_skill(
+        &root,
+        "marketing-audit",
+        "Run the audit.",
+        "# the long body",
+    );
     let h = Harness::load(&root).expect("load");
     let s = h.skills().first().expect("one skill");
     assert_eq!(s.name, "marketing-audit");
@@ -437,7 +457,10 @@ fn a_persona_electing_a_skill_that_does_not_exist_fails_the_load() {
 #[test]
 fn commands_expand_at_intake_and_unknown_ones_pass_through() {
     let root = one_persona("commands", "rules");
-    write(&root.join("commands/audit.md"), "Run the audit checklist.\n");
+    write(
+        &root.join("commands/audit.md"),
+        "Run the audit checklist.\n",
+    );
     let h = Harness::load(&root).expect("load");
 
     let e = h.expand_command("/audit acme.com").expect("known command");
@@ -445,7 +468,10 @@ fn commands_expand_at_intake_and_unknown_ones_pass_through() {
     assert_eq!(e.raw, "/audit acme.com");
     assert_eq!(e.text, "Run the audit checklist.\n\nacme.com");
 
-    assert!(h.expand_command("/nope").is_none(), "unknown → ordinary text");
+    assert!(
+        h.expand_command("/nope").is_none(),
+        "unknown → ordinary text"
+    );
     assert!(h.expand_command("audit").is_none());
     assert!(
         h.expand_command("/auditor").is_none(),

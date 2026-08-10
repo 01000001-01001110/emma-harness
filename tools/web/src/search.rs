@@ -139,7 +139,10 @@ impl Tool for WebSearch {
     /// contents of a file.
     fn network_target(&self, args_v: &Value) -> Option<NetworkTarget> {
         let query = args_v.get("query")?.as_str()?.trim();
-        let host = url::Url::parse(&self.base_url).ok()?.host_str()?.to_string();
+        let host = url::Url::parse(&self.base_url)
+            .ok()?
+            .host_str()?
+            .to_string();
         Some(NetworkTarget::new(host, format!("search for: {query}")))
     }
 

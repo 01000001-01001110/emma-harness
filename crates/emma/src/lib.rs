@@ -42,7 +42,7 @@ pub mod settings;
 pub mod skill;
 pub mod term;
 
-pub use agent::{Agent, Budgets, Ending, Interrupt, Outcome, Setup};
+pub use agent::{Agent, Budgets, Ending, Interrupt, Outcome, Resumed, Setup};
 pub use approval::{Answer, Approvals, Asker, Gate, Verdict};
 pub use goal::{Done, DoneCheck, Goal, MarkerClaim};
-pub use session::SessionLog;
+pub use session::{Continuity, Restored, SessionLog};

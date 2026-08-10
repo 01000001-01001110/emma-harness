@@ -30,7 +30,12 @@ USAGE
   emma -p \"<text>\"             one goal, no prompts, then exit
   emma api [<key>]             store an API key in ~/.emma (prompts, no echo)
   emma model [<name>]          show or set the default model
+  emma init                    write a minimal working .emma/ here and stop
   emma config check            load .emma/ (or .claude/) and report; no model call
+  emma --resume [<id>] [<text>]
+                               continue the newest session started in this
+                               directory, or the one named. Nothing is re-run:
+                               the conversation comes back, the tools do not.
 
 OPTIONS
   -p, --print                  non-interactive. Anything needing approval is
@@ -55,6 +60,11 @@ APPROVAL
   command, the diff, or the path and size. Answering 'a' allows that one tool
   for the rest of the process and no longer — there is no permission that
   outlives the run. A PreToolUse hook that denies cannot be approved away.
+
+  One exemption, by name: TaskCreate and TaskUpdate write, and never ask. They
+  write only to the agent's own task file under .emma/, and a prompt every time
+  the agent ticks off a task is a prompt that gets answered without being read —
+  which costs the prompts on Write, Edit and Bash as well.
 ";
 
 // endregion: The help text
@@ -73,6 +83,18 @@ pub enum Command {
     Run(Option<String>),
     Api(Option<String>),
     Model(Option<String>),
+    /// Write a harness in the working directory. Reaches no model, no key and
+    /// no network, which is why `main.rs` handles it beside `api` and `model`
+    /// rather than inside the runtime: the command that fixes "Emma will not
+    /// start here" must not need Emma to start.
+    Init,
+    /// Continue a session. `session` is an id when one was named, and the goal
+    /// is the ordinary positional text — a resume still needs something to
+    /// work on, it simply starts with a conversation behind it.
+    Resume {
+        session: Option<String>,
+        goal: Option<String>,
+    },
     ConfigCheck,
     Help,
     Version,
@@ -119,7 +141,7 @@ pub struct Cli {
 // ---------------------------------------------------------------------------
 
 pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
-    let mut it = args.into_iter();
+    let mut it = args.into_iter().peekable();
     let mut opts = Opts::default();
     let mut words: Vec<String> = Vec::new();
     let mut command: Option<Command> = None;
@@ -149,15 +171,37 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
             // spellings already make, and it selected the same body.
             "--model" => opts.model = Some(value("--model")?),
             "--session-dir" => opts.session_dir = Some(PathBuf::from(value("--session-dir")?)),
-            "--max-iterations" => opts.budgets.max_iterations = number(&value("--max-iterations")?)?,
+            "--max-iterations" => {
+                opts.budgets.max_iterations = number(&value("--max-iterations")?)?
+            }
             "--max-tokens" => opts.budgets.max_tokens = number(&value("--max-tokens")?)?,
             "--max-kicks" => opts.budgets.max_kicks = number(&value("--max-kicks")?)?,
             "--timeout" => {
                 opts.budgets.wall_clock = Duration::from_secs(number(&value("--timeout")?)?)
             }
+            // Spelled as a flag rather than a subcommand because it modifies a
+            // run — it takes the same goal text, the same budgets and the same
+            // approval rules — where `api`, `model` and `init` replace one.
+            "--resume" => {
+                if !matches!(command, None | Some(Command::Run(_))) {
+                    return Err("--resume cannot be combined with another command.".into());
+                }
+                // A session id or a goal, told apart by the fixed `sess-`
+                // prefix `SessionLog::new_id` gives every id. The alternative
+                // is a second flag for the id, which makes the common
+                // spelling — bare `--resume` with a goal after it — the one
+                // that needs explaining.
+                let named = it.peek().is_some_and(|a| a.starts_with("sess-"));
+                let session = if named { it.next() } else { None };
+                command = Some(Command::Resume {
+                    session,
+                    goal: None,
+                });
+            }
             // Subcommands, recognised only in first position so that a goal
             // beginning with the word "model" is still a goal.
             "goal" if fresh(&command, &words) => command = Some(Command::Run(None)),
+            "init" if fresh(&command, &words) => command = Some(Command::Init),
             "api" if fresh(&command, &words) => command = Some(Command::Api(None)),
             "model" if fresh(&command, &words) => command = Some(Command::Model(None)),
             "config" if fresh(&command, &words) => match it.next().as_deref() {
@@ -182,9 +226,11 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
     // bypass is that it is easy to reach. The long name is a sentence nobody
     // types by accident.
     if short_yes && !opts.print {
-        return Err("--yes only applies to `-p` runs. Interactively, if you really want no \
+        return Err(
+            "--yes only applies to `-p` runs. Interactively, if you really want no \
                     approval prompts at all, use --dangerously-skip-permissions."
-            .into());
+                .into(),
+        );
     }
 
     let joined = (!words.is_empty()).then(|| words.join(" "));
@@ -192,9 +238,32 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
         Some(Command::Run(_)) | None => Command::Run(joined),
         Some(Command::Api(_)) => Command::Api(joined),
         Some(Command::Model(_)) => Command::Model(joined),
+        Some(Command::Resume { session, .. }) => Command::Resume {
+            session,
+            goal: joined,
+        },
+        // Refused rather than ignored: `emma init something` is somebody
+        // expecting the word to mean something, and writing a harness while
+        // silently discarding it is the wrong half of the guess.
+        Some(Command::Init) => match joined {
+            Some(extra) => {
+                return Err(format!(
+                    "`init` takes no arguments; got `{extra}`. It writes .emma/ in the \
+                     current directory."
+                ))
+            }
+            None => Command::Init,
+        },
         Some(other) => other,
     };
-    if command == Command::Run(None) && opts.print {
+    // `-p` cannot answer a prompt, and a resumed run needs a goal for the same
+    // reason a fresh one does: the restored conversation is context, not an
+    // instruction to continue.
+    let needs_goal = matches!(
+        command,
+        Command::Run(None) | Command::Resume { goal: None, .. }
+    );
+    if needs_goal && opts.print {
         return Err("-p needs a goal: `emma -p \"make the tests pass\"`.".into());
     }
     Ok(Cli { command, opts })
@@ -259,10 +328,12 @@ mod tests {
         let err = p(&["--yes"]).unwrap_err();
         assert!(err.contains("--dangerously-skip-permissions"), "{err}");
         assert!(p(&["-p", "--yes", "go"]).unwrap().opts.skip_permissions);
-        assert!(p(&["--dangerously-skip-permissions"])
-            .unwrap()
-            .opts
-            .skip_permissions);
+        assert!(
+            p(&["--dangerously-skip-permissions"])
+                .unwrap()
+                .opts
+                .skip_permissions
+        );
     }
 
     #[test]
@@ -304,7 +375,14 @@ mod tests {
     #[test]
     fn budgets_come_off_the_command_line() {
         let cli = p(&[
-            "--max-iterations", "3", "--max-tokens", "99", "--timeout", "5", "--max-kicks", "0",
+            "--max-iterations",
+            "3",
+            "--max-tokens",
+            "99",
+            "--timeout",
+            "5",
+            "--max-kicks",
+            "0",
         ])
         .unwrap();
         assert_eq!(cli.opts.budgets.max_iterations, 3);
@@ -314,8 +392,54 @@ mod tests {
     }
 
     #[test]
+    fn resume_tells_a_session_id_from_a_goal_by_its_prefix() {
+        // The distinction the `sess-` prefix buys: no second flag, and the
+        // spelling somebody reaches for first — `--resume` plus what to do
+        // next — means what it looks like.
+        assert_eq!(
+            p(&["--resume"]).unwrap().command,
+            Command::Resume {
+                session: None,
+                goal: None
+            }
+        );
+        assert_eq!(
+            p(&["--resume", "sess-0000000000001-9"]).unwrap().command,
+            Command::Resume {
+                session: Some("sess-0000000000001-9".into()),
+                goal: None
+            }
+        );
+        assert_eq!(
+            p(&["--resume", "finish", "the", "port"]).unwrap().command,
+            Command::Resume {
+                session: None,
+                goal: Some("finish the port".into())
+            }
+        );
+        // A resumed run is still a run, so it still cannot be unattended
+        // without something to be unattended about.
+        assert!(p(&["-p", "--resume"]).unwrap_err().contains("needs a goal"));
+        assert!(p(&["api", "--resume"]).is_err());
+    }
+
+    #[test]
+    fn init_is_a_first_position_subcommand_and_takes_nothing() {
+        assert_eq!(p(&["init"]).unwrap().command, Command::Init);
+        // The word after a goal is a word, not a command.
+        assert_eq!(
+            p(&["goal", "init", "the", "repo"]).unwrap().command,
+            Command::Run(Some("init the repo".into()))
+        );
+        assert!(p(&["init", "please"]).unwrap_err().contains("no arguments"));
+    }
+
+    #[test]
     fn typos_are_refused_rather_than_guessed_at() {
-        assert_eq!(p(&["config", "check"]).unwrap().command, Command::ConfigCheck);
+        assert_eq!(
+            p(&["config", "check"]).unwrap().command,
+            Command::ConfigCheck
+        );
         assert!(p(&["config", "chekc"]).is_err());
         assert!(p(&["--nope"]).is_err());
         assert!(p(&["--model"]).is_err());

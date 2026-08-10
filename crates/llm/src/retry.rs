@@ -41,17 +41,14 @@ impl Default for Retry {
 }
 
 impl Retry {
-    /// Off — one attempt, no retry. For a caller that does its own scheduling,
-    /// or a test that wants a failure surfaced rather than absorbed. Nothing in
-    /// the tree calls it today; the provider tests build a `Retry` with
-    /// millisecond delays instead, because they want the retry path exercised
-    /// and not skipped.
-    pub fn none() -> Self {
-        Self {
-            max_attempts: 1,
-            ..Self::default()
-        }
-    }
+    // There was a `none()` constructor here — one attempt, no retry — for a
+    // caller that schedules its own or a test that wants a failure surfaced
+    // rather than absorbed. Neither ever appeared: the provider tests build a
+    // `Retry` with millisecond delays instead, because they want the retry path
+    // exercised and not skipped. Removed rather than kept for a hypothetical
+    // caller, because `Retry { max_attempts: 1, ..Default::default() }` is one
+    // line and the struct is `pub` in every field. A convenience for nobody is
+    // still surface that has to stay true.
 
     /// How long to wait before attempt `attempt + 1`, or `None` to give up.
     ///

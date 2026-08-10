@@ -65,8 +65,8 @@
 //! outright where both exist — never merged. See `claude.rs` and
 //! `notes/claude-code-compatibility.md`.
 
-pub mod hash;
 mod claude;
+pub mod hash;
 mod hooks;
 
 use anyhow::{bail, Context, Result};
@@ -74,8 +74,8 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::hooks::{HookDef, ResolvedHook};
 pub use crate::hooks::{HookCall, HookEvent, HookOutcome, HookResult, HookRun, HookVerdict};
+use crate::hooks::{HookDef, ResolvedHook};
 
 use emma_tool_api::Registry;
 
@@ -882,7 +882,8 @@ fn load_skills(
     // prompt prefix needs, whatever order the directory iterated in.
     let mut found: BTreeMap<String, SkillDef> = BTreeMap::new();
     if dir.is_dir() {
-        for entry in std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))?
+        for entry in
+            std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))?
         {
             // A subdirectory without a `SKILL.md` is skipped without complaint,
             // and a loose file in `skills/` is ignored.

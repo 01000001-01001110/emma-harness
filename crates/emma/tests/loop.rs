@@ -22,7 +22,7 @@ use emma_llm::{Caching, Mode};
 use emma_tool_api::Registry;
 use serde_json::json;
 
-use support::{call, text, empty_harness, harness_denying, registry, Fake, TestTool};
+use support::{call, empty_harness, harness_denying, registry, text, Fake, TestTool};
 
 fn budgets() -> Budgets {
     Budgets {
@@ -305,7 +305,10 @@ async fn the_token_budget_stops_the_loop_and_the_run_is_charged_for_what_it_spen
         .map(|r| r["billable_total_tokens"].as_i64().unwrap_or(0))
         .sum();
     assert_eq!(spent, 20, "the aborted run was recorded as free");
-    let finished = records.iter().find(|r| r["kind"] == "goal_finished").unwrap();
+    let finished = records
+        .iter()
+        .find(|r| r["kind"] == "goal_finished")
+        .unwrap();
     assert_eq!(finished["ending"], "tokens");
     assert_eq!(finished["tokens"], 20);
 }

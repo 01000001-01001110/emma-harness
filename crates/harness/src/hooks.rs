@@ -448,8 +448,8 @@ pub(crate) fn resolve(
         if enabled.is_some_and(|e| !e.contains(name)) {
             continue;
         }
-        let event = HookEvent::parse(&def.event)
-            .with_context(|| named(format!("hook `{name}`")))?;
+        let event =
+            HookEvent::parse(&def.event).with_context(|| named(format!("hook `{name}`")))?;
         let dir = (root.join("hooks").canonicalize())
             .with_context(|| named(format!("hook `{name}` is defined but hooks/ is missing")))?;
         let command = (root.join(&def.command).canonicalize())

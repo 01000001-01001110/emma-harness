@@ -216,14 +216,23 @@ pub struct ToolMeta {
     pub reaches_network: bool,
     /// Running it twice with the same arguments has the same effect as once.
     ///
-    /// Declared by every tool and, as of today, **read by nothing** — Emma has
-    /// no crash-recovery fold that replays a journalled call. That makes it the
-    /// same shape as the `needs_approval` field this struct's doc rejects
-    /// above, and it is recorded here rather than in a plan so nobody reads it
-    /// as a mechanism that exists. It is kept because the answer is a genuine
-    /// per-tool fact worth writing down at the point the tool is defined
-    /// (`Edit` is deliberately not idempotent, and says so), not because
-    /// something consults it.
+    /// This was for a while declared by every tool and read by nothing — the
+    /// same shape as the `needs_approval` field the doc above rejects, and it
+    /// was kept only on the argument that the answer is a genuine per-tool fact
+    /// (`Edit` is deliberately not idempotent, and says so). That argument is
+    /// true and was not sufficient: a field nobody consults is a field nobody
+    /// checks, and it drifts.
+    ///
+    /// **It now has one reader, and it is [`Registry::register`]**, which
+    /// refuses the pair `read_only: true, idempotent: false` because that is one
+    /// fact and its negation — see the reasoning there. So this field constrains
+    /// what `read_only` may claim, on every boot and in every test that builds a
+    /// registry.
+    ///
+    /// What it is still *not*: a replay mechanism. Emma has no crash-recovery
+    /// fold, nothing consults this to decide whether to re-run a call, and that
+    /// is said plainly here so nobody plans against a mechanism that does not
+    /// exist.
     pub idempotent: bool,
 }
 
@@ -364,7 +373,40 @@ impl Registry {
         Self::default()
     }
 
+    /// Adds a tool, after checking that its declaration is not
+    /// self-contradictory.
+    ///
+    /// **This is the reader for [`ToolMeta::idempotent`].** The field was for a
+    /// while declared by every tool and consulted by nothing, which is the exact
+    /// shape [`ToolMeta`]'s own doc rejects `needs_approval` for. It is checked
+    /// here rather than given a runtime consumer because Emma has no
+    /// crash-recovery fold to replay a journalled call, and inventing one to
+    /// justify a field would be the tail wagging the dog.
+    ///
+    /// What it checks: `read_only` promises the call changes no local state, and
+    /// a call that changes nothing has the same effect run twice as run once. So
+    /// `read_only: true` **entails** `idempotent: true`, and a tool declaring
+    /// both `read_only: true` and `idempotent: false` has stated one fact and its
+    /// negation. One of the two is wrong, and `read_only` is the one the approval
+    /// gate is about to trust to skip a human — so the pair is refused rather
+    /// than half-believed. Same fail-closed reasoning as
+    /// [`Tool::network_target`] returning `None` from a tool that declares
+    /// `reaches_network: true`.
+    ///
+    /// A panic, because this is a wiring mistake in a `const` a human wrote, not
+    /// a runtime condition: it is the same on every boot, it is reached by every
+    /// test that builds a registry, and there is no sensible way to continue with
+    /// a tool surface whose safety declarations do not cohere.
     pub fn register(&mut self, tool: Arc<dyn Tool>) {
+        let meta = tool.meta();
+        assert!(
+            // Reads as the entailment it is: read_only ⟹ idempotent.
+            !meta.read_only || meta.idempotent,
+            "{} declares read_only: true with idempotent: false — a call that \
+             changes no local state cannot have a different effect the second \
+             time, so one of the two is wrong",
+            tool.name()
+        );
         self.tools.push(tool);
     }
 
@@ -462,6 +504,83 @@ mod tests {
         ] {
             assert!(!e.detail().is_empty(), "{e:?} lost its detail");
         }
+    }
+
+    /// The tool the coherence tests register. Nothing about it matters except
+    /// its `meta`, which each test supplies.
+    struct Declared(&'static str, ToolMeta);
+
+    #[async_trait::async_trait]
+    impl Tool for Declared {
+        fn name(&self) -> &'static str {
+            self.0
+        }
+        fn description(&self) -> &str {
+            "test"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({ "type": "object" })
+        }
+        fn meta(&self) -> ToolMeta {
+            self.1
+        }
+        async fn invoke(
+            &self,
+            _ctx: &ToolCtx,
+            _args: serde_json::Value,
+        ) -> anyhow::Result<Result<ToolOutcome, ToolError>> {
+            Ok(Ok(ToolOutcome::new("")))
+        }
+    }
+
+    /// This is the test that makes [`ToolMeta::idempotent`] a field something
+    /// consults rather than a field everyone answers into a void. Delete it and
+    /// `register` becomes free to stop checking, which is how the declaration
+    /// drifts back into decoration.
+    ///
+    /// The contradiction is not a matter of taste: `read_only` promises the call
+    /// changes no local state, and a call that changes nothing has the same
+    /// effect run twice as run once. So `read_only: true, idempotent: false` is
+    /// not two facts, it is one fact and its negation, and at least one of them
+    /// is a lie the approval gate is about to trust.
+    #[test]
+    #[should_panic(expected = "declares read_only: true with idempotent: false")]
+    fn a_read_only_tool_cannot_also_declare_itself_unsafe_to_repeat() {
+        let mut reg = Registry::new();
+        reg.register(Arc::new(Declared(
+            "Contradiction",
+            ToolMeta {
+                read_only: true,
+                reaches_network: false,
+                idempotent: false,
+            },
+        )));
+    }
+
+    /// The positive control, and the half that keeps the check from being
+    /// satisfied by refusing everything. Both live shapes must still register:
+    /// a read that repeats freely, and `Edit`, whose whole point is that it is
+    /// *not* idempotent — a second run finds its anchor gone and must fail.
+    #[test]
+    fn the_two_honest_shapes_both_register() {
+        let mut reg = Registry::new();
+        reg.register(Arc::new(Declared(
+            "Read",
+            ToolMeta {
+                read_only: true,
+                reaches_network: false,
+                idempotent: true,
+            },
+        )));
+        reg.register(Arc::new(Declared(
+            "Edit",
+            ToolMeta {
+                read_only: false,
+                reaches_network: false,
+                idempotent: false,
+            },
+        )));
+        assert_eq!(reg.names(), vec!["Read", "Edit"]);
     }
 }
 

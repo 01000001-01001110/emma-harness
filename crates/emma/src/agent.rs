@@ -48,7 +48,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use emma_harness::{Harness, HookCall, HookEvent, HookResult};
-use emma_llm::{AssistantTurn, Caching, Event, LlmError, Message, Mode, Provider, Request, ToolCall};
+use emma_llm::{
+    AssistantTurn, Caching, Event, LlmError, Message, Mode, Provider, Request, Role, ToolCall,
+};
 use emma_tool_api::{Registry, ToolCtx};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
@@ -143,10 +145,7 @@ impl Ending {
                 .into(),
             Self::Iterations => format!("stopped: hit the {} model-call limit.", b.max_iterations),
             Self::Tokens => format!("stopped: hit the {} token budget.", b.max_tokens),
-            Self::Deadline => format!(
-                "stopped: hit the {}s time limit.",
-                b.wall_clock.as_secs()
-            ),
+            Self::Deadline => format!("stopped: hit the {}s time limit.", b.wall_clock.as_secs()),
             Self::Interrupted => "interrupted. The partial turn is in the session log.".into(),
             Self::Provider(e) => format!("stopped: {e}"),
         }
@@ -164,6 +163,51 @@ pub struct Outcome {
 }
 
 // endregion: Budgets and endings
+
+// region: What a resumed run inherits
+// ---------------------------------------------------------------------------
+// What a resumed run inherits
+//
+// Everything `--resume` carries across a process boundary. It sits next to
+// `Budgets` on purpose: four of these six fields are the *spent* half of the
+// budgets above, and a resume that omitted them would not be a resume with a
+// gap in it — it would be a cap that can be reset by pressing Ctrl-C.
+// ---------------------------------------------------------------------------
+
+/// The state of an interrupted goal, folded back out of its session file.
+///
+/// **Why the counters are here at all.** `session::fold` returns the messages
+/// and nothing else, and a resumed run that restarted `tokens`, `iterations`
+/// and `kicks` at zero would silently grant a fresh budget: a goal that ended
+/// on [`Ending::Tokens`] could then be resumed indefinitely and the cap it hit
+/// would mean nothing. So the meter comes back with the conversation, or the
+/// feature is a way to spend past a limit.
+///
+/// **Why the memo is here too.** `failed_now` is the loop's "this exact call
+/// failed and nothing has changed since". Dropping it does not overspend
+/// anything, but it hands the resumed model back the identical failing call as
+/// its most obvious next move, which is the specific loop the memo exists to
+/// break.
+///
+/// `Default` is the not-resuming case, and it is the one the loop takes on
+/// every ordinary run: an empty conversation and every counter at zero.
+#[derive(Debug, Default, Clone)]
+pub struct Resumed {
+    /// The message list the interrupted run last sent, in order. Placed whole
+    /// into `query` — see `Agent::run_goal`.
+    pub messages: Vec<Message>,
+    pub tokens: i64,
+    pub iterations: u32,
+    pub kicks: u32,
+    /// Memo keys — see [`memo_key`] — for calls that had failed with nothing
+    /// having succeeded since.
+    pub failed_now: Vec<String>,
+    /// Human-readable labels for everything that failed during the goal, which
+    /// is what a kick quotes back.
+    pub failed_ever: Vec<String>,
+}
+
+// endregion: What a resumed run inherits
 
 // region: Ctrl-C
 // ---------------------------------------------------------------------------
@@ -261,6 +305,11 @@ pub struct Agent<'a> {
     /// cached prefix, where every byte is paid for at full price on every call.
     history: Vec<Message>,
     turn_seq: u64,
+    /// Consumed by the first `run_goal` and never again: what it carries is one
+    /// interrupted goal's conversation and one interrupted goal's spend, and a
+    /// second goal typed at the prompt afterwards is a new goal with its own
+    /// budget, exactly as it would be without a resume.
+    resumed: Option<Resumed>,
 }
 
 impl<'a> Agent<'a> {
@@ -269,7 +318,20 @@ impl<'a> Agent<'a> {
             s,
             history: Vec::new(),
             turn_seq: 0,
+            resumed: None,
         }
+    }
+
+    /// Continue a session rather than start one.
+    ///
+    /// A builder method rather than a `Setup` field because it is the rare case
+    /// — every other caller would have written `resumed: None` — and because
+    /// the thing it takes is produced by a fallible read of a file, which is a
+    /// step the caller has to have taken before it can construct `Setup` at
+    /// all.
+    pub fn resuming(mut self, resumed: Resumed) -> Self {
+        self.resumed = Some(resumed);
+        self
     }
 
     pub fn history(&self) -> &[Message] {
@@ -285,12 +347,21 @@ impl<'a> Agent<'a> {
         // a name-to-`impl` table in step with `goal.rs` forever. Storing the
         // bytes costs a few hundred of them once per goal.
         let opening = goal.opening(self.s.done);
+        // Taken before the record is written, so `resumed` is the only place a
+        // resume can influence this goal and it can influence it exactly once.
+        let resumed = self.resumed.take().unwrap_or_default();
         self.s.log.append(
             "goal",
             json!({
                 "session_id": self.s.session_id,
                 "text": goal.text,
                 "opening": opening,
+                // The one field written for a reader rather than for the fold.
+                // Bare `--resume` means "the session I was last running *here*",
+                // and a file that does not say where it ran cannot answer that —
+                // so the working directory is recorded once per goal, which is
+                // also the only place the answer could change within a session.
+                "cwd": self.s.cwd.display().to_string(),
                 "instructions_hash": self.s.harness.instructions_hash(),
                 "tool_schema_hash": self.s.tools.schema_hash(),
                 "model": self.s.provider.model_id(),
@@ -300,17 +371,42 @@ impl<'a> Agent<'a> {
         self.s.term.goal_started(&goal.text);
 
         let tool_defs = self.s.tools.wire_definitions();
-        let mut query: Vec<Message> = vec![Message::user(opening)];
-        let mut tokens = 0i64;
-        let mut iterations = 0u32;
-        let mut kicks = 0u32;
+        // The restored conversation, with this goal's opening on the end. All
+        // of it goes in `query` and none of it in `history`: the split point is
+        // not recorded in the file — `history` is what the loop had collapsed,
+        // `query` is the goal in flight, and the fold returns one flat list —
+        // and guessing it wrong is a message list the API refuses. The cost is
+        // cache: `history` carries a breakpoint that would be byte-stable for
+        // the rest of the session, and a restored prefix sitting in `query`
+        // does not get it. That is a bill, and a wrong split is an outage.
+        let mut query: Vec<Message> = open_query(resumed.messages, opening);
+        let mut tokens = resumed.tokens;
+        let mut iterations = resumed.iterations;
+        let mut kicks = resumed.kicks;
         let mut tool_calls_since_kick = 0u32;
+        // Whether *this* run has nudged. Deliberately not `kicks > 0`, which is
+        // what the stall rule used to read: `kicks` is a budget and comes back
+        // across a resume, but the stall rule is about a model answering a
+        // nudge without doing anything, and a resumed run's last nudge was
+        // answered by a human typing a new goal. Reading the budget here would
+        // end every resumed run on its first stop, reported as `Stalled`.
+        let mut kicked = false;
         // Cleared whenever any tool succeeds — see the module comment. This is
         // "nothing has changed since this failed", not "this failed once".
-        let mut failed_now: HashSet<String> = HashSet::new();
-        // Everything that failed at any point, for the kick to quote. Capped so
-        // a long goal cannot turn the kick into a transcript.
-        let mut failed_ever: Vec<String> = Vec::new();
+        let mut failed_now: HashSet<String> = resumed.failed_now.into_iter().collect();
+        // Everything that failed at any point, for the kick to quote — capped
+        // here rather than at the use site, which is where the cap used to be
+        // and where the comment used to claim this list was.
+        //
+        // `tail(&failed_ever, 5)` still bounds what a kick shows; what it did
+        // not bound was the list, and the list is now written into a session
+        // record and read back by `--resume`, so an unbounded collection is a
+        // growing payload rather than a transient one. The oldest go first: a
+        // kick's job is to stop the model repeating what it just tried, and a
+        // failure twenty calls ago that has not recurred is the least likely to
+        // be the one it is about to repeat.
+        let mut failed_ever: Vec<String> = resumed.failed_ever;
+        trim_oldest(&mut failed_ever);
         let mut last_text = String::new();
 
         let ending = loop {
@@ -340,7 +436,7 @@ impl<'a> Agent<'a> {
             let turn = match self.call_model(request).await {
                 Ok(Some(turn)) => turn,
                 Ok(None) => break Ending::Interrupted,
-                Err(e) => break Ending::Provider(crate::commands::rename_auth(&e.to_string())),
+                Err(e) => break Ending::Provider(e.to_string()),
             };
             iterations += 1;
 
@@ -399,13 +495,14 @@ impl<'a> Agent<'a> {
                 };
                 // The model has answered the kick without doing anything. A
                 // third attempt is the loop arguing with itself.
-                if tool_calls_since_kick == 0 && kicks > 0 {
+                if tool_calls_since_kick == 0 && kicked {
                     break Ending::Stalled;
                 }
                 if kicks >= self.s.budgets.max_kicks {
                     break Ending::KicksExhausted;
                 }
                 kicks += 1;
+                kicked = true;
                 tool_calls_since_kick = 0;
                 // `text` is the composed message, not a second copy of `why`:
                 // `why` is the reason for a human reading the file, and the
@@ -432,9 +529,8 @@ impl<'a> Agent<'a> {
             let mut results = Vec::new();
             for call in &turn.tool_calls {
                 tool_calls_since_kick += 1;
-                let (block, succeeded, label) = self
-                    .run_tool_call(call, &turn_id, &failed_now)
-                    .await;
+                let (block, succeeded, label) =
+                    self.run_tool_call(call, &turn_id, &failed_now).await;
                 if succeeded {
                     // Something changed, so an earlier failure is worth trying
                     // again. This is what keeps edit-then-rerun-the-tests from
@@ -444,6 +540,7 @@ impl<'a> Agent<'a> {
                     failed_now.insert(memo_key(call));
                     if !failed_ever.contains(&label) {
                         failed_ever.push(label);
+                        trim_oldest(&mut failed_ever);
                     }
                 }
                 results.push(block);
@@ -547,7 +644,7 @@ impl<'a> Agent<'a> {
         turn_id: &str,
         failed_now: &HashSet<String>,
     ) -> (Value, bool, Option<String>) {
-        let label = format!("{}({})", call.name, compact(&call.input));
+        let label = label_of(&call.name, &call.input);
         let fail = |kind: &str, detail: String| {
             let block = failure_block(&call.id, &call.name, kind, &detail);
             // A failure block is a block that was sent, so it is recorded under
@@ -607,10 +704,16 @@ impl<'a> Agent<'a> {
             turn_id,
             result: None,
         };
-        let pre = self.s.harness.run_hooks(HookEvent::PreToolUse, &hook_call).await;
+        let pre = self
+            .s
+            .harness
+            .run_hooks(HookEvent::PreToolUse, &hook_call)
+            .await;
         self.log_hooks(turn_id, &pre.runs);
         if let Some(reason) = pre.denied {
-            self.s.term.warn(&format!("{} blocked by policy: {reason}", call.name));
+            self.s
+                .term
+                .warn(&format!("{} blocked by policy: {reason}", call.name));
             self.s.log.append(
                 "denied",
                 json!({ "turn_id": turn_id, "id": call.id, "by": "hook", "reason": reason }),
@@ -621,7 +724,12 @@ impl<'a> Agent<'a> {
             );
         }
 
-        match self.s.approvals.request(tool.as_ref(), &call.input, self.s.term).await {
+        match self
+            .s
+            .approvals
+            .request(tool.as_ref(), &call.input, self.s.term)
+            .await
+        {
             Verdict::Allow => {}
             Verdict::Deny(reason) => {
                 self.s.log.append(
@@ -648,7 +756,8 @@ impl<'a> Agent<'a> {
                             "kind": e.kind(), "detail": e.detail() }),
                 );
                 self.s.term.tool_result(None, e.detail(), true);
-                self.run_post_hooks(turn_id, call, e.detail(), false, Some(e.kind())).await;
+                self.run_post_hooks(turn_id, call, e.detail(), false, Some(e.kind()))
+                    .await;
                 return fail(e.kind(), e.detail().to_string());
             }
             // The outer `Result` is the tool claiming the session cannot
@@ -757,7 +866,6 @@ impl<'a> Agent<'a> {
                 .append("hook", json!({ "turn_id": turn_id, "run": run }));
         }
     }
-
 }
 
 // endregion: The loop
@@ -774,7 +882,50 @@ impl<'a> Agent<'a> {
 /// What makes two calls "the same call". Name plus arguments, canonically
 /// rendered — so `Bash(ls)` and `Bash(ls)` collide and `Bash(ls a)` does not.
 fn memo_key(call: &ToolCall) -> String {
-    format!("{}\u{1}{}", call.name, call.input)
+    memo_key_of(&call.name, &call.input)
+}
+
+/// The same key from the two fields a session record has, which is not a
+/// `ToolCall`. One definition rather than two: a resume that keyed the restored
+/// memo differently from the loop would restore a set that never matches, and
+/// the symptom would be a memo that silently does nothing.
+pub(crate) fn memo_key_of(name: &str, input: &Value) -> String {
+    format!("{name}\u{1}{input}")
+}
+
+/// The label a kick quotes, from the same two fields — see [`memo_key_of`] for
+/// why this is shared rather than re-derived.
+pub(crate) fn label_of(name: &str, input: &Value) -> String {
+    format!("{}({})", name, compact(input))
+}
+
+/// The restored conversation with this goal's opening attached.
+///
+/// It cannot simply be pushed. The fold ends wherever the interrupted run
+/// stopped, and that is usually a **user** turn — the tool results of the last
+/// complete round, or the kick that answered a turn which called nothing. Two
+/// user turns in a row is a 400 rather than a conversation, so the opening
+/// joins the last one instead of following it: appended as a text block after
+/// the result blocks when the content is an array, and concatenated when it is
+/// plain text. Nothing is dropped to make room, because dropping the trailing
+/// results would leave the `tool_use` above them unanswered, which is the other
+/// 400.
+///
+/// With nothing restored — every ordinary run — the list is empty and this is
+/// the `vec![Message::user(opening)]` it replaced.
+fn open_query(mut restored: Vec<Message>, opening: String) -> Vec<Message> {
+    match restored.last_mut() {
+        Some(last) if last.role == Role::User => match &mut last.content {
+            Value::String(text) => {
+                text.push_str("\n\n");
+                text.push_str(&opening);
+            }
+            Value::Array(blocks) => blocks.push(json!({ "type": "text", "text": opening })),
+            other => *other = Value::String(opening),
+        },
+        _ => restored.push(Message::user(opening)),
+    }
+    restored
 }
 
 fn failure_block(id: &str, tool: &str, kind: &str, detail: &str) -> Value {
@@ -811,6 +962,19 @@ fn compact(args: &Value) -> String {
 
 fn tail(v: &[String], n: usize) -> Vec<String> {
     v.iter().rev().take(n).rev().cloned().collect()
+}
+
+/// How many distinct failed calls a goal remembers. Four times what a kick
+/// shows, so the cap is a bound on the collection rather than a second, quieter
+/// version of the kick's own limit.
+const FAILED_EVER_MAX: usize = 20;
+
+/// Drop the oldest entries past the cap. See where the list is seeded for why
+/// oldest-first is the right end to lose.
+fn trim_oldest(v: &mut Vec<String>) {
+    if v.len() > FAILED_EVER_MAX {
+        v.drain(..v.len() - FAILED_EVER_MAX);
+    }
 }
 
 // endregion: The memo key, and what the model is shown

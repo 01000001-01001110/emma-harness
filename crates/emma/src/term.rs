@@ -129,7 +129,10 @@ impl Term {
     /// A tool is about to run. One line, the interesting argument inline.
     pub fn tool_started(&self, name: &str, args: &serde_json::Value) {
         let head = summarise_args(name, args);
-        self.side(&format!("{} {head}", self.paint(BOLD, &format!("● {name}"))));
+        self.side(&format!(
+            "{} {head}",
+            self.paint(BOLD, &format!("● {name}"))
+        ));
     }
 
     pub fn tool_result(&self, display: Option<&str>, content: &str, error: bool) {
@@ -228,7 +231,9 @@ impl LineSource {
                 match std::io::BufRead::read_line(&mut stdin.lock(), &mut line) {
                     Ok(0) | Err(_) => break,
                     Ok(_) => {
-                        if tx.blocking_send(line.trim_end_matches(['\r', '\n']).to_string()).is_err()
+                        if tx
+                            .blocking_send(line.trim_end_matches(['\r', '\n']).to_string())
+                            .is_err()
                         {
                             break;
                         }

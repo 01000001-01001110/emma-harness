@@ -653,20 +653,38 @@ async fn bash_kills_a_command_that_outruns_its_timeout() {
 
 /// A noisy build can spend an entire context window in one call. This pins both
 /// halves of the fix: output is capped, and the cap is admitted. It also
-/// exercises the drain-past-the-cap behaviour by accident and on purpose — a
-/// reader that stopped reading at 64 KiB would fill the pipe buffer, the child
-/// would block on a write nobody consumes, and this test would not fail, it
-/// would take the full timeout. Two minutes per noisy command, in every run.
+/// exercises the drain-past-the-cap behaviour on purpose — a reader that
+/// stopped reading at 64 KiB would fill the pipe buffer, the child would block
+/// on a write nobody consumes, and this test would not fail, it would sit until
+/// the timeout. That is why the payload is four times the cap: it has to
+/// outlast the pipe buffer as well as the cap, or a broken reader finishes
+/// anyway and the deadlock this exists to catch goes unnoticed.
+///
+/// **The timeout is a backstop, not a budget, and it is deliberately absurd.**
+/// The reasoning above was written about a pipe-buffer deadlock, and it turned
+/// out to describe an ordinary busy machine just as well: at 60s this failed
+/// under a parallel test round while passing in isolation, which measured the
+/// box rather than the code. So the work is now one `cat` of a file the test
+/// wrote — a single fork, no 4,000-iteration shell loop — and the timeout is
+/// five minutes. Nothing here should take milliseconds longer than that unless
+/// the drain has genuinely stopped draining, which is the only failure the
+/// clock is meant to catch.
 #[tokio::test]
 async fn bash_caps_output_and_says_so() {
     let sandbox = Sandbox::new();
+    // 256 KiB: four times `MAX_STREAM_BYTES`, so the length assertion below is
+    // one a missing cap would actually fail. The previous payload was 160 KB
+    // against a 200 KiB bound, which no amount of cap regression could exceed.
+    let line = "0123456789012345678901234567890123456789012345678901234567890123\n";
+    sandbox.write_file("noisy.txt", &line.repeat(256 * 1024 / line.len()));
+
     let outcome = sandbox
         .ok(
             "Bash",
-            json!({ "command": "i=0; while [ $i -lt 4000 ]; do echo 0123456789012345678901234567890123456789; i=$((i+1)); done", "timeout_ms": 60000 }),
+            json!({ "command": "cat noisy.txt", "timeout_ms": 300000 }),
         )
         .await;
-    assert!(outcome.truncated, "160 KB of output was not capped");
+    assert!(outcome.truncated, "256 KiB of output was not capped");
     assert!(
         outcome.content.contains("[truncated"),
         "{}",

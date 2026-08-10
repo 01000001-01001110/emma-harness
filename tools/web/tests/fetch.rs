@@ -148,7 +148,11 @@ fn webfetch_names_the_host_the_gate_will_grant_against() {
     // spellings of one host would prompt twice for a host already approved.
     assert_eq!(t.host, "docs.rs");
     // …and the human is shown the errand, not just the destination.
-    assert!(t.detail.contains("https://Docs.RS/tokio/latest"), "{}", t.detail);
+    assert!(
+        t.detail.contains("https://Docs.RS/tokio/latest"),
+        "{}",
+        t.detail
+    );
 }
 
 #[test]

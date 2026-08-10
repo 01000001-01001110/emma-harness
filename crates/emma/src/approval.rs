@@ -613,7 +613,10 @@ mod tests {
 
     #[tokio::test]
     async fn always_is_scoped_to_the_tool_and_to_the_process() {
-        let a = Approvals::new(Gate::Ask, Asker::Scripted(Mutex::new(vec![Answer::AlwaysThisTool])));
+        let a = Approvals::new(
+            Gate::Ask,
+            Asker::Scripted(Mutex::new(vec![Answer::AlwaysThisTool])),
+        );
         assert_eq!(
             a.decide("Write", WRITES, None, &Value::Null, &Term::silent())
                 .await,
@@ -864,8 +867,14 @@ mod tests {
         // question, so the call is still denied.
         let a = Approvals::new(Gate::Ask, Asker::Scripted(Mutex::new(vec![Answer::Yes])));
         assert!(matches!(
-            a.decide("Uploader", both, target("docs.rs"), &Value::Null, &Term::silent())
-                .await,
+            a.decide(
+                "Uploader",
+                both,
+                target("docs.rs"),
+                &Value::Null,
+                &Term::silent()
+            )
+            .await,
             Verdict::Deny(_)
         ));
     }
@@ -910,7 +919,10 @@ mod tests {
             "Write",
             &serde_json::json!({ "file_path": "a.txt", "content": "one\ntwo\n" }),
         );
-        assert!(p.contains("a.txt") && p.contains("8 bytes") && p.contains("2 lines"), "{p}");
+        assert!(
+            p.contains("a.txt") && p.contains("8 bytes") && p.contains("2 lines"),
+            "{p}"
+        );
     }
 
     #[test]

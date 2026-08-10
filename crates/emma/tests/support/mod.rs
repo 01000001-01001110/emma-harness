@@ -7,13 +7,17 @@
 //! inputs and count calls, and every assertion is about what `Agent` did with
 //! them.
 
+// A `mod support;` is compiled once into every test binary that declares it, so
+// anything only `loop.rs` uses is dead code from `resume.rs`'s point of view and
+// vice versa. The alternative is a support module per test file, which is two
+// copies of the fake provider.
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use emma_llm::{
-    AssistantTurn, Event, LlmError, Message, Mode, Provider, Request, ToolCall, Usage,
-};
+use emma_llm::{AssistantTurn, Event, LlmError, Message, Mode, Provider, Request, ToolCall, Usage};
 use emma_tool_api::{NetworkTarget, Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
@@ -123,7 +127,11 @@ impl Fake {
     pub fn last_messages(&self) -> Vec<Message> {
         let seen = self.seen.lock().unwrap();
         let last = seen.last().expect("the model was never called");
-        last.history.iter().chain(last.query.iter()).cloned().collect()
+        last.history
+            .iter()
+            .chain(last.query.iter())
+            .cloned()
+            .collect()
     }
 }
 

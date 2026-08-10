@@ -198,9 +198,7 @@ fn translate_command(root: &Path, name: &str, raw: &str) -> Result<String> {
         .unwrap_or(rest)
         .trim_start_matches("./");
 
-    if rest.is_empty()
-        || rest.contains(SHELL_METACHARACTERS)
-        || rest.contains(char::is_whitespace)
+    if rest.is_empty() || rest.contains(SHELL_METACHARACTERS) || rest.contains(char::is_whitespace)
     {
         bail!(
             "hook `{name}`: `{raw}` is a shell command. Emma execs a contained \
@@ -215,9 +213,8 @@ fn translate_command(root: &Path, name: &str, raw: &str) -> Result<String> {
     // canonicalise-and-contain check and be refused for the wrong reason — with
     // an error about a missing file rather than about containment. The rule is
     // the same on both platforms, so the check has to be too.
-    let rooted = rest.starts_with('/')
-        || rest.starts_with('\\')
-        || rest.as_bytes().get(1) == Some(&b':');
+    let rooted =
+        rest.starts_with('/') || rest.starts_with('\\') || rest.as_bytes().get(1) == Some(&b':');
     if rooted || Path::new(rest).is_absolute() {
         bail!(
             "hook `{name}`: `{raw}` is an absolute path. Hook commands must live \
@@ -303,7 +300,12 @@ pub(crate) fn agents(root: &Path) -> Result<Vec<String>> {
     for entry in std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
         let path = entry?.path();
         if path.extension().and_then(|e| e.to_str()) == Some("md") {
-            out.push(path.file_stem().unwrap_or_default().to_string_lossy().into_owned());
+            out.push(
+                path.file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+            );
         }
     }
     out.sort();

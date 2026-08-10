@@ -9,7 +9,7 @@ use emma::agent::{Agent, Ending, Interrupt, Setup};
 use emma::approval::{Approvals, Asker, Gate};
 use emma::cli::{self, Command};
 use emma::goal::{Goal, MarkerClaim};
-use emma::session::SessionLog;
+use emma::session::{self, SessionLog};
 use emma::settings;
 use emma::skill::Skill;
 use emma::term::{LineSource, Term};
@@ -26,9 +26,11 @@ fn main() -> Result<()> {
         }
     };
 
-    // These four touch a file and a terminal and nothing else. Running them
+    // These five touch a file and a terminal and nothing else. Running them
     // without a runtime means a broken runtime can never be the thing that
-    // stops somebody fixing their credentials.
+    // stops somebody fixing their credentials — and `init` belongs here for the
+    // sharper version of the same reason: the command that fixes "Emma will not
+    // start in this directory" must not need Emma to start.
     match cli.command {
         Command::Help => {
             print!("{}", cli::HELP);
@@ -40,6 +42,10 @@ fn main() -> Result<()> {
         }
         Command::Api(key) => return emma::commands::api(key),
         Command::Model(name) => return emma::commands::model(name),
+        Command::Init => {
+            let cwd = std::env::current_dir().context("reading the working directory")?;
+            return emma::commands::init(&cwd, &mut std::io::stdout());
+        }
         _ => {}
     }
 
@@ -131,16 +137,64 @@ async fn run(cli: cli::Cli) -> Result<()> {
 
     let home = auth::home_dir();
     let (model, _source) = settings::resolve(opts.model.as_deref(), home.as_deref());
-    let key = auth::load_default()
-        .map_err(|e| anyhow::anyhow!(emma::commands::rename_auth(&e.to_string())))?;
+    let key = auth::load_default()?;
     let provider = AnthropicProvider::new(key, Some(model));
 
-    let session_id = SessionLog::new_id();
-    let log = match opts
+    let session_dir = opts
         .session_dir
         .clone()
-        .or_else(|| SessionLog::default_dir(home.as_deref()))
-    {
+        .or_else(|| SessionLog::default_dir(home.as_deref()));
+
+    // Resolved before the log is opened, because a resumed run continues the
+    // same file rather than starting a new one: one goal's transcript in one
+    // place, and a resume of a resume that folds the whole thing rather than
+    // the last leg of it.
+    let restored = match &cli.command {
+        Command::Resume { session, .. } => {
+            let dir = session_dir.clone().context(
+                "no session directory: the home directory could not be determined. Name one \
+                 with --session-dir.",
+            )?;
+            let path = session::locate(&dir, session.as_deref(), &cwd)?;
+            let restored = session::restore(&path)?;
+            // The spend is shown against the caps rather than on its own,
+            // because the number that matters to somebody deciding whether to
+            // resume is the headroom: a session restored at 59/60 calls will
+            // stop again immediately, and that is worth knowing before it does
+            // rather than after.
+            let b = &opts.budgets;
+            let r = &restored.resumed;
+            term.note(&format!(
+                "resuming {} — {} messages restored. Already spent on this goal: {}/{} calls, \
+                 {}/{} tokens, {}/{} nudges.",
+                restored.id,
+                r.messages.len(),
+                r.iterations,
+                b.max_iterations,
+                r.tokens,
+                b.max_tokens,
+                r.kicks,
+                b.max_kicks
+            ));
+            // Warned about, never refused: the user asked to resume, and what
+            // is dangerous is not the change but the change being invisible.
+            for line in restored.continuity.differences(
+                &harness.instructions_hash(),
+                &tools.schema_hash(),
+                provider.model_id(),
+            ) {
+                term.warn(&line);
+            }
+            Some(restored)
+        }
+        _ => None,
+    };
+
+    let session_id = match &restored {
+        Some(restored) => restored.id.clone(),
+        None => SessionLog::new_id(),
+    };
+    let log = match session_dir {
         Some(dir) => match SessionLog::open(&dir, &session_id) {
             Ok(log) => log,
             Err(e) => {
@@ -153,14 +207,18 @@ async fn run(cli: cli::Cli) -> Result<()> {
         None => SessionLog::none(),
     };
     if !opts.print {
-        term.note(&format!("{}  session {}", provider.model_id(), log.path().display()));
+        term.note(&format!(
+            "{}  session {}",
+            provider.model_id(),
+            log.path().display()
+        ));
     }
 
     let interrupt = Interrupt::new();
     interrupt.install();
 
     let budgets = opts.budgets;
-    let mut agent = Agent::new(Setup {
+    let agent = Agent::new(Setup {
         provider: &provider,
         harness: &harness,
         tools: &tools,
@@ -173,11 +231,25 @@ async fn run(cli: cli::Cli) -> Result<()> {
         session_id,
         budgets,
         caching: opts.caching,
-        mode: if opts.print { Mode::Batch } else { Mode::Stream },
+        mode: if opts.print {
+            Mode::Batch
+        } else {
+            Mode::Stream
+        },
     });
 
-    let Command::Run(seed) = cli.command else {
-        unreachable!("every other command returned above")
+    // The restored conversation and counters go in here, and the loop below is
+    // unchanged by the resume: a resumed run is a run with something behind it,
+    // not a different mode.
+    let mut agent = match restored {
+        Some(restored) => agent.resuming(restored.resumed),
+        None => agent,
+    };
+
+    let seed = match cli.command {
+        Command::Run(seed) => seed,
+        Command::Resume { goal, .. } => goal,
+        _ => unreachable!("every other command returned above"),
     };
 
     let mut next = seed;

@@ -341,9 +341,13 @@ pub enum LlmError {
     // at the printing boundary; that was a workaround for a wrong string, and
     // the string is now right. `rename_auth` is therefore a no-op in practice
     // and can be deleted once nothing else depends on it.
-    Unauthorized { message: String },
+    Unauthorized {
+        message: String,
+    },
 
-    Forbidden { message: String },
+    Forbidden {
+        message: String,
+    },
 
     RateLimited {
         retry_after: Option<Duration>,
@@ -351,11 +355,19 @@ pub enum LlmError {
         message: String,
     },
 
-    BadRequest { message: String },
+    BadRequest {
+        message: String,
+    },
 
-    Unavailable { status: u16, message: String },
+    Unavailable {
+        status: u16,
+        message: String,
+    },
 
-    Api { status: u16, message: String },
+    Api {
+        status: u16,
+        message: String,
+    },
 
     Transport(String),
 

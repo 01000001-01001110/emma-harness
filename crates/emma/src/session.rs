@@ -28,7 +28,8 @@
 //!   spend last week". Folding every JSONL file to answer that is fine at a
 //!   hundred sessions and absurd at ten thousand.
 //!
-//! **The record is sufficient for resume; the command is not built.** Every
+//! **The record is sufficient for resume, and `emma --resume` is what spends
+//! it.** Every
 //! value the loop appends to `query` is written here at the moment it is
 //! appended, so [`fold`] returns the message list that was sent rather than a
 //! reconstruction of it. That is the distinction the whole format turns on: the
@@ -46,23 +47,31 @@
 //! beside `raw_content`, duplicating bytes on purpose so a human running `grep`
 //! over the file gets one plain line rather than an array of escaped blocks.
 //!
-//! What [`fold`] does not do is decide what a resumed run should *send* — that
-//! list has a new user turn on the end, and its shape is the `--resume`
-//! command's decision. There is no such flag today; `cli.rs` has no such
-//! option. Nor does anything here address exactly-once tool side effects: a
-//! resumed run re-runs from the last complete turn, and a turn whose tool calls
-//! were not all answered is dropped rather than half-restored, because the API
-//! rejects an unanswered `tool_use`.
+//! What [`fold`] does not do is decide what a resumed run should *send*, nor
+//! what it has already spent. Both are [`restore`], further down: the messages
+//! plus the goal's token, iteration and nudge counters and its failed-call
+//! memo, because a resumed run that restarted those at zero would hand back a
+//! fresh budget and make the cap that stopped it meaningless.
+//!
+//! Nothing here addresses exactly-once tool side effects, and nothing here
+//! replays a tool. A resumed run restarts from the last complete turn; a turn
+//! whose tool calls were not all answered is dropped rather than half-restored,
+//! because the API rejects an unanswered `tool_use`, and the calls in it are
+//! handed to the model as a gap in the record rather than re-run behind its
+//! back.
 
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use emma_llm::Message;
 use serde_json::{json, Value};
+
+use crate::agent::{label_of, memo_key_of, Resumed};
 
 pub struct SessionLog {
     id: String,
@@ -164,7 +173,8 @@ impl SessionLog {
     /// skipped rather than failing the read, which is the property that makes
     /// this format survivable without a transaction.
     pub fn read(path: &Path) -> Result<Vec<Value>> {
-        let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let raw =
+            fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         Ok(raw
             .lines()
             .filter_map(|l| serde_json::from_str(l).ok())
@@ -314,9 +324,10 @@ impl Fold {
         self.history
             .push(Message::user(std::mem::take(&mut self.goal_text)));
         if !self.last_text.trim().is_empty() {
-            self.history.push(Message::assistant(Value::String(
-                std::mem::take(&mut self.last_text),
-            )));
+            self.history
+                .push(Message::assistant(Value::String(std::mem::take(
+                    &mut self.last_text,
+                ))));
         }
         self.query.clear();
         self.in_goal = false;
@@ -352,6 +363,297 @@ fn string(r: &Value, key: &str) -> String {
 
 // endregion: The fold
 
+// region: Resume
+// ---------------------------------------------------------------------------
+// Resume
+//
+// Three questions the fold deliberately does not answer: which file, what was
+// already spent, and whether the harness that spent it is still the one in
+// front of us. The fold is about the conversation; this is about everything
+// else a run carried that a message list cannot express.
+//
+// What is *not* here, stated because its absence is a decision: replay.
+// Nothing in this section runs a tool. A turn dropped for unmatched tool ids
+// means those calls never happened as far as the restored conversation is
+// concerned, and re-running them to close the gap would re-run a `Write` or a
+// `Bash` against a working tree that has moved on since. Handing the model the
+// record and letting it decide what to redo costs a turn; replaying costs
+// whatever the tool did the second time.
+// ---------------------------------------------------------------------------
+
+/// Everything `--resume` needs out of one session file.
+#[derive(Debug)]
+pub struct Restored {
+    /// The session id, which is the file stem — a resumed run appends to this
+    /// same file rather than starting a new one, so the transcript of a goal
+    /// stays in one place.
+    pub id: String,
+    pub path: PathBuf,
+    pub resumed: Resumed,
+    pub continuity: Continuity,
+}
+
+/// What the file says the interrupted run was booted against.
+///
+/// Every field is a string that may be empty, because a session written before
+/// a field existed simply does not have it, and a warning derived from a
+/// missing value is noise that trains people to ignore warnings.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Continuity {
+    pub instructions_hash: String,
+    pub tool_schema_hash: String,
+    pub model: String,
+    pub cwd: String,
+}
+
+impl Continuity {
+    /// What changed between the run that wrote the file and the run about to
+    /// continue it, in sentences a user can act on.
+    ///
+    /// **Warn, do not refuse.** The user asked to resume; declining would leave
+    /// them with a transcript and no way to use it, and the thing that is
+    /// actually dangerous is not the change but the change being invisible. A
+    /// conversation continuing under instructions it was never held to is the
+    /// "booted on the wrong prompt" failure this project has already paid for,
+    /// arriving one level along — so each line names the field, the old value
+    /// and the new one.
+    pub fn differences(
+        &self,
+        instructions_hash: &str,
+        tool_schema_hash: &str,
+        model: &str,
+    ) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut check = |what: &str, was: &str, now: &str, cost: &str| {
+            if !was.is_empty() && was != now {
+                out.push(format!(
+                    "{what} changed since this session ran: {was} → {now}. {cost}"
+                ));
+            }
+        };
+        check(
+            "instructions",
+            &self.instructions_hash,
+            instructions_hash,
+            "The restored conversation was produced under a prompt this run is not using.",
+        );
+        check(
+            "tool schema",
+            &self.tool_schema_hash,
+            tool_schema_hash,
+            "A tool the transcript calls may not exist now, or may take different arguments.",
+        );
+        check(
+            "model",
+            &self.model,
+            model,
+            "The turns being handed back were written by a different model.",
+        );
+        out
+    }
+}
+
+/// Read one session file into everything a resumed run needs.
+pub fn restore(path: &Path) -> Result<Restored> {
+    let records = SessionLog::read(path)?;
+    if !records.iter().any(|r| r["kind"] == "goal") {
+        bail!(
+            "{} records no goal, so there is nothing to resume",
+            path.display()
+        );
+    }
+    Ok(Restored {
+        id: path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        path: path.to_path_buf(),
+        resumed: restore_records(&records),
+        continuity: continuity_of(&records),
+    })
+}
+
+/// [`restore`] over records already read — the testable half, and the half with
+/// the reasoning in it.
+///
+/// **Every counter resets at a `goal` record.** Budgets are per goal in the
+/// loop, so a session with three finished goals in it must not hand the fourth
+/// the sum of the first three; what a resume inherits is the spend of the goal
+/// it is continuing. `goal_finished` overrides the running totals where it is
+/// present because it is the loop's own arithmetic; the running totals are what
+/// answer the case the file exists for, which is a run that was killed and
+/// never wrote one.
+pub fn restore_records(records: &[Value]) -> Resumed {
+    let mut r = Resumed {
+        messages: fold_records(records),
+        ..Default::default()
+    };
+    // `tool_call` carries the arguments and `tool_result` carries the verdict,
+    // and they are two records joined by the call id. Neither alone is enough:
+    // the memo is keyed on the arguments, and whether the call failed is only
+    // in the block.
+    let mut args: HashMap<String, (String, Value)> = HashMap::new();
+    for record in records {
+        match record["kind"].as_str().unwrap_or_default() {
+            "goal" => {
+                r.tokens = 0;
+                r.iterations = 0;
+                r.kicks = 0;
+                r.failed_now.clear();
+                r.failed_ever.clear();
+                args.clear();
+            }
+            "model_call" => {
+                r.iterations += 1;
+                r.tokens += record["billable_total_tokens"].as_i64().unwrap_or(0);
+            }
+            "kick" => {
+                r.kicks = record["n"].as_u64().unwrap_or(u64::from(r.kicks) + 1) as u32;
+            }
+            "tool_call" => {
+                if let (Some(id), Some(tool)) = (str_of(record, "id"), str_of(record, "tool")) {
+                    args.insert(id, (tool, record["args"].clone()));
+                }
+            }
+            "tool_result" => {
+                let failed = record["block"]["is_error"] == Value::Bool(true);
+                if !failed {
+                    // The loop's rule, replayed: something changed, so every
+                    // earlier failure is worth trying again. A fold that only
+                    // accumulated failures would restore a memo that forbids
+                    // calls the original run had already re-allowed.
+                    r.failed_now.clear();
+                    continue;
+                }
+                // Only the failures that got as far as being dispatched are
+                // recoverable, because only those wrote a `tool_call` with the
+                // arguments in it. An unknown tool or a schema violation fails
+                // before that record exists, and is not restored — the cost is
+                // that the resumed model may re-issue one call that cannot run
+                // and gets told so again, which is a wasted turn rather than a
+                // side effect.
+                let Some(id) = str_of(record, "id") else {
+                    continue;
+                };
+                let Some((tool, input)) = args.get(&id) else {
+                    continue;
+                };
+                let key = memo_key_of(tool, input);
+                if !r.failed_now.contains(&key) {
+                    r.failed_now.push(key);
+                }
+                let label = label_of(tool, input);
+                if !r.failed_ever.contains(&label) {
+                    r.failed_ever.push(label);
+                }
+            }
+            "goal_finished" => {
+                r.tokens = record["tokens"].as_i64().unwrap_or(r.tokens);
+                r.iterations = record["iterations"]
+                    .as_u64()
+                    .unwrap_or(u64::from(r.iterations)) as u32;
+                r.kicks = record["kicks"].as_u64().unwrap_or(u64::from(r.kicks)) as u32;
+            }
+            _ => {}
+        }
+    }
+    r
+}
+
+/// The last `goal` record's account of the harness, because it is the one the
+/// restored messages were actually produced under.
+fn continuity_of(records: &[Value]) -> Continuity {
+    let mut out = Continuity::default();
+    for record in records {
+        if record["kind"] == "goal" {
+            out = Continuity {
+                instructions_hash: string(record, "instructions_hash"),
+                tool_schema_hash: string(record, "tool_schema_hash"),
+                model: string(record, "model"),
+                cwd: string(record, "cwd"),
+            };
+        }
+    }
+    out
+}
+
+/// Which session file `--resume` means.
+///
+/// **Named wins outright.** `--resume <id>` is a request for one session and is
+/// not filtered by the working directory: a user who names a session has
+/// already answered the question the directory rule exists to answer, and
+/// second-guessing them would refuse a file that is plainly there.
+///
+/// **Bare `--resume` means "the one I was last running here".** Sessions from
+/// every project share one directory, so the newest file overall is routinely
+/// somebody else's work — resuming that into this tree is a conversation about
+/// the wrong repository with write tools attached. Ids sort by time, so newest
+/// is the last id rather than the newest mtime: an mtime moves when a file is
+/// copied and an id does not.
+///
+/// Files are opened newest-first and the walk stops at the first match, so the
+/// usual case reads one file. It is still a scan, and it is the "queries across
+/// sessions" cost the module doc names as a thing that would change the format
+/// if it ever mattered at scale.
+pub fn locate(dir: &Path, id: Option<&str>, cwd: &Path) -> Result<PathBuf> {
+    if let Some(id) = id {
+        // Accept what `emma` prints at startup, which is a path ending in
+        // `.jsonl`, as well as the bare id.
+        let id = id.strip_suffix(".jsonl").unwrap_or(id);
+        let path = dir.join(format!("{id}.jsonl"));
+        if path.is_file() {
+            return Ok(path);
+        }
+        bail!("no session `{id}` in {}", dir.display());
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if dir.is_dir() {
+        for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+            let path = entry?.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                candidates.push(path);
+            }
+        }
+    }
+    candidates.sort();
+    for path in candidates.iter().rev() {
+        let Ok(records) = SessionLog::read(path) else {
+            continue;
+        };
+        if records
+            .iter()
+            .any(|r| r["kind"] == "goal" && same_dir(&string(r, "cwd"), cwd))
+        {
+            return Ok(path.clone());
+        }
+    }
+    bail!(
+        "no session recorded in {} was run from {}. Name one with `emma --resume <id>`.",
+        dir.display(),
+        cwd.display()
+    );
+}
+
+/// Whether a recorded working directory is this one. Canonicalised on both
+/// sides rather than compared as bytes, for the reason `harness::discover_in`
+/// gives: case, a trailing separator, a short name and a symlinked path are all
+/// ways two spellings name one directory. An empty recording — a session from
+/// before the field existed — matches nothing rather than everything.
+fn same_dir(recorded: &str, cwd: &Path) -> bool {
+    if recorded.is_empty() {
+        return false;
+    }
+    let real = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    real(Path::new(recorded)) == real(cwd)
+}
+
+fn str_of(r: &Value, key: &str) -> Option<String> {
+    r[key].as_str().map(str::to_string)
+}
+
+// endregion: Resume
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,7 +678,11 @@ mod tests {
         // two write syscalls. Everything before it must still read.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("torn.jsonl");
-        fs::write(&path, "{\"kind\":\"goal\",\"text\":\"a\"}\n{\"kind\":\"assis").unwrap();
+        fs::write(
+            &path,
+            "{\"kind\":\"goal\",\"text\":\"a\"}\n{\"kind\":\"assis",
+        )
+        .unwrap();
         let records = SessionLog::read(&path).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0]["text"], "a");

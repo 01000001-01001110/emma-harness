@@ -154,7 +154,8 @@ fn the_users_global_claude_directory_is_not_a_project_harness() {
     let err = emma_harness::discover_in(&deep, None, Some(home.clone()))
         .expect_err("the global .claude/ must not be adopted");
     assert!(
-        !err.to_string().contains(&home.join(".claude").display().to_string()),
+        !err.to_string()
+            .contains(&home.join(".claude").display().to_string()),
         "it should not even claim to have looked there: {err}"
     );
 }
@@ -187,7 +188,8 @@ fn the_skip_survives_a_differently_cased_home() {
     let err = emma_harness::discover_in(&deep, None, Some(other))
         .expect_err("a differently-spelled $HOME is still $HOME");
     assert!(
-        !err.to_string().contains(&home.join(".claude").display().to_string()),
+        !err.to_string()
+            .contains(&home.join(".claude").display().to_string()),
         "the skip went inert under a differently-cased home: {err}"
     );
 }
@@ -252,8 +254,14 @@ fn unselected_agents_do_not_refuse_the_boot() {
     let base = scratch("claude-agents");
     let root = base.join(".claude");
     write(&base.join("CLAUDE.md"), "RULES");
-    write(&root.join("agents/reviewer.md"), "---\nname: reviewer\n---\nbody");
-    write(&root.join("agents/planner.md"), "---\nname: planner\n---\nbody");
+    write(
+        &root.join("agents/reviewer.md"),
+        "---\nname: reviewer\n---\nbody",
+    );
+    write(
+        &root.join("agents/planner.md"),
+        "---\nname: planner\n---\nbody",
+    );
 
     let h = Harness::load(&root).expect("a repository full of agents must still boot");
     assert!(h.persona.is_none());
@@ -275,15 +283,19 @@ fn a_selected_agent_supplies_a_prompt_layer_and_its_allowlist() {
         "---\nname: reviewer\ntools: Read, Grep\nmodel: opus\n---\n\nReview carefully.\n",
     );
 
-    let h = Harness::load_selecting(&root, Flavor::Claude, Some("reviewer".into()))
-        .expect("load");
+    let h = Harness::load_selecting(&root, Flavor::Claude, Some("reviewer".into())).expect("load");
     assert_eq!(h.persona.as_deref(), Some("reviewer"));
     assert_eq!(
         h.instructions, "RULES\n\nReview carefully.\n",
         "the frontmatter is configuration and must not reach the model"
     );
-    assert_eq!(h.tools(), Some(["Read".to_string(), "Grep".to_string()].as_slice()));
-    let selected = h.select_tools(registry(&["Read", "Grep", "Bash"])).expect("select");
+    assert_eq!(
+        h.tools(),
+        Some(["Read".to_string(), "Grep".to_string()].as_slice())
+    );
+    let selected = h
+        .select_tools(registry(&["Read", "Grep", "Bash"]))
+        .expect("select");
     assert_eq!(selected.names(), vec!["Read", "Grep"]);
 }
 
@@ -299,7 +311,10 @@ fn an_agent_may_write_its_tools_as_a_yaml_list() {
         "---\ntools:\n  - Read\n  - Bash\n---\nbody\n",
     );
     let h = Harness::load_selecting(&root, Flavor::Claude, Some("r".into())).expect("load");
-    assert_eq!(h.tools(), Some(["Read".to_string(), "Bash".to_string()].as_slice()));
+    assert_eq!(
+        h.tools(),
+        Some(["Read".to_string(), "Bash".to_string()].as_slice())
+    );
 }
 
 /// **The compatibility promise, at the level below `settings.json`.** Real
@@ -347,7 +362,10 @@ fn a_claude_skill_may_open_with_a_licence_comment() {
 fn an_unreadable_claude_skill_is_skipped_rather_than_fatal() {
     let base = scratch("claude-skill-bad");
     let root = base.join(".claude");
-    write(&root.join("skills/broken/SKILL.md"), "no frontmatter at all\n");
+    write(
+        &root.join("skills/broken/SKILL.md"),
+        "no frontmatter at all\n",
+    );
     write(
         &root.join("skills/alsobroken/SKILL.md"),
         "---\ndescription: no name\n---\nbody\n",
@@ -546,7 +564,10 @@ fn an_unknown_key_inside_the_hooks_block_is_still_an_error() {
     let err = Harness::load(&root).expect_err("a misspelled matcher must not guard everything");
     let msg = format!("{err:#}");
     assert!(msg.contains("settings.json"), "{msg}");
-    assert!(msg.contains("mathcer"), "the error must name the key: {msg}");
+    assert!(
+        msg.contains("mathcer"),
+        "the error must name the key: {msg}"
+    );
 }
 
 // endregion: settings.json

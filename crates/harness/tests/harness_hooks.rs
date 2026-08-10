@@ -217,7 +217,14 @@ async fn silence_is_allow() {
 /// over side effects that had already happened.
 #[tokio::test]
 async fn a_post_tool_use_failure_leaves_the_result_standing() {
-    let root = one_hook("post-fail", "PostToolUse", "boom", "exit 9", "exit /b 9", "");
+    let root = one_hook(
+        "post-fail",
+        "PostToolUse",
+        "boom",
+        "exit 9",
+        "exit /b 9",
+        "",
+    );
     let h = Harness::load(&root).expect("load");
     let args = serde_json::json!({});
     let mut c = call(&args);

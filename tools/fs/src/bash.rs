@@ -23,15 +23,22 @@
 //! `cwd` *argument* is contained — it must resolve inside the root — which is a
 //! guard on the argument only, not on what the command then does with it.
 //!
-//! **Exit status is not failure.** The ruling and the reasoning are recorded at
-//! the point in `run` that implements it, below. One thing to know before
-//! reading further: `descriptions/bash.md`, which is what the model is actually
-//! shown, still describes a non-zero exit as a failure. That text predates the
-//! ruling and now contradicts the code. It is left alone here because the
-//! description is part of the tool's wire surface and changing it changes the
-//! registry's schema hash, so it is a deliberate edit rather than a drive-by
-//! one — but it is wrong, and it is wrong in the direction that teaches the
-//! model to avoid `Bash` for exactly the commands it should be using it for.
+//! **Exit status is not failure.** A command that started and finished is `Ok`,
+//! carrying `exit status <n>` as the first line of its content; only
+//! could-not-spawn, timed-out and killed are `Failed`. The reasoning is recorded
+//! at the point in `run` that implements it, below.
+//!
+//! The contract is stated in three places — here, in `run`, and in
+//! `descriptions/bash.md`, which is the only one the model reads — and for a
+//! while it was stated three different ways. The description went on describing
+//! a non-zero exit as a failure long after the code stopped treating it as one,
+//! because changing it moves the registry's schema hash and so kept being
+//! deferred as too deliberate for a drive-by edit. That deferral cost more than
+//! the edit would have: it taught the model to avoid `Bash` for exactly the
+//! commands it should use it for, and to append `|| true`, which discards the
+//! status the tool now reports correctly. All three agree as of 2026-08-10.
+//! **A contract change is not landed until it has reached the copy the model
+//! is shown.**
 
 use std::path::PathBuf;
 use std::process::Stdio;

@@ -20,9 +20,15 @@
 //!
 //! **Not idempotent, and that is correct.** Running the same edit twice fails
 //! the second time, because after the first the anchor is gone. A tool that
-//! reported success for a no-op would be lying about what it did, and crash
-//! recovery reads `idempotent` to decide whether replaying is safe — here it is
-//! not, and saying so is the point.
+//! reported success for a no-op would be lying about what it did.
+//!
+//! `idempotent: false` is what the tool declares about that, and it is worth
+//! knowing what reads it, because an earlier version of this paragraph claimed
+//! crash recovery does. Nothing does: there is no crash-recovery fold in this
+//! project, and no replay decision anywhere consults the field. Its one reader
+//! is `Registry::register`, which checks it against `read_only` — and `Edit`
+//! declaring `read_only: false` is exactly what makes `idempotent: false` a
+//! legal thing to say here rather than a contradiction.
 //!
 //! Unlike `Write`, a partial read *does* license an edit: an anchored change
 //! only claims to know the text it matched, which is text the model has seen.
