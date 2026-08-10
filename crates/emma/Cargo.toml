@@ -3,9 +3,34 @@ name = "emma"
 version.workspace = true
 edition.workspace = true
 
+# A library as well as a binary, and that is not packaging taste: the loop is
+# the only thing in this repository that cannot be tested through a public API
+# unless it has one. `main.rs` is argument parsing and wiring; everything with a
+# decision in it lives in the lib, where a scripted `Provider` can drive it.
+[lib]
+name = "emma"
+path = "src/lib.rs"
+
 [[bin]]
 name = "emma"
 path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
+rpassword.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# `signal` for Ctrl-C, `sync` for the event and stdin channels. Nothing here
+# spawns a process: the tools do that, behind the approval gate.
+tokio = { workspace = true, features = ["signal", "sync"] }
+
+emma-harness.workspace = true
+emma-llm.workspace = true
+emma-tool-api.workspace = true
+emma-tools-fs.workspace = true
+emma-tools-tasks.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

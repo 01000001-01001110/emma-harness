@@ -1,0 +1,8 @@
+{
+  "default_persona": "emma",
+  "personas": {
+    "emma": {
+      "description": "Emma working on her own repository."
+    }
+  }
+}

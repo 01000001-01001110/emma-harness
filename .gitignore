@@ -5,3 +5,6 @@
 *.db
 *.db-wal
 *.db-shm
+
+# Hook scratch: subagent and validation logs, regenerated per session.
+/memory
