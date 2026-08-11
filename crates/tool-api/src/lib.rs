@@ -121,6 +121,21 @@ pub struct ToolOutcome {
     /// silent truncation is indistinguishable from a short answer and it will
     /// reason confidently about the part it never saw.
     pub truncated: bool,
+    /// *Which* cap cut, how much it cut, and what would raise it — one line,
+    /// written by the tool that did the cutting.
+    ///
+    /// `truncated` alone is only half an admission. "Output was truncated" is
+    /// true and useless: it does not say whether the prose or an inventory was
+    /// lost, does not say how much, and does not name the argument that would
+    /// get the rest. A tool knows all three at the moment it cuts and nothing
+    /// downstream can reconstruct them, so it says them here and the runtime
+    /// passes them on verbatim — to the model in the result, and to the human
+    /// on the terminal line.
+    ///
+    /// `None` means the tool set only the flag. That is the weaker form, kept
+    /// because several tools explain their own cut inside `content` instead;
+    /// it is never the preferred one for a new tool.
+    pub truncation: Option<String>,
 }
 
 impl ToolOutcome {
@@ -129,6 +144,7 @@ impl ToolOutcome {
             content: content.into(),
             display: None,
             truncated: false,
+            truncation: None,
         }
     }
 
@@ -137,8 +153,20 @@ impl ToolOutcome {
         self
     }
 
+    /// Cut, with no stated reason. See [`ToolOutcome::truncated_because`].
     pub fn truncated(mut self) -> Self {
         self.truncated = true;
+        self
+    }
+
+    /// Cut, and here is what was lost and how to get it.
+    ///
+    /// The two fields cannot disagree: there is no way to supply a reason
+    /// without also setting the flag, and `truncation.is_some()` therefore
+    /// always implies `truncated`.
+    pub fn truncated_because(mut self, reason: impl Into<String>) -> Self {
+        self.truncated = true;
+        self.truncation = Some(reason.into());
         self
     }
 }
@@ -581,6 +609,23 @@ mod tests {
             },
         )));
         assert_eq!(reg.names(), vec!["Read", "Edit"]);
+    }
+
+    /// A stated reason must never exist without the flag that makes anything
+    /// downstream look for it. If these two could disagree, a result could
+    /// carry a full explanation of its own truncation and still be presented
+    /// as whole — the exact failure the flag exists to prevent.
+    #[test]
+    fn a_reason_for_truncation_implies_truncation() {
+        let o = ToolOutcome::new("body").truncated_because("50 of 70 links shown");
+        assert!(o.truncated);
+        assert_eq!(o.truncation.as_deref(), Some("50 of 70 links shown"));
+
+        let plain = ToolOutcome::new("body").truncated();
+        assert!(plain.truncated);
+        assert!(plain.truncation.is_none());
+
+        assert!(!ToolOutcome::new("body").truncated);
     }
 }
 

@@ -6,9 +6,17 @@ empty shell. Boilerplate — navigation, cookie banners, footers — is stripped
 
 - `url` must be `http://` or `https://`. Loopback addresses, `file:` and
   `chrome:` URLs are refused.
-- `max_chars` bounds the page text. The default is 8000 characters; raise it
-  for a long article. Whenever anything is cut the result says so and reports
-  the full length, so a truncated page is never presented as a whole one.
+- `max_chars` bounds the page text and nothing else. The default is 8000
+  characters; raise it for a long article, up to 200000.
+- `max_links` bounds how many links are listed, default 50 and capped at 120
+  because the browser collects no more than 120 from one page. Raise it for an
+  index, hub or search-results page, where the links are the content rather
+  than the furniture.
+- **The two caps are independent, and the result always names the one that
+  bound.** A truncation notice reports which limit cut, how many characters or
+  links were dropped, and the value to pass to get the rest — so raising
+  `max_chars` on a page whose _links_ were cut is a mistake the result tells
+  you not to make. A truncated page is never presented as a whole one.
 
 What comes back: the page's title, its final URL after redirects, the observed
 HTTP status, the main-content text, any tables and JSON-LD, and the page's

@@ -57,7 +57,7 @@ use crate::digest_md;
 // ---------------------------------------------------------------------------
 
 const NAME: &str = "WebFetch";
-const KEYS: &[&str] = &["url", "max_chars"];
+const KEYS: &[&str] = &["url", "max_chars", "max_links"];
 
 /// chromehand's own default. Roughly two thousand tokens of prose — enough for
 /// most articles, and the cap is raisable per call.
@@ -65,6 +65,20 @@ pub const DEFAULT_MAX_CHARS: u64 = chromehand::DEFAULT_MAX_TEXT_CHARS as u64;
 /// A page is not a corpus. Past this the model is being handed something it
 /// should be searching, not reading.
 pub const MAX_MAX_CHARS: u64 = 200_000;
+
+/// Links listed by default. Enough for an article plus its navigation.
+///
+/// **Why this is a separate knob rather than part of `max_chars`.** The two
+/// cut different things and a page can hit one while nowhere near the other:
+/// a news hub is four thousand characters of prose and a hundred links, so
+/// `max_chars` was never the cap that bound and raising it would have returned
+/// exactly the same fifty links. Before this argument existed there was no way
+/// to ask for the rest at all, which made the truncation notice's advice
+/// unfollowable — the honesty bug and the missing knob were the same bug.
+pub const DEFAULT_MAX_LINKS: u64 = 50;
+/// The browser's own collector stops at 120 links per page, so this is a
+/// ceiling and not a preference: above it there is nothing left to return.
+pub const MAX_MAX_LINKS: u64 = digest_md::COLLECTOR_LINK_BUDGET as u64;
 
 /// The allowlist file, if the user keeps one. **Home, never the project
 /// directory** — see [`chromehand::load_policy`].
@@ -151,7 +165,17 @@ impl Tool for WebFetch {
                     "minimum": 1,
                     "description": format!(
                         "Characters of page text to return. Default {DEFAULT_MAX_CHARS}, capped at {MAX_MAX_CHARS}. \
-                         Truncation is always reported."
+                         Bounds the prose only — it does not affect how many links are listed. \
+                         Truncation is always reported, with the numbers."
+                    )
+                },
+                "max_links": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": format!(
+                        "Links to list. Default {DEFAULT_MAX_LINKS}, capped at {MAX_MAX_LINKS} because the browser \
+                         collects no more than that from one page. Raise it for an index or hub page, \
+                         where the links are the content."
                     )
                 }
             },
@@ -209,6 +233,11 @@ impl Tool for WebFetch {
                 "WebFetch.max_chars must be at least 1".into(),
             ));
         }
+        if let Some(0) = args::opt_u64(args_v, NAME, "max_links")? {
+            return Err(ToolError::BadArguments(
+                "WebFetch.max_links must be at least 1".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -228,6 +257,9 @@ impl WebFetch {
         let max_chars = args::opt_u64(&args_v, NAME, "max_chars")?
             .unwrap_or(DEFAULT_MAX_CHARS)
             .min(MAX_MAX_CHARS);
+        let max_links = args::opt_u64(&args_v, NAME, "max_links")?
+            .unwrap_or(DEFAULT_MAX_LINKS)
+            .min(MAX_MAX_LINKS);
 
         let opts = DigestOptions {
             max_text_chars: max_chars as usize,
@@ -242,13 +274,31 @@ impl WebFetch {
             .await
             .map_err(map_error)?;
 
-        let rendered = digest_md::render(&digest).map_err(ToolError::Failed)?;
-        let outcome = ToolOutcome::new(rendered.markdown).with_display(rendered.display);
-        Ok(if rendered.truncated {
-            outcome.truncated()
-        } else {
-            outcome
-        })
+        let limits = digest_md::Limits {
+            max_links: max_links as usize,
+            max_chars: max_chars as usize,
+        };
+        let rendered = digest_md::render(&digest, &limits).map_err(ToolError::Failed)?;
+        Ok(into_outcome(rendered))
+    }
+}
+
+/// The renderer's verdict, as a `ToolOutcome`.
+///
+/// Its own function, and not three lines inlined above, only so that it can be
+/// tested without a browser. That is not a stylistic preference: this is the
+/// join where the reason the renderer wrote can be dropped on the floor, and
+/// the *only* other thing that notices is a test that launches Chrome and
+/// reaches the live network. A guarantee whose sole guard is `#[ignore]`d is a
+/// guarantee nobody checks.
+fn into_outcome(rendered: digest_md::Rendered) -> ToolOutcome {
+    let outcome = ToolOutcome::new(rendered.markdown).with_display(rendered.display);
+    // The renderer already wrote the sentence, numbers and remedy included; it
+    // is carried up whole rather than re-summarised, because every re-summary
+    // a truncation notice passes through is where the numbers get lost.
+    match rendered.truncation {
+        Some(reason) => outcome.truncated_because(reason),
+        None => outcome,
     }
 }
 
@@ -325,6 +375,57 @@ mod tests {
         let msg = err(json!({ "url": "https://x/", "maxChars": 10 })).to_string();
         assert!(msg.contains("maxChars"), "{msg}");
         assert!(msg.contains("max_chars"), "{msg}");
+    }
+
+    /// The renderer knows which cap bound; the model and the human only find
+    /// out if this join carries it. Reduce this to `outcome.truncated()` and
+    /// the result is exactly the field report — a warning with no subject.
+    #[test]
+    fn the_renderers_reason_reaches_the_outcome_intact() {
+        let reason = "50 of 70 links shown, 20 dropped by max_links=50";
+        let cut = into_outcome(digest_md::Rendered {
+            markdown: "# page".into(),
+            truncation: Some(reason.into()),
+            display: "page".into(),
+        });
+        assert!(cut.truncated);
+        assert_eq!(cut.truncation.as_deref(), Some(reason));
+
+        let whole = into_outcome(digest_md::Rendered {
+            markdown: "# page".into(),
+            truncation: None,
+            display: "page".into(),
+        });
+        assert!(!whole.truncated);
+        assert!(whole.truncation.is_none());
+    }
+
+    #[test]
+    fn both_budgets_reject_zero_rather_than_silently_meaning_unlimited() {
+        assert_eq!(
+            err(json!({ "url": "https://x/", "max_chars": 0 })).kind(),
+            "bad_arguments"
+        );
+        assert_eq!(
+            err(json!({ "url": "https://x/", "max_links": 0 })).kind(),
+            "bad_arguments"
+        );
+    }
+
+    /// The schema is where the model learns a knob exists at all. A truncation
+    /// notice that says "re-read with max_links=70" against a tool whose schema
+    /// never mentioned `max_links` is advice the model has no reason to
+    /// believe, and `deny_unknown` would refuse the retry.
+    #[test]
+    fn the_schema_offers_the_argument_the_truncation_notice_advertises() {
+        let schema = WebFetch::new().input_schema();
+        let props = schema["properties"].as_object().expect("no properties");
+        assert!(props.contains_key("max_links"), "{schema}");
+        assert!(props.contains_key("max_chars"), "{schema}");
+        // And the ceiling is stated, because raising past what the browser
+        // collected returns the same page and wastes a turn.
+        let doc = props["max_links"]["description"].as_str().unwrap();
+        assert!(doc.contains(&MAX_MAX_LINKS.to_string()), "{doc}");
     }
 
     #[test]

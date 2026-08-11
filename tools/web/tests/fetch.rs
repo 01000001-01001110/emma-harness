@@ -115,7 +115,45 @@ async fn a_real_page_renders_as_markdown() {
         outcome.content
     );
     assert!(!outcome.truncated);
+    assert!(outcome.truncation.is_none());
     assert!(outcome.display.is_some());
+}
+
+/// The page the owner hit, and the message they got: `… output was truncated
+/// by the tool` on a result whose prose was 4100 characters against an 8000
+/// cap. Nothing about the text was cut — the link list was — and neither the
+/// human nor the model was told which, how much, or what to pass instead.
+///
+/// Live, and `#[ignore]`d for the same reason as the test above: the
+/// guarantee is proven offline in `digest_md`'s unit tests, and this is the
+/// certification that a real hub page still exercises it. Run with
+/// `cargo test -p emma-tools-web --test fetch -- --ignored`.
+#[tokio::test]
+#[ignore = "reaches the live network and launches Chrome; run with --ignored"]
+async fn a_link_heavy_hub_page_names_the_cap_that_cut_it() {
+    let outcome = WebFetch::new()
+        .invoke(
+            &ctx(),
+            json!({ "url": "https://apnews.com/hub/artificial-intelligence" }),
+        )
+        .await
+        .expect("no turn-ending fault")
+        .expect("AP News is a result");
+
+    let reason = outcome
+        .truncation
+        .as_deref()
+        .expect("a hub page this size must report which cap bound");
+    assert!(reason.contains("links"), "{reason}");
+    assert!(reason.contains("max_links"), "{reason}");
+    // The specific wrong turn this fix exists to prevent: sending a reader to
+    // `max_chars` for a page whose text was never near its limit.
+    assert!(
+        !reason.contains("max_chars"),
+        "pointed at the cap that did not bind: {reason}"
+    );
+    // And the model's copy carries the same sentence, not a summary of it.
+    assert!(outcome.content.contains("max_links"), "{}", outcome.content);
 }
 
 #[test]

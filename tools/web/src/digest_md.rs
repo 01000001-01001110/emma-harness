@@ -30,6 +30,15 @@
 //! and the JSON-LD. Either one sets `ToolOutcome::truncated` and says so in
 //! the prose, because silent truncation is indistinguishable from a short page
 //! and the model will reason confidently about the part it never saw.
+//!
+//! **And "passed through" means the numbers, not the word.** A notice that
+//! says only *that* something was cut is the same failure one step milder: the
+//! reader cannot tell whether the article or the navigation went missing, how
+//! much of it there was, or which argument would bring it back. Every cut here
+//! names the cap that bound, the amount dropped, and the way to get the rest —
+//! or says plainly that there is no way, which is also an answer. Those lines
+//! are collected in [`Rendered::truncation`] so the same sentence reaches the
+//! model in the result and the human on the terminal.
 
 use serde_json::Value;
 
@@ -38,26 +47,58 @@ use serde_json::Value;
 // What gets cut, and how much
 //
 // Two budgets and the struct that reports them. Everything cut is announced —
-// `truncated` is true if anything was dropped anywhere, chromehand's own text
-// cap included, because silent truncation is indistinguishable from a short
-// page and the model will reason confidently about what it never saw.
+// `truncation` is `Some` if anything was dropped anywhere, chromehand's own
+// text cap included, because silent truncation is indistinguishable from a
+// short page and the model will reason confidently about what it never saw.
 // ---------------------------------------------------------------------------
 
-/// Links are the part of the inventory that survives, and this is where the
-/// budget goes. Fifty is roughly a page of navigation plus its content links.
-/// chromehand's own in-page cap is higher (120), so this is the second of two
-/// budgets and the one that usually binds.
-const MAX_LINKS: usize = 50;
+/// Links are the part of the inventory that survives, so this is where the
+/// caller's budget goes. Fifty is roughly a page of navigation plus its
+/// content links, which is right for an article and wrong for a hub — on a
+/// news index the links *are* the content. Hence a caller-supplied number
+/// rather than a constant; the default stays 50 and [`crate::fetch`] owns it.
+///
+/// chromehand's own in-page collector stops at 120, so a budget above that
+/// cannot produce more links: there are none to produce. Saying so is the
+/// difference between a raisable cap and a promise that quietly fails.
+pub const COLLECTOR_LINK_BUDGET: usize = 120;
+
 /// JSON-LD is often the densest true statement on a page (a job posting, a
-/// product, an article's byline) and often a marketing blob. Capped, not cut.
+/// product, an article's byline) and often a marketing blob. Capped, not cut —
+/// and unlike the other two this cap is not raisable, which the notice says
+/// rather than implying a knob that does not exist.
 const MAX_JSON_LD_CHARS: usize = 2_000;
+
+/// The budgets this renderer applies, supplied per call.
+///
+/// They live here rather than as constants because the caller is the only one
+/// that knows what the model asked for, and a cap the model cannot move is a
+/// cap it cannot be advised to move.
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
+    /// How many links to list. Above [`COLLECTOR_LINK_BUDGET`] nothing more
+    /// exists to list.
+    pub max_links: usize,
+    /// What the caller passed as `max_chars`, used only to name the argument
+    /// accurately when chromehand's text cap is the one that bound.
+    pub max_chars: usize,
+}
 
 pub struct Rendered {
     pub markdown: String,
-    /// True when *anything* was cut — chromehand's own text cap included.
-    pub truncated: bool,
+    /// Every cut that happened, one line each, already carrying its numbers
+    /// and its remedy. `None` means nothing was dropped anywhere — chromehand's
+    /// own text cap included.
+    pub truncation: Option<String>,
     /// The one-line terminal note. Never the page.
     pub display: String,
+}
+
+impl Rendered {
+    /// True when *anything* was cut.
+    pub fn truncated(&self) -> bool {
+        self.truncation.is_some()
+    }
 }
 
 // endregion: What gets cut, and how much
@@ -84,14 +125,17 @@ pub struct Rendered {
 /// is not renderable here and is not meant to be — `WebFetch` calls
 /// `digest_url` and nothing else. Pointing this at a verify output would read
 /// as a browser fault when the truth is that the wrong command was run.
-pub fn render(v: &Value) -> Result<Rendered, String> {
+pub fn render(v: &Value, limits: &Limits) -> Result<Rendered, String> {
     let digest = v
         .get("digest")
         .and_then(Value::as_object)
         .ok_or_else(|| "the browser returned no digest payload".to_string())?;
 
     let mut out = String::new();
-    let mut truncated = false;
+    // One entry per cap that bound, each already a complete sentence with its
+    // numbers and its remedy. Kept as a list rather than a bool so a page that
+    // lost both its prose and its links does not report only the first.
+    let mut cuts: Vec<String> = Vec::new();
 
     // ---------------------------------------------------------- provenance --
     let title = str_at(v, "page_title")
@@ -144,15 +188,21 @@ pub fn render(v: &Value) -> Result<Rendered, String> {
         out.push('\n');
     }
     if digest.get("text_truncated").and_then(Value::as_bool) == Some(true) {
-        truncated = true;
+        let shown = text.chars().count();
         let total = digest
             .get("text_chars_total")
             .and_then(Value::as_u64)
-            .unwrap_or(0);
-        out.push_str(&format!(
-            "\n[truncated: {} of {total} characters shown. Raise max_chars to see more.]\n",
-            text.chars().count()
-        ));
+            .unwrap_or(0) as usize;
+        // The one cut that costs prose, so it names the argument, the value
+        // that was in force, and what to set it to — "raise max_chars" alone
+        // leaves the reader guessing what it currently is.
+        let cut = format!(
+            "page text cut to {shown} of {total} characters by max_chars={}; \
+             re-read with max_chars={total} for the whole page",
+            limits.max_chars
+        );
+        out.push_str(&format!("\n[truncated: {cut}]\n"));
+        cuts.push(cut);
     }
     out.push('\n');
 
@@ -176,12 +226,20 @@ pub fn render(v: &Value) -> Result<Rendered, String> {
         if !ld.is_empty() {
             let body = serde_json::to_string_pretty(ld).unwrap_or_default();
             out.push_str("## Structured data (JSON-LD)\n\n```json\n");
-            if body.chars().count() > MAX_JSON_LD_CHARS {
-                truncated = true;
+            let total = body.chars().count();
+            if total > MAX_JSON_LD_CHARS {
+                // No argument raises this one, and pretending otherwise would
+                // send the model to spend a turn on a knob that does not
+                // exist. The honest remedy is the page's own prose and links,
+                // which are already above.
+                let cut = format!(
+                    "JSON-LD cut to {MAX_JSON_LD_CHARS} of {total} characters by a fixed cap \
+                     no argument raises; the page's text and links above are the whole of what \
+                     this tool can return"
+                );
                 out.push_str(&take_chars(&body, MAX_JSON_LD_CHARS));
-                out.push_str("\n… [truncated: JSON-LD longer than ");
-                out.push_str(&MAX_JSON_LD_CHARS.to_string());
-                out.push_str(" characters]");
+                out.push_str(&format!("\n… [truncated: {cut}]"));
+                cuts.push(cut);
             } else {
                 out.push_str(&body);
             }
@@ -203,7 +261,7 @@ pub fn render(v: &Value) -> Result<Rendered, String> {
         ordered.extend(links.iter().filter(|l| !in_content(l)));
 
         out.push_str(&format!("## Links ({})\n\n", links.len()));
-        for link in ordered.iter().take(MAX_LINKS) {
+        for link in ordered.iter().take(limits.max_links) {
             let text = str_at(link, "text").unwrap_or("");
             let href = str_at(link, "href").unwrap_or("");
             let label = if text.trim().is_empty() {
@@ -213,13 +271,31 @@ pub fn render(v: &Value) -> Result<Rendered, String> {
             };
             out.push_str(&format!("- [{}]({href})\n", link_label(label)));
         }
-        if ordered.len() > MAX_LINKS {
-            truncated = true;
-            out.push_str(&format!(
-                "\n[truncated: {} of {} links shown, main-content links first]\n",
-                MAX_LINKS,
-                ordered.len()
-            ));
+        if ordered.len() > limits.max_links {
+            let total = ordered.len();
+            // On a hub page this is the cut that loses the answer, and it is
+            // the one that used to be unattributable: the page text was well
+            // inside its cap, so a bare "truncated" pointed the reader at
+            // max_chars, which would have changed nothing. Name the right
+            // argument, and name the ceiling above which raising it is futile
+            // because the collector stopped there.
+            let ceiling = if total >= COLLECTOR_LINK_BUDGET {
+                format!(
+                    " — {COLLECTOR_LINK_BUDGET} is the most this browser collects from one page, \
+                     so links beyond that were never captured"
+                )
+            } else {
+                String::new()
+            };
+            let cut = format!(
+                "{} of {total} links shown (main-content links first), {} dropped by \
+                 max_links={}; re-read with max_links={total} for the rest{ceiling}",
+                limits.max_links,
+                total - limits.max_links,
+                limits.max_links
+            );
+            out.push_str(&format!("\n[truncated: {cut}]\n"));
+            cuts.push(cut);
         }
         out.push('\n');
     }
@@ -290,7 +366,10 @@ pub fn render(v: &Value) -> Result<Rendered, String> {
 
     Ok(Rendered {
         markdown: out,
-        truncated,
+        // Joined rather than merged: two caps that bound are two facts, and a
+        // summary that says "output was truncated" for both is how the reader
+        // ends up believing the prose was cut when only the link list was.
+        truncation: (!cuts.is_empty()).then(|| cuts.join("; also ")),
         display,
     })
 }
@@ -434,12 +513,39 @@ mod tests {
         }
     }
 
+    /// The defaults `crate::fetch` applies, so these tests exercise the same
+    /// numbers a real call would.
+    fn limits() -> Limits {
+        Limits {
+            max_links: 50,
+            max_chars: 8_000,
+        }
+    }
+
+    fn render_default(v: &Value) -> Rendered {
+        render(v, &limits()).unwrap()
+    }
+
+    /// Links enough to overrun a budget, with one in-content link appended so
+    /// ordering is observable too.
+    fn many_links(n: usize) -> Value {
+        let mut links: Vec<Value> = (0..n)
+            .map(|i| json!({ "text": format!("chrome {i}"), "href": "https://x/", "in_content": false }))
+            .collect();
+        links.push(json!({ "text": "the answer", "href": "https://a/", "in_content": true }));
+        digest_with(
+            "body",
+            json!({ "digest": { "interactive": { "links": links } } }),
+        )
+    }
+
     #[test]
     fn an_empty_page_renders_as_a_result_not_a_complaint() {
         // The governing rule. If this ever renders as an error, "I could not
         // look" and "I looked and it was empty" have become the same message.
-        let r = render(&digest_with("", json!({}))).expect("empty text is renderable");
-        assert!(!r.truncated);
+        let r = render(&digest_with("", json!({})), &limits()).expect("empty text is renderable");
+        assert!(!r.truncated());
+        assert!(r.truncation.is_none());
         assert!(r.markdown.contains("no readable text"), "{}", r.markdown);
         assert!(r.markdown.contains("HTTP 200"), "{}", r.markdown);
     }
@@ -450,9 +556,117 @@ mod tests {
             "half a page",
             json!({ "digest": { "text_truncated": true, "text_chars_total": 90_000 } }),
         );
-        let r = render(&v).unwrap();
-        assert!(r.truncated, "chromehand cut the text and we reported whole");
+        let r = render_default(&v);
+        assert!(
+            r.truncated(),
+            "chromehand cut the text and we reported whole"
+        );
         assert!(r.markdown.contains("90000"), "{}", r.markdown);
+    }
+
+    /// The guarantee, on the axis that failed in the field: a cut names its
+    /// own cap, the size of the loss, and the argument that undoes it. Delete
+    /// any one of the three and this fails.
+    #[test]
+    fn a_cut_names_the_limit_the_loss_and_the_remedy() {
+        let text = render_default(&digest_with(
+            "half a page",
+            json!({ "digest": { "text_truncated": true, "text_chars_total": 90_000 } }),
+        ))
+        .truncation
+        .expect("text cut reported nothing");
+        assert!(text.contains("max_chars=8000"), "no limit named: {text}");
+        assert!(text.contains("90000"), "no size of loss: {text}");
+        assert!(text.contains("max_chars=90000"), "no remedy: {text}");
+
+        let links = render_default(&many_links(70))
+            .truncation
+            .expect("link cut reported nothing");
+        assert!(links.contains("max_links=50"), "no limit named: {links}");
+        assert!(links.contains("21 dropped"), "no size of loss: {links}");
+        assert!(links.contains("max_links=71"), "no remedy: {links}");
+    }
+
+    /// The AP News shape exactly: prose well inside `max_chars`, an inventory
+    /// past `max_links`. The bug was that this reported "truncated" with
+    /// nothing to distinguish it from a cut article, which sent the reader to
+    /// the one argument that would not have helped.
+    #[test]
+    fn a_link_cut_is_not_reported_as_a_text_cut() {
+        let r = render_default(&many_links(70));
+        let reason = r.truncation.expect("links were cut without saying so");
+        assert!(reason.contains("links"), "{reason}");
+        assert!(
+            !reason.contains("page text"),
+            "a link cut claimed the prose was cut: {reason}"
+        );
+        assert!(
+            !reason.contains("max_chars"),
+            "a link cut pointed at max_chars, which would change nothing: {reason}"
+        );
+    }
+
+    /// Raising `max_links` past what the browser collected is futile, and the
+    /// notice has to say so rather than advising a retry that returns the same
+    /// page.
+    #[test]
+    fn a_link_cut_at_the_collector_ceiling_says_more_is_unreachable() {
+        let r = render_default(&many_links(COLLECTOR_LINK_BUDGET));
+        let reason = r.truncation.expect("links were cut without saying so");
+        assert!(reason.contains("120"), "{reason}");
+        assert!(reason.contains("never captured"), "{reason}");
+    }
+
+    /// Two caps that bind are two facts. Reporting only the first is how a
+    /// reader raises `max_chars`, sees the prose return, and never learns the
+    /// link list is still short.
+    #[test]
+    fn every_cap_that_bound_is_reported_not_only_the_first() {
+        let mut v = many_links(70);
+        merge(
+            &mut v,
+            json!({ "digest": { "text_truncated": true, "text_chars_total": 90_000 } }),
+        );
+        let reason = render_default(&v).truncation.expect("nothing reported");
+        assert!(reason.contains("page text"), "{reason}");
+        assert!(reason.contains("links"), "{reason}");
+    }
+
+    /// A cap with no argument behind it must not invent one. Advice the reader
+    /// cannot follow is worse than the admission that there is none.
+    #[test]
+    fn a_cap_no_argument_raises_says_so_instead_of_naming_one() {
+        let blob: Vec<Value> = (0..200)
+            .map(|i| json!({ "@type": "Thing", "name": format!("padding value number {i}") }))
+            .collect();
+        let v = digest_with(
+            "body",
+            json!({ "digest": { "structured": { "json_ld": blob } } }),
+        );
+        let reason = render_default(&v).truncation.expect("JSON-LD cut silently");
+        assert!(reason.contains("JSON-LD"), "{reason}");
+        assert!(reason.contains("no argument raises"), "{reason}");
+        assert!(
+            !reason.contains("max_chars") && !reason.contains("max_links"),
+            "named an argument that does not move this cap: {reason}"
+        );
+    }
+
+    #[test]
+    fn a_raised_link_budget_actually_returns_more_links() {
+        // The remedy the notice advertises has to work. If `max_links` were
+        // ignored the advice would be a lie that reads perfectly.
+        let v = many_links(70);
+        let wide = render(
+            &v,
+            &Limits {
+                max_links: 71,
+                ..limits()
+            },
+        )
+        .unwrap();
+        assert!(!wide.truncated(), "{:?}", wide.truncation);
+        assert!(wide.markdown.contains("chrome 69"), "{}", wide.markdown);
     }
 
     #[test]
@@ -461,7 +675,7 @@ mod tests {
             "Verify you are human",
             json!({ "looks_blocked": true, "outcome": "blocked" }),
         );
-        let r = render(&v).unwrap();
+        let r = render_default(&v);
         let warning = r.markdown.find("anti-bot challenge").expect("no warning");
         let content = r.markdown.find("## Content").expect("no content heading");
         assert!(warning < content, "the warning must precede the prose");
@@ -469,16 +683,8 @@ mod tests {
 
     #[test]
     fn main_content_links_come_first_and_the_list_is_capped() {
-        let mut links: Vec<Value> = (0..MAX_LINKS + 10)
-            .map(|i| json!({ "text": format!("chrome {i}"), "href": "https://x/", "in_content": false }))
-            .collect();
-        links.push(json!({ "text": "the answer", "href": "https://a/", "in_content": true }));
-        let v = digest_with(
-            "body",
-            json!({ "digest": { "interactive": { "links": links } } }),
-        );
-        let r = render(&v).unwrap();
-        assert!(r.truncated, "links were cut without saying so");
+        let r = render_default(&many_links(60));
+        assert!(r.truncated(), "links were cut without saying so");
         let first = r
             .markdown
             .find("the answer")
@@ -493,13 +699,13 @@ mod tests {
             "body",
             json!({ "http_status": Value::Null, "outcome": "failed" }),
         );
-        let r = render(&v).unwrap();
+        let r = render_default(&v);
         assert!(r.markdown.contains("not observed"), "{}", r.markdown);
     }
 
     #[test]
     fn a_response_that_is_not_a_digest_is_a_failure() {
-        let r = render(&json!({ "error": "browser", "detail": "nope" }));
+        let r = render(&json!({ "error": "browser", "detail": "nope" }), &limits());
         assert!(r.is_err(), "a non-digest rendered as a page");
     }
 }
