@@ -20,7 +20,7 @@ use emma::goal::{Goal, MarkerClaim};
 use emma::session::SessionLog;
 use emma::term::Term;
 use emma_harness::{Flavor, Harness};
-use emma_llm::{Caching, Message, Mode, Role};
+use emma_llm::{Caching, ContentBlock, Message, Mode, Role};
 use emma_tool_api::Registry;
 use serde_json::{json, Value};
 
@@ -90,15 +90,10 @@ fn unmatched(messages: &[Message]) -> Vec<String> {
     let mut calls: Vec<String> = Vec::new();
     let mut answers: Vec<String> = Vec::new();
     for m in messages {
-        let Some(blocks) = m.content.as_array() else {
-            continue;
-        };
-        for b in blocks {
-            match b["type"].as_str() {
-                Some("tool_use") => calls.push(b["id"].as_str().unwrap_or("?").to_string()),
-                Some("tool_result") => {
-                    answers.push(b["tool_use_id"].as_str().unwrap_or("?").to_string())
-                }
+        for b in m.content.blocks() {
+            match b {
+                ContentBlock::ToolUse(c) => calls.push(c.id.clone()),
+                ContentBlock::ToolResult(r) => answers.push(r.tool_use_id.clone()),
                 _ => {}
             }
         }

@@ -40,10 +40,13 @@
 //! file** — `ToolError` is the only one, and adding a second would re-introduce
 //! precisely the bug the contract change removed.
 //!
-//! **`raw_content` is echoed back verbatim.** The assistant message pushed into
-//! `query` is the provider's own content array. Reassembling it from `text` and
-//! `tool_calls` invalidates thinking-block signatures and the next call is
-//! rejected.
+//! **An assistant turn is echoed back exactly as it came.** The message pushed
+//! into `query` is `AssistantTurn::content` — the provider's own blocks,
+//! including the thinking blocks and their signatures. It is typed now rather
+//! than a `serde_json::Value` blob, and the guarantee is unchanged: nothing here
+//! rebuilds a turn from its text, because a re-derived signature is rejected on
+//! the *next* call. See `emma_llm::content` for how a block this client cannot
+//! model exactly still survives the round trip.
 //!
 //! **Budgets are folded and enforced, and aborting costs what it spent.** Usage
 //! is added from every model call and recorded before the budget is tested, so
@@ -64,7 +67,8 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use emma_harness::{Harness, HookCall, HookEvent, HookResult};
 use emma_llm::{
-    AssistantTurn, Caching, Event, LlmError, Message, Mode, Provider, Request, Role, ToolCall,
+    AssistantTurn, Caching, Content, ContentBlock, Event, LlmError, Message, Mode, Provider,
+    Request, Role, ToolCall, ToolResult,
 };
 use emma_tool_api::{Registry, ToolCtx};
 use serde_json::{json, Value};
@@ -657,7 +661,7 @@ impl<'a> Agent<'a> {
         let mut last_text = String::new();
         // The assistant turn that has been received and not yet placed. See
         // where it is set for why it is held.
-        let mut pending_turn: Option<Value> = None;
+        let mut pending_turn: Option<Vec<ContentBlock>> = None;
 
         let ending = loop {
             if self.s.interrupt.tripped() {
@@ -743,7 +747,7 @@ impl<'a> Agent<'a> {
             // nowhere, which left the fold with a hole exactly where the tool
             // traffic is.
             //
-            // `raw_content` is the provider's own array and is the only field
+            // `raw_content` is the provider's own blocks and is the only field
             // resume can use: rebuilding a turn from `text` invalidates
             // thinking-block signatures, so a fold that had to do that would
             // produce a message list the API rejects. `text` stays beside it
@@ -753,15 +757,21 @@ impl<'a> Agent<'a> {
             // reads it at all — it used to, to rebuild the one-line collapse of
             // a finished goal, which is the duplicated rule that went away when
             // the conversation stopped being collapsed.
-            if !turn.text.trim().is_empty() {
-                last_text = turn.text.clone();
+            let text = turn.text();
+            if !text.trim().is_empty() {
+                last_text = text.clone();
             }
             self.s.log.append(
                 "assistant",
                 json!({
                     "turn_id": turn_id,
-                    "text": turn.text,
-                    "raw_content": turn.raw_content,
+                    "text": text,
+                    // The record key keeps its old name on purpose: a session
+                    // file written by an earlier build must still fold, and the
+                    // bytes under it are the same content array they always
+                    // were — it is only Rust's side of the boundary that is
+                    // typed now.
+                    "raw_content": turn.content,
                 }),
             );
             // Held rather than pushed. Where it goes depends on what happens
@@ -770,7 +780,7 @@ impl<'a> Agent<'a> {
             // of the conversation once the loop is out. A turn whose tools were
             // never run cannot go anywhere, and `place_turn` is what decides
             // that rather than four branches each deciding it again.
-            pending_turn = Some(turn.raw_content.clone());
+            pending_turn = Some(turn.content.clone());
             // `spend.get()` rather than the value added above: a tool call
             // earlier in this turn may have been a delegation, and what bounds
             // this goal is everything charged to it rather than everything this
@@ -779,10 +789,10 @@ impl<'a> Agent<'a> {
                 break Ending::Tokens;
             }
 
-            if turn.tool_calls.is_empty() {
+            if turn.tool_calls().is_empty() {
                 // The model stopped. Everything from here to `continue` is the
                 // goal being held rather than a conversation ending.
-                let why = match self.s.done.verdict(goal, &turn.text).await {
+                let why = match self.s.done.verdict(goal, &text).await {
                     Done::Yes => break Ending::Done,
                     Done::No(why) => why,
                 };
@@ -823,15 +833,15 @@ impl<'a> Agent<'a> {
                     json!({ "turn_id": turn_id, "n": kicks, "why": why, "text": kick_text }),
                 );
                 self.s.term.kick(kicks, self.s.budgets.max_kicks);
-                // `raw_content` verbatim. Never rebuilt from `text` +
-                // `tool_calls`.
+                // The provider's own blocks, verbatim. Never rebuilt from
+                // `text` plus the tool calls.
                 place(&mut query, &mut pending_turn, Vec::new());
                 query.push(Message::user(kick_text));
                 continue;
             }
 
             let mut results = Vec::new();
-            for call in &turn.tool_calls {
+            for call in turn.tool_calls() {
                 tool_calls_since_kick += 1;
                 // Set on the attempt rather than on success: a model whose only
                 // tool call was denied at the gate is still mid-task, and the
@@ -920,7 +930,7 @@ impl<'a> Agent<'a> {
         if chapter.messages.last().map(|m| m.role) == Some(Role::User) {
             chapter
                 .messages
-                .push(Message::assistant(Value::String(ended_note(ending))));
+                .push(Message::assistant_text(ended_note(ending)));
         }
     }
 
@@ -1084,7 +1094,7 @@ impl<'a> Agent<'a> {
         if streamed {
             self.s.term.end_of_text();
         } else {
-            self.s.term.text(&turn.text);
+            self.s.term.text(&turn.text());
         }
         Ok(Some(turn))
     }
@@ -1122,10 +1132,10 @@ impl<'a> Agent<'a> {
         call: &ToolCall,
         turn_id: &str,
         failed_now: &HashSet<String>,
-    ) -> (Value, bool, Option<String>) {
+    ) -> (ToolResult, bool, Option<String>) {
         let label = label_of(&call.name, &call.input);
         let fail = |kind: &str, detail: String| {
-            let block = failure_block(&call.id, &call.name, kind, &detail);
+            let block = failure_result(&call.id, &call.name, kind, &detail);
             // A failure block is a block that was sent, so it is recorded under
             // the same kind as a successful one — the fold rebuilds the user
             // turn from these and would otherwise reconstruct a turn that
@@ -1277,16 +1287,14 @@ impl<'a> Agent<'a> {
             outcome.truncated,
             outcome.truncation.as_deref(),
         );
-        // Anthropic's wire shape, built here rather than by the provider — as is
-        // the one in `failure_block`. That is the whole of what makes this loop
-        // Anthropic-only: OpenAI expresses a result as a separate message with
-        // `role: "tool"` and a `tool_call_id`, not as a block inside a user
-        // message, so a second provider is a refactor of these two sites plus
-        // the `raw_content` passthrough, not a new file beside `anthropic.rs`.
-        // Note that `raw_content` cannot simply be deleted in that refactor: it
-        // exists because thinking-block signatures do not survive reassembly, so
-        // the loop has to keep handing back bytes it does not interpret.
-        let block = json!({ "type": "tool_result", "tool_use_id": call.id, "content": content });
+        // A typed result, not Anthropic's wire shape. This site and
+        // `failure_result` used to build `{"type":"tool_result", …}` objects by
+        // hand, and that — with the old `raw_content` blob — was the whole of
+        // what made this loop Anthropic-only: OpenAI expresses a result as a
+        // separate message with `role: "tool"` and a `tool_call_id`, not as a
+        // block inside a user message. Both sites now say what happened and
+        // leave the spelling to the provider.
+        let block = ToolResult::ok(&call.id, content);
         self.log_result_block(turn_id, call, &block, Some(outcome.truncated));
         (block, true, None)
     }
@@ -1304,13 +1312,17 @@ impl<'a> Agent<'a> {
         &self,
         turn_id: &str,
         call: &ToolCall,
-        block: &Value,
+        block: &ToolResult,
         truncated: Option<bool>,
     ) {
         self.s.log.append(
             "tool_result",
             json!({ "turn_id": turn_id, "id": call.id, "tool": call.name,
-                    "block": block, "truncated": truncated }),
+                    // Written as the content block it becomes, `type` tag and
+                    // all, because that is the shape the fold reads back and the
+                    // shape `restore_records` tests `is_error` on.
+                    "block": ContentBlock::ToolResult(block.clone()),
+                    "truncated": truncated }),
         );
     }
 
@@ -1404,7 +1416,7 @@ fn summarise(c: &Chapter) -> Vec<Message> {
     };
     vec![
         Message::user(goal),
-        Message::assistant(Value::String(format!("{answer}\n\n{COMPACTED_NOTE}"))),
+        Message::assistant_text(format!("{answer}\n\n{COMPACTED_NOTE}")),
     ]
 }
 
@@ -1432,7 +1444,7 @@ pub(crate) fn ended_note(ending: &str) -> String {
 /// said dropping is necessary, and standing in for that measurement on the one
 /// call of a process that has none. It is never what fires a budget.
 fn estimate(messages: &[Message]) -> i64 {
-    let chars: usize = messages.iter().map(|m| m.content.to_string().len()).sum();
+    let chars: usize = messages.iter().map(|m| m.content.wire_len()).sum();
     (chars / 4) as i64
 }
 
@@ -1458,9 +1470,13 @@ fn cost_tokens(u: &emma_llm::Usage) -> i64 {
 ///
 /// A turn that could not be placed is dropped, and dropping it here rather than
 /// leaving it held is what stops it being offered again at the end of the loop.
-fn place(query: &mut Vec<Message>, pending: &mut Option<Value>, results: Vec<Value>) -> bool {
+fn place(
+    query: &mut Vec<Message>,
+    pending: &mut Option<Vec<ContentBlock>>,
+    results: Vec<ToolResult>,
+) -> bool {
     match pending.take() {
-        Some(raw) => crate::session::place_turn(query, raw, results),
+        Some(content) => crate::session::place_turn(query, content, results),
         None => false,
     }
 }
@@ -1502,28 +1518,29 @@ pub(crate) fn label_of(name: &str, input: &Value) -> String {
 fn open_query(mut restored: Vec<Message>, opening: String) -> Vec<Message> {
     match restored.last_mut() {
         Some(last) if last.role == Role::User => match &mut last.content {
-            Value::String(text) => {
+            Content::Text(text) => {
                 text.push_str("\n\n");
                 text.push_str(&opening);
             }
-            Value::Array(blocks) => blocks.push(json!({ "type": "text", "text": opening })),
-            other => *other = Value::String(opening),
+            Content::Blocks(blocks) => blocks.push(ContentBlock::text(opening)),
         },
         _ => restored.push(Message::user(opening)),
     }
     restored
 }
 
-fn failure_block(id: &str, tool: &str, kind: &str, detail: &str) -> Value {
-    json!({
-        "type": "tool_result",
-        "tool_use_id": id,
-        // `is_error` as well as the kind in the body: the flag is what the API
-        // and the model's own training key on, and the body is what says which
-        // failure it was and what to do instead.
-        "is_error": true,
-        "content": json!({ "kind": kind, "tool": tool, "detail": detail }).to_string(),
-    })
+/// A tool that failed, as the observation the model reads and the loop keeps
+/// going from.
+///
+/// `is_error` as well as the kind in the body: the flag is what the API and the
+/// model's own training key on, and the body is what says which failure it was
+/// and what to do instead. Both halves are load-bearing and neither substitutes
+/// for the other.
+fn failure_result(id: &str, tool: &str, kind: &str, detail: &str) -> ToolResult {
+    ToolResult::failed(
+        id,
+        json!({ "kind": kind, "tool": tool, "detail": detail }).to_string(),
+    )
 }
 
 /// What is appended to a result the tool says it cut.
@@ -1601,11 +1618,25 @@ mod tests {
 
     #[test]
     fn a_failure_block_is_flagged_and_typed() {
-        let b = failure_block("tu_1", "Bash", "tool_failed", "exited with 1");
-        assert_eq!(b["is_error"], true);
-        let body: Value = serde_json::from_str(b["content"].as_str().unwrap()).unwrap();
+        let b = failure_result("tu_1", "Bash", "tool_failed", "exited with 1");
+        assert!(b.is_error);
+        assert_eq!(b.tool_use_id, "tu_1");
+        let body: Value = serde_json::from_str(&b.content).unwrap();
         assert_eq!(body["kind"], "tool_failed");
         assert_eq!(body["tool"], "Bash");
+
+        // …and on the wire it is still the block the API takes, carrying the
+        // flag the model keys on. A failure that renders without `is_error`
+        // reads to the model as a successful call that returned odd text.
+        let wire = ContentBlock::ToolResult(b).to_value();
+        assert_eq!(wire["type"], "tool_result");
+        assert_eq!(wire["is_error"], true);
+
+        // A success carries no flag at all — the same two keys it always did,
+        // and no third one to make an ordinary result look conditional.
+        let ok = ContentBlock::ToolResult(ToolResult::ok("tu_2", "fine")).to_value();
+        assert_eq!(ok["type"], "tool_result");
+        assert!(ok.get("is_error").is_none(), "{ok}");
     }
 
     /// The model's half of the field report. A `WebFetch` on a news hub came
@@ -1633,6 +1664,7 @@ mod tests {
             id: "x".into(),
             name: "Bash".into(),
             input: args,
+            ..Default::default()
         };
         assert_eq!(
             memo_key(&mk(json!({ "command": "ls" }))),

@@ -10,17 +10,24 @@
 //! It is the only provider that exists today; a second one is planned and not
 //! built.
 //!
-//! **The abstraction is type-clean and still leaks the Anthropic wire shape,
-//! and it is worth knowing where.** Two places, both outside this crate: the
-//! loop builds its own `{"type":"tool_result","tool_use_id":…}` blocks, and it
-//! pushes [`AssistantTurn::raw_content`] back verbatim. A second provider is
-//! therefore a refactor rather than a file — OpenAI differs in kind, with tool
-//! calls in a `tool_calls` array and each result as its own `role:"tool"`
-//! message. Note what that refactor must *not* do: delete `raw_content`.
-//! Thinking-block signatures do not survive reassembly, so a turn rebuilt from
-//! `text` + `tool_calls` makes the *next* call fail. The shape that works is to
-//! make it opaque — the loop stores whatever the provider returned and hands it
-//! back without knowing what is in it.
+//! **The wire shape used to leak, and no longer does.** `AssistantTurn` once
+//! carried `raw_content: serde_json::Value` — Anthropic's own content array,
+//! echoed back unread — and the loop built its own
+//! `{"type":"tool_result","tool_use_id":…}` objects to answer it. Both are gone:
+//! a turn is now `Vec<ContentBlock>` and a result is [`ToolResult`], so the only
+//! code that knows what the Messages API looks like is [`anthropic`]. See
+//! [`content`] for the rule that made typing it safe — anything this client
+//! cannot model *exactly* is not modelled at all, and travels as
+//! [`ContentBlock::Passthrough`] — and for why that is not `raw_content` under
+//! another name.
+//!
+//! What has not changed is the reason the blob existed: this model family
+//! rejects a thinking block whose signature was re-derived, so a turn rebuilt
+//! from `text` + tool calls makes the *next* call fail. That state now has a
+//! name ([`ThinkingBlock::signature`]) instead of a hiding place. A second
+//! provider is still real work — OpenAI puts tool calls in a `tool_calls` array
+//! and each result in its own `role:"tool"` message — but it is work inside a
+//! new file beside `anthropic.rs`, not work in the loop.
 //!
 //! **The one shape that must not drift.** A `Request` names its four parts in
 //! prefix order — instructions, tools, history, query — because the provider's
@@ -31,6 +38,7 @@
 
 pub mod anthropic;
 pub mod auth;
+pub mod content;
 pub mod kind;
 pub mod models;
 mod retry;
@@ -45,6 +53,9 @@ use tokio::sync::mpsc;
 
 pub use anthropic::{AnthropicProvider, DEFAULT_MODEL};
 pub use auth::{ApiKey, AuthError};
+pub use content::{
+    Content, ContentBlock, RedactedThinkingBlock, TextBlock, ThinkingBlock, ToolCall, ToolResult,
+};
 pub use kind::{kind, ProviderKind, UnknownProvider, DEFAULT_PROVIDER};
 pub use models::{limits, Limits};
 pub use retry::Retry;
@@ -72,34 +83,53 @@ pub enum Role {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
-    /// A plain string or an array of content blocks, passed through verbatim so
-    /// `tool_use` / `tool_result` round-trips — and the thinking blocks that
-    /// must be echoed back unedited — survive the trip out and back.
-    pub content: serde_json::Value,
+    /// A plain string or typed content blocks — see [`Content`]. Blocks that
+    /// this client does not model survive the round trip whole rather than
+    /// being decoded lossily; that rule is [`content`]'s, and it is what lets
+    /// this be a type instead of a `serde_json::Value`.
+    pub content: Content,
 }
 
 impl Message {
     pub fn user(text: impl Into<String>) -> Self {
         Self {
             role: Role::User,
-            content: serde_json::Value::String(text.into()),
+            content: Content::Text(text.into()),
         }
     }
 
-    pub fn assistant(content: serde_json::Value) -> Self {
+    /// An assistant turn as the provider produced it — thinking blocks,
+    /// signatures and all. This is the constructor the loop uses to put a turn
+    /// back into the conversation, and the reason it takes blocks rather than a
+    /// string is that rebuilding a turn from its text loses the signature and
+    /// makes the *next* call fail.
+    pub fn assistant(content: Vec<ContentBlock>) -> Self {
         Self {
             role: Role::Assistant,
-            content,
+            content: Content::Blocks(content),
+        }
+    }
+
+    /// An assistant turn Emma composed rather than received — a compaction
+    /// summary, or the note that says the previous goal stopped short. Separate
+    /// from [`Message::assistant`] because these two have nothing in common
+    /// except their role: one is a record of what a model said, the other is a
+    /// sentence written here, and neither should be able to be passed where the
+    /// other is meant.
+    pub fn assistant_text(text: impl Into<String>) -> Self {
+        Self {
+            role: Role::Assistant,
+            content: Content::Text(text.into()),
         }
     }
 
     /// The user turn that carries results back for one or more tool calls. The
     /// API requires every `tool_use` in the preceding assistant turn to be
     /// answered in a single user message, so this takes all of them at once.
-    pub fn tool_results(results: Vec<serde_json::Value>) -> Self {
+    pub fn tool_results(results: Vec<ToolResult>) -> Self {
         Self {
             role: Role::User,
-            content: serde_json::Value::Array(results),
+            content: Content::Blocks(results.into_iter().map(ContentBlock::ToolResult).collect()),
         }
     }
 }
@@ -225,16 +255,9 @@ impl Request {
 // The turn that comes back
 //
 // The typed result of one model call, identical whether the bytes arrived as
-// one JSON body or as a stream. `Usage` carries the caching scar; `raw_content`
+// one JSON body or as a stream. `Usage` carries the caching scar; `content`
 // carries the blocks that must be echoed back untouched.
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ToolCall {
-    pub id: String,
-    pub name: String,
-    pub input: serde_json::Value,
-}
 
 /// Provider-reported token counts for one model call.
 ///
@@ -290,15 +313,40 @@ impl Usage {
 /// single JSON body or as a stream of SSE frames.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AssistantTurn {
-    /// Every text block concatenated — what a human read.
-    pub text: String,
-    pub tool_calls: Vec<ToolCall>,
+    /// The turn itself, in order, including the thinking blocks that must be
+    /// echoed back unedited. This is the whole turn — [`AssistantTurn::text`]
+    /// and [`AssistantTurn::tool_calls`] are views onto it.
+    pub content: Vec<ContentBlock>,
     pub stop_reason: String,
     pub usage: Usage,
-    /// The assistant turn as content blocks, for echoing back on the next call.
-    /// Thinking blocks are included and unedited: this model family rejects
-    /// modified ones, and dropping them breaks the turn.
-    pub raw_content: serde_json::Value,
+}
+
+impl AssistantTurn {
+    /// Every text block concatenated — what a human read.
+    ///
+    /// Derived rather than stored, and that is the point: this and `content`
+    /// used to be two fields, which is two things that can disagree about what
+    /// the model said. A projection cannot drift from what it projects.
+    pub fn text(&self) -> String {
+        self.content
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Every tool call in the turn, in the order the model made them.
+    pub fn tool_calls(&self) -> Vec<&ToolCall> {
+        self.content
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::ToolUse(c) => Some(c),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 // endregion: The turn that comes back

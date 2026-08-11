@@ -33,14 +33,15 @@
 //! value the loop appends to `query` is written here at the moment it is
 //! appended, so [`fold`] returns the message list that was sent rather than a
 //! reconstruction of it. That is the distinction the whole format turns on: the
-//! loop echoes the provider's own content array back on the next call because
+//! loop echoes the provider's own content blocks back on the next call because
 //! thinking-block signatures do not survive reassembly, so an `assistant`
-//! record carries `raw_content` verbatim — rebuilding a turn from its `text`
-//! would produce exactly the modified blocks this model family rejects. A
-//! `tool_result` record carries the `{"type":"tool_result", …}` block that was
-//! sent, including the failure blocks, because the `tool_use_id` in it is what
-//! pairs a result with its call and a rendered string has no way to say which
-//! call it answers. See `Agent::run_goal` and `Agent::run_tool_call` in
+//! record carries them verbatim under `raw_content` — rebuilding a turn from its
+//! `text` would produce exactly the modified blocks this model family rejects.
+//! The key kept its name through the typing of those blocks so that a file
+//! written by an earlier build still folds. A `tool_result` record carries the
+//! `{"type":"tool_result", …}` block that was sent, including the failure
+//! blocks, because the `tool_use_id` in it is what pairs a result with its call
+//! and a rendered string has no way to say which call it answers. See `Agent::run_goal` and `Agent::run_tool_call` in
 //! `agent.rs` for the full list of record kinds.
 //!
 //! It is still an audit trail as well: `text` stays on the `assistant` record
@@ -80,7 +81,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
-use emma_llm::{Message, Role};
+use emma_llm::{ContentBlock, Message, Role, ToolResult};
 use serde_json::{json, Value};
 
 use crate::agent::{label_of, memo_key_of, Resumed};
@@ -334,9 +335,9 @@ struct Fold {
     finished: Option<String>,
     /// An assistant turn that has been read but not yet placed, because what
     /// follows it decides whether it can be placed at all.
-    pending: Option<Value>,
+    pending: Option<Vec<ContentBlock>>,
     /// Result blocks for `pending`, accumulating until something closes them.
-    results: Vec<Value>,
+    results: Vec<ToolResult>,
 }
 
 impl Fold {
@@ -362,11 +363,18 @@ impl Fold {
                 // rebuilt thinking block is rejected, so an approximation here
                 // would be a resumed run that dies on its first call with an
                 // error naming a signature nobody in the file mentions.
-                self.pending = r.get("raw_content").cloned();
+                self.pending = r.get("raw_content").and_then(blocks_of);
             }
             "tool_result" => {
-                if let Some(block) = r.get("block") {
-                    self.results.push(block.clone());
+                // Anything that is not a `tool_result` block is not pushed, and
+                // the turn it was meant to answer is therefore dropped by
+                // `answered` rather than half-restored. A record this cannot
+                // read is a gap, and a gap is the one thing the API will not
+                // take: an unanswered `tool_use` is a 400.
+                if let Some(ContentBlock::ToolResult(result)) =
+                    r.get("block").cloned().map(ContentBlock::from_value)
+                {
+                    self.results.push(result);
                 }
             }
             "kick" => {
@@ -374,8 +382,8 @@ impl Fold {
                 // nothing to pair. If the turn itself could not be placed the
                 // kick goes with it — a user message with no assistant turn
                 // before it would leave two user turns in a row.
-                if let Some(raw) = self.pending.take() {
-                    self.query.push(Message::assistant(raw));
+                if let Some(content) = self.pending.take() {
+                    self.query.push(Message::assistant(content));
                     self.query.push(Message::user(string(r, "text")));
                 }
                 self.results.clear();
@@ -407,12 +415,12 @@ impl Fold {
     /// Place the assistant turn and its results, or drop both. See
     /// [`place_turn`], which is the rule and is shared with the loop.
     fn close_turn(&mut self) {
-        let Some(raw) = self.pending.take() else {
+        let Some(content) = self.pending.take() else {
             self.results.clear();
             return;
         };
         let results = std::mem::take(&mut self.results);
-        place_turn(&mut self.query, raw, results);
+        place_turn(&mut self.query, content, results);
     }
 
     /// Move a finished goal into the conversation, whole.
@@ -435,9 +443,7 @@ impl Fold {
         let mut messages = std::mem::take(&mut self.query);
         if let Some(ending) = self.finished.take() {
             if messages.last().map(|m| m.role) == Some(Role::User) {
-                messages.push(Message::assistant(Value::String(crate::agent::ended_note(
-                    &ending,
-                ))));
+                messages.push(Message::assistant_text(crate::agent::ended_note(&ending)));
             }
         }
         self.history.extend(messages);
@@ -460,11 +466,15 @@ impl Fold {
 /// the one that was sent in precisely the cases neither is tested on.
 ///
 /// Returns whether the turn was placed.
-pub(crate) fn place_turn(out: &mut Vec<Message>, raw: Value, results: Vec<Value>) -> bool {
-    if !answered(&raw, &results) {
+pub(crate) fn place_turn(
+    out: &mut Vec<Message>,
+    content: Vec<ContentBlock>,
+    results: Vec<ToolResult>,
+) -> bool {
+    if !answered(&content, &results) {
         return false;
     }
-    out.push(Message::assistant(raw));
+    out.push(Message::assistant(content));
     // A turn that called nothing is answered by nothing, and appending an empty
     // user turn to say so is a 400 of its own.
     if !results.is_empty() {
@@ -477,24 +487,31 @@ pub(crate) fn place_turn(out: &mut Vec<Message>, raw: Value, results: Vec<Value>
 /// every result a call. Both directions, because the API refuses both ways
 /// round. A turn with no calls and no results satisfies it, which is what makes
 /// a plain text turn placeable.
-fn answered(raw: &Value, results: &[Value]) -> bool {
-    let mut calls: Vec<&str> = raw
-        .as_array()
-        .map(|blocks| {
-            blocks
-                .iter()
-                .filter(|b| b["type"] == "tool_use")
-                .filter_map(|b| b["id"].as_str())
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut answers: Vec<&str> = results
+fn answered(content: &[ContentBlock], results: &[ToolResult]) -> bool {
+    let mut calls: Vec<&str> = content
         .iter()
-        .filter_map(|b| b["tool_use_id"].as_str())
+        .filter_map(ContentBlock::tool_use_id)
         .collect();
+    let mut answers: Vec<&str> = results.iter().map(|r| r.tool_use_id.as_str()).collect();
     calls.sort_unstable();
     answers.sort_unstable();
     calls == answers
+}
+
+/// A stored `raw_content` array back into blocks.
+///
+/// `None` rather than an empty turn for anything that is not an array, because
+/// an assistant record whose content cannot be read is a turn that must be
+/// dropped whole — the same ruling `place_turn` makes about a half-answered one,
+/// and for the same reason.
+fn blocks_of(v: &Value) -> Option<Vec<ContentBlock>> {
+    Some(
+        v.as_array()?
+            .iter()
+            .cloned()
+            .map(ContentBlock::from_value)
+            .collect(),
+    )
 }
 
 fn string(r: &Value, key: &str) -> String {
@@ -1005,7 +1022,7 @@ mod tests {
         ]);
         assert_eq!(msgs.len(), 3);
         assert_eq!(msgs[1].role, emma_llm::Role::Assistant);
-        assert_eq!(msgs[2].content.as_array().unwrap().len(), 2);
+        assert_eq!(msgs[2].content.blocks().len(), 2);
     }
 
     #[test]

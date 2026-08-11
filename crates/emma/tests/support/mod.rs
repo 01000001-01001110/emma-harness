@@ -17,7 +17,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use emma_llm::{AssistantTurn, Event, LlmError, Message, Mode, Provider, Request, ToolCall, Usage};
+use emma_llm::{
+    AssistantTurn, ContentBlock, Event, LlmError, Message, Mode, Provider, Request, ThinkingBlock,
+    ToolCall, Usage,
+};
 use emma_tool_api::{NetworkTarget, Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
@@ -156,36 +159,50 @@ impl Provider for Fake {
             });
         };
 
-        let mut blocks = Vec::new();
+        // Blocks only, with `text` and the tool calls as views onto them —
+        // the same shape the real provider produces. A fake that carried its
+        // own copies of those two could disagree with its own content array,
+        // which is precisely the drift the typed turn removed.
+        let n = self.seen.lock().unwrap().len();
+        let mut content = Vec::new();
+        // A thinking block on every turn, signature and all, because it is the
+        // one thing the loop must hand back untouched and a fake that never
+        // produced one would let `the_assistant_turn_is_echoed_back_exactly_as_
+        // it_arrived` assert about a turn with nothing fragile in it.
+        content.push(ContentBlock::Thinking(ThinkingBlock {
+            thinking: "fake thinking".into(),
+            signature: Some(format!("sig-{n}")),
+            ..Default::default()
+        }));
         if !say.text.is_empty() {
-            blocks.push(json!({ "type": "text", "text": say.text }));
+            content.push(ContentBlock::text(say.text.clone()));
         }
-        let mut tool_calls = Vec::new();
         for (i, (name, input)) in say.calls.iter().enumerate() {
-            let id = format!("tu_{}_{i}", self.seen.lock().unwrap().len());
-            blocks.push(json!({
-                "type": "tool_use", "id": id, "name": name, "input": input
-            }));
-            tool_calls.push(ToolCall {
-                id,
+            content.push(ContentBlock::ToolUse(ToolCall {
+                id: format!("tu_{n}_{i}"),
                 name: name.clone(),
                 input: input.clone(),
-            });
+                // The real API puts a `caller` key on every `tool_use` block,
+                // and a fake that never did would not exercise the path a live
+                // run found broken.
+                extra: serde_json::Map::from_iter([(
+                    "caller".to_string(),
+                    json!({ "type": "direct" }),
+                )]),
+            }));
         }
         Ok(AssistantTurn {
-            text: say.text,
-            stop_reason: if tool_calls.is_empty() {
+            stop_reason: if say.calls.is_empty() {
                 "end_turn".into()
             } else {
                 "tool_use".into()
             },
-            tool_calls,
+            content,
             usage: Usage {
                 input_tokens: say.tokens,
                 output_tokens: 0,
                 ..Default::default()
             },
-            raw_content: Value::Array(blocks),
         })
     }
 }

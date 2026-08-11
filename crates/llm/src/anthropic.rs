@@ -35,8 +35,8 @@
 use crate::models;
 use crate::retry::retry_after_seconds;
 use crate::{
-    redact, trim_body, ApiKey, AssistantTurn, Caching, Event, LlmError, Message, Mode, Provider,
-    Request, Retry, ToolCall, Usage,
+    redact, trim_body, ApiKey, AssistantTurn, Caching, ContentBlock, Event, LlmError, Message,
+    Mode, Provider, Request, Retry, Usage,
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -127,8 +127,17 @@ fn system_field(instructions: &str, tools_chars: usize, caching: Caching) -> Val
     json!([block])
 }
 
+/// How many bytes a message list renders to.
+///
+/// The *rendered* length, not the length of the text inside — the quotes and
+/// the escapes are bytes the provider tokenises too, and this number is only
+/// ever compared against [`MIN_CACHEABLE_TOKENS`]. It was
+/// `m.content.to_string().len()` over `serde_json::Value` and is the same
+/// arithmetic over the typed form, deliberately: a breakpoint that moved
+/// because the estimator changed units would be a caching regression nothing
+/// on screen would report.
 fn chars_of(messages: &[Message]) -> usize {
-    messages.iter().map(|m| m.content.to_string().len()).sum()
+    messages.iter().map(|m| m.content.wire_len()).sum()
 }
 
 /// `messages` as `history ++ query`, with up to two more breakpoints.
@@ -698,33 +707,27 @@ fn turn_from_message(msg: &Value) -> Result<AssistantTurn, LlmError> {
 
 /// The single place a typed turn is derived from content blocks, so batch and
 /// streaming cannot drift apart in what they extract.
+///
+/// This is the whole of the Anthropic-to-Emma translation for a turn, and it is
+/// three lines because [`ContentBlock::from_value`] does the deciding — text and
+/// tool calls used to be pulled out here by hand into fields beside the blob,
+/// and they are now views on the parsed blocks. What a block this client does
+/// not model becomes is that function's business too, and the answer is that it
+/// is kept whole.
 fn turn_from_content(
     content: Value,
     stop_reason: String,
     usage: Usage,
 ) -> Result<AssistantTurn, LlmError> {
-    let blocks = content
-        .as_array()
-        .ok_or_else(|| LlmError::Protocol("content was not an array of blocks".into()))?;
-    let mut text = String::new();
-    let mut tool_calls = Vec::new();
-    for block in blocks {
-        match block.get("type").and_then(Value::as_str) {
-            Some("text") => text.push_str(block.get("text").and_then(Value::as_str).unwrap_or("")),
-            Some("tool_use") => tool_calls.push(ToolCall {
-                id: str_at(block, "id"),
-                name: str_at(block, "name"),
-                input: block.get("input").cloned().unwrap_or_else(|| json!({})),
-            }),
-            _ => {}
-        }
-    }
+    let Value::Array(blocks) = content else {
+        return Err(LlmError::Protocol(
+            "content was not an array of blocks".into(),
+        ));
+    };
     Ok(AssistantTurn {
-        text,
-        tool_calls,
+        content: blocks.into_iter().map(ContentBlock::from_value).collect(),
         stop_reason,
         usage,
-        raw_content: content,
     })
 }
 
@@ -733,7 +736,7 @@ fn turn_from_content(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Effort, Role};
+    use crate::{Effort, ToolCall, ToolResult};
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -1027,13 +1030,22 @@ mod tests {
         let (from_stream, events) = run(&streamed, request(), Mode::Stream).await;
 
         let (a, b) = (from_batch.unwrap(), from_stream.unwrap());
-        assert_eq!(a.text, b.text);
-        assert_eq!(a.tool_calls, b.tool_calls);
+        assert_eq!(a.text(), b.text());
+        assert_eq!(a.tool_calls(), b.tool_calls());
         assert_eq!(a.stop_reason, b.stop_reason);
         assert_eq!(a.usage, b.usage);
         // Including the blocks echoed back next turn — a thinking block that
         // lost its signature in reassembly is rejected on the next call.
-        assert_eq!(a.raw_content, b.raw_content);
+        assert_eq!(a.content, b.content);
+        assert_eq!(
+            a.content[0],
+            ContentBlock::Thinking(crate::ThinkingBlock {
+                thinking: "check both files".into(),
+                signature: Some("sig-abc".into()),
+                ..Default::default()
+            }),
+            "the signature must survive both paths identically"
+        );
         assert_eq!(a, b);
 
         // …and only the streaming path narrates.
@@ -1065,7 +1077,8 @@ mod tests {
             }])
             .await;
             let (turn, _) = run(&s, request(), mode).await;
-            let calls = turn.unwrap().tool_calls;
+            let turn = turn.unwrap();
+            let calls = turn.tool_calls();
             assert_eq!(calls.len(), 2, "{mode:?}");
             assert_eq!(calls[0].id, "toolu_01");
             assert_eq!(calls[0].name, "Read");
@@ -1255,7 +1268,7 @@ mod tests {
         let req = request()
             .with_history(vec![
                 Message::user("older question"),
-                Message::assistant(json!("older answer")),
+                Message::assistant_text("older answer"),
             ])
             .with_query(vec![Message::user("the new question")]);
         let _ = run(&s, req, Mode::Batch).await;
@@ -1285,7 +1298,7 @@ mod tests {
         let req = request()
             .with_history(vec![
                 Message::user(big_instructions()),
-                Message::assistant(json!("older answer")),
+                Message::assistant_text("older answer"),
             ])
             .with_query(vec![Message::user("the new question")]);
         let _ = run(&s, req, Mode::Batch).await;
@@ -1311,12 +1324,13 @@ mod tests {
         let s = stub(vec![Reply::json(batch_body())]).await;
         let req = request().with_query(vec![
             Message::user(big_instructions()),
-            Message::assistant(json!([
-                { "type": "tool_use", "id": "toolu_01", "name": "Read", "input": {} }
-            ])),
-            Message::tool_results(vec![
-                json!({ "type": "tool_result", "tool_use_id": "toolu_01", "content": "fn main() {}" }),
-            ]),
+            Message::assistant(vec![ContentBlock::ToolUse(ToolCall {
+                id: "toolu_01".into(),
+                name: "Read".into(),
+                input: json!({}),
+                ..Default::default()
+            })]),
+            Message::tool_results(vec![ToolResult::ok("toolu_01", "fn main() {}")]),
         ]);
         let _ = run(&s, req, Mode::Batch).await;
         let sent = s.last();
@@ -1324,6 +1338,108 @@ mod tests {
         assert_eq!(cache_marks(&sent["messages"][2]), 1, "sent: {sent}");
         assert_eq!(sent["messages"][2]["content"][0]["type"], "tool_result");
         assert_eq!(cache_marks(&sent["messages"][1]), 0);
+    }
+
+    /// A request carrying every content shape Emma can send, as the exact bytes
+    /// that leave the socket.
+    ///
+    /// **Why a golden string rather than more field assertions.** The tests
+    /// above pin where a `cache_control` lands and what order the four parts go
+    /// in, and they all passed while the message model was a `serde_json::Value`
+    /// blob and while it was typed — which is the point of them. What they
+    /// cannot see is a byte that moved *inside* a block: a `signature` that
+    /// stopped being emitted, an `is_error` that started being emitted as
+    /// `false`, a `thinking` block re-serialised with its keys in a different
+    /// order. Every one of those is a silent 400 on the next call or a cache
+    /// miss that costs 10× and reports nothing.
+    ///
+    /// So this is the whole body, verbatim. It is meant to be annoying to
+    /// change: if it goes red, the question is not "update the literal" but
+    /// "which byte moved, and does the provider care".
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_whole_request_body_is_pinned_byte_for_byte() {
+        let s = stub(vec![Reply::json(batch_body())]).await;
+        let req = Request::new("INSTRUCTIONS ".repeat(200), vec![json!({ "name": "Read" })])
+            .with_history(vec![
+                Message::user("HISTORY ".repeat(200)),
+                Message::assistant(vec![
+                    ContentBlock::Thinking(crate::ThinkingBlock {
+                        thinking: "the older thought".into(),
+                        signature: Some("sig-history".into()),
+                        ..Default::default()
+                    }),
+                    ContentBlock::text("the older answer"),
+                ]),
+            ])
+            .with_query(vec![
+                Message::user("QUERY ".repeat(200)),
+                Message::assistant(vec![
+                    // Unsigned on purpose: a streamed block that carried no
+                    // `signature_delta` must not grow a `"signature": ""`.
+                    ContentBlock::Thinking(crate::ThinkingBlock {
+                        thinking: "unsigned".into(),
+                        signature: None,
+                        ..Default::default()
+                    }),
+                    ContentBlock::RedactedThinking(crate::RedactedThinkingBlock {
+                        data: "REDACTED".into(),
+                        ..Default::default()
+                    }),
+                    ContentBlock::ToolUse(ToolCall {
+                        id: "toolu_ok".into(),
+                        name: "Read".into(),
+                        input: json!({ "path": "a.rs" }),
+                        // The key every real `tool_use` carries. It is in the
+                        // golden body because it has to come back out.
+                        extra: serde_json::Map::from_iter([(
+                            "caller".to_string(),
+                            json!({ "type": "direct" }),
+                        )]),
+                    }),
+                    ContentBlock::ToolUse(ToolCall {
+                        id: "toolu_bad".into(),
+                        name: "Read".into(),
+                        input: json!({ "path": "b.rs" }),
+                        ..Default::default()
+                    }),
+                    // A block this client cannot model, which must travel out
+                    // exactly as it came in.
+                    ContentBlock::Passthrough(
+                        json!({ "type": "server_tool_use", "id": "srv_1", "name": "web_search" }),
+                    ),
+                ]),
+                Message::tool_results(vec![
+                    ToolResult::ok("toolu_ok", "fn main() {}"),
+                    ToolResult::failed("toolu_bad", "{\"kind\":\"not_found\"}"),
+                ]),
+            ]);
+        let _ = run(&s, req, Mode::Batch).await;
+
+        let expected = concat!(
+            r#"{"max_tokens":32000,"messages":["#,
+            r#"{"content":"<<H>>","role":"user"},"#,
+            r#"{"content":[{"signature":"sig-history","thinking":"the older thought","type":"thinking"},"#,
+            r#"{"cache_control":{"type":"ephemeral"},"text":"the older answer","type":"text"}],"role":"assistant"},"#,
+            r#"{"content":"<<Q>>","role":"user"},"#,
+            r#"{"content":[{"thinking":"unsigned","type":"thinking"},"#,
+            r#"{"data":"REDACTED","type":"redacted_thinking"},"#,
+            r#"{"caller":{"type":"direct"},"id":"toolu_ok","input":{"path":"a.rs"},"name":"Read","type":"tool_use"},"#,
+            r#"{"id":"toolu_bad","input":{"path":"b.rs"},"name":"Read","type":"tool_use"},"#,
+            r#"{"id":"srv_1","name":"web_search","type":"server_tool_use"}],"role":"assistant"},"#,
+            r#"{"content":[{"content":"fn main() {}","tool_use_id":"toolu_ok","type":"tool_result"},"#,
+            r#"{"cache_control":{"type":"ephemeral"},"content":"{\"kind\":\"not_found\"}","is_error":true,"#,
+            r#""tool_use_id":"toolu_bad","type":"tool_result"}],"role":"user"}],"#,
+            r#""model":"claude-opus-5","output_config":{"effort":"xhigh"},"#,
+            r#""system":[{"cache_control":{"type":"ephemeral"},"text":"<<I>>","type":"text"}],"#,
+            r#""tools":[{"name":"Read"}]}"#,
+        );
+        // The three long strings are only long so the prefix clears the cache
+        // minimum; spelling them out here would bury the shape this pins.
+        let expected = expected
+            .replace("<<I>>", &"INSTRUCTIONS ".repeat(200))
+            .replace("<<H>>", &"HISTORY ".repeat(200))
+            .replace("<<Q>>", &"QUERY ".repeat(200));
+        assert_eq!(s.last().to_string(), expected);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1483,11 +1599,7 @@ mod tests {
             "user"
         );
         assert_eq!(
-            serde_json::to_value(Message {
-                role: Role::Assistant,
-                content: json!("x")
-            })
-            .unwrap()["role"],
+            serde_json::to_value(Message::assistant_text("x")).unwrap()["role"],
             "assistant"
         );
     }
@@ -1542,7 +1654,8 @@ mod tests {
             // Out: the wire form the registry produced, byte for byte.
             assert_eq!(s.last()["tools"], Value::Array(registry.wire_definitions()),);
             // Back: every call names a tool the registry can dispatch.
-            for call in turn.unwrap().tool_calls {
+            let turn = turn.unwrap();
+            for call in turn.tool_calls() {
                 assert!(
                     registry.get(&call.name).is_some(),
                     "the model called {}, which the registry does not have",
