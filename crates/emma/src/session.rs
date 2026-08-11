@@ -704,6 +704,86 @@ pub fn locate(dir: &Path, id: Option<&str>, cwd: &Path) -> Result<PathBuf> {
     );
 }
 
+/// Whether this is somebody's first run, and how that was decided.
+///
+/// **Decided from the session history rather than from a marker file.** A
+/// marker is a second source of truth that can be deleted, copied between
+/// machines, or written by a run that then crashed — and the question "has
+/// anyone used Emma here?" already has an answer on disk, in the transcripts.
+///
+/// Two reasons, kept apart because they mean different things to the person
+/// reading the welcome: there is no session directory at all, or there is one
+/// and nothing in it was run from this working directory. The second is the
+/// common one — a new project on a machine that has used Emma before — and it
+/// is deliberately treated as a first run, because what the welcome lists is
+/// *this project's* harness, commands and skills.
+///
+/// **The scan is bounded.** Sessions from every project share one directory and
+/// this runs at startup on every interactive run, so only the newest
+/// [`FIRST_RUN_SCAN`] files are read. That makes the answer "no *recent*
+/// session from here", which is what [`FirstRun::reason`] says — an honest
+/// narrower claim rather than a broad one that would cost a full directory read
+/// before the first prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FirstRun {
+    /// Emma has never had anywhere to write a transcript.
+    NoSessionDirectory,
+    /// There are sessions, and none of the recent ones ran here.
+    NoneFromHere,
+}
+
+/// How many session files back the first-run check looks. Fifty is far more
+/// than a person switches between in a day and is one directory read plus fifty
+/// small file reads in the worst case.
+const FIRST_RUN_SCAN: usize = 50;
+
+impl FirstRun {
+    /// Said out loud in the welcome, so a returning user can tell whether
+    /// something is wrong rather than wondering why they are being introduced
+    /// to a tool they already use.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::NoSessionDirectory => {
+                "there is no session directory yet, so nothing has been recorded anywhere"
+            }
+            Self::NoneFromHere => "no recent session was recorded from this directory",
+        }
+    }
+}
+
+pub fn first_run(dir: Option<&Path>, cwd: &Path) -> Option<FirstRun> {
+    let Some(dir) = dir.filter(|d| d.is_dir()) else {
+        return Some(FirstRun::NoSessionDirectory);
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Some(FirstRun::NoSessionDirectory);
+    };
+    let mut candidates: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("jsonl"))
+        .collect();
+    if candidates.is_empty() {
+        return Some(FirstRun::NoSessionDirectory);
+    }
+    // Ids sort by time, so the newest are at the end — the same ordering
+    // `locate` relies on, and for the same reason: an mtime moves when a file
+    // is copied and an id does not.
+    candidates.sort();
+    for path in candidates.iter().rev().take(FIRST_RUN_SCAN) {
+        let Ok(records) = SessionLog::read(path) else {
+            continue;
+        };
+        if records
+            .iter()
+            .any(|r| r["kind"] == "goal" && same_dir(&string(r, "cwd"), cwd))
+        {
+            return None;
+        }
+    }
+    Some(FirstRun::NoneFromHere)
+}
+
 /// Whether a recorded working directory is this one. Canonicalised on both
 /// sides rather than compared as bytes, for the reason `harness::discover_in`
 /// gives: case, a trailing separator, a short name and a symlinked path are all
@@ -854,5 +934,97 @@ mod tests {
             json!({ "kind": "kick", "turn_id": "turn-1", "n": 1, "text": "keep going" }),
         ]);
         assert_eq!(msgs, vec![Message::user("work on g")]);
+    }
+
+    // -----------------------------------------------------------------------
+    // The first run
+    //
+    // Decided from the transcripts rather than from a marker file, so what is
+    // asserted is that the two reasons are told apart and that a directory with
+    // history in it is not mistaken for a fresh one.
+    // -----------------------------------------------------------------------
+
+    /// A session file that records one goal run from `cwd`.
+    fn session_from(dir: &Path, id: &str, cwd: &Path) {
+        let log = SessionLog::open(dir, id).unwrap();
+        log.append(
+            "goal",
+            json!({ "text": "g", "cwd": cwd.display().to_string() }),
+        );
+    }
+
+    #[test]
+    fn a_machine_that_has_never_run_emma_is_a_first_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+        // No directory at all, and a directory with nothing in it, are the same
+        // answer: there is no history anywhere.
+        assert_eq!(
+            first_run(Some(&cwd.join("nope")), cwd),
+            Some(FirstRun::NoSessionDirectory)
+        );
+        assert_eq!(first_run(None, cwd), Some(FirstRun::NoSessionDirectory));
+        let empty = dir.path().join("sessions");
+        fs::create_dir_all(&empty).unwrap();
+        assert_eq!(
+            first_run(Some(&empty), cwd),
+            Some(FirstRun::NoSessionDirectory)
+        );
+    }
+
+    #[test]
+    fn a_new_project_on_a_machine_with_history_is_still_a_first_run() {
+        // The common case, and the one that decides whether the welcome is
+        // worth having: sessions from every project share one directory, so
+        // "has Emma run anywhere" is the wrong question. What the welcome
+        // lists — the harness, this project's commands and skills — is a fact
+        // about *here*.
+        let home = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let here = tempfile::tempdir().unwrap();
+        let sessions = home.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        session_from(&sessions, "sess-1", elsewhere.path());
+        assert_eq!(
+            first_run(Some(&sessions), here.path()),
+            Some(FirstRun::NoneFromHere)
+        );
+        // …and once something has run here, it is not shown again.
+        session_from(&sessions, "sess-2", here.path());
+        assert_eq!(first_run(Some(&sessions), here.path()), None);
+    }
+
+    #[test]
+    fn each_reason_says_which_one_it_was() {
+        // The welcome prints this. A returning user seeing an introduction
+        // needs to be able to tell whether something is wrong, and "we found
+        // no session directory" and "nothing recent ran here" point at
+        // different things.
+        assert!(FirstRun::NoSessionDirectory
+            .reason()
+            .contains("no session directory"));
+        assert!(FirstRun::NoneFromHere.reason().contains("this directory"));
+    }
+
+    #[test]
+    fn the_scan_is_bounded_so_startup_does_not_read_a_whole_history() {
+        // Only the newest `FIRST_RUN_SCAN` files are read, so a session that
+        // ran here long enough ago falls off the end and the welcome is shown
+        // again. That is the trade the doc states rather than hides: a full
+        // directory read before every prompt is a worse bug than one extra
+        // welcome.
+        let home = tempfile::tempdir().unwrap();
+        let here = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let sessions = home.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        session_from(&sessions, "sess-0000", here.path());
+        for i in 1..=(FIRST_RUN_SCAN + 1) {
+            session_from(&sessions, &format!("sess-{i:04}"), elsewhere.path());
+        }
+        assert_eq!(
+            first_run(Some(&sessions), here.path()),
+            Some(FirstRun::NoneFromHere)
+        );
     }
 }

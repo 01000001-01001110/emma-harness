@@ -441,6 +441,12 @@ pub struct Agent<'a> {
 
 impl<'a> Agent<'a> {
     pub fn new(s: Setup<'a>) -> Self {
+        // The two caps the status line's meters are measured against. Set here
+        // rather than in `main` because this is where the budgets already are,
+        // and a meter measured against the wrong cap is the kind of untruth the
+        // status line exists to not have.
+        s.term
+            .set_budgets(s.budgets.max_context, s.budgets.max_tokens);
         Self {
             s,
             chapters: Vec::new(),
@@ -654,6 +660,14 @@ impl<'a> Agent<'a> {
             // and it is the whole request, so it includes the system prompt and
             // the tool schemas as well as the conversation.
             self.last_input = Some(turn.usage.billable_input_tokens());
+            // The live half of the status line, and the only place it is fed.
+            // Both numbers are measured — the provider's own input count, and
+            // this goal's weighted spend — so nothing on that line is an
+            // estimate. It is updated here, after every call, which is the only
+            // moment either of them can change.
+            self.s
+                .term
+                .spent(turn.usage.billable_input_tokens(), tokens);
             // One record per turn, whatever the turn contained — a turn that is
             // nothing but tool calls has empty text and used to be written
             // nowhere, which left the fold with a hole exactly where the tool
@@ -734,10 +748,7 @@ impl<'a> Agent<'a> {
                     "kick",
                     json!({ "turn_id": turn_id, "n": kicks, "why": why, "text": kick_text }),
                 );
-                self.s.term.note(&format!(
-                    "not done yet — nudge {kicks}/{}",
-                    self.s.budgets.max_kicks
-                ));
+                self.s.term.kick(kicks, self.s.budgets.max_kicks);
                 // `raw_content` verbatim. Never rebuilt from `text` +
                 // `tool_calls`.
                 place(&mut query, &mut pending_turn, Vec::new());
@@ -777,6 +788,9 @@ impl<'a> Agent<'a> {
         // turn whose tools were never run, and `place_turn` drops it rather
         // than leaving a `tool_use` nothing answers.
         place(&mut query, &mut pending_turn, Vec::new());
+
+        // The clock stops here rather than freezing at whatever it last showed.
+        self.s.term.goal_ended();
 
         let outcome = Outcome {
             ending,
@@ -1102,9 +1116,10 @@ impl<'a> Agent<'a> {
             .await;
         self.log_hooks(turn_id, &pre.runs);
         if let Some(reason) = pre.denied {
-            self.s
-                .term
-                .warn(&format!("{} blocked by policy: {reason}", call.name));
+            // Its own treatment on screen, and not a warning: no answer at the
+            // prompt could have allowed this, and a user who reads it as "I
+            // could have said yes" goes looking for a prompt that never comes.
+            self.s.term.tool_blocked(&call.name, &reason);
             self.s.log.append(
                 "denied",
                 json!({ "turn_id": turn_id, "id": call.id, "by": "hook", "reason": reason }),
@@ -1123,6 +1138,10 @@ impl<'a> Agent<'a> {
         {
             Verdict::Allow => {}
             Verdict::Deny(reason) => {
+                // Said on screen as well as in the log. A call that vanishes
+                // between "wants to run" and the next thing is a tool that
+                // mysteriously did nothing.
+                self.s.term.tool_refused(&call.name);
                 self.s.log.append(
                     "denied",
                     json!({ "turn_id": turn_id, "id": call.id, "by": "user", "reason": reason }),
@@ -1146,7 +1165,7 @@ impl<'a> Agent<'a> {
                     json!({ "turn_id": turn_id, "id": call.id, "tool": call.name,
                             "kind": e.kind(), "detail": e.detail() }),
                 );
-                self.s.term.tool_result(None, e.detail(), true);
+                self.s.term.tool_failed(&call.name, e.detail());
                 self.run_post_hooks(turn_id, call, e.detail(), false, Some(e.kind()))
                     .await;
                 return fail(e.kind(), e.detail().to_string());
@@ -1161,7 +1180,7 @@ impl<'a> Agent<'a> {
                     json!({ "turn_id": turn_id, "id": call.id, "tool": call.name,
                             "detail": fault.to_string() }),
                 );
-                self.s.term.tool_result(None, &fault.to_string(), true);
+                self.s.term.tool_failed(&call.name, &fault.to_string());
                 return fail("tool_fault", fault.to_string());
             }
         };
@@ -1183,7 +1202,7 @@ impl<'a> Agent<'a> {
 
         self.s
             .term
-            .tool_result(outcome.display.as_deref(), &content, false);
+            .tool_result(outcome.display.as_deref(), &content, outcome.truncated);
         // Anthropic's wire shape, built here rather than by the provider — as is
         // the one in `failure_block`. That is the whole of what makes this loop
         // Anthropic-only: OpenAI expresses a result as a separate message with

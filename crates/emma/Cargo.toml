@@ -34,11 +34,28 @@ emma-tools-tasks.workspace = true
 # nothing at run time unless a browser and a key are actually there — see
 # `web_tools`, and the registration in `main.rs` that reports what it left out.
 emma-tools-web.workspace = true
+# The terminal UI. `Viewport::Inline` is the whole reason it is here: a widget
+# tree rendered into the *normal* screen buffer, with ordinary output above it
+# that the terminal keeps in scrollback. No alternate screen — that costs
+# scrollback and mouse selection, and Emma's output is a transcript people read
+# after the run.
+#
+# **`scrolling-regions` must stay off.** With it enabled, `insert_before` is
+# implemented with `ESC[{top};{bottom}r`, and a DEC scrolling region whose top
+# margin is below row 1 discards the lines that leave it — which is exactly the
+# defect that shipped here once and could not scroll. `term/frame.rs` asserts
+# this manifest never names it.
+#
+# `default-features = false` also drops `underline-color`, which is an escape
+# sequence several terminals answer by printing garbage, and nothing here uses.
+# crossterm is not a separate dependency: it is re-exported as
+# `ratatui::crossterm`, so the two can never drift to versions that disagree
+# about what a `KeyEvent` is.
+ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 
-# The pinned frame asks the platform two questions and asks nothing else of it:
-# how big is the window, and will this console honour VT escape sequences. Both
-# are one syscall; a terminal crate would be several thousand lines and an
-# opinion about input handling, which `term.rs` deliberately does not want.
+# Two questions ratatui does not answer: how big is the *window* as opposed to
+# the screen buffer, and did VT processing actually turn on. Both are one
+# syscall, and both are load-bearing on Windows — see `term.rs`.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_System_Console"] }
 

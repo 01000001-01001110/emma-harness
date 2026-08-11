@@ -1,0 +1,688 @@
+//! The one place stdin is read, in either of the two ways it can be read.
+//!
+//! A single reader behind a channel. The goal prompt and the approval prompt
+//! both want lines, and two readers on one stdin race for them.
+//!
+//! # The property that cannot regress
+//!
+//! **The queue must be empty before a question is asked.** The reader is eager:
+//! it consumes whatever is typed, whenever it is typed, and holds it. Without a
+//! drain, a line typed while the agent was working is waiting when the next
+//! prompt appears and is handed over as the answer. That is not a stale-input
+//! annoyance — it is one question being answered by a keystroke aimed at
+//! another, and the place it matters most is the approval gate, where the line
+//! in question is a `y`.
+//!
+//! Observed rather than theorised, on the first real run: an answered `y`
+//! outlived a turn that aborted on its token budget and was consumed as the
+//! *next goal*. The same path could as easily have approved a `Bash` command
+//! the user never saw — and left a log saying they approved it.
+//!
+//! **The frame did not weaken this; it strengthened it.** Under the old cooked
+//! mode there was a second buffer nothing here could reach: the line discipline
+//! held a partly-typed line, and a drain could not touch it, so a half-typed
+//! `y` followed by return after a question appeared would still answer it. In
+//! raw mode Emma holds that buffer itself, so [`LineSource::drain`] now clears
+//! *both* — the completed lines in the channel and the characters typed but not
+//! yet submitted. After a drain the input box is visibly empty, which is the
+//! version of this property a user can check.
+//!
+//! # What raw mode costs, and what it buys
+//!
+//! It costs the line discipline: backspace, `Ctrl-U` and the rest are
+//! implemented here rather than by the terminal, and there is no history and no
+//! completion. It buys the only thing that made the viewport possible — the
+//! terminal no longer echoes anything, so nothing lands on rows ratatui thinks
+//! it owns. It also means **Ctrl-C is a keystroke rather than a signal**, and
+//! delivering it is this file's job: see [`Action::Interrupt`].
+
+use std::sync::Arc;
+
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use tokio::sync::mpsc;
+
+use super::frame::Frame;
+use super::menu::Menu;
+
+// region: The line editor
+// ---------------------------------------------------------------------------
+// The line editor
+//
+// Pure, and small on purpose. Everything here is a key that a user pressing it
+// would be surprised not to have. Anything more — history, completion, word
+// motion beyond `Ctrl-W` — is a text editor, and Emma already has one of those
+// as a tool.
+// ---------------------------------------------------------------------------
+
+/// What a keystroke did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    /// Redraw and wait for more.
+    Edit,
+    /// A line was submitted.
+    Submit(String),
+    /// Ctrl-C. The reader trips the interrupt; it does not end input.
+    Interrupt,
+    /// Ctrl-D on an empty line, or the terminal going away.
+    Eof,
+    /// Nothing worth redrawing for.
+    Ignore,
+}
+
+/// The line being typed.
+#[derive(Debug, Default, Clone)]
+pub struct Editor {
+    chars: Vec<char>,
+    cursor: usize,
+}
+
+impl Editor {
+    pub fn text(&self) -> String {
+        self.chars.iter().collect()
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.chars.is_empty()
+    }
+
+    /// Throw away whatever is half-typed. Called by [`LineSource::drain`], and
+    /// the reason it exists: see the module doc.
+    pub fn clear(&mut self) {
+        self.chars.clear();
+        self.cursor = 0;
+    }
+
+    pub fn key(&mut self, key: KeyEvent) -> Action {
+        // Windows reports releases as well as presses; acting on both types
+        // every character twice.
+        if key.kind == KeyEventKind::Release {
+            return Action::Ignore;
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char('c') if ctrl => {
+                // The buffer goes with it. A user who hits Ctrl-C and then
+                // types a goal must not find the interrupted line still in
+                // front of it.
+                self.clear();
+                Action::Interrupt
+            }
+            KeyCode::Char('d') if ctrl => {
+                if self.chars.is_empty() {
+                    Action::Eof
+                } else {
+                    Action::Ignore
+                }
+            }
+            KeyCode::Char('u') if ctrl => {
+                self.clear();
+                Action::Edit
+            }
+            KeyCode::Char('w') if ctrl => {
+                while self.cursor > 0 && self.chars[self.cursor - 1].is_whitespace() {
+                    self.chars.remove(self.cursor - 1);
+                    self.cursor -= 1;
+                }
+                while self.cursor > 0 && !self.chars[self.cursor - 1].is_whitespace() {
+                    self.chars.remove(self.cursor - 1);
+                    self.cursor -= 1;
+                }
+                Action::Edit
+            }
+            KeyCode::Char('a') if ctrl => {
+                self.cursor = 0;
+                Action::Edit
+            }
+            KeyCode::Char('e') if ctrl => {
+                self.cursor = self.chars.len();
+                Action::Edit
+            }
+            // A modifier we do not implement must not type its letter: `Ctrl-R`
+            // arriving as an `r` in the middle of a goal is worse than nothing
+            // happening.
+            KeyCode::Char(_) if ctrl || key.modifiers.contains(KeyModifiers::ALT) => Action::Ignore,
+            KeyCode::Char(c) => {
+                self.chars.insert(self.cursor, c);
+                self.cursor += 1;
+                Action::Edit
+            }
+            KeyCode::Backspace if self.cursor > 0 => {
+                self.chars.remove(self.cursor - 1);
+                self.cursor -= 1;
+                Action::Edit
+            }
+            KeyCode::Delete if self.cursor < self.chars.len() => {
+                self.chars.remove(self.cursor);
+                Action::Edit
+            }
+            KeyCode::Left if self.cursor > 0 => {
+                self.cursor -= 1;
+                Action::Edit
+            }
+            KeyCode::Right if self.cursor < self.chars.len() => {
+                self.cursor += 1;
+                Action::Edit
+            }
+            KeyCode::Home => {
+                self.cursor = 0;
+                Action::Edit
+            }
+            KeyCode::End => {
+                self.cursor = self.chars.len();
+                Action::Edit
+            }
+            KeyCode::Enter => {
+                let line = self.text();
+                self.clear();
+                Action::Submit(line)
+            }
+            _ => Action::Ignore,
+        }
+    }
+}
+
+// endregion: The line editor
+
+// region: The menu's keys
+// ---------------------------------------------------------------------------
+// The menu's keys
+//
+// Four keys change meaning while the command menu is up, and only while it is
+// up. Kept as a pure function so "Esc closes the menu rather than clearing the
+// line" and "Enter picks rather than submits" are decisions a test states,
+// rather than branches buried in a thread nothing can drive.
+// ---------------------------------------------------------------------------
+
+/// A keystroke the menu owns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuKey {
+    Up,
+    Down,
+    /// Enter or Tab: take the highlighted command.
+    Accept,
+    /// Esc. The menu goes and the typed text stays.
+    Dismiss,
+}
+
+/// Which keys the menu takes, and which fall through to the line editor.
+///
+/// With the menu shut this is `None` for everything, which is what keeps the
+/// editor exactly as it was: arrows still move the cursor, Enter still submits,
+/// and Esc still does nothing at all.
+pub fn menu_key(key: KeyEvent, open: bool) -> Option<MenuKey> {
+    if !open || key.kind == KeyEventKind::Release {
+        return None;
+    }
+    match key.code {
+        KeyCode::Up => Some(MenuKey::Up),
+        KeyCode::Down => Some(MenuKey::Down),
+        KeyCode::Enter | KeyCode::Tab => Some(MenuKey::Accept),
+        KeyCode::Esc => Some(MenuKey::Dismiss),
+        _ => None,
+    }
+}
+
+// endregion: The menu's keys
+
+// region: The reader
+// ---------------------------------------------------------------------------
+// The reader
+//
+// Two constructors, one type. `stdin` is the pre-frame reader and is what the
+// fallback path still uses, character for character. `raw` is the frame's, and
+// the only difference the rest of Emma can see is that `drain` now reaches one
+// buffer further.
+// ---------------------------------------------------------------------------
+
+pub struct LineSource {
+    rx: mpsc::Receiver<String>,
+    /// The half-typed line, shared with the reader thread. `None` on the cooked
+    /// path, where the terminal's own line discipline holds it and nothing in
+    /// this process can reach it.
+    editing: Option<Arc<std::sync::Mutex<Editor>>>,
+    /// The command menu, shared with the same thread and drained with the same
+    /// call. An open menu holds a selection, and a selection is one Enter away
+    /// from being a line — so it is a place input can hide, and [`Self::drain`]
+    /// closes it for exactly the reason it clears the half-typed line.
+    menu: Option<Arc<std::sync::Mutex<Menu>>>,
+    frame: Option<Arc<Frame>>,
+}
+
+impl LineSource {
+    /// The cooked reader: whole lines, edited by the terminal.
+    ///
+    /// Unchanged from before the frame existed, deliberately. It is what every
+    /// fallback run uses — no TTY, `TERM=dumb`, a tiny window, `EMMA_NO_FRAME`
+    /// — and the fallback is the product.
+    pub fn stdin() -> Self {
+        let (tx, rx) = mpsc::channel(8);
+        std::thread::spawn(move || {
+            let stdin = std::io::stdin();
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match std::io::BufRead::read_line(&mut stdin.lock(), &mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        if tx
+                            .blocking_send(line.trim_end_matches(['\r', '\n']).to_string())
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        Self {
+            rx,
+            editing: None,
+            menu: None,
+            frame: None,
+        }
+    }
+
+    /// The raw reader, for a run that has a viewport.
+    ///
+    /// `on_interrupt` is Ctrl-C. Raw mode turns off the terminal's own signal
+    /// generation on both platforms — `ISIG` on unix, `ENABLE_PROCESSED_INPUT`
+    /// on Windows — so `tokio::signal` will not fire while this reader is
+    /// installed and the keystroke is the only delivery there is. The signal
+    /// handler stays installed anyway: it is what a fallback run uses, and two
+    /// paths tripping one flag costs nothing.
+    pub fn raw(frame: Arc<Frame>, menu: Menu, on_interrupt: impl Fn() + Send + 'static) -> Self {
+        let (tx, rx) = mpsc::channel(8);
+        let editing = Arc::new(std::sync::Mutex::new(Editor::default()));
+        let menu = Arc::new(std::sync::Mutex::new(menu));
+        let thread_editor = editing.clone();
+        let thread_menu = menu.clone();
+        let thread_frame = frame.clone();
+        std::thread::spawn(move || loop {
+            // A poll rather than a blocking read, so a frame that has been torn
+            // down does not leave a thread wedged inside the console driver
+            // holding a handle nobody can close.
+            match event::read() {
+                Err(_) => break,
+                Ok(Event::Key(key)) => {
+                    // The menu takes four keys, and only while it is open. With
+                    // it shut this is `None` for everything and the editor
+                    // below is reached exactly as it always was.
+                    let owned = {
+                        let m = thread_menu.lock().unwrap_or_else(|e| e.into_inner());
+                        menu_key(key, m.is_open())
+                    };
+                    if let Some(owned) = owned {
+                        let picked = {
+                            let mut m = thread_menu.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut ed = thread_editor.lock().unwrap_or_else(|e| e.into_inner());
+                            let picked = match owned {
+                                MenuKey::Up => {
+                                    m.move_by(-1);
+                                    None
+                                }
+                                MenuKey::Down => {
+                                    m.move_by(1);
+                                    None
+                                }
+                                // The typed text is not touched: Esc is for the
+                                // popup, not for the sentence behind it.
+                                MenuKey::Dismiss => {
+                                    m.dismiss(&ed.text());
+                                    None
+                                }
+                                MenuKey::Accept => {
+                                    let name = m.selection().map(|e| format!("/{}", e.name));
+                                    m.close();
+                                    if name.is_some() {
+                                        // The picked command replaces whatever
+                                        // was being typed towards it, so the
+                                        // box is empty for the next line.
+                                        ed.clear();
+                                        thread_frame.set_input("", 0);
+                                    }
+                                    name
+                                }
+                            };
+                            thread_frame.set_menu(m.view());
+                            picked
+                        };
+                        thread_frame.draw();
+                        if let Some(line) = picked {
+                            if tx.blocking_send(line).is_err() {
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+
+                    let action = {
+                        let mut ed = thread_editor.lock().unwrap_or_else(|e| e.into_inner());
+                        let action = ed.key(key);
+                        thread_frame.set_input(&ed.text(), ed.cursor());
+                        // What is typed decides whether the menu is up. A
+                        // pending question suppresses it outright — while an
+                        // approval is on screen, `/` is just a character.
+                        let mut m = thread_menu.lock().unwrap_or_else(|e| e.into_inner());
+                        match action {
+                            // A submitted or interrupted line takes the menu
+                            // with it rather than leaving a selection behind.
+                            Action::Submit(_) | Action::Interrupt => m.close(),
+                            _ => m.sync(&ed.text(), thread_frame.prompt_pending()),
+                        }
+                        thread_frame.set_menu(m.view());
+                        action
+                    };
+                    match action {
+                        Action::Ignore => {}
+                        Action::Edit => thread_frame.draw(),
+                        Action::Interrupt => {
+                            thread_frame.draw();
+                            on_interrupt();
+                        }
+                        Action::Eof => break,
+                        Action::Submit(line) => {
+                            thread_frame.draw();
+                            if tx.blocking_send(line).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+                // A resize is a redraw and nothing else: ratatui re-measures on
+                // every draw, so there is no state here to update.
+                Ok(Event::Resize(..)) => thread_frame.draw(),
+                Ok(_) => {}
+            }
+        });
+        Self {
+            rx,
+            editing: Some(editing),
+            menu: Some(menu),
+            frame: Some(frame),
+        }
+    }
+
+    /// Discard anything typed before now, and report how much was dropped.
+    ///
+    /// Called immediately before a prompt is shown, so the only line that can
+    /// answer a question is one typed after seeing it. The count is returned
+    /// rather than swallowed because silently eating a line a person typed is
+    /// its own small betrayal — the caller says so.
+    ///
+    /// On the raw path this also clears the half-typed line, which the cooked
+    /// path never could. A partly-typed `y` is one keystroke from being an
+    /// answer to a question it was not aimed at.
+    pub fn drain(&mut self) -> usize {
+        let mut dropped = 0;
+        while self.rx.try_recv().is_ok() {
+            dropped += 1;
+        }
+        if let Some(editing) = &self.editing {
+            let mut ed = editing.lock().unwrap_or_else(|e| e.into_inner());
+            if !ed.is_empty() {
+                dropped += 1;
+                ed.clear();
+            }
+        }
+        // The menu is a third place a keystroke can sit: an open one has a
+        // highlighted command, and Enter would turn it into a line. It closes
+        // with the rest, and is not counted — nothing was typed into it that
+        // the editor above did not already account for.
+        if let Some(menu) = &self.menu {
+            menu.lock().unwrap_or_else(|e| e.into_inner()).close();
+        }
+        if let Some(frame) = &self.frame {
+            frame.set_input("", 0);
+            frame.set_menu(None);
+            frame.draw();
+        }
+        dropped
+    }
+
+    pub async fn next(&mut self) -> Option<String> {
+        self.rx.recv().await
+    }
+
+    /// A queue fed from a list rather than from stdin, for tests that need to
+    /// assert on the drain rather than on a terminal.
+    #[cfg(test)]
+    fn scripted(lines: &[&str]) -> Self {
+        let (tx, rx) = mpsc::channel(16);
+        for line in lines {
+            tx.try_send((*line).to_string())
+                .expect("test queue is big enough");
+        }
+        Self {
+            rx,
+            editing: None,
+            menu: None,
+            frame: None,
+        }
+    }
+
+    /// The same, with a half-typed line and a menu behind it — the raw path's
+    /// shape, without a terminal.
+    #[cfg(test)]
+    fn scripted_raw(lines: &[&str], typing: &str) -> Self {
+        let mut source = Self::scripted(lines);
+        let mut editor = Editor::default();
+        for c in typing.chars() {
+            editor.key(KeyEvent::from(KeyCode::Char(c)));
+        }
+        let mut menu = Menu::for_project(&["review"]);
+        menu.sync(&editor.text(), false);
+        source.editing = Some(Arc::new(std::sync::Mutex::new(editor)));
+        source.menu = Some(Arc::new(std::sync::Mutex::new(menu)));
+        source
+    }
+}
+
+// endregion: The reader
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent::from(code)
+    }
+
+    fn ctrl(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+    }
+
+    fn typed(editor: &mut Editor, text: &str) {
+        for c in text.chars() {
+            editor.key(press(KeyCode::Char(c)));
+        }
+    }
+
+    #[test]
+    fn typing_and_submitting_a_line_gives_back_exactly_what_was_typed() {
+        let mut ed = Editor::default();
+        typed(&mut ed, "port the middleware");
+        assert_eq!(ed.text(), "port the middleware");
+        assert_eq!(
+            ed.key(press(KeyCode::Enter)),
+            Action::Submit("port the middleware".into())
+        );
+        // …and the box is empty afterwards, rather than holding the line that
+        // was just sent.
+        assert!(ed.is_empty());
+    }
+
+    #[test]
+    fn the_editing_keys_a_person_will_reach_for_all_work() {
+        let mut ed = Editor::default();
+        typed(&mut ed, "cargo tesr");
+        ed.key(press(KeyCode::Backspace));
+        typed(&mut ed, "t");
+        assert_eq!(ed.text(), "cargo test");
+
+        ed.key(press(KeyCode::Home));
+        assert_eq!(ed.cursor(), 0);
+        typed(&mut ed, "$ ");
+        assert_eq!(ed.text(), "$ cargo test");
+
+        ed.key(press(KeyCode::End));
+        ed.key(ctrl('w'));
+        assert_eq!(ed.text(), "$ cargo ");
+        ed.key(ctrl('u'));
+        assert!(ed.is_empty());
+    }
+
+    /// A shortcut Emma does not implement must do nothing, rather than typing
+    /// its letter into the middle of a goal.
+    #[test]
+    fn an_unimplemented_control_key_types_nothing() {
+        let mut ed = Editor::default();
+        typed(&mut ed, "abc");
+        assert_eq!(ed.key(ctrl('r')), Action::Ignore);
+        assert_eq!(ed.text(), "abc");
+    }
+
+    /// Ctrl-C in raw mode is a keystroke, not a signal — this file is the only
+    /// thing that can deliver it. It also takes the half-typed line with it.
+    #[test]
+    fn ctrl_c_asks_for_an_interrupt_and_clears_what_was_being_typed() {
+        let mut ed = Editor::default();
+        typed(&mut ed, "half a goal");
+        assert_eq!(ed.key(ctrl('c')), Action::Interrupt);
+        assert!(ed.is_empty());
+    }
+
+    #[test]
+    fn ctrl_d_ends_input_only_when_there_is_nothing_to_lose() {
+        let mut ed = Editor::default();
+        typed(&mut ed, "x");
+        assert_eq!(ed.key(ctrl('d')), Action::Ignore);
+        ed.key(ctrl('u'));
+        assert_eq!(ed.key(ctrl('d')), Action::Eof);
+    }
+
+    #[test]
+    fn a_key_release_is_not_a_second_keypress() {
+        // Windows reports both edges. Acting on both types everything twice.
+        let mut ed = Editor::default();
+        let mut release = press(KeyCode::Char('x'));
+        release.kind = KeyEventKind::Release;
+        assert_eq!(ed.key(release), Action::Ignore);
+        assert!(ed.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // The drain
+    //
+    // The security property, and the one thing in this file that is not
+    // allowed to change. The first two tests are the ones that existed before
+    // the frame; the third is the ground the raw path gained.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn a_line_typed_before_the_question_cannot_answer_it() {
+        // The bug, in miniature: `y` was typed at some earlier moment, a
+        // question is now being asked, and the answer must be the line typed
+        // after it — not the one already in the queue.
+        let mut lines = LineSource::scripted(&["y", "y"]);
+        assert_eq!(lines.drain(), 2, "the queue was not emptied");
+        // Nothing left to hand over, so a question asked now waits for a
+        // person instead of consuming their old keystroke.
+        assert_eq!(lines.rx.try_recv().ok(), None);
+    }
+
+    #[tokio::test]
+    async fn draining_an_empty_queue_drops_nothing_and_says_so() {
+        // The count is what the caller turns into "ignoring N lines"; a false
+        // positive there tells a user their input was eaten when it was not.
+        let mut lines = LineSource::scripted(&[]);
+        assert_eq!(lines.drain(), 0);
+    }
+
+    /// What raw mode added: the half-typed line is drained too.
+    ///
+    /// Under cooked mode this buffer lived in the terminal's line discipline
+    /// and nothing in this process could reach it, so a user who had typed `y`
+    /// and not yet pressed return could answer the *next* question with one
+    /// keystroke. That hole is closed here, and the test is written from the
+    /// hole rather than from the implementation.
+    #[tokio::test]
+    async fn a_half_typed_answer_is_drained_as_well_as_a_submitted_one() {
+        let mut lines = LineSource::scripted_raw(&["y"], "y");
+        assert_eq!(lines.drain(), 2, "the half-typed line survived the drain");
+        let Some(editing) = &lines.editing else {
+            panic!("the raw path lost its editor")
+        };
+        assert!(
+            editing.lock().unwrap().is_empty(),
+            "the input box still held an answer to an unasked question"
+        );
+    }
+
+    /// The menu is the newest place input can hide, so the drain reaches it
+    /// too.
+    ///
+    /// An open menu holds a highlighted command, and one Enter turns that into
+    /// a submitted line. A question asked while a menu was up would otherwise
+    /// have a `/exit` sitting one keystroke from answering it.
+    #[tokio::test]
+    async fn draining_closes_the_command_menu_as_well() {
+        let mut lines = LineSource::scripted_raw(&[], "/re");
+        let Some(menu) = &lines.menu else {
+            panic!("the raw path lost its menu")
+        };
+        assert!(
+            menu.lock().unwrap().is_open(),
+            "the fixture did not open a menu, so this proves nothing"
+        );
+        // The half-typed `/re` counts as the one thing dropped; the menu is not
+        // a second line, it is a view of that one.
+        assert_eq!(lines.drain(), 1);
+        let menu = lines.menu.as_ref().unwrap().lock().unwrap();
+        assert!(!menu.is_open(), "a menu survived the drain");
+        assert_eq!(menu.selection(), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // The menu's keys
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn the_menu_takes_four_keys_and_only_while_it_is_open() {
+        for (code, expected) in [
+            (KeyCode::Up, Some(MenuKey::Up)),
+            (KeyCode::Down, Some(MenuKey::Down)),
+            (KeyCode::Enter, Some(MenuKey::Accept)),
+            (KeyCode::Tab, Some(MenuKey::Accept)),
+            (KeyCode::Esc, Some(MenuKey::Dismiss)),
+            (KeyCode::Char('x'), None),
+            (KeyCode::Backspace, None),
+            (KeyCode::Left, None),
+        ] {
+            assert_eq!(menu_key(press(code), true), expected, "{code:?}");
+            // Closed, the editor keeps every one of them — including Enter,
+            // which must still submit, and Esc, which must still do nothing.
+            assert_eq!(menu_key(press(code), false), None, "{code:?}");
+        }
+    }
+
+    /// Esc reaches the menu and nothing else: the editor never sees it, so the
+    /// line survives.
+    #[test]
+    fn esc_with_a_menu_open_leaves_the_typed_text_where_it_was() {
+        let mut ed = Editor::default();
+        typed(&mut ed, "/re");
+        let mut menu = Menu::for_project(&["review"]);
+        menu.sync(&ed.text(), false);
+        assert_eq!(
+            menu_key(press(KeyCode::Esc), menu.is_open()),
+            Some(MenuKey::Dismiss)
+        );
+        menu.dismiss(&ed.text());
+        assert!(!menu.is_open());
+        assert_eq!(ed.text(), "/re", "Esc took the line with the menu");
+    }
+}

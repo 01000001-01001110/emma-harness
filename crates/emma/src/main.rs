@@ -12,7 +12,7 @@ use emma::goal::{Goal, MarkerClaim};
 use emma::session::{self, SessionLog};
 use emma::settings;
 use emma::skill::Skill;
-use emma::term::{LineSource, Term};
+use emma::term::{Term, Welcome};
 use emma_harness::Harness;
 use emma_llm::{auth, AnthropicProvider, Mode, Provider};
 use emma_tool_api::{Registry, Tool};
@@ -114,10 +114,27 @@ async fn run(cli: cli::Cli) -> Result<()> {
         Term::interactive()
     };
 
+    // Before the reader, because the reader may *be* the delivery. A viewport
+    // means raw mode, and raw mode is the state in which the terminal stops
+    // turning Ctrl-C into a signal — so the keystroke has to reach this flag
+    // directly. `install` wires the signal as well; a fallback run has no other
+    // way to be interrupted, and two paths tripping one flag costs nothing.
+    let interrupt = Interrupt::new();
+    interrupt.install();
+
     let (gate, asker) = match (opts.skip_permissions, opts.print) {
         (true, _) => (Gate::SkipAll, Asker::Scripted(Default::default())),
         (false, true) => (Gate::Unattended, Asker::Scripted(Default::default())),
-        (false, false) => (Gate::Ask, Asker::Terminal(LineSource::stdin().into())),
+        (false, false) => {
+            let signal = interrupt.clone();
+            // The `/` menu's vocabulary is this run's, taken from the harness
+            // that actually loaded. Nothing else may put a name in it.
+            let menu = emma::term::menu::Menu::for_project(&harness.command_names());
+            (
+                Gate::Ask,
+                Asker::Terminal(term.line_source(menu, move || signal.trip()).into()),
+            )
+        }
     };
     // After the terminal exists, because this is the first thing a user needs
     // when a page read they expected does not happen: the tool is absent, and
@@ -190,6 +207,11 @@ async fn run(cli: cli::Cli) -> Result<()> {
         _ => None,
     };
 
+    // Kept because `session_dir` is moved into the log below and the first-run
+    // check needs the same answer: "is there anywhere sessions are recorded, and
+    // has anything been recorded here".
+    let session_dir_for_welcome = session_dir.clone();
+
     let session_id = match &restored {
         Some(restored) => restored.id.clone(),
         None => SessionLog::new_id(),
@@ -238,10 +260,37 @@ async fn run(cli: cli::Cli) -> Result<()> {
                     .join("  ")
             ));
         }
+        // Once, for somebody who has not been here before. Detected from the
+        // transcripts rather than from a marker file — see `session::first_run`,
+        // which also supplies the sentence saying how it decided, because "why
+        // am I seeing this?" is a returning user's first question.
+        //
+        // Composed from the run that is actually starting: the harness that
+        // loaded, the tools that survived selection, this project's commands and
+        // skills. A welcome that lists capabilities the run does not have
+        // teaches, first thing, that Emma's account of itself cannot be trusted.
+        if let Some(why) = session::first_run(session_dir_for_welcome.as_deref(), &cwd) {
+            term.welcome(&Welcome {
+                reason: why.reason().to_string(),
+                harness: format!(
+                    "{} {} {}",
+                    match harness.flavor {
+                        emma_harness::Flavor::Claude => "claude",
+                        emma_harness::Flavor::Emma => "emma",
+                    },
+                    "at",
+                    harness.root.display()
+                ),
+                tools: tools.names().iter().map(|n| n.to_string()).collect(),
+                commands: commands.iter().map(|c| c.to_string()).collect(),
+                skills: harness
+                    .skill_names()
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            });
+        }
     }
-
-    let interrupt = Interrupt::new();
-    interrupt.install();
 
     let budgets = opts.budgets;
     let agent = Agent::new(Setup {
@@ -336,12 +385,12 @@ async fn run(cli: cli::Cli) -> Result<()> {
         // the provider reports and a person comparing this line with a bill
         // should know which one it is: a cached read counts here at the tenth
         // of a token it costs. The raw provider counts are in the transcript.
-        term.note(&format!(
-            "{} — {} calls, {} tokens (cache-weighted)",
-            outcome.ending.message(&budgets),
+        term.ending(
+            &outcome.ending.message(&budgets),
+            matches!(outcome.ending, Ending::Done | Ending::Answered),
             outcome.iterations,
-            outcome.tokens
-        ));
+            outcome.tokens,
+        );
         last = outcome.ending;
         if opts.print || interrupt.tripped() {
             break;
