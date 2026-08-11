@@ -1,11 +1,15 @@
-//! `emma api`, `emma model`, `emma init`, `emma config check` — the four things
-//! that run without a model call, and therefore the four things worth reaching
-//! for when something is wrong.
+//! `emma set-provider`, `emma set-model`, `emma api`, `emma model`,
+//! `emma init`, `emma config check` — the things that run without a model call,
+//! and therefore the things worth reaching for when something is wrong.
 //!
-//! `api` and `model` write under `~/.emma/`; `config check` writes nothing at
-//! all. Neither of the first two touches the project directory — Emma runs
+//! Everything but `init` writes under `~/.emma/`, and `config check` writes
+//! nothing at all. None of them touches the project directory — Emma runs
 //! inside repositories, and a file it creates next to someone's code is a file
 //! their next `git add .` publishes.
+//!
+//! `api` and `model` are the pre-provider spellings and are kept as aliases
+//! rather than removed. `printf %s "$KEY" | emma api` is an existing contract,
+//! and two match arms is a cheap price for not breaking it.
 //!
 //! [`init`] is the exception, and it is the whole of what it does: it writes
 //! `.emma/` in the working directory because that is the file whose absence
@@ -24,68 +28,213 @@ use emma_tool_api::Registry;
 
 use crate::settings;
 
-/// Store an API key under the user's home directory.
+// region: provider and model
+// ---------------------------------------------------------------------------
+// `emma set-provider`, `emma set-model`, and the two older spellings
+//
+// One rule governs the order of writes here and it is worth stating before the
+// code: **a stored key with no model is a reasonable resting place; a stored
+// model with no key is not.** So the key is written first and a model is only
+// ever stored beside a provider that has one, or that could have one from the
+// environment.
+//
+// Every one of these is split in two: a public function that finds the home
+// directory and reads a key from a terminal, and a private one that takes both
+// as arguments. Only the second is testable, and it is where all the behaviour
+// is — a test that had to prompt for a key would be a test nobody writes.
+// ---------------------------------------------------------------------------
+
+/// Read a key from an argument, a pipe, or a prompt that does not echo it.
 ///
-/// The key may be given as an argument for provisioning scripts, or typed at a
-/// prompt that does not echo it. Echoing would put it on the screen, in a
-/// screen recording, and — if it was pasted after the command — in shell
-/// history. `rpassword` exists in the dependency list for this one call.
-pub fn api(given: Option<String>) -> Result<()> {
-    let home = auth::home_dir().context(
-        "the home directory could not be determined, so there is nowhere to store a key",
-    )?;
-    let key = match given {
-        Some(key) => key,
-        None if std::io::stdin().is_terminal() => {
-            rpassword::prompt_password("Anthropic API key (not echoed): ")
-                .context("reading the key")?
-        }
-        // Piped in: `printf %s "$KEY" | emma api`.
-        None => {
+/// Echoing would put the key on the screen, in a screen recording, and — if it
+/// was pasted after the command — in shell history. `rpassword` exists in the
+/// dependency list for this one call.
+///
+/// `-` as the argument means stdin explicitly, so a script can say what it
+/// means instead of relying on Emma noticing it has no terminal.
+fn read_key(given: Option<String>, prompt: &str) -> Result<String> {
+    let raw = match given.as_deref() {
+        Some("-") | None if !std::io::stdin().is_terminal() => {
+            // Piped in: `printf %s "$KEY" | emma set-provider anthropic`.
             let mut raw = String::new();
             std::io::stdin()
                 .read_line(&mut raw)
                 .context("reading the key from stdin")?;
             raw
         }
+        Some("-") => bail!("`--key -` reads the key from stdin, and stdin is a terminal here"),
+        Some(_) => given.expect("matched Some"),
+        None => rpassword::prompt_password(prompt).context("reading the key")?,
     };
-    let key = key.trim();
+    let key = raw.trim().to_string();
     if key.is_empty() {
         bail!("no key was given; nothing was written");
     }
-    let path = auth::store(&home, &ApiKey::new(key))?;
-    println!("stored {}", path.display());
-    if std::env::var_os(auth::ENV_VAR).is_some() {
-        // Otherwise the next run uses the environment and the user concludes
-        // the file did not work.
-        eprintln!(
+    Ok(key)
+}
+
+/// `emma set-provider <name>`: store that provider's key and select it.
+///
+/// The name is checked **before** anything is prompted for. `emma set-provider
+/// antropic` must not get as far as asking for a secret, and a key typed into a
+/// command that is about to fail is a key the user now has to rotate or retype.
+pub fn set_provider(name: &str, key: Option<String>, model: Option<String>) -> Result<()> {
+    let kind = emma_llm::kind(name)?;
+    let home = auth::home_dir().context(
+        "the home directory could not be determined, so there is nowhere to store a key",
+    )?;
+    let key = read_key(key, &format!("{} API key (not echoed): ", kind.name()))?;
+    let mut out = std::io::stdout();
+    store_provider(&home, kind, &key, model.as_deref(), &mut out)
+}
+
+fn store_provider(
+    home: &Path,
+    kind: &dyn emma_llm::ProviderKind,
+    key: &str,
+    model: Option<&str>,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let path = auth::store(home, kind.name(), &ApiKey::new(key))?;
+    writeln!(out, "provider  {}  {}", kind.name(), path.display())?;
+
+    let mut settings = settings::load(home);
+    settings.provider = Some(kind.name().to_string());
+    if let Some(model) = model {
+        settings
+            .models
+            .insert(kind.name().to_string(), model.to_string());
+    }
+    let path = settings::save(home, &settings)?;
+    let (model, source) = match settings.models.get(kind.name()) {
+        Some(model) => (model.clone(), "settings.json"),
+        None => (kind.default_model().to_string(), "built-in default"),
+    };
+    writeln!(out, "model     {model}  ({source})  {}", path.display())?;
+    if source == "built-in default" {
+        // The §2.4 resting place, reached in this build by not naming a model
+        // rather than by a list call failing. Either way the user is one
+        // command from finished and must be told which one.
+        writeln!(
+            out,
+            "\nNo model was chosen, so {model} is what will run. Choose another with \
+             `emma set-model <id>`."
+        )?;
+    }
+    env_note(kind, out)
+}
+
+/// Say so when the environment outranks what was just written. Otherwise the
+/// next run uses the variable and the user concludes the file did not work —
+/// which is an hour, reliably, every time.
+fn env_note(kind: &dyn emma_llm::ProviderKind, out: &mut dyn Write) -> Result<()> {
+    if std::env::var_os(kind.env_var()).is_some() {
+        writeln!(
+            out,
             "note: {} is set in this shell and takes precedence over the stored key",
-            auth::ENV_VAR
-        );
+            kind.env_var()
+        )?;
     }
     Ok(())
 }
 
-/// `emma model` reports; `emma model <name>` sets.
+/// `emma set-model <id>`: set the model remembered for a provider.
+pub fn set_model(model: &str, provider: Option<&str>) -> Result<()> {
+    let home = auth::home_dir().context(
+        "the home directory could not be determined, so there is nowhere to store a preference",
+    )?;
+    let mut out = std::io::stdout();
+    set_model_at(&home, model, provider, &mut out)
+}
+
+fn set_model_at(
+    home: &Path,
+    model: &str,
+    provider: Option<&str>,
+    out: &mut dyn Write,
+) -> Result<()> {
+    // A model belongs to a provider, so there must be one to belong to. The
+    // message names the command that fixes it, because "set a provider first"
+    // with no next step is where somebody puts the tool down.
+    if provider.is_none() && settings::load(home).provider.is_none() {
+        bail!(
+            "no provider is set, and a model id means nothing without one. Run \
+             `emma set-provider <name>` — it stores the key and selects the provider — or \
+             name one here with `--provider`."
+        );
+    }
+    let (kind, _) = settings::resolve_kind(provider, None, Some(home))?;
+    let path = write_model(home, kind.name(), model)?;
+    writeln!(out, "model     {model}  for {}", kind.name())?;
+    writeln!(out, "stored    {}", path.display())?;
+    // A warning rather than a refusal. Nothing here calls the provider, so a
+    // model set before a key is a state that costs one more command to leave
+    // and nothing else — and refusing would mean a user with a key in a
+    // password manager cannot configure Emma until they open it.
+    if auth::resolve(kind, std::env::var(kind.env_var()).ok().as_deref(), home).is_err() {
+        writeln!(
+            out,
+            "note: no API key for {} yet, so this model cannot run. `emma set-provider {}` \
+             stores one.",
+            kind.name(),
+            kind.name()
+        )?;
+    }
+    Ok(())
+}
+
+/// The one place a model id is written, so "keyed by provider" is a property of
+/// the file rather than a habit of two call sites.
+fn write_model(home: &Path, provider: &str, model: &str) -> Result<std::path::PathBuf> {
+    let mut settings = settings::load(home);
+    settings
+        .models
+        .insert(provider.to_string(), model.to_string());
+    settings::save(home, &settings)
+}
+
+/// `emma api [<key>]` — the pre-provider spelling, kept.
+///
+/// It stores a key for the provider already selected and does **not** become
+/// the guided flow: `printf %s "$KEY" | emma api` is a contract, and turning it
+/// into something that asks questions would break every script that has one.
+pub fn api(given: Option<String>) -> Result<()> {
+    let home = auth::home_dir().context(
+        "the home directory could not be determined, so there is nowhere to store a key",
+    )?;
+    let (kind, _) = settings::resolve_kind(None, None, Some(&home))?;
+    let key = read_key(given, &format!("{} API key (not echoed): ", kind.name()))?;
+    let path = auth::store(&home, kind.name(), &ApiKey::new(key))?;
+    println!("stored {} for {}", path.display(), kind.name());
+    println!(
+        "note: `emma set-provider {}` does this and selects the provider in one step.",
+        kind.name()
+    );
+    env_note(kind, &mut std::io::stdout())
+}
+
+/// `emma model` reports; `emma model <name>` sets — for the current provider.
+///
+/// Bare `emma model` still *reports* rather than doing what bare `set-model`
+/// would, which is the one place these two deliberately differ: a habitual
+/// `emma model` must keep meaning what it meant.
 pub fn model(name: Option<String>) -> Result<()> {
     let home = auth::home_dir().context(
         "the home directory could not be determined, so there is nowhere to store a preference",
     )?;
+    let (kind, resolved) = settings::resolve_kind(None, None, Some(&home))?;
     match name {
         Some(name) => {
-            let mut current = settings::load(&home);
-            current.model = Some(name.clone());
-            let path = settings::save(&home, &current)?;
-            println!("model set to {name}");
+            let path = write_model(&home, kind.name(), &name)?;
+            println!("model set to {name} for {}", kind.name());
             println!("stored {}", path.display());
         }
-        None => {
-            let (model, source) = settings::resolve(None, Some(&home));
-            println!("{model}  ({source})");
-        }
+        None => println!("{}  ({})", resolved.model, resolved.model_source),
     }
     Ok(())
 }
+
+// endregion: provider and model
 
 // region: init
 // ---------------------------------------------------------------------------
@@ -596,20 +745,96 @@ pub fn config_check(
     }
 
     let home = auth::home_dir();
-    let (model, source) = settings::resolve(None, home.as_deref());
-    println!("model          {model}  ({source})");
-
-    // Reported, never printed. Whether a key resolves is the question; which
-    // key it is, is not.
-    match auth::load_default() {
-        Ok(_) if std::env::var_os(auth::ENV_VAR).is_some() => {
-            println!("api key        found ({})", auth::ENV_VAR)
-        }
-        Ok(_) => println!("api key        found (stored file)"),
-        Err(e) => println!("api key        NOT FOUND — {e}"),
+    for line in configured(home.as_deref(), &|name| std::env::var(name).ok()) {
+        println!("{line}");
     }
     println!("\nno model was called.");
     Ok(())
+}
+
+/// The provider, the model and where the key came from — the three lines
+/// somebody debugging "why is it using that" actually needs.
+///
+/// A function returning lines rather than four `println!`s, because this is the
+/// half of `config check` that has a wrong answer worth pinning: a provider
+/// nobody can run, a model that came from somewhere other than where the user
+/// thinks, or a stored key silently shadowed by an environment variable.
+///
+/// The environment arrives as a lookup rather than being read here, for the
+/// same reason `auth::resolve` takes its value: a test can pin either source
+/// without mutating process state every other test in the binary shares.
+fn configured(home: Option<&Path>, env: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
+    let (kind, resolved) = match settings::resolve_kind(None, None, home) {
+        Ok(both) => both,
+        // Loud, and not fatal: `config check` is the command people run when
+        // something is wrong, so the one thing it must never do is fail to
+        // report the thing that is wrong.
+        Err(e) => {
+            return vec![
+                format!("provider       NOT USABLE — {e}"),
+                "               nothing will run until `emma set-provider <name>` names one \
+                 this build supports"
+                    .into(),
+            ]
+        }
+    };
+    let mut lines = vec![
+        format!(
+            "provider       {}  ({})",
+            resolved.provider, resolved.provider_source
+        ),
+        format!(
+            "model          {}  ({})",
+            resolved.model, resolved.model_source
+        ),
+    ];
+
+    // Reported, never printed. Whether a key resolves is the question; which
+    // key it is, is not.
+    //
+    // The two sources are asked in the same order `auth::load_default` asks
+    // them, and separately rather than through one call, because there is no
+    // home to hand `resolve` when the platform will not say where home is — and
+    // substituting a relative path there would make this the one place in the
+    // program that looks for a key in the working directory.
+    let env = env(kind.env_var()).filter(|k| !k.trim().is_empty());
+    match (env, home) {
+        (Some(_), _) => {
+            lines.push(format!("api key        found ({})", kind.env_var()));
+            if home.is_some_and(|h| auth::stored_providers(h).iter().any(|p| p == kind.name())) {
+                // The hour this saves: a key stored, a key exported, and no way
+                // to tell which one the 401 came from.
+                lines.push(format!(
+                    "               the environment overrides the key stored for {}",
+                    kind.name()
+                ));
+            }
+        }
+        (None, Some(home)) => match auth::resolve(kind, None, home) {
+            Ok(_) => lines.push("api key        found (stored file)".into()),
+            Err(e) => lines.push(format!("api key        NOT FOUND — {e}")),
+        },
+        (None, None) => lines.push(format!(
+            "api key        NOT FOUND — {}",
+            emma_llm::AuthError::NoHome
+        )),
+    }
+
+    // Enough to answer "did I store that key?", and not enough to be a
+    // disclosure: names of providers, never a byte of any key.
+    let others: Vec<String> = home
+        .map(auth::stored_providers)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| p != kind.name())
+        .collect();
+    if !others.is_empty() {
+        lines.push(format!(
+            "               a key is also stored for: {}",
+            others.join(", ")
+        ));
+    }
+    lines
 }
 
 // `rename_auth` used to live here: a `replace` that rewrote `emma auth` to
@@ -627,3 +852,212 @@ fn or_none(s: &str) -> String {
         s.to_string()
     }
 }
+
+// region: Tests
+// ---------------------------------------------------------------------------
+// Tests
+//
+// Every one of these drives the private half of a command — the one that takes
+// a home directory and a writer rather than finding them. The public halves are
+// two lines each and prompt for a secret; what is worth pinning is what lands
+// on disk, and that is all in here.
+//
+// Two of them guard properties that would be silent if they broke: the owner's
+// pre-provider key and model surviving an upgrade, and a provider this build
+// cannot run never quietly becoming Anthropic.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn anthropic() -> &'static dyn emma_llm::ProviderKind {
+        emma_llm::kind("anthropic").unwrap()
+    }
+
+    fn say(f: impl FnOnce(&mut dyn Write) -> Result<()>) -> String {
+        let mut out: Vec<u8> = Vec::new();
+        f(&mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn set_provider_writes_the_key_first_and_then_selects_it() {
+        let home = tempfile::tempdir().unwrap();
+        let said = say(|out| {
+            store_provider(
+                home.path(),
+                anthropic(),
+                "sk-ant-new",
+                Some("claude-sonnet-4-5"),
+                out,
+            )
+        });
+        assert_eq!(
+            auth::resolve(anthropic(), None, home.path())
+                .unwrap()
+                .expose(),
+            "sk-ant-new"
+        );
+        let (_, resolved) = settings::resolve_kind(None, None, Some(home.path())).unwrap();
+        assert_eq!(resolved.provider, "anthropic");
+        assert_eq!(resolved.model, "claude-sonnet-4-5");
+        assert!(said.contains("credentials.json"), "{said}");
+        assert!(said.contains("settings.json"), "{said}");
+        assert!(said.contains("claude-sonnet-4-5"), "{said}");
+        // Stored, and never repeated back.
+        assert!(!said.contains("sk-ant-new"), "the key was echoed: {said}");
+    }
+
+    #[test]
+    fn a_provider_stored_without_a_model_says_which_command_finishes_the_job() {
+        // The resting place: a key is a reasonable thing to have on its own, and
+        // somebody who stops here must not have to guess what is left.
+        let home = tempfile::tempdir().unwrap();
+        let said = say(|out| store_provider(home.path(), anthropic(), "sk-ant-x", None, out));
+        assert!(said.contains("emma set-model"), "{said}");
+        assert!(said.contains(emma_llm::DEFAULT_MODEL), "{said}");
+    }
+
+    #[test]
+    fn the_setup_that_exists_today_survives_the_upgrade() {
+        // The owner's live `~/.emma`, reproduced: a flat `api_key`, a Brave key
+        // beside it that belongs to the web tools, and a bare `{"model": …}`.
+        // If this goes red, an upgrade quietly took away somebody's working
+        // configuration — the failure that arrives with no error message.
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".emma")).unwrap();
+        std::fs::write(
+            emma_llm::auth::credentials_path(home.path()),
+            r#"{"api_key":"sk-ant-live","brave_search_api_key":"BSA-live"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            settings::path(home.path()),
+            r#"{"model":"claude-sonnet-5"}"#,
+        )
+        .unwrap();
+
+        // Before touching anything: the key and the model are the ones he set.
+        let lines = configured(Some(home.path()), &|_| None).join("\n");
+        assert!(lines.contains("anthropic"), "{lines}");
+        assert!(lines.contains("claude-sonnet-5"), "{lines}");
+        assert!(
+            lines.contains("api key        found (stored file)"),
+            "{lines}"
+        );
+
+        // …and after both kinds of write, still — including the key this module
+        // does not own, which a whole-file rewrite would have deleted.
+        say(|out| set_model_at(home.path(), "claude-opus-5", None, out));
+        say(|out| store_provider(home.path(), anthropic(), "sk-ant-live", None, out));
+        assert_eq!(
+            auth::resolve(anthropic(), None, home.path())
+                .unwrap()
+                .expose(),
+            "sk-ant-live"
+        );
+        let raw = std::fs::read_to_string(emma_llm::auth::credentials_path(home.path())).unwrap();
+        assert!(raw.contains("BSA-live"), "{raw}");
+        let (_, resolved) = settings::resolve_kind(None, None, Some(home.path())).unwrap();
+        assert_eq!(resolved.model, "claude-opus-5");
+        assert_eq!(resolved.provider, "anthropic");
+    }
+
+    #[test]
+    fn set_model_needs_a_provider_and_names_the_command_that_sets_one() {
+        let home = tempfile::tempdir().unwrap();
+        let err = set_model_at(home.path(), "claude-x", None, &mut Vec::new())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("emma set-provider"), "{err}");
+        // Nothing was written: a model with no provider is not a state to be in.
+        assert!(!settings::path(home.path()).exists());
+    }
+
+    #[test]
+    fn a_model_is_never_stored_for_a_provider_this_build_cannot_run() {
+        // The silent failure this prevents: `emma set-model gpt-5.5 --provider
+        // openai` writing a setting that Anthropic then quietly answers.
+        let home = tempfile::tempdir().unwrap();
+        let err = set_model_at(home.path(), "gpt-5.5", Some("openai"), &mut Vec::new())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("openai"), "{err}");
+        assert!(err.contains("anthropic"), "{err}");
+        assert!(!settings::path(home.path()).exists());
+        // The same refusal from the other door, and before a key is asked for:
+        // this call supplies one and it must never be stored anywhere.
+        let err = set_provider("openai", Some("sk-should-never-be-read".into()), None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("openai"), "{err}");
+    }
+
+    #[test]
+    fn set_model_says_when_there_is_no_key_for_the_provider_yet() {
+        let home = tempfile::tempdir().unwrap();
+        let said = say(|out| set_model_at(home.path(), "claude-x", Some("anthropic"), out));
+        assert!(said.contains("no API key"), "{said}");
+        assert!(said.contains("emma set-provider anthropic"), "{said}");
+        // Named a provider without switching to it: `--provider` sets that
+        // provider's remembered model and leaves the selection alone.
+        assert!(settings::load(home.path()).provider.is_none());
+        assert_eq!(settings::load(home.path()).models["anthropic"], "claude-x");
+    }
+
+    #[test]
+    fn config_check_says_where_the_key_came_from() {
+        let home = tempfile::tempdir().unwrap();
+        store_provider(
+            home.path(),
+            anthropic(),
+            "sk-ant-stored",
+            Some("claude-x"),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        emma_llm::auth::store(
+            home.path(),
+            "elsewhere",
+            &emma_llm::ApiKey::new("other-key"),
+        )
+        .unwrap();
+
+        let lines = configured(Some(home.path()), &|_| None).join("\n");
+        assert!(
+            lines.contains("provider       anthropic  (settings.json)"),
+            "{lines}"
+        );
+        assert!(
+            lines.contains("model          claude-x  (settings.json)"),
+            "{lines}"
+        );
+        assert!(lines.contains("found (stored file)"), "{lines}");
+        assert!(lines.contains("also stored for: elsewhere"), "{lines}");
+        assert!(!lines.contains("other-key"), "a key was printed: {lines}");
+
+        // The hour this line saves: an exported variable silently outranking
+        // the key that was just stored.
+        let lines = configured(Some(home.path()), &|name| {
+            (name == "ANTHROPIC_API_KEY").then(|| "sk-ant-env".to_string())
+        })
+        .join("\n");
+        assert!(lines.contains("found (ANTHROPIC_API_KEY)"), "{lines}");
+        assert!(lines.contains("the environment overrides"), "{lines}");
+    }
+
+    #[test]
+    fn config_check_reports_an_unusable_provider_rather_than_hiding_it() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".emma")).unwrap();
+        std::fs::write(settings::path(home.path()), r#"{"provider":"openai"}"#).unwrap();
+        let lines = configured(Some(home.path()), &|_| None).join("\n");
+        assert!(lines.contains("NOT USABLE"), "{lines}");
+        assert!(lines.contains("openai"), "{lines}");
+        // Nothing may claim a model or a key under a provider that cannot run.
+        assert!(!lines.contains("api key        found"), "{lines}");
+    }
+}
+
+// endregion: Tests

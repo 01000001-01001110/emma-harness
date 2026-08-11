@@ -28,8 +28,15 @@ USAGE
   emma                         interactive: state a goal at the prompt
   emma goal \"<text>\"           state the goal on the command line
   emma -p \"<text>\"             one goal, no prompts, then exit
-  emma api [<key>]             store an API key in ~/.emma (prompts, no echo)
-  emma model [<name>]          show or set the default model
+  emma set-provider <name> [--key <KEY>] [--model <ID>]
+                               store that provider's key in ~/.emma and make it
+                               the one Emma uses. Prompts for the key without
+                               echoing it unless --key or a pipe supplies one.
+  emma set-model <id> [--provider <name>]
+                               set the model for the current provider, or for
+                               the one named. Each provider remembers its own.
+  emma api [<key>]             alias: store a key for the current provider only
+  emma model [<name>]          alias: show or set that provider's model
   emma init                    write a minimal working .emma/ here and stop
   emma config check            load .emma/ (or .claude/) and report; no model call
   emma agents                  what each subagent type has cost and produced,
@@ -42,7 +49,14 @@ USAGE
 OPTIONS
   -p, --print                  non-interactive. Anything needing approval is
                                denied and the model is told why.
-      --model <ID>             use this model for one run.
+      --model <ID>             use this model for one run — or, with
+                               set-provider, the model to store.
+      --provider <NAME>        use this provider for one run — or, with
+                               set-model, the provider to set it for.
+      --key <KEY>              with set-provider: the key, for scripts. `-`
+                               reads it from stdin.
+      --no-verify, --force     accepted and currently redundant: nothing is
+                               checked against the provider yet.
       --max-iterations <N>     model calls per goal (default 60).
       --max-tokens <N>         billable tokens per goal (default 500000).
       --timeout <SECONDS>      wall clock per goal (default 1800).
@@ -118,6 +132,16 @@ APPROVAL
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Run(Option<String>),
+    /// Store a provider's key and select it. The model, when one is named,
+    /// arrives as `opts.model` — the same flag that overrides a run, because
+    /// "--model means an id for this provider" is one rule rather than two.
+    SetProvider {
+        name: String,
+        key: Option<String>,
+    },
+    /// Set the remembered model for a provider. Which provider is `opts.provider`,
+    /// defaulting to the one currently selected.
+    SetModel(String),
     Api(Option<String>),
     Model(Option<String>),
     /// Write a harness in the working directory. Reaches no model, no key and
@@ -145,6 +169,11 @@ pub struct Opts {
     pub print: bool,
     pub skip_permissions: bool,
     pub model: Option<String>,
+    pub provider: Option<String>,
+    /// Only `set-provider` reads it. It lives here rather than in the command
+    /// so that the redaction rule — a key is never echoed back — has one place
+    /// to be true of.
+    pub key: Option<String>,
     pub caching: Caching,
     pub session_dir: Option<PathBuf>,
     pub budgets: Budgets,
@@ -156,6 +185,8 @@ impl Default for Opts {
             print: false,
             skip_permissions: false,
             model: None,
+            provider: None,
+            key: None,
             caching: Caching::On,
             session_dir: None,
             budgets: Budgets::default(),
@@ -210,6 +241,14 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
             // above this one; the guard was written for a distinction the
             // spellings already make, and it selected the same body.
             "--model" => opts.model = Some(value("--model")?),
+            "--provider" => opts.provider = Some(value("--provider")?),
+            "--key" => opts.key = Some(value("--key")?),
+            // Accepted now and redundant now: nothing in this build asks a
+            // provider whether a key or a model is real, so every path is
+            // already the unverified one. They parse so that a script written
+            // against the documented flow keeps working when verification
+            // lands, rather than failing on an unknown option.
+            "--no-verify" | "--force" => {}
             "--session-dir" => opts.session_dir = Some(PathBuf::from(value("--session-dir")?)),
             "--max-iterations" => {
                 opts.budgets.max_iterations = number(&value("--max-iterations")?)?
@@ -245,6 +284,15 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
             "init" if fresh(&command, &words) => command = Some(Command::Init),
             "api" if fresh(&command, &words) => command = Some(Command::Api(None)),
             "model" if fresh(&command, &words) => command = Some(Command::Model(None)),
+            "set-provider" if fresh(&command, &words) => {
+                command = Some(Command::SetProvider {
+                    name: String::new(),
+                    key: None,
+                })
+            }
+            "set-model" if fresh(&command, &words) => {
+                command = Some(Command::SetModel(String::new()))
+            }
             "agents" if fresh(&command, &words) => command = Some(Command::Agents),
             "config" if fresh(&command, &words) => match it.next().as_deref() {
                 Some("check") => command = Some(Command::ConfigCheck),
@@ -280,6 +328,17 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
         Some(Command::Run(_)) | None => Command::Run(joined),
         Some(Command::Api(_)) => Command::Api(joined),
         Some(Command::Model(_)) => Command::Model(joined),
+        // One word, required. A provider name with a space in it is a typo, and
+        // guessing which half was meant is how `emma set-provider anthropic
+        // please` ends up storing a key for a provider called `anthropic
+        // please`.
+        Some(Command::SetProvider { .. }) => Command::SetProvider {
+            name: one_word("set-provider", "a provider name", joined)?,
+            key: opts.key.clone(),
+        },
+        Some(Command::SetModel(_)) => {
+            Command::SetModel(one_word("set-model", "a model id", joined)?)
+        }
         Some(Command::Resume { session, .. }) => Command::Resume {
             session,
             goal: joined,
@@ -386,6 +445,11 @@ pub fn typed_at_the_prompt(line: &str) -> Typed {
         // somebody's scrollback and in this session's transcript.
         (Some("api"), 1 | 2) => "api",
         (Some("model"), 1 | 2) => "model",
+        // `set-provider anthropic --key sk-…` is five words, and the argument
+        // count is therefore not what keeps a goal safe here — the hyphenated
+        // name is. No English sentence starts with `set-provider`.
+        (Some("set-provider"), _) => "set-provider",
+        (Some("set-model"), _) => "set-model",
         (Some("config"), 2) if words[1].eq_ignore_ascii_case("check") => "config check",
         (Some("agents"), 1) => "agents",
         // Everything else is a goal, including `init the database`, `model the
@@ -408,6 +472,18 @@ pub fn typed_at_the_prompt(line: &str) -> Typed {
 /// A subcommand is only a subcommand in first position.
 fn fresh(command: &Option<Command>, words: &[String]) -> bool {
     command.is_none() && words.is_empty()
+}
+
+/// The single positional a `set-*` command takes, or a refusal naming what was
+/// wanted. Nothing here is echoed for `--key`, which never reaches this.
+fn one_word(command: &str, wanted: &str, joined: Option<String>) -> Result<String, String> {
+    match joined {
+        Some(text) if !text.contains(' ') => Ok(text),
+        Some(text) => Err(format!(
+            "`{command}` takes {wanted}, one word; got `{text}`."
+        )),
+        None => Err(format!("`{command}` needs {wanted}. See `emma --help`.")),
+    }
 }
 
 fn done(command: Command, opts: Opts) -> Result<Cli, String> {
@@ -496,6 +572,63 @@ mod tests {
             p(&["api", "sk-ant-x"]).unwrap().command,
             Command::Api(Some("sk-ant-x".into()))
         );
+    }
+
+    #[test]
+    fn set_provider_takes_a_name_and_optionally_a_key_and_a_model() {
+        let cli = p(&["set-provider", "anthropic"]).unwrap();
+        assert_eq!(
+            cli.command,
+            Command::SetProvider {
+                name: "anthropic".into(),
+                key: None
+            }
+        );
+        let cli = p(&[
+            "set-provider",
+            "anthropic",
+            "--key",
+            "sk-ant-x",
+            "--model",
+            "claude-x",
+            "--no-verify",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.command,
+            Command::SetProvider {
+                name: "anthropic".into(),
+                key: Some("sk-ant-x".into())
+            }
+        );
+        assert_eq!(cli.opts.model.as_deref(), Some("claude-x"));
+        // A name is required, and a sentence is not a name.
+        assert!(p(&["set-provider"]).unwrap_err().contains("provider name"));
+        assert!(p(&["set-provider", "anthropic", "please"]).is_err());
+    }
+
+    #[test]
+    fn set_model_takes_an_id_and_an_optional_provider() {
+        assert_eq!(
+            p(&["set-model", "claude-x"]).unwrap().command,
+            Command::SetModel("claude-x".into())
+        );
+        let cli = p(&[
+            "set-model",
+            "claude-x",
+            "--provider",
+            "anthropic",
+            "--force",
+        ])
+        .unwrap();
+        assert_eq!(cli.opts.provider.as_deref(), Some("anthropic"));
+        // Bare `set-model` lists, in a build that can list. This one cannot, so
+        // it says what it needs rather than doing something else.
+        assert!(p(&["set-model"]).unwrap_err().contains("model id"));
+        // `--provider` is also a one-run override for an ordinary goal.
+        let cli = p(&["--provider", "anthropic", "goal", "do it"]).unwrap();
+        assert_eq!(cli.opts.provider.as_deref(), Some("anthropic"));
+        assert_eq!(cli.command, Command::Run(Some("do it".into())));
     }
 
     #[test]
@@ -598,6 +731,9 @@ mod tests {
             "model claude-x",
             "config check",
             "emma config check",
+            "set-provider anthropic",
+            "set-model claude-x",
+            "emma set-provider anthropic --key sk-ant-not-a-real-key",
         ] {
             match typed_at_the_prompt(line) {
                 Typed::Elsewhere(say) => {

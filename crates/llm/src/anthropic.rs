@@ -32,6 +32,7 @@
 //! money is in the conversation, which is why the history and in-flight tool
 //! results get breakpoints too.
 
+use crate::models;
 use crate::retry::retry_after_seconds;
 use crate::{
     redact, trim_body, ApiKey, AssistantTurn, Caching, Event, LlmError, Message, Mode, Provider,
@@ -249,16 +250,29 @@ impl AnthropicProvider {
         let system = system_field(&req.instructions, tools_chars, req.caching);
         let messages = messages_field(req, tools_chars + req.instructions.len())?;
 
+        // The request says what Emma wants; the model says what it will take.
+        // Clamping happens here because this is the only place both are in
+        // scope, and because it is the last point every request passes through
+        // however it was built — a struct literal somewhere in the loop gets
+        // the same treatment as `Request::new`.
+        let limits = models::limits(&self.model);
+
         // serde_json orders object keys deterministically, which is what the
         // cache needs: two identical requests must render identical bytes.
         let mut body = json!({
             "model": self.model,
-            "max_tokens": req.max_tokens,
+            "max_tokens": limits.clamp_max_tokens(req.max_tokens),
             "system": system,
             "messages": messages,
             "tools": req.tools,
-            "output_config": { "effort": req.effort.as_str() },
         });
+        // Absent rather than defaulted: on a model with no effort parameter the
+        // field itself is the 400, so there is no value that would be safe to
+        // send. Omitting it takes the provider's own default, which is the
+        // closest thing to "as hard as this model works".
+        if let Some(effort) = limits.clamp_effort(req.effort) {
+            body["output_config"] = json!({ "effort": effort.as_str() });
+        }
         if mode == Mode::Stream {
             body["stream"] = json!(true);
         }
@@ -1407,6 +1421,59 @@ mod tests {
         req.effort = Effort::Low;
         let _ = run(&s, req, Mode::Batch).await;
         assert_eq!(s.last()["output_config"]["effort"], "low");
+    }
+
+    /// Same `Request`, three models, three different sets of bytes on the wire.
+    /// The unit tests in `models` pin the table; this pins that the table is
+    /// what the socket sees, which is the part a wrong wiring would break
+    /// while every table test still passed.
+    async fn sent_to(model: &str) -> Value {
+        let s = stub(vec![Reply::json(batch_body())]).await;
+        let p = AnthropicProvider::new(ApiKey::new(TEST_KEY), Some(model.to_string()))
+            .with_base_url(s.url.clone());
+        let _ = p.send(request(), Mode::Batch, None).await;
+        s.last()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_model_with_a_lower_ceiling_is_never_sent_the_full_ask() {
+        // `Request::new` asks for 32,000. A model this table does not know
+        // must not be handed it: too high a max_tokens is a 400 before the
+        // model generates anything, which is the failure this exists to stop.
+        assert_eq!(
+            sent_to("claude-opus-9-unreleased").await["max_tokens"],
+            8_192
+        );
+        // …while a model that can take the ask still gets it in full.
+        assert_eq!(sent_to(DEFAULT_MODEL).await["max_tokens"], 32_000);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_model_without_xhigh_is_never_sent_xhigh() {
+        // `Request::new` asks for xhigh.
+        assert_eq!(
+            sent_to(DEFAULT_MODEL).await["output_config"]["effort"],
+            "xhigh"
+        );
+        // 4.6 has `max` but not `xhigh`, so the ask lands on `high` — down the
+        // ladder to the best level it has, never up to `max`.
+        let sent = sent_to("claude-opus-4-6").await;
+        assert_eq!(sent["output_config"]["effort"], "high", "{sent}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_model_with_no_effort_parameter_is_sent_no_output_config() {
+        // Haiku 4.5 rejects the field itself, so no value is safe — the key
+        // has to be absent, not defaulted.
+        let sent = sent_to("claude-haiku-4-5").await;
+        assert!(
+            sent.get("output_config").is_none(),
+            "output_config must be absent, not defaulted: {sent}"
+        );
+        assert_eq!(sent["max_tokens"], 32_000, "{sent}");
+        // An unknown model is the same shape for a different reason.
+        let sent = sent_to("claude-opus-9-unreleased").await;
+        assert!(sent.get("output_config").is_none(), "{sent}");
     }
 
     #[test]

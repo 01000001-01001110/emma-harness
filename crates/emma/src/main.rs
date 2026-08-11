@@ -14,7 +14,7 @@ use emma::settings;
 use emma::skill::Skill;
 use emma::term::{Term, Welcome};
 use emma_harness::Harness;
-use emma_llm::{auth, AnthropicProvider, Mode, Provider};
+use emma_llm::{auth, Mode, Provider};
 use emma_tool_api::{Registry, Tool};
 
 fn main() -> Result<()> {
@@ -42,6 +42,14 @@ fn main() -> Result<()> {
         }
         Command::Api(key) => return emma::commands::api(key),
         Command::Model(name) => return emma::commands::model(name),
+        // The model, when one was named, is `--model` — the same flag that
+        // overrides a run. See `cli::Command::SetProvider`.
+        Command::SetProvider { name, key } => {
+            return emma::commands::set_provider(&name, key, cli.opts.model)
+        }
+        Command::SetModel(model) => {
+            return emma::commands::set_model(&model, cli.opts.provider.as_deref())
+        }
         Command::Init => {
             let cwd = std::env::current_dir().context("reading the working directory")?;
             return emma::commands::init(&cwd, &mut std::io::stdout());
@@ -182,10 +190,17 @@ async fn run(cli: cli::Cli) -> Result<()> {
     let approvals = Arc::new(Approvals::new(gate, asker));
 
     let home = auth::home_dir();
-    let (model, _source) = settings::resolve(opts.model.as_deref(), home.as_deref());
-    let key = auth::load_default()?;
-    let provider: Arc<dyn Provider> =
-        Arc::new(AnthropicProvider::new(key.clone(), Some(model.clone())));
+    // The one place a running provider is chosen. An unknown name fails here
+    // rather than falling back, so a mis-set provider cannot look like a
+    // working one — see `settings::resolve_kind`.
+    let (kind, resolved) = settings::resolve_kind(
+        opts.provider.as_deref(),
+        opts.model.as_deref(),
+        home.as_deref(),
+    )?;
+    let model = resolved.model;
+    let key = auth::load_default(kind)?;
+    let provider: Arc<dyn Provider> = kind.build(key.clone(), Some(model.clone()));
 
     let session_dir = opts
         .session_dir
@@ -289,12 +304,12 @@ async fn run(cli: cli::Cli) -> Result<()> {
         harness.tools(),
         // A per-type model override, honoured rather than ignored: an agent file
         // saying `model: claude-sonnet-4-5` that quietly runs on something else
-        // is a lie the user cannot see. Same key; the parent's own provider
-        // whenever the file names nothing, or names what is already running.
+        // is a lie the user cannot see. Same provider and same key; the parent's
+        // own client whenever the file names nothing, or names what is already
+        // running. An agent file naming *another provider's* model is out of
+        // scope: `def.model` is a bare id in this provider's namespace.
         &|wanted| match wanted {
-            Some(named) if named != model => {
-                Arc::new(AnthropicProvider::new(key.clone(), Some(named.to_string())))
-            }
+            Some(named) if named != model => kind.build(key.clone(), Some(named.to_string())),
             _ => provider.clone(),
         },
     );
@@ -329,6 +344,18 @@ async fn run(cli: cli::Cli) -> Result<()> {
         // row costs a scroll region, a scroll region costs scrollback, and the
         // owner's first complaint was that he could not scroll.
         term.set_status(provider.model_id(), &cwd, log.path());
+        // A `statusLine` in the harness's settings replaces the line above for
+        // the rest of the run. Resolution, containment and the timeout are the
+        // harness's; `set_status_source` is the whole of the wiring. A note
+        // rather than a failure when configuration asked for one and could not
+        // have it — the bottom row is decoration, and `statusline.rs` argues the
+        // ruling.
+        if let Some(note) = harness.status_line_note() {
+            term.warn(note);
+        }
+        if let Some(line) = harness.status_line() {
+            term.set_status_source(std::sync::Arc::new(line.clone()));
+        }
         // What the interactive session understands, said once, because none of
         // it is guessable. `/exit` and `/quit` have always worked and were
         // documented nowhere; the harness's own commands are whatever the user

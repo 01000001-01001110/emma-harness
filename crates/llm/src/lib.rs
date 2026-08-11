@@ -31,6 +31,8 @@
 
 pub mod anthropic;
 pub mod auth;
+pub mod kind;
+pub mod models;
 mod retry;
 
 use async_trait::async_trait;
@@ -43,6 +45,8 @@ use tokio::sync::mpsc;
 
 pub use anthropic::{AnthropicProvider, DEFAULT_MODEL};
 pub use auth::{ApiKey, AuthError};
+pub use kind::{kind, ProviderKind, UnknownProvider, DEFAULT_PROVIDER};
+pub use models::{limits, Limits};
 pub use retry::Retry;
 
 // region: The request, in prefix order
@@ -102,6 +106,11 @@ impl Message {
 
 /// How hard the model works before answering. Not a token budget — the fixed
 /// thinking budget was removed on this model family and returns 400.
+///
+/// **Not every model implements every level**, and sending one that a model
+/// does not implement is also a 400. Which levels a given model takes is
+/// [`models::Limits::efforts`]; the choice of what to send is
+/// [`models::Limits::clamp_effort`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Effort {
     Low,
@@ -119,6 +128,23 @@ impl Effort {
             Self::High => "high",
             Self::XHigh => "xhigh",
             Self::Max => "max",
+        }
+    }
+
+    /// Position on the ladder, for "the best level at or below this one".
+    ///
+    /// A number rather than `#[derive(PartialOrd)]` because deriving it would
+    /// also make `<` work on the enum everywhere, and a comparison between two
+    /// efforts only means something in the one place that clamps them — a
+    /// model's supported set has holes, so `a < b` says nothing about whether
+    /// `b` can be sent where `a` can.
+    pub(crate) fn rank(self) -> u8 {
+        match self {
+            Self::Low => 0,
+            Self::Medium => 1,
+            Self::High => 2,
+            Self::XHigh => 3,
+            Self::Max => 4,
         }
     }
 }
@@ -149,7 +175,14 @@ pub struct Request {
     pub query: Vec<Message>,
     /// Caps thinking **and** answer together on this model family, so a value
     /// sized around the answer alone truncates mid-thought.
+    ///
+    /// A ceiling the caller wants, not one the model promised. Every model has
+    /// its own maximum and exceeding it is a 400, so the provider lowers this
+    /// to the model's when the model's is lower — see [`models`].
     pub max_tokens: u32,
+    /// Likewise an ask: the provider clamps it down to the best level the
+    /// chosen model actually implements, or drops it entirely for a model with
+    /// no effort parameter.
     pub effort: Effort,
     pub caching: Caching,
 }
@@ -161,8 +194,13 @@ impl Request {
             tools,
             history: Vec::new(),
             query: Vec::new(),
-            // xhigh is the documented setting for coding and agentic work, and
-            // Emma is nothing else.
+            // What Emma wants, not what it will necessarily get. xhigh is the
+            // documented setting for coding and agentic work and Emma is
+            // nothing else, and 32,000 is a budget rather than a ceiling — a
+            // model that caps lower gets its own cap, a model without xhigh
+            // gets the best level it has. `models` holds both, and the
+            // provider applies them, because a `Request` does not know which
+            // model it will be sent to.
             max_tokens: 32_000,
             effort: Effort::XHigh,
             caching: Caching::On,
