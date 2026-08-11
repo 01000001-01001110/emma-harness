@@ -23,6 +23,14 @@
 //! off in `Cargo.toml` and a test asserts that it stays off, because the failure
 //! it causes is invisible to every other test in this repository.
 //!
+//! **The frame sits on the last rows of the window, from the first draw.** An
+//! inline viewport puts itself where the cursor happens to be, which on a fresh
+//! shell is row three with the rest of the window empty underneath. The cursor
+//! is walked down to `height - view_rows` before ratatui is handed the terminal,
+//! and everything after that follows from ratatui's own arithmetic. Walking down
+//! over rows that already exist scrolls nothing, so this costs the transcript
+//! above it nothing at all — see the `Anchoring` region.
+//!
 //! # Why raw mode
 //!
 //! ratatui draws by diffing what it believes is on screen against what it wants
@@ -54,6 +62,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
+use super::markdown::Markdown;
 use super::render::{rows_used, Skin};
 use super::view::{Mode, Prompt, View};
 
@@ -77,11 +86,18 @@ static PANIC_HOOK: Once = Once::new();
 /// Take the viewport off the screen and leave the terminal as it was found.
 ///
 /// Only relative cursor movement, and only upwards by a number that was written
-/// down when the viewport was last drawn. Absolute addressing is not used
-/// anywhere here: on at least one common Windows console the row numbers a
-/// program can compute are viewport rows while `SetConsoleCursorPosition` reads
-/// them as *screen buffer* rows, which is where a repaint aimed at "row 40" of a
-/// nine-thousand-row buffer goes to be invisible.
+/// down when the viewport was last drawn. Nothing on this path computes a row
+/// number: on a Windows console without VT processing the rows a program can
+/// compute are window rows while `SetConsoleCursorPosition` reads them as
+/// *screen buffer* rows, which is where a repaint aimed at "row 40" of a
+/// nine-thousand-row buffer goes to be invisible — and this path runs on the way
+/// out, when whether VT was ever proved is no longer knowable from here.
+///
+/// Absolute addressing above the frame is a different question and the answer
+/// is different: with VT proved, `ESC[y;xH` is window-relative, crossterm's
+/// cursor report is window-relative to match, and ratatui addresses every cell
+/// of the viewport that way already. [`anchor`] uses it on the resize path for
+/// exactly that reason, and only over rows it has just erased.
 pub fn restore_terminal() {
     if !FRAME_ON.swap(false, Ordering::SeqCst) {
         return;
@@ -89,18 +105,12 @@ pub fn restore_terminal() {
     if RAW_ON.swap(false, Ordering::SeqCst) {
         let _ = disable_raw_mode();
     }
-    let mut out = String::new();
-    let row = CURSOR_ROW.swap(u16::MAX, Ordering::SeqCst);
-    if row != u16::MAX {
-        if row > 0 {
-            out.push_str(&format!("\x1b[{row}A"));
-        }
-        // Back to column one, then wipe everything from here to the bottom of
-        // the screen. What is above is the transcript and is not ours.
-        out.push_str("\r\x1b[J");
-    }
-    // Show the cursor and drop every attribute: a frame torn down mid-paint
-    // could otherwise leave a shell prompt bold, or invisible.
+    let mut out = erase_frame();
+    // Show the cursor, end any synchronized update that was in flight, and drop
+    // every attribute: a frame torn down mid-paint could otherwise leave a shell
+    // prompt bold, invisible, or — with [`SYNC_END`] unsent — not repainting at
+    // all until the terminal's own timeout fired.
+    out.push_str(SYNC_END);
     out.push_str("\x1b[?25h\x1b[0m");
     let mut stdout = std::io::stdout();
     let _ = stdout.write_all(out.as_bytes());
@@ -115,7 +125,74 @@ pub fn restore_terminal() {
     }
 }
 
+/// The escape that takes the viewport off the screen, climbing to its top row
+/// by the number of rows written down at the last paint and wiping from there
+/// to the bottom. Empty when nothing is drawn.
+///
+/// Relative movement only, and upwards only, by a number this file measured
+/// itself: what is *above* the viewport is the transcript, and it is the
+/// terminal's.
+fn erase_frame() -> String {
+    let row = CURSOR_ROW.swap(u16::MAX, Ordering::SeqCst);
+    if row == u16::MAX {
+        return String::new();
+    }
+    let mut out = String::new();
+    if row > 0 {
+        out.push_str(&format!("\x1b[{row}A"));
+    }
+    out.push_str("\r\x1b[J");
+    out
+}
+
 // endregion: Restoring
+
+// region: Synchronized output
+// ---------------------------------------------------------------------------
+// Synchronized output
+//
+// `ESC [ ? 2026 h` asks the terminal to stop presenting frames until the
+// matching `l`, so a repaint made of several writes — scroll, draw the inserted
+// lines, redraw the viewport, clear — reaches the eye as one picture instead of
+// as its steps. That sequence is exactly what `insert_before` does, and it is
+// what tears once the viewport is anchored at the bottom: without this, the
+// frame is visibly erased and redrawn a row lower on every line of output.
+//
+// **On a terminal that does not implement it, nothing happens.** DECSET/DECRST
+// with an unrecognised parameter is defined to be ignored, and 2026 is
+// registered, so a terminal either honours it or drops it — there is no third
+// behaviour and no reply to read. Windows Terminal, WezTerm, kitty, foot, iTerm2
+// and Ghostty honour it; legacy conhost ignores it.
+//
+// The failure mode worth naming is an unmatched `h`: a terminal that never sees
+// the `l` stops updating. Every terminal that implements the mode implements a
+// timeout for that reason, and Emma sends `l` on the restore path as well —
+// which covers `Drop`, the panic hook and the `process::exit` route — so the
+// only way to strand one is a `SIGKILL`, which strands raw mode too.
+//
+// Nothing here is reachable without a `Frame`, and a `Frame` exists only when
+// the terminal was verified able to carry one. A pipe never sees these bytes.
+// ---------------------------------------------------------------------------
+
+const SYNC_BEGIN: &str = "\x1b[?2026h";
+const SYNC_END: &str = "\x1b[?2026l";
+
+/// Hold the picture still for the length of one repaint.
+///
+/// Written straight to `stdout` rather than through the backend because it is
+/// not a drawing operation and ratatui has no notion of one: both go into the
+/// same global buffer, so the order they were written in is the order they go
+/// out in.
+fn synchronized<T>(f: impl FnOnce() -> T) -> T {
+    let mut out = std::io::stdout();
+    let _ = out.write_all(SYNC_BEGIN.as_bytes());
+    let result = f();
+    let _ = out.write_all(SYNC_END.as_bytes());
+    let _ = out.flush();
+    result
+}
+
+// endregion: Synchronized output
 
 // region: The frame
 // ---------------------------------------------------------------------------
@@ -150,6 +227,15 @@ pub struct Frame {
 struct Inner {
     term: Terminal<CrosstermBackend<Stdout>>,
     view: View,
+    /// The markdown state for the answer being streamed, which is one open
+    /// fence. Here rather than in [`View`] because it belongs to the transcript
+    /// — the thing being written *above* the viewport — and is reset between
+    /// answers. See [`super::markdown`].
+    md: Markdown,
+    /// The window as it was when the frame was last anchored to the bottom of
+    /// it. A change means the user resized, and the viewport has to be put back
+    /// on the last rows of the new window — see [`Inner::reanchor`].
+    screen: (u16, u16),
     /// When the running goal started. The elapsed field on the status line is
     /// computed from this at paint time rather than stored, which is the whole
     /// reason it can be trusted: there is no copy of it to go stale.
@@ -192,7 +278,7 @@ impl Frame {
         if !super::enable_vt() {
             return None;
         }
-        let (_, rows) = size?;
+        let (cols, rows) = size?;
 
         // Whatever is on the current line is somebody's shell prompt, and the
         // viewport should not be drawn on top of it.
@@ -203,10 +289,15 @@ impl Frame {
         enable_raw_mode().ok()?;
         RAW_ON.store(true, Ordering::SeqCst);
 
+        let height = view_rows(rows);
+        let mut backend = CrosstermBackend::new(std::io::stdout());
+        // The whole of the bottom-anchoring, and it happens before ratatui sees
+        // the terminal. See [`anchor`].
+        anchor(&mut backend, rows, height, false);
         let terminal = match Terminal::with_options(
-            CrosstermBackend::new(std::io::stdout()),
+            backend,
             TerminalOptions {
-                viewport: Viewport::Inline(view_rows(rows)),
+                viewport: Viewport::Inline(height),
             },
         ) {
             Ok(t) => t,
@@ -234,6 +325,8 @@ impl Frame {
             inner: Mutex::new(Inner {
                 term: terminal,
                 view: View::new(skin),
+                md: Markdown::new(),
+                screen: (cols, rows),
                 started: None,
                 caps: (0, 0),
                 transcript: String::new(),
@@ -256,7 +349,7 @@ impl Frame {
     /// Repaint the viewport.
     pub fn draw(&self) {
         let mut inner = self.lock();
-        inner.paint();
+        synchronized(|| inner.paint());
     }
 
     /// Ordinary transcript output: written above the viewport, into the
@@ -266,41 +359,66 @@ impl Frame {
             return;
         }
         let mut inner = self.lock();
-        inner.emit(lines);
-        inner.paint();
+        synchronized(|| {
+            inner.emit(lines);
+            inner.paint();
+        });
     }
 
-    /// Assistant text as it arrives.
+    /// Assistant text as it arrives, rendered as the markdown it is.
     ///
     /// Complete lines go to the transcript; the fragment after the last newline
     /// stays in the viewport, where it can still be added to. A fragment
     /// inserted above the viewport could never be extended, so a paragraph
     /// streamed without newlines would arrive as a column of one-word lines.
+    ///
+    /// **The newline is also the boundary the formatting waits for**, and for
+    /// the same reason: every block [`super::markdown`] recognises is decided by
+    /// the start of a line, so a complete line is all the context it needs and
+    /// nothing has to be held back to be styled. The width is asked for here,
+    /// at the moment of writing, because it is what the rows reserved by
+    /// [`emit_into`] are counted against.
     pub fn prose(&self, text: &str) {
         let mut inner = self.lock();
         inner.view.partial.push_str(text);
+        if !inner.view.partial.contains('\n') {
+            // Nothing to commit: only the viewport's tail changed.
+            synchronized(|| inner.paint());
+            return;
+        }
+        let width = inner.term.get_frame().area().width;
         let mut done: Vec<Line<'static>> = Vec::new();
         while let Some(i) = inner.view.partial.find('\n') {
             let line: String = inner.view.partial.drain(..=i).collect();
-            done.push(self.skin.prose(line.trim_end_matches(['\r', '\n'])));
+            let rows = inner.md.line(&line, width, &self.skin);
+            done.extend(rows);
         }
-        inner.emit(done);
-        inner.paint();
+        synchronized(|| {
+            inner.emit(done);
+            inner.paint();
+        });
     }
 
     /// The assistant stopped talking: whatever is still in the viewport becomes
     /// a transcript line, followed by the blank line that separates one answer
     /// from what comes next.
+    ///
+    /// The markdown state is dropped here rather than carried, so an answer that
+    /// ended inside an unclosed fence cannot render the *next* answer as code.
     pub fn flush_prose(&self) {
         let mut inner = self.lock();
         let held = std::mem::take(&mut inner.view.partial);
+        let width = inner.term.get_frame().area().width;
         let mut lines = Vec::new();
         if !held.trim().is_empty() {
-            lines.push(self.skin.prose(held.trim_end()));
+            lines.extend(inner.md.line(&held, width, &self.skin));
         }
+        inner.md.reset();
         lines.push(Line::default());
-        inner.emit(lines);
-        inner.paint();
+        synchronized(|| {
+            inner.emit(lines);
+            inner.paint();
+        });
     }
 
     pub fn set_input(&self, text: &str, cursor: usize) {
@@ -501,6 +619,11 @@ impl Inner {
     /// [`restore_terminal`] can erase from a panic hook that holds no
     /// reference to any of this.
     fn paint(&mut self) {
+        if let Some(size) = super::terminal_size() {
+            if size != self.screen {
+                self.reanchor(size);
+            }
+        }
         self.view.status.elapsed = self.started.map(|t| t.elapsed());
         let cursor = paint_into(&mut self.term, &self.view);
         let top = self.term.get_frame().area().y;
@@ -514,7 +637,130 @@ impl Inner {
     fn emit(&mut self, lines: Vec<Line<'static>>) {
         emit_into(&mut self.term, lines);
     }
+
+    /// The window changed size: put the viewport back on its last rows.
+    ///
+    /// **Why a fresh `Terminal` rather than `resize`.** ratatui's own
+    /// `autoresize` keeps an inline viewport *where it is* and only moves it
+    /// when it would not otherwise fit — which is right for a viewport anchored
+    /// where it was created and wrong for one anchored to the bottom: a window
+    /// dragged taller leaves the frame stranded in the middle with a field of
+    /// empty rows under it. There is no way to tell it otherwise, because the
+    /// top row it computes comes from the cursor, and the cursor is the one
+    /// thing this file can put where it likes. So the frame is erased, the
+    /// cursor is placed on the row the viewport should start at, and a new
+    /// `Terminal` is built around it — which is exactly what [`Frame::install`]
+    /// does, and reuses its argument rather than restating it.
+    ///
+    /// The viewport's *height* is re-derived too. A window dragged from forty
+    /// rows to fifteen should not keep a ten-row frame in it, and `view_rows`
+    /// already knows what the right answer is.
+    ///
+    /// **Nothing above the frame is touched.** The erase climbs by the number of
+    /// rows written down at the last paint and wipes from there down; the
+    /// transcript is above that line and stays where the terminal put it. What
+    /// this cannot promise is that a terminal reflowing a *narrower* window left
+    /// the frame where it last saw it — a reflow moves text this file did not
+    /// write. In that case the erase lands somewhere near, and the worst outcome
+    /// is a few blank rows or a leftover row of the old frame, which the next
+    /// line of output scrolls away. It is a repaint being untidy, not scrollback
+    /// being lost.
+    ///
+    /// **The one hazard worth naming.** Asking where the cursor is costs a
+    /// round trip through the terminal on unix — Emma writes a DSR query and
+    /// reads the answer off stdin — and by the time a resize happens the reader
+    /// thread is on stdin too, so the answer can go to the wrong reader. That
+    /// exposure is not new: ratatui's own `autoresize` asks the same question on
+    /// the first draw after any resize. When it fails, `anchor` moves nothing
+    /// and `Terminal::with_options` returns an error, so the frame stays where
+    /// it was — untidy, not broken. On Windows, where this is developed and
+    /// used, the position comes from a console API call and there is no race at
+    /// all.
+    fn reanchor(&mut self, size: (u16, u16)) {
+        self.screen = size;
+        let (_, rows) = size;
+        let height = view_rows(rows);
+        let mut out = std::io::stdout();
+        let _ = out.write_all(erase_frame().as_bytes());
+        let _ = out.flush();
+        let mut backend = CrosstermBackend::new(std::io::stdout());
+        anchor(&mut backend, rows, height, true);
+        if let Ok(term) = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Inline(height),
+            },
+        ) {
+            self.term = term;
+        }
+    }
 }
+
+// region: Anchoring
+// ---------------------------------------------------------------------------
+// Anchoring
+//
+// **The input box belongs on the bottom row of the window, from the first
+// frame.** `Viewport::Inline` puts itself where the cursor is, so on a fresh
+// shell with two lines of scrollback Emma drew itself near the top with most of
+// the window empty underneath — which is what the owner sent a screenshot of.
+//
+// The fix is one line of arithmetic in the right place, and finding that place
+// was the work. ratatui computes the viewport's top row in `compute_inline_size`
+// from exactly two things: where the cursor is when the `Terminal` is built, and
+// how tall the viewport is. Put the cursor on row `height - view_rows` and the
+// viewport occupies the last `view_rows` rows of the window. There is nothing to
+// override and no state to keep in step.
+//
+// **Why this is not the alternate screen, and does not cost scrollback.**
+// Nothing is cleared and nothing is scrolled: the cursor is walked *down* over
+// rows that already exist, with newlines, which is the one movement a terminal
+// never turns into a scroll until it reaches the last row — and the target is
+// `height - view_rows`, which is above the last row whenever the viewport has a
+// row in it. So no line, blank or otherwise, is pushed into scrollback by
+// anchoring. Compare the obvious alternative — print a screen of newlines and
+// let it scroll — which does exactly the thing this project has twice shipped a
+// bug about.
+//
+// pi (`notes/research-pi.md` §3.4) reaches the same conclusion from the other
+// end: it owns `previousViewportTop` and pads its buffer to the terminal height
+// because its renderer has no equivalent of `compute_inline_size` to hand the
+// answer to. Emma does, so what pi spends a render state on is a `saturating_sub`
+// here.
+// ---------------------------------------------------------------------------
+
+/// The row the viewport's top belongs on: the window's height, less the frame's.
+fn anchor_row(screen_rows: u16, view_rows: u16) -> u16 {
+    screen_rows.saturating_sub(view_rows)
+}
+
+/// Put the cursor where the viewport should begin, before ratatui asks.
+///
+/// `climb` is the difference between the two callers. At install the cursor may
+/// only be walked *down*: the rows above it are somebody's shell prompt and
+/// their scrollback, and a frame that started by jumping up over them would draw
+/// on top of output Emma did not write. On a resize it may also be walked up,
+/// because by then the rows below have just been erased and they are ours.
+///
+/// A backend that cannot say where its cursor is gets no anchoring rather than a
+/// guess — which is the behaviour Emma had before this existed, and it is
+/// correct rather than merely safe: the viewport still lands somewhere legible.
+fn anchor<B: Backend>(backend: &mut B, screen_rows: u16, height: u16, climb: bool) {
+    let target = anchor_row(screen_rows, height);
+    let Ok(pos) = backend.get_cursor_position() else {
+        return;
+    };
+    if pos.y < target {
+        // Newlines over rows that already exist: no scroll, so nothing enters
+        // scrollback.
+        let _ = backend.append_lines(target - pos.y);
+    } else if climb && pos.y > target {
+        let _ = backend.set_cursor_position(Position::new(0, target));
+    }
+    let _ = backend.flush();
+}
+
+// endregion: Anchoring
 
 // region: The two operations, over any backend
 // ---------------------------------------------------------------------------
@@ -771,6 +1017,209 @@ mod tests {
         assert!(
             !source.contains(&format!("Enter{}", "AlternateScreen")),
             "the alternate screen is one API call away from costing every user their scrollback"
+        );
+    }
+
+    /// **Rendered markdown is ordinary scrollback like everything else.**
+    ///
+    /// The styling happens before `insert_before` and changes nothing about
+    /// where the lines go or how many rows they are given. The viewport
+    /// underneath is still whole, which is the assertion that matters: a
+    /// rendered line that took one row more than was reserved for it would have
+    /// written its tail over the input box.
+    #[test]
+    fn formatted_prose_lands_above_the_viewport_and_leaves_it_whole() {
+        let mut term = screen(24, 5);
+        let view = view();
+        let skin = view.skin;
+        paint_into(&mut term, &view);
+
+        let mut md = Markdown::new();
+        let doc = "# Heading\n\ntext with **bold** and `code`\n\n```rust\nfn main() { println!(\"hi\"); }\n```\n";
+        let width = term.get_frame().area().width;
+        for line in doc.lines() {
+            emit_into(&mut term, md.line(line, width, &skin));
+            paint_into(&mut term, &view);
+        }
+
+        let rows = rows_of(&term);
+        let shown = rows.join("\n");
+        // The viewport is intact and on the bottom five rows.
+        assert!(shown.contains("emma"), "{shown}");
+        assert!(
+            rows.iter().any(|r| r.contains(UNICODE.border.top_left)),
+            "the formatted prose wrote over the input box: {shown}"
+        );
+        // The hashes are gone and the heading is not, and the emphasis markers
+        // went with them.
+        assert!(shown.contains("Heading"), "{shown}");
+        assert!(!shown.contains("# Heading"), "{shown}");
+        assert!(shown.contains("text with bold and code"), "{shown}");
+        // The code line arrived on one row, unbroken: 48 columns is wider than
+        // it, so nothing had any business splitting it.
+        assert!(
+            rows.iter()
+                .any(|r| r.trim() == "fn main() { println!(\"hi\"); }"),
+            "the code line was broken up: {shown}"
+        );
+        // All of it is above the viewport, which still owns the last five rows.
+        let box_top = rows
+            .iter()
+            .position(|r| r.contains(UNICODE.border.top_left))
+            .expect("there was no input box");
+        let heading = rows.iter().position(|r| r.contains("Heading")).unwrap();
+        assert!(heading < box_top, "{shown}");
+    }
+
+    // -----------------------------------------------------------------------
+    // Anchoring
+    //
+    // `TestBackend` implements `append_lines` and `get_cursor_position` the way
+    // a terminal does — including pushing rows into a scrollback these tests can
+    // read — and `compute_inline_size` is ratatui's own. So what is asserted
+    // here is the real mechanism: where the viewport lands, and what anchoring
+    // costs the rows above it.
+    //
+    // What it cannot show is a screen. Whether the box *looks* pinned to the
+    // bottom of a real window is in the report, not in this file.
+    // -----------------------------------------------------------------------
+
+    /// A `Terminal` built the way [`Frame::install`] builds one, so the
+    /// arithmetic under test is ratatui's rather than a restatement of it.
+    fn install_into(mut backend: TestBackend, rows: u16) -> Terminal<TestBackend> {
+        let height = view_rows(rows);
+        anchor(&mut backend, rows, height, false);
+        Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Inline(height),
+            },
+        )
+        .expect("a test backend never fails to size")
+    }
+
+    /// **The defect: on a fresh shell the frame drew near the top.**
+    ///
+    /// `Viewport::Inline` puts itself where the cursor is, so two lines of
+    /// scrollback meant a frame on row three with most of the window empty
+    /// under it. Anchored, it is on the last `view_rows` rows and its last row
+    /// is the last row of the window.
+    #[test]
+    fn the_frame_is_anchored_to_the_bottom_of_the_window_from_the_first_draw() {
+        let mut backend = TestBackend::new(48, 30);
+        // A fresh shell: a couple of lines printed, the cursor under them.
+        backend.set_cursor_position(Position::new(0, 2)).unwrap();
+        let mut term = install_into(backend, 30);
+        let area = term.get_frame().area();
+        assert_eq!(area.height, view_rows(30));
+        assert_eq!(
+            area.bottom(),
+            30,
+            "the frame is not on the last row of the window: {area:?}"
+        );
+        assert_eq!(area.y, anchor_row(30, view_rows(30)));
+    }
+
+    /// Anchoring must cost nothing above it. This is the one that would catch
+    /// the obvious implementation — print a screen of newlines — which pins the
+    /// box by scrolling everything that was on screen into scrollback and
+    /// filling it with blanks.
+    #[test]
+    fn anchoring_pushes_nothing_into_scrollback_and_disturbs_nothing_above_it() {
+        // A tall window with a shell prompt on its first row and the cursor
+        // under it, which is the case the owner photographed.
+        let mut lines = vec!["$ emma".to_string()];
+        lines.extend((1..20).map(|_| "      ".to_string()));
+        let mut backend = TestBackend::with_lines(lines);
+        backend.set_cursor_position(Position::new(0, 1)).unwrap();
+
+        let term = install_into(backend, 20);
+        let backend = term.backend();
+        backend.assert_scrollback_empty();
+        // …and the shell's own line is still on the row it was on.
+        let row: String = (0..6)
+            .map(|x| backend.buffer()[(x, 0u16)].symbol())
+            .collect();
+        assert_eq!(row, "$ emma", "anchoring scrolled the screen");
+    }
+
+    /// The rows above the cursor are somebody else's output, and the frame may
+    /// never start by jumping up over them. On a resize it may, because by then
+    /// the rows below have just been erased and they are Emma's.
+    #[test]
+    fn anchoring_walks_down_at_install_and_may_only_climb_on_a_resize() {
+        let mut backend = TestBackend::new(20, 20);
+        backend.set_cursor_position(Position::new(0, 18)).unwrap();
+        anchor(&mut backend, 20, 6, false);
+        assert_eq!(
+            backend.get_cursor_position().unwrap().y,
+            18,
+            "install climbed over output it did not write"
+        );
+        anchor(&mut backend, 20, 6, true);
+        assert_eq!(backend.get_cursor_position().unwrap().y, anchor_row(20, 6));
+    }
+
+    /// A window resized taller re-anchors to the new bottom, and one resized
+    /// shorter gets a frame sized for the window it is now in.
+    ///
+    /// Written against the two functions `reanchor` is made of, because
+    /// `reanchor` itself writes to the process's real stdout — there is no
+    /// terminal in a test binary, which is the same reason `install` refuses.
+    #[test]
+    fn a_resized_window_puts_the_frame_back_on_its_last_rows() {
+        for (before, after) in [(20u16, 40u16), (40, 20), (40, 9)] {
+            let mut backend = TestBackend::new(24, after);
+            // Where the old frame was: the bottom of the *old* window.
+            backend
+                .set_cursor_position(Position::new(0, anchor_row(before, view_rows(before))))
+                .unwrap();
+            let height = view_rows(after);
+            anchor(&mut backend, after, height, true);
+            let mut term = Terminal::with_options(
+                backend,
+                TerminalOptions {
+                    viewport: Viewport::Inline(height),
+                },
+            )
+            .unwrap();
+            let area = term.get_frame().area();
+            assert_eq!(
+                area.bottom(),
+                after,
+                "{before} -> {after} left the frame off the bottom: {area:?}"
+            );
+            assert_eq!(area.height, view_rows(after), "{before} -> {after}");
+        }
+    }
+
+    /// A window barely taller than the frame must not produce a screen of
+    /// padding, and the smallest window Emma will draw in at all must still
+    /// have room for the frame.
+    #[test]
+    fn a_window_barely_taller_than_the_frame_is_anchored_without_a_field_of_padding() {
+        // Eight rows is the least `fallback_reason` allows.
+        let mut backend = TestBackend::new(24, 8);
+        backend.set_cursor_position(Position::new(0, 1)).unwrap();
+        let mut term = install_into(backend, 8);
+        let area = term.get_frame().area();
+        assert_eq!(area.bottom(), 8);
+        assert_eq!(area.height, 5);
+        // Three rows of padding, not eight: the cursor walked to row three and
+        // stopped, so nothing scrolled.
+        term.backend().assert_scrollback_empty();
+    }
+
+    /// Synchronized output is two constants and a rule about pairing them: the
+    /// end is on the restore path, so `Drop`, the panic hook and `process::exit`
+    /// all release a terminal that was told to hold its picture.
+    #[test]
+    fn a_synchronized_update_is_always_ended_including_on_the_way_out() {
+        assert_eq!(SYNC_BEGIN, "\x1b[?2026h");
+        assert_eq!(SYNC_END, "\x1b[?2026l");
+        assert!(
+            include_str!("frame.rs").contains("out.push_str(SYNC_END)"),
+            "the restore path no longer ends a synchronized update"
         );
     }
 

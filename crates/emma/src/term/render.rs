@@ -61,6 +61,13 @@ pub struct Glyphs {
     pub banner: &'static str,
     pub ellipsis: &'static str,
     pub sep: &'static str,
+    /// The mark in front of a markdown list item. The source's own `-` is
+    /// replaced rather than kept because a rendered bullet is what a list looks
+    /// like — see [`super::markdown`].
+    pub bullet: &'static str,
+    /// One column of a horizontal rule: a thematic break, and the line a code
+    /// fence becomes.
+    pub rule: &'static str,
     pub border: border::Set,
 }
 
@@ -78,6 +85,8 @@ pub const UNICODE: Glyphs = Glyphs {
     banner: "!!",
     ellipsis: "…",
     sep: "·",
+    bullet: "•",
+    rule: "─",
     border: border::ROUNDED,
 };
 
@@ -95,6 +104,8 @@ pub const ASCII: Glyphs = Glyphs {
     banner: "!!",
     ellipsis: "...",
     sep: "|",
+    bullet: "-",
+    rule: "-",
     border: border::Set {
         top_left: "+",
         top_right: "+",
@@ -175,18 +186,29 @@ impl Skin {
 
     /// A tool ran. The body is indented under its call and dimmed: it is
     /// evidence, not prose, and the eye should be able to skip it.
-    pub fn tool_ok(&self, body: &str, truncated: bool) -> Vec<Line<'static>> {
+    pub fn tool_ok(&self, body: &str, truncated: bool, reason: Option<&str>) -> Vec<Line<'static>> {
         let mut out = self.body(body, Role::Dim);
         if truncated {
             // Distinct from "more lines than fit on screen" below: this one
             // says the *tool* stopped early, so what the model got is also
             // incomplete. Conflating the two would tell a user their output was
             // merely abbreviated when it was actually cut.
-            out.push(Line::from(Span::styled(
-                format!(
-                    "  {} output was truncated by the tool",
+            //
+            // And when the tool said which cap bound, that is the line, not a
+            // paraphrase of it. "output was truncated by the tool" on a page
+            // whose text was nowhere near its limit sent a reader looking at
+            // the wrong number entirely; the tool's own sentence names the
+            // right one. It is left whole rather than shortened to fit —
+            // `body` already wraps, and a remedy cut in half is not a remedy.
+            let note = match reason {
+                Some(r) => format!("  {} truncated: {r}", self.glyphs.ellipsis),
+                None => format!(
+                    "  {} output was truncated by the tool, which did not say by which limit",
                     self.glyphs.ellipsis
                 ),
+            };
+            out.push(Line::from(Span::styled(
+                note,
                 self.palette.style(Role::Warn),
             )));
         }
@@ -470,10 +492,13 @@ pub struct Status {
     pub model: String,
     pub cwd: String,
     pub session: String,
-    /// The provider's own input count for the most recent call, and the
-    /// compaction cap it is measured against.
+    /// **A snapshot.** The provider's own input count for the most recent call,
+    /// and the compaction cap it is measured against. It rises as a
+    /// conversation grows and falls when the conversation is compacted.
     pub context: Option<(i64, i64)>,
-    /// What the running goal has spent, weighted by price, and its budget.
+    /// **A running total.** Everything this goal has been billed for, weighted
+    /// by price — cache writes at 1.25, cache reads at 0.1, plus output — and
+    /// the budget that ends the goal. It only ever rises.
     pub spend: Option<(i64, i64)>,
     /// How long the running goal has been running.
     pub elapsed: Option<std::time::Duration>,
@@ -482,7 +507,7 @@ pub struct Status {
 impl Skin {
     /// The status line, fitted to the width it has.
     ///
-    /// **Fields are dropped, never truncated mid-value.** A `spend 34k/50` that
+    /// **Fields are dropped, never truncated mid-value.** A `total 34k/50` that
     /// ran out of room is a number that is wrong rather than absent, and the
     /// whole argument for this line is that everything on it is true. The order
     /// below is the order things go: the session id first because it is the
@@ -539,6 +564,21 @@ impl Skin {
     }
 
     /// The live half. Absent fields are absent — see [`Status`].
+    ///
+    /// **`ctx` and `total`, and the question that renamed the second one.** The
+    /// owner read `ctx 73k/120k · spend 103k/500k` and asked whether the two
+    /// were the wrong way round, because spend was the larger number. They were
+    /// not: the second call of any goal spends more than the first call's
+    /// context, and every call after that widens the gap. But a label that
+    /// invites the question is the defect, and `spend` invited it — it reads as
+    /// a level, like `ctx`, when it is an accumulation.
+    ///
+    /// So the label names what the number *is* rather than what it is measured
+    /// against: `ctx` is how full the window is right now, and `total` is what
+    /// the goal has been billed for so far. A total exceeding a level is not a
+    /// thing anybody has to reason about. `total` is the same five columns
+    /// `spend` was, so the order this line drops fields in is unchanged — see
+    /// [`Skin::status`], which drops whole fields rather than cutting a number.
     fn live_fields(&self, s: &Status) -> Vec<Span<'static>> {
         let mut spans: Vec<Span<'static>> = Vec::new();
         let push = |label: &str, value: String, role: Role, spans: &mut Vec<Span<'static>>| {
@@ -561,7 +601,7 @@ impl Skin {
         }
         if let Some((used, cap)) = s.spend {
             push(
-                "spend",
+                "total",
                 format!("{}/{}", human(used), human(cap)),
                 pressure(used, cap),
                 &mut spans,
@@ -698,7 +738,7 @@ mod tests {
     #[test]
     fn a_successful_result_is_dim_and_a_failure_is_red() {
         let s = skin(Level::Truecolor);
-        let ok = s.tool_ok("all good", false);
+        let ok = s.tool_ok("all good", false, None);
         assert!(ok[0].spans[0].style.add_modifier.contains(Modifier::DIM));
         let bad = s.tool_failed("Bash", "boom");
         assert_eq!(bad[1].spans[0].style.fg, Some(s.palette.color(Role::Err)));
@@ -708,16 +748,36 @@ mod tests {
     #[test]
     fn a_truncated_tool_and_a_long_result_say_different_things() {
         let s = skin(Level::Truecolor);
-        let long = s.tool_ok(&"line\n".repeat(30), false);
+        let long = s.tool_ok(&"line\n".repeat(30), false, None);
         let text: String = long.iter().map(plain).collect::<Vec<_>>().join("\n");
         assert!(text.contains("22 more lines"), "{text}");
         // The screen left some out. The tool itself did not stop early, so
         // nothing may claim it did.
         assert!(!text.contains("truncated"), "{text}");
 
-        let cut = s.tool_ok("a\nb", true);
+        let cut = s.tool_ok("a\nb", true, None);
         let text: String = cut.iter().map(plain).collect::<Vec<_>>().join("\n");
-        assert!(text.contains("truncated by the tool"), "{text}");
+        assert!(text.contains("truncated"), "{text}");
+    }
+
+    /// The line the owner actually saw, and the fix. A tool that named its cap
+    /// gets that sentence on screen verbatim; one that did not says so rather
+    /// than implying the reader has been told which limit bound.
+    #[test]
+    fn a_stated_reason_reaches_the_screen_whole() {
+        let s = skin(Level::Truecolor);
+        let reason = "50 of 70 links shown, 20 dropped by max_links=50; \
+                      re-read with max_links=70 for the rest";
+        let cut = s.tool_ok("a\nb", true, Some(reason));
+        let text: String = cut.iter().map(plain).collect::<Vec<_>>().join("\n");
+        assert!(
+            text.contains(reason),
+            "the reason was dropped or reworded: {text}"
+        );
+
+        let vague = s.tool_ok("a\nb", true, None);
+        let text: String = vague.iter().map(plain).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("did not say by which limit"), "{text}");
     }
 
     #[test]
@@ -743,7 +803,7 @@ mod tests {
         let everything = [
             s.goal("g"),
             s.tool_started("Bash", "ls"),
-            s.tool_ok("out", true),
+            s.tool_ok("out", true, Some("50 of 70 links shown")),
             s.tool_failed("Bash", "boom"),
             s.tool_refused("Bash"),
             s.tool_blocked("Bash", "policy"),
@@ -802,8 +862,32 @@ mod tests {
             assert!(out.contains(expected), "{expected} is missing: {out}");
         }
         assert!(out.contains("ctx 12k/120k"), "{out}");
-        assert!(out.contains("spend 34k/500k"), "{out}");
+        assert!(out.contains("total 34k/500k"), "{out}");
         assert!(out.contains("1m12s"), "{out}");
+    }
+
+    /// **The two meters are different kinds of number and the labels say so.**
+    ///
+    /// The failure this pins is the one that was reported: a reader seeing the
+    /// second number larger than the first and concluding the line was
+    /// inverted. `spend` reads as a level; `total` cannot. Written against the
+    /// realistic case — a goal several calls in, where the running total is
+    /// genuinely larger than the current context — because that is the exact
+    /// screen that produced the question.
+    #[test]
+    fn the_cumulative_meter_is_not_labelled_like_the_snapshot_one() {
+        let s = Status {
+            context: Some((73_000, 120_000)),
+            spend: Some((103_000, 500_000)),
+            ..status()
+        };
+        let out = plain(&skin(Level::Truecolor).status(120, &s));
+        assert!(out.contains("ctx 73k/120k"), "{out}");
+        assert!(out.contains("total 103k/500k"), "{out}");
+        // The word that invited "is that inverted?" is gone, and nothing
+        // replaced it with a longer one: the label is the same width, so the
+        // narrow-window drop order below is untouched.
+        assert!(!out.contains("spend"), "{out}");
     }
 
     /// A field nobody can keep true is not shown at all.
@@ -837,7 +921,7 @@ mod tests {
         let narrow = plain(&skin.status(64, &status()));
         assert!(!narrow.contains("sess-123"), "{narrow}");
         // The live half survives longest: it is the only part that changes.
-        assert!(narrow.contains("spend 34k/500k"), "{narrow}");
+        assert!(narrow.contains("total 34k/500k"), "{narrow}");
 
         let tiny = plain(&skin.status(34, &status()));
         assert!(!tiny.contains("C:\\src"), "{tiny}");

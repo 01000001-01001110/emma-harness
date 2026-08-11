@@ -66,6 +66,7 @@ use ratatui::text::Line;
 
 pub mod frame;
 pub mod input;
+pub mod markdown;
 pub mod menu;
 pub mod palette;
 pub mod render;
@@ -439,6 +440,14 @@ impl Term {
     /// The completion marker is taken out on the way through. See
     /// [`crate::goal::MarkerFilter`] for why that happens here, character by
     /// character, rather than on the finished text.
+    ///
+    /// **Formatting stops at the frame.** With a viewport the text is markdown
+    /// and is rendered as markdown — headings, code, lists, wrapped to the
+    /// window — because there is a window to wrap to and a terminal to style
+    /// for. Without one there is neither: a pipe has no width, and every byte
+    /// written to it is somebody's input to the next program. So the fallback
+    /// path passes the model's own characters through untouched, which is also
+    /// what keeps `emma … | tee` free of escape bytes. See [`markdown`].
     pub fn delta(&self, text: &str) {
         if !self.enabled || self.subordinate {
             return;
@@ -476,16 +485,21 @@ impl Term {
     }
 
     /// Whole assistant text at once, for `-p` where nothing streamed.
+    ///
+    /// With a viewport it goes through the same two calls the streaming path
+    /// uses, rather than a second rendering of its own: markdown is decided a
+    /// line at a time either way, and a private path here is a path that would
+    /// drift from the one people actually see. Without a viewport it is printed
+    /// as it arrived — see [`Term::delta`] for why formatting stops at the
+    /// frame.
     pub fn text(&self, text: &str) {
         let text = crate::goal::MarkerFilter::once(text);
         if self.enabled && !self.subordinate && !text.trim().is_empty() {
             match &self.frame {
-                Some(frame) => frame.write_lines(
-                    text.trim_end()
-                        .lines()
-                        .map(|l| self.skin.prose(l))
-                        .collect(),
-                ),
+                Some(frame) => {
+                    frame.prose(text.trim_end());
+                    frame.flush_prose();
+                }
                 None => println!("{}", text.trim_end()),
             }
         }
@@ -529,8 +543,22 @@ impl Term {
     /// A tool ran. `truncated` is the tool's own claim that it stopped early,
     /// which is a different fact from the screen showing only the first few
     /// lines — the model's copy is short too.
-    pub fn tool_result(&self, display: Option<&str>, content: &str, truncated: bool) {
-        self.side(self.skin.tool_ok(display.unwrap_or(content), truncated));
+    ///
+    /// `reason` is that same tool's account of *which* cap bound and by how
+    /// much. Passed through rather than summarised: the human watching is the
+    /// one who can raise a default, and they cannot do that from the word
+    /// "truncated".
+    pub fn tool_result(
+        &self,
+        display: Option<&str>,
+        content: &str,
+        truncated: bool,
+        reason: Option<&str>,
+    ) {
+        self.side(
+            self.skin
+                .tool_ok(display.unwrap_or(content), truncated, reason),
+        );
     }
 
     /// A `ToolError`, or a fault the tool could not continue past.
@@ -595,28 +623,55 @@ impl Term {
         self.side(lines);
     }
 
-    pub fn prompt_question(&self, tool: &str) {
-        self.question(
-            &format!("allow? [y]es  [n]o  [a]lways {tool} this session: "),
-            vec![
-                ("y".to_string(), "yes".to_string()),
-                ("n".to_string(), "no".to_string()),
-                ("a".to_string(), format!("always {tool}")),
-            ],
-        );
+    /// `remember` is the rule text `[r]` would write to disk, or `None` when
+    /// nothing can be written — an unattended run, or a prompt an `ask` rule
+    /// forced, where the grant would be outranked by the rule that produced the
+    /// question.
+    ///
+    /// **The rule is shown verbatim, not described.** "remember this tool" is a
+    /// sentence the user has to translate into a permission; `Write` is the
+    /// permission. The string here is the same one that lands in the file, so
+    /// there is no second rendering to disagree with it.
+    pub fn prompt_question(&self, tool: &str, remember: Option<&str>) {
+        let mut q = format!("allow? [y]es  [n]o  [a]lways {tool} this session");
+        let mut keys = vec![
+            ("y".to_string(), "yes".to_string()),
+            ("n".to_string(), "no".to_string()),
+            ("a".to_string(), format!("always {tool}")),
+        ];
+        if let Some(rule) = remember {
+            q.push_str(&format!("  [r]emember {rule}"));
+            keys.push(("r".to_string(), format!("save {rule}")));
+        }
+        q.push_str(": ");
+        self.question(&q, keys);
     }
 
-    /// The network question, worded so the grant on offer is the one the answer
-    /// actually gives: a host for the session, not a tool and not one call.
-    /// There is no third option, because a wider network grant is not offered.
-    pub fn prompt_network_question(&self, host: &str) {
-        self.question(
-            &format!("allow? [y]es — and {host} again this session  [n]o: "),
-            vec![
-                ("y".to_string(), format!("yes, and {host} again")),
-                ("n".to_string(), "no".to_string()),
-            ],
-        );
+    /// The network question, worded so each grant on offer is the one the answer
+    /// actually gives: one call, or the host for the session, or one of two
+    /// rules written down.
+    ///
+    /// The two saved options are deliberately different sizes and deliberately
+    /// separate keys. `[r]` is the host in front of you. `[t]` is every call this
+    /// tool ever makes, anywhere — the answer to "just let it search" — and it is
+    /// never what `[r]` silently expands into, because a grant somebody arrived
+    /// at by pressing the obvious key is a grant they did not read.
+    pub fn prompt_network_question(&self, host: &str, remember: Option<&str>, trust: Option<&str>) {
+        let mut q = format!("allow? [y]es — and {host} again this session  [n]o");
+        let mut keys = vec![
+            ("y".to_string(), format!("yes, and {host} again")),
+            ("n".to_string(), "no".to_string()),
+        ];
+        if let Some(rule) = remember {
+            q.push_str(&format!("  [r]emember {rule}"));
+            keys.push(("r".to_string(), format!("save {rule}")));
+        }
+        if let Some(rule) = trust {
+            q.push_str(&format!("  [t]rust {rule} (any host)"));
+            keys.push(("t".to_string(), format!("save {rule}")));
+        }
+        q.push_str(": ");
+        self.question(&q, keys);
     }
 
     fn question(&self, q: &str, keys: Vec<(String, String)>) {
@@ -1227,7 +1282,7 @@ mod tests {
         term.goal_ended();
         term.spent(1, 2);
         term.tool_started("Bash", &json!({ "command": "ls" }));
-        term.tool_result(None, "out", false);
+        term.tool_result(None, "out", false, None);
         term.tool_failed("Bash", "boom");
         term.tool_blocked("Bash", "policy");
         term.tool_refused("Bash");
@@ -1237,8 +1292,14 @@ mod tests {
         term.end_of_text();
         term.text("y");
         term.prompt_header("Bash", "$ ls");
-        term.prompt_question("Bash");
-        term.prompt_network_question("docs.rs");
+        term.prompt_question("Bash", None);
+        term.prompt_question("Bash", Some("Bash"));
+        term.prompt_network_question("docs.rs", None, None);
+        term.prompt_network_question(
+            "docs.rs",
+            Some("WebFetch(domain:docs.rs)"),
+            Some("WebFetch"),
+        );
         term.goal_prompt();
         term.prompt_answered(Some("y"));
         term.welcome(&Welcome::default());
