@@ -1,0 +1,20 @@
+[package]
+name = "emma-tools-lsp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["sync", "io-util"] }
+emma-tool-api.workspace = true
+# For `path::{root, resolve_existing, display}` only. Containment must have
+# exactly one implementation in this workspace: a language server will happily
+# answer about `C:\Users\someone\.cargo\registry\...`, and the boundary Emma
+# enforces on `Read` has to mean the same thing here or it means nothing.
+emma-tools-fs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "io-util", "sync", "time"] }

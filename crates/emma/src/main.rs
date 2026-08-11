@@ -80,6 +80,15 @@ async fn run(cli: cli::Cli) -> Result<()> {
     for tool in emma_tools_tasks::task_tools() {
         registry.register(tool);
     }
+    // Code intelligence: `FindReferences`, `GoToDefinition`, `Hover`,
+    // `DocumentSymbols`. All four are `read_only` and prompt nobody. The pool is
+    // dropped on purpose, as `_tracker` above is — the four tools hold clones of
+    // the one shared instance, so the language server outlives this binding and
+    // dies with them at exit.
+    let (lsp, _lsp_pool) = emma_tools_lsp::lsp_tools();
+    for tool in lsp {
+        registry.register(tool);
+    }
     // Registered only when the harness resolved skills — an unusable capability
     // with a description attached is a trap.
     if let Some(skill) = Skill::new(harness.clone()) {

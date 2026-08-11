@@ -366,6 +366,7 @@ dependencies = [
  "emma-llm",
  "emma-tool-api",
  "emma-tools-fs",
+ "emma-tools-lsp",
  "emma-tools-tasks",
  "emma-tools-web",
  "libc",

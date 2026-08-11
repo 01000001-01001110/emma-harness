@@ -30,6 +30,11 @@ emma-llm.workspace = true
 emma-tool-api.workspace = true
 emma-tools-fs.workspace = true
 emma-tools-tasks.workspace = true
+# Code intelligence over LSP. Registered unconditionally, unlike `web_tools`: a
+# missing rust-analyzer produces an `Unavailable` naming what was looked for,
+# what it rejected and both ways to fix it, which is strictly more useful to the
+# model than the tool being absent — and the server can be installed mid-session.
+emma-tools-lsp.workspace = true
 # The web surface. It costs a Chrome dependency at build time and registers
 # nothing at run time unless a browser and a key are actually there — see
 # `web_tools`, and the registration in `main.rs` that reports what it left out.

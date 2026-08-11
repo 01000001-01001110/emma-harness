@@ -6,6 +6,7 @@ members = [
     "crates/llm",
     "crates/emma",
     "tools/fs",
+    "tools/lsp",
     "tools/web",
     "tools/tasks",
 ]
@@ -62,5 +63,6 @@ emma-tool-api = { path = "crates/tool-api" }
 emma-harness = { path = "crates/harness" }
 emma-llm = { path = "crates/llm" }
 emma-tools-fs = { path = "tools/fs" }
+emma-tools-lsp = { path = "tools/lsp" }
 emma-tools-web = { path = "tools/web" }
 emma-tools-tasks = { path = "tools/tasks" }
