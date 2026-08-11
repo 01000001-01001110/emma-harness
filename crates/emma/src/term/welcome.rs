@@ -35,8 +35,11 @@ pub struct Welcome {
 
 impl Skin {
     pub fn welcome(&self, w: &Welcome) -> Vec<Line<'static>> {
-        let mut out = vec![Line::default()];
-        out.push(Line::from(vec![
+        // No blank row of its own at either end: the gap above and below this
+        // block is a boundary `Term::welcome` declares, and a block that also
+        // padded itself is how a screen ends up with two. See
+        // [`super::spacing`]. The blanks *inside* are this block's own layout.
+        let mut out = vec![Line::from(vec![
             Span::styled("emma", self.palette.bold(Role::Accent)),
             Span::styled(
                 format!(
@@ -45,7 +48,7 @@ impl Skin {
                 ),
                 self.palette.style(Role::Text),
             ),
-        ]));
+        ])];
         out.push(Line::from(Span::styled(
             "It reads and searches on its own, and asks before it writes a file, runs a \
              command, or reaches the network.",
@@ -115,7 +118,6 @@ impl Skin {
             format!("  shown once {} {}", self.glyphs.sep, w.reason),
             self.palette.dim(),
         )));
-        out.push(Line::default());
         out
     }
 
@@ -167,6 +169,33 @@ mod tests {
         // something is wrong.
         assert!(out.contains("shown once"), "{out}");
         assert!(out.contains("no session directory yet"), "{out}");
+    }
+
+    /// **The block does not pad itself.** The gap above and below the welcome
+    /// is a boundary `Term::welcome` declares, and one that also shipped its
+    /// own blank row would put two on screen wherever the block that follows
+    /// declares the same boundary — which is the whole of
+    /// [`crate::term::spacing`]. The blanks *between* its sections stay: those
+    /// are this block's layout, not the gap around it.
+    #[test]
+    fn the_welcome_leaves_the_gap_around_itself_to_whoever_is_placing_it() {
+        let skin = Skin::new(Palette::new(Level::None), UNICODE);
+        let out = skin.welcome(&Welcome {
+            harness: "claude".into(),
+            ..Welcome::default()
+        });
+        assert!(
+            !plain(&out[0]).trim().is_empty(),
+            "it opens with a blank row"
+        );
+        assert!(
+            !plain(out.last().unwrap()).trim().is_empty(),
+            "it ends with a blank row"
+        );
+        assert!(
+            out.iter().any(|l| plain(l).trim().is_empty()),
+            "its own sections stopped being separated"
+        );
     }
 
     #[test]

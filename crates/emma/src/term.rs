@@ -64,12 +64,14 @@ use std::sync::{Arc, Mutex};
 
 use ratatui::text::Line;
 
+pub mod diff;
 pub mod frame;
 pub mod input;
 pub mod markdown;
 pub mod menu;
 pub mod palette;
 pub mod render;
+pub mod spacing;
 pub mod statusline;
 pub mod view;
 pub mod welcome;
@@ -126,6 +128,11 @@ pub struct Term {
     /// What was said to the status meters and the approval prompt, when
     /// somebody asked to be told. See [`Term::recording`].
     record: Option<Arc<Mutex<Vec<String>>>>,
+    /// Blank rows, for the path that has no viewport. The framed path keeps its
+    /// own inside [`Frame`], because prose reaches the frame without coming
+    /// through here — see [`Term::side`], which is the only user of this one.
+    /// One rule, two places that can be *at* the transcript; never two rules.
+    spacing: Mutex<spacing::Spacing>,
 }
 
 impl Term {
@@ -190,6 +197,7 @@ impl Term {
             pending: Mutex::default(),
             subordinate: false,
             record: None,
+            spacing: Mutex::default(),
         }
     }
 
@@ -214,6 +222,7 @@ impl Term {
             pending: Mutex::default(),
             subordinate: false,
             record: None,
+            spacing: Mutex::default(),
         }
     }
 
@@ -229,6 +238,7 @@ impl Term {
             pending: Mutex::default(),
             subordinate: false,
             record: None,
+            spacing: Mutex::default(),
         }
     }
 
@@ -288,6 +298,7 @@ impl Term {
             pending: Mutex::default(),
             subordinate: true,
             record: self.record.clone(),
+            spacing: Mutex::default(),
         }
     }
 
@@ -408,7 +419,31 @@ impl Term {
     /// What a new user sees, once. See [`welcome`] and
     /// [`crate::session::first_run`].
     pub fn welcome(&self, w: &Welcome) {
+        self.separate();
         self.side(self.skin.welcome(w));
+        self.separate();
+    }
+
+    /// Declare a boundary between two blocks of transcript.
+    ///
+    /// The blank row is written by whichever path is actually at the transcript,
+    /// and only if a block turns up on the other side of the boundary — so a
+    /// caller may say this without knowing what follows it, or whether anything
+    /// does. See [`spacing`], which is the rule, and which exists because two
+    /// callers each pushing a `Line::default()` is how the screen ended up with
+    /// two blank rows where one was meant.
+    fn separate(&self) {
+        if !self.enabled {
+            return;
+        }
+        match &self.frame {
+            Some(frame) => frame.separate(),
+            None => self
+                .spacing
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .separate(),
+        }
     }
 
     /// The side channel: tool lines, notes, warnings. stderr in `-p`.
@@ -420,6 +455,11 @@ impl Term {
             frame.write_lines(lines);
             return;
         }
+        let lines = self
+            .spacing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .apply(lines);
         for line in &lines {
             // `for_stream` writes the text and nothing else when the palette
             // has no colour in it, which is the case for every pipe and every
@@ -479,7 +519,11 @@ impl Term {
                 if !held.is_empty() {
                     self.write_out(&held);
                 }
+                // Ends the line the model left open — a terminator, not a
+                // separator. The gap between this answer and whatever follows
+                // is the boundary declared under it.
                 println!();
+                self.separate();
             }
         }
     }
@@ -500,7 +544,10 @@ impl Term {
                     frame.prose(text.trim_end());
                     frame.flush_prose();
                 }
-                None => println!("{}", text.trim_end()),
+                None => {
+                    println!("{}", text.trim_end());
+                    self.separate();
+                }
             }
         }
     }
@@ -518,9 +565,17 @@ impl Term {
             frame.prose(text);
             return;
         }
+        // Straight to stdout, byte for byte, which is what keeps a pipe free of
+        // anything Emma invented — so these rows never pass through the
+        // spacing rule and it has to be told they happened, or the answer and
+        // the next block would run together.
         let mut out = std::io::stdout();
         let _ = out.write_all(text.as_bytes());
         let _ = out.flush();
+        self.spacing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .wrote_text(false);
     }
 
     pub fn note(&self, text: &str) {
@@ -535,9 +590,29 @@ impl Term {
         self.side(self.skin.banner(text));
     }
 
-    /// A tool is about to run. One line, the interesting argument inline.
+    /// A tool is about to run. One line, the interesting argument inline — and,
+    /// for a tool that changes a file, the diff underneath it.
+    ///
+    /// **This is the only place a change reaches the transcript, and it is why
+    /// it is here rather than at the prompt.** The loop calls this for every tool
+    /// call; the prompt fires only for the calls that are actually asked about,
+    /// so a `Write` covered by an `allow` rule, by an `a` earlier in the session
+    /// or by `--dangerously-skip-permissions` would otherwise change a file with
+    /// nothing on screen but its name. That is the case the survey is about:
+    /// every other harness shows the change, Emma showed the path.
+    ///
+    /// The diff is a *proposal* — the tool has not run, and may still be blocked,
+    /// refused or fail — which is exactly what this line already means. See
+    /// [`Term::prompt_header`], which does not repeat it.
     pub fn tool_started(&self, name: &str, args: &serde_json::Value) {
-        self.side(self.skin.tool_started(name, &summarise_args(name, args)));
+        if !self.enabled {
+            return;
+        }
+        let mut lines = self.skin.tool_started(name, &summarise_args(name, args));
+        if let Some(change) = diff::for_call(name, args) {
+            lines.extend(change.to_lines(&self.skin, diff::BUDGET));
+        }
+        self.side(lines);
     }
 
     /// A tool ran. `truncated` is the tool's own claim that it stopped early,
@@ -583,10 +658,17 @@ impl Term {
 
     /// A goal stopped, for whatever reason, having spent what it spent.
     pub fn ending(&self, message: &str, ok: bool, iterations: u32, tokens: i64) {
+        // The summary is its own block: it is what a reader scrolling back
+        // looks for, and it should not read as one more tool result.
+        self.separate();
         self.side(self.skin.ending(message, ok, iterations, tokens));
     }
 
     pub fn goal_started(&self, goal: &str) {
+        // Above the echoed goal, not below it: the gap belongs between one
+        // turn and the next, and the answer to a goal is part of the same
+        // exchange as the goal. "Space after my message" was the complaint.
+        self.separate();
         self.side(self.skin.goal(goal));
         self.meter("goal_started", Frame::goal_started);
     }
@@ -609,16 +691,29 @@ impl Term {
     /// It goes to the transcript in full — that is the record of what was
     /// asked, and it can be scrolled back to and selected — and is held for the
     /// viewport panel, which shows as much of it as fits.
+    ///
+    /// **Except when the transcript already has it.** [`Term::tool_started`]
+    /// draws the diff for a tool that changes a file, and it runs first for
+    /// every call, so echoing the preview here would put the same forty rows on
+    /// screen twice in a row — which is not merely wasteful: a reader scrolling
+    /// back through two copies of a diff has to work out whether they are two
+    /// changes. The panel still gets the whole preview, because the panel is not
+    /// the transcript and cannot be scrolled to.
     pub fn prompt_header(&self, tool: &str, preview: &str) {
         self.remember("prompt_header");
         let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         pending.title = format!("Approve {tool}");
         pending.preview = preview.lines().map(str::to_string).collect();
         drop(pending);
-        let mut lines = vec![Line::default()];
-        lines.extend(self.skin.tool_started(tool, "wants to run:"));
-        for line in preview.lines() {
-            lines.push(self.skin.prose(&format!("  {line}")));
+        // A boundary rather than a blank row of its own. The answer that just
+        // ended declared one too, and the model's own trailing newline may
+        // already have written one; three intentions, one gap.
+        self.separate();
+        let mut lines = self.skin.tool_started(tool, "wants to run:");
+        if !diff::changes_a_file(tool) {
+            for line in preview.lines() {
+                lines.push(self.skin.prose(&format!("  {line}")));
+            }
         }
         self.side(lines);
     }
@@ -1303,6 +1398,65 @@ mod tests {
         term.goal_prompt();
         term.prompt_answered(Some("y"));
         term.welcome(&Welcome::default());
+    }
+
+    /// **One predicate decides both halves of the no-duplication rule**, so
+    /// "`tool_started` draws the diff" and "`prompt_header` does not draw it
+    /// again" cannot come apart. The failure it prevents is two copies of a
+    /// forty-row diff in a row, which a reader scrolling back has to work out
+    /// are one change rather than two.
+    ///
+    /// Written as "these are the same set" rather than as two `contains` calls,
+    /// because the hazard is a writing tool added to one list and not the other.
+    #[test]
+    fn the_tools_whose_diff_is_drawn_are_exactly_the_ones_the_prompt_does_not_repeat() {
+        for tool in ["Write", "Edit"] {
+            assert!(diff::changes_a_file(tool), "{tool}");
+            assert!(
+                diff::for_call(tool, &json!({})).is_none(),
+                "a call with no arguments produced a diff"
+            );
+        }
+        for tool in ["Bash", "Read", "Grep", "WebFetch", "TaskUpdate"] {
+            assert!(!diff::changes_a_file(tool), "{tool}");
+            assert!(diff::for_call(tool, &json!({ "command": "ls" })).is_none());
+        }
+    }
+
+    /// **No emitter fabricates a blank row.** Blank rows between blocks are
+    /// declared as boundaries and materialised in one place — see [`spacing`],
+    /// which is the only file allowed to construct one.
+    ///
+    /// Asserted on the source because the failure has no other witness: a
+    /// second hand-rolled `Line::default()` next to a `separate()` produces two
+    /// blank rows on a real screen and passes every test that renders lines,
+    /// which is exactly how the screen the owner photographed came to have
+    /// three. The needle is assembled rather than written out, because this
+    /// file is its own haystack.
+    ///
+    /// The exception, stated: a block's *internal* layout may use blank rows —
+    /// `welcome.rs` does, between its sections — because those are its content,
+    /// not the gap between it and its neighbour.
+    #[test]
+    fn no_emitter_between_here_and_the_terminal_writes_a_blank_row_of_its_own() {
+        let needle = format!("Line::{}()", "default");
+        for (name, src) in [
+            ("term.rs", include_str!("term.rs")),
+            ("term/frame.rs", include_str!("term/frame.rs")),
+        ] {
+            // Comments stripped: both files argue about the old blank rows by
+            // name, as this one does. What must not appear is a *use* of one.
+            let code: String = src
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(
+                !code.contains(&needle),
+                "{name} writes a blank row directly. Blank rows are boundaries: call `separate()` \
+                 and let `spacing` decide whether one is owed."
+            );
+        }
     }
 
     #[test]

@@ -76,6 +76,17 @@
 //!    cannot evaluate trains them to press `y`, which is worse than no prompt:
 //!    it manufactures consent and leaves a record saying they agreed.
 //!
+//!    **The `Write` prompt was failing this rule, by this rule's own words.** It
+//!    said `write src/auth.rs — 4,102 bytes, 118 lines` and stopped: a path, a
+//!    size, and not one word about the change. There is no answer a reader can
+//!    give to that except the one this paragraph is written against. It now
+//!    carries the diff, computed against the file on disk, and so does `Edit`.
+//!    Both go through [`crate::term::diff`], which is also where every case that
+//!    *cannot* honestly be diffed — a binary file, one too large to read, a
+//!    changed region too large to line up — is turned into a sentence saying so
+//!    rather than into something plausible. A fabricated diff would be this rule
+//!    inverted: a prompt the user can evaluate, wrongly.
+//!
 //! **What rule 2 does not cover, and none of it is an oversight.** It gates
 //! where bytes go and nothing else. It says nothing about *what comes back*: an
 //! approved host is a destination the user chose, not a source they trust, and
@@ -764,7 +775,22 @@ impl Approvals {
 // What the human is shown
 //
 // A prompt is only worth the information in it. One arm per writing tool, and
-// a diff that is the tool's own arguments rather than a computed one.
+// the change itself under each of them.
+//
+// **What the `Edit` arm used to say, and why the replacement is the same
+// argument rather than a reversal of it.** This file carried a rule that the
+// two sides must be shown *verbatim*, never as a computed diff, because `Edit`'s
+// arguments are the two sides and a verbatim rendering is the only one that
+// cannot disagree with what the tool will do. That premise is intact and is why
+// `term::diff` reads nothing for an `Edit`: the same two argument strings go in,
+// and what comes out is those strings with the lines they have in common
+// written once instead of twice. Nothing is minimised away — every changed line
+// is still there under its own sign — so it is not the summary the old rule
+// refused. It is the same evidence, arranged so the reader does not have to do
+// the diffing that the tool has already decided.
+//
+// `Write` is the arm that was genuinely failing the file's own standard: it
+// named a path and a byte count and withheld the change entirely.
 // ---------------------------------------------------------------------------
 
 /// What the human is shown. The whole point of the gate.
@@ -783,26 +809,38 @@ pub fn preview(tool: &str, args: &Value) -> String {
             }
             out
         }
+        // The two writing tools, and the one thing they used to withhold. See
+        // `term::diff` for what each can honestly show and for every case where
+        // the answer is a sentence rather than a diff.
         "Write" => {
             let content = s("content");
-            format!(
+            let mut out = format!(
                 "write {}\n  {} bytes, {} lines",
                 s("file_path"),
                 content.len(),
                 content.lines().count()
-            )
+            );
+            if let Some(change) = crate::term::diff::for_call(tool, args) {
+                out.push('\n');
+                out.push_str(&change.to_text(crate::term::diff::BUDGET));
+            }
+            out
         }
         "Edit" => {
             let all = args
                 .get("replace_all")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            format!(
-                "edit {}{}\n{}",
+            let mut out = format!(
+                "edit {}{}",
                 s("file_path"),
-                if all { "  (every occurrence)" } else { "" },
-                diff(s("old_string"), s("new_string"))
-            )
+                if all { "  (every occurrence)" } else { "" }
+            );
+            if let Some(change) = crate::term::diff::for_call(tool, args) {
+                out.push('\n');
+                out.push_str(&change.to_text(crate::term::diff::BUDGET));
+            }
+            out
         }
         // A delegation is the one call in the surface where the *model* wrote
         // the instructions, so the prompt shows which agent, and the brief
@@ -852,36 +890,6 @@ const BRIEF_LINES: usize = 12;
 /// per-tool arm, because the tool already composed the only part that varies.
 pub fn network_preview(target: &NetworkTarget) -> String {
     format!("reach {}\n  {}", target.host, target.detail)
-}
-
-/// The exact text going out and the exact text coming in, as `-`/`+` lines.
-///
-/// Not a computed diff, and it must not become one. `Edit`'s arguments *are*
-/// the two sides, so showing them verbatim is the only rendering that cannot
-/// disagree with what the tool will do. A minimised diff would be prettier and
-/// would show the user a summary of the change rather than the change.
-const DIFF_LINES: usize = 40;
-
-fn diff(old: &str, new: &str) -> String {
-    let mut out = String::new();
-    let mut shown = 0usize;
-    let push = |sign: char, text: &str, out: &mut String, shown: &mut usize| {
-        for line in text.lines() {
-            if *shown == DIFF_LINES {
-                out.push_str("  …\n");
-                *shown += 1;
-                return;
-            }
-            if *shown > DIFF_LINES {
-                return;
-            }
-            out.push_str(&format!("  {sign} {line}\n"));
-            *shown += 1;
-        }
-    };
-    push('-', old, &mut out, &mut shown);
-    push('+', new, &mut out, &mut shown);
-    out.trim_end().to_string()
 }
 
 // endregion: What the human is shown
@@ -1655,6 +1663,41 @@ mod tests {
         assert!(p.contains("+ let user = session::current(req)?;"), "{p}");
     }
 
+    /// The half of an `Edit` prompt that is new: the lines the two sides share
+    /// are shown once, as context, instead of once under `-` and again under
+    /// `+`. Nothing is minimised away — both changed lines are still on screen —
+    /// which is what keeps this inside the rule the module doc states rather
+    /// than a summary of the change.
+    #[test]
+    fn the_edit_preview_no_longer_makes_the_reader_do_the_diffing() {
+        let old = "fn handler(req: Req) -> Res {\n    let user = legacy(req);\n    render(user)\n}";
+        let new =
+            "fn handler(req: Req) -> Res {\n    let user = current(req)?;\n    render(user)\n}";
+        let p = preview(
+            "Edit",
+            &serde_json::json!({
+                "file_path": "src/auth.rs", "old_string": old, "new_string": new,
+            }),
+        );
+        assert!(
+            p.contains("- ") && p.contains("let user = legacy(req);"),
+            "{p}"
+        );
+        assert!(
+            p.contains("+ ") && p.contains("let user = current(req)?;"),
+            "{p}"
+        );
+        // The signature is identical on both sides and is printed once.
+        assert_eq!(
+            p.matches("fn handler").count(),
+            1,
+            "an unchanged line was shown on both sides: {p}"
+        );
+        // …and the size of the change is stated, so a cut prompt still says how
+        // big the thing being approved is.
+        assert!(p.contains("+1 -1 lines"), "{p}");
+    }
+
     #[test]
     fn the_write_preview_states_the_size_rather_than_the_bytes() {
         let p = preview(
@@ -1667,6 +1710,31 @@ mod tests {
         );
     }
 
+    /// **The prompt this feature exists for.** A `Write` over an existing file
+    /// used to say the path and the byte count and nothing else — the reader was
+    /// asked to approve a change they could not see, which is the exact defect
+    /// rule 4 of this module is written against. It now carries the diff, and the
+    /// old contents are visibly *going*.
+    #[test]
+    fn a_write_over_an_existing_file_shows_what_it_destroys() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("auth.rs");
+        std::fs::write(&file, "keep me\nDELETE ME\nkeep me too\n").unwrap();
+        let p = preview(
+            "Write",
+            &serde_json::json!({
+                "file_path": file.to_str().unwrap(),
+                "content": "keep me\nBRAND NEW\nkeep me too\n",
+            }),
+        );
+        assert!(p.contains("- DELETE ME"), "the removal was invisible: {p}");
+        assert!(p.contains("+ BRAND NEW"), "{p}");
+        assert!(p.contains("+1 -1 lines"), "{p}");
+        // Nothing anywhere calls this a new file, which is the mislabelling
+        // that makes a destructive prompt read as a harmless one.
+        assert!(!p.contains("a new file"), "{p}");
+    }
+
     #[test]
     fn a_huge_edit_is_cut_rather_than_flooding_the_terminal() {
         let big = "line\n".repeat(500);
@@ -1674,8 +1742,19 @@ mod tests {
             "Edit",
             &serde_json::json!({ "file_path": "a", "old_string": big, "new_string": "x" }),
         );
-        assert!(p.lines().count() < DIFF_LINES + 5, "{}", p.lines().count());
-        assert!(p.contains('…'));
+        assert!(
+            p.lines().count() < crate::term::diff::BUDGET + 8,
+            "{}",
+            p.lines().count()
+        );
+        // …and says how much it left out rather than trailing off, which is the
+        // rule this repository applied to the web tools hours ago and which
+        // matters more here: the reader is approving the part they cannot see.
+        assert!(p.contains("more diff lines not shown"), "{p}");
+        assert!(
+            p.contains("-500 lines") || p.contains("+1 -500 lines"),
+            "{p}"
+        );
     }
 }
 

@@ -622,6 +622,46 @@ mod tests {
         assert!(all.contains("more lines, all of it above"), "{all}");
     }
 
+    /// **The prompt this feature was built for, drawn.** A `Write` over an
+    /// existing file used to put a path and a byte count in this panel; it now
+    /// puts the change in it. What the panel must still do is what it always
+    /// did — keep the answer keys, and say how much of the diff is above rather
+    /// than trailing off.
+    #[test]
+    fn a_write_prompt_shows_the_change_in_the_panel_and_still_keeps_the_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("auth.rs");
+        std::fs::write(&file, "keep\nDELETE ME\nkeep\n").unwrap();
+        let preview = crate::approval::preview(
+            "Write",
+            &serde_json::json!({
+                "file_path": file.to_str().unwrap(),
+                "content": "keep\nBRAND NEW\nkeep\n",
+            }),
+        );
+        let mut v = view();
+        v.prompt = Some(Prompt {
+            title: "Approve Write".into(),
+            preview: preview.lines().map(str::to_string).collect(),
+            keys: vec![("y".into(), "yes".into()), ("n".into(), "no".into())],
+            question: "allow? ".into(),
+        });
+        let all = draw(&v, 72, 14).0.join("\n");
+        assert!(all.contains("Approve Write"), "{all}");
+        assert!(
+            all.contains("- DELETE ME"),
+            "the removal was invisible: {all}"
+        );
+        assert!(all.contains("+ BRAND NEW"), "{all}");
+        // The size of the change is in the panel too, so a reader on a short
+        // viewport still knows what they are approving.
+        assert!(all.contains("+1 -1 lines"), "{all}");
+        assert!(
+            all.contains(" y "),
+            "the answer keys were pushed off: {all}"
+        );
+    }
+
     #[test]
     fn streamed_prose_shows_its_tail_above_the_box() {
         let mut v = view();
