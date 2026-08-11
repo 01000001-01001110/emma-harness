@@ -71,6 +71,61 @@ fn the_spine_and_the_local_file_merge_rather_than_override() {
 }
 
 #[test]
+fn six_remembered_grants_in_one_local_file_all_come_back() {
+    // The reading half of the multi-run claim in `emma/tests/permissions.rs`.
+    // That file proves six separate runs *write* six rules into one document;
+    // this proves the harness then hands all six back — none swallowed by
+    // another, none lost to the keys around them, and the project's own rules
+    // still in front of them.
+    //
+    // Six rather than one because the failure mode being guarded is a reader
+    // that keeps the last rule it saw, or the first, and one rule cannot tell
+    // those two apart from a reader that works.
+    let hosts = [
+        "example.com",
+        "example.org",
+        "example.net",
+        "www.iana.org",
+        "www.rust-lang.org",
+        "docs.rs",
+    ];
+    let root = scratch("perm-six").join(".claude");
+    write(
+        &root.join("settings.json"),
+        r#"{"permissions":{"deny":["WebFetch(domain:evil.example)"]}}"#,
+    );
+    // The shape `permissions::remember` leaves behind after six grants, with
+    // the unrelated keys a real file has around them.
+    let allow: Vec<String> = hosts
+        .iter()
+        .map(|h| format!("WebFetch(domain:{h})"))
+        .collect();
+    write(
+        &root.join("settings.local.json"),
+        &serde_json::json!({
+            "statusLine": { "type": "command", "command": "hooks/status" },
+            "env": { "EMMA_TEST": "1" },
+            "permissions": { "allow": allow }
+        })
+        .to_string(),
+    );
+
+    let h = Harness::load(&root).expect("load");
+    let mut want = vec!["deny WebFetch(domain:evil.example)".to_string()];
+    want.extend(hosts.iter().map(|h| format!("allow WebFetch(domain:{h})")));
+    assert_eq!(rules(&h), want, "six grants did not survive the read");
+    // Every one of them names the file it came from, which is the sentence an
+    // operator needs when the sixth rule is the one not firing.
+    for entry in h.permissions().iter().skip(1) {
+        assert!(
+            entry.source.ends_with("settings.local.json"),
+            "{:?}",
+            entry.source
+        );
+    }
+}
+
+#[test]
 fn a_dot_emma_project_carries_the_same_block_and_writes_beside_itself() {
     // The block is Claude Code's shape in both directories, so a rule does not
     // have to be re-typed to move between them. And the file a remembered grant
