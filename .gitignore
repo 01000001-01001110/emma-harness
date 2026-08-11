@@ -11,3 +11,8 @@
 
 # The agent maintains this while it works. Session state, not source.
 .emma/tasks/
+
+# Screenshot scratch from agents rendering pages; cwd is this repo even when the
+# work is not. Never source.
+/.playwright-mcp/
+/*.png

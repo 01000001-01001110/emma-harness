@@ -20,6 +20,15 @@
 //! consequential file here: a tool surface that can write is a different safety
 //! problem from one that cannot, and Emma's can.
 //!
+//! **A session is one conversation.** A goal is a turn in it, not a context of
+//! its own: the tool traffic of one goal is still in front of the model for the
+//! next, so a follow-up question does not re-read the file its answer came
+//! from. Two things keep that safe — `session::place_turn`, which never lets a
+//! `tool_use` reach the wire without its result, and `Agent::compact`, which
+//! summarises the oldest goals once a request passes `Budgets::max_context`.
+//! Compaction is lossy by decision: the words survive, the tool results do not,
+//! and the model is told so.
+//!
 //! **The map.** [`agent`] is the loop and holds both properties above.
 //! [`approval`] is the gate it consults, and [`goal`] is what it holds across
 //! turns — the goal text, the done-check trait, and the kick. Around those:

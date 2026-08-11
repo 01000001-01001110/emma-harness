@@ -1,7 +1,18 @@
 //! The loop: send, receive, run tools, repeat, and hold the goal across turns.
 //!
-//! Four properties govern this file, and each of them is here because it was
+//! Five properties govern this file, and each of them is here because it was
 //! paid for somewhere else first.
+//!
+//! **A session is one conversation, and a goal is a turn in it.** The loop used
+//! to collapse each finished goal to the goal text and the answer, discarding
+//! the tool traffic, and the second question about a file therefore arrived at a
+//! model that no longer had the file — so it read it again, every time. The
+//! traffic now stays. Two things pay for that: [`session::place_turn`], which is
+//! the fold's own rule about never sending a `tool_use` nothing answers and is
+//! shared rather than copied, and [`Agent::compact`], which applies the old
+//! collapse to the oldest goals once a request passes
+//! [`Budgets::max_context`]. The old behaviour is the fallback now, not the
+//! policy.
 //!
 //! **A tool failure is a `tool_result`, never an abort.** Every failure class —
 //! unknown tool, bad arguments, `ToolError`, hook denial, refused approval —
@@ -38,7 +49,11 @@
 //! is added from every model call and recorded before the budget is tested, so
 //! a run that dies on the token cap is recorded having spent the tokens it
 //! spent. In tustle-agent the counter only reached the log on a completed turn,
-//! which made aborting the cheapest way to spend money.
+//! which made aborting the cheapest way to spend money. What is *summed* is
+//! [`cost_tokens`] rather than the provider's raw total, because a cached read
+//! costs a tenth of what it weighs and a budget that counted it at full weight
+//! would fire on the length of the conversation rather than on the bill — see
+//! [`Budgets::max_tokens`], which is where that argument is written out.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -81,9 +96,22 @@ pub struct Budgets {
     /// more than this many. The asymmetry with `max_tokens` below is real and
     /// is why the two are worded differently to the user.
     pub max_iterations: u32,
-    /// Billable tokens across the whole goal — see `Usage::billable_total_tokens`,
-    /// never the bare `input_tokens`, which reports only the uncached remainder
-    /// and under-counts a cached turn by up to ~10x.
+    /// What the goal is allowed to spend, in tokens weighted by what they cost
+    /// — see [`cost_tokens`], never the bare `input_tokens`, which reports only
+    /// the uncached remainder and under-counts a cached turn by up to ~10×.
+    ///
+    /// **Weighted, and it has to be now.** `Usage::billable_total_tokens` counts
+    /// a cache read at full weight and a cache read is billed at 0.1×. That was
+    /// harmless while a finished goal shrank to two lines of prose. It is not
+    /// harmless now: a session carries its whole conversation, so at a 100,000
+    /// token context every call charges ~100,000 against this cap and a 500,000
+    /// default fires five calls into a barely-started goal — while the actual
+    /// bill for those five calls is a few cents. A cap that fires on *how long
+    /// the conversation is* rather than on spend is not what somebody typing
+    /// `--max-tokens` is asking for, and it is the same failure this type has
+    /// already had once: a limit expressed in the units of one policy, kept
+    /// after the policy changed. The provider's own numbers are still logged
+    /// raw; only the arithmetic that enforces this is weighted.
     ///
     /// **A tripwire, not a ceiling.** It is tested *after* each call, so the
     /// call that crosses it is paid for in full: a 500,000 budget stopped a
@@ -102,6 +130,24 @@ pub struct Budgets {
     pub max_tokens: i64,
     pub wall_clock: Duration,
     pub max_kicks: u32,
+    /// How large one request's input may get before the conversation behind it
+    /// is compacted — see [`Agent::compact`].
+    ///
+    /// **Not a per-goal budget; the only bound here that is about the session.**
+    /// The other three reset when a goal does, which is right for spend and
+    /// wrong for size: the conversation is what carries a follow-up question its
+    /// answer, and it does not restart at the prompt. Measured against the
+    /// provider's reported input for the last call, so it counts the system
+    /// prompt and the tool schemas as well as the conversation — the thing it is
+    /// protecting is the request, not one list inside it.
+    ///
+    /// It is also what keeps [`Budgets::max_tokens`] reachable in a long
+    /// session: input per call is bounded by this, so the number of calls a
+    /// goal gets is bounded below by roughly `max_tokens / max_context`
+    /// — four at the defaults, and in practice far more, because most calls sit
+    /// nowhere near the cap. Raising this without raising `max_tokens` buys
+    /// context by spending calls.
+    pub max_context: i64,
 }
 
 impl Default for Budgets {
@@ -111,6 +157,7 @@ impl Default for Budgets {
             max_tokens: 500_000,
             wall_clock: Duration::from_secs(30 * 60),
             max_kicks: 3,
+            max_context: 120_000,
         }
     }
 }
@@ -192,8 +239,9 @@ impl Ending {
             // run that prompted the rewording — and a sentence that implies
             // otherwise contradicts the number printed next to it.
             Self::Tokens => format!(
-                "stopped: went past the {} token budget, which is checked after each call — so \
-                 the call that crossed it is included in the total below.",
+                "stopped: went past the {} token budget, which counts cached input at what it \
+                 costs rather than at its size, and is checked after each call — so the call \
+                 that crossed it is included in the total below.",
                 b.max_tokens
             ),
             Self::Deadline => format!("stopped: hit the {}s time limit.", b.wall_clock.as_secs()),
@@ -206,8 +254,11 @@ impl Ending {
 #[derive(Debug, Clone)]
 pub struct Outcome {
     pub ending: Ending,
-    /// The last thing the assistant said.
+    /// The last thing the assistant said. Verbatim, marker and all — the screen
+    /// is where that is taken out, by `Term`, and this is the record.
     pub text: String,
+    /// What the goal spent, weighted by price — see [`cost_tokens`]. Not the
+    /// provider's token count, which is in the transcript.
     pub tokens: i64,
     pub iterations: u32,
     pub kicks: u32,
@@ -348,13 +399,38 @@ pub struct Setup<'a> {
 
 pub struct Agent<'a> {
     s: Setup<'a>,
-    /// Completed goals, collapsed to the goal and the answer.
+    /// The session's one conversation, a chapter per goal, tool traffic and all.
     ///
-    /// Not the tool traffic. A `tool_use` block in history with no matching
-    /// result is rejected by the API, and carrying the pairs would put a whole
-    /// previous goal's file contents ahead of this one's query — after the
-    /// cached prefix, where every byte is paid for at full price on every call.
-    history: Vec<Message>,
+    /// **This used to be completed goals collapsed to a goal and an answer**,
+    /// with a comment defending the saving: a `tool_use` in history with no
+    /// matching result is rejected by the API, and carrying the pairs puts a
+    /// previous goal's file contents ahead of this one's query where every byte
+    /// is paid for again. Both halves of that are true and the conclusion was
+    /// still wrong, because it priced one turn and not the next one.
+    ///
+    /// *"read src/auth.rs and tell me what it does"* read the file and answered.
+    /// *"why does it do that?"* then opened on two lines of prose — the file was
+    /// gone, so it read the file again. Every follow-up re-did the work of the
+    /// turn before it, which is a larger bill than the one being avoided and a
+    /// worse conversation: a person asking a second question about the same file
+    /// is the ordinary case, not the exception.
+    ///
+    /// So the traffic stays, and the two real costs are paid for properly rather
+    /// than by amnesia. The unmatched-`tool_use` hazard is handled by
+    /// [`session::place_turn`], which is the fold's own rule and is now shared
+    /// with the loop. Unbounded growth is handled by [`Agent::compact`], which
+    /// applies exactly the old collapse — the goal and the answer, without the
+    /// traffic — but only to the oldest goals and only once the context cap
+    /// says it must. The old behaviour is now the fallback rather than the
+    /// policy.
+    chapters: Vec<Chapter>,
+    /// How the last goal ended, until the next one opens. See
+    /// [`Agent::close_previous_goal`].
+    last_ending: Option<&'static str>,
+    /// The provider's reported input size for the most recent call, which is
+    /// what [`Budgets::max_context`] is tested against. `None` before the first
+    /// call of the process, where an estimate stands in.
+    last_input: Option<i64>,
     turn_seq: u64,
     /// Consumed by the first `run_goal` and never again: what it carries is one
     /// interrupted goal's conversation and one interrupted goal's spend, and a
@@ -367,7 +443,9 @@ impl<'a> Agent<'a> {
     pub fn new(s: Setup<'a>) -> Self {
         Self {
             s,
-            history: Vec::new(),
+            chapters: Vec::new(),
+            last_ending: None,
+            last_input: None,
             turn_seq: 0,
             resumed: None,
         }
@@ -385,12 +463,26 @@ impl<'a> Agent<'a> {
         self
     }
 
-    pub fn history(&self) -> &[Message] {
-        &self.history
+    /// The whole session as one message list — every goal, in order, with the
+    /// tool traffic that has not been compacted away.
+    ///
+    /// This is what a request carries as `Request::history`, and it is what a
+    /// fold of the session file must equal.
+    pub fn conversation(&self) -> Vec<Message> {
+        self.chapters
+            .iter()
+            .flat_map(|c| c.messages.iter().cloned())
+            .collect()
     }
 
     pub async fn run_goal(&mut self, goal: &Goal) -> Outcome {
         let started = Instant::now();
+        // The previous goal, if it stopped mid-turn, needs a word saying so
+        // before this goal's opening follows it. Done here rather than at that
+        // goal's end because the fold does it here too — see
+        // `Fold::close_goal`, and the two lists have to agree at every point in
+        // the record stream rather than only at the end of it.
+        self.close_previous_goal();
         // Composed before it is logged, because the record carries the opening
         // message verbatim as well as the goal text. `opening` is built from the
         // `DoneCheck` in force, and the log names that check but does not hold
@@ -420,16 +512,31 @@ impl<'a> Agent<'a> {
             }),
         );
         self.s.term.goal_started(&goal.text);
+        // Before the first request rather than after it, so a goal never opens
+        // already over the cap — which is the state a resume into a long
+        // session, or a goal typed after a very long one, would otherwise start
+        // in. There is no measurement to use yet at this point, so the estimate
+        // stands in; see `Agent::compact`.
+        self.compact_if_needed(None, "a new goal opened over the context limit");
+        self.warn_if_the_budget_is_nearly_spent_on_arrival();
 
         let tool_defs = self.s.tools.wire_definitions();
         // The restored conversation, with this goal's opening on the end. All
-        // of it goes in `query` and none of it in `history`: the split point is
-        // not recorded in the file — `history` is what the loop had collapsed,
-        // `query` is the goal in flight, and the fold returns one flat list —
-        // and guessing it wrong is a message list the API refuses. The cost is
-        // cache: `history` carries a breakpoint that would be byte-stable for
-        // the rest of the session, and a restored prefix sitting in `query`
-        // does not get it. That is a bill, and a wrong split is an outage.
+        // of it goes in `query` and none of it in the chapters: the split point
+        // is not recorded in the file — the chapters are the goals that have
+        // finished, `query` is the goal in flight, and the fold returns one flat
+        // list — and guessing it wrong is a message list the API refuses. The
+        // cost is cache: the chapters carry a breakpoint that would be
+        // byte-stable for the rest of the session, and a restored prefix sitting
+        // in `query` does not get it. That is a bill, and a wrong split is an
+        // outage.
+        //
+        // The second cost is compaction: a restored block is one chapter's worth
+        // of `query` however many goals went into it, so it is compacted as a
+        // unit at the end of this goal — a resume that comes back over
+        // `max_context` therefore runs this one goal at that size, and only this
+        // one. That is the same flattening resume already does, showing up once
+        // more.
         let resuming_a_goal_in_flight = !resumed.messages.is_empty();
         let mut query: Vec<Message> = open_query(resumed.messages, opening);
         let mut tokens = resumed.tokens;
@@ -472,6 +579,9 @@ impl<'a> Agent<'a> {
         let mut failed_ever: Vec<String> = resumed.failed_ever;
         trim_oldest(&mut failed_ever);
         let mut last_text = String::new();
+        // The assistant turn that has been received and not yet placed. See
+        // where it is set for why it is held.
+        let mut pending_turn: Option<Value> = None;
 
         let ending = loop {
             if self.s.interrupt.tripped() {
@@ -483,6 +593,12 @@ impl<'a> Agent<'a> {
             if iterations >= self.s.budgets.max_iterations {
                 break Ending::Iterations;
             }
+            // Between the budget tests and the request, so the request that
+            // goes out is the compacted one. `last_input` is what the provider
+            // said the previous request weighed; on the first call of a goal it
+            // is whatever the previous goal ended at, which is the right number
+            // — the conversation has not shrunk since.
+            self.compact_if_needed(self.last_input, "the request passed the context limit");
 
             self.turn_seq += 1;
             let turn_id = format!("turn-{}", self.turn_seq);
@@ -499,7 +615,7 @@ impl<'a> Agent<'a> {
                     goal::standing_contract(self.s.done)
                 ),
                 tools: tool_defs.clone(),
-                history: self.history.clone(),
+                history: self.conversation(),
                 query: query.clone(),
                 max_tokens: 32_000,
                 effort: emma_llm::Effort::XHigh,
@@ -514,8 +630,11 @@ impl<'a> Agent<'a> {
             iterations += 1;
 
             // Recorded before the budget is tested, so an abort costs what it
-            // spent rather than nothing.
-            tokens += turn.usage.billable_total_tokens();
+            // spent rather than nothing. The four provider fields go in raw and
+            // `billable_total_tokens` beside them, because the log records what
+            // the provider said; `cost_tokens` is the same call weighted by
+            // price, and it is the only one the cap is tested against.
+            tokens += cost_tokens(&turn.usage);
             self.s.log.append(
                 "model_call",
                 json!({
@@ -527,9 +646,14 @@ impl<'a> Agent<'a> {
                     "cache_creation_input_tokens": turn.usage.cache_creation_input_tokens,
                     "cache_read_input_tokens": turn.usage.cache_read_input_tokens,
                     "billable_total_tokens": turn.usage.billable_total_tokens(),
+                    "cost_tokens": cost_tokens(&turn.usage),
                     "goal_total_so_far": tokens,
                 }),
             );
+            // What the next request will carry, measured rather than guessed —
+            // and it is the whole request, so it includes the system prompt and
+            // the tool schemas as well as the conversation.
+            self.last_input = Some(turn.usage.billable_input_tokens());
             // One record per turn, whatever the turn contained — a turn that is
             // nothing but tool calls has empty text and used to be written
             // nowhere, which left the fold with a hole exactly where the tool
@@ -539,11 +663,12 @@ impl<'a> Agent<'a> {
             // resume can use: rebuilding a turn from `text` invalidates
             // thinking-block signatures, so a fold that had to do that would
             // produce a message list the API rejects. `text` stays beside it
-            // even though every byte of it is also inside the array, for two
-            // reasons — the file is an audit trail somebody reads with `grep`,
-            // where one plain line beats a JSON array of escaped blocks, and
-            // the fold itself reads `text` to collapse a finished goal into the
-            // one-line answer `history` carries between goals.
+            // even though every byte of it is also inside the array, because the
+            // file is an audit trail somebody reads with `grep`, where one plain
+            // line beats a JSON array of escaped blocks. The fold no longer
+            // reads it at all — it used to, to rebuild the one-line collapse of
+            // a finished goal, which is the duplicated rule that went away when
+            // the conversation stopped being collapsed.
             if !turn.text.trim().is_empty() {
                 last_text = turn.text.clone();
             }
@@ -555,6 +680,13 @@ impl<'a> Agent<'a> {
                     "raw_content": turn.raw_content,
                 }),
             );
+            // Held rather than pushed. Where it goes depends on what happens
+            // next: beside its tool results, beside a kick, or — for every
+            // ending that stops on a turn the model just produced — on the end
+            // of the conversation once the loop is out. A turn whose tools were
+            // never run cannot go anywhere, and `place_turn` is what decides
+            // that rather than four branches each deciding it again.
+            pending_turn = Some(turn.raw_content.clone());
             if tokens > self.s.budgets.max_tokens {
                 break Ending::Tokens;
             }
@@ -606,13 +738,12 @@ impl<'a> Agent<'a> {
                     "not done yet — nudge {kicks}/{}",
                     self.s.budgets.max_kicks
                 ));
-                query.push(Message::assistant(turn.raw_content.clone()));
+                // `raw_content` verbatim. Never rebuilt from `text` +
+                // `tool_calls`.
+                place(&mut query, &mut pending_turn, Vec::new());
                 query.push(Message::user(kick_text));
                 continue;
             }
-
-            // `raw_content` verbatim. Never rebuilt from `text` + `tool_calls`.
-            query.push(Message::assistant(turn.raw_content.clone()));
 
             let mut results = Vec::new();
             for call in &turn.tool_calls {
@@ -637,8 +768,15 @@ impl<'a> Agent<'a> {
                 }
                 results.push(block);
             }
-            query.push(Message::tool_results(results));
+            place(&mut query, &mut pending_turn, results);
         };
+        // The turn the loop stopped on. For `Done`, `Answered`, `Stalled` and
+        // `KicksExhausted` that is the model's final message, and it is the
+        // whole reason a follow-up can be asked at all — the answer has to be
+        // in the conversation, not merely in the outcome. For `Tokens` it is a
+        // turn whose tools were never run, and `place_turn` drops it rather
+        // than leaving a `tool_use` nothing answers.
+        place(&mut query, &mut pending_turn, Vec::new());
 
         let outcome = Outcome {
             ending,
@@ -659,15 +797,176 @@ impl<'a> Agent<'a> {
             }),
         );
 
-        // The goal joins the history whatever the ending: a run that hit its
-        // token budget still happened, and the next goal in the session must
-        // not be told a story in which it did not.
-        self.history.push(Message::user(goal.text.clone()));
-        if !outcome.text.trim().is_empty() {
-            self.history
-                .push(Message::assistant(Value::String(outcome.text.clone())));
-        }
+        // The goal joins the conversation whatever the ending: a run that hit
+        // its token budget still happened, and the next goal in the session
+        // must not be told a story in which it did not. What joins it is the
+        // goal's own message list — the opening, the turns, the tool results —
+        // rather than a summary of it. The summary is what compaction makes
+        // later, out of exactly these two fields, and only if it has to.
+        self.last_ending = Some(outcome.ending.as_str());
+        self.chapters.push(Chapter {
+            goal: goal.text.clone(),
+            answer: outcome.text.clone(),
+            messages: query,
+            summarised: false,
+        });
         outcome
+    }
+
+    /// Say that the previous goal stopped short, if it did.
+    ///
+    /// A goal killed by a budget or by Ctrl-C leaves a **user** turn last — the
+    /// tool results of a round-trip nobody answered, or a kick — and this
+    /// goal's opening is a user turn too. Two user turns in a row is a 400
+    /// rather than a conversation, so something has to sit between them, and
+    /// the honest something is the fact: the previous goal did not finish. A
+    /// model reading an abandoned goal as a completed one is the other bug this
+    /// prevents, and it is the more expensive of the two.
+    fn close_previous_goal(&mut self) {
+        let Some(ending) = self.last_ending.take() else {
+            return;
+        };
+        let Some(chapter) = self.chapters.last_mut() else {
+            return;
+        };
+        if chapter.messages.last().map(|m| m.role) == Some(Role::User) {
+            chapter
+                .messages
+                .push(Message::assistant(Value::String(ended_note(ending))));
+        }
+    }
+
+    /// A word before the first call of a goal that opens with a lot behind it.
+    ///
+    /// The budget is per goal and the conversation is not, so a goal late in a
+    /// long session starts expensive — and the failure mode worth refusing is
+    /// the silent one, where a cap somebody set is unreachable and the run
+    /// simply stops with a number they cannot connect to anything. Compaction
+    /// bounds the size; this says what the size means in calls.
+    fn warn_if_the_budget_is_nearly_spent_on_arrival(&self) {
+        let carried = estimate(&self.conversation());
+        if carried <= 0 || carried * 4 < self.s.budgets.max_tokens {
+            return;
+        }
+        self.s.term.warn(&format!(
+            "this goal opens with roughly {carried} tokens of conversation behind it, so the \
+             {} token budget is about {} model calls at that size. Raise it with --max-tokens, \
+             lower --max-context, or start a new session.",
+            self.s.budgets.max_tokens,
+            (self.s.budgets.max_tokens / carried.max(1)).max(1)
+        ));
+    }
+
+    /// Shorten the conversation when a request has grown past
+    /// [`Budgets::max_context`].
+    ///
+    /// **The trigger is measured, not estimated.** `measured` is the provider's
+    /// own input count for the last call, which is the only honest number
+    /// available — the estimator below under-counts, and this project has
+    /// already ruled once that an honest tripwire beats a dishonest ceiling.
+    /// The estimate stands in for exactly one case: the first check of a goal
+    /// on a process that has not called the model yet, which is a resume into a
+    /// large session.
+    ///
+    /// **What it replaces, and in what order.** Whole goals, oldest first,
+    /// until what is left fits in half the cap — half rather than all of it
+    /// because the goal now starting needs room to work in. It never touches
+    /// the goal in flight: within one goal the conversation grows exactly as it
+    /// did before this change, bounded by the token budget, and it is the
+    /// growth *across* goals that is new and therefore the growth this bounds.
+    ///
+    /// **What it loses, stated rather than discovered.** Compaction replaces a
+    /// goal with the goal and the answer — the two lines the loop used to keep
+    /// for every goal, immediately, which is why this is a fallback rather than
+    /// a new invention. What goes is the tool traffic: file contents, command
+    /// output, diffs. The model is told so in the replacement text, because a
+    /// model that does not know a file has left its context will answer from a
+    /// memory of it, and a wrong answer delivered confidently is worse than a
+    /// second read. Nothing else is dropped — every goal's words and every
+    /// answer survive for the life of the session.
+    ///
+    /// **It is not summarised by a model, deliberately.** A model call here
+    /// would spend the budget of the goal that happens to be running, can fail
+    /// in the middle of one, and produces a claim about the conversation where
+    /// this produces a record of it. What is written into the session file is
+    /// the replacement itself, so a resume rebuilds the conversation that was
+    /// sent rather than re-deriving one that might differ.
+    fn compact_if_needed(&mut self, measured: Option<i64>, why: &str) {
+        let cap = self.s.budgets.max_context;
+        if cap <= 0 {
+            return;
+        }
+        let size = measured.unwrap_or_else(|| estimate(&self.conversation()));
+        if size <= cap {
+            return;
+        }
+        self.compact(size, why);
+    }
+
+    fn compact(&mut self, size: i64, why: &str) {
+        // Half the cap rather than all of it: the goal now running needs room
+        // to work in, and compacting to exactly the limit would mean compacting
+        // again on the next call.
+        let target = (self.s.budgets.max_context / 2).max(1);
+        // Measured once per chapter rather than once per step. Re-summing the
+        // whole conversation on every iteration of the loop below is quadratic
+        // in a list whose elements are file contents.
+        let sizes: Vec<i64> = self
+            .chapters
+            .iter()
+            .map(|c| estimate(&c.messages))
+            .collect();
+        let mut remaining: i64 = sizes.iter().sum();
+        let mut take = 0;
+        while take < sizes.len() && remaining > target {
+            remaining -= sizes[take];
+            take += 1;
+        }
+        if take == 0 {
+            return;
+        }
+        let before: i64 = sizes[..take].iter().sum();
+        let replacement: Vec<Message> = self.chapters[..take].iter().flat_map(summarise).collect();
+        let after = estimate(&replacement);
+        // A conversation that is already nothing but summaries has nothing left
+        // to give. Stopping here rather than rewriting it into itself is what
+        // keeps a session under a cap it cannot reach from logging a record and
+        // reporting a saving on every single call.
+        if after >= before {
+            return;
+        }
+        let dropped: usize = self.chapters[..take].iter().map(|c| c.messages.len()).sum();
+        self.chapters.drain(..take);
+        self.chapters.insert(
+            0,
+            Chapter {
+                goal: String::new(),
+                answer: String::new(),
+                messages: replacement.clone(),
+                summarised: true,
+            },
+        );
+        // Both halves, because the fold replays this rather than re-deciding
+        // it: how many messages off the front went, and exactly what took their
+        // place. It is also the one record a human reads to find out what the
+        // model stopped being able to see.
+        self.s.log.append(
+            "compacted",
+            json!({
+                "why": why,
+                "goals": take,
+                "drop_messages": dropped,
+                "messages": replacement,
+                "request_tokens": size,
+                "max_context": self.s.budgets.max_context,
+                "estimated_before": before,
+                "estimated_after": after,
+            }),
+        );
+        self.s.term.note(&format!(
+            "compacted {dropped} earlier messages from {take} finished goal(s) — roughly {before} \
+             tokens down to {after}. Their tool results are no longer in context.",
+        ));
     }
 
     /// One model call, with streaming and Ctrl-C. `Ok(None)` is an interrupt.
@@ -970,6 +1269,108 @@ impl<'a> Agent<'a> {
 // shape a failure takes on the wire, and two ways of shortening an argument
 // so it fits somewhere it has to fit.
 // ---------------------------------------------------------------------------
+
+/// One goal's place in the session's single conversation.
+///
+/// A chapter rather than a flat list because compaction works in whole goals:
+/// cutting anywhere else risks separating a `tool_use` from the result that
+/// answers it, and a boundary that is "wherever the arithmetic landed" is a
+/// boundary somebody has to re-derive every time they read the code. `goal` and
+/// `answer` are kept beside the messages because they are what a summary is
+/// made of, and deriving them back out of the message list afterwards would be
+/// guesswork.
+struct Chapter {
+    goal: String,
+    answer: String,
+    messages: Vec<Message>,
+    /// Already a summary. Summarising it again would produce the same two
+    /// messages and a second log record saying nothing happened.
+    summarised: bool,
+}
+
+/// What a compacted goal leaves behind: the goal, the answer, and a sentence
+/// saying what is no longer there.
+///
+/// Exactly the collapse `run_goal` used to apply to every goal the moment it
+/// finished — see [`Agent::chapters`]. The note is the part that is new, and it
+/// is the difference between a model that reads a file again and one that
+/// answers from a recollection of it.
+fn summarise(c: &Chapter) -> Vec<Message> {
+    if c.summarised {
+        return c.messages.clone();
+    }
+    let goal = if c.goal.trim().is_empty() {
+        "[an earlier goal]"
+    } else {
+        c.goal.trim()
+    };
+    let answer = if c.answer.trim().is_empty() {
+        "[this goal ended without a final message]"
+    } else {
+        c.answer.trim()
+    };
+    vec![
+        Message::user(goal),
+        Message::assistant(Value::String(format!("{answer}\n\n{COMPACTED_NOTE}"))),
+    ]
+}
+
+/// Said to the model, in the place the traffic used to be.
+const COMPACTED_NOTE: &str = "[Summarised to save context. The tool calls from this goal and \
+     their results — file contents, command output, diffs — are no longer in this conversation. \
+     Read anything you need again rather than recalling it.]";
+
+/// Said to the model when the goal before this one did not finish.
+///
+/// Shared with `session::Fold::close_goal`, which composes the same sentence
+/// from the `ending` recorded in the file: two spellings of it would be a
+/// resumed conversation that differs from the one that was sent by one message,
+/// which is the kind of difference nothing notices until a cache miss or a 400.
+pub(crate) fn ended_note(ending: &str) -> String {
+    format!("[The previous goal stopped before it was finished: {ending}.]")
+}
+
+/// Roughly how many tokens a message list is worth.
+///
+/// `chars / 4`, the same conservative ratio `emma-llm`'s packer uses to decide
+/// whether a prefix is worth a cache breakpoint, and documented there as
+/// under-counting what the provider bills. It is used here for two things that
+/// tolerate it — deciding *how much* to drop once a measured number has already
+/// said dropping is necessary, and standing in for that measurement on the one
+/// call of a process that has none. It is never what fires a budget.
+fn estimate(messages: &[Message]) -> i64 {
+    let chars: usize = messages.iter().map(|m| m.content.to_string().len()).sum();
+    (chars / 4) as i64
+}
+
+/// Tokens weighted by what they cost, which is what a budget should count.
+///
+/// The multipliers are the provider's: a cache read is billed at 0.1× and a
+/// cache write at 1.25×, and `Usage::billable_total_tokens` deliberately counts
+/// neither — it answers "how much context did this call carry", which is a
+/// different question and the right one for the field it is on. Emma asks both:
+/// the size question decides compaction, and this one decides the budget. See
+/// [`Budgets::max_tokens`] for what went wrong when one number answered both.
+///
+/// Integer arithmetic, so a cache read under ten tokens weighs nothing. At the
+/// scale a budget is set in, that is not a rounding error worth a float.
+fn cost_tokens(u: &emma_llm::Usage) -> i64 {
+    u.input_tokens
+        + (u.cache_creation_input_tokens * 5) / 4
+        + u.cache_read_input_tokens / 10
+        + u.output_tokens
+}
+
+/// [`session::place_turn`] against a held turn, taking it only if it was placed.
+///
+/// A turn that could not be placed is dropped, and dropping it here rather than
+/// leaving it held is what stops it being offered again at the end of the loop.
+fn place(query: &mut Vec<Message>, pending: &mut Option<Value>, results: Vec<Value>) -> bool {
+    match pending.take() {
+        Some(raw) => crate::session::place_turn(query, raw, results),
+        None => false,
+    }
+}
 
 /// What makes two calls "the same call". Name plus arguments, canonically
 /// rendered — so `Bash(ls)` and `Bash(ls)` collide and `Bash(ls a)` does not.

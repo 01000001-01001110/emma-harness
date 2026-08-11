@@ -93,6 +93,15 @@ pub struct Term {
     /// path, which is why `printing()` and `silent()` need no special handling
     /// beyond never constructing one.
     frame: Option<Frame>,
+    /// The completion marker, on its way off the screen.
+    ///
+    /// Here rather than in the loop because this is a display decision and the
+    /// loop's copy of the text is the one done-detection reads: filtering
+    /// upstream of here would mean the thing deciding whether a goal is finished
+    /// and the thing showing the answer disagreed about what the model said.
+    /// It is `Mutex` because every write method takes `&self` — the same reason
+    /// [`Frame`] holds one — and it is state because text arrives in fragments.
+    marker: Mutex<crate::goal::MarkerFilter>,
 }
 
 impl Term {
@@ -104,6 +113,7 @@ impl Term {
             // The only constructor that may draw. Detection is in
             // `Frame::install`, which refuses far more often than it accepts.
             frame: Frame::install(),
+            marker: Mutex::default(),
         }
     }
 
@@ -113,6 +123,7 @@ impl Term {
             quiet: true,
             enabled: true,
             frame: None,
+            marker: Mutex::default(),
         }
     }
 
@@ -124,6 +135,7 @@ impl Term {
             quiet: true,
             enabled: false,
             frame: None,
+            marker: Mutex::default(),
         }
     }
 
@@ -173,22 +185,32 @@ impl Term {
 
     /// Assistant text, as it arrives. No newline, flushed every time — a
     /// buffered stream is a blank terminal with the words already in it.
+    ///
+    /// The completion marker is taken out on the way through. See
+    /// [`crate::goal::MarkerFilter`] for why that happens here, character by
+    /// character, rather than on the finished text.
     pub fn delta(&self, text: &str) {
         if !self.enabled {
             return;
         }
-        if let Some(frame) = &self.frame {
-            frame.write(text);
+        let shown = self.filtered(|f| f.push(text));
+        if shown.is_empty() {
             return;
         }
-        let mut out = std::io::stdout();
-        let _ = out.write_all(text.as_bytes());
-        let _ = out.flush();
+        self.write_out(&shown);
     }
 
     pub fn end_of_text(&self) {
         if !self.enabled {
             return;
+        }
+        // Whatever the filter is still holding, which for a turn ending on the
+        // marker with no trailing newline is the marker itself — the ordinary
+        // case, and the one that would otherwise reach the screen at the very
+        // moment the user is reading the answer.
+        let held = self.filtered(|f| f.finish());
+        if !held.is_empty() {
+            self.write_out(&held);
         }
         if let Some(frame) = &self.frame {
             frame.write("\n");
@@ -199,6 +221,7 @@ impl Term {
 
     /// Whole assistant text at once, for `-p` where nothing streamed.
     pub fn text(&self, text: &str) {
+        let text = crate::goal::MarkerFilter::once(text);
         if self.enabled && !text.trim().is_empty() {
             if let Some(frame) = &self.frame {
                 frame.write(&format!("{}\n", text.trim_end()));
@@ -206,6 +229,24 @@ impl Term {
                 println!("{}", text.trim_end());
             }
         }
+    }
+
+    /// The marker filter, which is stateful and behind `&self`. A poisoned lock
+    /// means a panic mid-write; carrying on with the inner value shows the user
+    /// their text rather than adding a second panic to the first.
+    fn filtered(&self, f: impl FnOnce(&mut crate::goal::MarkerFilter) -> String) -> String {
+        f(&mut self.marker.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Assistant prose, straight through, wherever it goes.
+    fn write_out(&self, text: &str) {
+        if let Some(frame) = &self.frame {
+            frame.write(text);
+            return;
+        }
+        let mut out = std::io::stdout();
+        let _ = out.write_all(text.as_bytes());
+        let _ = out.flush();
     }
 
     pub fn note(&self, text: &str) {

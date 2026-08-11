@@ -34,6 +34,10 @@ fn budgets() -> Budgets {
         max_tokens: 1_000_000,
         wall_clock: Duration::from_secs(60),
         max_kicks: 3,
+        // Effectively off: the tests that are about compaction set it, and a
+        // test that is not must not have its conversation rewritten underneath
+        // the thing it is asserting on.
+        max_context: 1_000_000,
     }
 }
 

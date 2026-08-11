@@ -209,23 +209,35 @@ pub struct TestTool {
     /// destination, which is the only shape the gate will grant.
     host: Option<&'static str>,
     fails: bool,
+    /// What a successful call returns. `None` is `"<name> ran"`, which is
+    /// enough for a test that only counts calls; a test asserting that a
+    /// *result* survived into a later turn needs a body it can search for.
+    body: Option<String>,
     calls: Arc<AtomicUsize>,
 }
 
 impl TestTool {
     pub fn ok(name: &'static str, read_only: bool) -> (Arc<dyn Tool>, Arc<AtomicUsize>) {
-        Self::build(name, read_only, None, false)
+        Self::build(name, read_only, None, false, None)
     }
 
     pub fn failing(name: &'static str, read_only: bool) -> (Arc<dyn Tool>, Arc<AtomicUsize>) {
-        Self::build(name, read_only, None, true)
+        Self::build(name, read_only, None, true, None)
+    }
+
+    /// A read-only tool whose output is a string the test can look for later.
+    pub fn returning(
+        name: &'static str,
+        body: impl Into<String>,
+    ) -> (Arc<dyn Tool>, Arc<AtomicUsize>) {
+        Self::build(name, true, None, false, Some(body.into()))
     }
 
     /// A tool that changes nothing locally and reaches one host — the shape
     /// `WebFetch` and `WebSearch` have, and the shape that would run silently
     /// if the gate asked only about writing.
     pub fn reaching(name: &'static str, host: &'static str) -> (Arc<dyn Tool>, Arc<AtomicUsize>) {
-        Self::build(name, true, Some(host), false)
+        Self::build(name, true, Some(host), false, None)
     }
 
     fn build(
@@ -233,6 +245,7 @@ impl TestTool {
         read_only: bool,
         host: Option<&'static str>,
         fails: bool,
+        body: Option<String>,
     ) -> (Arc<dyn Tool>, Arc<AtomicUsize>) {
         let calls = Arc::new(AtomicUsize::new(0));
         (
@@ -241,6 +254,7 @@ impl TestTool {
                 read_only,
                 host,
                 fails,
+                body,
                 calls: calls.clone(),
             }),
             calls,
@@ -284,7 +298,10 @@ impl Tool for TestTool {
         Ok(if self.fails {
             Err(ToolError::Failed(format!("{} broke on purpose", self.name)))
         } else {
-            Ok(ToolOutcome::new(format!("{} ran", self.name)))
+            Ok(ToolOutcome::new(match &self.body {
+                Some(body) => body.clone(),
+                None => format!("{} ran", self.name),
+            }))
         })
     }
 }

@@ -30,6 +30,10 @@ fn budgets() -> Budgets {
         max_tokens: 1_000_000,
         wall_clock: Duration::from_secs(60),
         max_kicks: 3,
+        // Effectively off: the tests that are about compaction set it, and a
+        // test that is not must not have its conversation rewritten underneath
+        // the thing it is asserting on.
+        max_context: 1_000_000,
     }
 }
 
@@ -46,7 +50,7 @@ async fn drive(
     goal: &Goal,
     log: &SessionLog,
 ) -> Outcome {
-    let mut out = drive_goals(
+    let (mut out, _) = drive_goals(
         root,
         cwd,
         tools,
@@ -61,7 +65,8 @@ async fn drive(
 }
 
 /// The same thing for more than one goal on one `Agent`, which is the only way
-/// to exercise the history it carries between them.
+/// to exercise the conversation it carries between them. Returns the outcomes
+/// and the conversation the agent is left holding.
 #[allow(clippy::too_many_arguments)]
 async fn drive_goals(
     root: &Path,
@@ -72,7 +77,7 @@ async fn drive_goals(
     budgets: Budgets,
     goals: &[Goal],
     log: &SessionLog,
-) -> Vec<Outcome> {
+) -> (Vec<Outcome>, Vec<emma_llm::Message>) {
     // `load_selecting` rather than `load`: the latter reads `EMMA_PERSONA` from
     // the process environment, and a test whose result depends on the
     // developer's shell is a test that passes for the wrong reason.
@@ -97,7 +102,7 @@ async fn drive_goals(
     for goal in goals {
         out.push(agent.run_goal(goal).await);
     }
-    out
+    (out, agent.conversation())
 }
 
 fn goal() -> Goal {
@@ -867,16 +872,23 @@ async fn the_assistant_turn_is_echoed_back_exactly_as_it_arrived() {
     assert!(last.contains("marker-value"), "{last}");
 }
 
-/// The claim the session format makes: what was sent can be read back out of
-/// the file. Byte equality against the messages the provider actually received,
-/// because the thing resume needs is not "roughly this conversation" — a
-/// reassembled thinking block is rejected, so anything short of the same values
-/// is a run that dies on its first call.
+/// The claim the session format makes: what was held can be read back out of
+/// the file. Byte equality, because the thing resume needs is not "roughly this
+/// conversation" — a reassembled thinking block is rejected, so anything short
+/// of the same values is a run that dies on its first call.
+///
+/// **Two comparisons, and they are different claims.** The fold equals the
+/// conversation the agent is left holding, which is what a resume continues;
+/// and every message the last request carried is still the first N of it
+/// unchanged, which is the byte-for-byte property the `raw_content` design
+/// exists for. The two differ by exactly one message — the final answer, which
+/// the loop places into the conversation *after* the call that produced it, and
+/// which is the whole reason a follow-up question can be asked.
 ///
 /// The script covers every shape the query can take: a successful call, a
 /// failure block, a kick, and a second round of tool use.
 #[tokio::test]
-async fn the_log_folds_back_to_the_messages_that_were_sent() {
+async fn the_log_folds_back_to_the_conversation_that_was_held() {
     let dir = tempfile::tempdir().unwrap();
     let root = empty_harness(dir.path());
     let (fine, _) = TestTool::ok("Fine", true);
@@ -890,31 +902,34 @@ async fn the_log_folds_back_to_the_messages_that_were_sent() {
     ]);
     let log = SessionLog::open(dir.path(), "roundtrip").unwrap();
 
-    let out = drive(
+    let (out, conversation) = drive_goals(
         &root,
         dir.path(),
         registry(vec![fine, boom]),
         &Approvals::unattended(),
         &fake,
         budgets(),
-        &goal(),
+        std::slice::from_ref(&goal()),
         &log,
     )
     .await;
 
-    assert_eq!(out.ending, Ending::Done);
-    assert_eq!(out.kicks, 1);
+    assert_eq!(out[0].ending, Ending::Done);
+    assert_eq!(out[0].kicks, 1);
     let folded = emma::session::fold(log.path()).unwrap();
     // Stated as a number as well as compared, so a fold that returned nothing
     // against a provider that was sent nothing could not pass.
-    assert_eq!(folded.len(), 9, "{folded:#?}");
-    assert_eq!(folded, fake.last_messages());
+    assert_eq!(folded.len(), 10, "{folded:#?}");
+    assert_eq!(folded, conversation);
+    let sent = fake.last_messages();
+    assert_eq!(sent.len(), folded.len() - 1, "{sent:#?}");
+    assert_eq!(folded[..sent.len()], sent[..]);
 }
 
-/// A session is more than one goal, and the loop collapses a finished one to
-/// the goal and the answer before the next one starts. A fold that rebuilt only
-/// the current goal would hand back a shorter list than was sent every time
-/// somebody typed a second goal at the prompt.
+/// A session is more than one goal, and the conversation runs straight through
+/// them. A fold that rebuilt only the current goal — or that collapsed a
+/// finished one the way the loop used to — would hand back a different list
+/// from the one that was sent, every time somebody typed a second goal.
 #[tokio::test]
 async fn the_fold_carries_a_finished_goal_forward_the_way_the_loop_does() {
     let dir = tempfile::tempdir().unwrap();
@@ -927,7 +942,7 @@ async fn the_fold_carries_a_finished_goal_forward_the_way_the_loop_does() {
     ]);
     let log = SessionLog::open(dir.path(), "two-goals").unwrap();
 
-    let out = drive_goals(
+    let (out, conversation) = drive_goals(
         &root,
         dir.path(),
         registry(vec![fine]),
@@ -942,8 +957,17 @@ async fn the_fold_carries_a_finished_goal_forward_the_way_the_loop_does() {
     assert_eq!(out[0].ending, Ending::Done);
     assert_eq!(out[1].ending, Ending::Done);
     let folded = emma::session::fold(log.path()).unwrap();
-    assert_eq!(folded.len(), 5, "{folded:#?}");
-    assert_eq!(folded, fake.last_messages());
+    // The first goal in full — opening and answer — then the second goal's
+    // opening, its tool round-trip, and its answer.
+    assert_eq!(folded.len(), 6, "{folded:#?}");
+    assert_eq!(folded, conversation);
+    // The tool traffic of goal two is in there, which is the thing the old
+    // collapse threw away before goal three could ever see it.
+    assert!(folded
+        .iter()
+        .any(|m| m.content.to_string().contains("tool_result")));
+    let sent = fake.last_messages();
+    assert_eq!(folded[..sent.len()], sent[..]);
 }
 
 // endregion: The record

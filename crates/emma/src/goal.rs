@@ -211,9 +211,124 @@ impl DoneCheck for MarkerClaim {
 pub fn claims_done(text: &str) -> bool {
     text.lines().any(|line| {
         line.trim()
-            .trim_matches(|c: char| c == '*' || c == '`' || c == '#' || c == '_' || c == ' ')
+            .trim_matches(is_decoration)
             .eq_ignore_ascii_case(MARKER)
     })
+}
+
+/// The characters a model decorates a line with, which a claim survives.
+fn is_decoration(c: char) -> bool {
+    matches!(c, '*' | '`' | '#' | '_' | ' ')
+}
+
+/// Takes the completion marker out of what the user reads, without taking it
+/// out of what the loop reads.
+///
+/// **Why this exists.** [`MARKER`] is a ritual between the loop and the model,
+/// and it is printed into prose a person is reading. Claude Code has no
+/// completion ritual — it stops when it stops — and a session that ends every
+/// answer with two shouted words reads as a machine reporting to another
+/// machine, which is exactly what it is. Emma's kick needs the signal and the
+/// user does not need to see it, and those are separable: `verdict` still reads
+/// the model's real text, unchanged, and this is applied on the way to the
+/// screen only. **Done-detection is not touched here** — deciding whether a
+/// marker is the right shape of signal at all is a larger question than a
+/// display fix.
+///
+/// **Why it is not simply a `replace` on the finished text.** Text streams. By
+/// the time the whole turn is in hand it is already on the screen, so the
+/// filter has to work on fragments arriving a few characters at a time.
+///
+/// **Why it does not simply buffer each line.** That would hold every line of
+/// prose until its newline, turning a streamed paragraph into something that
+/// appears a line at a time — a visible cost paid on every line to hide a
+/// string that occurs on one. Instead only a line that could *still turn into*
+/// the marker is held: the moment a character rules that out, everything held
+/// is released and the rest of the line streams with no delay at all. In prose
+/// that is a one- or two-character pause on a line beginning with `g`.
+#[derive(Default)]
+pub struct MarkerFilter {
+    /// The start of the current line, held back because it may yet be a marker.
+    held: String,
+    /// This line has already been ruled out; the rest of it goes straight
+    /// through.
+    passing: bool,
+}
+
+impl MarkerFilter {
+    /// Feed a fragment; get back what should appear on the screen now.
+    pub fn push(&mut self, chunk: &str) -> String {
+        let mut out = String::new();
+        for c in chunk.chars() {
+            if c == '\n' {
+                if self.passing {
+                    out.push('\n');
+                } else if !claims_done(&self.held) {
+                    out.push_str(&self.held);
+                    out.push('\n');
+                }
+                // …and when it *was* the marker, the line and its newline both
+                // go, so nothing is left behind where it was.
+                self.held.clear();
+                self.passing = false;
+                continue;
+            }
+            if self.passing {
+                out.push(c);
+                continue;
+            }
+            self.held.push(c);
+            if !could_become_marker(&self.held) {
+                out.push_str(&self.held);
+                self.held.clear();
+                self.passing = true;
+            }
+        }
+        out
+    }
+
+    /// End of the turn: release whatever is still held, unless it is the
+    /// marker. A model that ends without a trailing newline is the ordinary
+    /// case, so this is where most markers are actually caught.
+    pub fn finish(&mut self) -> String {
+        self.passing = false;
+        let held = std::mem::take(&mut self.held);
+        if claims_done(&held) {
+            String::new()
+        } else {
+            held
+        }
+    }
+
+    /// Everything, filtered, for a caller that has the whole text already.
+    pub fn once(text: &str) -> String {
+        let mut f = Self::default();
+        let mut out = f.push(text);
+        out.push_str(&f.finish());
+        out
+    }
+}
+
+/// Whether a partial line is still on its way to being a claim.
+///
+/// Deliberately generous at both ends, for the same reason [`claims_done`] is:
+/// a model writing `**GOAL COMPLETE**` means the same thing, so the decoration
+/// has to be tolerated *while the line is being held* or the held text is
+/// released one character before the thing it was waiting for.
+fn could_become_marker(line: &str) -> bool {
+    let t = line.trim_start_matches(is_decoration);
+    match t.get(..MARKER.len()) {
+        // Long enough to have said it: it must have, and everything after must
+        // be decoration.
+        Some(head) => {
+            head.eq_ignore_ascii_case(MARKER) && t[MARKER.len()..].chars().all(is_decoration)
+        }
+        // `get` also says `None` for a length that lands inside a character,
+        // which only happens past the marker's own length — so that is a line
+        // that is already longer than the marker and is not it.
+        None if t.len() <= MARKER.len() => MARKER[..t.len()].eq_ignore_ascii_case(t),
+        None => false,
+    }
 }
 
 // endregion: Done-detection
@@ -326,6 +441,76 @@ mod tests {
             MarkerClaim.verdict(&goal, "nearly there").await,
             Done::No(_)
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // The marker, on its way to the screen
+    //
+    // Two things have to be true at once and they pull in opposite directions:
+    // the loop still reads the marker, and the user never sees it. Everything
+    // below is about the second one, and the first is asserted by the tests
+    // above — `claims_done` is untouched and is what `verdict` reads.
+    // -----------------------------------------------------------------------
+
+    /// The whole point, in the shape the model actually produces it: an answer,
+    /// a blank line, the marker, no trailing newline.
+    #[test]
+    fn the_marker_never_reaches_the_screen() {
+        for text in [
+            "Ported the middleware.\n\nGOAL COMPLETE",
+            "Ported the middleware.\n\nGOAL COMPLETE\n",
+            "Ported the middleware.\n\n**GOAL COMPLETE**",
+            "Ported the middleware.\n\n  goal complete  \n",
+        ] {
+            let shown = MarkerFilter::once(text);
+            assert!(
+                !shown.to_lowercase().contains("goal complete"),
+                "the marker was shown: {shown:?}"
+            );
+            assert!(
+                shown.contains("Ported the middleware."),
+                "the answer was eaten with it: {shown:?}"
+            );
+        }
+    }
+
+    /// Streamed a fragment at a time, which is how it actually arrives — and
+    /// the reason the filter is a state machine rather than a `replace`.
+    #[test]
+    fn a_marker_split_across_fragments_is_still_caught() {
+        let mut f = MarkerFilter::default();
+        let mut shown = String::new();
+        // Deliberately cut inside the marker, inside the word before it, and
+        // between the two words of it.
+        for chunk in ["Ported the mid", "dleware.\n\nGO", "AL COMP", "LETE"] {
+            shown.push_str(&f.push(chunk));
+        }
+        shown.push_str(&f.finish());
+        assert_eq!(shown, "Ported the middleware.\n\n");
+    }
+
+    /// The cost of hiding it, bounded: prose is not held back waiting to find
+    /// out. A line that cannot be the marker is released the moment that is
+    /// known, which is on the first character that rules it out.
+    #[test]
+    fn prose_is_not_delayed_by_the_filter() {
+        let mut f = MarkerFilter::default();
+        // Nothing about this line could be the marker after one character.
+        assert_eq!(f.push("Ported"), "Ported");
+        // A line that starts like it is held only until it stops being like it.
+        let mut f = MarkerFilter::default();
+        assert_eq!(f.push("GOAL"), "");
+        assert_eq!(f.push("s are a thing"), "GOALs are a thing");
+    }
+
+    /// A sentence *about* the marker is not a claim — `claims_done` already
+    /// says so — and it must not be censored either, or the model explaining
+    /// its own contract to the user comes out with a hole in it.
+    #[test]
+    fn a_mention_of_the_marker_is_left_alone() {
+        let text = "I will print GOAL COMPLETE once the tests are green.\n";
+        assert_eq!(MarkerFilter::once(text), text);
+        assert!(!claims_done(text));
     }
 
     #[test]

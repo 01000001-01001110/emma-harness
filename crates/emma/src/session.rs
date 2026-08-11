@@ -47,6 +47,18 @@
 //! beside `raw_content`, duplicating bytes on purpose so a human running `grep`
 //! over the file gets one plain line rather than an array of escaped blocks.
 //!
+//! **A finished goal is no longer collapsed here, and that is the point.** The
+//! fold used to keep its own copy of `run_goal`'s two-line collapse — goal text,
+//! last answer — which was one decision written twice: the moment either moved,
+//! `--resume` rebuilt a conversation that was never sent, and nothing but the
+//! round-trip test would have said so. A session is now one continuous
+//! conversation, so a finished goal stays in it whole, and the only thing that
+//! ever shortens it is compaction. Compaction writes a `compacted` record
+//! carrying **both** how many messages off the front it replaced and the exact
+//! messages it replaced them with, so [`fold`] replays it rather than
+//! re-deriving it. There is no summarising code in this file to disagree with
+//! the loop's.
+//!
 //! What [`fold`] does not do is decide what a resumed run should *send*, nor
 //! what it has already spent. Both are [`restore`], further down: the messages
 //! plus the goal's token, iteration and nudge counters and its failed-call
@@ -68,7 +80,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
-use emma_llm::Message;
+use emma_llm::{Message, Role};
 use serde_json::{json, Value};
 
 use crate::agent::{label_of, memo_key_of, Resumed};
@@ -219,17 +231,27 @@ pub fn fold_records(records: &[Value]) -> Vec<Message> {
 
 /// The state a walk over the records needs.
 ///
-/// Two lists because the loop keeps two: `Agent::history` holds finished goals
-/// collapsed to a goal and an answer, and `query` holds the goal in progress in
-/// full. A fold that merged them would return the right conversation in the
-/// wrong shape and would not equal what was sent.
+/// Two lists because the loop keeps two: `history` is the conversation up to
+/// the last finished goal — the part a request sends as `Request::history` —
+/// and `query` is the goal in progress. A fold that merged them would return
+/// the right conversation in the wrong shape and could not apply a compaction
+/// record, which counts messages in the first list only.
+///
+/// **Nothing here collapses a finished goal.** It used to: the loop kept two
+/// lines of prose per goal and the fold kept its own copy of that rule, which
+/// was two implementations of one decision and a `--resume` that reconstructed
+/// a different conversation the moment either moved. A finished goal now stays
+/// in the conversation in full, and the *only* thing that shortens it is
+/// compaction — which writes what it replaced the messages with into the
+/// record, so this reads it rather than re-deriving it.
 #[derive(Default)]
 struct Fold {
     history: Vec<Message>,
     query: Vec<Message>,
-    goal_text: String,
     in_goal: bool,
-    last_text: String,
+    /// The ending of the goal that has just finished, from `goal_finished`.
+    /// Applied when the *next* goal opens — see [`Fold::close_goal`].
+    finished: Option<String>,
     /// An assistant turn that has been read but not yet placed, because what
     /// follows it decides whether it can be placed at all.
     pending: Option<Value>,
@@ -243,15 +265,14 @@ impl Fold {
             "goal" => {
                 self.close_turn();
                 // A goal record while another goal is open means the previous
-                // one ended — collapsing it here rather than at
-                // `goal_finished` is deliberate: after a `goal_finished` the
-                // loop still holds the finished goal's `query` and sends it
-                // again if nothing else happens, so collapsing early would make
-                // the fold disagree with the last call of a one-goal session.
+                // one ended — closed here rather than at `goal_finished`
+                // because the loop does the same: after a `goal_finished` the
+                // loop still holds the finished goal's `query` and would send
+                // it again unchanged if nothing else happened, so closing early
+                // would make the fold disagree with the last call of a one-goal
+                // session.
                 self.close_goal();
                 self.in_goal = true;
-                self.goal_text = string(r, "text");
-                self.last_text.clear();
                 self.query = vec![Message::user(string(r, "opening"))];
             }
             "assistant" => {
@@ -262,10 +283,6 @@ impl Fold {
                 // would be a resumed run that dies on its first call with an
                 // error naming a signature nobody in the file mentions.
                 self.pending = r.get("raw_content").cloned();
-                let text = string(r, "text");
-                if !text.trim().is_empty() {
-                    self.last_text = text;
-                }
             }
             "tool_result" => {
                 if let Some(block) = r.get("block") {
@@ -283,6 +300,19 @@ impl Fold {
                 }
                 self.results.clear();
             }
+            // Replayed rather than re-decided. The record carries both halves —
+            // how many messages off the front were replaced, and exactly what
+            // replaced them — so a fold cannot summarise differently from the
+            // run that did it. Compaction only ever touches finished goals, so
+            // the count is an index into `history` and never into `query`.
+            "compacted" => {
+                let drop = r["drop_messages"].as_u64().unwrap_or(0) as usize;
+                let replacement: Vec<Message> =
+                    serde_json::from_value(r["messages"].clone()).unwrap_or_default();
+                let drop = drop.min(self.history.len());
+                self.history.splice(..drop, replacement);
+            }
+            "goal_finished" => self.finished = Some(string(r, "ending")),
             _ => {}
         }
     }
@@ -294,49 +324,79 @@ impl Fold {
         out
     }
 
-    /// Place the assistant turn and its results, or drop both.
-    ///
-    /// The rule the whole fold turns on: **the API rejects an assistant turn
-    /// carrying a `tool_use` that no `tool_result` answers**, and equally a
-    /// result answering nothing. A run killed between the model call and the
-    /// last of its tools leaves exactly that in the file. Half a turn is not
-    /// worth a message list that cannot be sent, so an unmatched turn is
-    /// dropped whole and resume restarts one turn earlier.
+    /// Place the assistant turn and its results, or drop both. See
+    /// [`place_turn`], which is the rule and is shared with the loop.
     fn close_turn(&mut self) {
         let Some(raw) = self.pending.take() else {
             self.results.clear();
             return;
         };
         let results = std::mem::take(&mut self.results);
-        if results.is_empty() || !answered(&raw, &results) {
-            return;
-        }
-        self.query.push(Message::assistant(raw));
-        self.query.push(Message::tool_results(results));
+        place_turn(&mut self.query, raw, results);
     }
 
-    /// Collapse a finished goal the way `Agent::run_goal` does — the goal, and
-    /// the last thing the assistant said, if it said anything.
+    /// Move a finished goal into the conversation, whole.
+    ///
+    /// The one thing added is the note on a goal that stopped mid-turn. A run
+    /// killed on its token budget leaves a user turn last — the tool results
+    /// nothing answered — and the next goal's opening is also a user turn, so
+    /// without something between them the next request is two user turns in a
+    /// row, which is a 400. The note is that something, and it is information
+    /// rather than padding: without it the model reads an abandoned goal as a
+    /// completed one.
+    ///
+    /// It is added when the *next* goal opens rather than when this one ends,
+    /// because that is when the loop adds it — and the two lists have to agree
+    /// at every point in the record stream, not merely at the end.
     fn close_goal(&mut self) {
         if !self.in_goal {
             return;
         }
-        self.history
-            .push(Message::user(std::mem::take(&mut self.goal_text)));
-        if !self.last_text.trim().is_empty() {
-            self.history
-                .push(Message::assistant(Value::String(std::mem::take(
-                    &mut self.last_text,
+        let mut messages = std::mem::take(&mut self.query);
+        if let Some(ending) = self.finished.take() {
+            if messages.last().map(|m| m.role) == Some(Role::User) {
+                messages.push(Message::assistant(Value::String(crate::agent::ended_note(
+                    &ending,
                 ))));
+            }
         }
-        self.query.clear();
+        self.history.extend(messages);
         self.in_goal = false;
     }
 }
 
+/// Place an assistant turn and the results that answer it, or place neither.
+///
+/// The rule the fold and the loop both turn on: **the API rejects an assistant
+/// turn carrying a `tool_use` that no `tool_result` answers**, and equally a
+/// result answering nothing. A run killed between the model call and the last
+/// of its tools leaves exactly that — in the file, and in the loop's own
+/// in-flight list. Half a turn is not worth a message list that cannot be sent,
+/// so an unmatched turn is dropped whole.
+///
+/// One function rather than one per caller. The loop carries tool traffic
+/// across goals now, so it needs this ruling in the same place the fold does,
+/// and a second copy of it would be a resumed conversation that differs from
+/// the one that was sent in precisely the cases neither is tested on.
+///
+/// Returns whether the turn was placed.
+pub(crate) fn place_turn(out: &mut Vec<Message>, raw: Value, results: Vec<Value>) -> bool {
+    if !answered(&raw, &results) {
+        return false;
+    }
+    out.push(Message::assistant(raw));
+    // A turn that called nothing is answered by nothing, and appending an empty
+    // user turn to say so is a 400 of its own.
+    if !results.is_empty() {
+        out.push(Message::tool_results(results));
+    }
+    true
+}
+
 /// Whether every `tool_use` in an assistant turn has exactly one result, and
 /// every result a call. Both directions, because the API refuses both ways
-/// round.
+/// round. A turn with no calls and no results satisfies it, which is what makes
+/// a plain text turn placeable.
 fn answered(raw: &Value, results: &[Value]) -> bool {
     let mut calls: Vec<&str> = raw
         .as_array()
@@ -505,7 +565,16 @@ pub fn restore_records(records: &[Value]) -> Resumed {
             }
             "model_call" => {
                 r.iterations += 1;
-                r.tokens += record["billable_total_tokens"].as_i64().unwrap_or(0);
+                // `cost_tokens`, not `billable_total_tokens`: the budget counts
+                // a cached read at what it costs rather than at its size, and a
+                // resume that summed the raw field would restore a meter in
+                // different units from the one the loop enforces — the same
+                // record, read two ways. The raw fields are still in the record
+                // beside it, and a log written before the weighting existed
+                // falls back to them rather than restoring zero.
+                r.tokens += record["cost_tokens"]
+                    .as_i64()
+                    .unwrap_or_else(|| record["billable_total_tokens"].as_i64().unwrap_or(0));
             }
             "kick" => {
                 r.kicks = record["n"].as_u64().unwrap_or(u64::from(r.kicks) + 1) as u32;

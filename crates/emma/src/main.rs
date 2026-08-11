@@ -332,8 +332,12 @@ async fn run(cli: cli::Cli) -> Result<()> {
         };
 
         let outcome = agent.run_goal(&Goal::new(text)).await;
+        // "cache-weighted" rather than "tokens", because it is not the number
+        // the provider reports and a person comparing this line with a bill
+        // should know which one it is: a cached read counts here at the tenth
+        // of a token it costs. The raw provider counts are in the transcript.
         term.note(&format!(
-            "{} — {} calls, {} tokens",
+            "{} — {} calls, {} tokens (cache-weighted)",
             outcome.ending.message(&budgets),
             outcome.iterations,
             outcome.tokens

@@ -46,6 +46,9 @@ OPTIONS
       --timeout <SECONDS>      wall clock per goal (default 1800).
       --max-kicks <N>          times the loop may say 'not done, continue'
                                before giving up (default 3).
+      --max-context <N>        how large one request may get before the
+                               conversation behind it is compacted (default
+                               120000). Per session, not per goal.
       --no-cache               do not send cache breakpoints.
       --session-dir <PATH>     where the JSONL transcript is written.
       --dangerously-skip-permissions
@@ -57,7 +60,17 @@ OPTIONS
 
 THE INTERACTIVE SESSION
   A goal at the prompt runs until it is done or a budget stops it, then the
-  prompt comes back. Between goals and during one:
+  prompt comes back.
+
+  A session is one conversation. The next thing you type continues the last
+  one — what was read, run and answered is still there, so a follow-up question
+  does not re-read the file the answer came from. Budgets are still per goal;
+  the conversation is not. When it grows past --max-context the oldest goals
+  are compacted to their goal and their answer, and their tool results — file
+  contents, command output — leave the conversation. Emma says so when it
+  happens, and the transcript records exactly what was replaced.
+
+  Between goals and during one:
 
     /exit, /quit               end the session.
     Ctrl-C                     interrupt the goal that is running.
@@ -193,6 +206,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
             }
             "--max-tokens" => opts.budgets.max_tokens = number(&value("--max-tokens")?)?,
             "--max-kicks" => opts.budgets.max_kicks = number(&value("--max-kicks")?)?,
+            "--max-context" => opts.budgets.max_context = number(&value("--max-context")?)?,
             "--timeout" => {
                 opts.budgets.wall_clock = Duration::from_secs(number(&value("--timeout")?)?)
             }
@@ -493,12 +507,15 @@ mod tests {
             "5",
             "--max-kicks",
             "0",
+            "--max-context",
+            "1234",
         ])
         .unwrap();
         assert_eq!(cli.opts.budgets.max_iterations, 3);
         assert_eq!(cli.opts.budgets.max_tokens, 99);
         assert_eq!(cli.opts.budgets.wall_clock.as_secs(), 5);
         assert_eq!(cli.opts.budgets.max_kicks, 0);
+        assert_eq!(cli.opts.budgets.max_context, 1234);
     }
 
     #[test]
