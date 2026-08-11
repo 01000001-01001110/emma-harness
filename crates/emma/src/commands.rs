@@ -745,6 +745,41 @@ pub fn config_check(
     }
 
     let home = auth::home_dir();
+
+    // The permission rules, in the order they are consulted, each with the file
+    // it came from. This is the answer to "why did it not ask me about that" and
+    // to "why is it still asking" — and it is the visibility the whole persisted
+    // grant rests on. A permission the user cannot see is a permission they have
+    // forgotten they granted; this command is where they see it.
+    let mut entries = harness.permissions().to_vec();
+    entries.extend(emma_harness::user_permissions(home.as_deref())?);
+    println!(
+        "permissions    {}",
+        if entries.is_empty() {
+            "(none — every write, command and host is asked about)".to_string()
+        } else {
+            format!("{} rule(s)", entries.len())
+        }
+    );
+    for entry in &entries {
+        println!(
+            "               {:<5} {}   {}",
+            entry.kind.word(),
+            entry.rule,
+            entry.source.display()
+        );
+    }
+    // The rules that will not do anything, said again here even though startup
+    // says it too: this is the command somebody runs *because* a rule did not
+    // fire, and making them re-read scrollback for the reason is a poor answer.
+    for note in crate::permissions::Rules::parse(&entries).1 {
+        println!("               ! {note}");
+    }
+    println!(
+        "               a remembered grant is written to {}",
+        crate::permissions::file_for(&harness.root).display()
+    );
+
     for line in configured(home.as_deref(), &|name| std::env::var(name).ok()) {
         println!("{line}");
     }

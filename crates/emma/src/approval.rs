@@ -5,16 +5,47 @@
 //! to achieve it. Emma writes files and runs commands, which inverts that
 //! property, and this file is the thing standing in its place.
 //!
-//! **The rules, in the order they are applied, because the order is the
-//! design.**
+//! **The precedence order, in one place, because the order is the design.**
+//!
+//! Read top to bottom; the first line that answers is the answer, and nothing
+//! below it gets a say.
+//!
+//! ```text
+//!   1. a PreToolUse hook denial          policy, checked in the loop
+//!   2. a `deny` rule                     policy, written in a file
+//!   3. --dangerously-skip-permissions    the bypass
+//!   4. an `ask` rule                     forces the question back
+//!   5. an `allow` rule                   the persisted grant
+//!   6. read-only, or EXEMPT              no question to ask
+//!   7. a session grant                   this process, from a `y`/`a`
+//!   8. ask the human
+//! ```
+//!
+//! Rules 2, 4 and 5 are new and live in [`crate::permissions`]; that file holds
+//! the syntax and the matcher, this one holds where they are consulted. Two
+//! things about their placement are worth stating rather than deducing:
+//!
+//! - **`deny` sits above the bypass.** `--dangerously-skip-permissions` used to
+//!   be the first thing read here and is now the third. A deny rule is something
+//!   the operator wrote down and can see; the bypass is a flag somebody typed to
+//!   get through a script. When they disagree, the written one wins — the same
+//!   ruling as rule 1, and the same one Claude Code makes ("if a tool is denied
+//!   at any level, no other level can allow it").
+//! - **`ask` sits above `allow` and above the session grant**, so it is a real
+//!   escape hatch: "I allow this tool generally, and I want to be asked about it
+//!   today" is expressible, and cannot be undone by a `y` typed an hour ago.
+//!
+//! **The rules the two axes follow, unchanged.**
 //!
 //! 1. **A `PreToolUse` hook that denies wins.** It is checked before any human
 //!    is asked, and no answer overrides it — not a `y`, not a session
-//!    allowance, not `--dangerously-skip-permissions`. A hook is policy the
-//!    operator wrote down; the prompt is convenience for the person sitting
-//!    there. If a human could wave a hook through, the hook would be advice.
-//!    (The check itself lives in the loop, which is where the hook runner is.
-//!    What is enforced here is that nothing in this file can undo it.)
+//!    allowance, not `--dangerously-skip-permissions`, and not an `allow` rule
+//!    in a settings file. A hook is policy the operator wrote down; the prompt
+//!    is convenience for the person sitting there. If a human could wave a hook
+//!    through, the hook would be advice. (The check itself lives in the loop,
+//!    which is where the hook runner is. What is enforced here is that nothing
+//!    in this file can undo it — and the loop `return`s on a denial before
+//!    `Approvals::request` is reached, so it is structure and not a convention.)
 //! 2. **`ToolMeta::reaches_network` decides whether bytes may leave this
 //!    machine, and it is asked *before* and *separately from* the write
 //!    question.** Two axes, because they are two risks: writing is something
@@ -55,13 +86,23 @@
 //! name. And it enforces nothing: like `read_only` it is a declaration, kept
 //! honest by the tool crates' own tests, not by this file.
 //!
-//! **What is deliberately absent.** There is no persistent always-allow, on
-//! either axis. "Yes, and stop asking for this tool" and "yes, and stop asking
-//! for this host" both live in a `HashSet` on this struct and die with the
-//! process — a permission the user cannot see is a permission they have
+//! **What used to be deliberately absent, and what replaced it.** This file
+//! carried a section arguing that there must be no persistent always-allow on
+//! either axis: "a permission the user cannot see is a permission they have
 //! forgotten they granted, and the place they would not see it is a config file
-//! written six weeks ago. The session scope is the longest scope a permission
-//! may have, and there is no file anywhere in Emma that lengthens it.
+//! written six weeks ago." The hazard was real and the conclusion was wrong,
+//! measured against one goal that cost five prompts and re-asked all five on the
+//! next run. What the argument actually demands is not the absence of a
+//! persistent grant but its **visibility**, and that is what
+//! [`crate::permissions`] is built to provide: a grant is written only when the
+//! user picks the answer that says so, the exact rule is on screen before it is
+//! written, it lands in a JSON file they can read and delete, and `emma config
+//! check` lists every rule with the file it came from.
+//!
+//! The three unpersisted answers are still here and still mean what they meant.
+//! `y` grants one call — or, on the network question, one host for this process.
+//! `a` grants one tool for this process. Neither writes anything, and the
+//! `HashSet`s they fill still die with it.
 //!
 //! **The bypass.** `--dangerously-skip-permissions` exists because scripting
 //! exists. It cannot be set from configuration or the environment, it is
@@ -71,11 +112,13 @@
 //! typing the whole word.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 use emma_tool_api::{NetworkTarget, Tool, ToolMeta};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
+use crate::permissions::{Decision, Rule, Rules};
 use crate::term::{LineSource, Term};
 
 // region: The exemption
@@ -136,12 +179,29 @@ const EXEMPT: &[&str] = &["TaskCreate", "TaskUpdate"];
 // ---------------------------------------------------------------------------
 
 /// What a human answered.
+///
+/// The two `Remember` answers are the only ones that write to disk, and they are
+/// separate variants rather than one with a width flag so that "which rule did
+/// that keystroke grant" is answered by the type and not by an argument that can
+/// be passed wrong. Their *content* is not here on purpose: the rule is composed
+/// by the gate, from the tool and the host it is holding, and shown to the user
+/// in the question. An `Answer` carrying its own rule string would be a second
+/// place for the granted rule to be decided, one of them out of sight of the
+/// prompt that displayed it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Answer {
     Yes,
     No,
     /// Yes, and stop asking for this tool — for this process only.
     AlwaysThisTool,
+    /// Yes, and write down the **narrow** rule the prompt showed: the host on
+    /// the network question, the tool on the local one.
+    RememberNarrow,
+    /// Yes, and write down the **tool-wide** rule the prompt showed — every call
+    /// to this tool, any host. Offered as a distinct keystroke rather than
+    /// inferred, because it is a materially larger grant than the narrow one and
+    /// nobody should arrive at it by pressing the same key.
+    RememberWide,
 }
 
 /// The gate's decision about one call.
@@ -181,10 +241,37 @@ pub enum Gate {
 enum Question<'a> {
     Tool,
     /// A `y` here already covers this host for the rest of the session, so `a`
-    /// is accepted and means exactly the same thing. There is no wider network
-    /// grant on offer — "always, for any host" is the permission this file
-    /// declines to have.
+    /// is accepted and means exactly the same thing.
     Network(&'a str),
+}
+
+/// The rules a keystroke at this prompt would write, if any.
+///
+/// Built by the gate and handed to both the terminal and the answer loop, so the
+/// text on screen and the text written to the file are the same `String` and
+/// cannot drift. The whole point of the feature is that nobody discovers later
+/// that they granted more than they meant, and two independently formatted
+/// copies of a rule is exactly how that happens.
+///
+/// `None` in either slot means the keystroke is neither offered nor accepted.
+/// Both are `None` when there is nowhere to write — an unattended run, or a
+/// harness whose directory could not be resolved — because offering a persistent
+/// grant that silently does not persist is worse than not offering one.
+#[derive(Debug, Default, Clone)]
+struct Offers {
+    /// The host rule on the network question; the bare tool rule on the local
+    /// one, where "narrow" and "tool-wide" are the same grant.
+    narrow: Option<Rule>,
+    /// The bare tool rule. Offered on the network question only, where it is
+    /// genuinely wider than `narrow` — this is "all web searches in the
+    /// directory", asked for in those words.
+    wide: Option<Rule>,
+}
+
+impl Offers {
+    fn text(rule: &Option<Rule>) -> Option<String> {
+        rule.as_ref().map(Rule::to_string)
+    }
 }
 
 /// Where answers come from.
@@ -232,6 +319,19 @@ pub struct Approvals {
     /// session log, which the loop writes on every denial and every call it
     /// lets through.
     seen: Mutex<Vec<(String, Verdict)>>,
+    /// The rules from disk, plus anything this run has added to it.
+    ///
+    /// Behind a `Mutex` because a remembered grant is adopted into the live set
+    /// the moment it is written: without that, "yes, and remember this" would
+    /// prompt again on the very next call and the user would reasonably conclude
+    /// the feature does not work.
+    rules: Mutex<Rules>,
+    /// Where a remembered rule is written, and `None` when there is nowhere.
+    ///
+    /// One field decides both whether the keystroke is offered and whether it
+    /// would persist, so those two cannot disagree — an option on screen that
+    /// silently does not persist is worse than no option.
+    file: Option<PathBuf>,
 }
 
 impl Approvals {
@@ -242,7 +342,21 @@ impl Approvals {
             session_allowed: Mutex::new(HashSet::new()),
             hosts_allowed: Mutex::new(HashSet::new()),
             seen: Mutex::new(Vec::new()),
+            rules: Mutex::new(Rules::default()),
+            file: None,
         }
+    }
+
+    /// The rules this run operates under, and the file a remembered one goes in.
+    ///
+    /// Separate from [`Approvals::new`] rather than two more parameters on it,
+    /// because every existing caller and every existing test builds a gate with
+    /// no rules and that must keep meaning "ask about everything". A rule set
+    /// that arrived by default is how a gate acquires a permission nobody chose.
+    pub fn with_rules(mut self, rules: Rules, file: Option<PathBuf>) -> Self {
+        self.rules = Mutex::new(rules);
+        self.file = file;
+        self
     }
 
     /// `-p` with no bypass.
@@ -290,10 +404,19 @@ impl Approvals {
         args: &Value,
         term: &Term,
     ) -> Verdict {
-        // The bypass first, because it waves through both questions below and
-        // reading it once is one chance to get it wrong instead of two.
-        if self.gate == Gate::SkipAll {
-            return Verdict::Allow;
+        // Only bare `Tool` rules answer this question; a `Tool(domain:…)` grant
+        // is about a destination, and reading it as permission to run the tool
+        // would let a narrow grant answer a question nobody asked it.
+        let rule = self.rules.lock().await.for_tool(name);
+
+        // A `deny` rule first, above the bypass. See the precedence block at the
+        // top of the file: written policy outranks a flag somebody typed.
+        if rule == Some(Decision::Deny) {
+            return Verdict::Deny(format!(
+                "A `deny` permission rule forbids {name}. It was not run, and no answer at a \
+                 prompt can change that — it is written down in a settings file. Do not retry \
+                 it; tell the user which rule is in the way if they need to know."
+            ));
         }
         // Egress before the local question, and independent of it: a tool can
         // be read-only — genuinely, honestly read-only — and still be the way
@@ -302,15 +425,29 @@ impl Approvals {
         if let deny @ Verdict::Deny(_) = self.egress(name, meta, target, term).await {
             return deny;
         }
-        if meta.read_only {
+        if self.gate == Gate::SkipAll {
             return Verdict::Allow;
         }
-        // The named hole. See `EXEMPT`.
-        if EXEMPT.contains(&name) {
-            return Verdict::Allow;
-        }
-        if self.session_allowed.lock().await.contains(name) {
-            return Verdict::Allow;
+        // An `ask` rule puts the question back, over an `allow` rule, over
+        // `read_only`, over the exemption and over a session grant. That is the
+        // whole value of having a third list: "allowed in general, ask me today"
+        // has to be expressible, and it cannot be undone by a `y` typed an hour
+        // ago or it is not a rule, it is a preference.
+        let forced = rule == Some(Decision::Ask);
+        if !forced {
+            if rule == Some(Decision::Allow) {
+                return Verdict::Allow;
+            }
+            if meta.read_only {
+                return Verdict::Allow;
+            }
+            // The named hole. See `EXEMPT`.
+            if EXEMPT.contains(&name) {
+                return Verdict::Allow;
+            }
+            if self.session_allowed.lock().await.contains(name) {
+                return Verdict::Allow;
+            }
         }
         if self.gate == Gate::Unattended {
             return Verdict::Deny(format!(
@@ -320,16 +457,40 @@ impl Approvals {
             ));
         }
 
+        // On this question the narrow rule and the tool-wide one are the same
+        // grant, so there is one remember key rather than two that do the same
+        // thing. And nothing is offered when an `ask` rule forced the prompt: the
+        // `allow` it would write is outranked by that very rule, so the keystroke
+        // would write a grant that does nothing.
+        let offers = match (forced, &self.file) {
+            (false, Some(_)) => Offers {
+                narrow: Some(Rule::every_call(name)),
+                wide: None,
+            },
+            _ => Offers::default(),
+        };
+
         term.prompt_header(name, &preview(name, args));
-        // `ask` loops on unreadable input; by the time it answers, the answer
-        // is one of the three.
-        match self.ask(name, term, Question::Tool).await {
+        // `ask` loops on unreadable input; by the time it answers, the answer is
+        // one of the offered ones.
+        match self.ask(name, term, Question::Tool, &offers).await {
             Some(Answer::Yes) => Verdict::Allow,
             Some(Answer::AlwaysThisTool) => {
                 self.session_allowed.lock().await.insert(name.to_string());
                 term.note(&format!(
                     "{name} is approved for the rest of this session (this process only)"
                 ));
+                Verdict::Allow
+            }
+            Some(Answer::RememberNarrow | Answer::RememberWide) => {
+                // Both keys mean the same rule here, and the fallback covers the
+                // scripted asker, which can hand back an answer the terminal
+                // would not have offered.
+                let rule = offers
+                    .narrow
+                    .clone()
+                    .unwrap_or_else(|| Rule::every_call(name));
+                self.keep(rule, term).await;
                 Verdict::Allow
             }
             Some(Answer::No) => Verdict::Deny(format!(
@@ -342,6 +503,44 @@ impl Approvals {
                 "No approval was given for this {name} call, so it was not run."
             )),
         }
+    }
+
+    /// Write a rule down, adopt it for the rest of this run, and say so.
+    ///
+    /// **A failed write is a warning and not a denial.** The user answered the
+    /// question; refusing the call because the *bookkeeping* failed would punish
+    /// them for a permissions problem on a file. What they lose is the
+    /// persistence, and they are told exactly that, with the reason — including
+    /// the case that matters most, a settings file this run declined to touch
+    /// because it could not parse it.
+    async fn keep(&self, rule: Rule, term: &Term) {
+        match &self.file {
+            Some(file) => match crate::permissions::remember(file, &rule) {
+                // The rule and the file, both, every time. A grant whose text is
+                // on screen and whose location is not is a grant the user cannot
+                // go and revoke.
+                Ok(wrote) => term.note(&format!(
+                    "{} `{rule}` in {} — Emma will not ask about this again",
+                    if wrote { "saved" } else { "already had" },
+                    file.display()
+                )),
+                Err(e) => term.warn(&format!(
+                    "`{rule}` was allowed for this session but NOT saved: {e:#}"
+                )),
+            },
+            // Not reachable from the terminal, which offers the key only when
+            // there is a file. A scripted run can get here, and saying so is
+            // better than pretending something was written.
+            None => term.warn(&format!(
+                "`{rule}` was not saved: this run has nowhere to write permission rules"
+            )),
+        }
+        // **Adopted on every path, including both failures.** The user answered
+        // the question; the file is how the answer survives the process, not how
+        // it takes effect. A `keep` that returned early on a write error would
+        // re-ask for the rest of the run — punishing them a second time for a
+        // problem with a file.
+        self.rules.lock().await.adopt(rule);
     }
 
     /// Rule 2: may bytes leave this machine, for this host, at all.
@@ -370,8 +569,29 @@ impl Approvals {
                  That is a defect in {name}; it is not something to work around from here."
             ));
         };
-        if self.hosts_allowed.lock().await.contains(&target.host) {
+        // Bare `Tool` rules and this tool's `domain:` rules both answer here.
+        let rule = self.rules.lock().await.for_egress(name, &target.host);
+        if rule == Some(Decision::Deny) {
+            return Verdict::Deny(format!(
+                "A `deny` permission rule forbids {name} from contacting {}. It was not run, \
+                 no answer at a prompt can change that, and a different host to reach the \
+                 same content is not a workaround — it is the thing the rule is about.",
+                target.host
+            ));
+        }
+        // The bypass, here as well as in `decide`. Both questions are waved
+        // through by one flag; a `deny` rule is what neither of them waves.
+        if self.gate == Gate::SkipAll {
             return Verdict::Allow;
+        }
+        let forced = rule == Some(Decision::Ask);
+        if !forced {
+            if rule == Some(Decision::Allow) {
+                return Verdict::Allow;
+            }
+            if self.hosts_allowed.lock().await.contains(&target.host) {
+                return Verdict::Allow;
+            }
         }
         if self.gate == Gate::Unattended {
             return Verdict::Deny(format!(
@@ -383,8 +603,25 @@ impl Approvals {
             ));
         }
 
+        // The two grants on offer, and they are deliberately different sizes.
+        // The narrow one is the host the user is looking at — the natural answer
+        // for a `WebFetch` on `apnews.com`. The wide one is every call to this
+        // tool, any host, which is "all web searches in the directory" as it was
+        // asked for; it is a separate keystroke because guessing which one
+        // somebody meant is how they end up granting more than they read.
+        let offers = match (forced, &self.file) {
+            (false, Some(_)) => Offers {
+                narrow: Some(Rule::domain(name, &target.host)),
+                wide: Some(Rule::every_call(name)),
+            },
+            _ => Offers::default(),
+        };
+
         term.prompt_header(name, &network_preview(&target));
-        match self.ask(name, term, Question::Network(&target.host)).await {
+        match self
+            .ask(name, term, Question::Network(&target.host), &offers)
+            .await
+        {
             // `a` grants no more here than `y` does — see `Question::Network`.
             Some(Answer::Yes | Answer::AlwaysThisTool) => {
                 self.hosts_allowed.lock().await.insert(target.host.clone());
@@ -392,6 +629,18 @@ impl Approvals {
                     "{} is approved for the rest of this session (this process only)",
                     target.host
                 ));
+                Verdict::Allow
+            }
+            Some(answer @ (Answer::RememberNarrow | Answer::RememberWide)) => {
+                let rule = match answer {
+                    Answer::RememberWide => offers.wide.clone(),
+                    _ => offers.narrow.clone(),
+                };
+                self.keep(
+                    rule.unwrap_or_else(|| Rule::domain(name, &target.host)),
+                    term,
+                )
+                .await;
                 Verdict::Allow
             }
             Some(Answer::No) => Verdict::Deny(format!(
@@ -429,7 +678,13 @@ impl Approvals {
         }
     }
 
-    async fn ask(&self, name: &str, term: &Term, question: Question<'_>) -> Option<Answer> {
+    async fn ask(
+        &self,
+        name: &str,
+        term: &Term,
+        question: Question<'_>,
+        offers: &Offers,
+    ) -> Option<Answer> {
         match &self.asker {
             Asker::Scripted(queue) => {
                 let mut q = queue.lock().await;
@@ -451,10 +706,17 @@ impl Approvals {
                         "ignoring {stale} line(s) typed before this question — answer it below"
                     ));
                 }
+                let (narrow, wide) = (Offers::text(&offers.narrow), Offers::text(&offers.wide));
                 loop {
+                    // The rule text goes on screen *before* the key that writes
+                    // it is pressed, and it is the same string `keep` writes —
+                    // one `Rule`, formatted once. Nobody is to discover later
+                    // that they granted something other than what they read.
                     match question {
-                        Question::Tool => term.prompt_question(name),
-                        Question::Network(host) => term.prompt_network_question(host),
+                        Question::Tool => term.prompt_question(name, narrow.as_deref()),
+                        Question::Network(host) => {
+                            term.prompt_network_question(host, narrow.as_deref(), wide.as_deref())
+                        }
                     }
                     let line = lines.next().await;
                     // Before anything else is printed, and on both arms. The
@@ -470,7 +732,24 @@ impl Approvals {
                         // their prompt back has not read anything.
                         "" | "n" | "no" => return Some(Answer::No),
                         "a" | "always" => return Some(Answer::AlwaysThisTool),
-                        other => term.note(&format!("`{other}` is not one of y / n / a")),
+                        // Guarded on the offer rather than on the question, so a
+                        // key that was not shown is a key that does not work. A
+                        // prompt with an undocumented answer that writes to disk
+                        // is the same trap as a prompt nobody can evaluate.
+                        "r" | "remember" if narrow.is_some() => {
+                            return Some(Answer::RememberNarrow)
+                        }
+                        "t" | "trust" if wide.is_some() => return Some(Answer::RememberWide),
+                        other => {
+                            let mut keys = String::from("y / n / a");
+                            if narrow.is_some() {
+                                keys.push_str(" / r");
+                            }
+                            if wide.is_some() {
+                                keys.push_str(" / t");
+                            }
+                            term.note(&format!("`{other}` is not one of {keys}"));
+                        }
                     }
                 }
             }
@@ -934,6 +1213,412 @@ mod tests {
             .await,
             Verdict::Deny(_)
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // Rules
+    //
+    // The precedence order from the top of this file, tested in the direction
+    // that costs something when it inverts. `permissions.rs` owns the matcher
+    // and its near-misses; what is pinned here is *where the gate consults it*,
+    // which is the half that can be broken by moving one `if`.
+    // -----------------------------------------------------------------------
+
+    /// A gate carrying rules and no answers at all, so anything reaching the
+    /// prompt is denied — which makes "allowed" mean "a rule allowed it" and
+    /// nothing else.
+    fn ruled(gate: Gate, deny: &[&str], ask: &[&str], allow: &[&str]) -> Approvals {
+        let mut entries = Vec::new();
+        for (kind, list) in [
+            (emma_harness::PermissionKind::Deny, deny),
+            (emma_harness::PermissionKind::Ask, ask),
+            (emma_harness::PermissionKind::Allow, allow),
+        ] {
+            for rule in list {
+                entries.push(emma_harness::PermissionEntry {
+                    rule: (*rule).to_string(),
+                    kind,
+                    source: std::path::PathBuf::from("settings.local.json"),
+                });
+            }
+        }
+        let (rules, notes) = crate::permissions::Rules::parse(&entries);
+        assert!(notes.is_empty(), "a test wrote an unusable rule: {notes:?}");
+        Approvals::new(gate, Asker::Scripted(Mutex::new(Vec::new()))).with_rules(rules, None)
+    }
+
+    #[tokio::test]
+    async fn an_allow_rule_is_why_the_second_run_does_not_ask() {
+        // The whole feature, from the user's side: five hosts approved once,
+        // and the next process does not ask about any of them. The queue is
+        // empty, so every `Allow` below is the rule and not a scripted answer.
+        let hosts = [
+            "api.search.brave.com",
+            "www.reuters.com",
+            "tech.yahoo.com",
+            "openai.com",
+            "apnews.com",
+        ];
+        let rules: Vec<String> = hosts
+            .iter()
+            .map(|h| format!("WebFetch(domain:{h})"))
+            .collect();
+        let a = ruled(
+            Gate::Ask,
+            &[],
+            &[],
+            &rules.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+        for host in hosts {
+            assert_eq!(
+                a.decide(
+                    "WebFetch",
+                    REACHES,
+                    target(host),
+                    &Value::Null,
+                    &Term::silent()
+                )
+                .await,
+                Verdict::Allow,
+                "{host} was approved in a settings file and asked anyway"
+            );
+        }
+        // …and a sixth host still asks. A persisted grant that widened to
+        // everything would be the bug this whole file is arranged against.
+        assert!(matches!(
+            a.decide(
+                "WebFetch",
+                REACHES,
+                target("evil.example"),
+                &Value::Null,
+                &Term::silent()
+            )
+            .await,
+            Verdict::Deny(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_deny_rule_beats_an_allow_rule_on_both_axes() {
+        // The guarantee. Delete the deny check and both halves go green as
+        // `Allow`, which is a settings file whose `deny` list is decoration.
+        let a = ruled(Gate::Ask, &["WebFetch"], &[], &["WebFetch(domain:docs.rs)"]);
+        match a
+            .decide(
+                "WebFetch",
+                REACHES,
+                target("docs.rs"),
+                &Value::Null,
+                &Term::silent(),
+            )
+            .await
+        {
+            Verdict::Deny(why) => assert!(why.contains("deny"), "{why}"),
+            Verdict::Allow => panic!("an allow rule overrode a deny rule on the network axis"),
+        }
+        // The same, on the local axis, where the deny is narrow and the allow
+        // is the broad one.
+        let a = ruled(Gate::Ask, &["Bash"], &[], &["Bash", "Write"]);
+        assert!(matches!(
+            a.decide("Bash", WRITES, None, &Value::Null, &Term::silent())
+                .await,
+            Verdict::Deny(_)
+        ));
+        assert_eq!(
+            a.decide("Write", WRITES, None, &Value::Null, &Term::silent())
+                .await,
+            Verdict::Allow,
+            "a deny on one tool swallowed the allow on another"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_deny_rule_beats_the_bypass_flag() {
+        // `--dangerously-skip-permissions` used to be the first thing `decide`
+        // read. It is now third, behind the hook denial and the deny rule, and
+        // this is the test that keeps it there: a written-down refusal is not
+        // something a flag on the command line gets to override.
+        let a = ruled(Gate::SkipAll, &["Bash"], &[], &[]);
+        assert!(matches!(
+            a.decide("Bash", WRITES, None, &Value::Null, &Term::silent())
+                .await,
+            Verdict::Deny(_)
+        ));
+        // …and on the egress axis, which is a separate `if` and so a separate
+        // way to get it wrong.
+        let a = ruled(Gate::SkipAll, &["WebFetch(domain:evil.example)"], &[], &[]);
+        assert!(matches!(
+            a.decide(
+                "WebFetch",
+                REACHES,
+                target("evil.example"),
+                &Value::Null,
+                &Term::silent()
+            )
+            .await,
+            Verdict::Deny(_)
+        ));
+        // The bypass still bypasses everything nobody wrote a rule about,
+        // which is the half that keeps this from being "the flag stopped
+        // working".
+        assert_eq!(
+            a.decide(
+                "WebFetch",
+                REACHES,
+                target("docs.rs"),
+                &Value::Null,
+                &Term::silent()
+            )
+            .await,
+            Verdict::Allow
+        );
+    }
+
+    // A hook denial outranking every rule in every file is a property of the
+    // *loop*, not of this file — `agent.rs` resolves the `PreToolUse` verdict
+    // and returns before `Approvals::request` exists to be called, so nothing
+    // here can undo it and nothing here can test it either. It is guarded
+    // behaviourally, three times, in
+    // `tests/permissions.rs::a_hook_denial_outranks_an_allow_rule_that_covers_the_call`
+    // and in `tests/loop.rs`. A source-order assertion was written here first
+    // and removed: it passed against a mutation that disabled the denial
+    // outright, which makes it worse than nothing.
+
+    #[tokio::test]
+    async fn an_ask_rule_puts_the_question_back_over_an_allow_and_over_a_grant() {
+        // The reason the third list is worth having. Two `Yes` answers are
+        // queued: if `ask` did not force the prompt, neither would be consumed
+        // and the second call would still be `Allow` — which is the failure
+        // this catches.
+        let a = Approvals::new(
+            Gate::Ask,
+            Asker::Scripted(Mutex::new(vec![Answer::AlwaysThisTool])),
+        )
+        .with_rules(
+            crate::permissions::Rules::parse(&[
+                emma_harness::PermissionEntry {
+                    rule: "Write".into(),
+                    kind: emma_harness::PermissionKind::Ask,
+                    source: std::path::PathBuf::new(),
+                },
+                emma_harness::PermissionEntry {
+                    rule: "Write".into(),
+                    kind: emma_harness::PermissionKind::Allow,
+                    source: std::path::PathBuf::new(),
+                },
+            ])
+            .0,
+            None,
+        );
+        assert_eq!(
+            a.decide("Write", WRITES, None, &Value::Null, &Term::silent())
+                .await,
+            Verdict::Allow
+        );
+        // `a` filled the session grant, and the `ask` rule outranks it, so the
+        // second call asks again — and the queue is empty.
+        assert!(
+            matches!(
+                a.decide("Write", WRITES, None, &Value::Null, &Term::silent())
+                    .await,
+                Verdict::Deny(_)
+            ),
+            "an `ask` rule was outranked by a session grant"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ask_rule_reaches_even_a_read_only_tool_and_an_exempt_one() {
+        // Both shortcuts that exist to keep the gate usable — `read_only` and
+        // the `EXEMPT` list — are below the `ask` rule, because an operator who
+        // writes `ask` about a tool has said something more specific than
+        // either default.
+        let a = ruled(Gate::Ask, &[], &["Read", EXEMPT[0]], &[]);
+        assert!(matches!(
+            a.decide("Read", LOCAL_READ, None, &Value::Null, &Term::silent())
+                .await,
+            Verdict::Deny(_)
+        ));
+        assert!(matches!(
+            a.decide(EXEMPT[0], WRITES, None, &Value::Null, &Term::silent())
+                .await,
+            Verdict::Deny(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_domain_rule_does_not_become_permission_to_run_the_tool() {
+        // A grant naming one destination is not a grant to do local damage.
+        // Nothing has this shape today; the first tool that both writes and
+        // names a host would be the one that pays for getting it wrong.
+        let both = ToolMeta {
+            read_only: false,
+            reaches_network: true,
+            idempotent: false,
+        };
+        let a = ruled(Gate::Ask, &[], &[], &["Uploader(domain:docs.rs)"]);
+        assert!(matches!(
+            a.decide(
+                "Uploader",
+                both,
+                target("docs.rs"),
+                &Value::Null,
+                &Term::silent()
+            )
+            .await,
+            Verdict::Deny(_),
+        ));
+    }
+
+    #[tokio::test]
+    async fn remembering_writes_the_rule_shown_and_stops_the_next_prompt() {
+        // The round trip the owner asked for, end to end and through the same
+        // code path a person drives: one answer, a file on disk, and no second
+        // question — for that host and for nothing else.
+        let dir = tempfile::tempdir().unwrap();
+        let file = crate::permissions::file_for(dir.path());
+        let a = Approvals::new(
+            Gate::Ask,
+            Asker::Scripted(Mutex::new(vec![Answer::RememberNarrow])),
+        )
+        .with_rules(crate::permissions::Rules::default(), Some(file.clone()));
+
+        assert_eq!(
+            a.decide(
+                "WebFetch",
+                REACHES,
+                target("apnews.com"),
+                &Value::Null,
+                &Term::silent()
+            )
+            .await,
+            Verdict::Allow
+        );
+        let written = std::fs::read_to_string(&file).unwrap();
+        assert!(written.contains("WebFetch(domain:apnews.com)"), "{written}");
+
+        // The queue is empty now, so a second `Allow` can only come from the
+        // rule having been adopted into the live set.
+        assert_eq!(
+            a.decide(
+                "WebFetch",
+                REACHES,
+                target("apnews.com"),
+                &Value::Null,
+                &Term::silent()
+            )
+            .await,
+            Verdict::Allow,
+            "the grant was written to disk and not applied to this run"
+        );
+        // …and it did not widen. This is the assertion that fails if `remember`
+        // ever writes the tool instead of the host.
+        assert!(matches!(
+            a.decide(
+                "WebFetch",
+                REACHES,
+                target("evil.example"),
+                &Value::Null,
+                &Term::silent()
+            )
+            .await,
+            Verdict::Deny(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn trusting_the_tool_is_a_wider_grant_and_a_different_key() {
+        // "all web searches in the directory", which is the other half of what
+        // was asked for. `RememberWide` writes the bare tool name, and the
+        // difference from the test above is the whole reason the two answers
+        // are separate keystrokes.
+        let dir = tempfile::tempdir().unwrap();
+        let file = crate::permissions::file_for(dir.path());
+        let a = Approvals::new(
+            Gate::Ask,
+            Asker::Scripted(Mutex::new(vec![Answer::RememberWide])),
+        )
+        .with_rules(crate::permissions::Rules::default(), Some(file.clone()));
+        assert_eq!(
+            a.decide(
+                "WebSearch",
+                REACHES,
+                target("api.search.brave.com"),
+                &Value::Null,
+                &Term::silent()
+            )
+            .await,
+            Verdict::Allow
+        );
+        let written = std::fs::read_to_string(&file).unwrap();
+        assert!(written.contains("\"WebSearch\""), "{written}");
+        assert!(!written.contains("domain"), "{written}");
+        // Any host, now — and still only that tool.
+        assert_eq!(
+            a.decide(
+                "WebSearch",
+                REACHES,
+                target("somewhere.else"),
+                &Value::Null,
+                &Term::silent()
+            )
+            .await,
+            Verdict::Allow
+        );
+        assert!(matches!(
+            a.decide(
+                "WebFetch",
+                REACHES,
+                target("somewhere.else"),
+                &Value::Null,
+                &Term::silent()
+            )
+            .await,
+            Verdict::Deny(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_run_with_nowhere_to_write_still_honours_the_answer_for_the_session() {
+        // A scripted or unattended run can produce a `Remember` answer that
+        // cannot be persisted. The call is allowed and the grant lasts the
+        // process: the user answered the question, and failing the call over
+        // bookkeeping would punish them for it.
+        let a = Approvals::new(
+            Gate::Ask,
+            Asker::Scripted(Mutex::new(vec![Answer::RememberNarrow])),
+        );
+        assert_eq!(
+            a.decide("Write", WRITES, None, &Value::Null, &Term::silent())
+                .await,
+            Verdict::Allow
+        );
+        assert_eq!(
+            a.decide("Write", WRITES, None, &Value::Null, &Term::silent())
+                .await,
+            Verdict::Allow
+        );
+    }
+
+    #[test]
+    fn the_prompt_names_the_rule_it_would_write() {
+        // The rule is on screen before the key that writes it is pressed, and
+        // it is the same string the file gets. A prompt that said "remember
+        // this" and wrote something the user never saw would be the exact
+        // failure the module doc is written against.
+        let term = Term::silent();
+        term.prompt_network_question(
+            "apnews.com",
+            Some(&Rule::domain("WebFetch", "apnews.com").to_string()),
+            Some(&Rule::every_call("WebFetch").to_string()),
+        );
+        // Constructed the way the gate constructs it, so a change to `Rule`'s
+        // rendering shows up here rather than only in the file.
+        assert_eq!(
+            Rule::domain("WebFetch", "apnews.com").to_string(),
+            "WebFetch(domain:apnews.com)"
+        );
+        assert_eq!(Rule::every_call("WebSearch").to_string(), "WebSearch");
     }
 
     #[test]

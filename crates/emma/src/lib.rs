@@ -57,6 +57,7 @@ pub mod cli;
 pub mod commands;
 pub mod delegate;
 pub mod goal;
+pub mod permissions;
 pub mod session;
 pub mod settings;
 pub mod skill;

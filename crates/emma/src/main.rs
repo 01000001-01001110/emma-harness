@@ -183,13 +183,37 @@ async fn run(cli: cli::Cli) -> Result<()> {
              this directory.",
         );
     }
-    // Shared with every nested run, and the sharing is the design: one gate, one
-    // set of session grants, one keyboard. A subagent with its own `Approvals`
-    // would re-ask for a host the user already approved — and could be handed a
-    // bypass the parent was not.
-    let approvals = Arc::new(Approvals::new(gate, asker));
-
     let home = auth::home_dir();
+
+    // The permission rules, from two scopes, merged rather than layered: they
+    // compose safely because `deny` beats `allow` at match time whichever file
+    // each came from. Project scope carries all three lists; the user's
+    // `~/.claude/settings.json` contributes `deny` only, and
+    // `emma_harness::user_permissions` carries the whole argument for that
+    // asymmetry — it is the same one `discover_in` makes about not adopting
+    // another program's global configuration.
+    //
+    // Never fatal. A user settings file that cannot be read is skipped there; a
+    // project one that cannot be *parsed* already failed the boot in `Harness`,
+    // and a rule this build cannot evaluate becomes a note printed below.
+    let mut entries = harness.permissions().to_vec();
+    entries.extend(emma_harness::user_permissions(home.as_deref())?);
+    let (rules, rule_notes) = emma::permissions::Rules::parse(&entries);
+    for note in &rule_notes {
+        // Warnings rather than notes: every one of these is a line somebody
+        // wrote in a settings file that is not doing what they think it is, and
+        // the `deny` ones are a protection they believe they have.
+        term.warn(note);
+    }
+
+    // Shared with every nested run, and the sharing is the design: one gate, one
+    // set of session grants, one rule set, one keyboard. A subagent with its own
+    // `Approvals` would re-ask for a host the user already approved — and could
+    // be handed a bypass the parent was not.
+    let approvals = Arc::new(
+        Approvals::new(gate, asker)
+            .with_rules(rules, Some(emma::permissions::file_for(&harness.root))),
+    );
     // The one place a running provider is chosen. An unknown name fails here
     // rather than falling back, so a mis-set provider cannot look like a
     // working one — see `settings::resolve_kind`.

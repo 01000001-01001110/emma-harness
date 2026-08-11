@@ -65,6 +65,18 @@ pub(crate) struct Settings {
     /// file still is not.
     #[serde(default, rename = "statusLine")]
     pub(crate) status_line: Option<crate::statusline::StatusLineBlock>,
+    /// The permission rules. Read rather than ignored as of
+    /// `emma::permissions`, which carries the whole argument — including why
+    /// the *shape* is honoured here while the rule vocabulary Emma can actually
+    /// evaluate is much smaller than Claude Code's.
+    ///
+    /// The block itself stays permissive: `defaultMode`, `additionalDirectories`
+    /// and `disableBypassPermissionsMode` are real keys in real files, Emma has
+    /// no opinion about any of them, and the module doc's ruling applies —
+    /// refusing to boot over a key belonging to another program is an outage,
+    /// not a safety property.
+    #[serde(default)]
+    pub(crate) permissions: crate::PermissionBlock,
 }
 
 /// One matcher and the commands attached to it. Strict, because this is the

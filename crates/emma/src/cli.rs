@@ -103,9 +103,30 @@ THE INTERACTIVE SESSION
 
 APPROVAL
   Read, Glob and Grep run silently. Write, Edit and Bash ask, showing the
-  command, the diff, or the path and size. Answering 'a' allows that one tool
-  for the rest of the process and no longer — there is no permission that
-  outlives the run. A PreToolUse hook that denies cannot be approved away.
+  command, the diff, or the path and size. A tool that reaches the network asks
+  separately about the host, showing the URL or the query.
+
+    y   allow this call. On the network question it also allows that host for
+        the rest of the process.
+    n   refuse. Empty is 'n' — hitting return is not consent.
+    a   allow that tool for the rest of the process, and no longer.
+    r   allow, and write the rule down: the host on the network question, the
+        tool on the others. The exact rule is shown before you press the key.
+    t   network question only: allow, and write down the whole tool — every
+        call it makes, to any host. Bigger than 'r' on purpose, which is why
+        it is a different key.
+
+  What 'r' and 't' write is a Claude Code permission rule, in
+  <harness>/settings.local.json — WebFetch(domain:apnews.com), or WebSearch.
+  `emma config check` lists every rule and the file it came from; delete a line
+  to revoke it. Rules already in .claude/settings.json are honoured, and a deny
+  rule in your ~/.claude/settings.json applies here too (allow rules there do
+  not — they were written for a different program).
+
+  The order, and the first line that answers wins: a PreToolUse hook denial, a
+  deny rule, --dangerously-skip-permissions, an ask rule, an allow rule,
+  read-only, a session grant, then you. A hook denial and a deny rule cannot be
+  approved away, and neither is waved through by the bypass flag.
 
   Delegate asks like any other writer, showing which agent type and the first
   lines of the brief. A subagent inherits this gate: its prompts are the same

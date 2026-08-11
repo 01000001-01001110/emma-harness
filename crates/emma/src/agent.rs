@@ -1261,10 +1261,7 @@ impl<'a> Agent<'a> {
 
         let mut content = outcome.content.clone();
         if outcome.truncated {
-            content.push_str(
-                "\n[truncated: this is not the whole output. Narrow the request if you need \
-                 the rest.]",
-            );
+            content.push_str(&truncation_note(outcome.truncation.as_deref()));
         }
         let post = self
             .run_post_hooks(turn_id, call, &content, outcome.truncated, None)
@@ -1274,9 +1271,12 @@ impl<'a> Agent<'a> {
             content.push_str(&extra);
         }
 
-        self.s
-            .term
-            .tool_result(outcome.display.as_deref(), &content, outcome.truncated);
+        self.s.term.tool_result(
+            outcome.display.as_deref(),
+            &content,
+            outcome.truncated,
+            outcome.truncation.as_deref(),
+        );
         // Anthropic's wire shape, built here rather than by the provider — as is
         // the one in `failure_block`. That is the whole of what makes this loop
         // Anthropic-only: OpenAI expresses a result as a separate message with
@@ -1526,6 +1526,28 @@ fn failure_block(id: &str, tool: &str, kind: &str, detail: &str) -> Value {
     })
 }
 
+/// What is appended to a result the tool says it cut.
+///
+/// A tool that knows which cap bound says so itself — the amount, and the
+/// argument that raises it — and that sentence is repeated verbatim rather
+/// than summarised. A summary of a truncation notice is how the numbers get
+/// lost, and the numbers are the entire content: a page whose *link list* was
+/// cut and a page whose *prose* was cut both read as "truncated", and only one
+/// of them is fixed by asking for fewer characters.
+///
+/// The fallback is for tools that set the flag alone. It says so, and its
+/// advice is marked as advice — "narrow the request" is simply wrong when what
+/// was dropped is an inventory the model has no way to narrow, so the model is
+/// told that nobody named a limit rather than being sent to guess at one.
+fn truncation_note(reason: Option<&str>) -> String {
+    match reason {
+        Some(reason) => format!("\n[truncated: {reason}]"),
+        None => "\n[truncated: this is not the whole output, and this tool did not say which \
+                 limit cut it. Narrow the request if you need the rest.]"
+            .to_string(),
+    }
+}
+
 /// Arguments, short enough to sit inside a kick.
 fn compact(args: &Value) -> String {
     let s = args
@@ -1584,6 +1606,25 @@ mod tests {
         let body: Value = serde_json::from_str(b["content"].as_str().unwrap()).unwrap();
         assert_eq!(body["kind"], "tool_failed");
         assert_eq!(body["tool"], "Bash");
+    }
+
+    /// The model's half of the field report. A `WebFetch` on a news hub came
+    /// back marked truncated with no subject: the prose was well inside its
+    /// cap and the *link list* was what got cut, but nothing said so, and the
+    /// only argument the model had been told about was the one that would not
+    /// have helped. Whatever the tool worked out, the model reads verbatim.
+    #[test]
+    fn a_stated_reason_reaches_the_model_verbatim() {
+        let reason = "50 of 70 links shown, 20 dropped by max_links=50; \
+                      re-read with max_links=70 for the rest";
+        let note = truncation_note(Some(reason));
+        assert!(note.contains(reason), "the reason was reworded: {note}");
+        assert!(note.contains("truncated"), "{note}");
+
+        // And a tool that named nothing must not be dressed up as one that
+        // did. The generic line has to admit that no limit was named.
+        let vague = truncation_note(None);
+        assert!(vague.contains("did not say which limit"), "{vague}");
     }
 
     #[test]

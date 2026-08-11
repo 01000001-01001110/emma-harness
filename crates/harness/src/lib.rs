@@ -333,6 +333,13 @@ struct Spine {
     /// directories would defeat the reason the feature was implemented.
     #[serde(default, rename = "statusLine")]
     status_line: Option<crate::statusline::StatusLineBlock>,
+    /// The same `permissions` block `.claude/settings.json` carries, so a
+    /// project that chose `.emma/` can express standing grants too. Deliberately
+    /// not renamed: the rule strings are Claude Code's and so are the three list
+    /// names, and a block that had to be re-typed to move between the two
+    /// directories would defeat the reason it is read at all.
+    #[serde(default)]
+    permissions: PermissionBlock,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -441,6 +448,188 @@ pub struct AgentDef {
 
 // endregion: Agent types
 
+// region: Permission rules
+// ---------------------------------------------------------------------------
+// Permission rules
+//
+// The harness reads them; it does not understand them. Every string here goes
+// out to `emma::permissions` exactly as it was written, tagged with the list it
+// was in and the file it came from — because the two sentences an operator needs
+// when a rule does not fire are "which file" and "which list", and a merged
+// `Vec<String>` can answer neither.
+//
+// The scopes and the order are stated here because this is the only place that
+// knows them. Nearest wins is *not* how these compose: permission lists **merge
+// across scopes** rather than override, the way Claude Code documents, and the
+// merge is safe precisely because `deny` beats `allow` at match time — so a
+// restrictive rule from any file survives a permissive rule in any other.
+// ---------------------------------------------------------------------------
+
+/// The `permissions` object as it appears on disk.
+///
+/// Permissive on purpose: `defaultMode`, `additionalDirectories`,
+/// `disableBypassPermissionsMode` and whatever Claude Code adds next are keys
+/// Emma has no opinion about, and `deny_unknown_fields` here would refuse to
+/// boot in a working repository.
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct PermissionBlock {
+    #[serde(default)]
+    pub allow: Vec<String>,
+    #[serde(default)]
+    pub deny: Vec<String>,
+    #[serde(default)]
+    pub ask: Vec<String>,
+}
+
+/// Which of the three lists a rule was in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionKind {
+    Allow,
+    Deny,
+    Ask,
+}
+
+impl PermissionKind {
+    /// For a sentence. `"a {} rule"`.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+            Self::Ask => "ask",
+        }
+    }
+}
+
+/// One rule, still a string, with everything needed to talk about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionEntry {
+    pub rule: String,
+    pub kind: PermissionKind,
+    /// The file it was written in. Carried per entry rather than per file
+    /// because rules merge across scopes, so by the time one misfires there is
+    /// no other way back to the document that holds it.
+    pub source: PathBuf,
+}
+
+impl PermissionBlock {
+    fn into_entries(self, source: &Path, entries: &mut Vec<PermissionEntry>) {
+        // Deny first, then ask, then allow — the same order they are consulted
+        // in. Nothing depends on it; it means a debug print of this vector reads
+        // in precedence order, which is one fewer thing to hold in your head.
+        for (kind, list) in [
+            (PermissionKind::Deny, self.deny),
+            (PermissionKind::Ask, self.ask),
+            (PermissionKind::Allow, self.allow),
+        ] {
+            for rule in list {
+                entries.push(PermissionEntry {
+                    rule,
+                    kind,
+                    source: source.to_path_buf(),
+                });
+            }
+        }
+    }
+}
+
+/// The file a `settings.local.json` block is read from and written back to.
+///
+/// One name in both flavours. See `emma::permissions::file_for` for why a grant
+/// lands beside the harness that actually loaded rather than always in
+/// `.claude/`.
+pub const LOCAL_SETTINGS_FILE: &str = "settings.local.json";
+
+/// The project's rules: the spine file's block, then `settings.local.json`.
+///
+/// **A malformed `settings.local.json` fails the boot**, unlike a rule Emma
+/// cannot evaluate — which is only a note. The two are different mistakes. An
+/// unevaluatable rule is a file written correctly for a program with a larger
+/// vocabulary; unparseable JSON is a file that says nothing at all, and booting
+/// past it would mean running with a `deny` list the operator believes is in
+/// force. This is the same ruling the crate makes everywhere else: malformed
+/// configuration refuses to start, naming the file and the problem.
+fn read_permissions(
+    root: &Path,
+    spine: PermissionBlock,
+    spine_path: &Path,
+) -> Result<Vec<PermissionEntry>> {
+    let mut entries = Vec::new();
+    spine.into_entries(spine_path, &mut entries);
+    let local = root.join(LOCAL_SETTINGS_FILE);
+    let raw = read_if_present(&local)?;
+    if !raw.trim().is_empty() {
+        #[derive(Deserialize)]
+        struct Local {
+            #[serde(default)]
+            permissions: PermissionBlock,
+        }
+        let parsed: Local = serde_json::from_str(&raw)
+            .with_context(|| format!("{} is malformed", local.display()))?;
+        parsed.permissions.into_entries(&local, &mut entries);
+    }
+    Ok(entries)
+}
+
+/// The **user scope**: `~/.claude/settings.json`, and `deny` rules only.
+///
+/// **This is a deliberate divergence from Claude Code, and it is the one
+/// judgement call in the feature.** There, user settings carry `allow`, `deny`
+/// and `ask`, and all three apply in every project. Here only `deny` crosses,
+/// for the reason `discover_in` already refuses to adopt `~/.claude/` as a
+/// harness: it is *another program's* global configuration, and a grant made
+/// there was made for that program, in a session Emma was not part of, possibly
+/// years ago.
+///
+/// This is not hypothetical. The owner's own `~/.claude/settings.json`, at the
+/// time this was written, carries `Bash(rm:*)`, `Bash(bash:*)` and
+/// `Bash(powershell.exe:*)` in its `allow` list, plus `"defaultMode":
+/// "dontAsk"`. Honouring user-scope `allow` would have handed Emma an
+/// unprompted shell in every repository on the machine, granted by nobody, on
+/// the first run after this feature shipped.
+///
+/// `deny` is safe in the other direction and is imported for exactly that
+/// reason: it only ever removes a capability, it cannot be the mechanism of a
+/// surprise, and a host somebody blocked globally is a host they meant. `ask`
+/// is left out with `allow` rather than with `deny` — it is not restrictive
+/// enough to be worth importing and not permissive enough to be dangerous, and
+/// a rule that only prompts more is not worth a second scope to explain.
+///
+/// `home` is threaded rather than read from the environment, for the reason
+/// `discover_in` threads it: a test that reads the real `HOME` either mutates
+/// shared state in a threaded test binary or answers differently on different
+/// machines, and both have happened here.
+pub fn user_permissions(home: Option<&Path>) -> Result<Vec<PermissionEntry>> {
+    let Some(home) = home else {
+        return Ok(Vec::new());
+    };
+    let file = home.join(CLAUDE_DIR_NAME).join("settings.json");
+    let raw = read_if_present(&file)?;
+    if raw.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    #[derive(Deserialize)]
+    struct User {
+        #[serde(default)]
+        permissions: PermissionBlock,
+    }
+    // Never `?`. A personal settings file belonging to another program is not
+    // this project's to refuse to start over — and the only thing taken from it
+    // is restrictions, so failing to read it can only leave Emma asking more
+    // often.
+    let Ok(parsed) = serde_json::from_str::<User>(&raw) else {
+        return Ok(Vec::new());
+    };
+    let mut entries = Vec::new();
+    PermissionBlock {
+        deny: parsed.permissions.deny,
+        ..Default::default()
+    }
+    .into_entries(&file, &mut entries);
+    Ok(entries)
+}
+
+// endregion: Permission rules
+
 // region: The resolved value
 // ---------------------------------------------------------------------------
 // The resolved value
@@ -472,6 +661,9 @@ pub struct Harness {
     /// Why there is not one, when configuration asked for something Emma could
     /// not honour. A sentence rather than a boot failure — see `statusline.rs`.
     status_line_note: Option<String>,
+    /// Project-scope permission rules, still as strings. See the region above
+    /// for why they are not parsed here.
+    permissions: Vec<PermissionEntry>,
 }
 
 /// A command expansion. Both halves are kept so the log can record what the user
@@ -518,7 +710,7 @@ impl Harness {
         let root = root.as_ref().to_path_buf();
         let spine_path = root.join(flavor.spine_file());
 
-        let (spine, raw, hook_defs, status_block) = match flavor {
+        let (spine, raw, hook_defs, status_block, permission_block) = match flavor {
             Flavor::Emma => {
                 let raw = read_if_present(&spine_path)?;
                 let spine: Spine = if raw.trim().is_empty() {
@@ -529,16 +721,20 @@ impl Harness {
                 };
                 let hooks = spine.hooks.clone();
                 let status = spine.status_line.clone();
-                (spine, raw, hooks, status)
+                let permissions = spine.permissions.clone();
+                (spine, raw, hooks, status, permissions)
             }
             Flavor::Claude => {
                 let (mut settings, raw) = claude::Settings::read(&root)?;
                 // Taken before the hooks block is consumed, and separately from
                 // it: a status line that cannot be resolved must not be able to
-                // stop a hook from resolving, or the other way round.
+                // stop a hook from resolving, or the other way round. The
+                // permissions block is taken on the same rule and for the same
+                // reason — one unreadable key must not cost another.
                 let status = settings.status_line.take();
+                let permissions = std::mem::take(&mut settings.permissions);
                 let hooks = settings.into_hook_defs(&root)?;
-                (Spine::default(), raw, hooks, status)
+                (Spine::default(), raw, hooks, status, permissions)
             }
         };
 
@@ -591,6 +787,7 @@ impl Harness {
             agent_notes,
             status_line,
             status_line_note,
+            permissions: read_permissions(&root, permission_block, &spine_path)?,
             flavor,
             root,
         })
@@ -756,6 +953,20 @@ impl Harness {
         self.status_line_note.as_deref()
     }
 
+    /// The project's permission rules, unparsed. See the region above.
+    pub fn permissions(&self) -> &[PermissionEntry] {
+        &self.permissions
+    }
+
+    /// Where a rule the user asks to be remembered is written.
+    ///
+    /// Beside whichever directory this harness actually loaded, so answering a
+    /// prompt in a `.emma/` project cannot conjure a `.claude/` directory for a
+    /// program that is not running.
+    pub fn permissions_file(&self) -> PathBuf {
+        self.root.join(LOCAL_SETTINGS_FILE)
+    }
+
     /// What startup logs and a `config check` prints: identity only. A snapshot
     /// carrying prompt text would be a second copy to drift.
     pub fn snapshot(&self) -> serde_json::Value {
@@ -776,6 +987,14 @@ impl Harness {
             "agent_notes": self.agent_notes,
             "commands": self.commands.keys().collect::<Vec<_>>(),
             "hooks": hooks,
+            // The rule text and the list it is in, never a resolved verdict: the
+            // question a reader has is "what is written down", and a snapshot
+            // that showed conclusions would be a second copy of the matcher to
+            // drift away from the first.
+            "permissions": self.permissions.iter().map(|p| {
+                serde_json::json!({ "rule": p.rule, "kind": p.kind.word(),
+                                    "source": p.source.display().to_string() })
+            }).collect::<Vec<_>>(),
             // Identity of the program, never its text — the same rule a hook
             // follows, and for the same reason: a log that records a name
             // cannot answer "was this the program that ran".
