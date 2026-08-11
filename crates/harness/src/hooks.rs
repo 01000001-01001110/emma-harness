@@ -33,7 +33,7 @@
 //! it guards `Bash` and `Write`. Every check below was already justified; none
 //! of them is now optional.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -57,7 +57,7 @@ const DEFAULT_HOOK_TIMEOUT_MS: u64 = 5_000;
 /// more is silently reduced rather than refused: the operator asked for a
 /// longer gate, not for a different program.
 const MAX_HOOK_TIMEOUT_MS: u64 = 10_000;
-const HOOK_OUTPUT_CAP: u64 = 64 * 1024;
+pub(crate) const HOOK_OUTPUT_CAP: u64 = 64 * 1024;
 const HOOK_REASON_CAP: usize = 400;
 
 /// The environment a hook is given, and all of it — six names. `SYSTEMROOT` and
@@ -69,7 +69,8 @@ const HOOK_REASON_CAP: usize = 400;
 /// turn: it gets what it needs to execute and nothing that would let it call a
 /// model or a paid API as us. A hook that needs a value reads it from a file
 /// next to itself.
-const HOOK_ENV_ALLOWLIST: &[&str] = &["PATH", "HOME", "LANG", "TMPDIR", "SYSTEMROOT", "COMSPEC"];
+pub(crate) const HOOK_ENV_ALLOWLIST: &[&str] =
+    &["PATH", "HOME", "LANG", "TMPDIR", "SYSTEMROOT", "COMSPEC"];
 
 // endregion: The caps, and the environment a hook is given
 
@@ -332,20 +333,7 @@ impl ResolvedHook {
             stderr: String::new(),
         };
 
-        // argv exec of a canonicalised path: no shell, no PATH lookup, no
-        // argument string for a tool name to be interpolated into.
-        let mut cmd = tokio::process::Command::new(&self.command);
-        cmd.stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
-        cmd.env_clear();
-        for key in HOOK_ENV_ALLOWLIST {
-            if let Some(v) = std::env::var_os(key) {
-                cmd.env(key, v);
-            }
-        }
-
+        let mut cmd = contained_command(&self.command);
         let body = self.payload(call).to_string();
         let finished = tokio::time::timeout(self.timeout, exec(&mut cmd, body)).await;
         run.duration_ms = started.elapsed().as_millis() as u64;
@@ -392,10 +380,35 @@ impl ResolvedHook {
     }
 }
 
+/// A child process configured the only way this crate ever configures one:
+/// **argv exec of an already-contained path — no shell, no PATH lookup, no
+/// argument string for anything to be interpolated into — with the environment
+/// cleared down to [`HOOK_ENV_ALLOWLIST`].**
+///
+/// Shared with the status line rather than copied, and that sharing is the
+/// point. This process holds `ANTHROPIC_API_KEY`; a second spawn site that
+/// forgot the `env_clear` would hand a config-named program the ability to
+/// spend the user's money, and the way to not have a second spawn site that
+/// forgot something is to not have a second spawn site.
+pub(crate) fn contained_command(program: &Path) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    cmd.env_clear();
+    for key in HOOK_ENV_ALLOWLIST {
+        if let Some(v) = std::env::var_os(key) {
+            cmd.env(key, v);
+        }
+    }
+    cmd
+}
+
 /// Spawn, feed stdin, read both pipes under a hard cap. A hook that writes past
 /// the cap blocks and hits the timeout, which is the right answer for a program
 /// that will not stop.
-async fn exec(
+pub(crate) async fn exec(
     cmd: &mut tokio::process::Command,
     body: String,
 ) -> std::io::Result<(Option<i32>, Vec<u8>, Vec<u8>)> {
@@ -426,6 +439,48 @@ async fn exec(
 // question: is there any way to know now that this will not work?
 // ---------------------------------------------------------------------------
 
+/// Turn a config-declared command into a path that is safe to exec, or say why
+/// it is not. The three checks are the boundary, and they are shared rather
+/// than repeated: **anything config can point Emma at goes through here.**
+///
+/// The containment check is why `command` is relative — an absolute path or a
+/// `..` escape would let a config file run any executable on the box with
+/// Emma's permissions, and Emma's permissions include writing the user's source
+/// tree. The executable-bit check is not the boundary; it catches the operator
+/// who forgot to `chmod +x`, which would otherwise surface much later as a
+/// spawn failure that reads like something else.
+///
+/// `what` names the caller in the sentence, because "no such command" with no
+/// subject is a sentence an operator cannot act on.
+pub(crate) fn contain(root: &Path, what: &str, command: &str) -> Result<PathBuf, String> {
+    let dir = root
+        .join("hooks")
+        .canonicalize()
+        .map_err(|_| format!("{what} is defined but hooks/ is missing"))?;
+    let path = root
+        .join(command)
+        .canonicalize()
+        .map_err(|_| format!("{what}: no such command `{command}`"))?;
+    if !path.starts_with(&dir) {
+        return Err(format!(
+            "{what} resolves to {}, outside {}",
+            path.display(),
+            dir.display()
+        ));
+    }
+    // Unix only, because there is no executable bit on Windows to consult — a
+    // `.cmd` or `.exe` is runnable by extension.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = std::fs::metadata(&path).map_err(|e| format!("{what}: {e}"))?;
+        if meta.permissions().mode() & 0o111 == 0 {
+            return Err(format!("{what} is not executable"));
+        }
+    }
+    Ok(path)
+}
+
 pub(crate) fn resolve(
     root: &Path,
     spine_path: &Path,
@@ -450,34 +505,8 @@ pub(crate) fn resolve(
         }
         let event =
             HookEvent::parse(&def.event).with_context(|| named(format!("hook `{name}`")))?;
-        let dir = (root.join("hooks").canonicalize())
-            .with_context(|| named(format!("hook `{name}` is defined but hooks/ is missing")))?;
-        let command = (root.join(&def.command).canonicalize())
-            .with_context(|| named(format!("hook `{name}`: no such command `{}`", def.command)))?;
-        // The containment check is why `command` is relative: an absolute path
-        // or a `..` escape would let the spine run any executable on the box
-        // with Emma's permissions — and Emma's permissions include writing the
-        // user's source tree.
-        if !command.starts_with(&dir) {
-            bail!(named(format!(
-                "hook `{name}` resolves to {}, outside {}",
-                command.display(),
-                dir.display()
-            )));
-        }
-        // Unix only, because there is no executable bit on Windows to consult —
-        // a `.cmd` or `.exe` is runnable by extension. The check is not the
-        // containment boundary, which is the `starts_with` above and applies
-        // everywhere; it catches the operator who wrote a hook and forgot to
-        // `chmod +x` it, which would otherwise surface as a spawn failure at the
-        // first tool call and — `PreToolUse` being fail-closed — as a denial.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if std::fs::metadata(&command)?.permissions().mode() & 0o111 == 0 {
-                bail!(named(format!("hook `{name}` is not executable")));
-            }
-        }
+        let command = contain(root, &format!("hook `{name}`"), &def.command)
+            .map_err(|e| anyhow!(named(e)))?;
         let matcher = match &def.matcher {
             // Anchored: a matcher is matched in full, so `Read` cannot silently
             // guard `ReadFile` — the near miss that looks like a working policy.

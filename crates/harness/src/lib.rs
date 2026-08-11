@@ -68,6 +68,7 @@
 mod claude;
 pub mod hash;
 mod hooks;
+mod statusline;
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -76,6 +77,9 @@ use std::path::{Path, PathBuf};
 
 pub use crate::hooks::{HookCall, HookEvent, HookOutcome, HookResult, HookRun, HookVerdict};
 use crate::hooks::{HookDef, ResolvedHook};
+pub use crate::statusline::{
+    StatusContext, StatusCost, StatusLine, StatusModel, StatusPayload, StatusWorkspace,
+};
 
 use emma_tool_api::Registry;
 
@@ -322,6 +326,13 @@ struct Spine {
     personas: BTreeMap<String, PersonaBlock>,
     #[serde(default)]
     hooks: BTreeMap<String, HookDef>,
+    /// The same block `.claude/settings.json` spells `statusLine`, so Emma's own
+    /// format can express it too. Deliberately *not* renamed to a prettier
+    /// snake_case spelling: the inner keys are Claude Code's (`type`, `command`,
+    /// `padding`) and a block that had to be re-typed to move between the two
+    /// directories would defeat the reason the feature was implemented.
+    #[serde(default, rename = "statusLine")]
+    status_line: Option<crate::statusline::StatusLineBlock>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -456,6 +467,11 @@ pub struct Harness {
     tools: Option<Vec<String>>,
     agents: Vec<AgentDef>,
     agent_notes: Vec<String>,
+    /// The configured status-line program, when one resolved.
+    status_line: Option<StatusLine>,
+    /// Why there is not one, when configuration asked for something Emma could
+    /// not honour. A sentence rather than a boot failure — see `statusline.rs`.
+    status_line_note: Option<String>,
 }
 
 /// A command expansion. Both halves are kept so the log can record what the user
@@ -502,7 +518,7 @@ impl Harness {
         let root = root.as_ref().to_path_buf();
         let spine_path = root.join(flavor.spine_file());
 
-        let (spine, raw, hook_defs) = match flavor {
+        let (spine, raw, hook_defs, status_block) = match flavor {
             Flavor::Emma => {
                 let raw = read_if_present(&spine_path)?;
                 let spine: Spine = if raw.trim().is_empty() {
@@ -512,13 +528,33 @@ impl Harness {
                         .with_context(|| format!("{} is malformed", spine_path.display()))?
                 };
                 let hooks = spine.hooks.clone();
-                (spine, raw, hooks)
+                let status = spine.status_line.clone();
+                (spine, raw, hooks, status)
             }
             Flavor::Claude => {
-                let (settings, raw) = claude::Settings::read(&root)?;
+                let (mut settings, raw) = claude::Settings::read(&root)?;
+                // Taken before the hooks block is consumed, and separately from
+                // it: a status line that cannot be resolved must not be able to
+                // stop a hook from resolving, or the other way round.
+                let status = settings.status_line.take();
                 let hooks = settings.into_hook_defs(&root)?;
-                (Spine::default(), raw, hooks)
+                (Spine::default(), raw, hooks, status)
             }
+        };
+
+        // Never `?`. A hook that will not resolve stops the boot because a
+        // policy the operator believes they have is worse than none; the bottom
+        // row of the screen is decoration, and refusing to start over it would
+        // be an outage. The sentence is kept and shown instead.
+        let (status_line, status_line_note) = match StatusLine::resolve(&root, status_block) {
+            Ok(found) => (found, None),
+            Err(why) => (
+                None,
+                Some(format!(
+                    "{}: {why}. The built-in status line is being drawn instead.",
+                    spine_path.display()
+                )),
+            ),
         };
 
         let persona = select_persona(&root, flavor, &spine, &spine_path, selected)?;
@@ -553,6 +589,8 @@ impl Harness {
             tools: block.tools,
             agents,
             agent_notes,
+            status_line,
+            status_line_note,
             flavor,
             root,
         })
@@ -706,6 +744,18 @@ impl Harness {
         self.commands.keys().map(String::as_str).collect()
     }
 
+    /// The configured status-line program, or `None` for the built-in status.
+    /// See `statusline.rs` for what it is allowed to be and why.
+    pub fn status_line(&self) -> Option<&StatusLine> {
+        self.status_line.as_ref()
+    }
+
+    /// Why configuration asked for a status line and did not get one. `None`
+    /// when nothing was asked for, or when what was asked for resolved.
+    pub fn status_line_note(&self) -> Option<&str> {
+        self.status_line_note.as_deref()
+    }
+
     /// What startup logs and a `config check` prints: identity only. A snapshot
     /// carrying prompt text would be a second copy to drift.
     pub fn snapshot(&self) -> serde_json::Value {
@@ -726,6 +776,10 @@ impl Harness {
             "agent_notes": self.agent_notes,
             "commands": self.commands.keys().collect::<Vec<_>>(),
             "hooks": hooks,
+            // Identity of the program, never its text — the same rule a hook
+            // follows, and for the same reason: a log that records a name
+            // cannot answer "was this the program that ran".
+            "status_line": self.status_line.as_ref().map(StatusLine::identity),
         })
     }
 

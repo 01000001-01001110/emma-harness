@@ -140,6 +140,11 @@ const MAX_INSERT_ROWS: u16 = 500;
 pub struct Frame {
     inner: Mutex<Inner>,
     skin: Skin,
+    /// Where a request for a fresh status line is posted, once one has been
+    /// configured. A separate lock from `inner` on purpose: it is taken from
+    /// inside paths that already hold `inner`, and one mutex for two unrelated
+    /// things is how a repaint ends up waiting on a subprocess.
+    status_requests: Mutex<Option<super::statusline::Requests>>,
 }
 
 struct Inner {
@@ -152,6 +157,10 @@ struct Inner {
     /// `(max_context, max_tokens)`, so a measurement arriving before or after
     /// the budgets are set lands against the same caps either way.
     caps: (i64, i64),
+    /// The transcript file, for the `transcript_path` a status program is
+    /// handed. The status *line* carries only the stem, which is what fits on
+    /// screen; a script that wants to read the transcript needs the whole path.
+    transcript: String,
 }
 
 impl Frame {
@@ -227,8 +236,10 @@ impl Frame {
                 view: View::new(skin),
                 started: None,
                 caps: (0, 0),
+                transcript: String::new(),
             }),
             skin,
+            status_requests: Mutex::new(None),
         });
         frame.draw();
         spawn_clock(Arc::downgrade(&frame));
@@ -325,48 +336,149 @@ impl Frame {
         self.lock().view.prompt.is_some()
     }
 
-    pub fn set_identity(&self, model: &str, cwd: &str, session: &str) {
+    pub fn set_identity(&self, model: &str, cwd: &str, session: &str, transcript: &str) {
+        {
+            let mut inner = self.lock();
+            inner.view.status.model = model.to_string();
+            inner.view.status.cwd = cwd.to_string();
+            inner.view.status.session = session.to_string();
+            inner.transcript = transcript.to_string();
+            inner.paint();
+        }
+        // The first invocation. Claude Code runs a status line once when a
+        // session starts, before anything else has happened, and so does this —
+        // the row is otherwise the built-in one until the first model call
+        // returns, which on a slow first turn is a long time to show something
+        // the user configured away.
+        self.request_status();
+    }
+
+    // -----------------------------------------------------------------------
+    // The configured status line
+    //
+    // Two directions, and the split between them is the safety property: a
+    // *request* is a non-blocking post to a channel, and a *result* arrives
+    // later from a task. Nothing on this side of the boundary ever waits on a
+    // process. See `super::statusline`.
+    // -----------------------------------------------------------------------
+
+    /// Adopt a configured status program, and start the task that runs it.
+    ///
+    /// `Weak`, so the task dies with the frame — the same arrangement
+    /// [`spawn_clock`] uses and for the same reason. Called once, from
+    /// `Term::set_status_source`.
+    pub fn set_status_source(self: &Arc<Self>, line: Arc<emma_harness::StatusLine>) {
+        let padding = line.padding;
+        {
+            let mut inner = self.lock();
+            inner.view.status_padding = padding;
+        }
+        let tx = super::statusline::spawn(Arc::downgrade(self), line);
+        *self
+            .status_requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(tx);
+    }
+
+    /// Ask for a fresh status line, with the measurements as they stand.
+    ///
+    /// **This function must never block, and it is the reason the whole feature
+    /// is safe.** It builds a small struct, posts it into a one-slot channel and
+    /// returns; a full channel means a request with fresher data is already
+    /// queued behind the one in flight, and the right answer to that is to do
+    /// nothing. It is called from the paths that move the status — a goal
+    /// starting or ending, a model call reporting — which are the same events
+    /// Claude Code re-runs a status line on.
+    pub fn request_status(&self) {
+        let guard = self
+            .status_requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let Some(tx) = guard.as_ref() else {
+            return;
+        };
+        let payload = {
+            let mut inner = self.lock();
+            inner.view.status.elapsed = inner.started.map(|t| t.elapsed());
+            super::statusline::payload(
+                &inner.view.status,
+                &inner.transcript,
+                inner
+                    .view
+                    .status
+                    .elapsed
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0),
+            )
+        };
+        let _ = tx.try_send(payload);
+    }
+
+    /// What the program printed, or `None` to go back to the built-in line.
+    /// Called from the task; the only writer.
+    pub fn set_custom_status(&self, text: Option<String>) {
         let mut inner = self.lock();
-        inner.view.status.model = model.to_string();
-        inner.view.status.cwd = cwd.to_string();
-        inner.view.status.session = session.to_string();
+        inner.view.custom_status = text;
         inner.paint();
+    }
+
+    /// One dim transcript line, for the task to explain itself with. The skin is
+    /// the frame's, so a status-line failure reads like every other note rather
+    /// than like a different program's output.
+    pub fn note_line(&self, text: &str) {
+        self.write_lines(self.skin.note(text));
     }
 
     /// A goal started. The clock starts here and is read at paint time, so what
     /// is on screen is the elapsed time and not a copy of it.
     pub fn goal_started(&self) {
-        let mut inner = self.lock();
-        inner.started = Some(Instant::now());
-        inner.view.mode = Mode::Working;
-        // The previous goal's spend is not this goal's spend, and a number left
-        // over from the last one is exactly the stale readout this line exists
-        // to not have.
-        inner.view.status.spend = None;
-        inner.paint();
+        {
+            let mut inner = self.lock();
+            inner.started = Some(Instant::now());
+            inner.view.mode = Mode::Working;
+            // The previous goal's spend is not this goal's spend, and a number
+            // left over from the last one is exactly the stale readout this line
+            // exists to not have.
+            inner.view.status.spend = None;
+            inner.paint();
+        }
+        // Outside the lock, always: `request_status` takes it again, and a
+        // method that held it across the call would deadlock the first time
+        // anybody typed a goal. The scoping is load-bearing, not tidiness.
+        self.request_status();
     }
 
     pub fn goal_ended(&self) {
-        let mut inner = self.lock();
-        inner.started = None;
-        inner.view.mode = Mode::Idle;
-        inner.view.status.elapsed = None;
-        inner.paint();
+        {
+            let mut inner = self.lock();
+            inner.started = None;
+            inner.view.mode = Mode::Idle;
+            inner.view.status.elapsed = None;
+            inner.paint();
+        }
+        self.request_status();
     }
 
     /// Measurements from the model call that just returned. Both numbers are
     /// the provider's or the loop's own, never an estimate — see
     /// [`Status`](super::render::Status).
     pub fn spent(&self, context: Option<i64>, spend: Option<i64>) {
-        let mut inner = self.lock();
-        let (ctx_cap, token_cap) = inner.caps;
-        if let Some(context) = context {
-            inner.view.status.context = Some((context, ctx_cap));
+        {
+            let mut inner = self.lock();
+            let (ctx_cap, token_cap) = inner.caps;
+            if let Some(context) = context {
+                inner.view.status.context = Some((context, ctx_cap));
+            }
+            if let Some(spend) = spend {
+                inner.view.status.spend = Some((spend, token_cap));
+            }
+            inner.paint();
         }
-        if let Some(spend) = spend {
-            inner.view.status.spend = Some((spend, token_cap));
-        }
-        inner.paint();
+        // The nearest thing Emma has to Claude Code's "a new assistant message
+        // arrived": this is called once per model call, with that call's own
+        // measurements. Debouncing downstream is what keeps a fast turn from
+        // spawning a process per response.
+        self.request_status();
     }
 
     /// The caps the two meters are measured against. Set once, from the

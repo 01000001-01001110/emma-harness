@@ -93,6 +93,15 @@ pub struct View {
     /// draws nothing, which is what keeps a pending question unaffected: the
     /// menu is never synced while one is up.
     pub menu: Option<MenuView>,
+    /// What the configured status program last printed, when one is configured
+    /// and has answered. `None` is every other case — nothing configured, the
+    /// first run still in flight, the program failed — and every one of them
+    /// draws the built-in status, because the built-in line is true and an empty
+    /// row reads as a crash. See [`super::statusline`].
+    pub custom_status: Option<String>,
+    /// Leading spaces the configuration asked for. Claude Code's
+    /// `statusLine.padding`; meaningless without `custom_status`.
+    pub status_padding: u16,
 }
 
 impl View {
@@ -106,6 +115,8 @@ impl View {
             partial: String::new(),
             prompt: None,
             menu: None,
+            custom_status: None,
+            status_padding: 0,
         }
     }
 
@@ -119,16 +130,37 @@ impl View {
         if area.height == 0 || area.width == 0 {
             return None;
         }
-        let [status, body, hint] = Layout::vertical([
-            Constraint::Length(1),
+        // **Bottom-up: the thing you type into, then the hint, then the status
+        // on the very last row.** The status used to be the first row; the owner
+        // asked for what the terminal agents he uses do — the chat bar at the
+        // bottom of the window with the status underneath it. The eye ends where
+        // the cursor is, and the two rows below the box are the two that never
+        // move.
+        //
+        // **Nothing was added.** These are the same two rows of chrome the old
+        // order spent, reordered, so `body` gets exactly the height it got
+        // before and every case that fitted still fits — including the five-row
+        // minimum, where `body` is three rows and the input box takes all of
+        // them. A third fixed row would have cost the shortest viewport the
+        // ability to show a command *and* the keys to approve it, which
+        // `render_prompt` already surrenders its border to protect.
+        //
+        // The hint keeps a row of its own rather than being folded into the
+        // status. The status is the one line on screen that is *live*, and
+        // `Skin::status` earns its honesty by dropping whole fields when it runs
+        // out of room; sharing that row with a fixed sentence would mean an
+        // advice string deciding whether a measurement fits. Showing the hint
+        // only when it "has something to say" was the other candidate and is
+        // worse in the hand: the row would come and go as the mode changed,
+        // moving the input box under the user's fingers.
+        let [body, hint, status] = Layout::vertical([
             Constraint::Min(1),
+            Constraint::Length(1),
             Constraint::Length(1),
         ])
         .areas(area);
 
-        self.skin
-            .status(status.width, &self.status)
-            .render(status, buf);
+        self.status_row(status.width).render(status, buf);
         Line::from(Span::styled(
             fit(
                 &self.hint(),
@@ -145,7 +177,30 @@ impl View {
         }
     }
 
-    /// What the bottom row says. It is the only permanently visible place the
+    /// The last row: the configured program's output when there is some, and the
+    /// built-in status otherwise.
+    ///
+    /// **The fallback is not a degraded mode, it is the product.** A status
+    /// program is a luxury on top of a line that already carries the model, the
+    /// directory, the elapsed clock and two meters measured against real caps.
+    /// Every path that is not "a configured program answered" lands here, which
+    /// is what makes a broken script cost a note rather than a blank row.
+    ///
+    /// The reverse of that trade is the one worth stating in the docs: a program
+    /// that answers **replaces** the built-in line entirely, so anything it does
+    /// not print is simply gone. See `notes/status-line.md`.
+    fn status_row(&self, width: u16) -> Line<'static> {
+        match &self.custom_status {
+            Some(text) => super::statusline::to_line(
+                text,
+                self.status_padding,
+                self.skin.palette.style(Role::Text),
+            ),
+            None => self.skin.status(width, &self.status),
+        }
+    }
+
+    /// What the hint row says. It is the only permanently visible place the
     /// two things nobody can guess are written down.
     ///
     /// Composed from [`Glyphs::sep`](super::render::Glyphs) rather than written
@@ -429,19 +484,75 @@ mod tests {
         (rows, cursor)
     }
 
+    /// **The order, and the only test that pins it.** The box you type into is
+    /// at the bottom of the window, with the hint and then the status under it.
+    ///
+    /// Written as "which row is which, relative to the last one" rather than as
+    /// three independent `contains` calls over the whole viewport, because the
+    /// property *is* the ordering: a test that only asked whether each piece
+    /// appeared somewhere would pass the layout this replaced, which had the
+    /// status on the first row and the hint on the last.
     #[test]
-    fn the_idle_viewport_is_a_status_line_an_input_box_and_a_hint() {
+    fn the_input_box_is_at_the_bottom_with_the_hint_and_then_the_status_beneath_it() {
         let (rows, cursor) = draw(&view(), 60, 8);
-        assert!(rows[0].contains("emma"), "{rows:?}");
-        assert!(rows.iter().any(|r| r.contains('>')), "{rows:?}");
-        assert!(rows[7].contains("/ lists commands"), "{rows:?}");
-        assert!(cursor.is_some(), "nothing showed the user where they type");
+        let last = rows.len() - 1;
+
+        // The very last row of the window is the status.
+        assert!(rows[last].contains("emma"), "{rows:?}");
+        assert!(rows[last].contains("claude-opus-4"), "{rows:?}");
+        // Directly above it, the hint.
+        assert!(rows[last - 1].contains("/ lists commands"), "{rows:?}");
+        // And above *that*, the input box — closed off by its own bottom
+        // border, so "above" is the whole box and not just some row with a `>`
+        // on it.
+        let bottom = rows
+            .iter()
+            .rposition(|r| r.contains(UNICODE.border.bottom_left))
+            .expect("there was no input box at all");
+        assert_eq!(
+            bottom,
+            last - 2,
+            "the input box is not immediately above the hint and status: {rows:?}"
+        );
+        // The row you actually type on is inside that box, and the cursor is on
+        // it. This is what would break if the box were laid out from the top.
+        let cursor = cursor.expect("nothing showed the user where they type");
+        assert_eq!(usize::from(cursor.y), bottom - 1, "{rows:?}");
+        assert!(rows[bottom - 1].contains('>'), "{rows:?}");
+
         // An empty box says what it takes. Without this the first thing a new
         // user sees is a rounded rectangle with a caret in it.
         assert!(
-            rows.iter().any(|r| r.contains("describe a goal")),
+            rows[bottom - 1].contains("describe a goal"),
             "the empty box had no placeholder: {rows:?}"
         );
+    }
+
+    /// The row budget did not change, and this is the assertion that says so.
+    ///
+    /// Moving the status from the first row to the last was a reordering, not an
+    /// addition: `body` gets the same height it always got, so everything that
+    /// fitted before still fits. The five-row minimum is where that matters —
+    /// three rows for the box and nothing to spare — and it is the size
+    /// `fallback_reason` and `view_rows` agree is the smallest Emma will draw.
+    #[test]
+    fn the_reordering_cost_the_body_no_rows_at_the_smallest_viewport_emma_draws() {
+        for height in [5u16, 8, 10] {
+            let (rows, cursor) = draw(&view(), 60, height);
+            let last = rows.len() - 1;
+            assert!(
+                rows[last].contains("emma"),
+                "height {height} lost its status row: {rows:?}"
+            );
+            // Two rows of chrome, three of box — so a viewport of five still has
+            // somewhere to type, which is the property the box is laid out
+            // first to guarantee.
+            assert!(
+                rows.iter().any(|r| r.contains(UNICODE.border.bottom_left)),
+                "height {height} had no input box: {rows:?}"
+            );
+            assert!(cursor.is_some(), "height {height} had nowhere to type");
+        }
     }
 
     #[test]
@@ -516,10 +627,14 @@ mod tests {
         let mut v = view();
         v.partial = "a".repeat(300);
         let (rows, _) = draw(&v, 40, 10);
-        // Five rows of stream, three of box, one status, one hint — and the
-        // stream is showing the end of the text rather than the start.
-        assert!(rows[1].starts_with('a'), "{rows:?}");
-        assert!(rows[5].starts_with('a'), "{rows:?}");
+        // Ten rows: five of stream, three of box, then the hint and the status
+        // — so the stream starts at the very top of the viewport now that
+        // nothing sits above it. And it is showing the *end* of the text rather
+        // than the start, which is the point of the test.
+        assert!(rows[0].starts_with('a'), "{rows:?}");
+        assert!(rows[4].starts_with('a'), "{rows:?}");
+        // Nothing spilled onto the box or the two rows under it.
+        assert!(!rows[5].starts_with('a'), "{rows:?}");
     }
 
     #[test]
@@ -527,8 +642,13 @@ mod tests {
         let mut v = view();
         v.mode = Mode::Working;
         let (rows, _) = draw(&v, 70, 8);
-        assert!(rows[7].contains("Ctrl-C"), "{rows:?}");
-        assert!(rows[7].contains("runs next"), "{rows:?}");
+        // Second from the bottom: under the box, above the status.
+        let hint = rows.len() - 2;
+        assert!(rows[hint].contains("Ctrl-C"), "{rows:?}");
+        assert!(rows[hint].contains("runs next"), "{rows:?}");
+        // …and it is the hint that changed, not the status, which still carries
+        // the run's identity while a goal is running.
+        assert!(rows[rows.len() - 1].contains("emma"), "{rows:?}");
     }
 
     /// The smallest viewport Emma will draw still shows what is being approved.
@@ -595,18 +715,21 @@ mod tests {
         assert!(all.contains("end this session"), "{all}");
         // Nothing invented for a harness command that came without one.
         assert!(all.contains(crate::term::menu::NO_DESCRIPTION), "{all}");
-        // …and the box is still under it, three rows from the hint, with the
-        // cursor on the row you type into.
-        assert!(rows[7].contains('>'), "{rows:?}");
-        assert_eq!(cursor.unwrap().y, 7);
+        // …and the box is still under it, with the cursor on the row you type
+        // into — which is now the third row from the bottom, because the hint
+        // and the status are below the box rather than around it.
+        assert!(rows[6].contains('>'), "{rows:?}");
+        assert_eq!(cursor.unwrap().y, 6);
+        assert!(rows[9].contains("emma"), "the status is not last: {rows:?}");
     }
 
     /// The constraint that would otherwise be found by a user on a laptop: a
     /// menu that eats the box is a menu you cannot type your way out of.
     #[test]
     fn a_short_viewport_keeps_the_input_box_and_shortens_the_menu() {
-        // Seven rows: one status, one hint, three for the box, two for the
-        // menu — which is one command and an honest count of the rest.
+        // Seven rows: two for the menu, three for the box, then the hint and
+        // the status — so the menu gets one command and an honest count of the
+        // rest.
         let (rows, cursor) = draw(&menu_view(), 60, 7);
         let all = rows.join("\n");
         assert!(
@@ -668,5 +791,96 @@ mod tests {
         for height in 0..6u16 {
             let (_rows, _cursor) = draw(&menu_view(), 24, height);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // The configured status line
+    //
+    // The decisions — running it, timing it out, parsing its bytes — are in
+    // `super::statusline` and tested there. What is asserted here is only what
+    // *drawing* can get wrong: which of the two lines lands on the last row,
+    // and that nothing a program printed can reach a cell as a control byte.
+    // -----------------------------------------------------------------------
+
+    /// A program that answered replaces the built-in line, and replaces all of
+    /// it. This is the trade the docs have to state: the model, the directory,
+    /// the clock and both meters are Emma's line, and a script that does not
+    /// print them has not hidden them — it has taken their row.
+    #[test]
+    fn a_configured_status_line_takes_the_last_row_and_the_builtin_one_goes() {
+        let mut v = view();
+        v.custom_status = Some("main ~ 12% ctx".into());
+        let (rows, _) = draw(&v, 60, 8);
+        let last = rows.len() - 1;
+        assert_eq!(rows[last], "main ~ 12% ctx", "{rows:?}");
+        // Nothing of the built-in survives anywhere: not a second copy on
+        // another row, and not a half of it sharing this one.
+        assert!(
+            !rows.join("\n").contains("claude-opus-4"),
+            "the built-in status was drawn as well: {rows:?}"
+        );
+        // …and the hint above it is untouched, because the two rows are two
+        // rows and this feature does not get to eat the other one.
+        assert!(rows[last - 1].contains("/ lists commands"), "{rows:?}");
+    }
+
+    /// Every case that is not "a program answered" draws the built-in line:
+    /// nothing configured, the first run still in flight, the program failed.
+    /// They are one case in the view on purpose — a `None` here has exactly one
+    /// meaning, so there is no state in which the row is blank.
+    #[test]
+    fn without_an_answer_from_a_program_the_builtin_status_is_what_is_drawn() {
+        let mut v = view();
+        v.custom_status = None;
+        // The padding a configuration asked for must not indent a line it does
+        // not apply to.
+        v.status_padding = 4;
+        let (rows, _) = draw(&v, 60, 8);
+        let last = rows.len() - 1;
+        assert!(rows[last].starts_with("emma"), "{rows:?}");
+        assert!(rows[last].contains("claude-opus-4"), "{rows:?}");
+    }
+
+    #[test]
+    fn the_padding_a_configuration_asked_for_indents_the_row() {
+        let mut v = view();
+        v.custom_status = Some("x".into());
+        v.status_padding = 3;
+        let (rows, _) = draw(&v, 60, 8);
+        assert_eq!(rows[rows.len() - 1], "   x", "{rows:?}");
+    }
+
+    /// **End to end, through the real render path: a status program cannot put
+    /// an escape byte into the cell buffer.**
+    ///
+    /// `super::statusline` proves this of the translator; this proves the
+    /// translator is actually the thing on the path. ratatui counts a stored
+    /// escape byte as one column and the terminal counts it as none, so one of
+    /// them in a cell makes the frame wrong about every row below it — and the
+    /// rows below it are the ones this whole design exists to keep in
+    /// scrollback.
+    #[test]
+    fn nothing_a_status_program_prints_can_write_an_escape_into_the_viewport() {
+        let mut v = view();
+        v.custom_status = Some(
+            // Colour, a hyperlink, a cursor move, a screen erase, and the
+            // scroll region this project's scrollback defect was made of.
+            "\x1b[32mok\x1b[0m \x1b]8;;https://x\x07link\x1b]8;;\x07 \x1b[2J\x1b[5;9H\x1b[2;20r"
+                .into(),
+        );
+        let (rows, _) = draw(&v, 60, 8);
+        // Row by row rather than over a joined string: the join's own newlines
+        // are control characters, and a test that had to exclude them would be
+        // one edit away from excluding the thing it is looking for.
+        for row in &rows {
+            assert!(
+                !row.chars().any(|c| c == '\x1b' || c.is_control()),
+                "an escape or control byte reached the cell buffer: {row:?}"
+            );
+        }
+        // …and the text survived, which is what makes dropping the rest a
+        // translation rather than a refusal to draw.
+        assert!(rows[rows.len() - 1].contains("ok"), "{rows:?}");
+        assert!(rows[rows.len() - 1].contains("link"), "{rows:?}");
     }
 }

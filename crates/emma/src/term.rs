@@ -29,8 +29,9 @@
 //!
 //! The transcript is ordinary terminal output. Emma draws a small **inline
 //! viewport** — ratatui's [`Viewport::Inline`](ratatui::Viewport::Inline) — in
-//! the last few rows of the normal screen buffer: a status line, whatever is
-//! being streamed or asked, an input box, and a hint. There is no alternate
+//! the last few rows of the normal screen buffer, read bottom-up: a status line
+//! on the very last row, a hint above it, the input box above that, and
+//! whatever is being streamed or asked in whatever is left. There is no alternate
 //! screen. Transcript lines are pushed above it with `insert_before`, which
 //! scrolls the screen the way `println!` does, so the terminal wraps them, keeps
 //! them in scrollback and lets a mouse select them. [`frame`] carries the whole
@@ -68,6 +69,7 @@ pub mod input;
 pub mod menu;
 pub mod palette;
 pub mod render;
+pub mod statusline;
 pub mod view;
 pub mod welcome;
 
@@ -351,7 +353,12 @@ impl Term {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
         if let Some(frame) = &self.frame {
-            frame.set_identity(model, &cwd.display().to_string(), &session_id);
+            frame.set_identity(
+                model,
+                &cwd.display().to_string(),
+                &session_id,
+                &session.display().to_string(),
+            );
             return;
         }
         self.side(self.skin.note(&format!(
@@ -362,6 +369,31 @@ impl Term {
             self.skin.glyphs.sep,
             session.display()
         )));
+    }
+
+    /// Adopt a status-line program the harness resolved.
+    ///
+    /// **The whole of this feature's wiring, and it is one call.** Everything a
+    /// status line can do wrong — hang, fail, print an escape sequence, be
+    /// pointed at somebody else's binary — is decided in `statusline.rs` here and
+    /// in the harness, so a caller has nothing to get right beyond handing over
+    /// what the config named.
+    ///
+    /// Ignored without a viewport, and that is not an oversight. `-p` is a
+    /// script's stdout, [`Term::silent`] draws nothing, and the fallback path
+    /// prints identity once as an ordinary line that scrolls away — none of the
+    /// three has a row to keep a live status on, so running somebody's program
+    /// for one would be a subprocess spawned to produce output with nowhere to
+    /// go. A subordinate terminal is skipped for the reason every meter is: the
+    /// status belongs to the process, not to a delegation.
+    pub fn set_status_source(&self, line: std::sync::Arc<emma_harness::StatusLine>) {
+        if self.subordinate {
+            return;
+        }
+        self.remember("set_status_source");
+        if let Some(frame) = &self.frame {
+            frame.set_status_source(line);
+        }
     }
 
     /// The caps the status meters are measured against. Called by the loop from
@@ -766,7 +798,7 @@ fn frame_wanted() -> bool {
 /// On Windows those differ: the screen buffer is usually far taller than the
 /// window, and a viewport sized from the buffer would be drawn off screen.
 #[cfg(windows)]
-fn terminal_size() -> Option<(u16, u16)> {
+pub(crate) fn terminal_size() -> Option<(u16, u16)> {
     use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Console::{
         GetConsoleScreenBufferInfo, GetStdHandle, CONSOLE_SCREEN_BUFFER_INFO, STD_OUTPUT_HANDLE,
@@ -790,7 +822,7 @@ fn terminal_size() -> Option<(u16, u16)> {
 }
 
 #[cfg(unix)]
-fn terminal_size() -> Option<(u16, u16)> {
+pub(crate) fn terminal_size() -> Option<(u16, u16)> {
     unsafe {
         let mut ws: libc::winsize = std::mem::zeroed();
         if libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws) != 0 {
@@ -804,7 +836,7 @@ fn terminal_size() -> Option<(u16, u16)> {
 }
 
 #[cfg(not(any(windows, unix)))]
-fn terminal_size() -> Option<(u16, u16)> {
+pub(crate) fn terminal_size() -> Option<(u16, u16)> {
     // An unknown platform gets the fallback, which is the whole product.
     None
 }

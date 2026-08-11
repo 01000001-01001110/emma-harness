@@ -59,6 +59,12 @@ use crate::hooks::{HookDef, HookEvent};
 pub(crate) struct Settings {
     #[serde(default)]
     hooks: BTreeMap<String, Vec<Group>>,
+    /// The bottom row of the screen, when the user named a program to draw it.
+    /// Read rather than ignored as of `statusline.rs`, which carries the whole
+    /// argument — including why this one key is honoured while the rest of the
+    /// file still is not.
+    #[serde(default, rename = "statusLine")]
+    pub(crate) status_line: Option<crate::statusline::StatusLineBlock>,
 }
 
 /// One matcher and the commands attached to it. Strict, because this is the
@@ -152,7 +158,11 @@ impl Settings {
                         name.clone(),
                         HookDef {
                             event: event.clone(),
-                            command: translate_command(root, &name, &entry.command)?,
+                            command: translate_command(
+                                root,
+                                &format!("hook `{name}`"),
+                                &entry.command,
+                            )?,
                             matcher: group.matcher.clone(),
                             // Seconds there, milliseconds here.
                             timeout_ms: entry.timeout.map(|s| s.saturating_mul(1_000)),
@@ -166,7 +176,11 @@ impl Settings {
     }
 }
 
-/// Turn a Claude Code hook command into a path Emma can exec, or refuse.
+/// Turn a Claude Code command string into a path Emma can exec, or refuse.
+///
+/// Used by both things a `settings.json` can point Emma at — a hook and a
+/// `statusLine` — because they are the same hazard wearing two names, and
+/// `name` is what puts the caller into the sentence.
 ///
 /// **This is the one place the two systems genuinely disagree, and Emma does not
 /// blink.** Claude Code's `command` is a shell string: it may pipe, expand
@@ -179,7 +193,7 @@ impl Settings {
 /// `hooks/x.sh` all resolve. Anything else is a startup error that says what to
 /// do about it — which is the same ruling as the unimplemented event, for the
 /// same reason. A guard that cannot be honoured must not be quietly dropped.
-fn translate_command(root: &Path, name: &str, raw: &str) -> Result<String> {
+pub(crate) fn translate_command(root: &Path, name: &str, raw: &str) -> Result<String> {
     let dir_name = root
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -201,7 +215,7 @@ fn translate_command(root: &Path, name: &str, raw: &str) -> Result<String> {
     if rest.is_empty() || rest.contains(SHELL_METACHARACTERS) || rest.contains(char::is_whitespace)
     {
         bail!(
-            "hook `{name}`: `{raw}` is a shell command. Emma execs a contained \
+            "{name}: `{raw}` is a shell command. Emma execs a contained \
              executable with a cleared environment and cannot honour a shell \
              string without dropping that. Move it into {}/hooks/ and reference \
              it by path",
@@ -217,8 +231,9 @@ fn translate_command(root: &Path, name: &str, raw: &str) -> Result<String> {
         rest.starts_with('/') || rest.starts_with('\\') || rest.as_bytes().get(1) == Some(&b':');
     if rooted || Path::new(rest).is_absolute() {
         bail!(
-            "hook `{name}`: `{raw}` is an absolute path. Hook commands must live \
-             inside {}/hooks/ so the config cannot run arbitrary executables",
+            "{name}: `{raw}` is an absolute path. A command named by \
+             configuration must live inside {}/hooks/ so the config cannot run \
+             arbitrary executables",
             root.display()
         );
     }
