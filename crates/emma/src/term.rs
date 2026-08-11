@@ -118,6 +118,11 @@ pub struct Term {
     /// them separately; keeping the half-built thing here rather than in the
     /// frame is what lets the fallback path use the same two calls.
     pending: Mutex<Prompt>,
+    /// This terminal belongs to a nested run — see [`Term::subordinate`].
+    subordinate: bool,
+    /// What was said to the status meters and the approval prompt, when
+    /// somebody asked to be told. See [`Term::recording`].
+    record: Option<Arc<Mutex<Vec<String>>>>,
 }
 
 impl Term {
@@ -180,6 +185,8 @@ impl Term {
             frame,
             marker: Mutex::default(),
             pending: Mutex::default(),
+            subordinate: false,
+            record: None,
         }
     }
 
@@ -202,6 +209,8 @@ impl Term {
             frame: None,
             marker: Mutex::default(),
             pending: Mutex::default(),
+            subordinate: false,
+            record: None,
         }
     }
 
@@ -215,6 +224,88 @@ impl Term {
             frame: None,
             marker: Mutex::default(),
             pending: Mutex::default(),
+            subordinate: false,
+            record: None,
+        }
+    }
+
+    /// A terminal that remembers what it was told, and draws nothing.
+    ///
+    /// It exists for one reason: the three status meters are the calls a nested
+    /// run must **not** make, and a no-op nobody can observe is a rule nobody
+    /// can test. Everything routed through [`Term::meter`] is recorded by name,
+    /// as is the approval prompt — which a subordinate terminal must keep, so a
+    /// test needs to see both halves of that rule and not only one.
+    pub fn recording() -> Self {
+        let mut term = Self::silent();
+        term.record = Some(Arc::new(Mutex::new(Vec::new())));
+        term
+    }
+
+    /// What was said to the meters and the prompt, in order. Empty unless this
+    /// terminal (or the one it is subordinate to) was built by
+    /// [`Term::recording`].
+    pub fn recorded(&self) -> Vec<String> {
+        match &self.record {
+            Some(rec) => rec.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            None => Vec::new(),
+        }
+    }
+
+    /// A nested run's view of this terminal.
+    ///
+    /// **The bug this exists to fix.** `Term` carries the *process's* status
+    /// meters, and a nested [`crate::agent::Agent`] would drive them with a
+    /// nested run's numbers: `set_budgets` would re-point the context and token
+    /// meters at the sub's caps for the rest of the process, `goal_ended` would
+    /// stop the parent's clock while the parent is still running, and `spent`
+    /// would feed the live line a per-goal figure smaller than the parent's, so
+    /// the meter would jump backwards mid-goal. A meter measured against the
+    /// wrong cap is the kind of untruth the status line exists to not have.
+    ///
+    /// So a subordinate terminal shares the frame, the skin and the stdin path,
+    /// and swallows exactly four calls: `set_budgets`, `goal_started`,
+    /// `goal_ended` and `spent`. It swallows the assistant's prose as well —
+    /// `delta`, `text`, `end_of_text` — because a delegation reports once at the
+    /// end rather than streaming a second conversation into the first.
+    ///
+    /// **What it must not swallow is the approval prompt.** A subagent inherits
+    /// the gate, and a prompt the user cannot see is the same defect as a prompt
+    /// they cannot evaluate, with the argument already made. `prompt_header`,
+    /// `prompt_question`, `prompt_network_question` and `prompt_answered` render
+    /// exactly as they do for the parent, and so do the tool lines and notes —
+    /// the sub's activity becomes ordinary lines on the parent's transcript.
+    pub fn subordinate(&self) -> Self {
+        Self {
+            skin: self.skin,
+            quiet: self.quiet,
+            enabled: self.enabled,
+            frame: self.frame.clone(),
+            marker: Mutex::default(),
+            pending: Mutex::default(),
+            subordinate: true,
+            record: self.record.clone(),
+        }
+    }
+
+    /// Anything that moves the status meters, which a subordinate terminal does
+    /// not have. One funnel rather than four `if`s, so a meter added later
+    /// cannot forget the rule.
+    fn meter(&self, event: &str, f: impl FnOnce(&Frame)) {
+        if self.subordinate {
+            return;
+        }
+        self.remember(event);
+        if let Some(frame) = &self.frame {
+            f(frame);
+        }
+    }
+
+    fn remember(&self, event: &str) {
+        if let Some(rec) = &self.record {
+            rec.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(event.to_string());
         }
     }
 
@@ -276,9 +367,9 @@ impl Term {
     /// The caps the status meters are measured against. Called by the loop from
     /// the budgets it was given, so nothing here has to know what a budget is.
     pub fn set_budgets(&self, max_context: i64, max_tokens: i64) {
-        if let Some(frame) = &self.frame {
-            frame.set_budgets(max_context, max_tokens);
-        }
+        self.meter("set_budgets", |frame| {
+            frame.set_budgets(max_context, max_tokens)
+        });
     }
 
     /// What a new user sees, once. See [`welcome`] and
@@ -317,7 +408,7 @@ impl Term {
     /// [`crate::goal::MarkerFilter`] for why that happens here, character by
     /// character, rather than on the finished text.
     pub fn delta(&self, text: &str) {
-        if !self.enabled {
+        if !self.enabled || self.subordinate {
             return;
         }
         let shown = self.filtered(|f| f.push(text));
@@ -328,7 +419,7 @@ impl Term {
     }
 
     pub fn end_of_text(&self) {
-        if !self.enabled {
+        if !self.enabled || self.subordinate {
             return;
         }
         // Whatever the filter is still holding, which for a turn ending on the
@@ -355,7 +446,7 @@ impl Term {
     /// Whole assistant text at once, for `-p` where nothing streamed.
     pub fn text(&self, text: &str) {
         let text = crate::goal::MarkerFilter::once(text);
-        if self.enabled && !text.trim().is_empty() {
+        if self.enabled && !self.subordinate && !text.trim().is_empty() {
             match &self.frame {
                 Some(frame) => frame.write_lines(
                     text.trim_end()
@@ -437,16 +528,12 @@ impl Term {
 
     pub fn goal_started(&self, goal: &str) {
         self.side(self.skin.goal(goal));
-        if let Some(frame) = &self.frame {
-            frame.goal_started();
-        }
+        self.meter("goal_started", Frame::goal_started);
     }
 
     /// The goal is over: the clock stops rather than freezing at its last value.
     pub fn goal_ended(&self) {
-        if let Some(frame) = &self.frame {
-            frame.goal_ended();
-        }
+        self.meter("goal_ended", Frame::goal_ended);
     }
 
     /// One model call's measurements, for the live half of the status line.
@@ -454,9 +541,7 @@ impl Term {
     /// weighted spend — because a status line with an estimate on it is a
     /// status line that lies at exactly the moment somebody checks it.
     pub fn spent(&self, context: i64, tokens: i64) {
-        if let Some(frame) = &self.frame {
-            frame.spent(Some(context), Some(tokens));
-        }
+        self.meter("spent", |frame| frame.spent(Some(context), Some(tokens)));
     }
 
     /// The evidence half of an approval prompt.
@@ -465,6 +550,7 @@ impl Term {
     /// asked, and it can be scrolled back to and selected — and is held for the
     /// viewport panel, which shows as much of it as fits.
     pub fn prompt_header(&self, tool: &str, preview: &str) {
+        self.remember("prompt_header");
         let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         pending.title = format!("Approve {tool}");
         pending.preview = preview.lines().map(str::to_string).collect();
@@ -505,6 +591,7 @@ impl Term {
         if !self.enabled {
             return;
         }
+        self.remember("prompt_question");
         let prompt = {
             let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
             pending.question = q.to_string();
@@ -572,7 +659,11 @@ impl Drop for Term {
     /// The ordinary exit path. `restore_terminal` is idempotent and global, so
     /// this racing the panic hook or an explicit call costs nothing.
     fn drop(&mut self) {
-        if self.frame.is_some() {
+        // Not on a subordinate view: it shares the parent's frame and goes out
+        // of scope at the end of every delegation, which is the middle of the
+        // parent's run. Restoring there would put the terminal back while the
+        // session is still drawing into it.
+        if self.frame.is_some() && !self.subordinate {
             restore_terminal();
         }
     }

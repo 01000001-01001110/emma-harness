@@ -29,6 +29,16 @@
 //! Compaction is lossy by decision: the words survive, the tool results do not,
 //! and the model is told so.
 //!
+//! **A goal may be delegated, once at a time, and the record says what came of
+//! it.** [`delegate`] is a `Tool` that runs a second [`agent::Agent`] against
+//! its own conversation, its own tools and its own prompt — the one in an
+//! `agents/<name>.md` file — while sharing this run's approval gate, session
+//! file, interrupt and token meter. The loop does not know it exists: nesting is
+//! values passed into [`agent::Setup`], never a branch inside it. What comes
+//! back is the sub's own text with a footer the *harness* composed from that
+//! run's log, because a delegation replaces evidence with testimony and the
+//! footer is what makes the testimony checkable.
+//!
 //! **The map.** [`agent`] is the loop and holds both properties above.
 //! [`approval`] is the gate it consults, and [`goal`] is what it holds across
 //! turns — the goal text, the done-check trait, and the kick. Around those:
@@ -45,13 +55,15 @@ pub mod agent;
 pub mod approval;
 pub mod cli;
 pub mod commands;
+pub mod delegate;
 pub mod goal;
 pub mod session;
 pub mod settings;
 pub mod skill;
 pub mod term;
 
-pub use agent::{Agent, Budgets, Ending, Interrupt, Outcome, Resumed, Setup};
+pub use agent::{Agent, Budgets, Ending, Interrupt, Outcome, Resumed, Setup, Spend};
 pub use approval::{Answer, Approvals, Asker, Gate, Verdict};
+pub use delegate::{Delegate, Nest};
 pub use goal::{Done, DoneCheck, Goal, MarkerClaim};
 pub use session::{Continuity, Restored, SessionLog};

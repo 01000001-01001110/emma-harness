@@ -53,6 +53,42 @@ fn what_init_writes_boots_as_a_harness() {
         "nothing tells the model it has tools"
     );
 
+    // Two delegation targets, and they must actually resolve — a template that
+    // ships a `Delegate` catalogue Emma cannot load would teach, first thing,
+    // that Emma's account of itself is not to be trusted.
+    let types = harness.agent_types();
+    assert_eq!(
+        types.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(),
+        vec!["explorer", "implementer"],
+        "{:?}",
+        harness.agent_notes()
+    );
+    assert!(
+        harness.agent_notes().is_empty(),
+        "init shipped an agent file the loader complained about: {:?}",
+        harness.agent_notes()
+    );
+    // Genuinely different in kind, which is the entire reason there are two:
+    // one can only look, the other can act, and `emma agents` is where the
+    // comparison shows up.
+    let tools = |name: &str| {
+        types
+            .iter()
+            .find(|a| a.name == name)
+            .and_then(|a| a.tools.clone())
+            .unwrap_or_default()
+    };
+    assert!(!tools("explorer")
+        .iter()
+        .any(|t| t == "Write" || t == "Bash"));
+    assert!(tools("implementer").iter().any(|t| t == "Bash"));
+    // The description is what a calling model reads to choose, so an agent
+    // without one is not offered at all.
+    for ty in types {
+        assert!(!ty.description.trim().is_empty(), "{}", ty.name);
+        assert!(!ty.instructions.trim().is_empty(), "{}", ty.name);
+    }
+
     // …and the report names what was written and what to type next.
     assert!(report.contains("config.json"), "{report}");
     assert!(report.contains("rules.md"), "{report}");

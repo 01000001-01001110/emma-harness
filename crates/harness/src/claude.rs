@@ -236,14 +236,45 @@ fn translate_command(root: &Path, name: &str, raw: &str) -> Result<String> {
 // program with more settings than Emma has.
 // ---------------------------------------------------------------------------
 
-/// The frontmatter fields Emma reads from `.claude/agents/<name>.md`. Permissive
-/// for the same reason `Settings` is: `model`, `color` and whatever else Claude
-/// Code grows are not Emma's business, and refusing to boot over them would make
-/// this compatibility feature an obstacle.
+/// The frontmatter fields Emma reads from `agents/<name>.md`. Permissive for the
+/// same reason `Settings` is: `category`, `version`, `color` and whatever else
+/// Claude Code grows are not Emma's business, and refusing to boot over them
+/// would make this compatibility feature an obstacle. **It must never gain
+/// `deny_unknown_fields`** — measured against a real library of 90 agent files,
+/// `category` and `version` appear throughout and every one of them would have
+/// been a boot failure.
+///
+/// Four fields are read and every one of them has a reader:
+///
+/// - `name` — checked against the file stem, which wins. See [`agents`].
+/// - `description` — what the calling model reads to choose an agent, and the
+///   only field a delegation target cannot do without. 63 of those 90 files
+///   carry it beside a `name`, 23 carry it alone, and 4 carry neither.
+/// - `tools` — the allowlist, in either spelling. See [`Tools::allowlist`] for
+///   what an *empty* one means, which is the trap in this format.
+/// - `model` — a per-agent model override. Honoured, because a file that says
+///   `model: claude-sonnet-4-5` and runs on something else is a lie the user
+///   cannot see.
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct AgentFront {
     #[serde(default)]
+    pub(crate) name: Option<String>,
+    #[serde(default)]
+    pub(crate) description: Option<String>,
+    #[serde(default)]
     pub(crate) tools: Option<Tools>,
+    #[serde(default)]
+    pub(crate) model: Option<String>,
+    /// Model calls this agent gets. Claude Code spells it `maxTurns`; both
+    /// spellings are accepted because Emma's own files are snake_case and the
+    /// foreign ones are not, and a budget that silently does not apply is worse
+    /// than no budget.
+    #[serde(default, alias = "maxTurns")]
+    pub(crate) max_turns: Option<u32>,
+    /// Weighted tokens this agent may spend, out of what remains of the
+    /// caller's. See `emma::delegate` for the ceiling it is clamped to.
+    #[serde(default, alias = "maxTokens")]
+    pub(crate) max_tokens: Option<i64>,
 }
 
 /// Claude Code writes `tools` either as a YAML list or as one comma-separated
@@ -269,6 +300,26 @@ impl Tools {
                 .collect(),
         }
     }
+
+    /// The allowlist an agent file declares, where **empty means "inherit"
+    /// rather than "nothing"**.
+    ///
+    /// This is the trap in the format and it is live. `tools:` with no value
+    /// parses as YAML null and never reaches here; `tools: []` and `tools: ""`
+    /// do, and under Emma's rules an empty allowlist means *no tools at all* —
+    /// which is the failure the note on [`Tools`] predicts, arriving through the
+    /// value rather than through the spelling. In Claude Code an absent `tools`
+    /// means inherit everything, and a present-but-empty one is the same
+    /// statement written differently: nobody writes `tools: []` meaning "this
+    /// agent may do nothing".
+    ///
+    /// So all three collapse to `None`, and `None` is the caller's signal to
+    /// inherit. An agent that really should have no tools is expressed by not
+    /// registering it, not by a list that reads as a typo.
+    pub(crate) fn allowlist(front: Option<Self>) -> Option<Vec<String>> {
+        let names = front?.into_vec();
+        (!names.is_empty()).then_some(names)
+    }
 }
 
 /// Split an agent file into the frontmatter Emma reads and the body it puts in
@@ -279,18 +330,57 @@ impl Tools {
 /// `tools:` are configuration, and sending them to the model as standing
 /// instructions would be telling it about machinery it cannot use. A file with
 /// no frontmatter is all body, which is also the correct answer.
-pub(crate) fn split_agent(text: &str) -> (AgentFront, &str) {
-    let Some(rest) = text.strip_prefix("---\n") else {
-        return (AgentFront::default(), text);
+/// **Line endings are tolerated, and that is not tidiness.** This required
+/// `---\n` exactly, so every CRLF agent file — which is every one of them on a
+/// Windows machine, and 90 out of 90 in the library this was measured against —
+/// fell through to "no frontmatter": its `tools` was ignored, its `description`
+/// was invisible, and its `name:`, `model:` and `category:` lines were handed to
+/// the model as standing instructions. Nothing failed; the file simply did not
+/// mean what it said. A byte-exact opener is a parser that works on the machine
+/// its author used.
+///
+/// The third element is the YAML error, when the frontmatter was found and could
+/// not be read. It used to be `unwrap_or_default()` and nothing else, which is
+/// how the failure above stayed invisible: an unreadable file and a file with no
+/// frontmatter produced the same empty value, and neither said so.
+pub(crate) fn split_agent(text: &str) -> (AgentFront, &str, Option<String>) {
+    // A byte-order mark before the opener is common from Windows editors, and it
+    // is the same class of silent miss.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let Some(rest) = open_frontmatter(text) else {
+        return (AgentFront::default(), text, None);
     };
     let Some(end) = rest.find("\n---") else {
-        return (AgentFront::default(), text);
+        return (AgentFront::default(), text, None);
     };
-    let front = serde_yaml::from_str(&rest[..end]).unwrap_or_default();
-    (front, rest[end + 4..].trim_start_matches('\n'))
+    let body = rest[end + 4..].trim_start_matches(['\r', '\n']);
+    match serde_yaml::from_str(&rest[..end]) {
+        Ok(front) => (front, body, None),
+        Err(e) => (AgentFront::default(), body, Some(e.to_string())),
+    }
 }
 
-/// The agent files available to select, by file stem, sorted.
+/// `---` on the first line, whatever the file's line endings are.
+fn open_frontmatter(text: &str) -> Option<&str> {
+    let rest = text.strip_prefix("---")?;
+    let rest = rest.strip_prefix('\r').unwrap_or(rest);
+    rest.strip_prefix('\n')
+}
+
+/// The agent files available to select **or to delegate to**, by file stem,
+/// sorted.
+///
+/// **The file stem is the name, and a `name:` in frontmatter that disagrees
+/// loses.** The stem is what `EMMA_PERSONA` names, what `agent_path` builds,
+/// and the only one of the two guaranteed unique — two files may declare the
+/// same `name`, and a catalogue keyed on a value that can collide silently
+/// drops one of them. The disagreement is worth saying out loud rather than
+/// resolving quietly, so `load_agents` notes it.
+///
+/// Top-level `*.md` only. A real library has subdirectories under `agents/`
+/// (23 of them, 205 files, on the machine this was measured against) and
+/// walking into them would flatten two namespaces into one where a collision is
+/// resolved by directory iteration order. Stated rather than discovered.
 pub(crate) fn agents(root: &Path) -> Result<Vec<String>> {
     let dir = root.join("agents");
     let mut out = Vec::new();
@@ -314,6 +404,65 @@ pub(crate) fn agents(root: &Path) -> Result<Vec<String>> {
 
 pub(crate) fn agent_path(root: &Path, name: &str) -> PathBuf {
     root.join("agents").join(format!("{name}.md"))
+}
+
+/// Every agent file in `<root>/agents/`, read as a delegation target, plus the
+/// notes about the ones that were dropped and why.
+///
+/// **Nothing here fails the boot.** A persona is selected by the operator at
+/// startup and a bad one is their mistake; an agent library is a directory
+/// somebody accumulated over months, and refusing to start because one file in
+/// ninety has no `description` is the outage this crate keeps ruling against.
+/// The dropped ones are named instead, and the names are shown by
+/// `emma config check` and at startup.
+///
+/// `description` is the one field a target cannot do without: it is what the
+/// calling model reads to choose. A file with a body and no description is a
+/// persona, not a delegation target, and it stays available as the former.
+pub(crate) fn load_agents(root: &Path) -> Result<(Vec<crate::AgentDef>, Vec<String>)> {
+    let mut out = Vec::new();
+    let mut notes = Vec::new();
+    for name in agents(root)? {
+        let path = agent_path(root, &name);
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(e) => {
+                notes.push(format!("agent `{name}` was not read: {e}"));
+                continue;
+            }
+        };
+        let (front, body, bad_yaml) = split_agent(&raw);
+        if let Some(problem) = bad_yaml {
+            notes.push(format!(
+                "agent `{name}`: its frontmatter could not be read, so nothing in it applied — \n                 not offered for delegation. {problem}"
+            ));
+            continue;
+        }
+        if let Some(declared) = front.name.as_deref() {
+            if declared != name {
+                notes.push(format!(
+                    "agent `{name}` declares name `{declared}`; the file name wins"
+                ));
+            }
+        }
+        let Some(description) = front.description.filter(|d| !d.trim().is_empty()) else {
+            notes.push(format!(
+                "agent `{name}` has no description, so nothing could tell a model when to \
+                 use it — not offered for delegation"
+            ));
+            continue;
+        };
+        out.push(crate::AgentDef {
+            name,
+            description: description.trim().to_string(),
+            instructions: body.to_string(),
+            tools: Tools::allowlist(front.tools),
+            model: front.model,
+            max_turns: front.max_turns,
+            max_tokens: front.max_tokens,
+        });
+    }
+    Ok((out, notes))
 }
 
 // endregion: Agents — Claude Code's nearest thing to a persona

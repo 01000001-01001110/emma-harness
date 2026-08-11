@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use emma::agent::{Agent, Ending, Interrupt, Setup};
+use emma::agent::{Agent, Ending, Interrupt, Setup, Spend};
 use emma::approval::{Approvals, Asker, Gate};
 use emma::cli::{self, Command};
 use emma::goal::{Goal, MarkerClaim};
@@ -45,6 +45,18 @@ fn main() -> Result<()> {
         Command::Init => {
             let cwd = std::env::current_dir().context("reading the working directory")?;
             return emma::commands::init(&cwd, &mut std::io::stdout());
+        }
+        // Reads the transcripts and prints. No harness, no key, no model — so it
+        // belongs here with the others rather than inside the runtime, and it
+        // still answers when the thing being investigated is why a run will not
+        // start.
+        Command::Agents => {
+            let dir = cli
+                .opts
+                .session_dir
+                .clone()
+                .or_else(|| SessionLog::default_dir(auth::home_dir().as_deref()));
+            return emma::commands::agents(dir.as_deref(), &mut std::io::stdout());
         }
         _ => {}
     }
@@ -109,19 +121,23 @@ async fn run(cli: cli::Cli) -> Result<()> {
     for tool in web.tools {
         registry.register(tool);
     }
-    // Consumes the registry: the unfiltered one must not survive the call.
-    let tools = harness.select_tools(registry)?;
-
     if cli.command == Command::ConfigCheck {
+        // The one path that does not delegate: it needs no key, and `Delegate`
+        // cannot be built without a provider. It prints the agent catalogue from
+        // the harness instead, and says that is what it is doing.
+        let tools = harness.select_tools(registry)?;
         return emma::commands::config_check(&harness, &tools, &cwd, &web.skipped);
     }
 
     let opts = cli.opts;
-    let term = if opts.print {
+    // `Arc` because a delegation borrows this same terminal — `Term::subordinate`
+    // shares the frame and the stdin path so a subagent's approval prompt reaches
+    // the same keyboard, while the status meters stay the parent's.
+    let term = Arc::new(if opts.print {
         Term::printing()
     } else {
         Term::interactive()
-    };
+    });
 
     // Before the reader, because the reader may *be* the delivery. A viewport
     // means raw mode, and raw mode is the state in which the terminal stops
@@ -159,12 +175,17 @@ async fn run(cli: cli::Cli) -> Result<()> {
              this directory.",
         );
     }
-    let approvals = Approvals::new(gate, asker);
+    // Shared with every nested run, and the sharing is the design: one gate, one
+    // set of session grants, one keyboard. A subagent with its own `Approvals`
+    // would re-ask for a host the user already approved — and could be handed a
+    // bypass the parent was not.
+    let approvals = Arc::new(Approvals::new(gate, asker));
 
     let home = auth::home_dir();
     let (model, _source) = settings::resolve(opts.model.as_deref(), home.as_deref());
     let key = auth::load_default()?;
-    let provider = AnthropicProvider::new(key, Some(model));
+    let provider: Arc<dyn Provider> =
+        Arc::new(AnthropicProvider::new(key.clone(), Some(model.clone())));
 
     let session_dir = opts
         .session_dir
@@ -202,15 +223,10 @@ async fn run(cli: cli::Cli) -> Result<()> {
                 r.kicks,
                 b.max_kicks
             ));
-            // Warned about, never refused: the user asked to resume, and what
-            // is dangerous is not the change but the change being invisible.
-            for line in restored.continuity.differences(
-                &harness.instructions_hash(),
-                &tools.schema_hash(),
-                provider.model_id(),
-            ) {
-                term.warn(&line);
-            }
+            // The continuity warnings are emitted further down, once the final
+            // tool surface exists: `Delegate` is registered after this point, so
+            // a schema hash taken here would be a hash of a surface no request
+            // will carry.
             Some(restored)
         }
         _ => None,
@@ -225,7 +241,7 @@ async fn run(cli: cli::Cli) -> Result<()> {
         Some(restored) => restored.id.clone(),
         None => SessionLog::new_id(),
     };
-    let log = match session_dir {
+    let log = Arc::new(match session_dir {
         Some(dir) => match SessionLog::open(&dir, &session_id) {
             Ok(log) => log,
             Err(e) => {
@@ -236,7 +252,73 @@ async fn run(cli: cli::Cli) -> Result<()> {
             }
         },
         None => SessionLog::none(),
-    };
+    });
+
+    // The token meter this process spends against, and the caps its status line
+    // measures against. Both are set here rather than in `Agent::new`, because
+    // both are facts about the *process*: a nested `Agent` constructed mid-run
+    // would otherwise re-point the meters at a sub-run's caps for the rest of it.
+    let budgets = opts.budgets;
+    let spend = Spend::new();
+    term.set_budgets(budgets.max_context, budgets.max_tokens);
+
+    // Delegation, when this harness resolved any agent types.
+    //
+    // Registered *before* `select_tools`, so a persona's `tools` list decides
+    // whether this run may delegate at all — leave `Delegate` out of it and the
+    // capability is gone for real rather than by convention. The child registries
+    // are built from `available`, which cannot contain `Delegate` because
+    // `Delegate` does not exist yet: that is the whole of the recursion guard,
+    // and it is structural rather than a check somebody has to remember.
+    let available: Vec<Arc<dyn Tool>> = registry.iter().cloned().collect();
+    let (delegate, agent_notes) = emma::Delegate::new(
+        emma::Nest {
+            harness: harness.clone(),
+            approvals: approvals.clone(),
+            log: log.clone(),
+            term: term.clone(),
+            interrupt: interrupt.clone(),
+            spend: spend.clone(),
+            cwd: cwd.clone(),
+            session_id: session_id.clone(),
+            caching: opts.caching,
+            budgets,
+        },
+        harness.agent_types(),
+        &available,
+        harness.tools(),
+        // A per-type model override, honoured rather than ignored: an agent file
+        // saying `model: claude-sonnet-4-5` that quietly runs on something else
+        // is a lie the user cannot see. Same key; the parent's own provider
+        // whenever the file names nothing, or names what is already running.
+        &|wanted| match wanted {
+            Some(named) if named != model => {
+                Arc::new(AnthropicProvider::new(key.clone(), Some(named.to_string())))
+            }
+            _ => provider.clone(),
+        },
+    );
+    for note in harness.agent_notes() {
+        term.note(note);
+    }
+    for note in &agent_notes {
+        term.note(note);
+    }
+    if let Some(delegate) = delegate {
+        registry.register(Arc::new(delegate) as Arc<dyn Tool>);
+    }
+    // Consumes the registry: the unfiltered one must not survive the call.
+    let tools = harness.select_tools(registry)?;
+
+    if let Some(restored) = &restored {
+        for line in restored.continuity.differences(
+            &harness.instructions_hash(),
+            &tools.schema_hash(),
+            provider.model_id(),
+        ) {
+            term.warn(&line);
+        }
+    }
     if !opts.print {
         // The run's identity, once, as an ordinary line that scrolls away like
         // any other. Model, directory and transcript path only: they are fixed
@@ -301,15 +383,16 @@ async fn run(cli: cli::Cli) -> Result<()> {
         }
     }
 
-    let budgets = opts.budgets;
     let agent = Agent::new(Setup {
-        provider: &provider,
+        provider: &*provider,
         harness: &harness,
+        instructions: &harness.instructions,
         tools: &tools,
         approvals: &approvals,
         log: &log,
         term: &term,
         interrupt: interrupt.clone(),
+        spend: spend.clone(),
         done: &MarkerClaim,
         cwd: cwd.clone(),
         session_id,

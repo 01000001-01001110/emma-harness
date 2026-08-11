@@ -525,9 +525,40 @@ pub fn preview(tool: &str, args: &Value) -> String {
                 diff(s("old_string"), s("new_string"))
             )
         }
+        // A delegation is the one call in the surface where the *model* wrote
+        // the instructions, so the prompt shows which agent, and the brief
+        // itself — capped like the diff is. Without this arm it falls to the
+        // pretty-JSON default and the prompt is a blob nobody reads, which is
+        // the prompt that manufactures consent.
+        crate::delegate::NAME => {
+            let mut out = format!("delegate to {}", s("agent"));
+            let context = args
+                .get("context")
+                .and_then(Value::as_array)
+                .map(|c| c.len())
+                .unwrap_or(0);
+            if context > 0 {
+                out.push_str(&format!("  ({context} facts handed down)"));
+            }
+            for line in s("task").lines().take(BRIEF_LINES) {
+                out.push_str(&format!("\n  {line}"));
+            }
+            if s("task").lines().count() > BRIEF_LINES {
+                out.push_str("\n  …");
+            }
+            if !s("deliver").is_empty() {
+                out.push_str(&format!("\n  must deliver: {}", s("deliver")));
+            }
+            out
+        }
         _ => serde_json::to_string_pretty(args).unwrap_or_else(|_| args.to_string()),
     }
 }
+
+/// How much of a delegation's brief the prompt shows. The brief is prose a model
+/// wrote and can be arbitrarily long; the question is "should this run at all",
+/// and the first few lines answer it.
+const BRIEF_LINES: usize = 12;
 
 /// What the human is shown before anything leaves the machine.
 ///

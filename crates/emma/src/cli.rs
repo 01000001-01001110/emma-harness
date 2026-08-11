@@ -32,6 +32,8 @@ USAGE
   emma model [<name>]          show or set the default model
   emma init                    write a minimal working .emma/ here and stop
   emma config check            load .emma/ (or .claude/) and report; no model call
+  emma agents                  what each subagent type has cost and produced,
+                               across every recorded session; no model call
   emma --resume [<id>] [<text>]
                                continue the newest session started in this
                                directory, or the one named. Nothing is re-run:
@@ -91,6 +93,11 @@ APPROVAL
   for the rest of the process and no longer — there is no permission that
   outlives the run. A PreToolUse hook that denies cannot be approved away.
 
+  Delegate asks like any other writer, showing which agent type and the first
+  lines of the brief. A subagent inherits this gate: its prompts are the same
+  prompts, on the same keyboard, which is why only one delegation runs at a
+  time.
+
   One exemption, by name: TaskCreate and TaskUpdate write, and never ask. They
   write only to the agent's own task file under .emma/, and a prompt every time
   the agent ticks off a task is a prompt that gets answered without being read —
@@ -126,6 +133,9 @@ pub enum Command {
         goal: Option<String>,
     },
     ConfigCheck,
+    /// What delegation has actually cost. Reads the session transcripts and
+    /// prints; calls no model, exactly as `config check` does not.
+    Agents,
     Help,
     Version,
 }
@@ -235,6 +245,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
             "init" if fresh(&command, &words) => command = Some(Command::Init),
             "api" if fresh(&command, &words) => command = Some(Command::Api(None)),
             "model" if fresh(&command, &words) => command = Some(Command::Model(None)),
+            "agents" if fresh(&command, &words) => command = Some(Command::Agents),
             "config" if fresh(&command, &words) => match it.next().as_deref() {
                 Some("check") => command = Some(Command::ConfigCheck),
                 Some(other) => {
@@ -376,6 +387,7 @@ pub fn typed_at_the_prompt(line: &str) -> Typed {
         (Some("api"), 1 | 2) => "api",
         (Some("model"), 1 | 2) => "model",
         (Some("config"), 2) if words[1].eq_ignore_ascii_case("check") => "config check",
+        (Some("agents"), 1) => "agents",
         // Everything else is a goal, including `init the database`, `model the
         // API surface` and every sentence that merely starts with one of these
         // words. The length checks above are what make that true.

@@ -54,11 +54,13 @@ async fn drive_goals(
     let mut agent = Agent::new(Setup {
         provider,
         harness: &harness,
+        instructions: &harness.instructions,
         tools: &tools,
         approvals: &approvals,
         log,
         term: &term,
         interrupt: Interrupt::new(),
+        spend: emma::agent::Spend::new(),
         done: &MarkerClaim,
         cwd: cwd.to_path_buf(),
         session_id: "sess-test".into(),

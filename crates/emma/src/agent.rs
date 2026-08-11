@@ -264,6 +264,61 @@ pub struct Outcome {
     pub kicks: u32,
 }
 
+/// The token meter one goal is charged against, shared with anything it
+/// delegates to.
+///
+/// **Why it is not a local.** `run_goal` kept `let mut tokens` and tested it
+/// after every call, which is exactly right for a loop that is the only thing
+/// spending. A delegation is a second loop spending the same budget, and it
+/// cannot reach a local — so the owner's ruling that a subagent spends the
+/// parent's budget is either this type or an `if call.name == "Delegate"` in
+/// `run_tool_call` adding the tool's self-reported cost. The second is the loop
+/// branching on a tool's identity, which the module doc forbids and which this
+/// project has already paid to remove twice.
+///
+/// **The parent link, and why `set` does not follow it.** A nested run gets a
+/// meter of its own whose every `add` also lands on its parent's, so the sub's
+/// spend charges the parent as it happens and the parent's `tokens > max_tokens`
+/// test sees it on its very next iteration. `set` is the per-goal reset and
+/// stays local: a nested `run_goal` opening its own goal would otherwise zero
+/// the meter of the goal that is paying for it.
+#[derive(Debug, Default)]
+pub struct Spend {
+    counted: std::sync::atomic::AtomicI64,
+    parent: Option<Arc<Spend>>,
+}
+
+impl Spend {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// A meter of its own that also charges `parent`.
+    pub fn child(parent: &Arc<Self>) -> Arc<Self> {
+        Arc::new(Self {
+            counted: std::sync::atomic::AtomicI64::new(0),
+            parent: Some(parent.clone()),
+        })
+    }
+
+    /// Charge, and answer what this meter now reads.
+    pub fn add(&self, tokens: i64) -> i64 {
+        if let Some(parent) = &self.parent {
+            parent.add(tokens);
+        }
+        self.counted.fetch_add(tokens, Ordering::SeqCst) + tokens
+    }
+
+    pub fn get(&self) -> i64 {
+        self.counted.load(Ordering::SeqCst)
+    }
+
+    /// The per-goal reset. Local by design — see the type's doc.
+    pub fn set(&self, tokens: i64) {
+        self.counted.store(tokens, Ordering::SeqCst);
+    }
+}
+
 // endregion: Budgets and endings
 
 // region: What a resumed run inherits
@@ -381,11 +436,22 @@ impl Interrupt {
 pub struct Setup<'a> {
     pub provider: &'a dyn Provider,
     pub harness: &'a Harness,
+    /// The system prompt, before the standing contract is appended.
+    ///
+    /// Taken here rather than read from `harness.instructions` because a
+    /// delegated run has the same harness — the same hooks, the same working
+    /// directory, the same skills — and a *different* prompt: the body of its
+    /// agent file. One field is the difference between that and a second
+    /// `Harness`, which would mean two objects claiming to be this project's
+    /// configuration.
+    pub instructions: &'a str,
     pub tools: &'a Registry,
     pub approvals: &'a Approvals,
     pub log: &'a SessionLog,
     pub term: &'a Term,
     pub interrupt: Arc<Interrupt>,
+    /// The token meter this run charges. See [`Spend`].
+    pub spend: Arc<Spend>,
     /// How this run decides a goal is met. One implementation today; the loop
     /// knows only the trait, so swapping in a task-list or check-command
     /// authority is a different value here rather than an edit below.
@@ -440,13 +506,15 @@ pub struct Agent<'a> {
 }
 
 impl<'a> Agent<'a> {
+    /// **This constructor deliberately touches nothing outside itself.** It used
+    /// to call `term.set_budgets(...)` here, on the argument that this is where
+    /// the budgets already were. That was true and it was a bug waiting for a
+    /// second `Agent`: the status meters belong to the *process*, and
+    /// constructing a nested one re-pointed the parent's context and token
+    /// meters at a sub-run's caps for the rest of the run. `main` sets them once
+    /// now, from the budgets it parsed, and `Term::subordinate` is what keeps a
+    /// nested run from moving them afterwards.
     pub fn new(s: Setup<'a>) -> Self {
-        // The two caps the status line's meters are measured against. Set here
-        // rather than in `main` because this is where the budgets already are,
-        // and a meter measured against the wrong cap is the kind of untruth the
-        // status line exists to not have.
-        s.term
-            .set_budgets(s.budgets.max_context, s.budgets.max_tokens);
         Self {
             s,
             chapters: Vec::new(),
@@ -511,7 +579,7 @@ impl<'a> Agent<'a> {
                 // so the working directory is recorded once per goal, which is
                 // also the only place the answer could change within a session.
                 "cwd": self.s.cwd.display().to_string(),
-                "instructions_hash": self.s.harness.instructions_hash(),
+                "instructions_hash": emma_harness::hash::short(self.s.instructions),
                 "tool_schema_hash": self.s.tools.schema_hash(),
                 "model": self.s.provider.model_id(),
                 "done_check": self.s.done.name(),
@@ -545,7 +613,9 @@ impl<'a> Agent<'a> {
         // more.
         let resuming_a_goal_in_flight = !resumed.messages.is_empty();
         let mut query: Vec<Message> = open_query(resumed.messages, opening);
-        let mut tokens = resumed.tokens;
+        // The meter, not a local: a delegation charges this same integer while
+        // it runs. See [`Spend`].
+        self.s.spend.set(resumed.tokens);
         let mut iterations = resumed.iterations;
         let mut kicks = resumed.kicks;
         let mut tool_calls_since_kick = 0u32;
@@ -617,7 +687,7 @@ impl<'a> Agent<'a> {
                 // call belong in the cached prefix, not in `query`.
                 instructions: format!(
                     "{}{}",
-                    self.s.harness.instructions,
+                    self.s.instructions,
                     goal::standing_contract(self.s.done)
                 ),
                 tools: tool_defs.clone(),
@@ -640,7 +710,7 @@ impl<'a> Agent<'a> {
             // `billable_total_tokens` beside them, because the log records what
             // the provider said; `cost_tokens` is the same call weighted by
             // price, and it is the only one the cap is tested against.
-            tokens += cost_tokens(&turn.usage);
+            let tokens = self.s.spend.add(cost_tokens(&turn.usage));
             self.s.log.append(
                 "model_call",
                 json!({
@@ -701,7 +771,11 @@ impl<'a> Agent<'a> {
             // never run cannot go anywhere, and `place_turn` is what decides
             // that rather than four branches each deciding it again.
             pending_turn = Some(turn.raw_content.clone());
-            if tokens > self.s.budgets.max_tokens {
+            // `spend.get()` rather than the value added above: a tool call
+            // earlier in this turn may have been a delegation, and what bounds
+            // this goal is everything charged to it rather than everything this
+            // loop spent itself.
+            if self.s.spend.get() > self.s.budgets.max_tokens {
                 break Ending::Tokens;
             }
 
@@ -795,7 +869,7 @@ impl<'a> Agent<'a> {
         let outcome = Outcome {
             ending,
             text: last_text,
-            tokens,
+            tokens: self.s.spend.get(),
             iterations,
             kicks,
         };

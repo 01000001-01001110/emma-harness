@@ -1,0 +1,804 @@
+//! Delegation, driven by a scripted model on both sides of it.
+//!
+//! The whole feature is testable without a network because a subagent is
+//! `Agent::run_goal` running a second time: the same `Fake` provider answers the
+//! parent and then the child, in the order the two loops ask.
+//!
+//! Four of these were validated by mutation — the guarantee was removed, the
+//! test was watched to fail, and the guarantee was restored. They are marked
+//! where they sit. The one that matters most is
+//! [`the_footer_is_the_harnesss_record_and_not_the_subagents_account`]: make
+//! `Facts::from` read the subagent's final message instead of the log and it
+//! goes red, which is the difference between a record and a claim.
+
+mod support;
+
+use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use emma::agent::{Agent, Budgets, Ending, Interrupt, Outcome, Setup, Spend};
+use emma::approval::{Answer, Approvals, Asker, Gate};
+use emma::delegate::{Delegate, Nest};
+use emma::goal::{Goal, MarkerClaim};
+use emma::session::SessionLog;
+use emma::term::Term;
+use emma_harness::{AgentDef, Flavor, Harness};
+use emma_llm::{Caching, Message, Mode, Provider};
+use emma_tool_api::{Registry, Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
+use serde_json::{json, Value};
+
+use support::{call, empty_harness, registry, text, Fake, Say, TestTool};
+
+// region: Building one
+// ---------------------------------------------------------------------------
+// Building one
+//
+// A parent `Agent` whose registry holds a real `Delegate`, whose agent types
+// hold real tools, and whose provider answers both loops from one script.
+// ---------------------------------------------------------------------------
+
+fn budgets() -> Budgets {
+    Budgets {
+        max_iterations: 20,
+        max_tokens: 1_000_000,
+        wall_clock: Duration::from_secs(60),
+        max_kicks: 1,
+        max_context: 1_000_000,
+    }
+}
+
+/// An agent type that inherits everything the caller has.
+fn agent_type(name: &str, tools: Option<Vec<&str>>) -> AgentDef {
+    AgentDef {
+        name: name.into(),
+        description: format!("the {name} agent, for a test"),
+        instructions: format!("You are {name}."),
+        tools: tools.map(|t| t.into_iter().map(str::to_string).collect()),
+        model: None,
+        max_turns: None,
+        max_tokens: None,
+    }
+}
+
+struct Run {
+    outcome: Outcome,
+    conversation: Vec<Message>,
+    parent_spend: i64,
+}
+
+/// Drive one parent goal whose registry contains `Delegate`.
+#[allow(clippy::too_many_arguments)]
+async fn delegating(
+    dir: &Path,
+    provider: Arc<Fake>,
+    defs: &[AgentDef],
+    sub_tools: Vec<Arc<dyn Tool>>,
+    approvals: Arc<Approvals>,
+    budgets: Budgets,
+    log: Arc<SessionLog>,
+    term: Arc<Term>,
+) -> Run {
+    let root = empty_harness(dir);
+    let harness = Arc::new(Harness::load_selecting(&root, Flavor::Emma, None).unwrap());
+    let spend = Spend::new();
+    let base: Arc<dyn Provider> = provider.clone();
+    let (delegate, _notes) = Delegate::new(
+        Nest {
+            harness: harness.clone(),
+            approvals: approvals.clone(),
+            log: log.clone(),
+            term: term.clone(),
+            interrupt: Interrupt::new(),
+            spend: spend.clone(),
+            cwd: dir.to_path_buf(),
+            session_id: "sess-test".into(),
+            caching: Caching::On,
+            budgets,
+        },
+        defs,
+        &sub_tools,
+        None,
+        &|_| base.clone(),
+    );
+    let tools = registry(vec![
+        Arc::new(delegate.expect("no agent types resolved")) as Arc<dyn Tool>
+    ]);
+
+    let mut agent = Agent::new(Setup {
+        provider: &*provider,
+        harness: &harness,
+        instructions: &harness.instructions,
+        tools: &tools,
+        approvals: &approvals,
+        log: &log,
+        term: &term,
+        interrupt: Interrupt::new(),
+        spend: spend.clone(),
+        done: &MarkerClaim,
+        cwd: dir.to_path_buf(),
+        session_id: "sess-test".into(),
+        budgets,
+        caching: Caching::On,
+        mode: Mode::Batch,
+    });
+    let outcome = agent
+        .run_goal(&Goal::new("find out where the retry policy lives"))
+        .await;
+    Run {
+        conversation: agent.conversation(),
+        parent_spend: spend.get(),
+        outcome,
+    }
+}
+
+fn delegate_to(agent: &str, task: &str) -> Say {
+    call("Delegate", json!({ "agent": agent, "task": task }))
+}
+
+/// Everything the parent's model was ever sent — which is where a `tool_result`
+/// carrying a footer shows up.
+fn allowing_everything() -> Arc<Approvals> {
+    Arc::new(Approvals::new(
+        Gate::SkipAll,
+        Asker::Scripted(Default::default()),
+    ))
+}
+
+// endregion: Building one
+
+// region: End to end
+// ---------------------------------------------------------------------------
+// End to end
+//
+// What a delegation looks like from the parent's side: one tool call in, one
+// message plus a record out.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_delegation_runs_a_nested_loop_and_returns_its_conclusion_under_a_footer() {
+    let dir = tempfile::tempdir().unwrap();
+    let (read, read_calls) = TestTool::returning("Read", "fn retry() {}");
+    let fake = Arc::new(Fake::new(vec![
+        // The parent delegates…
+        delegate_to("explorer", "where is the retry policy decided?"),
+        // …the sub reads a file and answers…
+        call("Read", json!({ "file_path": "src/retry.rs" })),
+        text("It is decided in src/retry.rs.\n\nGOAL COMPLETE"),
+        // …and the parent finishes on what came back.
+        text("The retry policy lives in src/retry.rs.\n\nGOAL COMPLETE"),
+    ]));
+
+    let run = delegating(
+        dir.path(),
+        fake.clone(),
+        &[agent_type("explorer", Some(vec!["Read"]))],
+        vec![read],
+        allowing_everything(),
+        budgets(),
+        Arc::new(SessionLog::none()),
+        Arc::new(Term::silent()),
+    )
+    .await;
+
+    assert_eq!(run.outcome.ending, Ending::Done);
+    // The sub really ran: its tool was called, by it, not by the parent.
+    assert_eq!(read_calls.load(Ordering::SeqCst), 1);
+
+    let seen = fake.transcript();
+    // The sub's own words reached the parent…
+    assert!(seen.contains("It is decided in src/retry.rs."), "{seen}");
+    // …under a footer the sub did not write.
+    assert!(seen.contains("ended: done"), "{seen}");
+    assert!(seen.contains("files read (1)"), "{seen}");
+    assert!(seen.contains("recorded by the harness"), "{seen}");
+}
+
+/// **The test the whole design turns on, and the one to mutate.**
+///
+/// The scripted subagent claims, in perfectly plausible prose, to have read two
+/// files and run a command that passed. It called no tool at all. Compose the
+/// footer from `outcome.text` rather than from the run's records and this goes
+/// red: the claimed paths appear under `files read`, and `cargo test → exit 0`
+/// appears under `commands run`.
+///
+/// Note what is *not* asserted: that the claim was removed. It is still there,
+/// verbatim, because the subagent's own account is what the parent asked for.
+/// What the footer adds is the means to check it.
+#[tokio::test]
+async fn the_footer_is_the_harnesss_record_and_not_the_subagents_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let (read, read_calls) = TestTool::returning("Read", "never called");
+    let fake = Arc::new(Fake::new(vec![
+        delegate_to("explorer", "check the retry tests"),
+        text(
+            "I read src/retry.rs and tests/retry.rs, and ran `cargo test` — exit status 0, \
+             everything passes.\n\nGOAL COMPLETE",
+        ),
+        text("Done.\n\nGOAL COMPLETE"),
+    ]));
+
+    let run = delegating(
+        dir.path(),
+        fake.clone(),
+        &[agent_type("explorer", Some(vec!["Read"]))],
+        vec![read],
+        allowing_everything(),
+        budgets(),
+        Arc::new(SessionLog::none()),
+        Arc::new(Term::silent()),
+    )
+    .await;
+    assert_eq!(run.outcome.ending, Ending::Done);
+    assert_eq!(
+        read_calls.load(Ordering::SeqCst),
+        0,
+        "the sub called nothing"
+    );
+
+    let seen = fake.transcript();
+    assert!(
+        seen.contains("I read src/retry.rs"),
+        "the claim was censored: {seen}"
+    );
+    assert!(
+        seen.contains("files read: none"),
+        "the footer credited files nothing opened: {seen}"
+    );
+    assert!(
+        seen.contains("commands run: none"),
+        "the footer credited a command nothing ran: {seen}"
+    );
+    assert!(
+        !seen.contains("cargo test → exit"),
+        "the footer echoed the model's account of a command: {seen}"
+    );
+}
+
+/// `Ending::Tokens` and `Ending::Done` leave the same confident final paragraph.
+/// Without the footer the parent cannot tell them apart, so this asserts the
+/// difference is on the wire — and that the partial answer is carried rather
+/// than thrown away.
+#[tokio::test]
+async fn a_subagent_that_ran_out_of_budget_is_not_reported_as_a_finished_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (read, _) = TestTool::returning("Read", "some file");
+    let mut ty = agent_type("explorer", Some(vec!["Read"]));
+    ty.max_tokens = Some(5_000);
+    let fake = Arc::new(Fake::new(vec![
+        delegate_to("explorer", "read everything"),
+        // One expensive call, over the type's own cap.
+        call("Read", json!({ "file_path": "src/big.rs" })).costing(9_000),
+        text("Understood.\n\nGOAL COMPLETE"),
+    ]));
+
+    let run = delegating(
+        dir.path(),
+        fake.clone(),
+        &[ty],
+        vec![read],
+        allowing_everything(),
+        budgets(),
+        Arc::new(SessionLog::none()),
+        Arc::new(Term::silent()),
+    )
+    .await;
+    assert_eq!(run.outcome.ending, Ending::Done);
+
+    let seen = fake.transcript();
+    assert!(seen.contains("ended: tokens"), "{seen}");
+    assert!(seen.contains("as partial"), "{seen}");
+    // A failed delegation is a `tool_result` the model routes around, never an
+    // abort — the governing rule of the whole loop, applied without exception.
+    assert!(seen.contains("is_error"), "{seen}");
+    assert!(seen.contains("Re-issuing the same brief"), "{seen}");
+}
+
+/// One meter, in the strongest sense available: the same integer. Without the
+/// shared `Spend` the parent's cap would bound only the parent's own calls, and
+/// a delegation would be a way to spend past it.
+#[tokio::test]
+async fn a_subagents_spend_charges_the_parents_meter() {
+    let dir = tempfile::tempdir().unwrap();
+    let (read, _) = TestTool::returning("Read", "x");
+    let fake = Arc::new(Fake::new(vec![
+        delegate_to("explorer", "look").costing(100),
+        call("Read", json!({ "file_path": "a.rs" })).costing(7_000),
+        text("found it\n\nGOAL COMPLETE").costing(300),
+        text("ok\n\nGOAL COMPLETE").costing(100),
+    ]));
+
+    let run = delegating(
+        dir.path(),
+        fake.clone(),
+        &[agent_type("explorer", Some(vec!["Read"]))],
+        vec![read],
+        allowing_everything(),
+        budgets(),
+        Arc::new(SessionLog::none()),
+        Arc::new(Term::silent()),
+    )
+    .await;
+
+    // 100 + 100 from the parent's two calls, 7,300 from the sub's.
+    assert_eq!(run.parent_spend, 7_500);
+    assert_eq!(run.outcome.tokens, 7_500);
+}
+
+// endregion: End to end
+
+// region: The three things that would bite
+// ---------------------------------------------------------------------------
+// The three things that would bite
+//
+// Recursion, the session file, and two prompts on one keyboard.
+// ---------------------------------------------------------------------------
+
+/// Recursion is prevented by the child registry not containing `Delegate`, so
+/// the hazard is a future edit that builds that registry from the parent's. This
+/// is written the same way `approval.rs`'s exemption test is, and for the same
+/// reason: the failure is what somebody later *adds*.
+#[tokio::test]
+async fn an_agent_type_cannot_be_given_the_delegate_tool_even_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let (read, _) = TestTool::returning("Read", "x");
+    let fake = Arc::new(Fake::new(vec![
+        delegate_to("explorer", "delegate further, if you can"),
+        // The inner model tries. There is nothing to call.
+        call("Delegate", json!({ "agent": "explorer", "task": "deeper" })),
+        text("I cannot delegate from here.\n\nGOAL COMPLETE"),
+        text("Right.\n\nGOAL COMPLETE"),
+    ]));
+
+    let run = delegating(
+        dir.path(),
+        fake.clone(),
+        // The file names it explicitly. It still cannot have it: the tool does
+        // not exist when the child registry is built.
+        &[agent_type("explorer", Some(vec!["Read", "Delegate"]))],
+        vec![read],
+        allowing_everything(),
+        budgets(),
+        Arc::new(SessionLog::none()),
+        Arc::new(Term::silent()),
+    )
+    .await;
+
+    assert_eq!(run.outcome.ending, Ending::Done);
+    let seen = fake.transcript();
+    assert!(seen.contains("no_such_tool"), "{seen}");
+    assert!(
+        seen.contains("`Delegate` is not available"),
+        "the inner model got something other than the ordinary unknown-tool observation: {seen}"
+    );
+}
+
+/// The fold test the mechanism note asks for by name.
+///
+/// A sub record written under the parent's own `kind` names would make
+/// `Fold::close_turn` place the parent's held turn without its results —
+/// `answered()` fails, `place_turn` returns false, and the parent's whole turn
+/// is silently dropped from every resume. Nothing else in the suite would
+/// notice.
+#[tokio::test]
+async fn folding_a_session_containing_a_delegation_returns_the_parents_conversation() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = Arc::new(SessionLog::open(dir.path(), "sess-delegation").unwrap());
+    let (read, _) = TestTool::returning("Read", "fn retry() {}");
+    let fake = Arc::new(Fake::new(vec![
+        delegate_to("explorer", "where is retry decided?"),
+        call("Read", json!({ "file_path": "src/retry.rs" })),
+        text("src/retry.rs.\n\nGOAL COMPLETE"),
+        text("It is in src/retry.rs.\n\nGOAL COMPLETE"),
+    ]));
+
+    let run = delegating(
+        dir.path(),
+        fake.clone(),
+        &[agent_type("explorer", Some(vec!["Read"]))],
+        vec![read],
+        allowing_everything(),
+        budgets(),
+        log.clone(),
+        Arc::new(Term::silent()),
+    )
+    .await;
+    assert_eq!(run.outcome.ending, Ending::Done);
+
+    let folded = emma::session::fold(log.path()).unwrap();
+    assert_eq!(
+        folded, run.conversation,
+        "folding a session with a delegation in it did not reproduce the parent's conversation"
+    );
+    // The sub's traffic really is in the same file — the audit trail is not the
+    // thing being protected here, the parent's fold is.
+    let records = SessionLog::read(log.path()).unwrap();
+    let kinds: Vec<&str> = records.iter().filter_map(|r| r["kind"].as_str()).collect();
+    assert!(kinds.contains(&"sub.goal"), "{kinds:?}");
+    assert!(kinds.contains(&"sub.tool_call"), "{kinds:?}");
+    assert!(kinds.contains(&"delegation"), "{kinds:?}");
+    // Every sub record says which delegation wrote it and which parent turn
+    // asked, which is what makes one file separable by `grep`.
+    for record in records
+        .iter()
+        .filter(|r| r["kind"].as_str().is_some_and(|k| k.starts_with("sub.")))
+    {
+        assert!(record["sub_id"].is_string(), "{record}");
+        assert!(record["parent_turn_id"].is_string(), "{record}");
+    }
+}
+
+/// A tool that reports the highest number of concurrent calls it ever saw.
+struct Overlapping {
+    live: Arc<AtomicUsize>,
+    peak: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl Tool for Overlapping {
+    fn name(&self) -> &'static str {
+        "Read"
+    }
+    fn description(&self) -> &str {
+        "counts how many callers are inside it at once"
+    }
+    fn input_schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    fn meta(&self) -> ToolMeta {
+        ToolMeta {
+            read_only: true,
+            reaches_network: false,
+            idempotent: true,
+        }
+    }
+    async fn invoke(
+        &self,
+        _ctx: &ToolCtx,
+        _args: Value,
+    ) -> anyhow::Result<Result<ToolOutcome, ToolError>> {
+        let live = self.live.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(live, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        self.live.fetch_sub(1, Ordering::SeqCst);
+        Ok(Ok(ToolOutcome::new("read")))
+    }
+}
+
+/// **The one-at-a-time rule, and what enforces it.**
+///
+/// Two `invoke` calls launched together. The permit is what keeps the second
+/// waiting; without it both nested runs would be inside the tool at once and the
+/// peak would be 2 — and, on a real terminal, two approval prompts would be
+/// racing for one stdin, which is the `y`-answers-the-wrong-question defect
+/// `LineSource::drain` exists to prevent.
+///
+/// Mutation-checked: removing `let _permit = self.permit.acquire().await` makes
+/// this fail.
+#[tokio::test]
+async fn two_delegations_never_overlap() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let harness = Arc::new(Harness::load_selecting(&root, Flavor::Emma, None).unwrap());
+    let live = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let tool: Arc<dyn Tool> = Arc::new(Overlapping {
+        live: live.clone(),
+        peak: peak.clone(),
+    });
+    // Two tool calls at the front of the script, so that *whichever* nested run
+    // reaches the model first, the next one to reach it also gets a tool call
+    // and lands inside `Overlapping` while the first is still there. A script
+    // whose second entry was a text turn would let the second run finish without
+    // ever entering the tool, and the test would pass with the permit removed —
+    // which it did, before this comment was written.
+    let fake = Arc::new(Fake::new(vec![
+        call("Read", json!({ "file_path": "a" })),
+        call("Read", json!({ "file_path": "b" })),
+        text("done\n\nGOAL COMPLETE"),
+        text("done\n\nGOAL COMPLETE"),
+    ]));
+    let base: Arc<dyn Provider> = fake.clone();
+    let (delegate, _) = Delegate::new(
+        Nest {
+            harness,
+            approvals: allowing_everything(),
+            log: Arc::new(SessionLog::none()),
+            term: Arc::new(Term::silent()),
+            interrupt: Interrupt::new(),
+            spend: Spend::new(),
+            cwd: dir.path().to_path_buf(),
+            session_id: "sess-test".into(),
+            caching: Caching::On,
+            budgets: budgets(),
+        },
+        &[agent_type("explorer", Some(vec!["Read"]))],
+        &[tool],
+        None,
+        &|_| base.clone(),
+    );
+    let delegate = delegate.unwrap();
+    let ctx = ToolCtx {
+        cwd: dir.path().to_path_buf(),
+        session_id: "sess-test".into(),
+        turn_id: "turn-1".into(),
+    };
+    let one = delegate.invoke(&ctx, json!({ "agent": "explorer", "task": "a" }));
+    let two = delegate.invoke(&ctx, json!({ "agent": "explorer", "task": "b" }));
+    let (a, b) = tokio::join!(one, two);
+    assert!(a.unwrap().is_ok());
+    assert!(b.unwrap().is_ok());
+    assert_eq!(
+        peak.load(Ordering::SeqCst),
+        1,
+        "two subagents were inside the tool surface at the same time"
+    );
+}
+
+// endregion: The three things that would bite
+
+// region: The status meters
+// ---------------------------------------------------------------------------
+// The status meters
+//
+// The latent bug, in both halves: the constructor that used to move them, and
+// the nested run that would keep moving them.
+// ---------------------------------------------------------------------------
+
+/// `Agent::new` used to call `term.set_budgets(...)`. Constructing a nested
+/// `Agent` therefore re-pointed the process's context and token meters at a
+/// sub-run's caps for the rest of the run — a meter measured against the wrong
+/// cap, which is exactly the untruth the status line exists to not have.
+#[tokio::test]
+async fn constructing_an_agent_never_moves_the_status_meters() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let harness = Harness::load_selecting(&root, Flavor::Emma, None).unwrap();
+    let term = Term::recording();
+    let tools = Registry::new();
+    let approvals = Approvals::unattended();
+    let fake = Fake::new(Vec::new());
+    let log = SessionLog::none();
+    let _agent = Agent::new(Setup {
+        provider: &fake,
+        harness: &harness,
+        instructions: &harness.instructions,
+        tools: &tools,
+        approvals: &approvals,
+        log: &log,
+        term: &term,
+        interrupt: Interrupt::new(),
+        spend: Spend::new(),
+        done: &MarkerClaim,
+        cwd: dir.path().to_path_buf(),
+        session_id: "sess-test".into(),
+        budgets: budgets(),
+        caching: Caching::On,
+        mode: Mode::Batch,
+    });
+    assert!(
+        term.recorded().is_empty(),
+        "constructing an Agent touched the status line: {:?}",
+        term.recorded()
+    );
+}
+
+/// The other three of the same shape: a nested `goal_started`/`goal_ended` stops
+/// the parent's clock while the parent is still running, and a nested `spent`
+/// feeds the live line a per-goal figure smaller than the parent's, so the meter
+/// jumps backwards mid-goal.
+///
+/// The approval prompt is asserted in the same test on purpose. A subordinate
+/// terminal that muted it would silently convert every sub-approval into a hang
+/// or a denial, and a test that only checked the meters were quiet would pass.
+#[tokio::test]
+async fn a_nested_run_moves_no_meter_and_still_reaches_the_keyboard() {
+    let dir = tempfile::tempdir().unwrap();
+    let term = Arc::new(Term::recording());
+    let (write, write_calls) = TestTool::ok("Write", false);
+    let fake = Arc::new(Fake::new(vec![
+        delegate_to("implementer", "add the file"),
+        call("Write", json!({ "file_path": "a.rs", "content": "x" })),
+        text("written\n\nGOAL COMPLETE"),
+        text("done\n\nGOAL COMPLETE"),
+    ]));
+
+    // The parent's own meters, moved once before the run, exactly as `main` does.
+    term.set_budgets(budgets().max_context, budgets().max_tokens);
+    let approvals = Arc::new(Approvals::new(
+        Gate::Ask,
+        // Two: the delegation itself is gated like any other writer, and then
+        // the subagent's `Write` is gated again — on the same terminal, from
+        // the same queue.
+        Asker::Scripted(vec![Answer::Yes, Answer::Yes].into()),
+    ));
+    let run = delegating(
+        dir.path(),
+        fake.clone(),
+        &[agent_type("implementer", Some(vec!["Write"]))],
+        vec![write],
+        approvals,
+        budgets(),
+        Arc::new(SessionLog::none()),
+        term.clone(),
+    )
+    .await;
+    assert_eq!(run.outcome.ending, Ending::Done);
+    assert_eq!(
+        write_calls.load(Ordering::SeqCst),
+        1,
+        "the sub's write did not run"
+    );
+
+    let said = term.recorded();
+    // The sub's write was gated, on the parent's terminal, with the parent's
+    // keyboard answering it.
+    assert_eq!(
+        said.iter().filter(|s| *s == "prompt_header").count(),
+        2,
+        "the delegation and the subagent's write were not both put to the human: {said:?}"
+    );
+    // The parent's own goal moved the meters exactly as many times as the parent
+    // has goals and model calls — one `set_budgets`, one `goal_started`, one
+    // `goal_ended`, one `spent` per parent call. A nested run adding its own is
+    // the bug.
+    let count = |what: &str| said.iter().filter(|s| *s == what).count();
+    assert_eq!(count("set_budgets"), 1, "{said:?}");
+    assert_eq!(count("goal_started"), 1, "{said:?}");
+    assert_eq!(count("goal_ended"), 1, "{said:?}");
+    assert_eq!(
+        count("spent"),
+        2,
+        "the sub fed the parent's meter: {said:?}"
+    );
+}
+
+// endregion: The status meters
+
+// region: The gate, the budget and the resume
+// ---------------------------------------------------------------------------
+// The gate, the budget and the resume
+//
+// Three narrow rulings that would each be silent if they broke.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn delegation_is_gated_and_the_prompt_shows_the_brief() {
+    // `read_only: false` unconditionally, including for an agent type whose
+    // tools are entirely read-only: the tool set is configuration, and a
+    // `meta()` that varied with it would put the gate's answer in a file the
+    // reviewer is not looking at.
+    let preview = emma::approval::preview(
+        "Delegate",
+        &json!({
+            "agent": "explorer",
+            "task": "find every call site of the old constructor",
+            "context": ["src/a.rs is the caller", "cargo build already fails"],
+            "deliver": "the paths and line numbers",
+        }),
+    );
+    assert!(preview.contains("explorer"), "{preview}");
+    assert!(preview.contains("old constructor"), "{preview}");
+    assert!(preview.contains("2 facts"), "{preview}");
+    assert!(preview.contains("the paths and line numbers"), "{preview}");
+    // The fallback would have been pretty-printed JSON, which is the prompt
+    // people learn to approve without reading.
+    assert!(!preview.contains('{'), "{preview}");
+}
+
+#[tokio::test]
+async fn a_delegation_refuses_to_start_when_the_goal_has_almost_nothing_left() {
+    // A delegation launched with nothing left returns a good answer into a goal
+    // that immediately ends, and the work is lost though it was paid for. The
+    // refusal is a `tool_result` the model can route around, never a missing
+    // tool — a capability that silently disappears late in every goal is a trap
+    // of a different shape.
+    let dir = tempfile::tempdir().unwrap();
+    let (read, read_calls) = TestTool::returning("Read", "x");
+    let fake = Arc::new(Fake::new(vec![
+        delegate_to("explorer", "look at everything"),
+        text("I will do it here instead.\n\nGOAL COMPLETE"),
+    ]));
+    let tight = Budgets {
+        max_tokens: 1_000,
+        ..budgets()
+    };
+
+    let run = delegating(
+        dir.path(),
+        fake.clone(),
+        &[agent_type("explorer", Some(vec!["Read"]))],
+        vec![read],
+        allowing_everything(),
+        tight,
+        Arc::new(SessionLog::none()),
+        Arc::new(Term::silent()),
+    )
+    .await;
+    assert_eq!(run.outcome.ending, Ending::Done);
+    assert_eq!(
+        read_calls.load(Ordering::SeqCst),
+        0,
+        "a subagent started anyway"
+    );
+    let seen = fake.transcript();
+    assert!(seen.contains("tool_unavailable"), "{seen}");
+    assert!(seen.contains("I cannot start a delegation"), "{seen}");
+}
+
+/// The measurement, end to end: a delegation happens, and a person can ask what
+/// it cost without opening a JSONL file.
+///
+/// It reads the same records the footer is built from, so the two cannot
+/// disagree about what happened — and it calls no model, which is what makes it
+/// safe to run while wondering whether delegation is worth it at all.
+#[tokio::test]
+async fn what_a_delegation_cost_can_be_read_back_across_sessions() {
+    let dir = tempfile::tempdir().unwrap();
+    let sessions = dir.path().join("sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    let log = Arc::new(SessionLog::open(&sessions, "sess-0000000000001-1").unwrap());
+    let (read, _) = TestTool::returning("Read", "fn retry() {}");
+    let fake = Arc::new(Fake::new(vec![
+        delegate_to("explorer", "where is retry decided?").costing(50),
+        call("Read", json!({ "file_path": "src/retry.rs" })).costing(2_000),
+        text("src/retry.rs:14.\n\nGOAL COMPLETE").costing(300),
+        text("It is at src/retry.rs:14.\n\nGOAL COMPLETE").costing(50),
+    ]));
+    let run = delegating(
+        dir.path(),
+        fake.clone(),
+        &[agent_type("explorer", Some(vec!["Read"]))],
+        vec![read],
+        allowing_everything(),
+        budgets(),
+        log.clone(),
+        Arc::new(Term::silent()),
+    )
+    .await;
+    assert_eq!(run.outcome.ending, Ending::Done);
+
+    let mut out = Vec::new();
+    emma::commands::agents(Some(&sessions), &mut out).unwrap();
+    let report = String::from_utf8(out).unwrap();
+    assert!(report.contains("explorer"), "{report}");
+    assert!(report.contains("done 1"), "{report}");
+    assert!(report.contains("delegations    1"), "{report}");
+    // The spend is the sub's own, taken off its record rather than off the
+    // parent's total: 2,300 for its two calls.
+    assert!(report.contains("2300"), "{report}");
+    assert!(report.contains("where is retry decided?"), "{report}");
+}
+
+#[test]
+fn asking_what_delegation_cost_before_delegating_anything_says_so() {
+    // The empty case is a real one — most sessions never delegate — and a table
+    // of zeroes reads as a broken command.
+    let dir = tempfile::tempdir().unwrap();
+    let mut out = Vec::new();
+    emma::commands::agents(Some(dir.path()), &mut out).unwrap();
+    let report = String::from_utf8(out).unwrap();
+    assert!(report.contains("Nothing has been delegated"), "{report}");
+    assert!(report.contains("emma config check"), "{report}");
+}
+
+#[test]
+fn a_resumed_parent_gets_back_what_its_delegations_spent() {
+    // The sub's own `sub.model_call` records are namespaced and invisible to
+    // `restore_records`, so without the `delegation` arm a resumed parent would
+    // come back with a meter missing everything its subagents spent — which is a
+    // way to spend past a cap.
+    let restored = emma::session::restore_records(&[
+        json!({ "kind": "goal", "text": "g", "opening": "g" }),
+        json!({ "kind": "model_call", "cost_tokens": 100 }),
+        json!({ "kind": "delegation", "agent": "explorer", "cost_tokens": 7_400 }),
+        json!({ "kind": "model_call", "cost_tokens": 100 }),
+    ]);
+    assert_eq!(restored.tokens, 7_600);
+    // …and it must not inflate the call count: the parent made one model call
+    // for that turn, not fifteen.
+    assert_eq!(restored.iterations, 2);
+}
+
+// endregion: The gate, the budget and the resume

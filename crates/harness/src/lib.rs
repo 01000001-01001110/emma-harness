@@ -383,6 +383,53 @@ impl SkillDef {
 
 // endregion: Skills
 
+// region: Agent types
+// ---------------------------------------------------------------------------
+// Agent types
+//
+// The same `agents/<name>.md` files a persona can be selected from, read for a
+// second and independent purpose: as things a *model* may delegate to. The file
+// format is Claude Code's and is not Emma's to change — `.emma/agents/` uses
+// it too, and `.emma/` still wins outright where both directories exist,
+// because `discover` already resolved that and this reads whatever it chose.
+//
+// The two uses share one format and have opposite selection rules, which is why
+// they have separate accessors and no function takes a boolean saying which it
+// is: `Harness::persona` is chosen by a human at startup, and an `AgentDef` is
+// chosen by the model at call time from a closed list. `PERSONA_ENV`'s comment —
+// *a model choosing its own persona is a self-modifying prompt* — is what makes
+// that distinction load-bearing rather than tidy.
+// ---------------------------------------------------------------------------
+
+/// One delegation target, resolved from `agents/<name>.md`.
+///
+/// Every field here is consumed by `emma::delegate`, which is the rule this
+/// struct is written to: `name` and `description` compose the tool's catalogue
+/// and its closed enum, `instructions` is the sub-run's system prompt, `tools`
+/// selects its registry, `model` picks its provider, and the two budget fields
+/// bound what it may spend. A field nobody reads is a declaration pretending to
+/// be a mechanism.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentDef {
+    /// The file stem. See `claude::agents` for why it beats a `name:` in
+    /// frontmatter.
+    pub name: String,
+    /// What the calling model reads to decide whether to delegate here.
+    pub description: String,
+    /// The body of the file: the sub-run's standing instructions.
+    pub instructions: String,
+    /// `None` means "inherit whatever the caller has", which is Claude Code's
+    /// meaning for an absent list and — deliberately — for an empty one too.
+    /// See `claude::Tools::allowlist`.
+    pub tools: Option<Vec<String>>,
+    /// A model id, honoured rather than ignored.
+    pub model: Option<String>,
+    pub max_turns: Option<u32>,
+    pub max_tokens: Option<i64>,
+}
+
+// endregion: Agent types
+
 // region: The resolved value
 // ---------------------------------------------------------------------------
 // The resolved value
@@ -407,6 +454,8 @@ pub struct Harness {
     commands: BTreeMap<String, String>,
     hooks: Vec<ResolvedHook>,
     tools: Option<Vec<String>>,
+    agents: Vec<AgentDef>,
+    agent_notes: Vec<String>,
 }
 
 /// A command expansion. Both halves are kept so the log can record what the user
@@ -489,6 +538,11 @@ impl Harness {
             },
         };
 
+        // Sorted by name, for the same reason `skills()` is: the catalogue rides
+        // in the cached prompt prefix and directory iteration order must not
+        // decide the prompt bytes. `claude::agents` sorts, and this preserves it.
+        let (agents, agent_notes) = claude::load_agents(&root)?;
+
         Ok(Self {
             instructions,
             persona,
@@ -497,6 +551,8 @@ impl Harness {
             commands: load_commands(&root)?,
             hooks: hooks::resolve(&root, &spine_path, &hook_defs, block.hooks.as_deref())?,
             tools: block.tools,
+            agents,
+            agent_notes,
             flavor,
             root,
         })
@@ -559,6 +615,25 @@ impl Harness {
     /// registered tool.
     pub fn tools(&self) -> Option<&[String]> {
         self.tools.as_deref()
+    }
+
+    /// Every delegation target this harness resolved, sorted by name.
+    ///
+    /// Deliberately a different accessor from [`Harness::persona`] even though
+    /// both come from `agents/`: one file format, two selection rules, and the
+    /// cheap guard against the rule from one leaking into the other is that no
+    /// function serves both. See the region comment on [`AgentDef`].
+    pub fn agent_types(&self) -> &[AgentDef] {
+        &self.agents
+    }
+
+    /// Agent files that were found and not offered, and why — one sentence each.
+    ///
+    /// Read by `main` at startup and by `emma config check`. A catalogue quietly
+    /// shorter than the directory is the gap nobody notices until the model
+    /// cannot find an agent that is plainly there.
+    pub fn agent_notes(&self) -> &[String] {
+        &self.agent_notes
     }
 
     /// Apply the allowlist to a registry, consuming it.
@@ -647,6 +722,8 @@ impl Harness {
             "empty": self.is_empty(),
             "tools": self.tools,
             "skills": skills,
+            "agents": self.agents.iter().map(|a| &a.name).collect::<Vec<_>>(),
+            "agent_notes": self.agent_notes,
             "commands": self.commands.keys().collect::<Vec<_>>(),
             "hooks": hooks,
         })
@@ -805,8 +882,13 @@ fn assemble(
                 let path = claude::agent_path(root, name);
                 let raw = std::fs::read_to_string(&path)
                     .with_context(|| format!("reading {}", path.display()))?;
-                let (front, body) = claude::split_agent(&raw);
-                tools = front.tools.map(claude::Tools::into_vec);
+                let (front, body, _) = claude::split_agent(&raw);
+                // An empty list means "inherit", not "nothing" — see
+                // `claude::Tools::allowlist`. It matters here as well as for
+                // delegation: a selected persona whose `tools: []` was read as an
+                // empty allowlist would boot with no tools at all and look like a
+                // model that refuses to work.
+                tools = claude::Tools::allowlist(front.tools);
                 if !body.is_empty() {
                     parts.push(body.to_string());
                 }

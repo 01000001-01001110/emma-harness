@@ -76,7 +76,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
@@ -84,6 +84,9 @@ use emma_llm::{Message, Role};
 use serde_json::{json, Value};
 
 use crate::agent::{label_of, memo_key_of, Resumed};
+
+/// The records one delegation wrote, in order — see [`SessionLog::subagent`].
+pub type Records = Arc<Mutex<Vec<Value>>>;
 
 pub struct SessionLog {
     id: String,
@@ -94,7 +97,29 @@ pub struct SessionLog {
     /// nothing measurable and would make "append the record, *then* do the
     /// thing" — the ordering the whole file exists for — an await point where
     /// a cancellation can land.
-    file: Mutex<Option<File>>,
+    ///
+    /// `Arc` because [`SessionLog::subagent`] hands out a second view of the
+    /// *same* file rather than a second file. One process, one writer, one
+    /// mutex — the module doc's "a second writer" caveat is about a second
+    /// process, not a second logical run inside this one.
+    file: Arc<Mutex<Option<File>>>,
+    /// Prefixed onto every `kind` this view writes. `None` for the session's own
+    /// records; `Some("sub")` for a delegation's — see [`SessionLog::subagent`].
+    prefix: Option<&'static str>,
+    /// Merged into every payload this view writes, so two runs sharing one file
+    /// are separable by `grep`.
+    stamp: Vec<(String, Value)>,
+    /// Every record this view wrote, kept in memory for whoever is composing a
+    /// footer out of them.
+    ///
+    /// **This is what makes the delegation footer a record rather than a
+    /// claim.** `Delegate` reads these back — the tool calls, their results, the
+    /// denials, the ending — and writes the footer from them, so what the parent
+    /// is told about what a subagent did comes from the loop rather than from the
+    /// subagent. Reading the file back instead would work everywhere except
+    /// where the log is [`SessionLog::none`], which is exactly where the tests
+    /// are.
+    tap: Option<Records>,
 }
 
 impl SessionLog {
@@ -129,7 +154,10 @@ impl SessionLog {
         Ok(Self {
             id,
             path,
-            file: Mutex::new(Some(file)),
+            file: Arc::new(Mutex::new(Some(file))),
+            prefix: None,
+            stamp: Vec::new(),
+            tap: None,
         })
     }
 
@@ -141,7 +169,10 @@ impl SessionLog {
         Self {
             id: "sess-none".into(),
             path: PathBuf::new(),
-            file: Mutex::new(None),
+            file: Arc::new(Mutex::new(None)),
+            prefix: None,
+            stamp: Vec::new(),
+            tap: None,
         }
     }
 
@@ -159,10 +190,10 @@ impl SessionLog {
     /// not be the thing that kills a run halfway through editing someone's
     /// source tree. The caller has already been told once by `open`.
     pub fn append(&self, kind: &str, mut payload: Value) {
-        let Ok(mut guard) = self.file.lock() else {
-            return;
+        let kind = match self.prefix {
+            Some(prefix) => format!("{prefix}.{kind}"),
+            None => kind.to_string(),
         };
-        let Some(file) = guard.as_mut() else { return };
         if let Some(obj) = payload.as_object_mut() {
             obj.insert("kind".into(), json!(kind));
             obj.insert(
@@ -172,11 +203,60 @@ impl SessionLog {
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0)),
             );
+            for (key, value) in &self.stamp {
+                obj.insert(key.clone(), value.clone());
+            }
         }
+        if let Some(tap) = &self.tap {
+            if let Ok(mut seen) = tap.lock() {
+                seen.push(payload.clone());
+            }
+        }
+        let Ok(mut guard) = self.file.lock() else {
+            return;
+        };
+        let Some(file) = guard.as_mut() else { return };
         let mut line = payload.to_string();
         line.push('\n');
         let _ = file.write_all(line.as_bytes());
         let _ = file.flush();
+    }
+
+    /// A second view of this same file for one delegation, and the buffer its
+    /// records also land in.
+    ///
+    /// **Why the `kind`s are namespaced.** [`fold_records`] and
+    /// [`restore_records`] match on `kind` and both have a `_ => {}` arm, so
+    /// `sub.assistant` and `sub.model_call` are ignored for free — which is the
+    /// whole mechanism. Written under the parent's own names the damage would
+    /// not be subtle: a sub `assistant` record arriving between the parent's
+    /// `tool_call` and its `tool_result` calls `close_turn`, which places the
+    /// parent's held turn *without* its results, `answered()` fails, and the
+    /// parent's whole turn is silently dropped from every resume of that
+    /// session. `tests/delegate.rs` folds a session containing a delegation and
+    /// asserts the parent's message list is unchanged, because without that test
+    /// this is a convention rather than a property.
+    ///
+    /// The three stamped fields are what make the file greppable back apart:
+    /// which delegation wrote a record, which of the parent's turns asked for
+    /// it, and which agent type ran.
+    pub fn subagent(&self, sub_id: &str, parent_turn_id: &str, agent: &str) -> (Self, Records) {
+        let tap: Records = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                id: self.id.clone(),
+                path: self.path.clone(),
+                file: self.file.clone(),
+                prefix: Some("sub"),
+                stamp: vec![
+                    ("sub_id".into(), json!(sub_id)),
+                    ("parent_turn_id".into(), json!(parent_turn_id)),
+                    ("agent".into(), json!(agent)),
+                ],
+                tap: Some(tap.clone()),
+            },
+            tap,
+        )
     }
 
     /// Every well-formed record in a session file, in order.
@@ -616,6 +696,14 @@ pub fn restore_records(records: &[Value]) -> Resumed {
                     r.failed_ever.push(label);
                 }
             }
+            // A delegation's own `sub.model_call` records are namespaced and
+            // therefore invisible to the arm above, so a resumed parent would
+            // restore a meter missing everything its delegations spent — a way to
+            // spend past a cap, which is the exact failure `Resumed`'s doc is
+            // written about. This record is the parent-level fact that closes it,
+            // and it deliberately does not touch `iterations`: the parent made
+            // one model call for that turn, not fifteen.
+            "delegation" => r.tokens += record["cost_tokens"].as_i64().unwrap_or(0),
             "goal_finished" => {
                 r.tokens = record["tokens"].as_i64().unwrap_or(r.tokens);
                 r.iterations = record["iterations"]
