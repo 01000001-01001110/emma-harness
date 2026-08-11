@@ -16,3 +16,8 @@
 # work is not. Never source.
 /.playwright-mcp/
 /*.png
+
+# Runtime session records from the vendored browser. They name a pid and an
+# unauthenticated CDP socket, they are dead the moment the process is, and one
+# was committed by accident once already.
+.browser-miner/

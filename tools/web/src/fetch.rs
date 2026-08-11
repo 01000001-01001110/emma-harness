@@ -82,7 +82,7 @@ pub const MAX_MAX_LINKS: u64 = digest_md::COLLECTOR_LINK_BUDGET as u64;
 
 /// The allowlist file, if the user keeps one. **Home, never the project
 /// directory** — see [`chromehand::load_policy`].
-fn home_allowlist() -> Option<PathBuf> {
+pub(crate) fn home_allowlist() -> Option<PathBuf> {
     let path = emma_llm::auth::home_dir()?
         .join(".emma")
         .join("browser-allowlist.json");
@@ -274,10 +274,10 @@ impl WebFetch {
             .await
             .map_err(map_error)?;
 
-        let limits = digest_md::Limits {
-            max_links: max_links as usize,
-            max_chars: max_chars as usize,
-        };
+        // `reading`, so the selectors stay off: this tool cannot click what it
+        // finds, and addresses for a thing nothing can address are a thousand
+        // tokens of noise. `BrowserRead` is where they come back.
+        let limits = digest_md::Limits::reading(max_links as usize, max_chars as usize);
         let rendered = digest_md::render(&digest, &limits).map_err(ToolError::Failed)?;
         Ok(into_outcome(rendered))
     }
@@ -324,7 +324,7 @@ fn into_outcome(rendered: digest_md::Rendered) -> ToolOutcome {
 /// - a browser failure is a failure of the machinery, retryable;
 /// - no Chrome at all is `Unavailable`, which reads "I cannot do this" and
 ///   never "this cannot be done".
-fn map_error(e: MinerError) -> ToolError {
+pub(crate) fn map_error(e: MinerError) -> ToolError {
     match e {
         MinerError::Refused(m) => ToolError::BadArguments(m),
         MinerError::Browser(m) => ToolError::Failed(m),

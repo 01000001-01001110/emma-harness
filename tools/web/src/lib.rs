@@ -51,12 +51,14 @@ use std::sync::Arc;
 use emma_tool_api::Tool;
 
 mod args;
+pub mod browser;
 pub mod chromehand;
 pub mod credentials;
 pub mod digest_md;
 pub mod fetch;
 pub mod search;
 
+pub use browser::{browser_tools, BrowserPool};
 pub use fetch::WebFetch;
 pub use search::WebSearch;
 
@@ -66,6 +68,15 @@ pub struct WebSurface {
     /// One line per tool that could not be registered, phrased for a human to
     /// act on. Empty when everything is available.
     pub skipped: Vec<String>,
+    /// The live browser sessions, when the browser tools were registered.
+    ///
+    /// **The caller must hold this for the length of the run.** Dropping it
+    /// kills every open Chrome — which is exactly right at exit and exactly
+    /// wrong in the middle of a goal. It is handed back rather than kept inside
+    /// the tools because there is no other way for a binary to end the sessions
+    /// deliberately, and because `tools/lsp` records what happens when teardown
+    /// is left to `main` to remember: "`tools/web` leaked a Chrome per session".
+    pub browser: Option<Arc<browser::BrowserPool>>,
 }
 
 /// Build the surface against the real environment.
@@ -91,7 +102,32 @@ pub fn web_tools() -> WebSurface {
         Err(why) => skipped.push(format!("WebSearch is not available: {why}")),
     }
 
-    WebSurface { tools, skipped }
+    // The session surface, under exactly the same rule: a browser that cannot be
+    // found means five tools that describe a capability this machine does not
+    // have, which costs a turn per attempt and teaches the model nothing.
+    // `WebFetch::detect` has already resolved Chrome, so its verdict is reused
+    // rather than asked again — two detections that could disagree is a surface
+    // where `WebFetch` is present and `BrowserOpen` is not for no visible reason.
+    let browser = match fetch::WebFetch::detect() {
+        Ok(_) => {
+            let (browser_tools, pool) = browser::browser_tools(fetch::home_allowlist());
+            tools.extend(browser_tools);
+            Some(pool)
+        }
+        Err(why) => {
+            skipped.push(format!(
+                "The browser session tools (BrowserOpen, BrowserRead, BrowserAct, BrowserFill, \
+                 BrowserClose) are not available: {why}"
+            ));
+            None
+        }
+    };
+
+    WebSurface {
+        tools,
+        skipped,
+        browser,
+    }
 }
 
 #[cfg(test)]

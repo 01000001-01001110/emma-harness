@@ -78,6 +78,35 @@ pub fn opt_u64(args: &Value, tool: &str, key: &str) -> Result<Option<u64>, ToolE
     }
 }
 
+pub fn opt_str<'a>(args: &'a Value, tool: &str, key: &str) -> Result<Option<&'a str>, ToolError> {
+    let obj = object(args, tool)?;
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s)),
+        Some(other) => Err(bad(format!(
+            "{tool}.{key} must be a string, got {}",
+            type_name(other)
+        ))),
+    }
+}
+
+/// A missing boolean is `None` and never `false`.
+///
+/// The distinction matters for a default that is `true` — `delta` on
+/// `BrowserRead` — where collapsing absent into false would silently make every
+/// read a full page re-send and nothing would look wrong.
+pub fn opt_bool(args: &Value, tool: &str, key: &str) -> Result<Option<bool>, ToolError> {
+    let obj = object(args, tool)?;
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(other) => Err(bad(format!(
+            "{tool}.{key} must be true or false, got {}",
+            type_name(other)
+        ))),
+    }
+}
+
 pub fn type_name(v: &Value) -> &'static str {
     match v {
         Value::Null => "null",

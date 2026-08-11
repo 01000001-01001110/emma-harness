@@ -16,14 +16,18 @@
 //! - To *act on* a page it needs selectors, field names, option lists, which
 //!   control submits.
 //!
-//! This pass ships reading only — the interaction verbs exist in
-//! `crate::chromehand` and are not exposed as tools. So the inventory is
-//! rendered as counts and form shapes rather than sixty selectors: enough for
-//! the model to report "there is a search form here" and enough for a human to
-//! know acting is possible, without spending a thousand tokens on addresses
-//! for a thing nothing can address yet. When the verbs are exposed, the
-//! selectors come back — and they should come back in the *action* tool's
-//! output, not in every page read.
+//! Which of those two a call needs is [`Limits::show_selectors`], and the
+//! default is off. `WebFetch` reads one page and cannot act on it, so listing
+//! sixty CSS selectors there would spend a thousand tokens on addresses for a
+//! thing that call cannot address: it gets counts and form shapes, enough to
+//! report "there is a search form here". `BrowserRead` is a read *inside a
+//! session that can click*, which is already an act of intent to interact, so it
+//! turns them on and can afford them.
+//!
+//! That split is the instruction this file left for itself when the interaction
+//! verbs were still unexposed — "when the verbs are exposed, the selectors come
+//! back, and they should come back in the *action* tool's output, not in every
+//! page read" — followed as written.
 //!
 //! **Truncation is passed through, never absorbed.** chromehand caps its own
 //! text and says so with `text_truncated`; this renderer caps the link list
@@ -74,7 +78,7 @@ const MAX_JSON_LD_CHARS: usize = 2_000;
 /// They live here rather than as constants because the caller is the only one
 /// that knows what the model asked for, and a cap the model cannot move is a
 /// cap it cannot be advised to move.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Limits {
     /// How many links to list. Above [`COLLECTOR_LINK_BUDGET`] nothing more
     /// exists to list.
@@ -82,7 +86,41 @@ pub struct Limits {
     /// What the caller passed as `max_chars`, used only to name the argument
     /// accurately when chromehand's text cap is the one that bound.
     pub max_chars: usize,
+    /// List each interactive element's stable CSS selector.
+    ///
+    /// Off for `WebFetch`, which cannot act on what it reads; on for
+    /// `BrowserRead`, which is a read inside a session that can. See the module
+    /// doc — this is the one knob that decides which of the digest's two halves
+    /// a call is paying for.
+    pub show_selectors: bool,
+    /// Case-insensitive substring the listed elements must match, against their
+    /// selector, their label or their text.
+    ///
+    /// A page with a hundred addressable elements costs more than a model
+    /// looking for the search box needs to pay. Ignored when
+    /// [`Limits::show_selectors`] is off, because there is then nothing to
+    /// filter.
+    pub selector_filter: Option<String>,
 }
+
+impl Limits {
+    /// The reading defaults: no selectors, no filter.
+    pub fn reading(max_links: usize, max_chars: usize) -> Self {
+        Self {
+            max_links,
+            max_chars,
+            show_selectors: false,
+            selector_filter: None,
+        }
+    }
+}
+
+/// How many addressable elements one read lists per category.
+///
+/// A selector line is short but a hundred of them is a page of noise, and the
+/// filter is the intended remedy — so the cut says so rather than advertising a
+/// number to raise.
+pub const SELECTOR_BUDGET: usize = 40;
 
 pub struct Rendered {
     pub markdown: String,
@@ -269,7 +307,18 @@ pub fn render(v: &Value, limits: &Limits) -> Result<Rendered, String> {
             } else {
                 text.trim()
             };
-            out.push_str(&format!("- [{}]({href})\n", link_label(label)));
+            // The selector rides along on a session read, because a link is the
+            // single most clickable thing on a page and `BrowserAct` addresses
+            // by selector, not by href — clicking is how a link with a JS
+            // handler, or one inside a single-page app, actually works.
+            match (limits.show_selectors, str_at(link, "selector")) {
+                (true, Some(selector)) => out.push_str(&format!(
+                    "- [{}]({href}) — `{}`\n",
+                    link_label(label),
+                    one_line(selector)
+                )),
+                _ => out.push_str(&format!("- [{}]({href})\n", link_label(label))),
+            }
         }
         if ordered.len() > limits.max_links {
             let total = ordered.len();
@@ -327,10 +376,34 @@ pub fn render(v: &Value, limits: &Limits) -> Result<Rendered, String> {
                     .unwrap_or_default();
                 out.push_str(&format!("- {method} {action} — {count} fields\n"));
             }
-            out.push_str(
-                "\nSelectors are not listed: this tool reads pages, it does not act on them. \
-                 Nothing here can be clicked, typed into, or submitted.\n\n",
-            );
+            if limits.show_selectors {
+                // The addresses. Only reached from a session read, and the whole
+                // reason `BrowserAct` can hit anything: every element carries the
+                // stable selector chromehand computed for it in-page.
+                out.push('\n');
+                for (key, heading) in [("fields", "Fields"), ("buttons", "Buttons")] {
+                    let items = i
+                        .get(key)
+                        .and_then(Value::as_array)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default();
+                    if let Some(section) =
+                        render_addressable(items, heading, limits.selector_filter.as_deref())
+                    {
+                        out.push_str(&section.body);
+                        if let Some(cut) = section.cut {
+                            cuts.push(cut);
+                        }
+                    }
+                }
+            } else {
+                out.push_str(
+                    "\nSelectors are not listed: this tool reads pages, it does not act on \
+                     them. Nothing here can be clicked, typed into, or submitted. To act on \
+                     this page, open a browser session with `BrowserOpen` — a session read \
+                     lists the selectors `BrowserAct` needs.\n\n",
+                );
+            }
         }
     }
 
@@ -394,6 +467,78 @@ fn status_line(v: &Value) -> String {
         // refuses to guess one and so does this.
         None => format!("HTTP status not observed, {outcome}"),
     }
+}
+
+/// One rendered `## Fields` / `## Buttons` block, and whatever it had to drop.
+struct Addressable {
+    body: String,
+    cut: Option<String>,
+}
+
+/// The addressable elements of one category, each with the selector that
+/// reaches it.
+///
+/// The selector is the whole point of the line, so it is first and it is in
+/// backticks — a model copying an address out of prose is the failure mode this
+/// format exists to prevent. `None` when the filter matched nothing, because an
+/// empty heading reads as "the page has no buttons" when the truth is "your
+/// filter excluded them"; the caller says which by leaving the section out and
+/// letting the counts above stand.
+fn render_addressable(items: &[Value], heading: &str, filter: Option<&str>) -> Option<Addressable> {
+    let needle = filter.map(str::to_lowercase);
+    let matching: Vec<&Value> = items
+        .iter()
+        .filter(|item| match &needle {
+            None => true,
+            Some(n) => ["selector", "label", "name", "id", "text", "type"]
+                .iter()
+                .filter_map(|k| str_at(item, k))
+                .any(|v| v.to_lowercase().contains(n.as_str())),
+        })
+        .collect();
+    if matching.is_empty() {
+        return None;
+    }
+
+    let mut body = format!("### {heading} ({})\n\n", matching.len());
+    for item in matching.iter().take(SELECTOR_BUDGET) {
+        let selector = str_at(item, "selector").unwrap_or("(no selector)");
+        let label = str_at(item, "label")
+            .or_else(|| str_at(item, "name"))
+            .unwrap_or("");
+        let kind = str_at(item, "type").unwrap_or("");
+        let required = item.get("required").and_then(Value::as_bool) == Some(true);
+        let mut line = format!("- `{}`", one_line(selector));
+        if !label.trim().is_empty() {
+            line.push_str(&format!(" — {}", link_label(label)));
+        }
+        if !kind.is_empty() {
+            line.push_str(&format!(" [{kind}]"));
+        }
+        if required {
+            line.push_str(" (required)");
+        }
+        body.push_str(&line);
+        body.push('\n');
+    }
+    let cut = (matching.len() > SELECTOR_BUDGET).then(|| {
+        // No argument raises this one — the remedy is to narrow, not to widen —
+        // so the notice names `selectors` rather than inventing a budget knob.
+        format!(
+            "{SELECTOR_BUDGET} of {} {} listed by a fixed per-category cap; narrow the list with \
+             the `selectors` filter rather than re-reading for more",
+            matching.len(),
+            heading.to_lowercase()
+        )
+    });
+    if cut.is_some() {
+        body.push_str(&format!(
+            "\n[truncated: {}]\n",
+            cut.as_deref().unwrap_or_default()
+        ));
+    }
+    body.push('\n');
+    Some(Addressable { body, cut })
 }
 
 fn in_content(link: &Value) -> bool {
@@ -516,10 +661,7 @@ mod tests {
     /// The defaults `crate::fetch` applies, so these tests exercise the same
     /// numbers a real call would.
     fn limits() -> Limits {
-        Limits {
-            max_links: 50,
-            max_chars: 8_000,
-        }
+        Limits::reading(50, 8_000)
     }
 
     fn render_default(v: &Value) -> Rendered {

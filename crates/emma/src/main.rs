@@ -125,10 +125,25 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // Both of these declare `reaches_network: true`, which is what makes
     // registering them a decision rather than a default: the approval gate asks
     // a human for each new host, once per session. See `approval.rs`.
+    //
+    // It also carries the five browser session tools, which are the same
+    // decision one size larger: inside a session the model acts as the user, on
+    // a page that may hold their login. `BrowserAct` and `BrowserFill` declare
+    // `read_only: false` so the gate asks about each call, and acting is
+    // additionally confined to the domains in the user's own
+    // `~/.emma/browser-allowlist.json`.
     let web = emma_tools_web::web_tools();
     for tool in web.tools {
         registry.register(tool);
     }
+    // **Held for the length of the run, deliberately.** This is the handle on
+    // every live Chrome, and dropping it kills them — which is what should
+    // happen when this function returns and must not happen before. `tools/lsp`
+    // records the bug this shape is arranged against: "`tools/web` leaked a
+    // Chrome per session because its teardown ran in `main`". Teardown is in the
+    // pool's `Drop` now; `main`'s only job is to keep the pool alive until the
+    // loop is finished with it, which the binding below is.
+    let browser_pool = web.browser.clone();
     if cli.command == Command::ConfigCheck {
         // The one path that does not delegate: it needs no key, and `Delegate`
         // cannot be built without a provider. It prints the agent catalogue from
@@ -535,6 +550,22 @@ async fn run(cli: cli::Cli) -> Result<()> {
             outcome.tokens,
         );
         last = outcome.ending;
+        // **A browser session is scoped to the goal that opened it.** Carrying a
+        // live one into the next goal would mean a page loaded under one goal's
+        // approval grant is readable under the next one's, with nothing on
+        // screen saying so — and Emma's per-host grants are already
+        // session-scoped for exactly that reason. Announced rather than silent,
+        // because a research task that had a login now does not.
+        if let Some(pool) = &browser_pool {
+            let closed = pool.close_all().await;
+            if !closed.is_empty() {
+                term.note(&format!(
+                    "closed {} browser session(s) at the end of this goal — a session does not \
+                     carry across goals",
+                    closed.len()
+                ));
+            }
+        }
         if opts.print || interrupt.tripped() {
             break;
         }
@@ -552,6 +583,15 @@ async fn run(cli: cli::Cli) -> Result<()> {
         // shape that leaves somebody's shell with a scroll region set, and the
         // next person to make this branch reachable interactively should not
         // have to notice that.
+        //
+        // The same argument applies with teeth to the browser pool: `exit` runs
+        // no destructors, so its `Drop` would not fire and every Chrome it
+        // started would survive this process — with an unauthenticated debugging
+        // port, which is the leak this crate has already suffered once. Killed
+        // by pid here, synchronously, because there is nothing left to await on.
+        if let Some(pool) = &browser_pool {
+            pool.kill_all_now();
+        }
         emma::term::restore_terminal();
         std::process::exit(1);
     }
