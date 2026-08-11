@@ -23,6 +23,48 @@
 //! Reading a file that exists and is empty **succeeds** and returns nothing.
 //! Emptiness is a result; only the machinery failing is an error.
 //!
+//! **Every line is labelled `<number>#<hash>`, and that is a real cost paid on
+//! every read to make some edits cheaper.** The trade was measured rather than
+//! assumed, and the measurement is closer than the idea's reputation suggests,
+//! so it is written down here instead of being waved at.
+//!
+//! Counted with Anthropic's `count_tokens` endpoint over 2000 lines of this
+//! repository's own Rust: the label costs **3.6 tokens a line**, a 23% increase
+//! on the rendered read. That is more than it looks like it should be — four hex
+//! characters are three or four tokens because they are not a word — and it is
+//! irreducible, not an encoding mistake. Base36 at the same width is worse
+//! (3.97), dropping the `#` separator saves only 0.5, and narrowing to three hex
+//! characters saves 0.7 at the price of four times the collision exposure on the
+//! one check nothing else backs up. Hex at four characters is the cheapest thing
+//! that is still worth having.
+//!
+//! On the other side, over fourteen real single-line edits sampled from this
+//! repository, the addressed form costs **26% fewer output tokens** than the
+//! `old_string` form it replaces — 842 against 1140 — because the anchor stops
+//! having to be long enough to be unique. Those are the two honest numbers, and
+//! they do not settle it on their own: at list prices a 400-line read costs
+//! about 1400 extra input tokens and each edit saves about 21 output tokens, so
+//! the direct arithmetic breaks even at roughly fourteen edits per read
+//! uncached, or one and a half per read once the read is cached — which it
+//! normally is within a turn.
+//!
+//! **So the token count is close to a wash, and the case does not rest on it.**
+//! It rests on the calls that no longer happen: a literal anchor that misses
+//! costs a whole second `Read` of the file plus a re-emitted edit, and an edit
+//! against a file that drifted used to cost exactly that every single time.
+//! That is the expensive path, it is the common one on a machine where somebody
+//! has the file open in an editor, and it is the one this removes. Anyone
+//! revisiting this should re-measure rather than trust the paragraph above; see
+//! `notes/improvements.md`, which records that the 61% figure quoted from
+//! elsewhere is a different scheme's author benchmarking their own scheme.
+//!
+//! The hash covers the line **exactly as this file shows it**, which is the
+//! property that makes it safe to quote back — including trailing whitespace,
+//! and see `hashline.rs` for why that is deliberate rather than incidental. The
+//! one line that cannot honour that promise is a clipped one: the model has seen
+//! its front and not its end, so it gets `#----` instead of a hash and `Edit`
+//! refuses that marker by name.
+//!
 //! Three separate things count as truncation and any of them sets the flag:
 //! there are lines after the window, the byte cap bit before the line cap did,
 //! or some single line was too long to show whole. `render` collects all three
@@ -37,8 +79,9 @@ use emma_tool_api::{Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
 use serde_json::{json, Value};
 
 use crate::args;
+use crate::hashline;
 use crate::path;
-use crate::session::ReadTracker;
+use crate::session::{LineHashes, ReadTracker};
 
 // region: The tool surface
 // ---------------------------------------------------------------------------
@@ -171,15 +214,25 @@ impl Read {
             ))
         })?;
 
-        let outcome = render(&root, &file, &text, offset, limit);
+        let shown = render(&root, &file, &text, offset, limit);
         // A truncated read is recorded as a *partial* sighting. Treating "I saw
         // the first 2000 lines" as "I have read this file" is precisely how a
         // subsequent `Write` throws away the other ten thousand.
         // `offset > 1` is a deliberate slice and is partial for the same reason.
-        self.tracker
-            .record(&ctx.session_id, &file, !outcome.truncated && offset == 1);
+        //
+        // The line hashes recorded alongside it are the window that was
+        // rendered and nothing more. A `Read` of lines 1-100 leaves lines
+        // 101-onwards with no record, so an addressed `Edit` reaching into them
+        // is refused for want of one — the same "you have not seen this" rule as
+        // the completeness flag, at line resolution instead of file resolution.
+        self.tracker.record(
+            &ctx.session_id,
+            &file,
+            !shown.outcome.truncated && offset == 1,
+            shown.lines,
+        );
 
-        Ok(outcome)
+        Ok(shown.outcome)
     }
 }
 
@@ -195,13 +248,33 @@ impl Read {
 // not one.
 // ---------------------------------------------------------------------------
 
-fn render(root: &Path, file: &Path, text: &str, offset: usize, limit: usize) -> ToolOutcome {
+/// What one `Read` produced: the answer for the model, and the record for the
+/// tracker. They are returned together because they must describe the same set
+/// of lines — a record covering lines the render dropped would license an
+/// addressed `Edit` against text nobody was shown.
+struct Shown {
+    outcome: ToolOutcome,
+    lines: LineHashes,
+}
+
+impl Shown {
+    fn nothing(outcome: ToolOutcome) -> Self {
+        Self {
+            outcome,
+            lines: LineHashes::default(),
+        }
+    }
+}
+
+fn render(root: &Path, file: &Path, text: &str, offset: usize, limit: usize) -> Shown {
     let shown = path::display(root, file);
     if text.is_empty() {
         // Content stays genuinely empty rather than gaining a prose stand-in,
         // because anything written here would be indistinguishable from file
         // content the next time the model quotes it back.
-        return ToolOutcome::new(String::new()).with_display(format!("{shown}: empty file"));
+        return Shown::nothing(
+            ToolOutcome::new(String::new()).with_display(format!("{shown}: empty file")),
+        );
     }
 
     let total = text.lines().count();
@@ -209,21 +282,31 @@ fn render(root: &Path, file: &Path, text: &str, offset: usize, limit: usize) -> 
     // file will eventually ask for a window that is not there, and the useful
     // answer is the line count, not a refusal.
     if offset > total {
-        return ToolOutcome::new(String::new()).with_display(format!(
+        return Shown::nothing(ToolOutcome::new(String::new()).with_display(format!(
             "{shown}: offset {offset} is past the last line ({total})"
-        ));
+        )));
     }
 
     let mut out = String::new();
     let mut clipped_line = false;
     let mut byte_capped = false;
     let mut last = offset;
+    let mut hashes = Vec::new();
 
     for (idx, line) in text.lines().enumerate().skip(offset - 1).take(limit) {
         let number = idx + 1;
         let (body, clipped) = clip(line, MAX_LINE_CHARS);
         clipped_line |= clipped;
-        let rendered = format!("{number:>6}\t{body}\n");
+        // The label describes the *whole* line even when the body shown is a
+        // prefix of it — except that a clipped line gets the marker instead of
+        // a hash, so there is never a hash in the output standing for text the
+        // model was not shown.
+        let tag = if clipped {
+            hashline::CLIPPED.to_string()
+        } else {
+            hashline::short(hashline::hash_line(line))
+        };
+        let rendered = format!("{number:>6}#{tag}\t{body}\n");
         if out.len() + rendered.len() > MAX_BYTES {
             byte_capped = true;
             break;
@@ -233,8 +316,18 @@ fn render(root: &Path, file: &Path, text: &str, offset: usize, limit: usize) -> 
         // reported below is `last + 1`, so a line counted here but dropped by
         // the cap would tell the model to resume one line past what it saw.
         out.push_str(&rendered);
+        // Recorded even for a clipped line. The record is the harness's own
+        // note of what the file said, used to detect drift under a range; it is
+        // the *printed* marker, not a gap in the record, that stops the model
+        // addressing a line it only half saw.
+        hashes.push(hashline::hash_line(line));
         last = number;
     }
+
+    let lines = LineHashes {
+        first: offset,
+        hashes,
+    };
 
     let more = last < total;
     let truncated = more || clipped_line || byte_capped;
@@ -259,14 +352,20 @@ fn render(root: &Path, file: &Path, text: &str, offset: usize, limit: usize) -> 
             ));
         }
         out.push_str(&format!("\n[truncated: {}]\n", why.join("; ")));
-        return ToolOutcome::new(out)
-            .with_display(format!(
-                "{shown}: lines {offset}-{last} of {total} (truncated)"
-            ))
-            .truncated();
+        return Shown {
+            outcome: ToolOutcome::new(out)
+                .with_display(format!(
+                    "{shown}: lines {offset}-{last} of {total} (truncated)"
+                ))
+                .truncated(),
+            lines,
+        };
     }
 
-    ToolOutcome::new(out).with_display(format!("{shown}: {total} lines"))
+    Shown {
+        outcome: ToolOutcome::new(out).with_display(format!("{shown}: {total} lines")),
+        lines,
+    }
 }
 
 /// Taken in `char`s, so a multi-byte character is never cut in half. The peek

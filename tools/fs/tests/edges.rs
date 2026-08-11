@@ -365,11 +365,15 @@ async fn read_of_an_empty_file_succeeds() {
     assert_eq!(outcome.display.as_deref(), Some("empty.txt: empty file"));
 }
 
-/// The exact-bytes test, and deliberately brittle. Two things are pinned that
+/// The exact-bytes test, and deliberately brittle. Three things are pinned that
 /// nothing else would catch: the numbers are absolute file lines rather than
 /// window offsets — so line 2 reads `2` and not `1`, and an `Edit` anchor taken
-/// from a paged read is not off by the offset — and the continuation hint names
-/// the next unread line, so paging forward neither skips nor repeats.
+/// from a paged read is not off by the offset — the continuation hint names the
+/// next unread line, so paging forward neither skips nor repeats, and the label
+/// is `<number>#<hash>` rather than a bare number, which is the string
+/// `Edit.lines` parses. The hashes are written out literally because they are a
+/// wire format: a change to the hash function or its width silently invalidates
+/// every label in every transcript the model is still working from.
 #[tokio::test]
 async fn read_numbers_lines_and_honours_offset_and_limit() {
     let sandbox = Sandbox::new();
@@ -380,7 +384,7 @@ async fn read_numbers_lines_and_honours_offset_and_limit() {
             json!({ "file_path": "n.txt", "offset": 2, "limit": 2 }),
         )
         .await;
-    assert_eq!(outcome.content, "     2\ttwo\n     3\tthree\n\n[truncated: showing lines 2-3 of 4; continue with offset 4]\n");
+    assert_eq!(outcome.content, "     2#5778\ttwo\n     3#e204\tthree\n\n[truncated: showing lines 2-3 of 4; continue with offset 4]\n");
     assert!(outcome.truncated);
 }
 

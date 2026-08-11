@@ -54,18 +54,22 @@ use std::sync::Arc;
 
 use emma_tool_api::Tool;
 
-// One module per tool, plus four that exist so the tools cannot disagree with
+// One module per tool, plus five that exist so the tools cannot disagree with
 // each other: `args` (one spelling for every malformed-call message), `path`
 // (the containment check), `walk` (the one directory traversal `Glob` and
-// `Grep` share) and `session` (the read tracker). `args` is private because it
-// is only a way of writing the same error twice; the rest are public because
-// `path` in particular is used from outside — `tools/tasks` resolves against
-// the same containment.
+// `Grep` share), `session` (the read tracker) and `hashline` (the one
+// definition of what a line's hash is, shared by the tool that prints it and
+// the two that check it — three copies of that function is how a `Read` starts
+// labelling lines with hashes an `Edit` will not accept). `args` is private
+// because it is only a way of writing the same error twice; the rest are public
+// because `path` in particular is used from outside — `tools/tasks` resolves
+// against the same containment.
 mod args;
 pub mod bash;
 pub mod edit;
 pub mod glob;
 pub mod grep;
+pub mod hashline;
 pub mod path;
 pub mod read;
 pub mod session;
@@ -77,7 +81,7 @@ pub use edit::Edit;
 pub use glob::Glob;
 pub use grep::Grep;
 pub use read::Read;
-pub use session::{ReadState, ReadTracker};
+pub use session::{LineHashes, ReadState, ReadTracker};
 pub use write::Write;
 
 /// The whole surface, wired to one read tracker.

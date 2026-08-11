@@ -36,7 +36,7 @@ use serde_json::{json, Value};
 
 use crate::args;
 use crate::path;
-use crate::session::{ReadState, ReadTracker};
+use crate::session::{LineHashes, ReadState, ReadTracker};
 
 // region: The tool surface
 // ---------------------------------------------------------------------------
@@ -193,8 +193,12 @@ impl Write {
             .map_err(|e| ToolError::Failed(format!("{raw} could not be written: {e}")))?;
 
         // The agent authored these bytes, so it has seen them: a follow-up
-        // Write is not blind and should not be refused.
-        self.tracker.record(&ctx.session_id, &target, true);
+        // Write is not blind and should not be refused. The per-line hashes go
+        // in for the same reason — a file the agent just wrote is one it can
+        // address by line without reading back, and refusing that would make
+        // `Write` then `Edit` cost a `Read` in between for no information.
+        self.tracker
+            .record(&ctx.session_id, &target, true, LineHashes::of_text(content));
 
         let shown = path::display(&root, &target);
         let lines = content.lines().count();
