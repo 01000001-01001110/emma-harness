@@ -89,11 +89,35 @@ pub const MARKER: &str = "GOAL COMPLETE";
 #[derive(Debug, Clone)]
 pub struct Goal {
     pub text: String,
+    /// What a `UserPromptSubmit` hook asked to put in front of the model for
+    /// this goal, in hook-name order. Empty for every goal nobody typed.
+    ///
+    /// **It lives on the goal rather than on the loop**, and that placement is
+    /// the answer to "where does this fire?". A hook attached to a *user
+    /// prompt* must fire once, when a person submits one — not once per model
+    /// call, and not at all for a subagent's brief, which is a work order one
+    /// machine wrote for another. Carrying it here means the only way to have
+    /// any is to have been given some at the place a human's text becomes a
+    /// goal; [`Goal::new`] has none, and `delegate.rs` calls `Goal::new`.
+    injected: Vec<String>,
 }
 
 impl Goal {
     pub fn new(text: impl Into<String>) -> Self {
-        Self { text: text.into() }
+        Self {
+            text: text.into(),
+            injected: Vec::new(),
+        }
+    }
+
+    /// Attach the context `UserPromptSubmit` hooks produced for this prompt.
+    pub fn with_injected(mut self, injected: Vec<String>) -> Self {
+        self.injected = injected;
+        self
+    }
+
+    pub fn injected(&self) -> &[String] {
+        &self.injected
     }
 
     /// The user message that opens a goal: **the user's words, and nothing
@@ -115,6 +139,61 @@ impl Goal {
     /// What the user typed is now what the model reads.
     pub fn opening(&self) -> String {
         self.text.trim().to_string()
+    }
+
+    /// The whole user turn that opens the goal: hook-injected context, then
+    /// [`opening`](Self::opening) unchanged.
+    ///
+    /// **Injected context is a third thing** — not the user's words, not the
+    /// standing contract — and each of the three places it could have gone is
+    /// wrong for its own reason:
+    ///
+    /// *In the system prompt, with the standing contract.* That is where every
+    /// sentence true of **every** turn lives, and this one is true of exactly
+    /// one turn. It is also the cached prefix: `crates/llm/src/anthropic.rs`
+    /// anchors a `cache_control` breakpoint on the system block, so per-turn
+    /// bytes there would rewrite the entry on every single turn — paying 1.25×
+    /// for the whole prompt each time instead of reading it at 0.1×. See
+    /// `notes/audit-caching-emma.md`.
+    ///
+    /// *Merged into the user's sentence.* The failure [`opening`](Self::opening)
+    /// exists to prevent: a preamble on someone's words is an instruction they
+    /// did not write and cannot see. The model must be able to tell which half a
+    /// person is accountable for.
+    ///
+    /// *As its own message before theirs.* Two user turns in a row is a 400, not
+    /// a conversation — see `open_query` in `agent.rs` — and an assistant turn
+    /// would be words put in the model's mouth.
+    ///
+    /// So it rides at the front of the same user turn, attributed in the same
+    /// bracketed register the loop's other injected sentences use, and separated
+    /// from the user's text by a blank line. What that costs the cache is one
+    /// growing suffix in `query`, which is where the per-turn bytes were going
+    /// anyway; the system, tools and history prefixes are untouched.
+    ///
+    /// **It is one string, not two content blocks, for a reason that outlives
+    /// aesthetics:** `session.rs` rebuilds this turn from the `opening` field of
+    /// the goal record — one string — and `--resume` replays what was recorded.
+    /// A second block would be dropped by the fold, and a resumed session would
+    /// silently replay a conversation the model never had. Claude Code makes the
+    /// same choice for the same reason: it saves the injected text in the
+    /// transcript and replays it on resume rather than re-running the hook.
+    pub fn opening_turn(&self) -> String {
+        let opening = self.opening();
+        if self.injected.is_empty() {
+            return opening;
+        }
+        let mut s = String::from(
+            "[Context added automatically by a UserPromptSubmit hook before this message. \
+             The user did not write it.]\n",
+        );
+        for block in &self.injected {
+            s.push_str(block.trim());
+            s.push('\n');
+        }
+        s.push('\n');
+        s.push_str(&opening);
+        s
     }
 }
 
@@ -431,6 +510,68 @@ mod tests {
         // And the half that made `Hello` cost 22,083 tokens: tools are for
         // when the request needs them.
         assert!(standing.to_lowercase().contains("greeting"));
+    }
+
+    /// Injected context is a third thing, and the test is that it stays one: the
+    /// user's words are not rewritten, the injected text is marked as not
+    /// theirs, and the two are one string so the fold can replay it.
+    #[test]
+    fn injected_context_rides_in_front_of_the_users_words_without_becoming_them() {
+        let goal = Goal::new("  port the middleware  ")
+            .with_injected(vec!["branch: main, 3 uncommitted files".into()]);
+
+        // The half that must not move. `opening` is the user's words, and a
+        // caller that wants only those still gets only those.
+        assert_eq!(goal.opening(), "port the middleware");
+        assert!(!goal.opening().contains("branch"));
+
+        let turn = goal.opening_turn();
+        assert!(turn.contains("branch: main, 3 uncommitted files"));
+        // Attributed. Without this the model reads an instruction the user did
+        // not write as though they had written it.
+        assert!(
+            turn.contains("UserPromptSubmit") && turn.contains("did not write"),
+            "the injection is not marked as somebody else's: {turn:?}"
+        );
+        // The user's words are last, so nothing sits between them and the answer.
+        assert!(turn.trim_end().ends_with("port the middleware"), "{turn:?}");
+        // One string, because `session.rs` rebuilds this turn from one recorded
+        // field and a resume must replay what was sent.
+        assert_eq!(turn.matches("port the middleware").count(), 1);
+        // Written out in full, because this exact text is what a certification
+        // run has to be able to reproduce by hand — and because a format change
+        // that nobody meant to make should be visible in the diff rather than
+        // in a `contains`.
+        assert_eq!(
+            turn,
+            "[Context added automatically by a UserPromptSubmit hook before this message. \
+             The user did not write it.]\n\
+             branch: main, 3 uncommitted files\n\
+             \n\
+             port the middleware"
+        );
+    }
+
+    /// A goal nobody typed carries nothing, and this is the whole of the
+    /// answer to "does a subagent's brief fire a user hook?": `delegate.rs`
+    /// builds its goal with `Goal::new`, and there is no context to attach.
+    #[test]
+    fn a_goal_with_no_injection_opens_exactly_as_it_did_before() {
+        let goal = Goal::new("port the middleware");
+        assert!(goal.injected().is_empty());
+        assert_eq!(goal.opening_turn(), goal.opening());
+        assert_eq!(goal.opening_turn(), "port the middleware");
+    }
+
+    /// Two hooks, both heard, in the order the harness ran them.
+    #[test]
+    fn every_hooks_context_is_carried_and_the_order_is_the_harnesss() {
+        let goal = Goal::new("go").with_injected(vec!["first".into(), "second".into()]);
+        let turn = goal.opening_turn();
+        assert!(
+            turn.find("first").unwrap() < turn.find("second").unwrap(),
+            "{turn:?}"
+        );
     }
 
     #[tokio::test]

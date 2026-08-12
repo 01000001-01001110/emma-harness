@@ -384,8 +384,15 @@ async fn read_numbers_lines_and_honours_offset_and_limit() {
             json!({ "file_path": "n.txt", "offset": 2, "limit": 2 }),
         )
         .await;
-    assert_eq!(outcome.content, "     2#5778\ttwo\n     3#e204\tthree\n\n[truncated: showing lines 2-3 of 4; continue with offset 4]\n");
+    assert_eq!(outcome.content, "     2#5778\ttwo\n     3#e204\tthree\n\n[truncated: showing lines 2-3 of 4, cut by limit=2; continue with offset 4]\n");
     assert!(outcome.truncated);
+    // The same sentence, verbatim, on the field the runtime quotes to the model
+    // and to the terminal. Two spellings of one cut is how the terminal came to
+    // say a page was truncated while naming a limit that had not fired.
+    assert_eq!(
+        outcome.truncation.as_deref(),
+        Some("showing lines 2-3 of 4, cut by limit=2; continue with offset 4")
+    );
 }
 
 /// Both are the model naming the wrong thing, so both must be `bad_arguments`

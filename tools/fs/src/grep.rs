@@ -56,6 +56,10 @@ pub const MAX_OUTPUT_LINES: usize = 500;
 /// Files larger than this are skipped. A 200 MB log is not what "search the
 /// project" meant, and reading it costs the whole call's latency.
 pub const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
+/// How much of one matching line is shown. Deliberately shorter than `Read`'s
+/// 2000: a grep hit is an address, and a minified bundle producing four
+/// thousand characters of one line is not what "show me the matches" meant.
+pub const MAX_MATCH_CHARS: usize = 400;
 
 #[derive(Default)]
 pub struct Grep;
@@ -89,7 +93,11 @@ impl Tool for Grep {
                     "enum": ["content", "files_with_matches", "count"],
                     "description": "Default content."
                 },
-                "head_limit": { "type": "integer", "minimum": 1, "description": format!("Cap on returned lines. Capped at {MAX_OUTPUT_LINES}.") }
+                // "Capped at 500" read as though 500 were a value to pass, and
+                // the schema is where the model learns what an argument can do.
+                // The `WebFetch` defect was exactly this: the one knob the model
+                // had been told about was the one that would not have helped.
+                "head_limit": { "type": "integer", "minimum": 1, "description": format!("Lowers the number of returned lines or paths. The ceiling is {MAX_OUTPUT_LINES} and this cannot raise it.") }
             },
             "required": ["pattern"],
             "additionalProperties": false
@@ -196,7 +204,12 @@ impl Grep {
             Some(m) => Mode::parse(m)?,
             None => Mode::Content,
         };
-        let limit = args::opt_u64(&args_v, NAME, "head_limit")?
+        // Kept as well as `limit`, because the notice below has to say a
+        // different thing depending on it: a model that asked for 20 lines and
+        // got 20 can raise its own number, and a model that asked for nothing
+        // and got 500 has hit a ceiling `head_limit` cannot move.
+        let requested_limit = args::opt_u64(&args_v, NAME, "head_limit")?;
+        let limit = requested_limit
             .map(|v| (v as usize).min(MAX_OUTPUT_LINES))
             .unwrap_or(MAX_OUTPUT_LINES);
         let filter = match args::opt_str(&args_v, NAME, "glob")? {
@@ -254,9 +267,20 @@ impl Grep {
         let mut total_hits = 0usize;
         let mut capped = false;
 
+        // Counted because a file that was never opened cannot be reported as
+        // holding no matches. See `readable_text` for why only the size skip is
+        // counted and the not-text skip is not.
+        let mut skipped_large = 0usize;
+        let mut clipped_lines = 0usize;
+
         for file in &candidates {
-            let Some(text) = readable_text(file) else {
-                continue;
+            let text = match readable_text(file) {
+                Readable::Text(t) => t,
+                Readable::TooLarge => {
+                    skipped_large += 1;
+                    continue;
+                }
+                Readable::NotText => continue,
             };
             let shown = path::display(&root, file);
             let mut count = 0usize;
@@ -268,7 +292,11 @@ impl Grep {
                 total_hits += 1;
                 if mode == Mode::Content {
                     if lines.len() < limit {
-                        lines.push(format!("{shown}:{}:{}", idx + 1, clip(line)));
+                        let (body, was_clipped) = clip(line);
+                        if was_clipped {
+                            clipped_lines += 1;
+                        }
+                        lines.push(format!("{shown}:{}:{}", idx + 1, body));
                     } else {
                         capped = true;
                     }
@@ -297,39 +325,86 @@ impl Grep {
             }
         }
 
+        // Four independent cuts, each its own sentence, joined rather than
+        // summarised — see `glob.rs` and the web digest for the argument. The
+        // one that matters most here is `capped`, because `head_limit` is a
+        // knob the model has and cannot use to get past 500, and a notice that
+        // implied otherwise would send it to re-run a search that comes back
+        // identical.
+        let mut cuts: Vec<String> = Vec::new();
+        if capped {
+            let ceiling = if requested_limit.is_some() {
+                format!(
+                    "cut at head_limit={limit}; raising head_limit helps only as far as the fixed \
+                     {MAX_OUTPUT_LINES}-line ceiling"
+                )
+            } else {
+                format!(
+                    "cut at the fixed {MAX_OUTPUT_LINES}-line ceiling, which `head_limit` can \
+                     lower but not raise"
+                )
+            };
+            cuts.push(format!(
+                "{} of {total_hits} matches across {files_with_hits} files shown, {ceiling}. \
+                 For the rest, narrow `pattern`, `path` or `glob`, or ask \
+                 output_mode=count or files_with_matches, which answer how many and where \
+                 without spending a line on each match",
+                lines.len()
+            ));
+        }
+        if walk_truncated {
+            cuts.push(walk::ceiling_notice());
+        }
+        if clipped_lines > 0 {
+            cuts.push(format!(
+                "{clipped_lines} matching lines longer than {MAX_MATCH_CHARS} characters were \
+                 clipped to their first {MAX_MATCH_CHARS}; no argument raises that — Read the \
+                 file at the line number shown to see the whole line"
+            ));
+        }
+        if skipped_large > 0 {
+            cuts.push(format!(
+                "{skipped_large} text files were not opened at all because they exceed the \
+                 {MAX_FILE_BYTES}-byte per-file limit, so a match inside them would not appear \
+                 here; no argument raises that limit — Read or Bash can reach such a file by name"
+            ));
+        }
+        let truncated = !cuts.is_empty();
+        let reason = cuts.join("; also ");
+
         if lines.is_empty() {
             // The search ran and the pattern was absent. Saying so as an error
             // would tell the model it could not look, and it would waste a turn
             // looking again another way.
-            let mut outcome = ToolOutcome::new(String::new()).with_display(format!(
+            //
+            // But "no matches" is the answer a cut damages most. Every sentence
+            // above turns it from a fact about the tree into a fact about the
+            // part of the tree that was read, so the content carries the reason
+            // even here, where there is otherwise nothing to carry it.
+            if truncated {
+                return Ok(ToolOutcome::new(format!("[truncated: {reason}]"))
+                    .with_display(format!(
+                        "{pattern}: no matches in {} files (search incomplete)",
+                        candidates.len()
+                    ))
+                    .truncated_because(reason));
+            }
+            return Ok(ToolOutcome::new(String::new()).with_display(format!(
                 "{pattern}: no matches in {} files",
                 candidates.len()
-            ));
-            if walk_truncated {
-                outcome = outcome.truncated();
-            }
-            return Ok(outcome);
+            )));
         }
 
         let mut content = lines.join("\n");
-        let truncated = capped || walk_truncated;
         if truncated {
-            content.push_str(&format!(
-                "\n[truncated: {} of {total_hits} matches across {files_with_hits} files{}]",
-                lines.len(),
-                if walk_truncated {
-                    format!("; the {}-entry walk ceiling was reached", walk::MAX_VISITED)
-                } else {
-                    String::new()
-                }
-            ));
+            content.push_str(&format!("\n[truncated: {reason}]"));
         }
 
         let outcome = ToolOutcome::new(content).with_display(format!(
             "{pattern}: {total_hits} matches in {files_with_hits} files"
         ));
         Ok(if truncated {
-            outcome.truncated()
+            outcome.truncated_because(reason)
         } else {
             outcome
         })
@@ -347,28 +422,99 @@ impl Grep {
 // not text. Neither fails the call.
 // ---------------------------------------------------------------------------
 
-/// `None` for anything that is not searchable text. Skipping is right: a binary
-/// file is not a failed search, it is a file with no lines, and one JPEG in a
-/// tree must not fail the whole call.
-fn readable_text(file: &Path) -> Option<String> {
-    let meta = std::fs::metadata(file).ok()?;
+/// Why a candidate file did or did not contribute lines.
+///
+/// The two skips were one `None` until it became clear they are not the same
+/// admission. **A file that is not text is a file with no lines** — a JPEG
+/// genuinely contains no match, the module doc and `grep.md` both say so, and
+/// reporting one would put a truncation warning on every search of a tree that
+/// contains an icon. **A large text file is a file nobody looked in**, and it
+/// may well be the 20 MB log that holds the answer. Only the second is a gap in
+/// the search, so only the second is counted and reported.
+enum Readable {
+    Text(String),
+    TooLarge,
+    NotText,
+}
+
+fn readable_text(file: &Path) -> Readable {
+    let Ok(meta) = std::fs::metadata(file) else {
+        return Readable::NotText;
+    };
     if meta.len() > MAX_FILE_BYTES {
-        return None;
+        // Which of the two skips this is cannot be decided on size alone, and
+        // the first live run said so loudly: a repo-wide `Grep` here reported
+        // **499 files not opened**, every one of them an `.rlib` or a `.pdb`
+        // under `target/`. That notice was true and worthless — it made an
+        // ordinary search look badly incomplete, which is how a warning stops
+        // being read, and the whole point of naming a cut is that naming it
+        // means something.
+        //
+        // So the size cap asks the same question the small-file path asks, on a
+        // prefix: is this text? A 20 MB log still says it was skipped, because
+        // it might hold the answer. A 30 MB object file says nothing, because
+        // it holds no lines either way.
+        return if looks_like_text(file) {
+            Readable::TooLarge
+        } else {
+            Readable::NotText
+        };
     }
-    std::fs::read(file)
-        .ok()
-        .and_then(|b| String::from_utf8(b).ok())
+    match std::fs::read(file).ok().map(String::from_utf8) {
+        Some(Ok(text)) => Readable::Text(text),
+        _ => Readable::NotText,
+    }
+}
+
+/// Text or not, decided from the front of the file.
+///
+/// Only reached for files too large to read whole, so it must not read them
+/// whole — that is the cost the cap exists to avoid. A prefix is enough for the
+/// question being asked, which is not "is every byte valid UTF-8" but "could a
+/// line in here have matched": an object file fails in its first hundred bytes
+/// and a log does not.
+///
+/// The final character of the prefix is almost certainly cut in half, so an
+/// incomplete sequence at the very end is accepted rather than counted against
+/// the file — otherwise one multi-byte character straddling the boundary would
+/// reclassify a whole log as binary.
+fn looks_like_text(file: &Path) -> bool {
+    use std::io::Read;
+
+    const PREFIX: usize = 8 * 1024;
+    let Ok(mut handle) = std::fs::File::open(file) else {
+        return false;
+    };
+    let mut buf = vec![0u8; PREFIX];
+    let Ok(read) = handle.read(&mut buf) else {
+        return false;
+    };
+    buf.truncate(read);
+    // A NUL byte is the one cheap tell that is not a UTF-8 question: it is
+    // valid UTF-8 and appears in essentially no text file, which is why `grep`
+    // itself has used it as the binary test for decades.
+    if buf.contains(&0) {
+        return false;
+    }
+    match std::str::from_utf8(&buf) {
+        Ok(_) => true,
+        Err(e) => e.error_len().is_none(),
+    }
 }
 
 /// Counted and taken in `char`s rather than bytes, so a multi-byte character
 /// cannot be cut in half and produce output that is not valid UTF-8.
-fn clip(line: &str) -> String {
-    const MAX: usize = 400;
-    if line.chars().count() <= MAX {
-        return line.to_string();
+///
+/// Returns whether it cut, because the marker in the line is for a human
+/// skimming and the count it feeds is for the model: a line ending in
+/// `[line clipped]` used to be the only trace that a match had been shown in
+/// part, and nothing set the flag that says the result is incomplete.
+fn clip(line: &str) -> (String, bool) {
+    if line.chars().count() <= MAX_MATCH_CHARS {
+        return (line.to_string(), false);
     }
-    let head: String = line.chars().take(MAX).collect();
-    format!("{head} … [line clipped]")
+    let head: String = line.chars().take(MAX_MATCH_CHARS).collect();
+    (format!("{head} … [line clipped]"), true)
 }
 
 // endregion: What counts as searchable

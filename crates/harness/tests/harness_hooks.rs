@@ -282,6 +282,390 @@ async fn context_is_additive() {
 
 // endregion: PostToolUse: the result stands
 
+// region: UserPromptSubmit: enrichment fails open, and says so
+// ---------------------------------------------------------------------------
+// UserPromptSubmit: enrichment fails open, and says so
+//
+// The third ruling. This event exists to *add* to a turn rather than to gate
+// one, so the four failures that deny at `PreToolUse` must not deny here — a
+// hook script with a syntax error would otherwise refuse every prompt the user
+// types. What replaces the denial is a notice: the enrichment is lost visibly.
+//
+// Blocking is still real, because a hook that says `block` has answered rather
+// than failed, and both of Claude Code's spellings of it are honoured.
+// ---------------------------------------------------------------------------
+
+/// The whole point of the event, in Claude Code's spelling — which is the one
+/// spelling that matters, because it is what the hooks people already have print.
+/// Before this event existed that JSON was an unknown field, i.e. unparseable
+/// stdout.
+#[tokio::test]
+async fn context_reaches_the_caller_in_claude_codes_spelling() {
+    const OUT: &str = r#"{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"branch: main"}}"#;
+    let root = one_hook(
+        "ups-ctx",
+        "UserPromptSubmit",
+        "ctx",
+        &format!("echo '{OUT}'"),
+        &format!("echo {OUT}"),
+        "",
+    );
+    let h = Harness::load(&root).expect("load");
+    let v = h
+        .on_user_prompt("port the middleware", "sess_1", "s.jsonl")
+        .await;
+    assert_eq!(v.context, vec!["branch: main".to_string()]);
+    assert!(!v.is_blocked());
+    assert!(v.notices().is_empty(), "{:?}", v.notices());
+}
+
+/// Emma's own spelling keeps working, so a hook written against `PostToolUse`
+/// here does not have to be rewritten to enrich a prompt.
+#[tokio::test]
+async fn context_reaches_the_caller_in_emmas_spelling() {
+    let root = one_hook(
+        "ups-ctx2",
+        "UserPromptSubmit",
+        "ctx",
+        r#"echo '{"context":"branch: main"}'"#,
+        r#"echo {"context":"branch: main"}"#,
+        "",
+    );
+    let h = Harness::load(&root).expect("load");
+    let v = h.on_user_prompt("hi", "sess_1", "s.jsonl").await;
+    assert_eq!(v.context, vec!["branch: main".to_string()]);
+}
+
+/// A hook is told the words a person typed, under the names the scripts that
+/// exist already read. Proved from the child's side: the payload is whatever
+/// arrived on its stdin, not whatever the builder meant to send.
+#[tokio::test]
+async fn the_hook_is_told_the_prompt_under_claude_codes_field_names() {
+    let root = scratch("ups-payload").join(".emma");
+    let dump = root.join("stdin.json");
+    let cmd = script(
+        &root.join("hooks"),
+        "dump",
+        &format!("cat > '{}'", dump.display()),
+        &format!("findstr \"^\" > \"{}\"", dump.display()),
+    );
+    write(
+        &root.join("config.json"),
+        &format!(r#"{{"hooks":{{"h":{{"event":"UserPromptSubmit","command":"{cmd}"}}}}}}"#),
+    );
+    let h = Harness::load(&root).expect("load");
+    let _ = h
+        .on_user_prompt("port the middleware", "sess_7", "E:\\logs\\sess_7.jsonl")
+        .await;
+
+    let seen = std::fs::read_to_string(&dump).expect("the hook must have run");
+    let seen: serde_json::Value = serde_json::from_str(seen.trim()).expect("json on stdin");
+    assert_eq!(seen["prompt"], "port the middleware");
+    assert_eq!(seen["session_id"], "sess_7");
+    assert_eq!(seen["hook_event_name"], "UserPromptSubmit");
+    assert_eq!(seen["transcript_path"], "E:\\logs\\sess_7.jsonl");
+    assert!(
+        !seen["cwd"].as_str().unwrap_or_default().is_empty(),
+        "a hook that cannot tell where it is cannot report a branch: {seen}"
+    );
+    // Emma's own key is there too, so one hook can read the event the same way
+    // on all three dispatch sites.
+    assert_eq!(seen["event"], "UserPromptSubmit");
+    // Not sent, because Emma's approval gate is not Claude Code's mode enum and
+    // a plausible answer is one a hook would branch on and be wrong about.
+    assert!(seen.get("permission_mode").is_none(), "{seen}");
+}
+
+/// The failure this whole ruling is about. A hook that hangs must not hang the
+/// session, and — the half a fail-open design gets wrong — the turn must not
+/// quietly proceed as though nothing was configured.
+#[tokio::test]
+async fn a_prompt_hook_that_hangs_loses_its_context_loudly_and_never_blocks() {
+    let root = one_hook(
+        "ups-slow",
+        "UserPromptSubmit",
+        "slow",
+        "sleep 5",
+        "ping -n 6 127.0.0.1 >nul",
+        r#","timeout_ms":300"#,
+    );
+    let h = Harness::load(&root).expect("load");
+    let started = std::time::Instant::now();
+    let v = h.on_user_prompt("hi", "sess_1", "s.jsonl").await;
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "the prompt waited on the hook: {:?}",
+        started.elapsed()
+    );
+    assert!(
+        !v.is_blocked(),
+        "a broken enricher must not lock the user out of their own agent"
+    );
+    assert!(
+        v.context.is_empty(),
+        "a timed-out hook's output is discarded"
+    );
+    let notices = v.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].contains("timed out"), "{notices:?}");
+    assert!(
+        notices[0].contains("h"),
+        "the notice must name the hook: {notices:?}"
+    );
+}
+
+/// A crash and unreadable output are the other two ways to fail, and they land
+/// the same way — with one exception, which is the next test.
+#[tokio::test]
+async fn a_crash_or_garbage_loses_the_context_and_lets_the_prompt_through() {
+    for (tag, unix, windows) in [
+        ("ups-crash", "exit 3", "exit /b 3"),
+        (
+            "ups-garbage",
+            "echo not-json-at-all",
+            "echo not-json-at-all",
+        ),
+    ] {
+        let root = one_hook(tag, "UserPromptSubmit", "x", unix, windows, "");
+        let h = Harness::load(&root).expect("load");
+        let v = h.on_user_prompt("hi", "sess_1", "s.jsonl").await;
+        assert!(!v.is_blocked(), "{tag} blocked the prompt");
+        assert!(v.context.is_empty(), "{tag}");
+        assert_eq!(v.notices().len(), 1, "{tag}: {:?}", v.notices());
+    }
+}
+
+/// Exit 2 is the one non-zero exit that means "no" rather than "broken", and the
+/// message the user reads is the hook's stderr. Without this arm, an operator's
+/// `exit 2` guard is a crash notice and the prompt they meant to stop goes
+/// through.
+#[tokio::test]
+async fn exit_two_blocks_the_prompt_with_stderr_as_the_reason() {
+    let root = one_hook(
+        "ups-exit2",
+        "UserPromptSubmit",
+        "gate",
+        "echo 'no prompts on the release branch' >&2; exit 2",
+        "echo no prompts on the release branch 1>&2\r\nexit /b 2",
+        "",
+    );
+    let h = Harness::load(&root).expect("load");
+    let v = h.on_user_prompt("ship it", "sess_1", "s.jsonl").await;
+    assert_eq!(
+        v.blocked.as_deref(),
+        Some("no prompts on the release branch")
+    );
+}
+
+/// The JSON spelling of the same answer, and the one Claude Code documents
+/// first. `deny` is accepted as well, because that is Emma's word everywhere
+/// else and an operator should not have to know which of their hooks is which.
+#[tokio::test]
+async fn a_decision_of_block_stops_the_prompt() {
+    for (tag, word) in [("ups-block", "block"), ("ups-deny", "deny")] {
+        let json = format!(r#"{{"decision":"{word}","reason":"not during the freeze"}}"#);
+        let root = one_hook(
+            tag,
+            "UserPromptSubmit",
+            "gate",
+            &format!("echo '{json}'"),
+            &format!("echo {json}"),
+            "",
+        );
+        let h = Harness::load(&root).expect("load");
+        let v = h.on_user_prompt("ship it", "sess_1", "s.jsonl").await;
+        assert_eq!(v.blocked.as_deref(), Some("not during the freeze"), "{tag}");
+    }
+}
+
+/// Context is what the model reads and `systemMessage` is what the user reads.
+/// A runtime that mixed them would either bill the user for a warning meant for
+/// them, or hide from them a sentence a hook wrote for them.
+#[tokio::test]
+async fn a_system_message_is_shown_to_the_user_and_not_to_the_model() {
+    const OUT: &str = r#"{"systemMessage":"the branch is stale","hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"branch: main"}}"#;
+    let root = one_hook(
+        "ups-msg",
+        "UserPromptSubmit",
+        "msg",
+        &format!("echo '{OUT}'"),
+        &format!("echo {OUT}"),
+        "",
+    );
+    let h = Harness::load(&root).expect("load");
+    let v = h.on_user_prompt("hi", "sess_1", "s.jsonl").await;
+    assert_eq!(v.context, vec!["branch: main".to_string()]);
+    assert_eq!(v.notices(), vec!["the branch is stale".to_string()]);
+}
+
+/// The user pays for injected context by the token, on this turn and on every
+/// later turn that replays it, so a program that will not stop printing is cut —
+/// and the cut is named in the text, because a model shown half a sentence
+/// reasons about the half it was given.
+#[tokio::test]
+async fn a_hook_cannot_fill_the_prompt_and_a_cut_says_so() {
+    // 20,000 characters of context, twice the cap. The script prints a file
+    // rather than building the string inline, because the two shells disagree
+    // about everything except `cat`/`type`.
+    let base = scratch("ups-flood");
+    let flood = base.join("flood.json");
+    write(
+        &flood,
+        &format!(r#"{{"context":"{}"}}"#, "x".repeat(20_000)),
+    );
+    let root = base.join(".emma");
+    let cmd = script(
+        &root.join("hooks"),
+        "flood",
+        &format!("cat '{}'", flood.display()),
+        &format!("type \"{}\"", flood.display()),
+    );
+    write(
+        &root.join("config.json"),
+        &format!(r#"{{"hooks":{{"h":{{"event":"UserPromptSubmit","command":"{cmd}"}}}}}}"#),
+    );
+    let h = Harness::load(&root).expect("load");
+    let v = h.on_user_prompt("hi", "sess_1", "s.jsonl").await;
+    let ctx = v.context.first().expect("some context survived");
+    assert!(
+        ctx.len() < 11_000,
+        "a hook put {} characters in front of the model",
+        ctx.len()
+    );
+    assert!(
+        ctx.contains("was cut"),
+        "the loss was not named: {}",
+        &ctx[ctx.len().saturating_sub(200)..]
+    );
+}
+
+/// A reason is arbitrary text from an arbitrary program, and the cap used to be
+/// a `String::truncate` — which panics on a byte index inside a character. A
+/// 400-byte cut through a `→` took the process down at the exact moment a policy
+/// was being explained.
+#[tokio::test]
+async fn a_multibyte_reason_longer_than_the_cap_does_not_panic() {
+    let long: String = "→".repeat(300);
+    let json = format!(r#"{{"decision":"block","reason":"{long}"}}"#);
+    let root = one_hook(
+        "ups-utf8",
+        "UserPromptSubmit",
+        "gate",
+        &format!("printf '%s' '{json}'"),
+        &format!("echo {json}"),
+        "",
+    );
+    let h = Harness::load(&root).expect("load");
+    let v = h.on_user_prompt("hi", "sess_1", "s.jsonl").await;
+    let reason = v.blocked.expect("blocked");
+    assert!(reason.starts_with('→'), "{reason}");
+    assert!(
+        reason.len() <= 400,
+        "the cap did not apply: {}",
+        reason.len()
+    );
+}
+
+/// Nothing configured is not a special case anywhere: no runs, no context, no
+/// block, and a caller that needs no `if` around the call.
+#[tokio::test]
+async fn a_harness_with_no_prompt_hooks_answers_nothing() {
+    let root = scratch("ups-none").join(".emma");
+    write(&root.join("config.json"), "{}");
+    let h = Harness::load(&root).expect("load");
+    let v = h.on_user_prompt("hi", "sess_1", "s.jsonl").await;
+    assert!(v.runs.is_empty() && v.context.is_empty() && !v.is_blocked());
+}
+
+/// A `UserPromptSubmit` hook has no tool name to match, so a matcher on one is a
+/// filter that can never be true — the same failure as a hook attached to an
+/// event that never fires, and it gets the same loud answer.
+#[tokio::test]
+async fn a_matcher_on_a_prompt_hook_is_a_startup_error() {
+    let root = one_hook(
+        "ups-matcher",
+        "UserPromptSubmit",
+        "ctx",
+        "exit 0",
+        "exit /b 0",
+        r#","matcher":"Bash""#,
+    );
+    let err = Harness::load(&root).expect_err("a matcher that can never match must not load");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("Bash"), "{msg}");
+    assert!(msg.contains("no tool name"), "{msg}");
+
+    // …and the empty one, which is what a group written for a tool event looks
+    // like when it was copied for this one, asks for nothing and loads.
+    let root = one_hook(
+        "ups-matcher-empty",
+        "UserPromptSubmit",
+        "ctx",
+        r#"echo '{"context":"ok"}'"#,
+        r#"echo {"context":"ok"}"#,
+        r#","matcher":"""#,
+    );
+    let h = Harness::load(&root).expect("an empty matcher is not a matcher");
+    let v = h.on_user_prompt("hi", "sess_1", "s.jsonl").await;
+    assert_eq!(v.context, vec!["ok".to_string()], "the hook never ran");
+}
+
+/// The compatibility claim, tested against Claude Code's own file format rather
+/// than Emma's: a `.claude/settings.json` that already has a `UserPromptSubmit`
+/// entry in it loads and fires, unchanged.
+#[tokio::test]
+async fn a_claude_settings_file_with_a_prompt_hook_works_unchanged() {
+    let root = scratch("ups-claude").join(".claude");
+    let cmd = script(
+        &root.join("hooks"),
+        "nudge",
+        r#"echo '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"[task-tracking] keep a task list"}}'"#,
+        r#"echo {"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"[task-tracking] keep a task list"}}"#,
+    );
+    write(
+        &root.join("settings.json"),
+        &format!(
+            r#"{{"model":"opus","hooks":{{"UserPromptSubmit":[{{"hooks":[
+               {{"type":"command","command":"$CLAUDE_PROJECT_DIR/.claude/{cmd}"}}]}}]}}}}"#
+        ),
+    );
+    write(&root.join("CLAUDE.md"), "rules");
+    let h = Harness::load(&root).expect("load");
+    let v = h.on_user_prompt("hi", "sess_1", "s.jsonl").await;
+    assert_eq!(
+        v.context,
+        vec!["[task-tracking] keep a task list".to_string()]
+    );
+}
+
+/// Widening the reply shape to accept Claude Code's JSON must not turn a `deny`
+/// into an allow. Its `PreToolUse` spelling used to be unparseable — which
+/// denied, for the wrong reason but with the right result — so this pins the
+/// right reason: the verdict is read, not fallen back to.
+#[tokio::test]
+async fn claude_codes_pre_tool_use_spelling_of_deny_is_honoured() {
+    const OUT: &str = r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"not that path"}}"#;
+    let root = one_hook(
+        "cc-deny",
+        "PreToolUse",
+        "gate",
+        &format!("echo '{OUT}'"),
+        &format!("echo {OUT}"),
+        "",
+    );
+    let h = Harness::load(&root).expect("load");
+    let args = serde_json::json!({});
+    let v = h.run_hooks(HookEvent::PreToolUse, &call(&args)).await;
+    assert_eq!(v.denied.as_deref(), Some("not that path"));
+    assert_eq!(
+        v.runs[0].exit_code,
+        Some(0),
+        "it must be the decision that denied, not a crash"
+    );
+}
+
+// endregion: UserPromptSubmit: enrichment fails open, and says so
+
 // region: The environment the child does not get
 // ---------------------------------------------------------------------------
 // The environment the child does not get

@@ -20,11 +20,13 @@ Read a text file from the working directory.
 - A line too long to show whole is labelled `#----` instead of a hash. You have
   not seen the end of it, so `Edit` will not let you replace it by address.
 - Reads at most 2000 lines and 256 KiB per call, and clips any single line
-  longer than 2000 characters. When anything was cut the result says so
-  explicitly and reports the line range that was returned; use `offset` to
-  continue from there.
-- `offset` is a 1-based line number. `limit` is a line count. Lines outside the
-  window you read cannot be addressed by `Edit`; read them first.
+  longer than 2000 characters. **No argument raises any of the three.** When
+  anything was cut the result names which one bound and reports the line range
+  that was returned; paging on with `offset` is the remedy, and for a clipped
+  line there is none.
+- `offset` is a 1-based line number. `limit` is a line count and can only
+  **lower** the 2000-line cap, never raise it. Lines outside the window you read
+  cannot be addressed by `Edit`; read them first.
 
 Reading an empty file succeeds and returns no content. Reading a file that does
 not exist, or a directory, is an argument error naming the path.

@@ -138,7 +138,10 @@ impl Tool for Read {
                 "limit": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": format!("How many lines to return. Capped at {MAX_LINES}.")
+                    // Says which direction it moves, for the same reason as
+                    // `Grep.head_limit`: "capped at 2000" reads as an invitation
+                    // to pass 5000 and get 5000.
+                    "description": format!("How many lines to return. Lowers the {MAX_LINES}-line cap and cannot raise it.")
                 }
             },
             "required": ["file_path"],
@@ -338,26 +341,48 @@ fn render(root: &Path, file: &Path, text: &str, offset: usize, limit: usize) -> 
         // caller that renders only one of them still tells the truth.
         let mut why = Vec::new();
         if more {
+            // Names the number that actually bound rather than "a limit": a
+            // caller that passed `limit` can raise its own, and a caller that
+            // passed none has met the fixed ceiling and would learn nothing
+            // from raising anything. Both are told to page instead, which is
+            // the remedy that works either way.
+            let bound = if limit < MAX_LINES {
+                format!("limit={limit}")
+            } else {
+                format!("the fixed {MAX_LINES}-line ceiling, which `limit` cannot raise")
+            };
             why.push(format!(
-                "showing lines {offset}-{last} of {total}; continue with offset {}",
+                "showing lines {offset}-{last} of {total}, cut by {bound}; continue with offset {}",
                 last + 1
             ));
         }
         if byte_capped {
-            why.push(format!("hit the {MAX_BYTES}-byte cap"));
+            why.push(format!(
+                "the {MAX_BYTES}-byte cap on one call bit before the line count did, so fewer \
+                 lines came back than `limit` asked for; no argument raises it and the offset \
+                 above is what continues past it"
+            ));
         }
         if clipped_line {
             why.push(format!(
-                "lines longer than {MAX_LINE_CHARS} characters were clipped"
+                "lines longer than {MAX_LINE_CHARS} characters were clipped to their first \
+                 {MAX_LINE_CHARS} and labelled {} instead of a hash; no argument raises that cap",
+                hashline::CLIPPED
             ));
         }
-        out.push_str(&format!("\n[truncated: {}]\n", why.join("; ")));
+        // One sentence, said twice on purpose. The content is what the model
+        // reads; `truncation` is what the runtime quotes verbatim to the model's
+        // result note and to the terminal line. Building both from the same
+        // string is what stops the two from drifting into two different stories
+        // about which cap bound.
+        let reason = why.join("; ");
+        out.push_str(&format!("\n[truncated: {reason}]\n"));
         return Shown {
             outcome: ToolOutcome::new(out)
                 .with_display(format!(
                     "{shown}: lines {offset}-{last} of {total} (truncated)"
                 ))
-                .truncated(),
+                .truncated_because(reason),
             lines,
         };
     }

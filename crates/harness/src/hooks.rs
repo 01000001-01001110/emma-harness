@@ -1,4 +1,4 @@
-//! Hooks: operator-authored programs the runtime runs at two dispatch sites.
+//! Hooks: operator-authored programs the runtime runs at three dispatch sites.
 //!
 //! **Why this is not in `lib.rs`.** Everything else in the harness — personas,
 //! skills, commands, the spine — really is "file reads, one serde struct". This
@@ -23,6 +23,13 @@
 //! **The one policy that lives here, because it is about hooks and not about the
 //! loop:** `PreToolUse` is fail-closed and `PostToolUse` is fail-open. See `run`
 //! — it is four lines and it is the whole design.
+//!
+//! **The third site is not a tool call.** `UserPromptSubmit` fires once, on the
+//! words a person typed, before the goal opens — see `run_prompt`. It is the one
+//! event that can *add* to what the model reads rather than only refuse
+//! something, so it has its own call type (`PromptCall`), its own verdict
+//! (`PromptVerdict`), and a third failure ruling that is neither of the two
+//! above: **fail-open, but never silently.** The argument is in `run_prompt`.
 //!
 //! Nothing here writes to a log or knows an event type. The caller owns any
 //! record it wants to keep, which is what lets every test in this crate run
@@ -59,6 +66,19 @@ const DEFAULT_HOOK_TIMEOUT_MS: u64 = 5_000;
 const MAX_HOOK_TIMEOUT_MS: u64 = 10_000;
 pub(crate) const HOOK_OUTPUT_CAP: u64 = 64 * 1024;
 const HOOK_REASON_CAP: usize = 400;
+/// How much injected context one hook may put in front of the model, in
+/// characters. Claude Code's own limit, kept to the character so a script sized
+/// against that documentation behaves the same here.
+///
+/// It is not the pipe cap doing this job. `HOOK_OUTPUT_CAP` stops a program
+/// filling memory; this stops a program filling the *prompt*, which is a
+/// different resource with a different owner — the user pays for it by the
+/// token, on this turn and on every later turn that replays it.
+///
+/// Claude Code spills the overflow to a file and passes the path. Emma
+/// truncates and says so in the text, because a path is only useful to a model
+/// that can read the file, and the honest failure is the one the model can see.
+const HOOK_CONTEXT_CAP: usize = 10_000;
 
 /// The environment a hook is given, and all of it — six names. `SYSTEMROOT` and
 /// `COMSPEC` are Windows process-creation requirements, not policy; the other
@@ -103,26 +123,30 @@ pub struct HookDef {
     pub(crate) text: Option<String>,
 }
 
-/// A closed set with two members. Config attaches commands to dispatch sites; it
-/// can never mint a third.
+/// A closed set with three members. Config attaches commands to dispatch sites;
+/// it can never mint a fourth.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum HookEvent {
     PreToolUse,
     PostToolUse,
+    /// Once per prompt a person typed, before the goal opens. The only event
+    /// that can add to what the model reads.
+    UserPromptSubmit,
 }
 
 impl HookEvent {
-    pub const ALL: &'static [&'static str] = &["PreToolUse", "PostToolUse"];
+    pub const ALL: &'static [&'static str] = &["PreToolUse", "PostToolUse", "UserPromptSubmit"];
 
-    /// Claude Code implements a larger set — `SessionStart`, `UserPromptSubmit`,
-    /// `Stop` and others. Emma implements two, and a config naming one of the
-    /// rest is a **startup error, never a silent skip**: a security hook that
-    /// quietly never runs is worse than no hook, because the operator believes
-    /// they have one. See `notes/claude-code-compatibility.md`.
+    /// Claude Code implements a larger set — `SessionStart`, `Stop`,
+    /// `PreCompact` and others. Emma implements three, and a config naming one
+    /// of the rest is a **startup error, never a silent skip**: a security hook
+    /// that quietly never runs is worse than no hook, because the operator
+    /// believes they have one. See `notes/claude-code-compatibility.md`.
     pub fn parse(raw: &str) -> Result<Self> {
         match raw {
             "PreToolUse" => Ok(Self::PreToolUse),
             "PostToolUse" => Ok(Self::PostToolUse),
+            "UserPromptSubmit" => Ok(Self::UserPromptSubmit),
             other => bail!(
                 "hook event `{other}` is not implemented by Emma (implemented: {}). \
                  A hook attached to an event that never fires is a policy the \
@@ -181,6 +205,69 @@ pub struct HookCall<'a> {
     pub result: Option<HookResult<'a>>,
 }
 
+/// Everything a `UserPromptSubmit` hook is told: the words a person typed, and
+/// where they typed them.
+///
+/// Separate from [`HookCall`] rather than a variant of it, because the two
+/// payloads have no field in common beyond the session and every field one of
+/// them grows is a field the other would have to answer `null` for. A tool hook
+/// that could read the prompt would also be a side channel nobody configured.
+pub struct PromptCall<'a> {
+    /// Exactly what the user typed, before anything is prepended to it.
+    pub prompt: &'a str,
+    pub session_id: &'a str,
+    /// The session JSONL. Claude Code's scripts read the transcript to see what
+    /// has happened so far, so the path is sent under Claude Code's name for it.
+    pub transcript_path: &'a str,
+    pub cwd: &'a str,
+}
+
+/// What the prompt hooks decided, together.
+///
+/// `blocked` and `context` are independent: a hook that blocks contributes no
+/// context (there is no turn to enrich), and a hook that enriches never blocks.
+#[derive(Debug, Default)]
+pub struct PromptVerdict {
+    /// `Some(reason)` when a hook stopped the prompt. The goal must not open,
+    /// and the reason is the user's to read.
+    pub blocked: Option<String>,
+    /// Text hooks asked to put in front of the model, in hook-name order.
+    pub context: Vec<String>,
+    pub runs: Vec<HookRun>,
+}
+
+impl PromptVerdict {
+    pub fn is_blocked(&self) -> bool {
+        self.blocked.is_some()
+    }
+
+    /// One sentence per hook that did not answer, for the terminal.
+    ///
+    /// **This exists because the failure here is fail-open.** A turn that
+    /// quietly lost its enrichment looks exactly like a turn that was never
+    /// configured to have any, and the operator would go on believing the branch
+    /// name was in the prompt. Silence is the bug; this is the fix.
+    pub fn notices(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for r in &self.runs {
+            if r.outcome == HookOutcome::Failed {
+                let why = r.stderr.lines().next().unwrap_or("").trim();
+                out.push(match (r.exit_code, why.is_empty()) {
+                    (_, false) => format!("hook `{}` added no context: {why}", r.hook),
+                    (Some(c), true) => format!("hook `{}` added no context: exited {c}", r.hook),
+                    (None, true) => format!("hook `{}` added no context", r.hook),
+                });
+            }
+            // `systemMessage` is the hook talking to the person, and it is said
+            // whether or not the hook also failed.
+            if let Some(m) = &r.message {
+                out.push(m.clone());
+            }
+        }
+        out
+    }
+}
+
 /// The model-visible outcome of a call, and nothing more.
 pub struct HookResult<'a> {
     /// Exactly the text that rode the `tool_result` block.
@@ -213,6 +300,11 @@ pub struct HookRun {
     pub duration_ms: u64,
     pub reason: Option<String>,
     pub context: Option<String>,
+    /// `systemMessage`: a word for the *user*, never for the model. Kept
+    /// separate from `context` for exactly that reason — one of these two is
+    /// paid for in tokens and read by a model, and mixing them would make which
+    /// is which a matter of where the caller happened to print it.
+    pub message: Option<String>,
     /// Captured for the log. Never reaches the model.
     pub stderr: String,
 }
@@ -233,15 +325,86 @@ impl HookVerdict {
     }
 }
 
-#[derive(Deserialize)]
+/// What a hook may print on stdout, in both spellings.
+///
+/// **Why this grew Claude Code's spelling rather than keeping Emma's.** The
+/// whole reason a `.claude/settings.json` is read at all is that the scripts it
+/// names keep working, and a real `UserPromptSubmit` hook does not print
+/// `{"context": …}` — it prints
+/// `{"hookSpecificOutput": {"hookEventName": …, "additionalContext": …}}`,
+/// which is what Claude Code's own documentation tells people to write. Before
+/// this, that object was an unknown field: unparseable stdout, which on
+/// `PreToolUse` means *deny*. A compatibility feature that turns a working
+/// upstream hook into a wall is not a compatibility feature.
+///
+/// **Still `deny_unknown_fields`, on both levels.** A misspelled `raeson` that
+/// silently allowed is the failure the attribute exists to prevent, and it is
+/// worth more than tolerance for a key Claude Code has not shipped yet. The two
+/// events resolve an unreadable answer differently and both resolutions are
+/// safe: `PreToolUse` denies (unchanged), `UserPromptSubmit` proceeds without
+/// the context and says so.
+///
+/// The universal fields are declared so that a hook printing them is not
+/// rejected; each one's comment says whether Emma acts on it, because a field
+/// accepted and quietly ignored is the same lie as an event that never fires.
+#[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct HookReply {
+    /// `deny` is Emma's spelling, `block` is Claude Code's on this event. Both
+    /// mean the same thing and both are honoured.
     #[serde(default)]
     decision: Option<String>,
     #[serde(default)]
     reason: Option<String>,
+    /// Emma's spelling of additive context.
     #[serde(default)]
     context: Option<String>,
+    #[serde(default, rename = "hookSpecificOutput")]
+    specific: Option<HookSpecificOutput>,
+    /// Honoured: `false` stops the prompt or the call, with `stopReason` as the
+    /// sentence. Claude Code documents it as taking precedence over the
+    /// event-specific decision, and it does here too.
+    #[serde(default, rename = "continue")]
+    keep_going: Option<bool>,
+    #[serde(default, rename = "stopReason")]
+    stop_reason: Option<String>,
+    /// Accepted, and shown to the user by the caller when there is one. Emma has
+    /// no separate warning channel, so it rides the same notice list.
+    #[serde(default, rename = "systemMessage")]
+    system_message: Option<String>,
+    /// Accepted and inert. It hides a hook's stdout in Claude Code's transcript;
+    /// Emma never prints hook stdout in the first place.
+    #[serde(default, rename = "suppressOutput")]
+    _suppress_output: Option<bool>,
+    /// Accepted and inert: Emma's sessions are named by id, not by title.
+    #[serde(default, rename = "sessionTitle")]
+    _session_title: Option<String>,
+    /// Accepted and inert. Emma always shows the user their own blocked prompt —
+    /// see `run_prompt`, where the trace is the point.
+    #[serde(default, rename = "suppressOriginalPrompt")]
+    _suppress_original_prompt: Option<bool>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct HookSpecificOutput {
+    /// Required by Claude Code, read by nothing here: the runtime already knows
+    /// which event it dispatched, and trusting a child process's claim about
+    /// that would let a hook answer for an event it was not attached to.
+    #[serde(default, rename = "hookEventName")]
+    _event: Option<String>,
+    #[serde(default, rename = "additionalContext")]
+    additional_context: Option<String>,
+    /// Claude Code's `PreToolUse` spelling of a verdict. Honoured, because the
+    /// alternative is reading a file that says `deny` and running the tool.
+    /// `ask` maps to deny: Emma's approval gate is asked separately and a hook
+    /// that wanted a human is not asking for the call to proceed unattended.
+    #[serde(default, rename = "permissionDecision")]
+    permission_decision: Option<String>,
+    #[serde(default, rename = "permissionDecisionReason")]
+    permission_reason: Option<String>,
+    #[serde(default, rename = "sessionTitle")]
+    _session_title: Option<String>,
 }
 
 // endregion: The call, and what a hook may answer
@@ -258,17 +421,20 @@ struct HookReply {
 /// Run every hook attached to `event` that matches this call, in hook-name
 /// order — the key in the `hooks` map, sorted. Not declaration order, which JSON
 /// does not preserve anyway.
+///
+/// Tool events only. `UserPromptSubmit` is excluded here as well as filtered by
+/// `event`, so a caller that passes it by mistake dispatches nothing rather than
+/// handing a prompt hook a payload with a tool name in it and no prompt.
 pub(crate) async fn run(
     hooks: &[ResolvedHook],
     event: HookEvent,
     call: &HookCall<'_>,
 ) -> HookVerdict {
     let mut verdict = HookVerdict::default();
-    for hook in hooks
-        .iter()
-        .filter(|h| h.event == event && h.matches(call.tool_name))
-    {
-        let run = hook.invoke(call).await;
+    for hook in hooks.iter().filter(|h| {
+        h.event == event && h.event != HookEvent::UserPromptSubmit && h.matches(call.tool_name)
+    }) {
+        let run = hook.invoke(hook.payload(call).to_string()).await;
         let denied = run.outcome != HookOutcome::Allow;
         let reason = run.reason.clone();
         if let Some(ctx) = run.context.clone() {
@@ -285,6 +451,77 @@ pub(crate) async fn run(
         if denied && event == HookEvent::PreToolUse {
             verdict.denied =
                 Some(reason.unwrap_or_else(|| "This call was blocked by policy.".into()));
+            return verdict;
+        }
+    }
+    verdict
+}
+
+/// Run every `UserPromptSubmit` hook, in hook-name order, over the words a
+/// person just typed.
+///
+/// **The third failure ruling, and why it is neither of the other two.**
+/// `PreToolUse` denies on ambiguity because a broken gate must not become no
+/// gate. `PostToolUse` allows on ambiguity because the side effect already
+/// happened. Here a hook that crashes has failed at *enrichment*, and resolving
+/// that to deny would mean a hook script with a syntax error locks the user out
+/// of their own agent — every prompt refused, by the program that was supposed
+/// to add the branch name to it. So: **the prompt proceeds, without the
+/// context, and the caller is handed a sentence saying so** ([`PromptVerdict::notices`]).
+/// Losing enrichment silently is the failure this is shaped to avoid; losing it
+/// loudly is a bad turn the user can see and fix.
+///
+/// This also happens to be Claude Code's documented behaviour on this event — a
+/// hook that times out is cancelled, its output including `additionalContext` is
+/// discarded, and the prompt still reaches the model — so an existing
+/// configuration behaves the same under both runtimes.
+///
+/// **Blocking is still real**, because a `UserPromptSubmit` hook that says
+/// `block` is not failing, it is answering. Two spellings, both from Claude
+/// Code: a JSON decision, and exit code 2 with the reason on stderr. A block
+/// short-circuits the rest, exactly as a `PreToolUse` denial does.
+pub(crate) async fn run_prompt(hooks: &[ResolvedHook], call: &PromptCall<'_>) -> PromptVerdict {
+    let mut verdict = PromptVerdict::default();
+    for hook in hooks
+        .iter()
+        .filter(|h| h.event == HookEvent::UserPromptSubmit)
+    {
+        let mut run = hook.invoke(hook.prompt_payload(call).to_string()).await;
+        // Exit 2 is Claude Code's "block" in the exit-code channel, and its
+        // message is stderr when the hook printed no reason. Every *other*
+        // non-zero exit is a crash, which is the fail-open path below.
+        let blocked_by_exit = run.exit_code == Some(2);
+        if blocked_by_exit {
+            run.outcome = HookOutcome::Deny;
+            if run.reason.is_none() {
+                let first = run.stderr.lines().next().unwrap_or("").trim();
+                if !first.is_empty() {
+                    run.reason = Some(first.to_string());
+                }
+            }
+        }
+        let outcome = run.outcome;
+        let reason = run.reason.clone();
+        if let Some(mut ctx) = run.context.clone() {
+            if outcome == HookOutcome::Allow {
+                if ctx.len() > HOOK_CONTEXT_CAP {
+                    truncate_on_a_char_boundary(&mut ctx, HOOK_CONTEXT_CAP);
+                    // Named in the text the model reads, because a model shown a
+                    // sentence that stops mid-clause will otherwise reason about
+                    // the half it was given as though it were the whole.
+                    ctx.push_str(&format!(
+                        "\n[hook `{}` printed more than {HOOK_CONTEXT_CAP} characters of \
+                         context; the rest was cut]",
+                        hook.name
+                    ));
+                }
+                verdict.context.push(ctx);
+            }
+        }
+        verdict.runs.push(run);
+        if outcome == HookOutcome::Deny {
+            verdict.blocked =
+                Some(reason.unwrap_or_else(|| "This prompt was blocked by policy.".into()));
             return verdict;
         }
     }
@@ -317,7 +554,32 @@ impl ResolvedHook {
         v
     }
 
-    async fn invoke(&self, call: &HookCall<'_>) -> HookRun {
+    /// What a `UserPromptSubmit` hook is told.
+    ///
+    /// **Two names for the event, and that is deliberate.** `event` is Emma's,
+    /// so a hook written against `PreToolUse` here reads the same key on every
+    /// event; `hook_event_name` is Claude Code's, so a script copied out of
+    /// somebody's `.claude/hooks/` finds the field its examples use. The rest of
+    /// the names are Claude Code's outright, because the scripts that exist
+    /// already read `prompt`, `session_id`, `transcript_path` and `cwd`, and a
+    /// better name would only be better for a file nobody has written yet.
+    ///
+    /// `permission_mode` is not sent. Emma's approval gate is not Claude Code's
+    /// mode enum, and a plausible-looking `"default"` would be a fact a hook
+    /// could branch on and be wrong about.
+    fn prompt_payload(&self, call: &PromptCall<'_>) -> serde_json::Value {
+        serde_json::json!({
+            "event": self.event,
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": call.prompt,
+            "session_id": call.session_id,
+            "transcript_path": call.transcript_path,
+            "cwd": call.cwd,
+            "config_text": self.text,
+        })
+    }
+
+    async fn invoke(&self, body: String) -> HookRun {
         let started = Instant::now();
         let mut run = HookRun {
             hook: self.name.clone(),
@@ -330,11 +592,11 @@ impl ResolvedHook {
             duration_ms: 0,
             reason: None,
             context: None,
+            message: None,
             stderr: String::new(),
         };
 
         let mut cmd = contained_command(&self.command);
-        let body = self.payload(call).to_string();
         let finished = tokio::time::timeout(self.timeout, exec(&mut cmd, body)).await;
         run.duration_ms = started.elapsed().as_millis() as u64;
         let (code, stdout, stderr) = match finished {
@@ -365,18 +627,50 @@ impl ResolvedHook {
             run.stderr.push_str("\nunparseable stdout");
             return run;
         };
-        run.context = reply.context;
-        // A hook's own reason, else the operator's configured `text`, else the
-        // generic line `run` supplies. Capped, and logged verbatim.
-        run.reason = reply.reason.or_else(|| self.text.clone()).map(|mut r| {
-            r.truncate(HOOK_REASON_CAP);
-            r
-        });
-        run.outcome = match reply.decision.as_deref() {
-            Some("deny") => HookOutcome::Deny,
-            _ => HookOutcome::Allow,
+        let specific = reply.specific.unwrap_or_default();
+        run.context = reply.context.or(specific.additional_context);
+        run.message = reply.system_message;
+        // A hook's own reason in whichever field it used, else the operator's
+        // configured `text`, else the generic line `run` supplies. Capped, and
+        // logged verbatim.
+        run.reason = reply
+            .reason
+            .or(specific.permission_reason)
+            .or(reply.stop_reason)
+            .or_else(|| self.text.clone())
+            .map(|mut r| {
+                truncate_on_a_char_boundary(&mut r, HOOK_REASON_CAP);
+                r
+            });
+        // Every spelling of "no", in one expression, because the failure to
+        // avoid is a file that says deny and a tool that ran. `continue: false`
+        // is first because Claude Code documents it as outranking the decision.
+        let refused = reply.keep_going == Some(false)
+            || matches!(reply.decision.as_deref(), Some("deny") | Some("block"))
+            || matches!(
+                specific.permission_decision.as_deref(),
+                Some("deny") | Some("ask")
+            );
+        run.outcome = if refused {
+            HookOutcome::Deny
+        } else {
+            HookOutcome::Allow
         };
         run
+    }
+}
+
+/// `String::truncate` panics on a byte index inside a character, and a hook's
+/// reason is arbitrary text from an arbitrary program — a 400-byte cut through a
+/// `→` would take the process down at the exact moment a policy was being
+/// explained. Cuts at the last boundary at or below the cap instead.
+fn truncate_on_a_char_boundary(s: &mut String, cap: usize) {
+    if s.len() > cap {
+        let mut end = cap;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
     }
 }
 
@@ -507,7 +801,28 @@ pub(crate) fn resolve(
             HookEvent::parse(&def.event).with_context(|| named(format!("hook `{name}`")))?;
         let command = contain(root, &format!("hook `{name}`"), &def.command)
             .map_err(|e| anyhow!(named(e)))?;
+        // A `UserPromptSubmit` hook has no tool name to match, so a matcher on
+        // one is a filter that can never be true. Claude Code ignores the field
+        // here; Emma names it, on the same rule as the unimplemented event — a
+        // hook the operator believes is conditional and which in fact never
+        // fires is worse than one that always does. The empty string is the
+        // exception and is treated as absent: `"matcher": ""` is what a group
+        // written for a tool event looks like when it was copied for this one,
+        // and it asks for nothing.
+        let matcher_text = def.matcher.as_deref().filter(|m| !m.trim().is_empty());
+        if event == HookEvent::UserPromptSubmit {
+            if let Some(m) = matcher_text {
+                bail!(named(format!(
+                    "hook `{name}` is a UserPromptSubmit hook with matcher `{m}`, but there is \
+                     no tool name to match on this event — remove the matcher, or match inside \
+                     the hook on the `prompt` field it is given"
+                )));
+            }
+        }
         let matcher = match &def.matcher {
+            // Only an empty one can have survived the check above, and on this
+            // event it means nothing was asked for.
+            Some(_) if event == HookEvent::UserPromptSubmit => None,
             // Anchored: a matcher is matched in full, so `Read` cannot silently
             // guard `ReadFile` — the near miss that looks like a working policy.
             Some(m) => Some(

@@ -75,7 +75,9 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-pub use crate::hooks::{HookCall, HookEvent, HookOutcome, HookResult, HookRun, HookVerdict};
+pub use crate::hooks::{
+    HookCall, HookEvent, HookOutcome, HookResult, HookRun, HookVerdict, PromptCall, PromptVerdict,
+};
 use crate::hooks::{HookDef, ResolvedHook};
 pub use crate::statusline::{
     StatusContext, StatusCost, StatusLine, StatusModel, StatusPayload, StatusWorkspace,
@@ -1007,6 +1009,44 @@ impl Harness {
     /// and every pre-flight check live in `hooks.rs`.
     pub async fn run_hooks(&self, event: HookEvent, call: &HookCall<'_>) -> HookVerdict {
         hooks::run(&self.hooks, event, call).await
+    }
+
+    /// Run every `UserPromptSubmit` hook over the words a person just typed.
+    ///
+    /// **Deliberately not reachable from the turn loop.** The loop calls the
+    /// model many times per goal and a delegated run calls it many times more;
+    /// this fires once, at the place a human's text becomes a goal. Keeping the
+    /// call site out there rather than in `run_goal` is what makes "once per
+    /// user prompt, and never for a subagent's brief" a property of the call
+    /// graph instead of a flag someone has to remember to set — a delegation
+    /// constructs its `Goal` directly and there is no path from it to here.
+    ///
+    /// Returns cheaply when nothing is configured, so the caller needs no
+    /// `if` around it: no hooks means no runs, no context and no block.
+    pub async fn on_user_prompt(
+        &self,
+        prompt: &str,
+        session_id: &str,
+        transcript_path: &str,
+    ) -> PromptVerdict {
+        // The working directory is read here rather than passed, because it is
+        // the process's and the caller has no better answer than
+        // `current_dir()` — a parameter would only be a chance to send a
+        // different one. A directory that cannot be read is sent as empty
+        // rather than guessed at.
+        let cwd = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        hooks::run_prompt(
+            &self.hooks,
+            &PromptCall {
+                prompt,
+                session_id,
+                transcript_path,
+                cwd: &cwd,
+            },
+        )
+        .await
     }
 }
 

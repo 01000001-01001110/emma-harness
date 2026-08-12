@@ -312,10 +312,10 @@ impl Bash {
         // both streams as cut. That loses output, which is the lesser harm: the
         // alternative is a `Bash` call that never returns, and "cut" is at
         // least true of a result assembled from nothing.
-        let ((out, out_cut), (err, err_cut)) =
+        let (drained, ((out, out_cut), (err, err_cut))) =
             match tokio::time::timeout(Duration::from_secs(5), drains).await {
-                Ok(Ok(pair)) => pair,
-                _ => ((Vec::new(), true), (Vec::new(), true)),
+                Ok(Ok(pair)) => (true, pair),
+                _ => (false, ((Vec::new(), true), (Vec::new(), true))),
             };
 
         let body = render(&out, &err);
@@ -368,13 +368,36 @@ impl Bash {
         // on, a resumed or compacted conversation would lose the one mention,
         // and the cost is one short line against a 64 KiB cap.
         content = format!("{}\n{content}", shell.banner());
+        // Two different cuts wearing one flag until now, and they call for
+        // opposite moves. The cap means the command printed more than fits and
+        // the output is a prefix of what it said; losing the drain race means
+        // whatever had been read was thrown away, so the result is assembled
+        // from nothing and the *whole* output is missing. Telling the model
+        // "cut at 65536 bytes" in the second case names a limit that never
+        // fired, and it would trust the empty body as short output.
+        let reason = if !drained {
+            "the command's output was discarded: its streams could not be drained within 5s \
+             of it exiting, which happens when a background grandchild still holds the pipe \
+             open. Nothing here is the command's output and no argument changes that — \
+             re-run it redirecting output to a file, then Read or Grep the file."
+                .to_string()
+        } else {
+            format!(
+                "output cut at the fixed {MAX_STREAM_BYTES}-byte per-stream cap, which no \
+                 argument raises; what is shown is the start of each stream. Re-run redirecting \
+                 output to a file and Read or Grep the file for the rest, or narrow the command \
+                 so it prints less."
+            )
+        };
         if cut {
-            content.push_str(&format!(
-                "\n[truncated: output cut at {MAX_STREAM_BYTES} bytes per stream]"
-            ));
+            content.push_str(&format!("\n[truncated: {reason}]"));
         }
         let outcome = ToolOutcome::new(content);
-        Ok(if cut { outcome.truncated() } else { outcome })
+        Ok(if cut {
+            outcome.truncated_because(reason)
+        } else {
+            outcome
+        })
     }
 }
 

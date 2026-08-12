@@ -11,8 +11,10 @@ subdirectory of it).
 - `timeout_ms` defaults to 120000 and is capped at 600000. On timeout the
   process is killed and the call fails, reporting whatever output was produced
   first.
-- Combined output is capped at 64 KiB per stream; the result says so when
-  output was cut.
+- Combined output is capped at 64 KiB per stream and **no argument raises it**;
+  the result says so when output was cut, and what is shown is the start of each
+  stream. For more than that, redirect the command's output to a file and then
+  `Read` or `Grep` the file.
 - The environment is reduced to a fixed allowlist. It carries no API keys.
 - **A command that ran is a success, whatever it exited with.** The result
   carries `exit status <n>` on its first line, then the output. A non-zero

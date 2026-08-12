@@ -150,7 +150,7 @@ impl Settings {
     pub(crate) fn into_hook_defs(self, root: &Path) -> Result<BTreeMap<String, HookDef>> {
         let mut out = BTreeMap::new();
         for (event, groups) in self.hooks {
-            // The loud failure. Emma implements two events; the rest are real
+            // The loud failure. Emma implements three events; the rest are real
             // Claude Code events that would silently never fire here, and an
             // operator who wrote a `Stop` guard would believe they had one.
             HookEvent::parse(&event).with_context(|| {

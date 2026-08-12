@@ -8,5 +8,10 @@ Find files by path pattern, newest first.
   the most recently touched work appears first.
 - `.git` is not searched.
 
-Matching nothing is a successful result with an empty list, not an error. At
-most 1000 paths are returned; when there were more, the result says so.
+Matching nothing is a successful result with an empty list, not an error.
+
+At most 1000 paths are returned — the 1000 most recently modified — and **no
+argument raises that**. When more matched, the result says how many and how many
+were dropped. A pattern that matches tens of thousands of paths is usually
+reaching into build output (`target/`, `node_modules/`, `dist/`); the answer is
+a narrower `pattern` or a `path` inside the tree, not a second call.
