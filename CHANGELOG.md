@@ -1,0 +1,100 @@
+# Changelog
+
+What changed, for someone deciding whether to upgrade. The reasoning behind a
+change lives in its commit message; what was learned lives in `notes/lessons/`;
+where the work stands lives in `notes/STATUS.md`. This file answers only: what
+is different now, and will it break me.
+
+## How versions work here
+
+Emma is `0.x`, and it is many months from `1.0.0` if it ever gets there. Until
+then the rule is the pre-1.0 reading of semantic versioning, which is narrower
+than people usually assume:
+
+- **`0.MINOR.0` — a breaking change, or a new capability.** Anything that
+  changes a command, a config file's shape, a tool's arguments, or what the
+  terminal does. Before `1.0.0` there is no promise of compatibility, so a
+  breaking change is a minor bump rather than a major one.
+- **`0.MINOR.PATCH` — a fix.** Behaviour that was already meant to work, now
+  working. No new surface, nothing to migrate.
+
+The version is in the workspace `Cargo.toml` and applies to the whole
+repository; the crates are not published separately.
+
+**Breaking changes get a `BREAKING` line saying what to do about it.** A
+changelog that says "improved configuration handling" over a config file that no
+longer loads is worse than silence, because it costs the reader the time to find
+out for themselves.
+
+## Unreleased
+
+Nothing yet.
+
+## 0.1.0
+
+The first version worth naming. Everything below already existed before this
+file did; it is recorded here so the next entry has something to be a change
+_from_.
+
+### The loop
+
+- A goal-holding agent loop with failure-as-observation: a tool that fails comes
+  back as a result the model can read and act on, never as an abort.
+- A "kick" that nudges the model once when it stops without claiming completion,
+  bounded by an iteration budget and a stall rule.
+- Compaction that replaces whole goals oldest-first when the conversation
+  approaches the context limit, deterministically and without a model call.
+- Continuous conversation across goals, with an append-only JSONL session log
+  and `--resume`.
+
+### Tools
+
+- Filesystem: `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash`. `Edit` takes
+  either a literal string or a `LINE#HASH` address, and refuses rather than
+  applying to a line that changed underneath it.
+- Tasks, for a goal-holding loop to write down what is left.
+- Web: `WebSearch`, and a `WebFetch` that renders in real Chrome. Five browser
+  tools for driving a page — open, read, act, fill, close. Nothing submits a
+  form, deliberately.
+- Code intelligence over LSP: `FindReferences`, `GoToDefinition`, `Hover`,
+  `DocumentSymbols`.
+- Every tool that truncates says which limit cut it, how much was lost, and how
+  to get the rest — or says plainly that no argument raises it.
+
+### Delegation
+
+- `Delegate` runs a subagent with its own registry, budget and instructions,
+  serialised so two subagents never race for one keyboard.
+- Agent types are `.claude/agents/*.md`, unchanged from Claude Code's format.
+- `emma agents` reports what ran, with no key, model or harness needed.
+
+### Consent
+
+- An approval gate with two axes: whether a tool can damage the machine, and
+  whether it reaches the network. Network grants are per host.
+- Permission rules in Claude Code's format, remembered in `settings.local.json`.
+  `deny` outranks `allow`, and outranks `--dangerously-skip-permissions` —
+  a flag that turns off prompting does not turn off policy.
+- `PreToolUse`, `PostToolUse` and `UserPromptSubmit` hooks, the last of which
+  can inject context into a turn or block it outright.
+
+### Configuration
+
+- `.emma/` and `.claude/` are both read: CLAUDE.md, agents, skills, commands,
+  settings.
+- Provider-scoped credentials and per-provider model selection.
+- `max_tokens` and reasoning effort follow the model rather than a constant.
+- In-session `/model`, `/compact`, `/clear`, `/config`, `/agents`, `/help`,
+  `/exit`.
+
+### Terminal
+
+- A full-screen interface: a sidebar, a two-column conversation pane, an input
+  dock and a status bar.
+- Markdown rendering, diffs shown before a write is approved, and a configurable
+  status line.
+- **BREAKING**: Emma now uses the alternate screen. The transcript no longer
+  lands in the terminal's own scrollback, native selection is reduced, and the
+  terminal's search does not see the conversation. Set `EMMA_UI=inline` for the
+  previous behaviour; that escape hatch is temporary and will be removed.
+- Piped and `-p` output is unchanged and contains no escape sequences.

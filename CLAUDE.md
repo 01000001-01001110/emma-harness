@@ -151,6 +151,13 @@ the remedy — or says plainly that no argument raises it.
 
 - `notes/STATUS.md` — where the work stands right now, dated entries,
   append-only. Read it first; distrust an entry older than the newest commit.
+- `CHANGELOG.md` — what is different for somebody upgrading, and nothing else.
+  Add to `## Unreleased` when you change something a user would notice: a
+  command, a config shape, a tool's arguments, what the terminal does. Not for
+  refactors, tests or internals — those are `git log`'s job. Emma is `0.x`, so a
+  breaking change is a **minor** bump and gets a `BREAKING` line saying what to
+  do about it. Four records, four jobs: this one is the only one addressed to
+  somebody who has not read the code.
 - `notes/improvements.md` — the backlog. Each item says where the idea came
   from and under what licence.
 - `notes/lessons/` — what was learned, one file per lesson.
