@@ -18,9 +18,34 @@
 //! and a terminal with no colour at all loses nothing but the shading.
 //!
 //! **The palette degrades rather than disappearing.** Truecolor gets the exact
-//! Gruvbox hexes, a 256-colour terminal gets the nearest xterm index, and a
-//! 16-colour terminal gets the named ANSI colour closest in intent. `NO_COLOR`,
-//! or a stream that is not a terminal, gets none.
+//! hexes, a 256-colour terminal gets the nearest xterm index, and a 16-colour
+//! terminal gets the named ANSI colour closest in intent. `NO_COLOR`, or a
+//! stream that is not a terminal, gets none.
+//!
+//! # Where the colours come from now
+//!
+//! The accent and the secondary grey are the owner's mockup, sampled from the
+//! image rather than described: `#fd548f` on the wordmark, `#e56383` on a
+//! border, `#fb5797` on a meter — one hue with antialias variance, taken here as
+//! the single value `#f5548f`. `notes/design-tui-fullscreen.md` §8.1 is the
+//! argument; this file is where it lands.
+//!
+//! **The safety vocabulary did not move.** `Ok`, `Warn`, `Err` and `Info` are
+//! still Gruvbox's, because a look-and-feel change is not a licence to recolour
+//! the glyphs that say a command failed or that a human has to answer something.
+//! The approval prompt is still amber. What changed is the decoration: the
+//! accent that marks Emma's own voice, and the grey everything unimportant is
+//! written in.
+//!
+//! **Two colours in the mockup were deliberately not adopted.** Its `#39393c`
+//! borders and `#414244` empty meter segments are near-black — they read as
+//! structure only because the mockup's ground is `#0d0d10`. Emma cannot know the
+//! terminal's background (the rule at the top of this file), so a near-black
+//! border is invisible on a dark theme and a heavy smear on a light one. Borders
+//! stay on [`Role::Dim`], which is legible on both. The mockup's brighter white
+//! for the `You` label and the key hints is not a role either: it is
+//! [`Role::Text`] with `BOLD`, which is brighter than the surrounding grey on
+//! every terminal and on every theme, which a hex is not.
 
 use ratatui::style::{Color, Modifier, Style};
 
@@ -134,9 +159,10 @@ pub enum Role {
     Ground,
 }
 
-/// Gruvbox, at three fidelities.
+/// The mockup's accent over Gruvbox's safety vocabulary, at three fidelities.
 ///
-/// The 256 indices are the customary Gruvbox terminal mapping and the ANSI
+/// The 256 indices are the customary Gruvbox terminal mapping for the roles
+/// that stayed, and the nearest cube entry for the two that moved. The ANSI
 /// names are chosen by intent rather than by nearest distance — `Warn` is
 /// yellow at every level even though the 24-bit yellow is nearer to some
 /// oranges, because a warning that changes hue between terminals is a warning
@@ -147,13 +173,28 @@ const fn table(role: Role) -> (u8, u8, u8, u8, Color) {
         // consulted. Present so the match is total and so that a future edit
         // that reaches for a foreground hex has to walk past the reason.
         Role::Text => (235, 219, 178, 223, Color::Reset),
-        Role::Dim => (146, 131, 116, 245, Color::DarkGray),
+        // Neutral rather than Gruvbox's warm `#928374`: the mockup's greys are
+        // untinted, and a warm grey beside a pink accent reads as a third,
+        // muddier colour rather than as an absence of one.
+        Role::Dim => (143, 143, 148, 245, Color::DarkGray),
         Role::Ok => (184, 187, 38, 142, Color::LightGreen),
         Role::Err => (251, 73, 52, 167, Color::LightRed),
         Role::Warn => (250, 189, 47, 214, Color::LightYellow),
         Role::Info => (142, 192, 124, 108, Color::LightCyan),
-        Role::Accent => (211, 134, 155, 175, Color::LightMagenta),
-        Role::Ground => (40, 40, 40, 235, Color::Black),
+        // The mockup's pink. Index 204 is `#ff5f87` — near enough that the two
+        // are hard to tell apart side by side, which is the whole bar a 256
+        // fallback has to clear.
+        //
+        // `LightMagenta` at 16 colours is deliberately **not** `LightRed`, even
+        // though the hue is nearer: `Role::Err` owns red at that level, and the
+        // accent is what a *user's own message* is drawn in. A goal line that
+        // reads as an error on a 16-colour terminal is worse than a goal line
+        // that reads as violet.
+        Role::Accent => (245, 84, 143, 204, Color::LightMagenta),
+        // Only ever a foreground on an accent background, so it is chosen for
+        // contrast against the pink above rather than for resemblance to
+        // anything. The mockup's own ground, which is as dark as this gets.
+        Role::Ground => (13, 13, 16, 233, Color::Black),
     }
 }
 
@@ -308,15 +349,61 @@ mod tests {
             );
         }
         assert_eq!(p.color(Role::Ok), Color::Indexed(142));
+        // The accent's cube entry is `#ff5f87`, which is the closest the cube
+        // gets to `#f5548f`. Pinned because "nearest" is an argument in a
+        // comment until a number is written down.
+        assert_eq!(p.color(Role::Accent), Color::Indexed(204));
     }
 
     #[test]
-    fn truecolor_gets_the_gruvbox_hexes_themselves() {
+    fn truecolor_gets_the_hexes_themselves() {
         let p = Palette::new(Level::Truecolor);
+        // The safety vocabulary is still Gruvbox's, and stays that way through
+        // a look-and-feel change: `✓` and `✗` are not decoration.
         assert_eq!(p.color(Role::Ok), Color::Rgb(184, 187, 38));
         assert_eq!(p.color(Role::Err), Color::Rgb(251, 73, 52));
         assert_eq!(p.color(Role::Warn), Color::Rgb(250, 189, 47));
-        assert_eq!(p.color(Role::Accent), Color::Rgb(211, 134, 155));
+        // The accent is the mockup's, sampled from the image.
+        assert_eq!(p.color(Role::Accent), Color::Rgb(245, 84, 143));
+    }
+
+    /// The accent marks the user's own words. On a 16-colour terminal it must
+    /// not land on the colour that means "this failed".
+    ///
+    /// Written as a comparison rather than as `assert_eq!(.., LightMagenta)`
+    /// because the property is the *distinctness*: a future edit that moved the
+    /// accent to `LightRed` for being nearer the hue would pass a literal test
+    /// on `Role::Err` and still make every goal line read as an error.
+    #[test]
+    fn the_accent_is_never_the_colour_that_means_failure() {
+        for level in [Level::Ansi16, Level::Ansi256, Level::Truecolor] {
+            let p = Palette::new(level);
+            assert_ne!(
+                p.color(Role::Accent),
+                p.color(Role::Err),
+                "at {level:?} a user's own message is drawn in the failure colour"
+            );
+            // …and it is not the warning colour either, which is what the
+            // approval prompt speaks in.
+            assert_ne!(p.color(Role::Accent), p.color(Role::Warn), "{level:?}");
+        }
+    }
+
+    /// The chip is a foreground *and* a background, so the pair has to be
+    /// readable. Both halves moved in this change; this is what says they moved
+    /// together.
+    #[test]
+    fn the_answer_keys_keep_a_dark_foreground_on_the_accent() {
+        for level in [Level::Ansi16, Level::Ansi256, Level::Truecolor] {
+            let p = Palette::new(level);
+            let chip = p.chip(Role::Accent);
+            assert_eq!(chip.fg, Some(p.color(Role::Ground)), "{level:?}");
+            assert_eq!(chip.bg, Some(p.color(Role::Accent)), "{level:?}");
+            assert_ne!(
+                chip.fg, chip.bg,
+                "the answer keys are invisible at {level:?}"
+            );
+        }
     }
 
     /// The rule that keeps Emma legible on a light background: body text is the

@@ -517,12 +517,11 @@ impl Skin {
         let live = self.live_fields(s);
         for attempt in 0..5 {
             let left = self.identity(s, attempt);
-            let plain_len: usize = left
-                .iter()
-                .chain(live.iter())
-                .map(|sp| sp.content.chars().count())
-                .sum();
-            let gap = usize::from(width).saturating_sub(plain_len);
+            // Columns, not characters: a working directory with CJK in its name
+            // is twice as wide as it is long, and the gap computed from its
+            // length pushes the live fields off the end of the row.
+            let used: usize = left.iter().chain(live.iter()).map(|sp| sp.width()).sum();
+            let gap = usize::from(width).saturating_sub(used);
             if gap >= 1 || attempt == 4 {
                 let mut spans = left;
                 spans.push(Span::raw(" ".repeat(gap.max(1))));
@@ -663,14 +662,72 @@ fn last_component(path: &str) -> String {
 
 // region: Fitting text
 // ---------------------------------------------------------------------------
+// Fitting text
+//
+// **Everything in this region counts display columns, never characters.** A
+// terminal cell is a column; `一` occupies two of them, `é` written as `e` plus
+// a combining acute occupies one, and both of those are one `char`. Anywhere a
+// budget derived from `area.width` was compared against `chars().count()`, a
+// line of CJK overran its box by its own length and the cell after it was
+// somebody else's.
+//
+// The measurement is ratatui's own — `Span::width`, which is what `Layout` and
+// `Buffer` measure with — rather than a second opinion from a crate imported
+// beside it. Two width tables that disagree is the same class of bug as two
+// crossterm versions that disagree about a `KeyEvent`, and the manifest already
+// argues that one.
+//
+// The honest limit: unicode-width sums per character, so a ZWJ emoji sequence
+// is measured as the sum of its parts while a terminal draws one glyph. Nothing
+// here can fix that — ratatui will lay it out by the same wrong number, so at
+// least Emma and its renderer are wrong together, which is the property that
+// keeps a box from being overrun by its own contents.
+// ---------------------------------------------------------------------------
 
-/// Cut a string to a character budget, marking the cut.
+/// How many terminal columns a string occupies.
+pub fn cols(text: &str) -> usize {
+    Span::raw(text).width()
+}
+
+/// How many columns the first `chars` characters occupy.
+///
+/// The bridge between the two coordinate systems that meet at the input box:
+/// [`super::input::Editor`] counts a cursor in characters, because that is what
+/// Left and Right move by, and the terminal wants a column.
+pub fn cols_upto(text: &str, chars: usize) -> usize {
+    text.chars().take(chars).map(char_cols).sum()
+}
+
+/// One character's columns, without allocating to ask.
+fn char_cols(c: char) -> usize {
+    let mut buf = [0u8; 4];
+    cols(c.encode_utf8(&mut buf))
+}
+
+/// Cut a string to a column budget, marking the cut.
+///
+/// **A wide character is never cut in half.** Half of `一` is not a narrow
+/// glyph, it is a cell the terminal fills with something of its own choosing —
+/// so when the next character would cross the budget the cut happens before it,
+/// and the result is one column short rather than one column over. Short is
+/// recoverable; over writes into the next widget.
 pub fn fit(text: &str, budget: usize, ellipsis: &str) -> String {
-    if text.chars().count() <= budget {
+    if cols(text) <= budget {
         return text.to_string();
     }
-    let keep = budget.saturating_sub(ellipsis.chars().count());
-    text.chars().take(keep).collect::<String>() + ellipsis
+    let keep = budget.saturating_sub(cols(ellipsis));
+    let mut out = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let w = char_cols(c);
+        if used + w > keep {
+            break;
+        }
+        used += w;
+        out.push(c);
+    }
+    out.push_str(ellipsis);
+    out
 }
 
 /// How many screen rows a line takes at this width, wrapping.
@@ -683,6 +740,64 @@ pub fn fit(text: &str, budget: usize, ellipsis: &str) -> String {
 pub fn rows_used(line: &Line<'_>, width: u16) -> u16 {
     let width = usize::from(width.max(1));
     (line.width().max(1)).div_ceil(width).max(1) as u16
+}
+
+/// Break a styled line into rows of at most `width` columns, keeping the
+/// styling.
+///
+/// The terminal used to do this: inline output is handed to `insert_before` and
+/// wrapped by whatever the window is. [`super::transcript`] owns a buffer the
+/// terminal never sees, so the wrap has to happen here — and it has to happen
+/// on the *styled* line, because splitting the plain text and re-styling it is
+/// how a diff's `+` ends up green on one row and not on the next.
+///
+/// A single character wider than the whole width gets a row to itself rather
+/// than an infinite loop; that is a two-column window, and the fallback gate
+/// refuses below twenty-four.
+pub fn wrap_line(line: &Line<'_>, width: u16) -> Vec<Line<'static>> {
+    let width = usize::from(width.max(1));
+    if line.width() <= width {
+        return vec![owned(line)];
+    }
+    let mut rows: Vec<Line<'static>> = Vec::new();
+    let mut row: Vec<Span<'static>> = Vec::new();
+    let mut used = 0;
+    for span in &line.spans {
+        let mut text = String::new();
+        for c in span.content.chars() {
+            let w = char_cols(c);
+            if used + w > width && !(row.is_empty() && text.is_empty()) {
+                if !text.is_empty() {
+                    row.push(Span::styled(std::mem::take(&mut text), span.style));
+                }
+                rows.push(Line::from(std::mem::take(&mut row)));
+                used = 0;
+            }
+            text.push(c);
+            used += w;
+        }
+        if !text.is_empty() {
+            row.push(Span::styled(text, span.style));
+        }
+    }
+    if !row.is_empty() {
+        rows.push(Line::from(row));
+    }
+    rows
+}
+
+/// A borrowed line, owned. `Line::to_owned` would clone the borrow, not the
+/// data.
+pub fn owned(line: &Line<'_>) -> Line<'static> {
+    Line {
+        style: line.style,
+        alignment: line.alignment,
+        spans: line
+            .spans
+            .iter()
+            .map(|s| Span::styled(s.content.to_string(), s.style))
+            .collect(),
+    }
 }
 
 // endregion: Fitting text
@@ -963,5 +1078,137 @@ mod tests {
         let cut = fit(&"a".repeat(200), 10, "…");
         assert_eq!(cut.chars().count(), 10);
         assert!(cut.ends_with('…'));
+    }
+
+    // -----------------------------------------------------------------------
+    // Display columns
+    //
+    // The budgets these functions take come from `area.width`, which is cells.
+    // Every test below is a string whose character count and column count
+    // differ, because a string where they agree cannot tell the two apart —
+    // and every one of these passed before the fix.
+    // -----------------------------------------------------------------------
+
+    /// `一` is two columns and one character; a combining acute is zero columns
+    /// and one character. Both were counted as one.
+    #[test]
+    fn width_is_measured_in_columns_not_characters() {
+        assert_eq!(cols("emma"), 4);
+        assert_eq!("一二三".chars().count(), 3);
+        assert_eq!(cols("一二三"), 6);
+        // `e` + U+0301. Two characters, one cell.
+        assert_eq!("e\u{301}".chars().count(), 2);
+        assert_eq!(cols("e\u{301}"), 1);
+    }
+
+    /// **The overrun.** Eight CJK characters are sixteen columns, and a budget
+    /// of twelve used to let all eight through untouched — sixteen cells
+    /// written into a twelve-cell box, four of them somebody else's.
+    #[test]
+    fn a_wide_string_is_cut_to_the_columns_it_has_rather_than_the_characters() {
+        let text = "一".repeat(8);
+        let cut = fit(&text, 12, "…");
+        assert!(
+            cols(&cut) <= 12,
+            "{cut:?} is {} columns in a 12-column budget",
+            cols(&cut)
+        );
+        assert!(cut.ends_with('…'));
+        // Short rather than over: the last whole glyph that fits, and never
+        // half of one.
+        assert_eq!(cut, "一一一一一…");
+    }
+
+    /// A cut that landed inside a wide character would give the terminal half a
+    /// glyph, which it fills with whatever it likes.
+    #[test]
+    fn a_cut_never_lands_inside_a_wide_character() {
+        for budget in 1..=20 {
+            let cut = fit(&"一".repeat(10), budget, "…");
+            assert!(
+                cols(&cut) <= budget,
+                "budget {budget} produced {} columns: {cut:?}",
+                cols(&cut)
+            );
+        }
+    }
+
+    /// The bridge the input box crosses: a character index becomes a column.
+    #[test]
+    fn a_character_index_becomes_the_column_the_cursor_belongs_on() {
+        assert_eq!(cols_upto("emma", 2), 2);
+        // Two CJK characters typed, cursor after them: column four, not two.
+        assert_eq!(cols_upto("一二三", 2), 4);
+        assert_eq!(cols_upto("一二三", 0), 0);
+        // Past the end is the whole string rather than a panic — a cursor can
+        // be stale by one keystroke while a repaint is in flight.
+        assert_eq!(cols_upto("一二三", 99), 6);
+    }
+
+    /// The status row is right-aligned by arithmetic, and the arithmetic used
+    /// to be in characters: a CJK directory name pushed the live fields off the
+    /// end of the row it was supposed to fit inside.
+    #[test]
+    fn a_wide_directory_name_does_not_push_the_status_off_the_row() {
+        let skin = skin(Level::Truecolor);
+        let mut s = Status {
+            cwd: "一".repeat(12),
+            model: "claude".into(),
+            ..Status::default()
+        };
+        s.context = Some((30_000, 100_000));
+        let line = skin.status(60, &s);
+        assert!(
+            line.width() <= 60,
+            "the status row is {} columns wide in 60: {:?}",
+            line.width(),
+            plain(&line)
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Wrapping styled lines
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn a_wrapped_line_keeps_every_character_and_its_styling() {
+        let skin = skin(Level::Truecolor);
+        let line = Line::from(vec![
+            Span::styled("abcdef".to_string(), skin.palette.style(Role::Ok)),
+            Span::styled("ghijkl".to_string(), skin.palette.style(Role::Err)),
+        ]);
+        let rows = wrap_line(&line, 4);
+        assert_eq!(
+            rows.iter().map(plain).collect::<Vec<_>>(),
+            ["abcd", "efgh", "ijkl"]
+        );
+        // The `e` and `f` are still green and the `g` and `h` still red — the
+        // reason this splits the styled line rather than the plain text.
+        let second = &rows[1];
+        assert_eq!(second.spans[0].content, "ef");
+        assert_eq!(second.spans[0].style, skin.palette.style(Role::Ok));
+        assert_eq!(second.spans[1].style, skin.palette.style(Role::Err));
+    }
+
+    #[test]
+    fn a_wrap_breaks_between_wide_characters_rather_than_through_one() {
+        let line = Line::from(Span::raw("一二三四五".to_string()));
+        let rows = wrap_line(&line, 5);
+        // Five columns holds two glyphs, not two and a half.
+        assert_eq!(
+            rows.iter().map(plain).collect::<Vec<_>>(),
+            ["一二", "三四", "五"]
+        );
+        for row in &rows {
+            assert!(row.width() <= 5, "{:?}", plain(row));
+        }
+    }
+
+    /// A window narrower than one glyph is not a reason to loop forever.
+    #[test]
+    fn a_character_wider_than_the_window_still_gets_a_row() {
+        let rows = wrap_line(&Line::from(Span::raw("一一".to_string())), 1);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.iter().map(plain).collect::<Vec<_>>(), ["一", "一"]);
     }
 }

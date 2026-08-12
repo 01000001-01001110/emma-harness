@@ -73,6 +73,7 @@ pub mod palette;
 pub mod render;
 pub mod spacing;
 pub mod statusline;
+pub mod transcript;
 pub mod view;
 pub mod welcome;
 
@@ -578,11 +579,21 @@ impl Term {
             .wrote_text(false);
     }
 
+    // The three prose channels record their *text* rather than an event name.
+    //
+    // The meters are recorded by name because what a test asks of them is "was
+    // this called"; a note is the opposite — the call is never in doubt and the
+    // sentence is the whole of what can be wrong. `session_command` is what
+    // needs it: every one of Emma's own commands answers by writing notes, and
+    // without this the only way to check what `/clear` said would be a terminal
+    // and a person reading it.
     pub fn note(&self, text: &str) {
+        self.remember(text);
         self.side(self.skin.note(text));
     }
 
     pub fn warn(&self, text: &str) {
+        self.remember(text);
         self.side(self.skin.warn(text));
     }
 

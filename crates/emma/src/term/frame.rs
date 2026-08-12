@@ -112,12 +112,7 @@ pub fn restore_terminal() {
         let _ = disable_raw_mode();
     }
     let mut out = erase_frame();
-    // Show the cursor, end any synchronized update that was in flight, and drop
-    // every attribute: a frame torn down mid-paint could otherwise leave a shell
-    // prompt bold, invisible, or — with [`SYNC_END`] unsent — not repainting at
-    // all until the terminal's own timeout fired.
-    out.push_str(SYNC_END);
-    out.push_str("\x1b[?25h\x1b[0m");
+    out.push_str(&leave_modes());
     let mut stdout = std::io::stdout();
     let _ = stdout.write_all(out.as_bytes());
     let _ = stdout.flush();
@@ -152,6 +147,55 @@ fn erase_frame() -> String {
 }
 
 // endregion: Restoring
+
+// region: Terminal modes
+// ---------------------------------------------------------------------------
+// Terminal modes
+//
+// The private modes Emma turns on for the length of a framed run, and the
+// matching offs. They are written as strings rather than through crossterm's
+// command types for the reason [`synchronized`] gives: they are not drawing
+// operations, they share the one stdout buffer with everything ratatui writes,
+// and the order they were written in is the order they go out in.
+//
+// **Every `h` here has to have its `l` there.** A mode left on outlives the
+// process: a shell inheriting bracketed paste that nothing will ever read the
+// markers of pastes `ESC[200~` into itself.
+// `every_terminal_mode_the_frame_sets_is_unset_on_the_way_out` is the assertion
+// that the two cannot drift — it reads the enable sequence, extracts every mode
+// number from it, and demands the matching disable — and that is why they are
+// two functions rather than one with a `bool` nobody would ever pass wrongly.
+// ---------------------------------------------------------------------------
+
+/// Bracketed paste: the terminal wraps clipboard text in `ESC[200~`/`ESC[201~`
+/// so a program can tell "the user pressed Enter" from "the user pasted
+/// something with a newline in it".
+///
+/// Without it, a pasted code block is delivered as the keystrokes it looks
+/// like, and its first newline submits whatever arrived before it as a goal.
+/// The evaluation in `notes/eval-tui-fullscreen-kimi.md` ranks that first on
+/// the list of things that would sink the redesign, and it is right that it is
+/// cheap: one sequence each way, plus [`super::input::Editor::paste`], which is
+/// where the guarantee that a paste cannot submit actually lives.
+const PASTE_ON: &str = "\x1b[?2004h";
+const PASTE_OFF: &str = "\x1b[?2004l";
+
+/// What a framed run turns on, once, after the viewport is up.
+fn enter_modes() -> String {
+    PASTE_ON.to_string()
+}
+
+/// What the way out turns off, whichever way out it is.
+///
+/// Show the cursor, end any synchronized update that was in flight, and drop
+/// every attribute as well: a frame torn down mid-paint could otherwise leave a
+/// shell prompt bold, invisible, or — with [`SYNC_END`] unsent — not repainting
+/// at all until the terminal's own timeout fired.
+fn leave_modes() -> String {
+    format!("{PASTE_OFF}{SYNC_END}\x1b[?25h\x1b[0m")
+}
+
+// endregion: Terminal modes
 
 // region: Synchronized output
 // ---------------------------------------------------------------------------
@@ -332,6 +376,16 @@ impl Frame {
             }));
         });
         FRAME_ON.store(true, Ordering::SeqCst);
+        // After `FRAME_ON`, never before: that flag is what makes
+        // [`restore_terminal`] willing to turn these modes off again, so one
+        // enabled ahead of it is one that survives a panic in the next three
+        // lines. Being late costs nothing; being early costs a shell that
+        // pastes escape markers into itself.
+        {
+            let mut stdout = std::io::stdout();
+            let _ = stdout.write_all(enter_modes().as_bytes());
+            let _ = stdout.flush();
+        }
 
         let frame = Arc::new(Frame {
             inner: Mutex::new(Inner {
@@ -1125,6 +1179,50 @@ mod tests {
             !source.contains(&format!("Enter{}", "AlternateScreen")),
             "the alternate screen is one API call away from costing every user their scrollback"
         );
+    }
+
+    /// **Every mode turned on is turned off again.**
+    ///
+    /// A private mode outlives the process that set it. Bracketed paste left on
+    /// means the shell that inherits the terminal receives `ESC[200~` around
+    /// everything anybody pastes into it, forever, from a program that has
+    /// exited — the same shape of damage as raw mode left on, which this file's
+    /// restore path already exists for.
+    ///
+    /// Asserted as a pairing over the sequences rather than as a literal, so
+    /// that adding a mode to the way in without adding it to the way out fails
+    /// here rather than on somebody's terminal. `enter_modes` is written to
+    /// `stdout` by `install`; that write is the part no test in this process
+    /// can see, and it is certified by running the binary.
+    #[test]
+    fn every_terminal_mode_the_frame_sets_is_unset_on_the_way_out() {
+        let leaving = leave_modes();
+        let mut found = 0;
+        for on in enter_modes().split_inclusive('h') {
+            let Some(number) = on.strip_prefix("\x1b[?").and_then(|s| s.strip_suffix('h')) else {
+                continue;
+            };
+            found += 1;
+            assert!(
+                leaving.contains(&format!("\x1b[?{number}l")),
+                "mode {number} is set on the way in and never unset: {leaving:?}"
+            );
+        }
+        assert!(found > 0, "the enter sequence set no modes at all");
+        // The three the way out owes regardless of what the way in did: the
+        // cursor comes back, a synchronized update in flight is ended, and no
+        // attribute outlives the frame.
+        assert!(leaving.contains("\x1b[?25h"), "{leaving:?}");
+        assert!(leaving.contains(SYNC_END), "{leaving:?}");
+        assert!(leaving.ends_with("\x1b[0m"), "{leaving:?}");
+    }
+
+    /// Bracketed paste specifically, because it is the one being added and the
+    /// number is the whole of it: `2004`, not `2044` or `20004`.
+    #[test]
+    fn bracketed_paste_is_enabled_by_the_frame_and_disabled_by_the_restore() {
+        assert!(enter_modes().contains("\x1b[?2004h"));
+        assert!(leave_modes().contains("\x1b[?2004l"));
     }
 
     /// **Rendered markdown is ordinary scrollback like everything else.**

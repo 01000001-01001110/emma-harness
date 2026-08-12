@@ -62,11 +62,14 @@ pub const NO_PROJECT_COMMANDS: &str = "this project has none of its own — .emm
 /// it names the key this file is about, and the two should not drift.
 pub const PLACEHOLDER: &str = "describe a goal, or press / for commands";
 
-/// Emma's own commands, which are not the harness's and never come from it.
-const BUILTINS: [(&str, &str); 2] = [
-    ("exit", "end this session"),
-    ("quit", "end this session — the same thing as /exit"),
-];
+/// Said about a project command a built-in shadows.
+///
+/// The row is kept rather than dropped, and this is the one place the menu is
+/// allowed to compose a sentence — because what it composes is a fact about
+/// *resolution*, not a summary of a file nobody wrote a description for. A
+/// command silently missing from the list is the gap that gets diagnosed as
+/// "Emma cannot see my commands"; a row saying why is one line.
+pub const SHADOWED: &str = "shadowed by Emma's own command of the same name";
 
 /// One line of the menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,14 +106,26 @@ pub struct Menu {
 }
 
 impl Menu {
-    /// The real vocabulary of this run: Emma's two built-ins and whatever the
+    /// The real vocabulary of this run: Emma's own built-ins and whatever the
     /// harness loaded, in the harness's own order.
     ///
     /// Nothing is added. A menu that lists a command the harness does not have
     /// teaches, on first use, that Emma's account of itself cannot be trusted —
-    /// which is the same argument the welcome screen is composed under.
+    /// which is the same argument the welcome screen is composed under. The
+    /// built-ins come from [`crate::session_command::BUILTINS`], which is also
+    /// what the parser matches on, so a row and a command cannot exist without
+    /// each other.
+    ///
+    /// **A name collision resolves to the built-in, and the row says so.** That
+    /// has been the de facto rule since the loop was written — `/exit` was
+    /// matched before `Harness::expand_command` — and the alternative is a
+    /// checkout being able to make Emma's own control surface unreachable.
+    /// What is new is that the project's row is marked rather than duplicated:
+    /// two identical rows would read as a bug, and dropping it silently would
+    /// hide the collision entirely.
     pub fn for_project(commands: &[&str]) -> Self {
-        let mut entries: Vec<Entry> = BUILTINS
+        let builtins = crate::session_command::BUILTINS;
+        let mut entries: Vec<Entry> = builtins
             .iter()
             .map(|(name, about)| Entry {
                 name: (*name).to_string(),
@@ -118,6 +133,21 @@ impl Menu {
             })
             .collect();
         for name in commands {
+            let shadowed = builtins
+                .iter()
+                .any(|(builtin, _)| builtin.eq_ignore_ascii_case(name));
+            if shadowed {
+                // Marked on the built-in's own row: the name resolves to one
+                // command, so it gets one row.
+                if let Some(entry) = entries
+                    .iter_mut()
+                    .find(|e| e.name.eq_ignore_ascii_case(name))
+                {
+                    let about = entry.about.take().unwrap_or_default();
+                    entry.about = Some(format!("{about} · this project's /{name} is {SHADOWED}"));
+                }
+                continue;
+            }
             entries.push(Entry {
                 name: (*name).to_string(),
                 about: None,
@@ -281,7 +311,58 @@ mod tests {
         let mut m = menu();
         m.sync("/", false);
         assert!(m.is_open());
-        assert_eq!(names(&m), ["exit", "quit", "review", "ship"]);
+        let shown = names(&m);
+        // Emma's own, in `session_command`'s order, then the harness's in the
+        // harness's order. The owner's complaint was that this list was two
+        // rows long and neither of them did anything but leave.
+        let expected: Vec<String> = crate::session_command::BUILTINS
+            .iter()
+            .map(|(n, _)| (*n).to_string())
+            .chain(["review".to_string(), "ship".to_string()])
+            .collect();
+        assert_eq!(shown, expected);
+    }
+
+    /// The collision ruling, on the menu: one name, one row, and the row says
+    /// which command it resolves to.
+    #[test]
+    fn a_project_command_a_builtin_shadows_gets_one_marked_row_not_two() {
+        let mut m = Menu::for_project(&["model", "review"]);
+        m.sync("/", false);
+        let shown = names(&m);
+        assert_eq!(
+            shown.iter().filter(|n| *n == "model").count(),
+            1,
+            "two rows for one name: {shown:?}"
+        );
+        let view = m.view().unwrap();
+        let (_, about) = view.rows.iter().find(|(n, _)| n == "model").unwrap();
+        assert!(about.contains(SHADOWED), "{about}");
+        // …and Enter on it picks Emma's, which is what actually runs.
+        m.sync("/model", false);
+        assert_eq!(m.selection().map(|e| e.name.clone()), Some("model".into()));
+        // A project command that collides with nothing is untouched.
+        let (_, review) = view.rows.iter().find(|(n, _)| n == "review").unwrap();
+        assert_eq!(review, NO_DESCRIPTION);
+    }
+
+    /// Every command the parser answers has a row, and every row parses. The
+    /// two lists are the same list; this is what stops the ninth command
+    /// shipping undiscoverable.
+    #[test]
+    fn the_menu_and_the_parser_agree_on_the_vocabulary() {
+        let mut m = Menu::for_project(&[]);
+        m.sync("/", false);
+        let shown = names(&m);
+        for (name, _) in crate::session_command::BUILTINS {
+            assert!(shown.iter().any(|n| n == name), "/{name} has no menu row");
+        }
+        for name in &shown {
+            assert!(
+                crate::session_command::parse(&format!("/{name}")).is_some(),
+                "the menu offers /{name} and nothing parses it"
+            );
+        }
     }
 
     #[test]
@@ -355,18 +436,20 @@ mod tests {
     fn the_arrows_move_the_selection_and_wrap_at_both_ends() {
         let mut m = menu();
         m.sync("/", false);
+        let all = names(&m);
+        assert_eq!(m.selection().unwrap().name, all[0]);
         m.move_by(1);
-        assert_eq!(m.selection().unwrap().name, "quit");
+        assert_eq!(m.selection().unwrap().name, all[1]);
         m.move_by(-1);
-        assert_eq!(m.selection().unwrap().name, "exit");
+        assert_eq!(m.selection().unwrap().name, all[0]);
         m.move_by(-1);
         assert_eq!(
             m.selection().unwrap().name,
-            "ship",
+            all[all.len() - 1],
             "up at the top did not wrap"
         );
         m.move_by(1);
-        assert_eq!(m.selection().unwrap().name, "exit");
+        assert_eq!(m.selection().unwrap().name, all[0]);
     }
 
     /// Narrowing must not move the highlight out from under a hand already on
@@ -387,7 +470,11 @@ mod tests {
         let mut m = Menu::for_project(&["review"]);
         m.sync("/", false);
         let view = m.view().unwrap();
-        assert_eq!(view.rows.len(), 3, "{view:?}");
+        assert_eq!(
+            view.rows.len(),
+            crate::session_command::BUILTINS.len() + 1,
+            "{view:?}"
+        );
         let (_, about) = view
             .rows
             .iter()
@@ -406,7 +493,7 @@ mod tests {
         let mut m = Menu::for_project(&[]);
         m.sync("/", false);
         let view = m.view().expect("the built-ins are always there");
-        assert_eq!(view.rows.len(), 2);
+        assert_eq!(view.rows.len(), crate::session_command::BUILTINS.len());
         assert_eq!(view.note.as_deref(), Some(NO_PROJECT_COMMANDS));
         assert!(view.note.unwrap().contains(".emma/commands/"));
     }

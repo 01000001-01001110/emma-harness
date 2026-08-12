@@ -96,6 +96,53 @@ impl Editor {
         self.cursor = 0;
     }
 
+    /// Text arriving as one lump from the terminal's clipboard.
+    ///
+    /// **This exists so that a pasted newline is not a keypress.** Without
+    /// bracketed paste the terminal delivers a pasted block as the keystrokes it
+    /// resembles, and the first `\n` in it is indistinguishable from Enter: half
+    /// a code block is submitted as a goal and the other half is typed into
+    /// whatever comes next. `ESC[?2004h` (see [`super::frame`]) makes the
+    /// terminal wrap the block in markers instead, and crossterm hands it here
+    /// as one `Event::Paste`. Nothing in this function can submit.
+    ///
+    /// **Line breaks become spaces, because this editor is one line.** The
+    /// multi-line editor that keeps them is stage 0(a) of
+    /// `notes/design-tui-fullscreen.md` and is not built yet; until it is, the
+    /// choice is between flattening the paste and refusing it, and a flattened
+    /// stack trace is still the stack trace the user meant to ask about. A run
+    /// of breaks collapses to one space so a paste with blank lines in it does
+    /// not arrive full of gaps.
+    ///
+    /// **Everything else that is not printable is dropped.** A clipboard can
+    /// hold escape bytes — from a terminal recording, from a log file, from
+    /// somebody who put them there on purpose — and this string is rendered
+    /// into cells and, on the fallback path, written to a stream. `\x1b` in a
+    /// span is an escape sequence Emma did not author, arriving at the terminal
+    /// through a text field. Tabs go too: a tab in a cell is not eight columns,
+    /// it is one cell containing a tab.
+    pub fn paste(&mut self, text: &str) -> Action {
+        let mut last_was_break = false;
+        for c in text.chars() {
+            if matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
+                if !last_was_break {
+                    self.chars.insert(self.cursor, ' ');
+                    self.cursor += 1;
+                }
+                last_was_break = true;
+                continue;
+            }
+            last_was_break = false;
+            let c = if c == '\t' { ' ' } else { c };
+            if c.is_control() {
+                continue;
+            }
+            self.chars.insert(self.cursor, c);
+            self.cursor += 1;
+        }
+        Action::Edit
+    }
+
     pub fn key(&mut self, key: KeyEvent) -> Action {
         // Windows reports releases as well as presses; acting on both types
         // every character twice.
@@ -392,6 +439,22 @@ impl LineSource {
                         }
                     }
                 }
+                // A whole clipboard at once. It reaches the editor and stops
+                // there: no `Action::Submit` can come out of a paste, which is
+                // the entire point of turning the mode on. The menu is synced
+                // afterwards for the same reason typing syncs it — a paste
+                // beginning `/` is a typed `/` as far as the menu is concerned.
+                Ok(Event::Paste(text)) => {
+                    {
+                        let mut ed = thread_editor.lock().unwrap_or_else(|e| e.into_inner());
+                        ed.paste(&text);
+                        thread_frame.set_input(&ed.text(), ed.cursor());
+                        let mut m = thread_menu.lock().unwrap_or_else(|e| e.into_inner());
+                        m.sync(&ed.text(), thread_frame.prompt_pending());
+                        thread_frame.set_menu(m.view());
+                    }
+                    thread_frame.draw();
+                }
                 // A resize is a redraw and nothing else: ratatui re-measures on
                 // every draw, so there is no state here to update.
                 Ok(Event::Resize(..)) => thread_frame.draw(),
@@ -449,8 +512,13 @@ impl LineSource {
 
     /// A queue fed from a list rather than from stdin, for tests that need to
     /// assert on the drain rather than on a terminal.
+    ///
+    /// `pub(crate)` because `approval.rs` needs it too: the goal prompt reads
+    /// through `Approvals::read_line`, and what that says about the lines it
+    /// drops is the difference between a command that visibly did not run and
+    /// one that silently vanished.
     #[cfg(test)]
-    fn scripted(lines: &[&str]) -> Self {
+    pub(crate) fn scripted(lines: &[&str]) -> Self {
         let (tx, rx) = mpsc::channel(16);
         for line in lines {
             tx.try_send((*line).to_string())
@@ -572,6 +640,96 @@ mod tests {
         release.kind = KeyEventKind::Release;
         assert_eq!(ed.key(release), Action::Ignore);
         assert!(ed.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Paste
+    //
+    // The failure being prevented is specific: without bracketed paste the
+    // terminal sends a pasted block as keystrokes, its first newline reads as
+    // Enter, and half a code block is submitted as a goal. The mode is enabled
+    // in `frame.rs`; the guarantee is here.
+    // -----------------------------------------------------------------------
+
+    /// **The sink risk from the evaluation, as an assertion.** A fifty-line
+    /// paste produces no `Submit`, whatever is in it.
+    #[test]
+    fn pasting_a_block_full_of_newlines_never_submits_it() {
+        let mut ed = Editor::default();
+        let block: String = (0..50)
+            .map(|i| format!("    line {i} of a code block\n"))
+            .collect();
+        assert_eq!(ed.paste(&block), Action::Edit);
+        assert!(!ed.is_empty());
+        assert!(
+            !ed.text().contains('\n'),
+            "a newline survived into the line"
+        );
+        // The text is all still there, minus the structure this editor cannot
+        // hold yet.
+        assert!(ed.text().contains("line 0 of a code block"));
+        assert!(ed.text().contains("line 49 of a code block"));
+        // And it takes an actual Enter to send it.
+        assert!(matches!(ed.key(press(KeyCode::Enter)), Action::Submit(_)));
+    }
+
+    /// Windows clipboards carry `\r\n`, and a run of breaks is one gap rather
+    /// than one space per byte.
+    #[test]
+    fn line_breaks_collapse_to_single_spaces_however_they_are_written() {
+        let mut ed = Editor::default();
+        ed.paste("first\r\n\r\n\r\nsecond\rthird\nfourth");
+        assert_eq!(ed.text(), "first second third fourth");
+    }
+
+    /// **A clipboard is untrusted bytes.** Its contents are rendered into cells
+    /// and, on the fallback path, written to a stream — so an escape sequence
+    /// in a paste is an escape sequence Emma did not author reaching the
+    /// terminal through a text field.
+    #[test]
+    fn control_bytes_in_a_paste_never_reach_the_line() {
+        let mut ed = Editor::default();
+        ed.paste("safe\x1b[31mred\x07\x00 text\ttabbed");
+        let text = ed.text();
+        assert!(!text.contains('\x1b'), "{text:?}");
+        assert!(!text.contains('\x07'), "{text:?}");
+        assert!(!text.contains('\0'), "{text:?}");
+        assert!(!text.contains('\t'), "{text:?}");
+        assert!(!text.chars().any(char::is_control), "{text:?}");
+        // What was printable survived, including the `[31m` that was only ever
+        // dangerous because of the escape in front of it.
+        assert_eq!(text, "safe[31mred text tabbed");
+    }
+
+    /// A paste lands where the cursor is, and leaves it after what arrived.
+    #[test]
+    fn a_paste_goes_in_at_the_cursor_and_the_cursor_follows_it() {
+        let mut ed = Editor::default();
+        typed(&mut ed, "review  now");
+        for _ in 0..4 {
+            ed.key(press(KeyCode::Left));
+        }
+        ed.paste("the diff");
+        assert_eq!(ed.text(), "review the diff now");
+        // Typing continues where the paste ended, not where it started.
+        typed(&mut ed, "!");
+        assert_eq!(ed.text(), "review the diff! now");
+    }
+
+    /// The half-typed line is drained before a question is asked, and a pasted
+    /// line is a half-typed line — it must not be a second hiding place.
+    #[tokio::test]
+    async fn a_pasted_line_is_drained_like_a_typed_one() {
+        let mut lines = LineSource::scripted_raw(&[], "");
+        lines
+            .editing
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .paste("y\nrm -rf /");
+        assert_eq!(lines.drain(), 1, "a pasted answer survived the drain");
+        assert!(lines.editing.as_ref().unwrap().lock().unwrap().is_empty());
     }
 
     // -----------------------------------------------------------------------

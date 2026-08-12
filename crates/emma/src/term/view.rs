@@ -39,7 +39,7 @@ use ratatui::widgets::{Block, Paragraph, Widget, Wrap};
 
 use super::menu::{MenuView, PLACEHOLDER};
 use super::palette::Role;
-use super::render::{fit, Skin, Status};
+use super::render::{cols, cols_upto, fit, Skin, Status};
 
 /// What the viewport is doing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,7 +280,14 @@ impl View {
             typed,
         ])
         .render(inner, buf);
-        Some(cursor_at(inner, prefix.chars().count() + self.cursor))
+        // Columns. `self.cursor` is a character index — what Left and Right
+        // move by — and the cursor goes on a cell, so the text before it is
+        // measured rather than counted. Type a CJK sentence and a counted
+        // cursor sits half way back through it.
+        Some(cursor_at(
+            inner,
+            cols(prefix) + cols_upto(&self.input, self.cursor),
+        ))
     }
 
     /// The command menu, drawn directly above the input box.
@@ -317,7 +324,7 @@ impl View {
                 let name = format!(" /{name} ");
                 let about = fit(
                     about,
-                    width.saturating_sub(name.chars().count() + 1),
+                    width.saturating_sub(cols(&name) + 1),
                     self.skin.glyphs.ellipsis,
                 );
                 lines.push(Line::from(vec![
@@ -405,16 +412,16 @@ impl View {
                 self.skin.palette.style(Role::Text),
             ));
         }
-        let typed_at = spans
-            .iter()
-            .map(|s| s.content.chars().count())
-            .sum::<usize>();
+        let typed_at = spans.iter().map(|s| s.width()).sum::<usize>();
         spans.push(Span::styled(
             self.input.clone(),
             self.skin.palette.bold(Role::Accent),
         ));
         Line::from(spans).render(answer, buf);
-        Some(cursor_at(answer, typed_at + self.cursor))
+        Some(cursor_at(
+            answer,
+            typed_at + cols_upto(&self.input, self.cursor),
+        ))
     }
 
     /// As much of the preview as fits, and an honest line about the rest.
@@ -567,6 +574,69 @@ mod tests {
         );
         // Two columns for the border and the box's own `> `, then the text.
         assert_eq!(cursor.unwrap().x, 1 + 2 + 19);
+    }
+
+    /// **The cursor sits on a cell, and the editor counts characters.**
+    ///
+    /// Three CJK characters are three Left presses and six columns. Counting
+    /// them put the cursor half way back through what had just been typed, and
+    /// the character-counted version passed every test above because every
+    /// string in them is one column per character.
+    #[test]
+    fn the_cursor_lands_on_the_right_column_after_wide_characters() {
+        let mut v = view();
+        v.input = "一二三".into();
+        v.cursor = 3;
+        let (_, cursor) = draw(&v, 60, 8);
+        assert_eq!(cursor.unwrap().x, 1 + 2 + 6);
+        // …and half way through, after one glyph, is column two.
+        v.cursor = 1;
+        let (_, cursor) = draw(&v, 60, 8);
+        assert_eq!(cursor.unwrap().x, 1 + 2 + 2);
+    }
+
+    /// The same arithmetic on the answer row, where the cursor sits after the
+    /// key chips rather than after a `> `.
+    #[test]
+    fn the_answer_cursor_counts_the_chips_in_columns_too() {
+        let mut v = view();
+        v.prompt = Some(Prompt {
+            title: "Approve Bash".into(),
+            preview: vec!["$ ls".into()],
+            keys: vec![("y".into(), "yes".into())],
+            question: "allow? ".into(),
+        });
+        v.input = "一".into();
+        v.cursor = 1;
+        let (_, cursor) = draw(&v, 60, 9);
+        // One column of border, ` y ` is three, ` yes  ` is six, then two
+        // columns of glyph.
+        assert_eq!(cursor.unwrap().x, 1 + 3 + 6 + 2);
+    }
+
+    /// A menu row's description is fitted to the columns left beside its name,
+    /// and a wide command name takes twice the room its length suggests.
+    #[test]
+    fn a_menu_row_never_overruns_its_width() {
+        let mut v = view();
+        v.menu = Some(MenuView {
+            rows: vec![("一二三四".into(), "描述".repeat(20))],
+            selected: 0,
+            note: None,
+        });
+        let (rows, _) = draw(&v, 30, 9);
+        let menu_row = rows
+            .iter()
+            .find(|r| r.contains('一'))
+            .expect("the menu did not draw");
+        // **Cut by `fit`, not clipped by the buffer.** A description budgeted in
+        // characters is twice as wide as its budget when it is CJK, so it runs
+        // past the right edge and ratatui drops what does not fit — silently,
+        // with no ellipsis, which is the one thing `fit` exists to never do.
+        assert!(
+            menu_row.trim_end().ends_with('…'),
+            "the description was clipped by the screen rather than cut: {menu_row:?}"
+        );
     }
 
     /// R6, structurally: the question is in the viewport, and the viewport is
@@ -747,20 +817,37 @@ mod tests {
 
     #[test]
     fn the_menu_draws_above_the_input_box_with_every_command_and_what_it_does() {
-        let (rows, cursor) = draw(&menu_view(), 60, 10);
+        // Tall enough for the whole vocabulary. It grew from two rows to Emma's
+        // full command set plus the project's, so a fixed height here would be
+        // asserting on the truncation rather than on the menu.
+        let (rows, cursor) = draw(&menu_view(), 60, 24);
         let all = rows.join("\n");
-        for name in ["/exit", "/quit", "/review", "/ship"] {
+        for (name, _) in crate::session_command::BUILTINS {
+            assert!(
+                all.contains(&format!("/{name}")),
+                "/{name} is missing: {all}"
+            );
+        }
+        for name in ["/review", "/ship"] {
             assert!(all.contains(name), "{name} is missing: {all}");
         }
         assert!(all.contains("end this session"), "{all}");
         // Nothing invented for a harness command that came without one.
         assert!(all.contains(crate::term::menu::NO_DESCRIPTION), "{all}");
         // …and the box is still under it, with the cursor on the row you type
-        // into — which is now the third row from the bottom, because the hint
-        // and the status are below the box rather than around it.
-        assert!(rows[6].contains('>'), "{rows:?}");
-        assert_eq!(cursor.unwrap().y, 6);
-        assert!(rows[9].contains("emma"), "the status is not last: {rows:?}");
+        // into, and the status last — the hint and the status are below the box
+        // rather than around it.
+        // The row inside the box, not merely a row with a `>` in it — a
+        // description that mentions `/model <id>` has one too.
+        let typing = rows
+            .iter()
+            .position(|r| r.contains(UNICODE.border.vertical_left) && r.contains('>'))
+            .expect("no input row");
+        assert_eq!(cursor.unwrap().y as usize, typing, "{rows:?}");
+        assert!(
+            rows.last().unwrap().contains("emma"),
+            "the status is not last: {rows:?}"
+        );
     }
 
     /// The constraint that would otherwise be found by a user on a laptop: a
@@ -777,10 +864,13 @@ mod tests {
             "the menu pushed the input box off: {rows:?}"
         );
         assert!(cursor.is_some(), "there was nowhere to type");
-        assert!(all.contains("/exit"), "{all}");
+        // The first row of the vocabulary, whatever it is.
+        let first = format!("/{}", crate::session_command::BUILTINS[0].0);
+        assert!(all.contains(&first), "{all}");
         // Fewer entries fit, so it says how many it left out rather than
-        // stopping silently.
-        assert!(all.contains("3 more"), "{all}");
+        // stopping silently. One row shown, the rest counted.
+        let total = crate::session_command::BUILTINS.len() + 2;
+        assert!(all.contains(&format!("{} more", total - 1)), "{all}");
 
         // One row less, and the count is what goes: a real command is worth
         // more than a line saying how many commands there were.
@@ -790,7 +880,7 @@ mod tests {
             "{rows:?}"
         );
         assert!(cursor.is_some());
-        assert!(rows.join("\n").contains("/exit"), "{rows:?}");
+        assert!(rows.join("\n").contains(&first), "{rows:?}");
     }
 
     /// A project that defines nothing still gets an answer to "what can I
@@ -801,7 +891,7 @@ mod tests {
         m.sync("/", false);
         let mut v = view();
         v.menu = m.view();
-        let all = draw(&v, 70, 10).0.join("\n");
+        let all = draw(&v, 70, 24).0.join("\n");
         assert!(all.contains("/exit"), "{all}");
         assert!(all.contains(".emma/commands/"), "{all}");
     }
