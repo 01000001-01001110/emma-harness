@@ -624,6 +624,21 @@ impl ResolvedHook {
             return run;
         }
         let Ok(reply) = serde_json::from_str::<HookReply>(stdout) else {
+            // On `UserPromptSubmit`, plain stdout *is* the context — that is the
+            // documented primary form, and the JSON object is the elaborate
+            // one. Requiring JSON here made a hook that does the ordinary thing
+            // (`echo` a line of context, exit 0) record `unparseable stdout` and
+            // throw the line away, which is the whole feature failing in the
+            // shape people actually write it. Found by running one.
+            //
+            // The other events keep the old resolution: they have no use for
+            // free text, so unreadable stdout there is a hook that meant
+            // something it failed to say, and `PreToolUse` denies on it.
+            if self.event == HookEvent::UserPromptSubmit {
+                run.context = Some(stdout.to_string());
+                run.outcome = HookOutcome::Allow;
+                return run;
+            }
             run.stderr.push_str("\nunparseable stdout");
             return run;
         };

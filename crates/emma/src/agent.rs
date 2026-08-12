@@ -785,7 +785,13 @@ impl<'a> Agent<'a> {
         // it — so a fold that tried to re-derive this string would have to keep
         // a name-to-`impl` table in step with `goal.rs` forever. Storing the
         // bytes costs a few hundred of them once per goal.
-        let opening = goal.opening();
+        // `opening_turn`, not `opening`: the whole user turn, including any
+        // context a `UserPromptSubmit` hook injected in front of it. The two are
+        // the same string when nothing was injected. It matters that the
+        // *recorded* bytes are the composed ones — the fold rebuilds this turn
+        // from this field, so recording the user's words alone would replay a
+        // conversation the model never had.
+        let opening = goal.opening_turn();
         // Taken before the record is written, so `resumed` is the only place a
         // resume can influence this goal and it can influence it exactly once.
         let resumed = self.resumed.take().unwrap_or_default();

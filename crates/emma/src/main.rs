@@ -480,7 +480,7 @@ async fn run(cli: cli::Cli) -> Result<()> {
         spend: spend.clone(),
         done: &MarkerClaim,
         cwd: cwd.clone(),
-        session_id,
+        session_id: session_id.clone(),
         budgets,
         caching: opts.caching,
         mode: if opts.print {
@@ -590,7 +590,43 @@ async fn run(cli: cli::Cli) -> Result<()> {
             None => raw,
         };
 
-        let outcome = agent.run_goal(&Goal::new(text)).await;
+        // `UserPromptSubmit`: once, here, on the words a person typed. After
+        // command expansion so a hook reads what the model will read, and
+        // before the goal exists so a delegation's brief can never reach it —
+        // `delegate.rs` builds its own `Goal`, which is what makes "never for a
+        // subagent" a property of the call graph rather than a flag to
+        // remember.
+        let submitted = harness
+            .on_user_prompt(&text, &session_id, &log.path().display().to_string())
+            .await;
+        for run in &submitted.runs {
+            log.append("hook", serde_json::json!({ "run": run }));
+        }
+        // A hook that failed loses its enrichment and says so. Silence here
+        // would be a turn that quietly lacks the context the project expects.
+        for notice in submitted.notices() {
+            term.note(&notice);
+        }
+        if let Some(reason) = submitted.blocked {
+            // Refused, but not vanished. The record is what stops a blocked
+            // prompt from being a turn nobody can account for afterwards —
+            // the same argument `prompt_blocked` makes against a silent drain.
+            log.append(
+                "prompt_blocked",
+                serde_json::json!({ "text": text, "reason": reason }),
+            );
+            term.warn(&format!("prompt blocked: {reason}"));
+            if opts.print {
+                // A script must not read a blocked prompt as a finished goal.
+                last = Ending::Interrupted;
+                break;
+            }
+            continue;
+        }
+
+        let outcome = agent
+            .run_goal(&Goal::new(text).with_injected(submitted.context))
+            .await;
         // "cache-weighted" rather than "tokens", because it is not the number
         // the provider reports and a person comparing this line with a bill
         // should know which one it is: a cached read counts here at the tenth
