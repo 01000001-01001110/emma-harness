@@ -417,22 +417,51 @@ async fn a_prompt_hook_that_hangs_loses_its_context_loudly_and_never_blocks() {
 /// A crash and unreadable output are the other two ways to fail, and they land
 /// the same way — with one exception, which is the next test.
 #[tokio::test]
-async fn a_crash_or_garbage_loses_the_context_and_lets_the_prompt_through() {
-    for (tag, unix, windows) in [
-        ("ups-crash", "exit 3", "exit /b 3"),
-        (
-            "ups-garbage",
-            "echo not-json-at-all",
-            "echo not-json-at-all",
-        ),
-    ] {
-        let root = one_hook(tag, "UserPromptSubmit", "x", unix, windows, "");
-        let h = Harness::load(&root).expect("load");
-        let v = h.on_user_prompt("hi", "sess_1", "s.jsonl").await;
-        assert!(!v.is_blocked(), "{tag} blocked the prompt");
-        assert!(v.context.is_empty(), "{tag}");
-        assert_eq!(v.notices().len(), 1, "{tag}: {:?}", v.notices());
-    }
+async fn a_crash_loses_the_context_and_lets_the_prompt_through() {
+    let root = one_hook(
+        "ups-crash",
+        "UserPromptSubmit",
+        "x",
+        "exit 3",
+        "exit /b 3",
+        "",
+    );
+    let h = Harness::load(&root).expect("load");
+    let v = h.on_user_prompt("hi", "sess_1", "s.jsonl").await;
+    assert!(!v.is_blocked(), "a crashing hook blocked the prompt");
+    assert!(v.context.is_empty());
+    assert_eq!(v.notices().len(), 1, "{:?}", v.notices());
+}
+
+/// Plain stdout **is** the context on this event, and that is the shape people
+/// actually write: a script that echoes a line and exits zero.
+///
+/// This case used to sit in the test above, asserting that non-JSON stdout was
+/// lost — and the feature was shipped that way. It survived every test and
+/// failed the first time a real hook ran: `echo`, exit 0, and Emma recorded
+/// `unparseable stdout` and threw the line away. The JSON object is the
+/// elaborate form, not the required one. The other events keep the old
+/// resolution, because free text means nothing to them and an unreadable answer
+/// there is a hook that failed to say what it meant.
+#[tokio::test]
+async fn plain_stdout_is_the_context_rather_than_a_parse_failure() {
+    let root = one_hook(
+        "ups-plain",
+        "UserPromptSubmit",
+        "x",
+        "echo the branch is main",
+        "echo the branch is main",
+        "",
+    );
+    let h = Harness::load(&root).expect("load");
+    let v = h.on_user_prompt("hi", "sess_1", "s.jsonl").await;
+    assert!(!v.is_blocked());
+    assert_eq!(v.context, vec!["the branch is main".to_string()]);
+    assert!(
+        v.notices().is_empty(),
+        "a hook that worked reported a problem: {:?}",
+        v.notices()
+    );
 }
 
 /// Exit 2 is the one non-zero exit that means "no" rather than "broken", and the
