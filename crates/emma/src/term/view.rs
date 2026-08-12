@@ -224,7 +224,10 @@ impl View {
     /// which is what makes "the menu must not push the input off screen on a
     /// short viewport" a property of the layout rather than of a check
     /// somebody has to remember.
-    fn render_input(&self, area: Rect, buf: &mut Buffer) -> Option<Position> {
+    /// `pub(crate)` for the full-screen dock: [`super::app`] draws the same
+    /// box, menu and streamed tail in the main pane's bottom rows — one input
+    /// renderer, two frames, so the two cannot drift.
+    pub(crate) fn render_input(&self, area: Rect, buf: &mut Buffer) -> Option<Position> {
         // Three rows for the box, whatever is left above it. When there is not
         // even three, the box wins: a stream with nowhere to type is worse than
         // a stream nobody can see the last line of.
@@ -367,7 +370,15 @@ impl View {
     /// user cannot evaluate manufactures consent — that argument is older than
     /// this file — so the decoration goes first and the title becomes an
     /// ordinary line.
-    fn render_prompt(&self, prompt: &Prompt, area: Rect, buf: &mut Buffer) -> Option<Position> {
+    /// `pub(crate)` for the same reason as [`View::render_input`]: the
+    /// approval panel must be the identical panel in both frames, because a
+    /// consent interface with two renderings is two interfaces.
+    pub(crate) fn render_prompt(
+        &self,
+        prompt: &Prompt,
+        area: Rect,
+        buf: &mut Buffer,
+    ) -> Option<Position> {
         let title = Span::styled(
             format!(" {} ", prompt.title),
             self.skin.palette.bold(Role::Warn),

@@ -39,17 +39,21 @@ emma-tools-lsp.workspace = true
 # nothing at run time unless a browser and a key are actually there — see
 # `web_tools`, and the registration in `main.rs` that reports what it left out.
 emma-tools-web.workspace = true
-# The terminal UI. `Viewport::Inline` is the whole reason it is here: a widget
-# tree rendered into the *normal* screen buffer, with ordinary output above it
-# that the terminal keeps in scrollback. No alternate screen — that costs
-# scrollback and mouse selection, and Emma's output is a transcript people read
-# after the run.
+# The terminal UI. Two interactive frames since 2026-08-12 (stage 2 of
+# notes/design-tui-fullscreen.md): the default is `Viewport::Fullscreen` on the
+# alternate screen — the owner chose a multi-pane layout that cannot be drawn
+# inline, knowing it costs terminal scrollback and native mouse selection; the
+# design's §2 prices the trade and term/ carries the replacements — and the old
+# `Viewport::Inline` frame survives behind `EMMA_UI=inline` for one release as
+# the soak-period escape hatch.
 #
-# **`scrolling-regions` must stay off.** With it enabled, `insert_before` is
-# implemented with `ESC[{top};{bottom}r`, and a DEC scrolling region whose top
-# margin is below row 1 discards the lines that leave it — which is exactly the
-# defect that shipped here once and could not scroll. `term/frame.rs` asserts
-# this manifest never names it.
+# **`scrolling-regions` must stay off, still.** With it enabled, the inline
+# path's `insert_before` is implemented with `ESC[{top};{bottom}r`, and a DEC
+# scrolling region whose top margin is below row 1 discards the lines that
+# leave it — which is exactly the defect that shipped here once and could not
+# scroll. The inline path ships for as long as the escape hatch does, and off
+# costs nothing after it dies. `term/frame.rs` asserts this manifest never
+# names the feature.
 #
 # `default-features = false` also drops `underline-color`, which is an escape
 # sequence several terminals answer by printing garbage, and nothing here uses.

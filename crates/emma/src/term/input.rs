@@ -38,7 +38,9 @@
 
 use std::sync::Arc;
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+};
 use tokio::sync::mpsc;
 
 use super::frame::Frame;
@@ -275,6 +277,69 @@ pub fn menu_key(key: KeyEvent, open: bool) -> Option<MenuKey> {
 
 // endregion: The menu's keys
 
+// region: The transcript's keys
+// ---------------------------------------------------------------------------
+// The transcript's keys
+//
+// The alternate screen took the terminal's scrolling, so the reader now owns
+// the keys that give it back. Kept as a pure function for the same reason
+// `menu_key` is — which key acts on which pane is a set of decisions a test
+// can state — and consumed in the reader without ever touching the line
+// channel, which is what keeps the drain guarantee whole: a scroll cannot
+// become a line, so it cannot answer a question. The transcript's scroll
+// position is likewise *exempt* from the drain, as a decision rather than an
+// omission (design §5): a scroll offset cannot answer a question, and yanking
+// the reader's page because a prompt appeared would be hostile.
+// ---------------------------------------------------------------------------
+
+/// A keystroke aimed at the transcript pane or the sidebar rather than the
+/// line editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneKey {
+    PageUp,
+    PageDown,
+    RowUp,
+    RowDown,
+    Top,
+    Tail,
+    Sidebar,
+}
+
+/// Which keys the panes take, and which fall through to the editor.
+///
+/// - `PgUp`/`PgDn` and `Ctrl-↑`/`Ctrl-↓` are unconditionally the
+///   transcript's: the editor never used them, and they work **while a goal
+///   runs and while a question is pending** — reading the evidence above an
+///   approval prompt is exactly when scrolling matters most, and the prompt
+///   itself is fixed chrome that scrolling cannot move.
+/// - `Home`/`End` belong to the editor while there is a line to move within;
+///   on an empty box they have nothing to do there and go to the transcript.
+///   One rule, no mode: the keys act on the thing that can act.
+/// - `Ctrl-B` toggles the sidebar, except while a question is pending — the
+///   design's §4.6 keeps sidebar keys dead under a prompt so nothing aimed at
+///   a pane can ever read as part of an answer.
+pub fn pane_key(key: KeyEvent, editor_empty: bool, prompt_pending: bool) -> Option<PaneKey> {
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::PageUp => Some(PaneKey::PageUp),
+        KeyCode::PageDown => Some(PaneKey::PageDown),
+        KeyCode::Up if ctrl => Some(PaneKey::RowUp),
+        KeyCode::Down if ctrl => Some(PaneKey::RowDown),
+        KeyCode::Home if editor_empty => Some(PaneKey::Top),
+        KeyCode::End if editor_empty => Some(PaneKey::Tail),
+        KeyCode::Char('b') if ctrl && !prompt_pending => Some(PaneKey::Sidebar),
+        _ => None,
+    }
+}
+
+/// Rows per wheel notch. Three is what terminals themselves scroll by.
+pub const WHEEL_ROWS: usize = 3;
+
+// endregion: The transcript's keys
+
 // region: The reader
 // ---------------------------------------------------------------------------
 // The reader
@@ -355,6 +420,27 @@ impl LineSource {
             match event::read() {
                 Err(_) => break,
                 Ok(Event::Key(key)) => {
+                    // The pane keys act first and locally — they mutate view
+                    // state through the frame and never enter the line
+                    // channel, so the drain guarantee cannot be touched by
+                    // anything they hold. Inline runs get a no-op from every
+                    // one of them: there the terminal still owns scrollback.
+                    let pane = {
+                        let ed = thread_editor.lock().unwrap_or_else(|e| e.into_inner());
+                        pane_key(key, ed.is_empty(), thread_frame.prompt_pending())
+                    };
+                    if let Some(cmd) = pane {
+                        match cmd {
+                            PaneKey::PageUp => thread_frame.scroll_page(true),
+                            PaneKey::PageDown => thread_frame.scroll_page(false),
+                            PaneKey::RowUp => thread_frame.scroll_rows(true, 1),
+                            PaneKey::RowDown => thread_frame.scroll_rows(false, 1),
+                            PaneKey::Top => thread_frame.scroll_top(),
+                            PaneKey::Tail => thread_frame.scroll_tail(),
+                            PaneKey::Sidebar => thread_frame.toggle_sidebar(),
+                        }
+                        continue;
+                    }
                     // The menu takes four keys, and only while it is open. With
                     // it shut this is `None` for everything and the editor
                     // below is reached exactly as it always was.
@@ -399,6 +485,9 @@ impl LineSource {
                         };
                         thread_frame.draw();
                         if let Some(line) = picked {
+                            // A menu-accepted command is a submit, and gets
+                            // the same snap to the tail a typed one does.
+                            thread_frame.scroll_tail();
                             if tx.blocking_send(line).is_err() {
                                 break;
                             }
@@ -432,6 +521,11 @@ impl LineSource {
                         }
                         Action::Eof => break,
                         Action::Submit(line) => {
+                            // A submit snaps the view to the tail (a no-op
+                            // inline): the answer to what was just sent is
+                            // about to arrive there, and a reader parked
+                            // fifty rows up would watch nothing happen.
+                            thread_frame.scroll_tail();
                             thread_frame.draw();
                             if tx.blocking_send(line).is_err() {
                                 break;
@@ -439,6 +533,16 @@ impl LineSource {
                         }
                     }
                 }
+                // The wheel, which mouse capture exists for: without capture,
+                // on the alternate screen, it does nothing at all. Wheel
+                // events only — clicks and drags fall through untouched, and
+                // selection is the terminal's Shift-drag (the quick help says
+                // so, since capture is what took the plain drag away).
+                Ok(Event::Mouse(mouse)) => match mouse.kind {
+                    MouseEventKind::ScrollUp => thread_frame.scroll_rows(true, WHEEL_ROWS),
+                    MouseEventKind::ScrollDown => thread_frame.scroll_rows(false, WHEEL_ROWS),
+                    _ => {}
+                },
                 // A whole clipboard at once. It reaches the editor and stops
                 // there: no `Action::Submit` can come out of a paste, which is
                 // the entire point of turning the mode on. The menu is synced
@@ -825,6 +929,85 @@ mod tests {
             // which must still submit, and Esc, which must still do nothing.
             assert_eq!(menu_key(press(code), false), None, "{code:?}");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // The transcript's keys
+    // -----------------------------------------------------------------------
+
+    /// The routing table for the pane keys, stated whole. The two rules with
+    /// teeth: Home/End go to the transcript only when the editor has nothing
+    /// for them to do, and Ctrl-B dies while a question is pending.
+    #[test]
+    fn the_pane_keys_route_to_the_transcript_and_nothing_else_does() {
+        for (code, expected) in [
+            (KeyCode::PageUp, Some(PaneKey::PageUp)),
+            (KeyCode::PageDown, Some(PaneKey::PageDown)),
+            (KeyCode::Char('x'), None),
+            (KeyCode::Up, None),
+            (KeyCode::Down, None),
+            (KeyCode::Enter, None),
+        ] {
+            assert_eq!(pane_key(press(code), true, false), expected, "{code:?}");
+        }
+        // Ctrl turns the arrows into row scrolling; plain arrows stay with
+        // history and the menu.
+        assert_eq!(
+            pane_key(
+                KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL),
+                true,
+                false
+            ),
+            Some(PaneKey::RowUp)
+        );
+        assert_eq!(
+            pane_key(
+                KeyEvent::new(KeyCode::Down, KeyModifiers::CONTROL),
+                false,
+                true
+            ),
+            Some(PaneKey::RowDown),
+            "scrolling must work mid-prompt: the evidence is what is being read"
+        );
+    }
+
+    /// Home and End act on the thing that can act: the editor while a line is
+    /// under the cursor, the transcript when the box is empty.
+    #[test]
+    fn home_and_end_go_to_the_transcript_only_when_the_editor_is_empty() {
+        assert_eq!(
+            pane_key(press(KeyCode::Home), true, false),
+            Some(PaneKey::Top)
+        );
+        assert_eq!(
+            pane_key(press(KeyCode::End), true, false),
+            Some(PaneKey::Tail)
+        );
+        assert_eq!(pane_key(press(KeyCode::Home), false, false), None);
+        assert_eq!(pane_key(press(KeyCode::End), false, false), None);
+    }
+
+    /// §4.6: sidebar keys are dead while a question is pending, so nothing
+    /// aimed at a pane can read as part of an answer. Scrolling is the stated
+    /// exception — it cannot answer anything and the evidence is above.
+    #[test]
+    fn the_sidebar_toggle_is_dead_while_a_question_is_pending() {
+        let ctrl_b = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
+        assert_eq!(pane_key(ctrl_b, true, false), Some(PaneKey::Sidebar));
+        assert_eq!(pane_key(ctrl_b, true, true), None);
+        assert_eq!(
+            pane_key(press(KeyCode::PageUp), true, true),
+            Some(PaneKey::PageUp)
+        );
+    }
+
+    /// A release edge is not a keystroke here either — the same Windows
+    /// double-fire the editor already guards against.
+    #[test]
+    fn a_key_release_never_scrolls() {
+        let mut release = press(KeyCode::PageUp);
+        release.kind = KeyEventKind::Release;
+        assert_eq!(pane_key(release, true, false), None);
     }
 
     /// Esc reaches the menu and nothing else: the editor never sees it, so the

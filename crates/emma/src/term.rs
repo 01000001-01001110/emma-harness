@@ -23,32 +23,36 @@
 //! things, and the screen says which before anybody reads a word. See
 //! [`render`].
 //!
-//! **Scrollback is the terminal's and stays the terminal's.**
+//! **The transcript is retained, because the alternate screen keeps no
+//! scrollback.** This was the reverse for the whole life of this module —
+//! "scrollback is the terminal's and stays the terminal's" — and the reversal
+//! is deliberate: stage 2 of `notes/design-tui-fullscreen.md`, owner-approved,
+//! priced in that note's §2 and red-teamed in `notes/eval-tui-fullscreen-kimi.md`.
 //!
-//! # The design, and the two it replaces
+//! # The design, and the three it replaces
 //!
-//! The transcript is ordinary terminal output. Emma draws a small **inline
-//! viewport** — ratatui's [`Viewport::Inline`](ratatui::Viewport::Inline) — in
-//! the last few rows of the normal screen buffer, read bottom-up: a status line
-//! on the very last row, a hint above it, the input box above that, and
-//! whatever is being streamed or asked in whatever is left. There is no alternate
-//! screen. Transcript lines are pushed above it with `insert_before`, which
-//! scrolls the screen the way `println!` does, so the terminal wraps them, keeps
-//! them in scrollback and lets a mouse select them. [`frame`] carries the whole
-//! argument, including the one feature flag that would silently break it.
+//! The interactive frame is a **full-screen app on the alternate screen**:
+//! sidebar left, status bar bottom, and a main pane holding the header, the
+//! retained transcript ([`transcript`]), and the input box pinned at the
+//! bottom — where the approval prompt replaces it when a question is pending,
+//! so no amount of output can move either. [`frame`] owns entry, restore and
+//! the locks; [`app`] owns the layout; [`chat`], [`sidebar`] and [`statusbar`]
+//! own their panes' cells.
 //!
-//! **The first attempt used a DEC scroll region** (`ESC[{top};{bottom}r`) to pin
-//! a status row. Lines that scroll off the top of a region whose top margin is
-//! below row 1 are *discarded*, so there was no scrollback; and it addressed
-//! rows absolutely, which on a Windows console targets the screen *buffer*
-//! rather than the window, so the pinned rows were painted thousands of lines
-//! above anything visible. One mechanism, two symptoms.
-//!
-//! **The second attempt** removed the scroll region and redrew an input block
-//! from the bottom with relative movement only. It worked, and it could not have
-//! a status line — the run's identity was printed once as an ordinary line that
-//! scrolled away — and it had no vocabulary: `●` prefixed every tool line
-//! whether it ran, failed or was refused.
+//! **The three earlier designs, kept for the argument.** A DEC scroll region
+//! discarded scrollback and addressed the Windows screen *buffer* rather than
+//! the window. A bottom-anchored redraw had no status line and no vocabulary.
+//! The **inline viewport** — a few rows at the bottom of the normal screen,
+//! transcript pushed above through `insert_before` — was the good one: the
+//! terminal kept scrollback, wrapped, and let a mouse select. It lost to a
+//! layout it structurally cannot draw (a sidebar and a pinned bottom bar need
+//! the whole screen), and it survives as the `EMMA_UI=inline` escape hatch
+//! for one release. What the flip costs and what pays it back: terminal
+//! scrollback → the [`transcript`] buffer, keys and wheel; native mouse
+//! selection → Shift-drag (mouse capture owns the wheel now), cleanly only
+//! with the sidebar collapsed, until `/export` and in-app selection land;
+//! re-reading the styled run after exit → gone, the session JSONL named in
+//! the exit line is the record.
 //!
 //! **The viewport is a luxury and the fallback is the product.** Nothing below
 //! makes a decision a plain stream of lines could not. If the terminal cannot be
@@ -56,7 +60,7 @@
 //! window is tiny, or if `EMMA_NO_FRAME` is set, [`Term`] degrades to
 //! line-by-line output on the same streams, with the same vocabulary and no
 //! escape byte at all when the destination is not a terminal. `-p` never gets a
-//! viewport, and neither does [`Term::silent`].
+//! viewport — and never the alternate screen — and neither does [`Term::silent`].
 
 use std::io::{IsTerminal, Write};
 use std::path::Path;
@@ -64,6 +68,8 @@ use std::sync::{Arc, Mutex};
 
 use ratatui::text::Line;
 
+pub mod app;
+pub mod chat;
 pub mod diff;
 pub mod frame;
 pub mod input;
@@ -71,7 +77,9 @@ pub mod markdown;
 pub mod menu;
 pub mod palette;
 pub mod render;
+pub mod sidebar;
 pub mod spacing;
+pub mod statusbar;
 pub mod statusline;
 pub mod transcript;
 pub mod view;
@@ -680,7 +688,14 @@ impl Term {
         // turn and the next, and the answer to a goal is part of the same
         // exchange as the goal. "Space after my message" was the complaint.
         self.separate();
-        self.side(self.skin.goal(goal));
+        match (&self.frame, self.enabled) {
+            // Through the kind-preserving door, so the full-screen chat pane
+            // can label the row `You` instead of guessing the speaker back
+            // from its styling. Inline this renders the same lines `side`
+            // would have.
+            (Some(frame), true) => frame.user_line(goal),
+            _ => self.side(self.skin.goal(goal)),
+        }
         self.meter("goal_started", Frame::goal_started);
     }
 
@@ -857,7 +872,18 @@ impl Drop for Term {
         // parent's run. Restoring there would put the terminal back while the
         // session is still drawing into it.
         if self.frame.is_some() && !self.subordinate {
+            let pointer = self.frame.as_ref().and_then(|f| f.session_pointer());
             restore_terminal();
+            // The exit line, after the alternate screen has restored the
+            // shell: the one pointer to a transcript the shell no longer
+            // holds, printed where it survives. Leaving the alt screen with
+            // nothing on the normal screen is the "run visually vanishes"
+            // cost from the design's §2.1, and this is the named remedy. On
+            // the inline path `session_pointer` is `None` — the transcript
+            // is already in the shell's scrollback and needs no pointer.
+            if let Some(path) = pointer {
+                println!("session: {path}");
+            }
         }
     }
 }
@@ -1454,6 +1480,10 @@ mod tests {
         for (name, src) in [
             ("term.rs", include_str!("term.rs")),
             ("term/frame.rs", include_str!("term/frame.rs")),
+            // The full-screen shell is under the same rule: its blank rows
+            // are the transcript buffer's separators, decided in
+            // `transcript.rs` and nowhere else.
+            ("term/app.rs", include_str!("term/app.rs")),
         ] {
             // Comments stripped: both files argue about the old blank rows by
             // name, as this one does. What must not appear is a *use* of one.

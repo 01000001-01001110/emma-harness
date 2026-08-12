@@ -83,6 +83,55 @@ pub enum EntryKind {
     Note(Vec<Line<'static>>),
 }
 
+/// Which voice a block speaks in, as the two-column pane needs to know it.
+///
+/// Derived here rather than in [`super::chat`], because the alternative is the
+/// pane sniffing styled spans to guess who is talking — which works until the
+/// day [`Skin`] restyles anything, and then fails silently. The kind is a fact
+/// this module already holds; the pane should be told it, not reconstruct it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Voice {
+    /// The human: a goal or a command line.
+    You,
+    /// The assistant's prose.
+    Emma,
+    /// Tool traffic. Not a speaker — see [`super::chat`] for what that means
+    /// for the gutter.
+    Activity,
+    /// The harness talking about itself: notes, warnings, endings, the
+    /// welcome. Kept distinct from `Activity` so a pane may treat the two
+    /// apart without this type changing again.
+    Note,
+}
+
+impl EntryKind {
+    /// Who this block belongs to.
+    pub fn voice(&self) -> Voice {
+        match self {
+            Self::User(_) => Voice::You,
+            Self::Assistant { .. } => Voice::Emma,
+            Self::Activity(_) => Voice::Activity,
+            Self::Note(_) => Voice::Note,
+        }
+    }
+}
+
+/// One rendered row and where it came from.
+///
+/// What [`Transcript::rows`] cannot say: which block a row renders and whether
+/// it opens it, which is what a speaker gutter needs to put the label beside
+/// the right row. Produced by the same assembly as `rows` — one assembly, not
+/// two, because two assemblies of the same rows is how a label and the scroll
+/// arithmetic drift apart.
+#[derive(Debug, Clone)]
+pub struct TaggedRow {
+    pub line: Line<'static>,
+    /// `None` for the cap marker and the blank separators, which belong to no
+    /// block; otherwise the block's index, its voice, and whether this row is
+    /// its first.
+    pub block: Option<(usize, Voice, bool)>,
+}
+
 /// An entry and its rendering at the current width.
 #[derive(Debug, Clone)]
 struct Entry {
@@ -372,25 +421,59 @@ impl Transcript {
     /// scrolls with the oldest thing that survived — which is where somebody
     /// looking for what is missing will actually be.
     pub fn rows(&self, skin: &Skin) -> Vec<Line<'static>> {
-        let mut out: Vec<Line<'static>> = Vec::new();
+        // Built from the tagged form so the two can never disagree about what
+        // the transcript contains: the tags are these rows, annotated.
+        self.tagged(skin).into_iter().map(|r| r.line).collect()
+    }
+
+    /// Every row with its provenance — the assembly `rows` and the visible
+    /// windows are both cut from.
+    fn tagged(&self, skin: &Skin) -> Vec<TaggedRow> {
+        let mut out: Vec<TaggedRow> = Vec::new();
         if self.dropped_entries > 0 {
-            out.extend(self.dropped_marker(skin));
-            out.push(Line::default());
+            out.extend(
+                self.dropped_marker(skin)
+                    .into_iter()
+                    .map(|line| TaggedRow { line, block: None }),
+            );
+            out.push(TaggedRow {
+                line: Line::default(),
+                block: None,
+            });
         }
         for (i, entry) in self.entries.iter().enumerate() {
             if i > 0 {
-                out.push(Line::default());
+                out.push(TaggedRow {
+                    line: Line::default(),
+                    block: None,
+                });
             }
-            out.extend(entry.lines.iter().map(owned));
+            let voice = entry.kind.voice();
+            out.extend(entry.lines.iter().enumerate().map(|(j, line)| TaggedRow {
+                line: owned(line),
+                block: Some((i, voice, j == 0)),
+            }));
         }
         out
     }
 
     /// The rows a pane of this height shows, at the current scroll.
     pub fn visible(&self, skin: &Skin, height: u16) -> Vec<Line<'static>> {
-        let all = self.rows(skin);
+        self.visible_tagged(skin, height)
+            .into_iter()
+            .map(|r| r.line)
+            .collect()
+    }
+
+    /// [`Self::visible`] for a renderer that also needs to know who is
+    /// speaking on each row. Same window, same rows — the plain form above is
+    /// cut from this one so a test comparing the two cannot find a difference.
+    pub fn visible_tagged(&self, skin: &Skin, height: u16) -> Vec<TaggedRow> {
+        let mut all = self.tagged(skin);
         let (start, end) = self.window(all.len(), height);
-        all[start..end].to_vec()
+        all.truncate(end);
+        all.drain(..start);
+        all
     }
 
     /// The half-open row range a pane of this height is looking at.
@@ -921,6 +1004,54 @@ mod tests {
         }
         // Taller than the content shows all of it, not padding.
         assert_eq!(t.visible(&skin, 200).len(), t.height(&skin));
+    }
+
+    // -----------------------------------------------------------------------
+    // The tagged rows
+    // -----------------------------------------------------------------------
+
+    /// The tags are the same rows annotated, and the annotation is true: first
+    /// rows are marked, separators belong to nobody, and the voice is the
+    /// entry's kind. The chat pane's gutter stands entirely on this.
+    #[test]
+    fn tagged_rows_are_the_same_rows_with_the_speaker_attached() {
+        let skin = skin();
+        let mut t = Transcript::new(Cap::default());
+        t.push(EntryKind::User("fix it".into()), &skin, 40);
+        t.stream("done, and here is why at some length", &skin, 40);
+        t.finish();
+        t.push(note("a note"), &skin, 40);
+
+        let tagged = t.tagged(&skin);
+        assert_eq!(
+            tagged.iter().map(|r| plain(&r.line)).collect::<Vec<_>>(),
+            t.rows(&skin).iter().map(plain).collect::<Vec<_>>(),
+            "the tagged assembly and rows() disagree"
+        );
+        // The separators are nobody's.
+        for row in tagged.iter().filter(|r| plain(&r.line).is_empty()) {
+            assert_eq!(row.block, None, "a separator was given to a block");
+        }
+        // Each block's first row is flagged once, with its own voice.
+        let firsts: Vec<(usize, Voice)> = tagged
+            .iter()
+            .filter_map(|r| r.block)
+            .filter(|(_, _, first)| *first)
+            .map(|(i, v, _)| (i, v))
+            .collect();
+        assert_eq!(
+            firsts,
+            [(0, Voice::You), (1, Voice::Emma), (2, Voice::Note)],
+            "{firsts:?}"
+        );
+        // And the windowed form is the same window `visible` shows.
+        assert_eq!(
+            t.visible_tagged(&skin, 3)
+                .iter()
+                .map(|r| plain(&r.line))
+                .collect::<Vec<_>>(),
+            t.visible(&skin, 3).iter().map(plain).collect::<Vec<_>>()
+        );
     }
 
     // -----------------------------------------------------------------------

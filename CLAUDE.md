@@ -64,6 +64,29 @@ only person who can write any of it is whoever just hit it.
 Report both as well as writing them — a lesson or a status nobody relays is
 one nobody reads.
 
+## The premise the rules follow from
+
+**This codebase has no author's memory, and every reader is a stranger —
+including the owner.** Roughly twenty agents have written it; each saw one
+crate, and the owner has never had the whole of it in his head. That is not a
+gap somebody will eventually close by reading everything. It is the permanent
+condition of the project.
+
+In an ordinary codebase the author's memory is the backstop — ask them why,
+and they know. Here there is nobody to ask, so the written record has to carry
+its own scepticism: what was measured, what was assumed, and what nobody has
+actually looked at. That is why a comment carries the argument rather than
+restating the code, why a test that cannot fail is called a false receipt, and
+why "say what you could not verify" is a rule rather than a courtesy — each is
+a substitute for a memory that does not exist. And it is why the failures in
+`notes/lessons/` are the most valuable thing here: every expensive mistake this
+project has made was a confident claim with nobody present who knew better — a
+token figure that did not survive measurement, an anchoring technique that was
+reversed, a strict decoder that passed every test and broke on the first live
+call, a test-count command that reported green over a red test. In each case
+the record was the only possible correction, and where the record was silent,
+the mistake shipped.
+
 ## The house rules
 
 **Comments carry the why, not the what.** Read a module's existing doc before
@@ -97,11 +120,23 @@ the remedy — or says plainly that no argument raises it.
 
 ## Constraints that are load-bearing
 
-- **`Viewport::Inline` only, never the alternate screen.** It costs scrollback
-  and mouse selection, and Emma's output is a transcript people read afterwards.
-- **The `scrolling-regions` ratatui feature stays off.** `crates/emma/Cargo.toml`
-  explains why; `term/frame.rs` has a test that reads the manifest and fails if
-  it is ever named.
+- **The interactive frame is full-screen, on the alternate screen** — since
+  2026-08-12, stage 2 of `notes/design-tui-fullscreen.md`, reversing the old
+  "`Viewport::Inline` only, never the alternate screen" rule on the owner's
+  decision. What the reversal cost, per that design's §2: terminal scrollback
+  (replaced by the retained `term/transcript.rs` buffer, keys and wheel),
+  native mouse selection (mouse capture owns the wheel; Shift-drag selects,
+  cleanly only with the sidebar collapsed, until `/export` lands), and
+  re-reading the styled run after exit (gone — the session JSONL named in the
+  exit line is the record). Three things still hold absolutely: the plain
+  fallback (`-p`, pipes, `EMMA_NO_FRAME`, no console) never touches the
+  alternate screen; every exit path — return, `Drop`, panic, Ctrl-C,
+  `process::exit` — leaves it (a stranded alt screen is the failure people
+  uninstall over); and `EMMA_UI=inline` keeps the old inline viewport for one
+  release as the escape hatch.
+- **The `scrolling-regions` ratatui feature stays off.** The reversal above
+  does not touch this. `crates/emma/Cargo.toml` explains why; `term/frame.rs`
+  has a test that reads the manifest and fails if it is ever named.
 - **Piped and `-p` output contains zero escape bytes.** There is a test. Keep it.
 - **A tool failure is an observation, not an abort.** It comes back as a
   `tool_result` with `is_error` and the loop continues.

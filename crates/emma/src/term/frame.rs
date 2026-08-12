@@ -1,40 +1,53 @@
-//! The inline viewport, and the rule that keeps scrollback working.
+//! The terminal frame: the alternate-screen app it draws by default, and the
+//! inline viewport it keeps as the `EMMA_UI=inline` escape hatch.
 //!
-//! # The rule
+//! # The rule, and the reversal
 //!
-//! **`Viewport::Inline` renders into the normal screen buffer.** There is no
-//! alternate screen — that costs scrollback and mouse selection, and Emma's
-//! output is a transcript people read after the run. Everything above the
-//! viewport is ordinary terminal output that the terminal owns, scrolls, wraps
-//! and keeps.
+//! This file spent its whole life arguing *against* the alternate screen: it
+//! costs terminal scrollback and native mouse selection, and Emma's output is
+//! a transcript people read after the run. That argument was true and it
+//! lost — the owner chose a multi-pane layout (sidebar, pinned input, status
+//! bar) that structurally cannot be drawn inline, and reopened the decision on
+//! purpose. `notes/design-tui-fullscreen.md` §2 prices every cost;
+//! `notes/eval-tui-fullscreen-kimi.md` adds the four the plan missed. The flip
+//! is stage 2 of that design, and this is it.
 //!
-//! **Transcript lines go out through `Terminal::insert_before`.** In the build
-//! Emma uses, that is implemented by putting the cursor on the last row of the
-//! screen and printing newlines — the same thing `println!` does, and the only
-//! mechanism a terminal actually captures into scrollback. The lines are then
-//! drawn into the space that opened up and the viewport is redrawn under them.
+//! What replaces what the terminal used to do for free: the retained
+//! [`Transcript`](super::transcript::Transcript) buffer replaces scrollback
+//! (scrolled by keys and the wheel — mouse capture is on, which is why plain
+//! drag-selection needs Shift now); leaving the alternate screen replaces the
+//! erase arithmetic (the terminal restores its own prior content wholesale);
+//! and the exit line printed by `Term`'s drop names the session log, because
+//! "scroll the shell up an hour later" is the one thing nothing here can give
+//! back.
 //!
-//! **ratatui's `scrolling-regions` feature must never be enabled.** With it on,
-//! `insert_before` is implemented with `ESC[{top};{bottom}r` instead. A DEC
-//! scrolling region whose top margin is below row 1 *discards* the lines that
-//! leave it: scrollback capture only happens when the region is the whole
-//! screen. That is not a theory — it is exactly what shipped here once before,
-//! and the owner's first complaint was that he could not scroll. The feature is
-//! off in `Cargo.toml` and a test asserts that it stays off, because the failure
-//! it causes is invisible to every other test in this repository.
+//! **The inline viewport is not deleted.** `EMMA_UI=inline` selects it for one
+//! release as a soak-period escape hatch (design §2.3), so everything below
+//! about `insert_before`, anchoring and erase-climbing still holds on that
+//! path. The plain fallback — pipes, `-p`, `EMMA_NO_FRAME`, no console —
+//! remains the product it always was and never sees an escape byte, let alone
+//! the alternate screen.
 //!
-//! **The frame starts where the cursor is and settles on the last rows of the
-//! window.** An inline viewport puts itself where the cursor happens to be, and
-//! every line pushed above it moves it one row down until it reaches the bottom,
-//! where it stays for the rest of the run. Nothing has to be done to make that
-//! happen — it is what `insert_before` does — and the alternative, walking the
-//! cursor to the bottom before ratatui ever sees the terminal, is what the owner
-//! photographed as two thirds of a window of nothing. See the `Anchoring`
-//! region, which is now about resizing and nothing else.
+//! **ratatui's `scrolling-regions` feature must still never be enabled.** With
+//! it on, the inline path's `insert_before` is implemented with
+//! `ESC[{top};{bottom}r` instead, and a DEC scrolling region whose top margin
+//! is below row 1 *discards* the lines that leave it. That is not a theory —
+//! it is exactly what shipped here once before, and the owner's first
+//! complaint was that he could not scroll. The inline path exists for as long
+//! as the escape hatch does; after that, "irrelevant and off" costs nothing,
+//! while "someone enabled it while the hatch still exists" is exactly the
+//! invisible defect the manifest test was written for.
 //!
-//! **Blank rows are a boundary between blocks and are decided in one place.**
-//! See [`super::spacing`]. Nothing in this file writes a `Line::default()` of
-//! its own.
+//! **On the inline path, transcript lines still go out through
+//! `Terminal::insert_before`** — cursor to the last row, newlines, the one
+//! mechanism a terminal captures into scrollback — and the frame still starts
+//! where the cursor is and drifts to the bottom rather than being walked
+//! there. See the `Anchoring` region.
+//!
+//! **Blank rows are a boundary between blocks and are decided in one place** —
+//! [`super::spacing`] on the inline path, the transcript buffer's own
+//! separators on the full-screen one. Nothing in this file writes a
+//! `Line::default()` of its own.
 //!
 //! # Why raw mode
 //!
@@ -48,12 +61,19 @@
 //! # Restoring
 //!
 //! [`restore_terminal`] is idempotent, global, and needs no reference to
-//! anything — a panic hook has no `self`. It undoes exactly four things: raw
-//! mode, the rows the viewport is drawn on, the Windows console mode, and the
-//! Windows output code page Emma set for itself at startup. The
-//! failure it prevents is the one people uninstall over: a shell prompt drawn
-//! on top of a viewport we left behind, in a terminal that is no longer echoing
-//! what they type.
+//! anything — a panic hook has no `self`. It undoes raw mode, mouse capture,
+//! the alternate screen (or, on the inline path, the rows the viewport is
+//! drawn on), the private modes, the Windows console mode, and the Windows
+//! output code page Emma set for itself at startup. The failure it prevents
+//! got worse with the flip: a stranded alternate screen is a user staring at a
+//! full frozen frame with a shell they cannot see typing into it, in a
+//! terminal that is no longer echoing what they type. It is reachable from
+//! `Drop`, the panic hook (which restores *before* the message prints, so the
+//! message lands on the normal screen), and the one `process::exit` path in
+//! `main.rs`. What it cannot cover, named honestly: `SIGKILL`, a stack
+//! overflow that skips the hook, and `std::process::abort` — those strand raw
+//! mode today and strand the alternate screen now, and no in-process code can
+//! do otherwise.
 
 use std::io::{IsTerminal, Stdout, Write};
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
@@ -61,12 +81,15 @@ use std::sync::{Arc, Mutex, Once, Weak};
 use std::time::{Duration, Instant};
 
 use ratatui::backend::{Backend, CrosstermBackend};
+use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::layout::{Position, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
+use super::app::App;
 use super::markdown::Markdown;
 use super::render::{rows_used, Skin};
 use super::spacing::Spacing;
@@ -84,6 +107,14 @@ use super::view::{Mode, Prompt, View};
 /// Set once the viewport has been drawn, cleared once it has been cleaned up.
 static FRAME_ON: AtomicBool = AtomicBool::new(false);
 static RAW_ON: AtomicBool = AtomicBool::new(false);
+/// Set once the alternate screen has been entered. The restore path branches
+/// on it: leaving the alternate screen restores the prior content wholesale,
+/// where the inline path has to erase its own rows.
+static ALT_ON: AtomicBool = AtomicBool::new(false);
+/// Set once mouse capture is on. Its own latch because on Windows the disable
+/// is a console-mode change rather than bytes, so it cannot ride in
+/// [`leave_modes`] with the string modes.
+static MOUSE_ON: AtomicBool = AtomicBool::new(false);
 /// How many rows the cursor sits below the top of the viewport, so the erase
 /// can climb exactly that far. `u16::MAX` means nothing is drawn.
 static CURSOR_ROW: AtomicU16 = AtomicU16::new(u16::MAX);
@@ -111,7 +142,24 @@ pub fn restore_terminal() {
     if RAW_ON.swap(false, Ordering::SeqCst) {
         let _ = disable_raw_mode();
     }
-    let mut out = erase_frame();
+    if MOUSE_ON.swap(false, Ordering::SeqCst) {
+        // Through crossterm rather than a string on purpose: on Windows the
+        // enable was a console-mode change, and only the matching command
+        // undoes it. On unix this writes the `?100x` lows.
+        let _ = execute!(std::io::stdout(), DisableMouseCapture);
+    }
+    // Leaving the alternate screen restores the prior shell content wholesale,
+    // which is the erase arithmetic's whole job done by the terminal; the
+    // inline path still erases its own rows. The `?1049l` is written only when
+    // `?1049h` was: a leave on the normal screen carries an implicit cursor
+    // restore that nothing saved, and terminals answer that by moving the
+    // cursor somewhere surprising.
+    let mut out = if ALT_ON.swap(false, Ordering::SeqCst) {
+        CURSOR_ROW.store(u16::MAX, Ordering::SeqCst);
+        ALT_LEAVE.to_string()
+    } else {
+        erase_frame()
+    };
     out.push_str(&leave_modes());
     let mut stdout = std::io::stdout();
     let _ = stdout.write_all(out.as_bytes());
@@ -179,6 +227,20 @@ fn erase_frame() -> String {
 /// where the guarantee that a paste cannot submit actually lives.
 const PASTE_ON: &str = "\x1b[?2004h";
 const PASTE_OFF: &str = "\x1b[?2004l";
+
+/// The alternate screen. `?1049h` switches to a cleared second buffer and
+/// `?1049l` restores the first, prior content and all — which is what makes
+/// the full-screen exit story *simpler* than the inline one: there is nothing
+/// to erase. Kept out of [`enter_modes`] because it is entered *before* the
+/// `Terminal` is built (ratatui must measure the screen it will draw on) and
+/// left conditionally (see [`restore_terminal`]); the pairing test scans both
+/// pairs, so the split cannot hide an unmatched `h`.
+///
+/// The `2J`+`H` after the switch is deliberate: xterm clears on entry, but
+/// "cleared" is the terminal's promise, not DEC's, and one explicit erase is
+/// cheaper than certifying every console's reading of 1049.
+const ALT_ENTER: &str = "\x1b[?1049h\x1b[2J\x1b[H";
+const ALT_LEAVE: &str = "\x1b[?1049l";
 
 /// What a framed run turns on, once, after the viewport is up.
 fn enter_modes() -> String {
@@ -274,8 +336,23 @@ pub struct Frame {
     status_requests: Mutex<Option<super::statusline::Requests>>,
 }
 
+/// Which of the two interactive frames this run is drawing.
+///
+/// `Full` is the default — the alternate-screen app, with the retained
+/// transcript and the multi-pane layout in [`super::app`]. `Inline` is the
+/// `EMMA_UI=inline` escape hatch: the old bottom-of-screen viewport with the
+/// terminal's own scrollback above it, kept for one release so the owner can
+/// discover what the flip costs against the real thing rather than in theory.
+enum Ui {
+    Inline,
+    /// Boxed for the size difference clippy flags — one heap hop per lock,
+    /// against an `Inner` that already lives behind a mutex.
+    Full(Box<App>),
+}
+
 struct Inner {
     term: Terminal<CrosstermBackend<Stdout>>,
+    ui: Ui,
     view: View,
     /// The markdown state for the answer being streamed, which is one open
     /// fence. Here rather than in [`View`] because it belongs to the transcript
@@ -340,9 +417,15 @@ impl Frame {
             return None;
         }
         let (cols, rows) = size?;
+        // The escape hatch: the inline viewport, for one release. Anything
+        // else — including the variable being unset, which is the ordinary
+        // case — is the full-screen app.
+        let inline = std::env::var("EMMA_UI").is_ok_and(|v| v.eq_ignore_ascii_case("inline"));
 
         // Whatever is on the current line is somebody's shell prompt, and the
-        // viewport should not be drawn on top of it.
+        // viewport should not be drawn on top of it. On the full-screen path
+        // the newline also means the exit line printed after the alternate
+        // screen restores lands under the prompt rather than on it.
         let mut stdout = std::io::stdout();
         stdout.write_all(b"\r\n").ok()?;
         stdout.flush().ok()?;
@@ -350,15 +433,41 @@ impl Frame {
         enable_raw_mode().ok()?;
         RAW_ON.store(true, Ordering::SeqCst);
 
+        if !inline {
+            // Entered before the `Terminal` is built, so ratatui's first
+            // measurement is of the buffer it will actually draw on. The
+            // latch goes on first: a panic between here and `FRAME_ON` would
+            // otherwise strand the alternate screen with a restore that
+            // refuses to run.
+            ALT_ON.store(true, Ordering::SeqCst);
+            if stdout.write_all(ALT_ENTER.as_bytes()).is_err() || stdout.flush().is_err() {
+                ALT_ON.store(false, Ordering::SeqCst);
+                if RAW_ON.swap(false, Ordering::SeqCst) {
+                    let _ = disable_raw_mode();
+                }
+                return None;
+            }
+        }
+
         let height = view_rows(rows);
-        // Where the cursor already is, which is directly under whatever the
-        // shell last printed. The frame is *not* walked to the bottom of the
-        // window here: see the `Anchoring` region for why the walk was removed.
+        // Inline: where the cursor already is, directly under whatever the
+        // shell last printed — the frame is *not* walked to the bottom (see
+        // `Anchoring`). Full: the whole alternate screen.
         let backend = CrosstermBackend::new(std::io::stdout());
-        let terminal = match open_viewport(backend, height) {
+        let opened = if inline {
+            open_viewport(backend, height)
+        } else {
+            open_fullscreen(backend)
+        };
+        let terminal = match opened {
             Ok(t) => t,
             Err(_) => {
                 // Half-installed is the worst state to leave a terminal in.
+                if ALT_ON.swap(false, Ordering::SeqCst) {
+                    let mut stdout = std::io::stdout();
+                    let _ = stdout.write_all(ALT_LEAVE.as_bytes());
+                    let _ = stdout.flush();
+                }
                 if RAW_ON.swap(false, Ordering::SeqCst) {
                     let _ = disable_raw_mode();
                 }
@@ -386,10 +495,28 @@ impl Frame {
             let _ = stdout.write_all(enter_modes().as_bytes());
             let _ = stdout.flush();
         }
+        if !inline {
+            // Mouse capture, for the wheel: on the alternate screen the wheel
+            // does nothing at all without it — not "less useful", nothing —
+            // and the first instinct of anybody reading a long answer is the
+            // wheel (`notes/eval-tui-fullscreen-kimi.md` §1.5). The cost is
+            // that plain drag-selection now needs Shift; the quick-help table
+            // says so, because it is the one fact a user cannot guess. Only
+            // on the full-screen path: inline, the terminal owns the wheel
+            // and taking it would break scrollback that still works.
+            if execute!(std::io::stdout(), EnableMouseCapture).is_ok() {
+                MOUSE_ON.store(true, Ordering::SeqCst);
+            }
+        }
 
         let frame = Arc::new(Frame {
             inner: Mutex::new(Inner {
                 term: terminal,
+                ui: if inline {
+                    Ui::Inline
+                } else {
+                    Ui::Full(Box::new(App::new((cols, rows))))
+                },
                 view: View::new(skin),
                 md: Markdown::new(),
                 screen: (cols, rows),
@@ -420,6 +547,24 @@ impl Frame {
         synchronized(|| inner.paint());
     }
 
+    /// The goal the user typed. On the full-screen path this keeps its kind —
+    /// a `User` entry, so the chat pane's gutter can say `You` beside it —
+    /// where `write_lines` would flatten it into anonymous activity. Inline,
+    /// the two are the same lines.
+    pub fn user_line(&self, text: &str) {
+        let mut inner = self.lock();
+        synchronized(|| {
+            match &mut inner.ui {
+                Ui::Full(app) => app.push_user(text, &self.skin),
+                Ui::Inline => {
+                    let lines = self.skin.goal(text);
+                    inner.emit(lines);
+                }
+            }
+            inner.paint();
+        });
+    }
+
     /// Ordinary transcript output: written above the viewport, into the
     /// terminal's own scrollback, exactly once.
     pub fn write_lines(&self, lines: Vec<Line<'static>>) {
@@ -448,6 +593,17 @@ impl Frame {
     /// [`emit_into`] are counted against.
     pub fn prose(&self, text: &str) {
         let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            // The owned buffer deletes the held-back partial line outright:
+            // deltas stream into the tail entry, which re-renders whole on
+            // every paint, so a code fence that opens three deltas in
+            // restyles everything it covers. The "a fragment above the
+            // viewport can never be extended" constraint was the inline
+            // path's, and it stays there.
+            app.stream(text, &self.skin);
+            synchronized(|| inner.paint());
+            return;
+        }
         inner.view.partial.push_str(text);
         if !inner.view.partial.contains('\n') {
             // Nothing to commit: only the viewport's tail changed.
@@ -481,6 +637,14 @@ impl Frame {
     /// ended inside an unclosed fence cannot render the *next* answer as code.
     pub fn flush_prose(&self) {
         let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            // Nothing is held back on this path — every delta already reached
+            // the buffer — so the end of a turn is just the tail entry
+            // closing, which is what stops the next answer growing into it.
+            app.transcript.finish();
+            synchronized(|| inner.paint());
+            return;
+        }
         let held = std::mem::take(&mut inner.view.partial);
         let width = inner.term.get_frame().area().width;
         let mut lines = Vec::new();
@@ -495,10 +659,16 @@ impl Frame {
         });
     }
 
-    /// Declare a boundary between blocks. See [`super::spacing`] — it costs a
-    /// blank row only if a block turns up on the other side of it.
+    /// Declare a boundary between blocks. On the inline path this is
+    /// [`super::spacing`]'s rule — a blank row only if a block turns up on the
+    /// other side. On the full-screen path it is a no-op: the transcript
+    /// buffer separates every block it holds, so the boundary is structural
+    /// rather than declared.
     pub fn separate(&self) {
-        self.lock().spacing.separate();
+        let mut inner = self.lock();
+        if matches!(inner.ui, Ui::Inline) {
+            inner.spacing.separate();
+        }
     }
 
     pub fn set_input(&self, text: &str, cursor: usize) {
@@ -541,6 +711,13 @@ impl Frame {
             inner.view.status.cwd = cwd.to_string();
             inner.view.status.session = session.to_string();
             inner.transcript = transcript.to_string();
+            if let Ui::Full(app) = &mut inner.ui {
+                // The sidebar's SESSIONS slot gets the one row that is
+                // honestly known — this run — and the transcript buffer
+                // learns where the complete record lives, so the cap marker
+                // can name the remedy when it binds.
+                app.set_identity(session, transcript, &self.skin);
+            }
             inner.paint();
         }
         // The first invocation. Claude Code runs a status line once when a
@@ -692,6 +869,88 @@ impl Frame {
         }
         inner.paint();
     }
+
+    // -----------------------------------------------------------------------
+    // The transcript keys
+    //
+    // The alternate screen took the terminal's scrolling; these give it back
+    // through the retained buffer. Every method is a no-op on the inline
+    // path, where the terminal still owns scrollback and taking these keys
+    // would break it. They are called from the reader thread — which already
+    // holds the `Arc<Frame>` and already acts locally without the line
+    // channel (menu sync does exactly this) — so nothing here ever enters
+    // the channel and the drain guarantee is untouched by construction.
+    // -----------------------------------------------------------------------
+
+    /// Scroll by whole rows. Up breaks the follow latch; arriving back at the
+    /// tail re-latches. The decisions live in
+    /// [`Transcript`](super::transcript::Transcript) and are tested there.
+    pub fn scroll_rows(&self, up: bool, rows: usize) {
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            if up {
+                app.transcript.scroll_up(rows);
+            } else {
+                app.transcript.scroll_down(rows);
+            }
+            synchronized(|| inner.paint());
+        }
+    }
+
+    /// A page: the chat pane's height less one row of continuity.
+    pub fn scroll_page(&self, up: bool) {
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            let page = app.page();
+            if up {
+                app.transcript.scroll_up(page);
+            } else {
+                app.transcript.scroll_down(page);
+            }
+            synchronized(|| inner.paint());
+        }
+    }
+
+    /// Home with an empty input box: as far back as there is.
+    pub fn scroll_top(&self) {
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            app.transcript.to_top();
+            synchronized(|| inner.paint());
+        }
+    }
+
+    /// End with an empty input box — and every submit, which is what stops a
+    /// scrolled-up reader sending a goal and watching nothing happen.
+    pub fn scroll_tail(&self) {
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            app.transcript.follow_tail();
+            synchronized(|| inner.paint());
+        }
+    }
+
+    /// Ctrl-B. Latches — see [`super::app::Latch`].
+    pub fn toggle_sidebar(&self) {
+        let mut inner = self.lock();
+        let cols = inner.screen.0;
+        if let Ui::Full(app) = &mut inner.ui {
+            app.toggle_sidebar(cols);
+            synchronized(|| inner.paint());
+        }
+    }
+
+    /// Where the whole run is written down, for the exit line — the last
+    /// thing left on the normal screen after the alternate screen restores,
+    /// because it is the only pointer to a transcript the shell no longer
+    /// holds. `None` on the inline path, whose transcript *is* the shell's.
+    pub fn session_pointer(&self) -> Option<String> {
+        let inner = self.lock();
+        match &inner.ui {
+            Ui::Full(_) if !inner.transcript.is_empty() => Some(inner.transcript.clone()),
+            _ => None,
+        }
+    }
 }
 
 impl Inner {
@@ -701,30 +960,83 @@ impl Inner {
     fn paint(&mut self) {
         if let Some(size) = super::terminal_size() {
             if size != self.screen {
-                self.reanchor(size);
+                match self.ui {
+                    // The inline viewport has to be erased and re-anchored by
+                    // hand; the full-screen terminal re-measures on every
+                    // draw, so a resize is just the next draw at the new
+                    // size — the transcript rewraps inside `App::render`.
+                    Ui::Inline => self.reanchor(size),
+                    Ui::Full(_) => self.screen = size,
+                }
             }
         }
         self.view.status.elapsed = self.started.map(|t| t.elapsed());
-        let cursor = paint_into(&mut self.term, &self.view);
-        let area = self.term.get_frame().area();
-        // The latch. Asked after the draw, of ratatui's own idea of where the
-        // viewport is, because that is the number `insert_before` moves and the
-        // only one that can answer "has it arrived yet".
-        self.pinned |= area.bottom() >= self.screen.1;
-        let top = area.y;
-        CURSOR_ROW.store(
-            cursor.map(|c| c.y.saturating_sub(top)).unwrap_or(0),
-            Ordering::SeqCst,
-        );
+        match &mut self.ui {
+            Ui::Inline => {
+                let cursor = paint_into(&mut self.term, &self.view);
+                let area = self.term.get_frame().area();
+                // The latch. Asked after the draw, of ratatui's own idea of
+                // where the viewport is, because that is the number
+                // `insert_before` moves and the only one that can answer "has
+                // it arrived yet".
+                self.pinned |= area.bottom() >= self.screen.1;
+                let top = area.y;
+                CURSOR_ROW.store(
+                    cursor.map(|c| c.y.saturating_sub(top)).unwrap_or(0),
+                    Ordering::SeqCst,
+                );
+            }
+            Ui::Full(app) => {
+                // The bar's cells map to real measurements or they do not
+                // appear. Its contract encodes absence as a non-positive
+                // cap, so an unmeasured `context`/`spend` becomes `(0, 0)` —
+                // never `(0, real_cap)`, which would draw an invented "0% of
+                // the budget" before the first model call reports. The ↑/↓
+                // raw token split is `None` because the loop does not carry
+                // it yet (design §7): absent, not zero.
+                let bar = super::statusbar::Bar {
+                    mode: match self.view.mode {
+                        Mode::Idle => "IDLE".to_string(),
+                        Mode::Working => "WORKING".to_string(),
+                    },
+                    model: self.view.status.model.clone(),
+                    env: super::app::stem(&self.view.status.cwd),
+                    ctx_used: self.view.status.context.map(|(u, _)| u).unwrap_or(0),
+                    ctx_max: self.view.status.context.map(|(_, c)| c).unwrap_or(0),
+                    total_used: self.view.status.spend.map(|(u, _)| u).unwrap_or(0),
+                    total_max: self.view.status.spend.map(|(_, c)| c).unwrap_or(0),
+                    up: None,
+                    down: None,
+                    elapsed: self.view.status.elapsed,
+                };
+                let view = &self.view;
+                let term = &mut self.term;
+                let mut cursor = None;
+                let _ = term.draw(|f| {
+                    let area = f.area();
+                    cursor = app.render(area, f.buffer_mut(), view, &bar);
+                    if let Some(pos) = cursor {
+                        f.set_cursor_position(pos);
+                    }
+                });
+                // `CURSOR_ROW` is the inline erase's climb count and stays
+                // parked at "nothing drawn": the full-screen restore leaves
+                // the alternate screen instead of erasing rows.
+            }
+        }
     }
 
-    /// Put lines above the viewport, where the terminal owns them.
+    /// One block of transcript output, to whichever transcript this run has.
     ///
-    /// The one gate every transcript row goes through, which is what makes
-    /// [`super::spacing`] a rule rather than a convention: a blank row owed to a
-    /// boundary is added here, once, whoever asked for it.
+    /// Inline: above the viewport, where the terminal owns it, through the
+    /// spacing rule. Full-screen: into the retained buffer, whose own
+    /// separators are the spacing rule — one blank row between blocks,
+    /// decided in one place either way.
     fn emit(&mut self, lines: Vec<Line<'static>>) {
-        emit_block(&mut self.term, &mut self.spacing, lines);
+        match &mut self.ui {
+            Ui::Inline => emit_block(&mut self.term, &mut self.spacing, lines),
+            Ui::Full(app) => app.push_block(lines, &self.view.skin),
+        }
     }
 
     /// The window changed size: put the viewport back where it belongs.
@@ -899,6 +1211,20 @@ fn open_viewport<B: Backend>(backend: B, height: u16) -> std::io::Result<Termina
         backend,
         TerminalOptions {
             viewport: Viewport::Inline(height),
+        },
+    )
+}
+
+/// The full-screen terminal, for the alternate-screen path. The other of the
+/// exactly two viewports this file may construct — the manifest test counts
+/// them — and only reachable after [`Frame::install`]'s fallback gate has
+/// said a real terminal is present, which is what keeps the alternate screen
+/// out of every pipe, test binary and `-p` run.
+fn open_fullscreen<B: Backend>(backend: B) -> std::io::Result<Terminal<B>> {
+    Terminal::with_options(
+        backend,
+        TerminalOptions {
+            viewport: Viewport::Fullscreen,
         },
     )
 }
@@ -1135,15 +1461,28 @@ mod tests {
         assert!(rows.iter().any(|r| r.starts_with("emma")), "{rows:?}");
     }
 
-    /// The defect the first attempt shipped, as an assertion nothing else can
-    /// catch.
+    /// The manifest's invariants — rewritten, not deleted, on 2026-08-12,
+    /// when stage 2 of `notes/design-tui-fullscreen.md` entered the alternate
+    /// screen on purpose.
     ///
-    /// With ratatui's `scrolling-regions` feature on, `insert_before` is
-    /// implemented with `ESC[{top};{bottom}r`. A scrolling region whose top
-    /// margin is below row 1 *discards* the lines that scroll off it, so the
-    /// transcript stops reaching scrollback — and every other test in this
-    /// repository passes anyway, because none of them can look at a terminal.
-    /// The only place the decision is visible is the manifest.
+    /// This test used to assert three things: `scrolling-regions` absent,
+    /// `Viewport::Inline` only, and no alternate-screen entry anywhere. The
+    /// third was a decision the owner reversed — a multi-pane layout cannot
+    /// be drawn inline, and the design note carries the full price list — so
+    /// the assertion died in this commit, out loud, as the design's §0 said
+    /// it must. What still holds, and is asserted below:
+    ///
+    /// 1. **`scrolling-regions` stays off.** The inline path survives as the
+    ///    `EMMA_UI=inline` escape hatch, and with the feature on its
+    ///    `insert_before` becomes a DEC scroll region that *discards* the
+    ///    lines that leave it — the defect that shipped here once, invisible
+    ///    to every other test, and the owner's first complaint.
+    /// 2. **Exactly two viewports exist, both constructed in this file**,
+    ///    behind the one install gate that refuses pipes, test binaries and
+    ///    `-p`. A third construction site is a path around the gate.
+    /// 3. **The alternate screen is entered by one constant, paired with its
+    ///    leave.** The enter bytes appearing anywhere else would be an entry
+    ///    the restore path does not know about.
     #[test]
     fn the_scrolling_regions_feature_is_never_enabled() {
         // Comments stripped: this file argues about the feature by name several
@@ -1156,14 +1495,10 @@ mod tests {
             .join(" ");
         assert!(
             !manifest.contains("scrolling-regions"),
-            "ratatui's scrolling-regions feature would implement insert_before with a DEC \
-             scroll region, which discards scrollback. That is the bug this design exists to \
-             not have."
+            "ratatui's scrolling-regions feature would implement the inline path's \
+             insert_before with a DEC scroll region, which discards scrollback. The inline \
+             escape hatch still ships; the feature stays off."
         );
-        // And the alternate screen, which costs scrollback outright and has
-        // been ruled out three times, is not reachable either: the only
-        // viewport this file ever constructs is an inline one.
-        //
         // The needles are assembled rather than written out, because this file
         // is its own haystack and a literal would match itself.
         let source = include_str!("frame.rs");
@@ -1172,12 +1507,29 @@ mod tests {
             source
                 .split(viewport.as_str())
                 .skip(1)
-                .all(|rest| rest.starts_with("Inline")),
-            "a viewport other than the inline one is constructed here"
+                .all(|rest| rest.starts_with("Inline") || rest.starts_with("Fullscreen")),
+            "a viewport beyond the sanctioned two is constructed here"
         );
-        assert!(
-            !source.contains(&format!("Enter{}", "AlternateScreen")),
-            "the alternate screen is one API call away from costing every user their scrollback"
+        // The alternate screen's enter sequence exists exactly once — the
+        // constant `install` writes and `restore_terminal` undoes. A second
+        // occurrence is an entry outside the latch's knowledge. Comments
+        // stripped first: this file argues about the sequence by number, as
+        // this sentence just did.
+        let code: String = source
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let enter = format!("?10{}h", "49");
+        assert_eq!(
+            code.matches(enter.as_str()).count(),
+            1,
+            "the alternate screen is entered somewhere other than ALT_ENTER"
+        );
+        assert_eq!(
+            code.matches(format!("?10{}l", "49").as_str()).count(),
+            1,
+            "the alternate-screen leave exists somewhere other than ALT_LEAVE"
         );
     }
 
@@ -1196,9 +1548,14 @@ mod tests {
     /// can see, and it is certified by running the binary.
     #[test]
     fn every_terminal_mode_the_frame_sets_is_unset_on_the_way_out() {
-        let leaving = leave_modes();
+        // The way out is `leave_modes` plus the conditional alternate-screen
+        // leave — two strings, because the alt leave must not be written on
+        // the inline path (an unpaired `?1049l` carries a cursor restore
+        // nothing saved). The way in is likewise two: `enter_modes` after the
+        // viewport is up, `ALT_ENTER` before it.
+        let leaving = format!("{ALT_LEAVE}{}", leave_modes());
         let mut found = 0;
-        for on in enter_modes().split_inclusive('h') {
+        for on in format!("{}{ALT_ENTER}", enter_modes()).split_inclusive('h') {
             let Some(number) = on.strip_prefix("\x1b[?").and_then(|s| s.strip_suffix('h')) else {
                 continue;
             };
@@ -1208,7 +1565,17 @@ mod tests {
                 "mode {number} is set on the way in and never unset: {leaving:?}"
             );
         }
-        assert!(found > 0, "the enter sequence set no modes at all");
+        assert!(found >= 2, "the enter sequences set fewer modes than exist");
+        // Mouse capture cannot ride in these strings — on Windows it is a
+        // console-mode change, not bytes — so its pairing is asserted on the
+        // source: the crossterm disable must appear in `restore_terminal`'s
+        // reach. Weak as assertions go, and said so; the live pairing is a
+        // certification item.
+        let source = include_str!("frame.rs");
+        assert!(
+            source.contains(&format!("Disable{}", "MouseCapture")),
+            "mouse capture is enabled and never disabled"
+        );
         // The three the way out owes regardless of what the way in did: the
         // cursor comes back, a synchronized update in flight is ended, and no
         // attribute outlives the frame.
@@ -1676,5 +2043,17 @@ mod tests {
         assert_eq!(CURSOR_ROW.load(Ordering::SeqCst), u16::MAX);
         restore_terminal();
         assert!(!FRAME_ON.load(Ordering::SeqCst));
+        // The alternate-screen latch clears the same way, in the same test
+        // rather than its own: these statics are process-global and the tests
+        // run in parallel threads, so two tests flipping FRAME_ON would race.
+        FRAME_ON.store(true, Ordering::SeqCst);
+        ALT_ON.store(true, Ordering::SeqCst);
+        restore_terminal();
+        assert!(
+            !ALT_ON.load(Ordering::SeqCst),
+            "the alternate-screen latch survived the restore"
+        );
+        restore_terminal();
+        assert!(!ALT_ON.load(Ordering::SeqCst));
     }
 }
