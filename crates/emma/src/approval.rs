@@ -674,7 +674,15 @@ impl Approvals {
     /// two readers on one stdin race, and the loser buffers the answer to a
     /// question the winner asked — which, for a gate, means a `y` intended for
     /// nothing at all.
-    pub async fn read_line(&self) -> Option<String> {
+    /// `term` is here only so the drain can say what it dropped.
+    ///
+    /// **It used to drain silently, and that is a defect this prompt could not
+    /// afford.** The approval path already reports "ignoring N line(s)"; the
+    /// goal prompt did not, so a `/exit` typed while a goal was still finishing
+    /// — or before the prompt existed at all — vanished with nothing on screen.
+    /// The symptom is indistinguishable from a command that does not work,
+    /// which is exactly what it was reported as.
+    pub async fn read_line(&self, term: &Term) -> Option<String> {
         match &self.asker {
             Asker::Terminal(lines) => {
                 let mut lines = lines.lock().await;
@@ -682,11 +690,33 @@ impl Approvals {
                 // from an approval — or from a turn that aborted before it was
                 // consumed — became a goal on the first real run, and Emma
                 // dutifully spent a budget working on it.
-                lines.drain();
+                let stale = lines.drain();
+                if stale > 0 {
+                    term.note(&format!(
+                        "ignoring {stale} line(s) typed before this prompt — nothing reads the \
+                         keyboard while a goal runs, so type it again"
+                    ));
+                }
                 lines.next().await
             }
             Asker::Scripted(_) => None,
         }
+    }
+
+    /// The grants given by answering `[a]` or `[y]` this session: tools, then
+    /// hosts.
+    ///
+    /// For `/clear`, which keeps them and has to be able to name them. A
+    /// receipt that said "grants were kept" without saying which would be the
+    /// silence the whole command is written against.
+    pub async fn session_grants(&self) -> (Vec<String>, Vec<String>) {
+        let mut tools: Vec<String> = self.session_allowed.lock().await.iter().cloned().collect();
+        let mut hosts: Vec<String> = self.hosts_allowed.lock().await.iter().cloned().collect();
+        // A `HashSet` has no order and a receipt that reshuffles itself between
+        // two readings is one nobody trusts.
+        tools.sort();
+        hosts.sort();
+        (tools, hosts)
     }
 
     async fn ask(
@@ -931,6 +961,40 @@ mod tests {
 
     fn target(host: &str) -> Option<NetworkTarget> {
         Some(NetworkTarget::new(host, format!("read https://{host}/x")))
+    }
+
+    /// The goal prompt drains, and now says so.
+    ///
+    /// **Written from a real report: `/exit` "stopped working".** Nothing reads
+    /// the keyboard while a goal is in flight, so a command typed then is
+    /// dropped at the next prompt — correctly, for the reason the whole drain
+    /// exists — and this path used to drop it in silence. A user cannot tell a
+    /// line that was eaten from a command that does not work, and they will
+    /// report the second.
+    #[tokio::test]
+    async fn a_line_dropped_at_the_goal_prompt_is_reported_rather_than_vanishing() {
+        let term = Term::recording();
+        let a = Approvals::new(
+            Gate::Ask,
+            Asker::Terminal(crate::term::input::LineSource::scripted(&["/exit", "hello"]).into()),
+        );
+        // The queue is drained, so `read_line` finds nothing left and ends.
+        assert_eq!(a.read_line(&term).await, None);
+        let said = term.recorded().join("\n");
+        assert!(said.contains("ignoring 2 line"), "{said}");
+        // …and it says why, because "your input was thrown away" with no reason
+        // reads as a bug rather than as the safety property it is.
+        assert!(said.contains("while a goal runs"), "{said}");
+
+        // Nothing dropped, nothing said. A false "your input was eaten" is its
+        // own defect.
+        let term = Term::recording();
+        let a = Approvals::new(
+            Gate::Ask,
+            Asker::Terminal(crate::term::input::LineSource::scripted(&[]).into()),
+        );
+        assert_eq!(a.read_line(&term).await, None);
+        assert!(term.recorded().is_empty(), "{:?}", term.recorded());
     }
 
     #[tokio::test]

@@ -102,13 +102,13 @@ async fn run(
     cwd: &Path,
     tools: Registry,
     approvals: &Approvals,
-    fake: &Fake,
+    fake: &Arc<Fake>,
 ) -> Outcome {
     let harness = Harness::load_selecting(root, Flavor::Claude, None).unwrap();
     let term = Term::silent();
     let log = SessionLog::none();
     let mut agent = Agent::new(Setup {
-        provider: fake,
+        provider: fake.clone(),
         harness: &harness,
         instructions: &harness.instructions,
         tools: &tools,
@@ -352,7 +352,7 @@ async fn a_hook_denial_outranks_an_allow_rule_that_covers_the_call() {
     ]);
     let tools = registry(vec![runner]);
     let mut agent = Agent::new(Setup {
-        provider: &fake,
+        provider: fake.clone(),
         harness: &harness,
         instructions: &harness.instructions,
         tools: &tools,

@@ -61,7 +61,7 @@ use emma_tool_api::{Registry, Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
 use serde_json::{json, Value};
 use tokio::sync::Semaphore;
 
-use crate::agent::{Agent, Budgets, Ending, Interrupt, Outcome, Setup, Spend};
+use crate::agent::{Agent, Budgets, Ending, Interrupt, Outcome, Running, Setup, Spend};
 use crate::approval::Approvals;
 use crate::goal::{Done, DoneCheck, Goal, MarkerClaim};
 use crate::session::SessionLog;
@@ -120,6 +120,11 @@ const FOOTER_ITEMS: usize = 12;
 // in it *means* to a running process is this file's.
 // ---------------------------------------------------------------------------
 
+/// How an agent type's model name becomes a client, or `None` for "the
+/// parent's, at delegation time". A named type because the signature is long
+/// enough that clippy is right about it.
+pub type ProviderFor<'a> = dyn Fn(Option<&str>) -> Option<Arc<dyn Provider>> + 'a;
+
 /// One delegation target, resolved.
 struct AgentType {
     name: String,
@@ -132,7 +137,20 @@ struct AgentType {
     instructions: String,
     /// This type's own tools. Never contains [`NAME`] — see the module doc.
     tools: Registry,
-    provider: Arc<dyn Provider>,
+    /// The client for the model this type's file named, or `None` for "the
+    /// parent's, whatever it is when the delegation runs".
+    ///
+    /// **`None` is not an optimisation, it is the specification.** An agent file
+    /// that names nothing is asking to run on whatever the caller is running on,
+    /// and since `/model` that is a fact which changes mid-session. Holding a
+    /// clone of the parent's client here would freeze it at boot: after a
+    /// `/model`, every subagent that named no model would go on using the model
+    /// the user had just changed away from, silently, while the status row said
+    /// otherwise. Resolved at call time from [`Nest::running`] instead.
+    ///
+    /// A file that *does* name a model is the opposite case and is built once,
+    /// here: the file is a fixed fact and `/model` is not about it.
+    provider: Option<Arc<dyn Provider>>,
     max_iterations: u32,
     /// A ceiling from the file, before the share of the remaining allowance is
     /// applied. `None` means "whatever the share allows".
@@ -160,6 +178,9 @@ pub struct Nest {
     pub caching: Caching,
     /// The *parent's* budgets, which is what a sub-budget is derived from.
     pub budgets: Budgets,
+    /// The provider in force right now, for an agent type that named no model
+    /// of its own. See [`AgentType::provider`] and [`Running`].
+    pub running: Running,
 }
 
 // endregion: An agent type
@@ -207,7 +228,7 @@ impl Delegate {
         defs: &[AgentDef],
         available: &[Arc<dyn Tool>],
         persona_allowed: Option<&[String]>,
-        provider_for: &dyn Fn(Option<&str>) -> Arc<dyn Provider>,
+        provider_for: &ProviderFor,
     ) -> (Option<Self>, Vec<String>) {
         let mut notes = Vec::new();
         // The persona's allowlist applies first and applies to everything: an
@@ -599,7 +620,10 @@ impl Tool for Delegate {
         };
         let outcome: Outcome = {
             let mut sub = Agent::new(Setup {
-                provider: &*ty.provider,
+                provider: ty
+                    .provider
+                    .clone()
+                    .unwrap_or_else(|| self.nest.running.get()),
                 harness: &self.nest.harness,
                 instructions: &ty.instructions,
                 tools: &ty.tools,

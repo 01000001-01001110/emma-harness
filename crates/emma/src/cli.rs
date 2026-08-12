@@ -21,7 +21,13 @@ use crate::agent::Budgets;
 // why it states the gate's rules rather than just listing the flags.
 // ---------------------------------------------------------------------------
 
-pub const HELP: &str = "\
+/// The command-line half. A macro rather than a `const` because `concat!` takes
+/// literals and nothing else — which is the whole mechanism keeping [`HELP`] and
+/// [`SESSION_HELP`] made of the same bytes rather than two texts that agree
+/// until somebody edits one.
+macro_rules! usage_and_options {
+    () => {
+        "\
 emma — an agent that holds a goal.
 
 USAGE
@@ -73,7 +79,14 @@ OPTIONS
       --yes                    the same thing, accepted only with -p.
   -h, --help                   this.
   -V, --version                version.
+"
+    };
+}
 
+/// The session half. See [`SESSION_HELP`].
+macro_rules! session_help {
+    () => {
+        "\
 THE INTERACTIVE SESSION
   A goal at the prompt runs until it is done or a budget stops it, then the
   prompt comes back.
@@ -86,14 +99,46 @@ THE INTERACTIVE SESSION
   contents, command output — leave the conversation. Emma says so when it
   happens, and the transcript records exactly what was replaced.
 
-  Between goals and during one:
+  Emma's own commands, at the goal prompt. Press / for the same list with the
+  project's commands on the end of it. Every one of these runs *between* goals:
+  nothing reads the keyboard while a goal is in flight, so a command typed then
+  is dropped at the next prompt rather than queued. Ctrl-C is what stops a goal.
 
+    /help                      this section.
+    /model                     the model in force, where it came from, and what
+                               it accepts — the max_tokens and effort ceiling
+                               Emma silently clamps to.
+    /model <id>                use <id> for the rest of this session. The
+                               conversation is kept and re-sent to the new
+                               model; the cached prefix is not, so the next
+                               call re-reads it at full price. Nothing on disk
+                               changes unless you add --save.
+    /compact                   summarise every finished goal but the last, now,
+                               instead of waiting for --max-context. It does
+                               not call a model, so it cannot take an
+                               instruction — it says so rather than ignoring
+                               the words. /compact all includes the last goal.
+    /clear                     start a fresh conversation without leaving. The
+                               transcript is kept and --resume will not replay
+                               what was cleared. This session's approval grants
+                               are kept too, and /clear names them: they are
+                               consent about the process, and /exit is what
+                               drops them.
+    /config                    what this run resolved — harness, tools,
+                               permission rules, agent types, and the model
+                               actually running rather than the one on disk.
+    /agents                    what each subagent type has cost and produced,
+                               including this session's delegations so far.
+    /resume                    says how to continue an earlier session, which
+                               has to happen before one starts.
     /exit, /quit               end the session.
     Ctrl-C                     interrupt the goal that is running.
     /<name>                    expand a command from commands/ in .emma/ (or
                                .claude/). `emma config check` lists the ones
                                this directory has; the session lists them at
-                               startup. An unknown /word is just text.
+                               startup. An unknown /word is just text. A name
+                               above wins over a project command that shares it,
+                               and `emma config check` says when one does.
 
   On a terminal that supports it, Emma frames the window: a status row on top,
   the transcript scrolling between, and the prompt pinned to the bottom row so
@@ -137,7 +182,24 @@ APPROVAL
   write only to the agent's own task file under .emma/, and a prompt every time
   the agent ticks off a task is a prompt that gets answered without being read —
   which costs the prompts on Write, Edit and Bash as well.
-";
+"
+    };
+}
+
+/// The whole of `emma --help`.
+pub const HELP: &str = concat!(usage_and_options!(), "\n", session_help!());
+
+/// What a running session understands, and what the gate does — the bytes
+/// `/help` prints, and the tail of [`HELP`].
+///
+/// **The menu cannot say this.** It is a vocabulary: a name and one line,
+/// filtered as you type, drawn on a row of a viewport that is often sixty
+/// columns wide. "What does /clear keep?" does not fit there. So the menu
+/// answers *what can I type* and this answers *what does it do*, and a test
+/// pins that every name in `session_command::BUILTINS` appears here — the
+/// `menu.rs` rule that a command nobody can discover is not a command, applied
+/// one level up.
+pub const SESSION_HELP: &str = session_help!();
 
 // endregion: The help text
 
@@ -821,6 +883,37 @@ mod tests {
         assert!(HELP.contains("/exit"), "the help does not say how to leave");
         assert!(HELP.contains("/quit"));
         assert!(HELP.contains("Ctrl-C"));
+        // …and it is the *same bytes* as `/help` prints, rather than a second
+        // text that agrees today. The exit lines live in the session half, so
+        // this also pins that `--help` still carries it.
+        assert!(
+            HELP.contains(SESSION_HELP),
+            "HELP and SESSION_HELP diverged"
+        );
+        assert!(SESSION_HELP.contains("/exit"));
+    }
+
+    /// Every command the menu offers has a paragraph here saying what it does.
+    ///
+    /// The menu row is one line on a sixty-column viewport and cannot answer
+    /// "what does /clear keep?". This is `menu.rs`'s rule — a command nobody can
+    /// discover is not a command — applied one level up, and it is the assertion
+    /// that stops the tenth command shipping undocumented.
+    #[test]
+    fn every_session_command_is_documented_where_help_can_be_read() {
+        // Whole words. A substring test would let `/clear` be satisfied by a
+        // paragraph about `/clearance`, which is the shape of false receipt
+        // this repository has already paid for once.
+        let words: Vec<&str> = SESSION_HELP
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .collect();
+        for (name, _) in crate::session_command::BUILTINS {
+            let spelled = format!("/{name}");
+            assert!(
+                words.contains(&spelled.as_str()),
+                "/{name} is offered by the menu and is not documented in SESSION_HELP"
+            );
+        }
     }
 
     #[test]

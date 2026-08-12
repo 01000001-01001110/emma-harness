@@ -255,6 +255,62 @@ impl Ending {
     }
 }
 
+/// The provider in force, shared with everything that must not disagree about
+/// which model this process is using.
+///
+/// **This exists because `/model` made "the model" a thing that changes.** The
+/// `Agent` owns its provider outright and swaps it explicitly — see
+/// [`Agent::set_provider`], and the argument on [`Setup::provider`] for why that
+/// is not an interior-mutable cell. But `Delegate` resolves a subagent's client
+/// when the delegation runs, long after it was constructed, and a subagent whose
+/// file names no model is specified to use *the parent's*. Reading a clone
+/// captured at boot would mean a subagent quietly running on the model the user
+/// changed away from, with the parent's status row saying otherwise.
+///
+/// So there is exactly one cell, written in exactly one place — the `/model`
+/// command, beside the `set_provider` call — and read by the one caller that
+/// resolves late.
+#[derive(Clone)]
+pub struct Running(Arc<std::sync::Mutex<Arc<dyn Provider>>>);
+
+impl Running {
+    pub fn new(provider: Arc<dyn Provider>) -> Self {
+        Self(Arc::new(std::sync::Mutex::new(provider)))
+    }
+
+    pub fn get(&self) -> Arc<dyn Provider> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn set(&self, provider: Arc<dyn Provider>) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = provider;
+    }
+}
+
+/// What a compaction did, for the caller that asked for it to report.
+///
+/// The nothing-happened case carries a reason because a *user* who typed
+/// `/compact` and saw nothing needs one. Automatic compaction is right to be
+/// silent there and simply ignores this value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Compacted {
+    Nothing(String),
+    Done {
+        goals: usize,
+        messages: usize,
+        before: i64,
+        after: i64,
+    },
+}
+
+/// What `/clear` dropped, so the receipt is counted rather than claimed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cleared {
+    /// Finished goals. A chapter that is already a summary is not one.
+    pub goals: usize,
+    pub messages: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct Outcome {
     pub ending: Ending,
@@ -438,7 +494,17 @@ impl Interrupt {
 // ---------------------------------------------------------------------------
 
 pub struct Setup<'a> {
-    pub provider: &'a dyn Provider,
+    /// The client for the model in force.
+    ///
+    /// **An `Arc` rather than a `&'a dyn Provider`, and the change was the one
+    /// invasive part of `/model`.** A borrow ties the agent to a provider for
+    /// its whole life, which is right up until the user is allowed to change
+    /// model without leaving the session. Owning a counted handle keeps the
+    /// field honest — the agent has exactly one provider at a time and swapping
+    /// it is an explicit event, [`Agent::set_provider`] — where an interior
+    /// `RefCell` would have made "which model is running" a question with no
+    /// single answer.
+    pub provider: Arc<dyn Provider>,
     pub harness: &'a Harness,
     /// The system prompt, before the standing contract is appended.
     ///
@@ -507,6 +573,12 @@ pub struct Agent<'a> {
     /// second goal typed at the prompt afterwards is a new goal with its own
     /// budget, exactly as it would be without a resume.
     resumed: Option<Resumed>,
+    /// The model this conversation was previously being written by, set by
+    /// [`Agent::set_provider`] and cleared by the first call that survives.
+    ///
+    /// It exists for one recovery and buys nothing else — see
+    /// [`Agent::recover_from_a_model_change`], which is the only reader.
+    changed_from: Option<String>,
 }
 
 impl<'a> Agent<'a> {
@@ -526,6 +598,7 @@ impl<'a> Agent<'a> {
             last_input: None,
             turn_seq: 0,
             resumed: None,
+            changed_from: None,
         }
     }
 
@@ -551,6 +624,151 @@ impl<'a> Agent<'a> {
             .iter()
             .flat_map(|c| c.messages.iter().cloned())
             .collect()
+    }
+
+    /// Roughly what the conversation weighs, by the same `chars / 4` the
+    /// compactor sizes chapters with — and it under-counts, which is why it is
+    /// only ever reported as "roughly" and never enforces anything.
+    pub fn estimated_context(&self) -> i64 {
+        estimate(&self.conversation())
+    }
+
+    /// Swap the model for the rest of the session, and answer what was running.
+    ///
+    /// **The conversation is untouched.** Every chapter, every tool result and
+    /// every summary stays exactly where it is and the whole list is re-sent to
+    /// the new model on the next goal — which is the behaviour a person asking
+    /// "is Sonnet enough for this?" wants, and the reason the one hazard below
+    /// exists.
+    pub fn set_provider(&mut self, provider: Arc<dyn Provider>) -> String {
+        let was = self.s.provider.model_id().to_string();
+        self.s.log.append(
+            "model_changed",
+            json!({ "from": was, "to": provider.model_id() }),
+        );
+        self.s.provider = provider;
+        self.changed_from = Some(was.clone());
+        was
+    }
+
+    /// Drop the conversation without ending the session.
+    ///
+    /// A `cleared` record goes in the log, and `session::Fold` honours it — the
+    /// bytes stay in the file for a human to read and the fold skips them.
+    /// Without that arm `--resume` would fold the whole file and un-clear the
+    /// session, which would make this command a lie.
+    ///
+    /// `turn_seq` is deliberately **kept**: turn ids have to stay unique inside
+    /// one session file, and the file is not cleared.
+    pub fn clear(&mut self) -> Cleared {
+        let cleared = Cleared {
+            goals: self.chapters.iter().filter(|c| !c.summarised).count(),
+            messages: self.chapters.iter().map(|c| c.messages.len()).sum(),
+        };
+        self.chapters.clear();
+        self.last_ending = None;
+        self.last_input = None;
+        // A resume that has not been spent yet is still a conversation waiting
+        // to be injected into the next goal's query. Leaving it would mean
+        // `/clear` on a `--resume`d session cleared everything except the thing
+        // the user was most obviously trying to get rid of.
+        self.resumed = None;
+        self.s.log.append(
+            "cleared",
+            json!({ "goals": cleared.goals, "messages": cleared.messages }),
+        );
+        cleared
+    }
+
+    /// Compact at the user's request rather than at the threshold.
+    ///
+    /// `everything` includes the goal that has just finished. The default keeps
+    /// it because "everything but the last goal" is a rule somebody can hold in
+    /// their head, where a target size is arithmetic they would have to be told.
+    ///
+    /// It goes through the same [`Agent::compact`] the threshold does, so there
+    /// is one compaction implementation, one `compacted` record and one fold
+    /// arm replaying it.
+    pub fn compact_now(&mut self, everything: bool) -> Compacted {
+        let n = self.chapters.len();
+        let take = if everything { n } else { n.saturating_sub(1) };
+        if take == 0 {
+            return Compacted::Nothing(match n {
+                0 => "there is no conversation yet".into(),
+                _ => "the only thing in the conversation is the goal you just finished. \
+                      `/compact all` includes it."
+                    .into(),
+            });
+        }
+        // The size a threshold compaction would have measured. Nothing is being
+        // decided from it — the count is already fixed above — so the estimate
+        // is only what the record and the report quote.
+        let size = self.estimated_context();
+        self.compact(take, size, "/compact")
+    }
+
+    /// The recovery for a model change that the provider would not accept.
+    ///
+    /// **Whether one model's signed thinking blocks are accepted by another is
+    /// not established in this tree**, and it is the one thing that can turn
+    /// `/model` from "works" into a 400 on the very next call. So the failure is
+    /// handled rather than predicted: a `BadRequest` naming a signature or a
+    /// thinking block, on the first call after a change, compacts the whole
+    /// conversation to summaries — which are two plain `Message`s carrying no
+    /// provider state at all — and the caller retries once.
+    ///
+    /// Two of the three guards are load-bearing and the third is a cheap
+    /// early-out, and it is worth saying which is which rather than implying
+    /// all three are needed.
+    ///
+    /// **Load-bearing:** only after a change — otherwise an ordinary malformed
+    /// request costs somebody their tool traffic — and only on a message that
+    /// names a signature or a thinking block. Both were confirmed by mutation:
+    /// remove either and a test goes red.
+    ///
+    /// **Redundant, kept anyway:** the [`ContentBlock::is_model_bound`] check.
+    /// It reads as the load-bearing one and is not, because what actually
+    /// bounds this to a single attempt is [`Agent::compact`] answering
+    /// `Compacted::Nothing` once the conversation is already summaries — and a
+    /// conversation with no model-bound block is a conversation compaction has
+    /// nothing left to take out of. Every mutation of this check is invisible
+    /// for that reason. It stays because it says what the recovery is *for* at
+    /// the place it happens, and because it costs one pass over a list that is
+    /// about to be rewritten; it is not a second safety property.
+    fn recover_from_a_model_change(&mut self, e: &LlmError) -> bool {
+        let Some(was) = self.changed_from.take() else {
+            return false;
+        };
+        let LlmError::BadRequest { message } = e else {
+            return false;
+        };
+        let lower = message.to_ascii_lowercase();
+        if !lower.contains("signature") && !lower.contains("thinking") {
+            return false;
+        }
+        if !self
+            .conversation()
+            .iter()
+            .any(|m| m.content.blocks().iter().any(ContentBlock::is_model_bound))
+        {
+            return false;
+        }
+        let size = self.estimated_context();
+        let take = self.chapters.len();
+        self.s.term.warn(&format!(
+            "the provider rejected this conversation after the model changed from {was}: \
+             {message}"
+        ));
+        match self.compact(take, size, "a model change invalidated signed content") {
+            Compacted::Done { messages, .. } => {
+                self.s.term.note(&format!(
+                    "summarised {messages} messages — a summary carries no signed thinking \
+                     blocks — and retrying once. Their tool results are no longer in context."
+                ));
+                true
+            }
+            Compacted::Nothing(_) => false,
+        }
     }
 
     pub async fn run_goal(&mut self, goal: &Goal) -> Outcome {
@@ -705,8 +923,17 @@ impl<'a> Agent<'a> {
             let turn = match self.call_model(request).await {
                 Ok(Some(turn)) => turn,
                 Ok(None) => break Ending::Interrupted,
+                // The one retry in this loop, and it is not a retry of a
+                // transport failure — `emma-llm` owns those. It is the
+                // conversation being made acceptable to a model the user
+                // changed to mid-session. Nothing was spent: the request was
+                // rejected before generation, so `iterations` does not move.
+                Err(e) if self.recover_from_a_model_change(&e) => continue,
                 Err(e) => break Ending::Provider(e.to_string()),
             };
+            // The new model has accepted the conversation, so there is nothing
+            // left to recover from.
+            self.changed_from = None;
             iterations += 1;
 
             // Recorded before the budget is tested, so an abort costs what it
@@ -998,14 +1225,10 @@ impl<'a> Agent<'a> {
         if size <= cap {
             return;
         }
-        self.compact(size, why);
-    }
-
-    fn compact(&mut self, size: i64, why: &str) {
         // Half the cap rather than all of it: the goal now running needs room
         // to work in, and compacting to exactly the limit would mean compacting
         // again on the next call.
-        let target = (self.s.budgets.max_context / 2).max(1);
+        let target = (cap / 2).max(1);
         // Measured once per chapter rather than once per step. Re-summing the
         // whole conversation on every iteration of the loop below is quadratic
         // in a list whose elements are file contents.
@@ -1020,18 +1243,54 @@ impl<'a> Agent<'a> {
             remaining -= sizes[take];
             take += 1;
         }
+        self.compact(take, size, why);
+    }
+
+    /// Replace the oldest `take` chapters with their summaries.
+    ///
+    /// **How many is the caller's decision and the only thing that differs
+    /// between the two doors.** The threshold path counts until the remainder
+    /// fits half the cap; `/compact` counts every finished goal, or every one
+    /// but the last. Everything after that — what a summary is, the
+    /// nothing-happened guard, the record the fold replays, the arithmetic in
+    /// the report — is here once, because two compaction implementations would
+    /// be two things a resume could disagree with.
+    fn compact(&mut self, take: usize, size: i64, why: &str) -> Compacted {
+        let take = take.min(self.chapters.len());
         if take == 0 {
-            return;
+            return Compacted::Nothing("there is nothing behind the current goal".into());
         }
-        let before: i64 = sizes[..take].iter().sum();
+        let before: i64 = self.chapters[..take]
+            .iter()
+            .map(|c| estimate(&c.messages))
+            .sum();
         let replacement: Vec<Message> = self.chapters[..take].iter().flat_map(summarise).collect();
         let after = estimate(&replacement);
-        // A conversation that is already nothing but summaries has nothing left
-        // to give. Stopping here rather than rewriting it into itself is what
-        // keeps a session under a cap it cannot reach from logging a record and
+        // A conversation summarising would not shrink has nothing to give.
+        // Stopping here rather than rewriting it into itself is what keeps a
+        // session under a cap it cannot reach from logging a record and
         // reporting a saving on every single call.
+        //
+        // **Two different situations reach this line and a user needs to be
+        // told which.** Automatic compaction is silent either way; `/compact` is
+        // not, and the first live run of it said "already summarised" about two
+        // goals that plainly were not — because those goals were four words
+        // long and `COMPACTED_NOTE` is three hundred characters, so the
+        // replacement was *larger* than what it replaced. The sentence was true
+        // of the arithmetic and false about the conversation, which is the class
+        // of untruth this repository has already paid for twice.
         if after >= before {
-            return;
+            let all_summaries = self.chapters[..take].iter().all(|c| c.summarised);
+            return Compacted::Nothing(if all_summaries {
+                "the conversation is already summarised — there is nothing left to take out".into()
+            } else {
+                format!(
+                    "summarising those {take} goal(s) would not make the conversation smaller. \
+                     Compaction replaces a goal with its text, its answer and a note saying the \
+                     tool results are gone, and here that note is longer than what it would \
+                     replace — roughly {before} tokens becoming {after}."
+                )
+            });
         }
         let dropped: usize = self.chapters[..take].iter().map(|c| c.messages.len()).sum();
         self.chapters.drain(..take);
@@ -1061,10 +1320,23 @@ impl<'a> Agent<'a> {
                 "estimated_after": after,
             }),
         );
-        self.s.term.note(&format!(
-            "compacted {dropped} earlier messages from {take} finished goal(s) — roughly {before} \
-             tokens down to {after}. Their tool results are no longer in context.",
-        ));
+        // The threshold path narrates itself here, because nobody asked for it
+        // and a conversation that silently lost its file contents is the bug
+        // this sentence exists to prevent. A user-triggered compaction is
+        // reported by its caller instead — `/compact` has more to say, and two
+        // notes for one action reads as two actions.
+        if why != "/compact" {
+            self.s.term.note(&format!(
+                "compacted {dropped} earlier messages from {take} finished goal(s) — roughly \
+                 {before} tokens down to {after}. Their tool results are no longer in context.",
+            ));
+        }
+        Compacted::Done {
+            goals: take,
+            messages: dropped,
+            before,
+            after,
+        }
     }
 
     /// One model call, with streaming and Ctrl-C. `Ok(None)` is an interrupt.

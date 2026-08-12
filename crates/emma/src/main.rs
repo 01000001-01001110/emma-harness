@@ -149,7 +149,17 @@ async fn run(cli: cli::Cli) -> Result<()> {
         // cannot be built without a provider. It prints the agent catalogue from
         // the harness instead, and says that is what it is doing.
         let tools = harness.select_tools(registry)?;
-        return emma::commands::config_check(&harness, &tools, &cwd, &web.skipped);
+        // `live: None` and stdout: this path has no running session, so it
+        // prints exactly the bytes it always did. The session door passes a
+        // `Live` and a buffer — see `session_command::run`.
+        return emma::commands::config_check(
+            &harness,
+            &tools,
+            &cwd,
+            &web.skipped,
+            None,
+            &mut std::io::stdout(),
+        );
     }
 
     let opts = cli.opts;
@@ -237,9 +247,12 @@ async fn run(cli: cli::Cli) -> Result<()> {
         opts.model.as_deref(),
         home.as_deref(),
     )?;
-    let model = resolved.model;
     let key = auth::load_default(kind)?;
-    let provider: Arc<dyn Provider> = kind.build(key.clone(), Some(model.clone()));
+    let provider: Arc<dyn Provider> = kind.build(key.clone(), Some(resolved.model.clone()));
+    // The one cell everything that resolves a provider *late* reads — today
+    // that is `Delegate` and nothing else. Written only by `/model`. See
+    // `agent::Running`.
+    let running = emma::agent::Running::new(provider.clone());
 
     let session_dir = opts
         .session_dir
@@ -337,20 +350,26 @@ async fn run(cli: cli::Cli) -> Result<()> {
             session_id: session_id.clone(),
             caching: opts.caching,
             budgets,
+            running: running.clone(),
         },
         harness.agent_types(),
         &available,
         harness.tools(),
         // A per-type model override, honoured rather than ignored: an agent file
         // saying `model: claude-sonnet-4-5` that quietly runs on something else
-        // is a lie the user cannot see. Same provider and same key; the parent's
-        // own client whenever the file names nothing, or names what is already
-        // running. An agent file naming *another provider's* model is out of
-        // scope: `def.model` is a bare id in this provider's namespace.
-        &|wanted| match wanted {
-            Some(named) if named != model => kind.build(key.clone(), Some(named.to_string())),
-            _ => provider.clone(),
-        },
+        // is a lie the user cannot see. Same provider and same key. An agent
+        // file naming *another provider's* model is out of scope: `def.model` is
+        // a bare id in this provider's namespace.
+        //
+        // **`None` means "the parent's, at delegation time".** This used to
+        // compare the named id against the model resolved at boot and hand back
+        // the parent's own client when they matched — an optimisation that
+        // became a bug the moment `/model` existed, because the captured id and
+        // the captured client both go stale on the first change. Building a
+        // separate client for a file that names one costs nothing (same key,
+        // same id) and cannot be stale; leaving the unnamed case unresolved is
+        // what makes `/model` reach subagents at all.
+        &|wanted| wanted.map(|named| kind.build(key.clone(), Some(named.to_string()))),
     );
     for note in harness.agent_notes() {
         term.note(note);
@@ -450,7 +469,7 @@ async fn run(cli: cli::Cli) -> Result<()> {
     }
 
     let agent = Agent::new(Setup {
-        provider: &*provider,
+        provider: provider.clone(),
         harness: &harness,
         instructions: &harness.instructions,
         tools: &tools,
@@ -487,6 +506,10 @@ async fn run(cli: cli::Cli) -> Result<()> {
 
     let mut next = seed;
     let mut last = Ending::Done;
+    // The provider binding travels into the command dispatcher, which is the
+    // only thing allowed to change it. `main` and the agent cannot disagree
+    // about the running model, because there is one binding.
+    let mut provider = provider;
     loop {
         // Whether this line came from a person at the prompt or from the
         // command line. Only the first is second-guessed: `emma goal "init"` is
@@ -502,7 +525,7 @@ async fn run(cli: cli::Cli) -> Result<()> {
                 // prompt existed cannot answer it — and the terminal echoes the
                 // return itself, which `prompt_answered` is what tells the
                 // input box about. Both happen before the line is looked at.
-                let line = approvals.read_line().await;
+                let line = approvals.read_line(&term).await;
                 term.prompt_answered(line.as_deref());
                 match line {
                     Some(line) if line.trim().is_empty() => continue,
@@ -511,8 +534,37 @@ async fn run(cli: cli::Cli) -> Result<()> {
                 }
             }
         };
-        if matches!(raw.trim(), "/exit" | "/quit") {
-            break;
+        // One of Emma's own commands, typed here or picked from the `/` menu —
+        // which sends the same string down the same channel, so there is one
+        // path rather than two. `/exit` and `/quit` are ordinary members of this
+        // set now; they used to be a `matches!` bolted in front of everything
+        // else, which made the way out of the session the one command whose
+        // dispatch nothing tested.
+        //
+        // Ahead of `expand_command`, so a built-in beats a project command of
+        // the same name. That has always been true of `/exit`; `config check`
+        // and the menu now say so out loud.
+        if let Some(cmd) = emma::session_command::parse(&raw) {
+            let mut session = emma::session_command::Session {
+                agent: &mut agent,
+                term: &term,
+                approvals: &approvals,
+                harness: &harness,
+                tools: &tools,
+                cwd: &cwd,
+                session_dir: session_dir_for_welcome.as_deref(),
+                unavailable: &web.skipped,
+                provider: &mut provider,
+                running: &running,
+                kind,
+                key: key.clone(),
+                log_path: log.path().to_path_buf(),
+                home: home.clone(),
+            };
+            match emma::session_command::run(cmd, &mut session).await {
+                emma::session_command::Flow::Exit => break,
+                emma::session_command::Flow::Continue => continue,
+            }
         }
         // One of Emma's own command lines, typed where goals go. Answered for
         // free rather than handed to the model, which previously went and found

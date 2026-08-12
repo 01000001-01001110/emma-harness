@@ -400,6 +400,29 @@ impl Fold {
                 let drop = drop.min(self.history.len());
                 self.history.splice(..drop, replacement);
             }
+            // `/clear`. Everything before this point left the conversation
+            // while the session was running, so a resume must not put it back.
+            //
+            // **Without this arm `/clear` is a lie**, and a quiet one: the
+            // in-memory chapters would be empty, the next `--resume` would fold
+            // the whole file, and the cleared conversation would walk back in
+            // carrying its tool results. The bytes stay in the file for a human
+            // to read; the fold skips them.
+            //
+            // Both lists go, and `in_goal` with them: `/clear` only ever happens
+            // between goals, so anything still in `query` here is a goal that
+            // finished and has not been moved across yet — which is exactly what
+            // was cleared. `restore_records` needs no arm of its own, because it
+            // already resets every counter at each `goal` record.
+            "cleared" => {
+                self.close_turn();
+                self.history.clear();
+                self.query.clear();
+                self.in_goal = false;
+                self.finished = None;
+                self.pending = None;
+                self.results.clear();
+            }
             "goal_finished" => self.finished = Some(string(r, "ending")),
             _ => {}
         }

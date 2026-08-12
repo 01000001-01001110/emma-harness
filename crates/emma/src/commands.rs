@@ -185,7 +185,7 @@ fn set_model_at(
 
 /// The one place a model id is written, so "keyed by provider" is a property of
 /// the file rather than a habit of two call sites.
-fn write_model(home: &Path, provider: &str, model: &str) -> Result<std::path::PathBuf> {
+pub(crate) fn write_model(home: &Path, provider: &str, model: &str) -> Result<std::path::PathBuf> {
     let mut settings = settings::load(home);
     settings
         .models
@@ -639,30 +639,54 @@ fn trim_to(text: &str, n: usize) -> String {
 
 // endregion: emma agents
 
+/// What this process actually resolved, as opposed to what `settings.json`
+/// says.
+///
+/// `None` from the CLI path, which has no running session and must keep
+/// printing exactly what it printed before. `Some` from `/config`, where the
+/// interesting case is a user who has just run `/model`: `settings::resolve_kind`
+/// would still return the value on disk, and a report that was wrong about the
+/// one thing they had just changed would be worse than no report.
+#[derive(Debug, Clone)]
+pub struct Live {
+    pub provider: String,
+    pub model: String,
+}
+
 /// Load the harness, apply the tool allowlist, and report — without calling a
 /// model, which is the whole point. Everything that can fail at startup fails
 /// here, where the message is the only output rather than a preamble to one.
+///
+/// The report goes to `out` rather than to `println!` so the session can have
+/// the same bytes: on the framed path a `println!` lands underneath the
+/// viewport, and two renderings of one report is how the two doors drift.
 pub fn config_check(
     harness: &Harness,
     tools: &Registry,
     cwd: &Path,
     unavailable: &[String],
+    live: Option<Live>,
+    out: &mut dyn Write,
 ) -> Result<()> {
     let snapshot = harness.snapshot();
-    println!("cwd            {}", cwd.display());
-    println!(
+    writeln!(out, "cwd            {}", cwd.display())?;
+    writeln!(
+        out,
         "harness        {}",
         snapshot["root"].as_str().unwrap_or("?")
-    );
-    println!(
+    )?;
+    writeln!(
+        out,
         "flavor         {}",
         snapshot["flavor"].as_str().unwrap_or("?")
-    );
-    println!(
+    )?;
+    writeln!(
+        out,
         "persona        {}",
         snapshot["persona"].as_str().unwrap_or("(none)")
-    );
-    println!(
+    )?;
+    writeln!(
+        out,
         "instructions   {} ({} bytes{})",
         harness.instructions_hash(),
         harness.instructions.len(),
@@ -671,27 +695,29 @@ pub fn config_check(
         } else {
             ""
         }
-    );
-    println!("config         {}", harness.config_hash);
-    println!("tools          {}", tools.names().join(", "));
+    )?;
+    writeln!(out, "config         {}", harness.config_hash)?;
+    writeln!(out, "tools          {}", tools.names().join(", "))?;
     // The tools that were built and then left out because this machine cannot
     // run them. This is the one command whose job is to answer "why can it not
     // do X", and a capability absent for a fixable reason — no browser, no
     // search key — is exactly the question it is asked.
     for line in unavailable {
-        println!("               {line}");
+        writeln!(out, "               {line}")?;
     }
-    println!("tool schema    {}", tools.schema_hash());
-    println!(
+    writeln!(out, "tool schema    {}", tools.schema_hash())?;
+    writeln!(
+        out,
         "skills         {}",
         or_none(&harness.skill_names().join(", "))
-    );
+    )?;
     // The delegation catalogue, and — separately — the files that were found and
     // not offered. A catalogue quietly shorter than the directory is the gap
     // nobody notices until the model cannot find an agent that is plainly there,
     // and this is the command whose job is to answer "why can it not do X".
     let types = harness.agent_types();
-    println!(
+    writeln!(
+        out,
         "agents         {}",
         or_none(
             &types
@@ -700,48 +726,63 @@ pub fn config_check(
                 .collect::<Vec<_>>()
                 .join(", ")
         )
-    );
+    )?;
     // Said explicitly, because the tools line above does not carry it and a
     // reader would reasonably conclude delegation is off. `Delegate` is built
     // from a provider, and this command deliberately runs without one so that it
     // still answers when the key is the thing that is wrong.
     if !types.is_empty() {
-        println!(
+        writeln!(
+            out,
             "               offered to the model as the `Delegate` tool, which is registered \
              at run time and so is not in the tools line above"
-        );
+        )?;
     }
     for note in harness.agent_notes() {
-        println!("               {note}");
+        writeln!(out, "               {note}")?;
     }
-    println!(
+    let project = harness.command_names();
+    writeln!(
+        out,
         "commands       {}",
         or_none(
-            &harness
-                .command_names()
+            &project
                 .iter()
                 .map(|c| format!("/{c}"))
                 .collect::<Vec<_>>()
                 .join(", ")
         )
-    );
+    )?;
+    // A project command that a built-in shadows. This is the command whose job
+    // is answering "why did it not do X", and "because Emma has a command of
+    // that name and Emma wins" is exactly that question — it has been true of
+    // `/exit` since the loop was written and was written down nowhere.
+    for name in shadowed(&project) {
+        writeln!(
+            out,
+            "               ! /{name} is shadowed by Emma's own /{name} and cannot be reached. \
+             Rename the file."
+        )?;
+    }
 
     let hooks = snapshot["hooks"].as_array().cloned().unwrap_or_default();
-    println!(
+    writeln!(
+        out,
         "hooks          {}",
         if hooks.is_empty() {
             "(none)".to_string()
         } else {
             format!("{} configured", hooks.len())
         }
-    );
+    )?;
     for hook in &hooks {
-        println!(
+        writeln!(
+            out,
             "               {} {} {}",
             hook["event"].as_str().unwrap_or("?"),
             hook["name"].as_str().unwrap_or("?"),
             hook["hash"].as_str().unwrap_or("?")
-        );
+        )?;
     }
 
     let home = auth::home_dir();
@@ -753,38 +794,62 @@ pub fn config_check(
     // forgotten they granted; this command is where they see it.
     let mut entries = harness.permissions().to_vec();
     entries.extend(emma_harness::user_permissions(home.as_deref())?);
-    println!(
+    writeln!(
+        out,
         "permissions    {}",
         if entries.is_empty() {
             "(none — every write, command and host is asked about)".to_string()
         } else {
             format!("{} rule(s)", entries.len())
         }
-    );
+    )?;
     for entry in &entries {
-        println!(
+        writeln!(
+            out,
             "               {:<5} {}   {}",
             entry.kind.word(),
             entry.rule,
             entry.source.display()
-        );
+        )?;
     }
     // The rules that will not do anything, said again here even though startup
     // says it too: this is the command somebody runs *because* a rule did not
     // fire, and making them re-read scrollback for the reason is a poor answer.
     for note in crate::permissions::Rules::parse(&entries).1 {
-        println!("               ! {note}");
+        writeln!(out, "               ! {note}")?;
     }
-    println!(
+    writeln!(
+        out,
         "               a remembered grant is written to {}",
         crate::permissions::file_for(&harness.root).display()
-    );
+    )?;
 
-    for line in configured(home.as_deref(), &|name| std::env::var(name).ok()) {
-        println!("{line}");
+    for line in configured(home.as_deref(), &|name| std::env::var(name).ok(), live) {
+        writeln!(out, "{line}")?;
     }
-    println!("\nno model was called.");
+    writeln!(out, "\nno model was called.")?;
     Ok(())
+}
+
+/// Project commands a built-in makes unreachable.
+///
+/// **The built-in wins, and that is already the de facto rule**: `main` has
+/// always matched `/exit` before `Harness::expand_command`, so
+/// `.claude/commands/exit.md` has never been reachable. The alternative — a
+/// directory being able to shadow `/model` or `/clear` — means a checkout can
+/// take away Emma's own control surface, which is a small supply-chain hole for
+/// no benefit. What changes here is only that it is said out loud, in the two
+/// places somebody would look: this report and the `/` menu.
+pub fn shadowed(project: &[&str]) -> Vec<String> {
+    project
+        .iter()
+        .filter(|name| {
+            crate::session_command::BUILTINS
+                .iter()
+                .any(|(builtin, _)| builtin.eq_ignore_ascii_case(name))
+        })
+        .map(|name| (*name).to_string())
+        .collect()
 }
 
 /// The provider, the model and where the key came from — the three lines
@@ -798,7 +863,11 @@ pub fn config_check(
 /// The environment arrives as a lookup rather than being read here, for the
 /// same reason `auth::resolve` takes its value: a test can pin either source
 /// without mutating process state every other test in the binary shares.
-fn configured(home: Option<&Path>, env: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
+fn configured(
+    home: Option<&Path>,
+    env: &dyn Fn(&str) -> Option<String>,
+    live: Option<Live>,
+) -> Vec<String> {
     let (kind, resolved) = match settings::resolve_kind(None, None, home) {
         Ok(both) => both,
         // Loud, and not fatal: `config check` is the command people run when
@@ -813,16 +882,32 @@ fn configured(home: Option<&Path>, env: &dyn Fn(&str) -> Option<String>) -> Vec<
             ]
         }
     };
-    let mut lines = vec![
-        format!(
-            "provider       {}  ({})",
-            resolved.provider, resolved.provider_source
-        ),
-        format!(
-            "model          {}  ({})",
-            resolved.model, resolved.model_source
-        ),
-    ];
+    // What is on disk, and — when there is a running session — what is actually
+    // in force. The two differ the moment somebody runs `/model`, and the disk
+    // value is then wrong about the one thing they just changed.
+    let mut lines = match &live {
+        Some(live) if live.model != resolved.model => vec![
+            format!(
+                "provider       {}  ({})",
+                resolved.provider, resolved.provider_source
+            ),
+            format!("model          {}  (this session, /model)", live.model),
+            format!(
+                "               settings.json still says {} — /model {} --save writes it",
+                resolved.model, live.model
+            ),
+        ],
+        _ => vec![
+            format!(
+                "provider       {}  ({})",
+                resolved.provider, resolved.provider_source
+            ),
+            format!(
+                "model          {}  ({})",
+                resolved.model, resolved.model_source
+            ),
+        ],
+    };
 
     // Reported, never printed. Whether a key resolves is the question; which
     // key it is, is not.
@@ -974,7 +1059,7 @@ mod tests {
         .unwrap();
 
         // Before touching anything: the key and the model are the ones he set.
-        let lines = configured(Some(home.path()), &|_| None).join("\n");
+        let lines = configured(Some(home.path()), &|_| None, None).join("\n");
         assert!(lines.contains("anthropic"), "{lines}");
         assert!(lines.contains("claude-sonnet-5"), "{lines}");
         assert!(
@@ -1059,7 +1144,7 @@ mod tests {
         )
         .unwrap();
 
-        let lines = configured(Some(home.path()), &|_| None).join("\n");
+        let lines = configured(Some(home.path()), &|_| None, None).join("\n");
         assert!(
             lines.contains("provider       anthropic  (settings.json)"),
             "{lines}"
@@ -1074,9 +1159,11 @@ mod tests {
 
         // The hour this line saves: an exported variable silently outranking
         // the key that was just stored.
-        let lines = configured(Some(home.path()), &|name| {
-            (name == "ANTHROPIC_API_KEY").then(|| "sk-ant-env".to_string())
-        })
+        let lines = configured(
+            Some(home.path()),
+            &|name| (name == "ANTHROPIC_API_KEY").then(|| "sk-ant-env".to_string()),
+            None,
+        )
         .join("\n");
         assert!(lines.contains("found (ANTHROPIC_API_KEY)"), "{lines}");
         assert!(lines.contains("the environment overrides"), "{lines}");
@@ -1087,7 +1174,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(home.path().join(".emma")).unwrap();
         std::fs::write(settings::path(home.path()), r#"{"provider":"openai"}"#).unwrap();
-        let lines = configured(Some(home.path()), &|_| None).join("\n");
+        let lines = configured(Some(home.path()), &|_| None, None).join("\n");
         assert!(lines.contains("NOT USABLE"), "{lines}");
         assert!(lines.contains("openai"), "{lines}");
         // Nothing may claim a model or a key under a provider that cannot run.

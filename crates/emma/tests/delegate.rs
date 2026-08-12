@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use emma::agent::{Agent, Budgets, Ending, Interrupt, Outcome, Setup, Spend};
+use emma::agent::{Agent, Budgets, Ending, Interrupt, Outcome, Running, Setup, Spend};
 use emma::approval::{Answer, Approvals, Asker, Gate};
 use emma::delegate::{Delegate, Nest};
 use emma::goal::{Goal, MarkerClaim};
@@ -96,18 +96,21 @@ async fn delegating(
             session_id: "sess-test".into(),
             caching: Caching::On,
             budgets,
+            running: Running::new(base.clone()),
         },
         defs,
         &sub_tools,
         None,
-        &|_| base.clone(),
+        // `None` for every type: no agent file in these fixtures names a model,
+        // and `None` is what "use the parent's, whatever it is now" means.
+        &|_| None,
     );
     let tools = registry(vec![
         Arc::new(delegate.expect("no agent types resolved")) as Arc<dyn Tool>
     ]);
 
     let mut agent = Agent::new(Setup {
-        provider: &*provider,
+        provider: provider.clone(),
         harness: &harness,
         instructions: &harness.instructions,
         tools: &tools,
@@ -160,7 +163,7 @@ fn allowing_everything() -> Arc<Approvals> {
 async fn a_delegation_runs_a_nested_loop_and_returns_its_conclusion_under_a_footer() {
     let dir = tempfile::tempdir().unwrap();
     let (read, read_calls) = TestTool::returning("Read", "fn retry() {}");
-    let fake = Arc::new(Fake::new(vec![
+    let fake = Fake::new(vec![
         // The parent delegates…
         delegate_to("explorer", "where is the retry policy decided?"),
         // …the sub reads a file and answers…
@@ -168,7 +171,7 @@ async fn a_delegation_runs_a_nested_loop_and_returns_its_conclusion_under_a_foot
         text("It is decided in src/retry.rs.\n\nGOAL COMPLETE"),
         // …and the parent finishes on what came back.
         text("The retry policy lives in src/retry.rs.\n\nGOAL COMPLETE"),
-    ]));
+    ]);
 
     let run = delegating(
         dir.path(),
@@ -210,14 +213,14 @@ async fn a_delegation_runs_a_nested_loop_and_returns_its_conclusion_under_a_foot
 async fn the_footer_is_the_harnesss_record_and_not_the_subagents_account() {
     let dir = tempfile::tempdir().unwrap();
     let (read, read_calls) = TestTool::returning("Read", "never called");
-    let fake = Arc::new(Fake::new(vec![
+    let fake = Fake::new(vec![
         delegate_to("explorer", "check the retry tests"),
         text(
             "I read src/retry.rs and tests/retry.rs, and ran `cargo test` — exit status 0, \
              everything passes.\n\nGOAL COMPLETE",
         ),
         text("Done.\n\nGOAL COMPLETE"),
-    ]));
+    ]);
 
     let run = delegating(
         dir.path(),
@@ -266,12 +269,12 @@ async fn a_subagent_that_ran_out_of_budget_is_not_reported_as_a_finished_one() {
     let (read, _) = TestTool::returning("Read", "some file");
     let mut ty = agent_type("explorer", Some(vec!["Read"]));
     ty.max_tokens = Some(5_000);
-    let fake = Arc::new(Fake::new(vec![
+    let fake = Fake::new(vec![
         delegate_to("explorer", "read everything"),
         // One expensive call, over the type's own cap.
         call("Read", json!({ "file_path": "src/big.rs" })).costing(9_000),
         text("Understood.\n\nGOAL COMPLETE"),
-    ]));
+    ]);
 
     let run = delegating(
         dir.path(),
@@ -302,12 +305,12 @@ async fn a_subagent_that_ran_out_of_budget_is_not_reported_as_a_finished_one() {
 async fn a_subagents_spend_charges_the_parents_meter() {
     let dir = tempfile::tempdir().unwrap();
     let (read, _) = TestTool::returning("Read", "x");
-    let fake = Arc::new(Fake::new(vec![
+    let fake = Fake::new(vec![
         delegate_to("explorer", "look").costing(100),
         call("Read", json!({ "file_path": "a.rs" })).costing(7_000),
         text("found it\n\nGOAL COMPLETE").costing(300),
         text("ok\n\nGOAL COMPLETE").costing(100),
-    ]));
+    ]);
 
     let run = delegating(
         dir.path(),
@@ -343,13 +346,13 @@ async fn a_subagents_spend_charges_the_parents_meter() {
 async fn an_agent_type_cannot_be_given_the_delegate_tool_even_by_name() {
     let dir = tempfile::tempdir().unwrap();
     let (read, _) = TestTool::returning("Read", "x");
-    let fake = Arc::new(Fake::new(vec![
+    let fake = Fake::new(vec![
         delegate_to("explorer", "delegate further, if you can"),
         // The inner model tries. There is nothing to call.
         call("Delegate", json!({ "agent": "explorer", "task": "deeper" })),
         text("I cannot delegate from here.\n\nGOAL COMPLETE"),
         text("Right.\n\nGOAL COMPLETE"),
-    ]));
+    ]);
 
     let run = delegating(
         dir.path(),
@@ -386,12 +389,12 @@ async fn folding_a_session_containing_a_delegation_returns_the_parents_conversat
     let dir = tempfile::tempdir().unwrap();
     let log = Arc::new(SessionLog::open(dir.path(), "sess-delegation").unwrap());
     let (read, _) = TestTool::returning("Read", "fn retry() {}");
-    let fake = Arc::new(Fake::new(vec![
+    let fake = Fake::new(vec![
         delegate_to("explorer", "where is retry decided?"),
         call("Read", json!({ "file_path": "src/retry.rs" })),
         text("src/retry.rs.\n\nGOAL COMPLETE"),
         text("It is in src/retry.rs.\n\nGOAL COMPLETE"),
-    ]));
+    ]);
 
     let run = delegating(
         dir.path(),
@@ -493,12 +496,12 @@ async fn two_delegations_never_overlap() {
     // whose second entry was a text turn would let the second run finish without
     // ever entering the tool, and the test would pass with the permit removed —
     // which it did, before this comment was written.
-    let fake = Arc::new(Fake::new(vec![
+    let fake = Fake::new(vec![
         call("Read", json!({ "file_path": "a" })),
         call("Read", json!({ "file_path": "b" })),
         text("done\n\nGOAL COMPLETE"),
         text("done\n\nGOAL COMPLETE"),
-    ]));
+    ]);
     let base: Arc<dyn Provider> = fake.clone();
     let (delegate, _) = Delegate::new(
         Nest {
@@ -512,11 +515,12 @@ async fn two_delegations_never_overlap() {
             session_id: "sess-test".into(),
             caching: Caching::On,
             budgets: budgets(),
+            running: Running::new(base.clone()),
         },
         &[agent_type("explorer", Some(vec!["Read"]))],
         &[tool],
         None,
-        &|_| base.clone(),
+        &|_| None,
     );
     let delegate = delegate.unwrap();
     let ctx = ToolCtx {
@@ -561,7 +565,7 @@ async fn constructing_an_agent_never_moves_the_status_meters() {
     let fake = Fake::new(Vec::new());
     let log = SessionLog::none();
     let _agent = Agent::new(Setup {
-        provider: &fake,
+        provider: fake.clone(),
         harness: &harness,
         instructions: &harness.instructions,
         tools: &tools,
@@ -597,12 +601,12 @@ async fn a_nested_run_moves_no_meter_and_still_reaches_the_keyboard() {
     let dir = tempfile::tempdir().unwrap();
     let term = Arc::new(Term::recording());
     let (write, write_calls) = TestTool::ok("Write", false);
-    let fake = Arc::new(Fake::new(vec![
+    let fake = Fake::new(vec![
         delegate_to("implementer", "add the file"),
         call("Write", json!({ "file_path": "a.rs", "content": "x" })),
         text("written\n\nGOAL COMPLETE"),
         text("done\n\nGOAL COMPLETE"),
-    ]));
+    ]);
 
     // The parent's own meters, moved once before the run, exactly as `main` does.
     term.set_budgets(budgets().max_context, budgets().max_tokens);
@@ -696,10 +700,10 @@ async fn a_delegation_refuses_to_start_when_the_goal_has_almost_nothing_left() {
     // of a different shape.
     let dir = tempfile::tempdir().unwrap();
     let (read, read_calls) = TestTool::returning("Read", "x");
-    let fake = Arc::new(Fake::new(vec![
+    let fake = Fake::new(vec![
         delegate_to("explorer", "look at everything"),
         text("I will do it here instead.\n\nGOAL COMPLETE"),
-    ]));
+    ]);
     let tight = Budgets {
         max_tokens: 1_000,
         ..budgets()
@@ -740,12 +744,12 @@ async fn what_a_delegation_cost_can_be_read_back_across_sessions() {
     std::fs::create_dir_all(&sessions).unwrap();
     let log = Arc::new(SessionLog::open(&sessions, "sess-0000000000001-1").unwrap());
     let (read, _) = TestTool::returning("Read", "fn retry() {}");
-    let fake = Arc::new(Fake::new(vec![
+    let fake = Fake::new(vec![
         delegate_to("explorer", "where is retry decided?").costing(50),
         call("Read", json!({ "file_path": "src/retry.rs" })).costing(2_000),
         text("src/retry.rs:14.\n\nGOAL COMPLETE").costing(300),
         text("It is at src/retry.rs:14.\n\nGOAL COMPLETE").costing(50),
-    ]));
+    ]);
     let run = delegating(
         dir.path(),
         fake.clone(),

@@ -10,6 +10,7 @@ mod support;
 
 use std::path::Path;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 
 use emma::agent::{Agent, Budgets, Ending, Interrupt, Outcome, Setup};
@@ -45,7 +46,7 @@ async fn drive(
     cwd: &Path,
     tools: Registry,
     approvals: &Approvals,
-    provider: &Fake,
+    provider: &Arc<Fake>,
     budgets: Budgets,
     goal: &Goal,
     log: &SessionLog,
@@ -73,7 +74,7 @@ async fn drive_goals(
     cwd: &Path,
     tools: Registry,
     approvals: &Approvals,
-    provider: &Fake,
+    provider: &Arc<Fake>,
     budgets: Budgets,
     goals: &[Goal],
     log: &SessionLog,
@@ -84,7 +85,7 @@ async fn drive_goals(
     let harness = Harness::load_selecting(root, Flavor::Emma, None).unwrap();
     let term = Term::silent();
     let mut agent = Agent::new(Setup {
-        provider,
+        provider: provider.clone(),
         harness: &harness,
         instructions: &harness.instructions,
         tools: &tools,

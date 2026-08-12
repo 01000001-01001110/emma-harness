@@ -38,6 +38,14 @@ pub struct Say {
     pub text: String,
     pub calls: Vec<(String, Value)>,
     pub tokens: i64,
+    /// Answer this call with `LlmError::BadRequest` carrying this message,
+    /// rather than with a turn.
+    ///
+    /// The provider rejecting a *request* — as opposed to failing to reach one
+    /// — is a case the loop now has a recovery for: a model change can leave
+    /// signed thinking blocks in the history that the new model will not take.
+    /// A fake that could only succeed could not exercise it.
+    pub fail: Option<String>,
 }
 
 pub fn text(t: &str) -> Say {
@@ -45,6 +53,7 @@ pub fn text(t: &str) -> Say {
         text: t.into(),
         calls: Vec::new(),
         tokens: 10,
+        fail: None,
     }
 }
 
@@ -53,6 +62,17 @@ pub fn call(tool: &str, args: Value) -> Say {
         text: String::new(),
         calls: vec![(tool.into(), args)],
         tokens: 10,
+        fail: None,
+    }
+}
+
+/// A call the provider refuses as malformed.
+pub fn rejected(message: &str) -> Say {
+    Say {
+        text: String::new(),
+        calls: Vec::new(),
+        tokens: 0,
+        fail: Some(message.into()),
     }
 }
 
@@ -66,14 +86,26 @@ impl Say {
 pub struct Fake {
     script: Mutex<std::collections::VecDeque<Say>>,
     seen: Mutex<Vec<Request>>,
+    /// What this client answers `model_id()` with. A session may now change
+    /// model mid-conversation, and a test of that needs two clients that are
+    /// distinguishable.
+    id: String,
 }
 
 impl Fake {
-    pub fn new(script: Vec<Say>) -> Self {
-        Self {
+    /// An `Arc`, because `Setup::provider` owns a counted handle rather than
+    /// borrowing one — a session may now swap the model under a running agent,
+    /// and a borrow could not express that.
+    pub fn new(script: Vec<Say>) -> Arc<Self> {
+        Self::named("fake", script)
+    }
+
+    pub fn named(id: &str, script: Vec<Say>) -> Arc<Self> {
+        Arc::new(Self {
             script: Mutex::new(script.into()),
             seen: Mutex::new(Vec::new()),
-        }
+            id: id.to_string(),
+        })
     }
 
     pub fn calls(&self) -> usize {
@@ -141,7 +173,7 @@ impl Fake {
 #[async_trait::async_trait]
 impl Provider for Fake {
     fn model_id(&self) -> &str {
-        "fake"
+        &self.id
     }
 
     async fn send(
@@ -151,7 +183,11 @@ impl Provider for Fake {
         _events: Option<mpsc::Sender<Event>>,
     ) -> Result<AssistantTurn, LlmError> {
         self.seen.lock().unwrap().push(request);
-        let Some(say) = self.script.lock().unwrap().pop_front() else {
+        let script_head = self.script.lock().unwrap().pop_front();
+        if let Some(message) = script_head.as_ref().and_then(|s| s.fail.clone()) {
+            return Err(LlmError::BadRequest { message });
+        }
+        let Some(say) = script_head else {
             // An unscripted call is a test that did something unexpected, and
             // must look like a failure rather than quietly ending the goal.
             return Err(LlmError::BadRequest {
