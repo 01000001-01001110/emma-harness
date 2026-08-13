@@ -283,6 +283,28 @@ impl View {
             typed,
         ])
         .render(inner, buf);
+        // The mockup's `[send: Enter]`, right-aligned inside the border — the
+        // one key a first-time user cannot see any other way (measured off
+        // `notes/mockup-tui.png`: dim, flush right, on the input row itself).
+        // Drawn only while it cannot collide with what is being typed: a hint
+        // that overwrites the sentence it is hinting about is worse than none,
+        // so a long line evicts it and the border's edge stays honest.
+        let send = "[send: Enter]";
+        let occupied = cols(prefix)
+            + if self.input.is_empty() {
+                cols(PLACEHOLDER)
+            } else {
+                cols(&self.input)
+            };
+        if usize::from(inner.width) > occupied + cols(send) + 2 {
+            let w = cols(send) as u16;
+            buf.set_line(
+                inner.right() - w,
+                inner.y,
+                &Line::from(Span::styled(send.to_string(), self.skin.palette.dim())),
+                w,
+            );
+        }
         // Columns. `self.cursor` is a character index — what Left and Right
         // move by — and the cursor goes on a cell, so the text before it is
         // measured rather than counted. Type a CJK sentence and a counted
@@ -571,6 +593,31 @@ mod tests {
             );
             assert!(cursor.is_some(), "height {height} had nowhere to type");
         }
+    }
+
+    /// The mockup's `[send: Enter]` sits inside the box's right edge — and
+    /// gives way rather than colliding when the typed line reaches for it.
+    #[test]
+    fn the_send_hint_sits_inside_the_box_and_yields_to_a_long_line() {
+        let (rows, _) = draw(&view(), 60, 8);
+        let input_row = rows
+            .iter()
+            .find(|r| r.contains('>') && r.contains("describe a goal"))
+            .expect("no input row");
+        assert!(
+            input_row.contains("[send: Enter]"),
+            "the send hint is missing: {input_row:?}"
+        );
+        // A line long enough to reach the hint's columns evicts it.
+        let mut v = view();
+        v.input = "x".repeat(50);
+        v.cursor = 50;
+        let (rows, _) = draw(&v, 60, 8);
+        assert!(
+            !rows.join("\n").contains("[send: Enter]"),
+            "the hint overwrote the typed line: {rows:?}"
+        );
+        assert!(rows.iter().any(|r| r.contains("xxx")), "{rows:?}");
     }
 
     #[test]

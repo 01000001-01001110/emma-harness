@@ -385,6 +385,11 @@ struct Inner {
     /// handed. The status *line* carries only the stem, which is what fits on
     /// screen; a script that wants to read the transcript needs the whole path.
     transcript: String,
+    /// The user-tool catalogue, as of the last time the working directory was
+    /// known. Held here rather than re-probed per keystroke: a chord lookup is
+    /// a `find` over this list, and the list only moves when the cwd does.
+    /// Empty on the inline path, where no sidebar lists it and no chord fires.
+    tools: Vec<crate::usertools::Entry>,
 }
 
 impl Frame {
@@ -509,13 +514,26 @@ impl Frame {
             }
         }
 
+        // The user-tool catalogue, against the directory Emma was started in.
+        // `set_identity` refreshes it when the run's real cwd arrives; probing
+        // here as well means the TOOLS section is never a placeholder on the
+        // first paint. Inline runs skip it: no sidebar lists it there.
+        let tools = if inline {
+            Vec::new()
+        } else {
+            std::env::current_dir()
+                .map(|d| crate::usertools::catalogue(&d))
+                .unwrap_or_default()
+        };
         let frame = Arc::new(Frame {
             inner: Mutex::new(Inner {
                 term: terminal,
                 ui: if inline {
                     Ui::Inline
                 } else {
-                    Ui::Full(Box::new(App::new((cols, rows))))
+                    let mut app = App::new((cols, rows));
+                    app.set_tools(super::app::tool_rows(&tools));
+                    Ui::Full(Box::new(app))
                 },
                 view: View::new(skin),
                 md: Markdown::new(),
@@ -525,6 +543,7 @@ impl Frame {
                 started: None,
                 caps: (0, 0),
                 transcript: String::new(),
+                tools,
             }),
             skin,
             status_requests: Mutex::new(None),
@@ -711,12 +730,24 @@ impl Frame {
             inner.view.status.cwd = cwd.to_string();
             inner.view.status.session = session.to_string();
             inner.transcript = transcript.to_string();
+            // The catalogue is re-probed against the run's real cwd — the
+            // availability of a tool is a fact about a directory. Computed
+            // before the `ui` borrow because the refreshed list lands in two
+            // places: the frame's lookup copy and the sidebar's rows.
+            let refreshed = (!cwd.is_empty() && matches!(inner.ui, Ui::Full(_)))
+                .then(|| crate::usertools::catalogue(std::path::Path::new(cwd)));
             if let Ui::Full(app) = &mut inner.ui {
                 // The sidebar's SESSIONS slot gets the one row that is
                 // honestly known — this run — and the transcript buffer
                 // learns where the complete record lives, so the cap marker
                 // can name the remedy when it binds.
                 app.set_identity(session, transcript, &self.skin);
+                if let Some(t) = &refreshed {
+                    app.set_tools(super::app::tool_rows(t));
+                }
+            }
+            if let Some(t) = refreshed {
+                inner.tools = t;
             }
             inner.paint();
         }
@@ -938,6 +969,75 @@ impl Frame {
             app.toggle_sidebar(cols);
             synchronized(|| inner.paint());
         }
+    }
+
+    /// A left click, routed to the layout's hit-test ([`App::click`] — today,
+    /// the sidebar's collapse affordance and nothing else). Dead while a
+    /// question is pending, the same §4.6 rule the `Ctrl-B` key follows: a
+    /// click cannot become an answer, but a layout that reshuffles under a
+    /// question the user is reading is its own hazard. A no-op click paints
+    /// nothing, so idle mouse noise costs no repaint.
+    pub fn click(&self, x: u16, y: u16) {
+        let mut inner = self.lock();
+        if inner.view.prompt.is_some() {
+            return;
+        }
+        let cols = inner.screen.0;
+        if let Ui::Full(app) = &mut inner.ui {
+            if app.click(x, y, cols) {
+                synchronized(|| inner.paint());
+            }
+        }
+    }
+
+    /// `Alt+<key>`: launch the user tool the catalogue lists under `key`, and
+    /// put the outcome — `Ok` or `Err`, either way — in the transcript. A key
+    /// that silently does nothing is the defect the collapse toggle just paid
+    /// for; an unbound chord is the one honest silence (the editor ignored it
+    /// before this existed, and there is no label to report under).
+    ///
+    /// The launch runs on its own thread: `launch` may spawn a process, and a
+    /// keystroke handler that waits on one is an event loop that has stopped.
+    /// The result comes back through [`Frame::write_lines`] — transcript
+    /// lines, which can never enter the line channel, answer a prompt, or
+    /// touch the editor: a launch pending across a prompt's appearance stays
+    /// outside the drain guarantee by construction.
+    pub fn launch_tool(self: &Arc<Self>, key: char) {
+        let picked = {
+            let inner = self.lock();
+            if !matches!(inner.ui, Ui::Full(_)) {
+                return;
+            }
+            inner
+                .tools
+                .iter()
+                .find(|e| e.key == key)
+                .map(|e| (e.tool, e.label.clone()))
+        };
+        let Some((tool, label)) = picked else {
+            return;
+        };
+        let frame = Arc::clone(self);
+        std::thread::spawn(move || {
+            let cwd = {
+                let inner = frame.lock();
+                inner.view.status.cwd.clone()
+            };
+            let cwd = if cwd.is_empty() {
+                // Before `set_identity` the view has no cwd; the process's is
+                // the honest stand-in — it is the directory Emma is in.
+                std::env::current_dir()
+                    .map(|d| d.display().to_string())
+                    .unwrap_or_default()
+            } else {
+                cwd
+            };
+            let lines = match crate::usertools::launch(tool, std::path::Path::new(&cwd)) {
+                Ok(msg) => frame.skin.note(&format!("{label}: {msg}")),
+                Err(err) => frame.skin.warn(&format!("{label}: {err}")),
+            };
+            frame.write_lines(lines);
+        });
     }
 
     /// Where the whole run is written down, for the exit line — the last

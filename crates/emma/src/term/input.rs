@@ -39,7 +39,7 @@
 use std::sync::Arc;
 
 use ratatui::crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use tokio::sync::mpsc;
 
@@ -338,6 +338,38 @@ pub fn pane_key(key: KeyEvent, editor_empty: bool, prompt_pending: bool) -> Opti
 /// Rows per wheel notch. Three is what terminals themselves scroll by.
 pub const WHEEL_ROWS: usize = 3;
 
+/// The user-tool chords: `Alt+<key>`, where `<key>` is a catalogue entry's
+/// letter (`Alt+s` for Shell, `Alt+,` for Settings, and so on — the sidebar's
+/// TOOLS column shows each one). Which letters are bound is the catalogue's
+/// knowledge, not this function's: it names the *class*, and the frame looks
+/// the letter up.
+///
+/// **A bare letter is never a shortcut, and the empty-editor gate would not
+/// have made it one safely.** The design's §6 refused the mockup's bare
+/// `s`/`c`/`f` bindings outright — "a bare letter that acts while the input
+/// box exists is a footgun" — and the softer "only when the editor is empty"
+/// rule dies on a fact the approval-gate keys never meet: the first character
+/// of *every* goal lands on an empty editor, so a bare `s` binding makes any
+/// goal beginning with `s` start a shell instead. An Alt chord types nothing,
+/// which puts it in `Ctrl-B`'s class: safe whatever the editor holds, so the
+/// editor's content is not consulted. AltGr arrives as Ctrl+Alt on Windows
+/// layouts and produces real characters, so Ctrl excludes.
+///
+/// Dead while a question is pending, like every non-scroll key aimed away
+/// from the prompt (§4.6) — and like the launches themselves, whose results
+/// come back as transcript lines that can never enter the line channel.
+pub fn tool_key(key: KeyEvent, prompt_pending: bool) -> Option<char> {
+    if key.kind == KeyEventKind::Release || prompt_pending {
+        return None;
+    }
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Char(c) if alt && !ctrl => Some(c),
+        _ => None,
+    }
+}
+
 // endregion: The transcript's keys
 
 // region: The reader
@@ -441,6 +473,18 @@ impl LineSource {
                         }
                         continue;
                     }
+                    // A tool chord is consumed here, reader-locally, exactly
+                    // like the pane keys above: the launch runs on its own
+                    // thread inside the frame and its result arrives as
+                    // transcript lines, so nothing on this path can enter the
+                    // line channel and the drain guarantee is untouched by
+                    // construction. An unbound chord launches nothing, which
+                    // is also what the editor did with it before this branch
+                    // existed (`Action::Ignore`).
+                    if let Some(c) = tool_key(key, thread_frame.prompt_pending()) {
+                        thread_frame.launch_tool(c);
+                        continue;
+                    }
                     // The menu takes four keys, and only while it is open. With
                     // it shut this is `None` for everything and the editor
                     // below is reached exactly as it always was.
@@ -534,13 +578,25 @@ impl LineSource {
                     }
                 }
                 // The wheel, which mouse capture exists for: without capture,
-                // on the alternate screen, it does nothing at all. Wheel
-                // events only — clicks and drags fall through untouched, and
-                // selection is the terminal's Shift-drag (the quick help says
-                // so, since capture is what took the plain drag away).
+                // on the alternate screen, it does nothing at all. Beyond the
+                // wheel, exactly one click is routed: a plain left *press*,
+                // to the frame's single click target (the sidebar's collapse
+                // affordance — the route the owner actually tried when the
+                // toggle "did not work"). Drags, releases and every other
+                // button fall through untouched, and anything Shift-modified
+                // is refused even where a terminal forwards it: Shift-drag is
+                // the terminal's own selection — the one copy route left on
+                // the alternate screen — and this arm must never bid for it.
+                // A click mutates view state through the frame and never
+                // enters the line channel, same as the wheel.
                 Ok(Event::Mouse(mouse)) => match mouse.kind {
                     MouseEventKind::ScrollUp => thread_frame.scroll_rows(true, WHEEL_ROWS),
                     MouseEventKind::ScrollDown => thread_frame.scroll_rows(false, WHEEL_ROWS),
+                    MouseEventKind::Down(MouseButton::Left)
+                        if !mouse.modifiers.contains(KeyModifiers::SHIFT) =>
+                    {
+                        thread_frame.click(mouse.column, mouse.row);
+                    }
                     _ => {}
                 },
                 // A whole clipboard at once. It reaches the editor and stops
@@ -998,6 +1054,56 @@ mod tests {
         assert_eq!(
             pane_key(press(KeyCode::PageUp), true, true),
             Some(PaneKey::PageUp)
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The tool chords
+    // -----------------------------------------------------------------------
+
+    /// **A bare letter is never a tool shortcut.** The design's §6 refused the
+    /// mockup's bare `s`/`c`/`f` bindings — "a bare letter that acts while the
+    /// input box exists is a footgun" — and the first character of every goal
+    /// lands on an empty editor, so even an empty-editor gate would turn
+    /// "ship the fix" into a shell launch plus "hip the fix". If this test
+    /// goes red, that refuted idea is back.
+    #[test]
+    fn a_bare_letter_is_never_a_tool_shortcut() {
+        for c in ['s', 'c', 'f', 'm', 'd', ',', '/'] {
+            assert_eq!(
+                tool_key(press(KeyCode::Char(c)), false),
+                None,
+                "bare {c:?} acted as a shortcut"
+            );
+        }
+    }
+
+    /// The chords that do launch: Alt+letter, dead while a question pends,
+    /// dead on the release edge, and dead under Ctrl+Alt — which is AltGr on
+    /// Windows layouts, where it produces real characters.
+    #[test]
+    fn alt_chords_launch_tools_and_die_under_a_prompt() {
+        let alt = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT);
+        assert_eq!(tool_key(alt('s'), false), Some('s'));
+        assert_eq!(tool_key(alt(','), false), Some(','));
+        assert_eq!(
+            tool_key(alt('s'), true),
+            None,
+            "a tool chord acted while a question was pending"
+        );
+        let mut release = alt('s');
+        release.kind = KeyEventKind::Release;
+        assert_eq!(tool_key(release, false), None);
+        assert_eq!(
+            tool_key(
+                KeyEvent::new(
+                    KeyCode::Char('s'),
+                    KeyModifiers::ALT | KeyModifiers::CONTROL
+                ),
+                false
+            ),
+            None,
+            "AltGr (Ctrl+Alt) must type, not launch"
         );
     }
 

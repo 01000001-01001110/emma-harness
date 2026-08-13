@@ -28,7 +28,29 @@ out for themselves.
 
 ## Unreleased
 
-Nothing yet.
+- The full-screen sidebar collapse now works by the routes a person actually
+  tries: clicking the `[+]` on the SESSIONS header collapses the sidebar, and
+  `Ctrl-B` still toggles it from the keyboard (listed in QUICK HELP and the
+  hint row). A collapse or expand you chose sticks; resizing the window no
+  longer overrides it. Shift+drag selection is untouched — only a plain left
+  click is routed.
+- The sidebar's TOOLS section lists the user tools (Shell, Code, File Browser,
+  Search, Memory, Data Explorer, Settings) with their real bindings:
+  `Alt+<key>` launches — `Alt+s` a shell, `Alt+,` settings, and so on — and
+  `/` is Search's surface, the command menu it already opens. A tool that
+  cannot launch on this machine shows `n/a` in the key column, and every
+  launch reports what happened, or why not, in the transcript. Bare letters
+  never launch anything; they type, as before.
+- The full-screen layout now matches the mockup image where it previously did
+  not: two columns of ground between the sidebar and the main pane, one blank
+  row between the main pane and the status bar, panes floated one cell inside
+  the window edge on roomy windows, and the input box carries the mockup's
+  `[send: Enter]` hint inside its right edge.
+- The sidebar itself is redrawn to the image's measured grid: the current
+  session is accent text on a subtle full-width band (not a solid pink bar),
+  the `[+]` is accent and sits on the same right edge as the dates and keys,
+  headers and rows are indented as the mockup has them, an unavailable tool
+  dims as a whole row, and the QUICK HELP table is uniformly dim.
 
 ## 0.1.0
 

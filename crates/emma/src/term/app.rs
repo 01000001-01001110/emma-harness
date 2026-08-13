@@ -13,9 +13,14 @@
 //! Sidebar on the left (width from [`sidebar::width`], zero when collapsed),
 //! status bar full-width at the bottom, and the main pane between them:
 //! a header, a rule, the transcript, the input dock, and a one-row hint. The
-//! proportions are the mockup's, as pixel-sampled in the design note §1 — the
-//! prose description of that image was wrong in five recorded places, so the
-//! numbers here cite the sampled table, not the prose.
+//! proportions are the mockup's, measured from `notes/mockup-tui.png` itself
+//! (re-measured 2026-08-13) — the prose description of that image was wrong in
+//! five recorded places, and the design note's §1.1 sampled table, though
+//! pixel-derived, still missed three facts the image shows: the panes do not
+//! share edges (two columns of ground between sidebar and main pane), one
+//! blank row separates the main pane from the status bar, and everything
+//! floats one cell inside the window edge. [`regions`] carries each with the
+//! measurement that decided it.
 //!
 //! # What owns what
 //!
@@ -107,6 +112,18 @@ pub const SLIM_HEADER_ROWS: u16 = 12;
 /// Below this many columns the main pane loses its border.
 pub const UNBORDERED_COLS: u16 = 60;
 
+/// Below this many rows the vertical float — the mockup's one blank row above
+/// the panes and below the bar — is shed. Rows are the scarce axis: at 24 rows
+/// two of them are a whole approval key row, and the mockup only speaks for
+/// one window size (~128×41 cells); how it degrades is this file's decision.
+pub const INSET_MIN_ROWS: u16 = 30;
+
+/// Columns of ground between the sidebar's box and the main pane's. Measured
+/// from the image: sidebar right edge ≈338px, main pane left edge ≈362px, at
+/// ≈11.3px per cell — two columns, not shared borders. Zero when the sidebar
+/// is collapsed: the gap is the sidebar's, and goes with it.
+const PANE_GAP_COLS: u16 = 2;
+
 /// Where everything goes, for one frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Regions {
@@ -128,14 +145,38 @@ pub struct Regions {
 /// from [`dock_height`], so the two decisions that depend on *state* are made
 /// before the arithmetic that does not.
 pub fn regions(area: Rect, sidebar_w: u16, dock_h: u16) -> Regions {
+    // The mockup floats every box inside the window rather than flush against
+    // it: ~14px of ground on an ~11.3px cell — one column each side, one row
+    // above the panes and one below the bar. Shed first when the window is
+    // small, because a float is the cheapest thing on screen; the horizontal
+    // inset rides with the border threshold so the two shed as one look.
+    let inset_x = u16::from(area.width >= UNBORDERED_COLS);
+    let inset_y = u16::from(area.height >= INSET_MIN_ROWS);
+    let outer = area.inner(Margin::new(inset_x, inset_y));
     let status_h = if area.height < SLIM_STATUS_ROWS { 1 } else { 3 };
-    let [content, status] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(status_h)]).areas(area);
-    let [sidebar, main] =
-        Layout::horizontal([Constraint::Length(sidebar_w), Constraint::Min(0)]).areas(content);
-    let main_bordered = area.width >= UNBORDERED_COLS && main.width >= 3 && main.height >= 3;
+    // One blank row between the main pane's bottom border and the bar's top —
+    // measured, not styled: pane bottom ≈982px, bar top ≈1006px, one cell row.
+    // It rides with the bar's border: a window too short for the border has no
+    // row to spend on a gap either.
+    let gap_h = u16::from(area.height >= SLIM_STATUS_ROWS);
+    let [content, _, status] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(gap_h),
+        Constraint::Length(status_h),
+    ])
+    .areas(outer);
+    let gap_w = if sidebar_w > 0 { PANE_GAP_COLS } else { 0 };
+    let [sidebar, _, main] = Layout::horizontal([
+        Constraint::Length(sidebar_w),
+        Constraint::Length(gap_w),
+        Constraint::Min(0),
+    ])
+    .areas(content);
+    let main_bordered = area.width >= UNBORDERED_COLS && main.width >= 5 && main.height >= 3;
+    // Inside the border the image pads the content: border at ≈362px, text at
+    // ≈393px — the border cell plus one more column ((2,1) counts the border).
     let inner = if main_bordered {
-        main.inner(Margin::new(1, 1))
+        main.inner(Margin::new(2, 1))
     } else {
         main
     };
@@ -210,6 +251,10 @@ pub struct App {
     wrap_width: u16,
     /// The chat pane's height at the last layout; less one row, a page.
     chat_height: u16,
+    /// The sidebar's rectangle at the last layout, for click hit-testing:
+    /// a mouse event arrives in window cells, and only the layout knows which
+    /// cells were the sidebar's when the user aimed at them.
+    side_rect: Rect,
 }
 
 impl App {
@@ -232,6 +277,7 @@ impl App {
             },
             wrap_width: chat::message_width(r.chat.width.max(1)),
             chat_height: r.chat.height.max(1),
+            side_rect: r.sidebar,
         }
     }
 
@@ -274,6 +320,42 @@ impl App {
         };
     }
 
+    /// A left click, in window cells. Returns whether anything changed, so the
+    /// caller repaints only when there is something new to paint.
+    ///
+    /// The one click target stage 2 has is the sidebar's SESSIONS header row —
+    /// where the `[-]` affordance sits, and the route the owner actually tried
+    /// (the collapse defect report was "+ and -", not "Ctrl-B"). The whole
+    /// header row is the target rather than the affordance's three cells: the
+    /// affordance's exact columns are the sidebar's internal layout, which this
+    /// file does not own, and a three-cell target at a guessed offset is a miss
+    /// magnet — the row holds exactly one control, so the row is the control.
+    ///
+    /// A collapsed sidebar has no cells and therefore no click target; the
+    /// way back is `Ctrl-B`, which the hint row names. That asymmetry is the
+    /// design's own (§3.2): collapsed is fully hidden, not a rail.
+    pub fn click(&mut self, x: u16, y: u16, total_cols: u16) -> bool {
+        let r = self.side_rect;
+        // Under three cells either way the sidebar drew nothing (its own
+        // rule), so there is no affordance on screen to have been aimed at.
+        if r.width < 3 || r.height < 3 {
+            return false;
+        }
+        let header_row = r.y + 1;
+        if y == header_row && x > r.x && x < r.right().saturating_sub(1) {
+            self.toggle_sidebar(total_cols);
+            return true;
+        }
+        false
+    }
+
+    /// The TOOLS section, from the user-tool catalogue — mapped by
+    /// [`tool_rows`] and handed in as rows so this stays testable without the
+    /// catalogue's filesystem probing.
+    pub fn set_tools(&mut self, rows: Vec<sidebar::Row>) {
+        self.side.commands = rows;
+    }
+
     /// The run's identity arrived: the current session becomes the one
     /// (honestly known) row in SESSIONS, and the transcript learns where the
     /// complete record lives so the cap marker can point at it.
@@ -307,6 +389,9 @@ impl App {
         self.side.collapsed = collapsed;
         let sb_w = sidebar::width(area.width, collapsed);
         let r = regions(area, sb_w, dock_height(view, area.height));
+        // Written down for the click hit-test: a mouse aims at what was on
+        // screen at the last paint, which is exactly this rectangle.
+        self.side_rect = r.sidebar;
 
         sidebar::render(r.sidebar, buf, &self.side, skin);
 
@@ -456,6 +541,35 @@ fn builtin_rows() -> Vec<sidebar::Row> {
         .collect()
 }
 
+/// The user-tool catalogue, mapped into the sidebar's [`sidebar::Row`]
+/// contract for the TOOLS section.
+///
+/// The trailing column carries the *real* binding, not the mockup's bare
+/// letter: the tools launch on `Alt+<key>` (see [`super::input::tool_key`] for
+/// why a bare letter was refused), and Search's `/` is the command menu the
+/// character already opens. `Row` has no availability field — the sidebar is
+/// another agent's fixed contract — so the key column carries that truth
+/// instead: a tool that cannot launch shows `n/a` where its chord would be,
+/// because a rendered key that does nothing is the exact defect the design's
+/// §6 forbids ("do not show keys that do nothing"). `Entry::detail` has no
+/// cell to land in and is dropped, named here rather than silently.
+pub fn tool_rows(entries: &[crate::usertools::Entry]) -> Vec<sidebar::Row> {
+    entries
+        .iter()
+        .map(|e| sidebar::Row {
+            name: e.label.clone(),
+            trailing: if !e.available {
+                "n/a".to_string()
+            } else if e.key == '/' {
+                "/".to_string()
+            } else {
+                format!("Alt+{}", e.key)
+            },
+            selected: false,
+        })
+        .collect()
+}
+
 /// The QUICK HELP table: the real keymap, nothing aspirational. `Shift+drag`
 /// is here because mouse capture is on for the wheel, which takes plain
 /// drag-selection away — the key that gives it back is the one fact a user
@@ -469,6 +583,7 @@ fn keymap() -> Vec<(String, String)> {
         ("Ctrl+Up/Dn", "scroll a row"),
         ("Home/End", "top / tail (empty box)"),
         ("Ctrl+B", "toggle sidebar"),
+        ("Alt+key", "launch tool"),
         ("Ctrl+C", "interrupt"),
         ("Ctrl+D", "quit"),
         ("Shift+drag", "select text"),
@@ -582,15 +697,40 @@ mod tests {
         assert_eq!(r.sidebar.width, 28, "{r:?}");
         assert_eq!(r.status.height, 3, "{r:?}");
         assert!(r.main_bordered);
-        // The main pane is everything the sidebar left, and the chat area is
-        // inside its border.
-        assert_eq!(r.main.width, 120 - 28);
-        assert_eq!(r.chat.width, 120 - 28 - 2);
+        // The main pane is what the sidebar, the pane gap and the two-sided
+        // float left; the chat area is inside its border plus one padding
+        // column each side.
+        assert_eq!(r.main.width, 120 - 28 - 2 - 2);
+        assert_eq!(r.chat.width, r.main.width - 4);
         // Bottom-up inside the pane: chat, dock, hint.
         assert!(r.chat.y > r.header.y);
         assert_eq!(r.dock.y, r.chat.bottom());
         assert_eq!(r.hint.y, r.dock.bottom());
-        assert_eq!(r.status.y, 27);
+        assert_eq!(r.status.y, 26);
+    }
+
+    /// **The three gaps measured off the image itself (2026-08-13), pinned.**
+    /// The design note's §1.1 sampled table, though pixel-derived, recorded
+    /// none of them; the image outranks it (§1's own rule). At the mockup's
+    /// approximate cell size (1448×1086px at ~11.3×26px per cell ≈ 128×41):
+    /// panes float one cell inside the window, two columns of ground separate
+    /// the sidebar's box from the main pane's, and one blank row separates the
+    /// main pane's bottom border from the status bar's top.
+    #[test]
+    fn the_pane_gaps_measured_from_the_mockup_are_in_the_carve() {
+        let r = regions(Rect::new(0, 0, 128, 41), sidebar::width(128, false), 3);
+        // The float: nothing touches the window edge on a roomy window.
+        assert_eq!(r.sidebar.x, 1, "{r:?}");
+        assert_eq!(r.sidebar.y, 1, "{r:?}");
+        assert_eq!(r.status.bottom(), 41 - 1, "{r:?}");
+        // Two columns of ground between the boxes — they do not share an edge.
+        assert_eq!(r.main.x - r.sidebar.right(), 2, "{r:?}");
+        // One blank row between the pane's bottom border and the bar's top.
+        assert_eq!(r.status.y - r.main.bottom(), 1, "{r:?}");
+        // Collapsed, the pane gap goes with the sidebar rather than becoming
+        // a stray two-column stripe of nothing.
+        let r = regions(Rect::new(0, 0, 128, 41), 0, 3);
+        assert_eq!(r.main.x, 1, "{r:?}");
     }
 
     /// **The seam that would fail silently.** The transcript is wrapped by
@@ -621,9 +761,11 @@ mod tests {
     fn at_eighty_by_twenty_four_the_sidebar_is_auto_collapsed() {
         let mut app = App::new((80, 24));
         let (rows, cursor) = draw(&mut app, &view(), 80, 24);
-        // No sidebar columns: the main pane's border is at column zero.
+        // No sidebar columns: the main pane's border sits at the float's one
+        // inset column, with nothing to its left.
         assert!(
-            rows.iter().any(|r| r.starts_with(UNICODE.border.top_left)),
+            rows.iter()
+                .any(|r| r.starts_with(&format!(" {}", UNICODE.border.top_left))),
             "{rows:?}"
         );
         assert!(cursor.is_some(), "nowhere to type at 80x24");
@@ -784,6 +926,144 @@ mod tests {
         assert!(
             app.transcript.height(&sk) > before,
             "narrowing the window did not rewrap the transcript"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The click
+    //
+    // The collapse defect this fixes was reported as "+ and - does not seem
+    // to work": the owner aimed at the affordance with the mouse, and nothing
+    // routed a click anywhere. The hit-test is here because only the layout
+    // knows which cells were the sidebar's.
+    // -----------------------------------------------------------------------
+
+    /// A click on the SESSIONS header row — the row the `[-]` affordance is
+    /// on — collapses the sidebar, and latches it as the user's choice.
+    #[test]
+    fn a_click_on_the_sessions_header_toggles_the_sidebar_and_latches() {
+        let mut app = App::new((120, 30));
+        let (rows, _) = draw(&mut app, &view(), 120, 30);
+        assert!(
+            rows.iter().any(|r| r.contains("SESSIONS")),
+            "precondition: the sidebar is not even drawn: {rows:?}"
+        );
+        // The float puts the sidebar at (1,1); its header row is inside the
+        // border, one row down.
+        assert!(app.click(5, 2, 120), "the header click did not toggle");
+        let (rows, _) = draw(&mut app, &view(), 120, 30);
+        assert!(
+            !rows.iter().any(|r| r.contains("SESSIONS")),
+            "the sidebar is still drawn after a collapse click: {rows:?}"
+        );
+        // A user's click is a user's latch: widening the window must not
+        // reopen what they closed — the §3.2 stickiness rule, via the mouse.
+        let (rows, _) = draw(&mut app, &view(), 200, 40);
+        assert!(
+            !rows.iter().any(|r| r.contains("SESSIONS")),
+            "the automatic rule overrode the user's click: {rows:?}"
+        );
+        // Collapsed, there is nothing on those cells to click.
+        assert!(!app.click(5, 2, 200), "a hidden sidebar took a click");
+    }
+
+    /// Clicks anywhere else — the border row, a session row, the chat pane —
+    /// toggle nothing. The one control gets the one row.
+    #[test]
+    fn a_click_anywhere_but_the_header_row_toggles_nothing() {
+        let mut app = App::new((120, 30));
+        let _ = draw(&mut app, &view(), 120, 30);
+        for (x, y) in [
+            (5u16, 1u16), // the sidebar's top border row
+            (5, 3),       // the first session row
+            (60, 2),      // the chat pane, same row as the header
+            (0, 2),       // the float column left of the sidebar's border
+        ] {
+            assert!(!app.click(x, y, 120), "({x},{y}) toggled the sidebar");
+        }
+        let (rows, _) = draw(&mut app, &view(), 120, 30);
+        assert!(rows.iter().any(|r| r.contains("SESSIONS")), "{rows:?}");
+    }
+
+    /// The user-expand half of the same latch, through the key path the click
+    /// shares: expanded by hand below the auto-collapse threshold, the
+    /// sidebar stays — the user insisted, the layout obeys.
+    #[test]
+    fn a_user_expand_below_the_threshold_survives_the_automatic_rule() {
+        let mut app = App::new((80, 24));
+        let (rows, _) = draw(&mut app, &view(), 80, 24);
+        assert!(
+            !rows.iter().any(|r| r.contains("SESSIONS")),
+            "precondition: 80 columns should auto-collapse: {rows:?}"
+        );
+        app.toggle_sidebar(80);
+        let (rows, _) = draw(&mut app, &view(), 80, 24);
+        assert!(
+            rows.iter().any(|r| r.contains("SESSIONS")),
+            "the user's expand was overruled by the width rule: {rows:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The TOOLS section
+    // -----------------------------------------------------------------------
+
+    /// The catalogue's entries land in the sidebar's row contract with the
+    /// *real* binding in the key column: `Alt+<key>` chords, `/` for Search
+    /// (the command menu the character already opens), and `n/a` where a tool
+    /// cannot launch — never a bare letter, which is not a binding here.
+    #[test]
+    fn tool_rows_carry_the_real_chords_and_mark_the_unavailable() {
+        let entries = vec![
+            crate::usertools::Entry {
+                tool: crate::usertools::Tool::Shell,
+                label: "Shell".into(),
+                key: 's',
+                detail: "open a shell here".into(),
+                available: true,
+            },
+            crate::usertools::Entry {
+                tool: crate::usertools::Tool::Search,
+                label: "Search".into(),
+                key: '/',
+                detail: "the command menu".into(),
+                available: true,
+            },
+            crate::usertools::Entry {
+                tool: crate::usertools::Tool::DataExplorer,
+                label: "Data Explorer".into(),
+                key: 'd',
+                detail: "".into(),
+                available: false,
+            },
+        ];
+        let rows = tool_rows(&entries);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].name, "Shell");
+        assert_eq!(rows[0].trailing, "Alt+s");
+        assert_eq!(rows[1].trailing, "/");
+        assert_eq!(
+            rows[2].trailing, "n/a",
+            "an unavailable tool showed a key that would do nothing"
+        );
+        // …and they reach the drawn TOOLS section through `set_tools`.
+        let mut app = App::new((120, 30));
+        app.set_tools(rows);
+        let (drawn, _) = draw(&mut app, &view(), 120, 30);
+        let all = drawn.join("\n");
+        assert!(all.contains("Shell"), "{all}");
+        assert!(all.contains("Alt+s"), "{all}");
+    }
+
+    /// The chord class is discoverable where the design says keys are
+    /// discovered: the QUICK HELP table.
+    #[test]
+    fn quick_help_names_the_tool_chords() {
+        let mut app = App::new((130, 40));
+        let (rows, _) = draw(&mut app, &view(), 130, 40);
+        assert!(
+            rows.iter().any(|r| r.contains("Alt+key")),
+            "the tool chords are not in QUICK HELP: {rows:?}"
         );
     }
 

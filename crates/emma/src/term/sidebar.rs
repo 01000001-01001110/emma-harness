@@ -6,13 +6,24 @@
 //! question. That split is the same one [`super::menu`] made, and for the same
 //! reason: what a pane *shows* is the part a test can hold still.
 //!
-//! # The two numbers that came from the mockup
+//! # The numbers here were measured off the image, not the prose
 //!
-//! The width is 22.4% of the terminal — the measured proportion of the owner's
-//! mockup (`notes/design-tui-fullscreen.md` §1.1, pixel-sampled; the circulated
-//! prose said 25% and the image corrected it). It is clamped between a floor of
-//! 28 columns — the narrowest at which a session name and a right-aligned
-//! `Yesterday` coexist without truncation — and a ceiling of 40, so an
+//! `notes/mockup-tui.png` was re-measured directly for this file (2026-08-13,
+//! pixel sampling; character pitch 10px, sidebar box x≈17..337 of 1448 —
+//! 22.2%). Where this file and `notes/design-tui-fullscreen.md` §1 disagree,
+//! the image won, twice: the selected row is *accent text on a barely-raised
+//! near-black band* (rgb 25,27,30 on a 13,15,19 ground), nothing like the
+//! approval chip's dark-on-pink; and the `[+]` affordance is accent pink, not
+//! a dim note. The measured grid is three constants below
+//! ([`HEADER_INDENT`], [`LEAD`], [`RIGHT_PAD`]): headers two columns in,
+//! rows led by ` > ` or three spaces, and every right-aligned column — dates,
+//! keys, the affordance — ending two columns before the border, one shared
+//! edge down the pane.
+//!
+//! The width is 22.4% of the terminal (the design's earlier sampling of the
+//! same image; this pass read 22.2%, the same number at cell resolution). It
+//! is clamped between a floor of 28 columns — at which `Yesterday` and a
+//! usable stub of name still coexist — and a ceiling of 40, so an
 //! ultrawide window does not grow a half-screen menu. And it is never more than
 //! half the terminal: a "side" bar wider than the pane it sits beside has the
 //! two the wrong way round, so on a terminal too narrow for the floor the
@@ -35,13 +46,15 @@
 //!
 //! # The selected row
 //!
-//! Marked twice, like everything in [`super::render`]: a `>` in the gutter
-//! *and* a full-width band from [`Palette::chip`](super::palette::Palette::chip)
-//! — the same treatment the `/` menu gives its highlighted row, which is why it
-//! is reused rather than a new fg+bg pair invented. The chip sets both halves
-//! of the pair so the band is legible on any theme, and degrades to reversed
-//! video at [`Level::None`](super::palette::Level::None), so the selection is
-//! never carried by colour alone.
+//! Marked twice, like everything in [`super::render`]: a `>` in the lead
+//! *and* a full-width band from [`band`]. An earlier draft reused
+//! [`Palette::chip`](super::palette::Palette::chip) here to avoid inventing a
+//! second fg+bg pair; the image refused it — the mockup's band is accent text
+//! on a subtle raised ground, and a solid pink chip row reads as a second
+//! approval prompt. The pair sets both halves so it is legible on any theme,
+//! and degrades to reversed video at
+//! [`Level::None`](super::palette::Level::None), so the selection is never
+//! carried by colour alone — the `>` survives everything.
 //!
 //! # Empty sections
 //!
@@ -62,10 +75,11 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Widget};
 
-use super::palette::Role;
+use super::palette::{Level, Palette, Role};
 use super::render::{cols, fit, Skin};
 
 // region: Width
@@ -132,7 +146,118 @@ pub struct State {
     pub collapsed: bool,
 }
 
+/// What an unavailable tool shows where its key would be — the trailing the
+/// shell's `app::tool_rows` mints for a `usertools::Entry` whose probe found
+/// nothing to run (no VS Code on the box). Words rather than a style alone:
+/// dimming dies on a colourless console, and a blank key would read as "no
+/// shortcut" rather than "no tool". [`list_row`] treats this exact trailing
+/// as a whole-row signal and dims the label with it, so the row reads as
+/// switched off rather than broken. A sentinel, named and narrow on purpose:
+/// [`when`] can never mint this string and no single-key binding can be
+/// three characters, so neither a session's date nor a live key collides.
+pub const TOOL_MISSING: &str = "n/a";
+
 // endregion: State
+
+// region: The session clock
+// ---------------------------------------------------------------------------
+// The session clock
+//
+// How a session's timestamp becomes the mockup's right column: `12:42` for
+// today, `Yesterday`, `May 18` for this year, `May 2025` before that. Pure
+// arithmetic over milliseconds plus an offset the caller supplies, because
+// this module draws and std cannot ask the OS for a timezone — the shell
+// owns the one platform call that can answer that question. An offset of 0
+// renders UTC under a local-looking format, which is a quiet lie on any box
+// west or east of Greenwich; the shell must pass the real offset, not guess.
+// ---------------------------------------------------------------------------
+
+/// What a session with no goal on record is called. Sessions have ids
+/// (`sess-<ms>-<pid>`), not names, and an id dressed up as a name is the
+/// filename defect this constant replaces.
+pub const UNTITLED_SESSION: &str = "untitled";
+
+/// What a session row shows instead of its filename: the first goal, with
+/// whitespace collapsed so a pasted multi-line goal stays one row. No length
+/// cap here — the pane already truncates to fit, and two caps drift.
+pub fn session_label(first_goal: Option<&str>) -> String {
+    let collapsed = first_goal
+        .unwrap_or("")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if collapsed.is_empty() {
+        UNTITLED_SESSION.to_string()
+    } else {
+        collapsed
+    }
+}
+
+/// The creation time buried in a session id (`sess-{ms:013}-{pid}`, with or
+/// without `.jsonl`), for when file metadata is missing or lying. `None` for
+/// anything that does not parse — a made-up time is worse than no column.
+pub fn session_time_ms(id: &str) -> Option<i64> {
+    let id = id.strip_suffix(".jsonl").unwrap_or(id);
+    let rest = id.strip_prefix("sess-")?;
+    let (ms, pid) = rest.split_once('-')?;
+    if pid.is_empty() || !pid.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    ms.parse::<i64>().ok().filter(|v| *v > 0)
+}
+
+const DAY_MS: i64 = 86_400_000;
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/// The right column, in the mockup's buckets. `offset_min` is local minus
+/// UTC in minutes (EDT is -240). Same local civil day: `12:42`. The civil
+/// day before: `Yesterday`. Older, same year: `May 18`; another year:
+/// `May 2025` — a date from last May shown bare would be a fresher claim
+/// than the file can back. A timestamp from the future is rendered as the
+/// date it says, because a skewed clock is the caller's fact to keep.
+pub fn when(then_ms: i64, now_ms: i64, offset_min: i32) -> String {
+    let off = i64::from(offset_min) * 60_000;
+    let t = then_ms.saturating_add(off);
+    let n = now_ms.saturating_add(off);
+    let t_day = t.div_euclid(DAY_MS);
+    let n_day = n.div_euclid(DAY_MS);
+    if t_day == n_day {
+        let rem = t.rem_euclid(DAY_MS);
+        return format!("{:02}:{:02}", rem / 3_600_000, rem % 3_600_000 / 60_000);
+    }
+    if n_day - t_day == 1 {
+        return "Yesterday".to_string();
+    }
+    let (ty, tm, td) = civil(t_day);
+    let (ny, _, _) = civil(n_day);
+    let month = MONTHS[(tm - 1) as usize];
+    if ty == ny {
+        format!("{month} {td}")
+    } else {
+        format!("{month} {ty}")
+    }
+}
+
+/// Days since 1970-01-01 to (year, month, day). Hinnant's civil-from-days —
+/// the standard closed form, with `div_euclid`/`rem_euclid` standing in for
+/// the paper's floored division. Exercised against known calendar anchors in
+/// the tests rather than trusted on reputation.
+fn civil(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+// endregion: The session clock
 
 // region: The empty states
 // ---------------------------------------------------------------------------
@@ -155,10 +280,17 @@ pub const EMPTY_COMMANDS: &str = "no commands yet: .emma/commands/";
 /// a fact worth a sentence rather than a blank.
 pub const EMPTY_HELP: &str = "no keys bound";
 
-/// The collapse affordance on the SESSIONS header. Shows the *action* (`-`,
-/// press to remove), not the mockup's `[+]` state marker — the deliberate
-/// deviation argued in the design's §3.2 and flagged for owner sign-off as Q6.
-pub const COLLAPSE_HINT: &str = "[-]";
+/// The collapse affordance on the SESSIONS header: the mockup's `[+]`, in
+/// accent, on the shared right edge. The design's §3.2 argued `[-]` ("show
+/// the action") and flagged the deviation as Q6, awaiting the owner; the
+/// owner then ran the build against the image and reported the sidebar "not
+/// formatted like the image" — which answers Q6 in the other direction, and
+/// the image outranks the argument. The glyph is state-honest regardless: a
+/// collapsed sidebar draws nothing at all, so this renders only on an
+/// expanded pane and only ever means one thing. What it does *not* do is
+/// accept a click — the shell owns input, and until it routes a mouse press
+/// here this is a label for Ctrl-B, drawn where the mockup drew it.
+pub const COLLAPSE_HINT: &str = "[+]";
 
 // endregion: The empty states
 
@@ -247,36 +379,96 @@ fn section_break(out: &mut Vec<Line<'static>>, w: usize, skin: &Skin) {
     out.push(Line::raw(""));
 }
 
-/// A section title, with the collapse affordance right-aligned when there is
-/// one. The affordance keeps its columns and the title truncates — a header
-/// that is legible but cannot be closed is worse than the reverse.
+/// The measured grid, in columns of the pane's inner width. Headers sit two
+/// in from the border; list rows lead with ` > ` (selected) or three spaces;
+/// and every right-aligned column — a date, a key, the affordance — ends two
+/// columns before the border, so the whole pane shares one right edge. The
+/// numbers are the mockup's, read off the image at its 10px character pitch
+/// (header text at ~2.2 cells, marker at ~1.5, names at ~3.6, right column
+/// ending ~1.9 cells in), rounded to the cell grid.
+const HEADER_INDENT: usize = 2;
+const LEAD: usize = 3;
+const RIGHT_PAD: usize = 2;
+
+/// A section title, indented onto the measured grid, with the collapse
+/// affordance right-aligned when there is one. The affordance keeps its
+/// columns and the title truncates — a header that is legible but cannot be
+/// closed is worse than the reverse.
 fn header(name: &str, affordance: Option<&str>, w: usize, skin: &Skin) -> Line<'static> {
-    // An affordance wider than the pane is dropped whole rather than clipped:
-    // half of `[-]` is not a control, it is debris.
-    let aff = affordance.filter(|a| cols(a) <= w).unwrap_or("");
+    let indent = HEADER_INDENT.min(w);
+    let room = w.saturating_sub(indent);
+    // An affordance that does not fit whole is dropped whole rather than
+    // clipped: half of `[+]` is not a control, it is debris. Its right pad
+    // goes first — one column off the border still reads as the control.
+    let mut aff = affordance.unwrap_or("");
+    let mut pad = if aff.is_empty() { 0 } else { RIGHT_PAD };
+    if cols(aff) + pad > room {
+        pad = 0;
+        if cols(aff) > room {
+            aff = "";
+        }
+    }
     let aff_w = cols(aff);
-    let name_budget = w.saturating_sub(aff_w + usize::from(aff_w > 0));
+    let name_budget = room.saturating_sub(aff_w + pad + usize::from(aff_w > 0));
     let name = clipped(name, name_budget, skin);
-    let gap = w.saturating_sub(cols(&name) + aff_w);
-    let mut spans = vec![Span::styled(name, skin.palette.bold(Role::Accent))];
-    spans.push(Span::raw(" ".repeat(gap)));
+    let gap = room.saturating_sub(cols(&name) + aff_w + pad);
+    let mut spans = vec![
+        Span::raw(" ".repeat(indent)),
+        Span::styled(name, skin.palette.bold(Role::Accent)),
+        Span::raw(" ".repeat(gap)),
+    ];
     if aff_w > 0 {
-        spans.push(Span::styled(aff.to_string(), skin.palette.dim()));
+        // Accent, not dim — measured off the image, where the `[+]` is the
+        // same pink as SESSIONS: it is a control, not a footnote.
+        spans.push(Span::styled(
+            aff.to_string(),
+            skin.palette.style(Role::Accent),
+        ));
+        spans.push(Span::raw(" ".repeat(pad)));
     }
     Line::from(spans)
 }
 
-/// One list row: `> name        trailing`, at exactly `w` columns.
+/// The selected row's band, border to border. Measured off
+/// `notes/mockup-tui.png` (2026-08-13): accent text on a barely-raised
+/// near-black — rgb(25,27,30) against the rgb(13,15,19) ground — not the
+/// approval chip's dark-on-pink, which an earlier draft reused and which
+/// reads as a second approval prompt. `palette.rs` calls `chip()` the one
+/// sanctioned fg+bg pair; the design's §6 extends that exception to this
+/// band, and the pair lives here rather than in `palette.rs` because that
+/// file is not this workstream's to grow. Both halves are always set, so the
+/// band survives a light terminal; with no colour at all it degrades to
+/// reversed video, exactly as the chip does.
+fn band(p: &Palette) -> Style {
+    match p.level {
+        Level::None => Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
+        // DarkGray is as subtle as sixteen colours get; index 234 is the
+        // greyscale ramp's `#1c1c1c`, the nearest step to the sampled band.
+        Level::Ansi16 => Style::default()
+            .fg(p.color(Role::Accent))
+            .bg(Color::DarkGray),
+        Level::Ansi256 => Style::default()
+            .fg(p.color(Role::Accent))
+            .bg(Color::Indexed(234)),
+        Level::Truecolor => Style::default()
+            .fg(p.color(Role::Accent))
+            .bg(Color::Rgb(25, 27, 30)),
+    }
+}
+
+/// One list row at exactly `w` columns: ` > name        trailing  `.
 ///
-/// The width arithmetic is the module doc's ruling made concrete: the trailing
-/// column is capped at half the row and survives; the name takes what is left
-/// and truncates with a visible mark. The gap is computed *after* both cuts,
-/// from measured columns, so the trailing text ends flush against the pane's
+/// The geometry is the measured grid ([`LEAD`], [`RIGHT_PAD`]); the width
+/// arithmetic is the module doc's ruling made concrete: the trailing column
+/// is capped at half the usable row and survives; the name takes what is
+/// left and truncates with a visible mark. The gap is computed *after* both
+/// cuts, from measured columns, so the trailing text ends flush on the shared
 /// right edge whatever [`fit`] undershot by — a wide glyph that would not
 /// split leaves the gap one wider, never the row one over.
 fn list_row(row: &Row, w: usize, skin: &Skin) -> Line<'static> {
-    let avail = w.saturating_sub(2);
-    let marker_w = w.min(2);
+    let lead_w = LEAD.min(w);
+    let pad_w = RIGHT_PAD.min(w.saturating_sub(lead_w));
+    let avail = w.saturating_sub(lead_w + pad_w);
     let trailing = clipped(&row.trailing, avail / 2, skin);
     let t_w = cols(&trailing);
     let name = clipped(
@@ -285,46 +477,62 @@ fn list_row(row: &Row, w: usize, skin: &Skin) -> Line<'static> {
         skin,
     );
     let gap = avail.saturating_sub(cols(&name) + t_w);
-    // The marker is ASCII by construction, so slicing it to the pane is a
+    // The lead is ASCII by construction, so slicing it to the pane is a
     // byte-safe way to keep a one-column pane at one column.
-    let marker = &(if row.selected { "> " } else { "  " })[..marker_w];
+    let lead = &(if row.selected { " > " } else { "   " })[..lead_w];
+    let pad = " ".repeat(pad_w);
     if row.selected {
-        // The band: one style across every span, padding included, so the
-        // highlight is the full row and not a patchwork. `chip` is the one
-        // sanctioned fg+bg pair and already degrades to reversed video when
-        // there is no colour — see the module doc.
-        let band = skin.palette.chip(Role::Accent);
+        // The band: one style across every span, lead and padding included,
+        // so the highlight is the full row and not a patchwork — the image
+        // shows it running border to border.
+        let b = band(&skin.palette);
         return Line::from(vec![
-            Span::styled(marker.to_string(), band),
-            Span::styled(name, band),
-            Span::styled(" ".repeat(gap), band),
-            Span::styled(trailing, band),
+            Span::styled(lead.to_string(), b),
+            Span::styled(name, b),
+            Span::styled(" ".repeat(gap), b),
+            Span::styled(trailing, b),
+            Span::styled(pad, b),
         ]);
     }
+    // An unavailable tool: [`TOOL_MISSING`] in the trailing column is the
+    // signal that survives everything, and the label dims with it so the row
+    // reads as switched off rather than merely unbound. The words carry what
+    // the dimming cannot — a colourless console still says "not found".
+    let name_style = if row.trailing == TOOL_MISSING {
+        skin.palette.dim()
+    } else {
+        skin.palette.style(Role::Text)
+    };
     Line::from(vec![
-        Span::raw(marker.to_string()),
-        Span::styled(name, skin.palette.style(Role::Text)),
+        Span::raw(lead.to_string()),
+        Span::styled(name, name_style),
         Span::raw(" ".repeat(gap)),
         Span::styled(trailing, skin.palette.dim()),
+        Span::raw(pad),
     ])
 }
 
-/// One QUICK HELP row: the key bold in a shared column, the description dim.
-/// Bold-reset rather than a hex for the key, for the reason `palette.rs` gives
-/// against the mockup's brighter white: bold is brighter on every theme.
+/// One QUICK HELP row: the key in a shared column, then the description —
+/// both dim. Measured off the image: the help table is uniformly the
+/// secondary grey (the "shortcut keys are brighter" note in the design's
+/// §1.2 was sampled from the status bar, not from this section), and the two
+/// columns are told apart by alignment, which no colour level takes away.
 fn help_row(key: &str, desc: &str, key_w: usize, w: usize, skin: &Skin) -> Line<'static> {
     // Every fixed piece is budgeted against what is actually left, so a pane
     // narrower than the indent-plus-key-column shrinks pieces instead of
     // writing past its edge.
-    let indent = 2usize.min(w);
+    let indent = HEADER_INDENT.min(w);
     let kb = key_w.min(w.saturating_sub(indent));
     let key = clipped(key, kb, skin);
     let after_key = w.saturating_sub(indent + cols(&key));
     let gap = (kb.saturating_sub(cols(&key)) + 2).min(after_key);
-    let desc = clipped(desc, after_key.saturating_sub(gap), skin);
+    // The description stops on the same right edge as every other column —
+    // prose running into the border reads as an overflow, not a margin.
+    let pad = RIGHT_PAD.min(after_key.saturating_sub(gap));
+    let desc = clipped(desc, after_key.saturating_sub(gap + pad), skin);
     Line::from(vec![
         Span::raw(" ".repeat(indent)),
-        Span::styled(key, skin.palette.bold(Role::Text)),
+        Span::styled(key, skin.palette.dim()),
         Span::raw(" ".repeat(gap)),
         Span::styled(desc, skin.palette.dim()),
     ])
@@ -550,6 +758,11 @@ mod tests {
                 trailing: "a-trailing-column-of-absurd-length".into(),
                 selected: false,
             },
+            Row {
+                name: "Code".into(),
+                trailing: TOOL_MISSING.into(),
+                selected: false,
+            },
         ];
         for w in 0..=44usize {
             for row in &hostile {
@@ -616,21 +829,26 @@ mod tests {
     }
 
     /// Right alignment is column arithmetic: a CJK trailing column ends flush
-    /// at the pane edge rather than two cells past it.
+    /// on the shared right edge — two columns before the border, like every
+    /// date, key and the affordance — rather than two cells past the pane.
     #[test]
-    fn a_cjk_trailing_column_ends_flush_with_the_pane() {
+    fn a_cjk_trailing_column_ends_flush_with_the_shared_right_edge() {
         let s = skin(Level::Truecolor);
         let line = list_row(
             &Row {
                 name: "s".into(),
-                trailing: "一二三".into(),
+                trailing: "\u{4e00}\u{4e8c}\u{4e09}".into(),
                 selected: false,
             },
             26,
             &s,
         );
         assert_eq!(line.width(), 26, "{:?}", plain(&line));
-        assert!(plain(&line).ends_with("一二三"));
+        assert!(
+            plain(&line).ends_with("\u{4e00}\u{4e8c}\u{4e09}  "),
+            "{:?}",
+            plain(&line)
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -670,10 +888,13 @@ mod tests {
             .contains(Modifier::REVERSED));
     }
 
-    /// With colour, the band spans the whole row — padding and trailing
-    /// included — because a band that stops at the name is a patchwork.
+    /// With colour, the band spans the whole row — lead, padding and trailing
+    /// included, border to border as the image shows — and it is the measured
+    /// pair: accent text on a barely-raised near-black. Not the approval
+    /// chip's dark-on-pink, which is the exact regression the owner reported
+    /// as "not formatted like the image".
     #[test]
-    fn the_band_covers_the_full_row_not_just_the_name() {
+    fn the_band_is_accent_on_a_subtle_ground_and_covers_the_full_row() {
         let s = skin(Level::Truecolor);
         let line = list_row(
             &Row {
@@ -684,10 +905,18 @@ mod tests {
             26,
             &s,
         );
-        let band = s.palette.chip(Role::Accent);
+        let b = band(&s.palette);
+        assert_eq!(line.width(), 26, "{:?}", plain(&line));
         for span in &line.spans {
-            assert_eq!(span.style, band, "unbanded span {:?}", span.content);
+            assert_eq!(span.style, b, "unbanded span {:?}", span.content);
         }
+        assert_eq!(b.fg, Some(s.palette.color(Role::Accent)));
+        assert_eq!(b.bg, Some(Color::Rgb(25, 27, 30)), "the sampled band bg");
+        assert_ne!(
+            b,
+            s.palette.chip(Role::Accent),
+            "the chip pair came back: dark-on-pink is not the mockup's band"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -713,17 +942,89 @@ mod tests {
         assert_eq!(rules, 2, "{all}");
     }
 
+    /// The affordance, measured: the mockup's `[+]`, accent like the header,
+    /// on the shared right edge two columns before the border — and the
+    /// header itself two columns in from the left. Q6 proposed `[-]`; the
+    /// owner's run against the image overruled it.
     #[test]
-    fn the_collapse_affordance_sits_at_the_right_edge_of_the_sessions_header() {
-        let rows = draw(&state(), &skin(Level::Truecolor), 30, 22);
-        let header = rows.iter().find(|r| r.contains("SESSIONS")).unwrap();
-        // Right edge of the *inner* pane: the border column follows it.
+    fn the_affordance_is_the_mockups_plus_in_accent_on_the_shared_right_edge() {
+        assert_eq!(COLLAPSE_HINT, "[+]", "Q6 was answered by the image");
+        let sk = skin(Level::Truecolor);
+        let rows = draw(&state(), &sk, 30, 22);
+        let (y, header) = rows
+            .iter()
+            .enumerate()
+            .find(|(_, r)| r.contains("SESSIONS"))
+            .unwrap();
         assert!(
-            header
-                .trim_end_matches(['│', '|', ' '])
-                .ends_with(COLLAPSE_HINT),
+            header.starts_with(&format!("{}  SESSIONS", UNICODE.border.vertical_left)),
             "{header:?}"
         );
+        assert!(
+            header.ends_with(&format!(
+                "{COLLAPSE_HINT}  {}",
+                UNICODE.border.vertical_right
+            )),
+            "{header:?}"
+        );
+        // Accent, not a dim footnote. Char position is cell position here:
+        // every glyph on this row is one column wide.
+        let area = Rect::new(0, 0, 30, 22);
+        let mut buf = Buffer::empty(area);
+        render(area, &mut buf, &state(), &sk);
+        let x = header.chars().position(|c| c == '[').unwrap() as u16;
+        assert_eq!(
+            buf[(x, y as u16)].style().fg,
+            Some(sk.palette.color(Role::Accent)),
+            "the affordance lost its accent"
+        );
+    }
+
+    /// The TOOLS contract: an available tool advertises its key; an
+    /// unavailable one — the shell hands its trailing in as [`TOOL_MISSING`]
+    /// — keeps its label, says so in words, and dims whole. The words are
+    /// the half of the signal that survives the consoles the dimming dies
+    /// on. Rows are built here exactly as `app::tool_rows` builds them from
+    /// a `usertools::Entry`; the constant is the interlock between the two.
+    #[test]
+    fn an_unavailable_tool_reads_as_switched_off_not_broken() {
+        let mut st = state();
+        st.commands = vec![
+            Row {
+                name: "Shell".into(),
+                trailing: "s".into(),
+                selected: false,
+            },
+            Row {
+                name: "Code".into(),
+                trailing: TOOL_MISSING.into(),
+                selected: false,
+            },
+        ];
+        let sk = skin(Level::Truecolor);
+        let grid = draw(&st, &sk, 30, 22);
+        let area = Rect::new(0, 0, 30, 22);
+        let mut buf = Buffer::empty(area);
+        render(area, &mut buf, &st, &sk);
+        let y = grid.iter().position(|r| r.contains("Code")).unwrap();
+        assert!(grid[y].contains(TOOL_MISSING), "{:?}", grid[y]);
+        let x = grid[y].chars().position(|c| c == 'C').unwrap() as u16;
+        assert_eq!(
+            buf[(x, y as u16)].style().fg,
+            Some(sk.palette.color(Role::Dim)),
+            "the unavailable label did not dim"
+        );
+        let ys = grid.iter().position(|r| r.contains("Shell")).unwrap();
+        let xs = grid[ys].chars().position(|c| c == 'S').unwrap() as u16;
+        assert_eq!(
+            buf[(xs, ys as u16)].style().fg,
+            Some(Color::Reset),
+            "an available label must stay at full strength"
+        );
+        // The colourless, glyphless console: the words are the signal.
+        let grid = draw(&st, &ascii_skin(), 30, 22);
+        let row = grid.iter().find(|r| r.contains("Code")).unwrap();
+        assert!(row.contains(TOOL_MISSING), "{row:?}");
     }
 
     /// The whole pane at the ASCII glyph set with no colour: every cell must
@@ -791,6 +1092,70 @@ mod tests {
             !flat.contains(UNICODE.ellipsis),
             "an explanation was cut: {flat}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // The session clock
+    // -----------------------------------------------------------------------
+
+    /// The mockup's buckets, against two calendar anchors computed by hand
+    /// (1970-04-11 is day 100; 2026-08-12 is day 20,677: 2020-01-01 is
+    /// 18,262, six years add 366+365+365+365+366+365 — 2020 and 2024 leap —
+    /// Jan..Jul of 2026 add 212, the 12th adds 11). The first draft of this
+    /// anchor forgot 2020's leap day and the algorithm caught the fixture,
+    /// which is the right direction for that to fail.
+    #[test]
+    fn the_session_clock_matches_the_mockups_buckets() {
+        let d = 20_677 * DAY_MS; // 2026-08-12 00:00 local
+        let t = d + 12 * 3_600_000 + 42 * 60_000;
+        assert_eq!(when(t, d + 13 * 3_600_000, 0), "12:42");
+        assert_eq!(when(d + 9 * 3_600_000 + 5 * 60_000, t, 0), "09:05");
+        assert_eq!(when(t, t + DAY_MS, 0), "Yesterday");
+        assert_eq!(when(t, t + 100 * DAY_MS, 0), "Aug 12");
+        assert_eq!(when(t, t + 200 * DAY_MS, 0), "Aug 2026");
+        assert_eq!(when(100 * DAY_MS, 300 * DAY_MS, 0), "Apr 11");
+    }
+
+    /// The offset moves the midnight boundary, not just the clock face —
+    /// which is the whole reason the shell must pass a real offset rather
+    /// than letting 0 quietly mean Greenwich.
+    #[test]
+    fn the_offset_moves_the_midnight_boundary_not_just_the_clock() {
+        // 23:30 UTC against 00:01 UTC next day: UTC says Yesterday...
+        let then = DAY_MS - 30 * 60_000;
+        let now = DAY_MS + 60_000;
+        assert_eq!(when(then, now, 0), "Yesterday");
+        // ...but two hours east, both instants share a civil day.
+        assert_eq!(when(then, now, 120), "01:30");
+        // West of Greenwich, the small hours of 1970-01-01 fall into a
+        // different civil *year*; the bucket crosses it without flinching.
+        assert_eq!(when(30 * 60_000, 2 * 3_600_000, -60), "Yesterday");
+    }
+
+    #[test]
+    fn a_session_id_yields_its_creation_time_and_garbage_yields_none() {
+        assert_eq!(
+            session_time_ms("sess-1786499687418-67640"),
+            Some(1_786_499_687_418)
+        );
+        assert_eq!(
+            session_time_ms("sess-1786499687418-67640.jsonl"),
+            Some(1_786_499_687_418)
+        );
+        assert_eq!(session_time_ms("sess-none"), None);
+        assert_eq!(session_time_ms("sess-abc-123"), None);
+        assert_eq!(session_time_ms("sess-1786499687418-"), None);
+        assert_eq!(session_time_ms("anything.jsonl"), None);
+    }
+
+    #[test]
+    fn a_session_label_is_the_goal_collapsed_never_the_filename() {
+        assert_eq!(
+            session_label(Some(" fix\tthe\nfrontmatter parser ")),
+            "fix the frontmatter parser"
+        );
+        assert_eq!(session_label(None), UNTITLED_SESSION);
+        assert_eq!(session_label(Some("   ")), UNTITLED_SESSION);
     }
 
     // -----------------------------------------------------------------------
