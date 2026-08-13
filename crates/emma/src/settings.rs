@@ -47,12 +47,53 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub validated: BTreeMap<String, Validation>,
 
+    /// The sidebar's user tools — which shell, which editor, which directory
+    /// the data explorer opens. Read and acted on by `crate::usertools`; an
+    /// absent field means "probe the machine", which is why the whole block is
+    /// skipped when empty rather than written as four nulls a user would have
+    /// to wonder about. Additive to this struct on purpose: the provider
+    /// fields above belong to another workstream and this one only appends.
+    #[serde(default, skip_serializing_if = "ToolSettings::is_empty")]
+    pub tools: ToolSettings,
+
     /// The pre-provider spelling. Deserialized and never written back, so it
     /// survives being read and disappears on the first save. Private because
     /// nothing outside this module has any business setting it: it is an input
     /// to [`load`]'s migration and nothing else.
     #[serde(default, rename = "model", skip_serializing)]
     legacy_model: Option<String>,
+}
+
+/// What the user has said about their tools, all optional. Values are a bare
+/// program name (looked up on PATH) or an absolute path — never a command
+/// *line*: `usertools` spawns argv directly and refuses to word-split a
+/// string, because splitting is the first half of running text through a
+/// shell and a path with a space in it is not an argument boundary.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolSettings {
+    /// The shell the Shell tool opens. Windows honours this directly; see
+    /// `usertools` for why mac/linux v1 lets the terminal app pick instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
+    /// The editor the Code and Settings tools open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor: Option<String>,
+    /// The file manager, when the OS default (`explorer`/`open`/`xdg-open`)
+    /// is not the one wanted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_browser: Option<String>,
+    /// Where the Data Explorer points. Absolute path; defaults to `~/.emma`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_dir: Option<String>,
+}
+
+impl ToolSettings {
+    pub fn is_empty(&self) -> bool {
+        self.shell.is_none()
+            && self.editor.is_none()
+            && self.file_browser.is_none()
+            && self.data_dir.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -284,6 +325,30 @@ mod tests {
         let (_, r) = resolve_kind(None, None, Some(home.path())).unwrap();
         assert_eq!(r.model_source, "built-in default");
         assert_eq!(r.provider_source, "built-in default");
+    }
+
+    #[test]
+    fn tool_settings_round_trip_and_an_empty_block_is_never_written() {
+        // Two halves of the same guarantee. A configured tool survives a
+        // load/save cycle — otherwise the Settings tool would eat its own
+        // configuration. And a file with no tool choices does not grow a
+        // `tools` key just because this build knows the word: a settings file
+        // that mutates on every save is one nobody can diff.
+        let home = tempfile::tempdir().unwrap();
+        let mut settings = load(home.path());
+        assert!(settings.tools.is_empty());
+        save(home.path(), &settings).unwrap();
+        let raw = std::fs::read_to_string(path(home.path())).unwrap();
+        assert!(!raw.contains("tools"), "{raw}");
+
+        settings.tools.editor = Some("C:\\Program Files\\odd name\\code.exe".into());
+        save(home.path(), &settings).unwrap();
+        let back = load(home.path());
+        assert_eq!(
+            back.tools.editor.as_deref(),
+            Some("C:\\Program Files\\odd name\\code.exe")
+        );
+        assert!(back.tools.shell.is_none());
     }
 
     #[test]
