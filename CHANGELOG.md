@@ -51,6 +51,23 @@ out for themselves.
   the `[+]` is accent and sits on the same right edge as the dates and keys,
   headers and rows are indented as the mockup has them, an unavailable tool
   dims as a whole row, and the QUICK HELP table is uniformly dim.
+- **New: `/theme` in a running session.** `/theme` lists the themes this
+  machine and this project have, marks the one that is selected, and — on a
+  fresh machine, which has none — says so and gives both directories a theme
+  file can go in. `/theme <name>` selects it and writes the name to
+  `~/.emma/settings.json`, leaving every other key in that file alone. **The
+  colours change at the next start, not immediately**, because a theme is read
+  once when Emma starts; `/theme` says which theme the screen is still showing.
+  A name that is not there, or a file that will not parse, is refused with the
+  list of what can be chosen, and nothing is written. There is no `--save` —
+  selecting is saving — and `/theme <name> --save` says so rather than being
+  quietly accepted. On a run with no colour at all (`NO_COLOR`,
+  `EMMA_COLORS=none`, or piped output) the selection is still stored and
+  `/theme` says plainly that restarting will not look any different.
+- A theme selected in `~/.emma/settings.json` is now read at startup and used
+  for the whole run. A theme file that is missing, that will not parse, or that
+  has a bad value in one place costs colour and never the boot: Emma falls back
+  as far as it has to, and says so in words before the first prompt.
 
 ## 0.1.0
 

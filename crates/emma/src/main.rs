@@ -166,10 +166,22 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // `Arc` because a delegation borrows this same terminal — `Term::subordinate`
     // shares the frame and the stdin path so a subagent's approval prompt reaches
     // the same keyboard, while the status meters stay the parent's.
+    // The theme, resolved once and here. It is read before the terminal exists
+    // because the palette is part of building one, and it is never read again:
+    // `/theme` writes the selection and says outright that the next start is
+    // what shows it, so there is no moment at which this value and the screen
+    // disagree. A broken theme costs colour and nothing else — `load` never
+    // fails — and the sentences it produces go through `Term::warn` below,
+    // once the thing that can say them exists.
+    // `None` is "whatever settings.json names": there is no `--theme` flag, and
+    // `theme::load` keeps the parameter for the one-run override that would be
+    // one if it were ever wanted.
+    let (theme, theme_notices) =
+        emma::term::theme::load(auth::home_dir().as_deref(), Some(&harness.root), None);
     let term = Arc::new(if opts.print {
-        Term::printing()
+        Term::printing(theme)
     } else {
-        Term::interactive()
+        Term::interactive(theme)
     });
 
     // Before the reader, because the reader may *be* the delivery. A viewport
@@ -199,6 +211,13 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // here is the sentence saying which one and why.
     for line in &web.skipped {
         term.note(line);
+    }
+    // Same rule, same place: a theme that could not be read entirely, or at
+    // all, has already been fallen back from — saying so is the difference
+    // between "Emma ignored my file" and "Emma found the typo and told me".
+    // Through `warn`, which is the side channel, so `-p`'s stdout is untouched.
+    for line in &theme_notices {
+        term.warn(line);
     }
     if gate == Gate::SkipAll {
         // Loud, every run, before anything happens. A bypass nobody is
@@ -510,6 +529,12 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // only thing allowed to change it. `main` and the agent cannot disagree
     // about the running model, because there is one binding.
     let mut provider = provider;
+    // What the screen is drawn in, snapshotted before anything can change it.
+    // A theme is read once, when the terminal is built, so this stays true for
+    // the life of the process — where `settings.json` does not, because
+    // `/theme` writes that same key and the two are then deliberately
+    // different facts.
+    let theme_at_start = home.as_deref().and_then(|h| emma::settings::load(h).theme);
     loop {
         // Whether this line came from a person at the prompt or from the
         // command line. Only the first is second-guessed: `emma goal "init"` is
@@ -560,6 +585,7 @@ async fn run(cli: cli::Cli) -> Result<()> {
                 key: key.clone(),
                 log_path: log.path().to_path_buf(),
                 home: home.clone(),
+                theme_at_start: theme_at_start.clone(),
             };
             match emma::session_command::run(cmd, &mut session).await {
                 emma::session_command::Flow::Exit => break,

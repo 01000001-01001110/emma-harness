@@ -124,6 +124,19 @@ THE INTERACTIVE SESSION
                                are kept too, and /clear names them: they are
                                consent about the process, and /exit is what
                                drops them.
+    /theme                     the colours: which theme is selected, which
+                               ones this machine and this project have, and
+                               where a theme file goes. A fresh machine has
+                               none, which is why the empty list says so.
+    /theme <name>              select it. A theme is read once, when Emma
+                               starts, so the name is written to
+                               ~/.emma/settings.json and the next start is what
+                               shows it — there is no --save, and nothing
+                               repaints. A name that is not there, or a file
+                               that will not parse, is refused and nothing is
+                               written. NO_COLOR outranks every theme, and
+                               /theme says so rather than letting you restart
+                               into the same screen.
     /config                    what this run resolved — harness, tools,
                                permission rules, agent types, and the model
                                actually running rather than the one on disk.

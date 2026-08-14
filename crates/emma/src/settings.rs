@@ -56,6 +56,24 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "ToolSettings::is_empty")]
     pub tools: ToolSettings,
 
+    /// Which theme is in force, by the name of the file that holds it — see
+    /// [`crate::term::theme`].
+    ///
+    /// **Here and not in `.emma/config.json`**, and that is the module doc's
+    /// ruling applied a second time rather than a new one: the project's
+    /// configuration is read by `emma-harness` and shared by everyone who
+    /// clones the repository, so a theme named there would be two files
+    /// answering "what colour is this" with no rule for disagreeing — and the
+    /// answer that won would be the repository's, on somebody else's screen.
+    /// Theme *files* may live in either place; the selection is a personal
+    /// preference and only ever lives here.
+    ///
+    /// Absent means the built-in. A name that resolves to nothing is a notice
+    /// and never a startup failure, because a theme is decoration and refusing
+    /// to start over it would be the outage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+
     /// The pre-provider spelling. Deserialized and never written back, so it
     /// survives being read and disappears on the first save. Private because
     /// nothing outside this module has any business setting it: it is an input
@@ -349,6 +367,29 @@ mod tests {
             Some("C:\\Program Files\\odd name\\code.exe")
         );
         assert!(back.tools.shell.is_none());
+    }
+
+    #[test]
+    fn a_theme_choice_round_trips_and_an_unthemed_file_never_grows_the_key() {
+        // Same two halves as the tools block, for the same reason: a settings
+        // file that mutates on every save is one nobody can diff, and a
+        // selection that does not survive a save is a `/theme --save` that
+        // silently does nothing.
+        let home = tempfile::tempdir().unwrap();
+        let mut settings = load(home.path());
+        assert!(settings.theme.is_none());
+        save(home.path(), &settings).unwrap();
+        assert!(!std::fs::read_to_string(path(home.path()))
+            .unwrap()
+            .contains("theme"));
+
+        settings.theme = Some("oxide".into());
+        save(home.path(), &settings).unwrap();
+        assert_eq!(load(home.path()).theme.as_deref(), Some("oxide"));
+        // …and it is not the project's to set: this key exists in the personal
+        // file and the harness config has no counterpart.
+        let raw = std::fs::read_to_string(path(home.path())).unwrap();
+        assert!(raw.contains("\"theme\": \"oxide\""), "{raw}");
     }
 
     #[test]

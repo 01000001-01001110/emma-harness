@@ -22,6 +22,18 @@
 //! terminal gets the named ANSI colour closest in intent. `NO_COLOR`, or a
 //! stream that is not a terminal, gets none.
 //!
+//! # The colours are data; the three rules above are not
+//!
+//! Which hex a role has comes from a [`Theme`](super::theme::Theme) — the
+//! built-in one, or a file somebody wrote (`notes/design-themes.md`). What a
+//! theme cannot do is reach any of the three rules. It never colours
+//! [`Role::Text`], it never paints a lone background, and it is never consulted
+//! at all on a terminal with no colour to spend. Those are enforced twice on
+//! purpose: once by the loader, which refuses the keys by name, and once here
+//! in [`Palette::color`], which returns before the theme is read. The loader
+//! can only refuse data it has thought of; this function cannot be given data
+//! at all.
+//!
 //! # Where the colours come from now
 //!
 //! The accent and the secondary grey are the owner's mockup, sampled from the
@@ -48,6 +60,8 @@
 //! every terminal and on every theme, which a hex is not.
 
 use ratatui::style::{Color, Modifier, Style};
+
+use super::theme::{Pair, Theme};
 
 // region: How much colour this terminal has
 // ---------------------------------------------------------------------------
@@ -133,7 +147,7 @@ impl Level {
 // The roles
 //
 // Named by what a colour *means* rather than by which colour it is, so the one
-// place a hex appears is the table below and a terminal that cannot render it
+// place a hex appears is the theme, and a terminal that cannot render it
 // substitutes at that single point.
 // ---------------------------------------------------------------------------
 
@@ -159,66 +173,93 @@ pub enum Role {
     Ground,
 }
 
-/// The mockup's accent over Gruvbox's safety vocabulary, at three fidelities.
-///
-/// The 256 indices are the customary Gruvbox terminal mapping for the roles
-/// that stayed, and the nearest cube entry for the two that moved. The ANSI
-/// names are chosen by intent rather than by nearest distance — `Warn` is
-/// yellow at every level even though the 24-bit yellow is nearer to some
-/// oranges, because a warning that changes hue between terminals is a warning
-/// somebody has to re-learn.
-const fn table(role: Role) -> (u8, u8, u8, u8, Color) {
-    match role {
-        // Never reached: `Text` short-circuits to `Color::Reset` before this is
-        // consulted. Present so the match is total and so that a future edit
-        // that reaches for a foreground hex has to walk past the reason.
-        Role::Text => (235, 219, 178, 223, Color::Reset),
-        // Neutral rather than Gruvbox's warm `#928374`: the mockup's greys are
-        // untinted, and a warm grey beside a pink accent reads as a third,
-        // muddier colour rather than as an absence of one.
-        Role::Dim => (143, 143, 148, 245, Color::DarkGray),
-        Role::Ok => (184, 187, 38, 142, Color::LightGreen),
-        Role::Err => (251, 73, 52, 167, Color::LightRed),
-        Role::Warn => (250, 189, 47, 214, Color::LightYellow),
-        Role::Info => (142, 192, 124, 108, Color::LightCyan),
-        // The mockup's pink. Index 204 is `#ff5f87` — near enough that the two
-        // are hard to tell apart side by side, which is the whole bar a 256
-        // fallback has to clear.
-        //
-        // `LightMagenta` at 16 colours is deliberately **not** `LightRed`, even
-        // though the hue is nearer: `Role::Err` owns red at that level, and the
-        // accent is what a *user's own message* is drawn in. A goal line that
-        // reads as an error on a 16-colour terminal is worse than a goal line
-        // that reads as violet.
-        Role::Accent => (245, 84, 143, 204, Color::LightMagenta),
-        // Only ever a foreground on an accent background, so it is chosen for
-        // contrast against the pink above rather than for resemblance to
-        // anything. The mockup's own ground, which is as dark as this gets.
-        Role::Ground => (13, 13, 16, 233, Color::Black),
-    }
-}
+// ---------------------------------------------------------------------------
+// Where the eight values live, and why the arguments for them stayed here
+//
+// The numbers are in [`super::theme`] now: the whole of the theme feature is
+// that this file reads a role's three values out of a `Theme` rather than out
+// of a `const fn`. The *arguments* did not go with them, because they are
+// arguments about what a role means, and the person most likely to reverse one
+// by accident is somebody editing a theme file who never opens the loader:
+//
+// - `Dim` is a neutral grey rather than Gruvbox's warm `#928374`: the mockup's
+//   greys are untinted, and a warm grey beside a pink accent reads as a third,
+//   muddier colour rather than as an absence of one.
+// - `Accent` is the mockup's pink, and its 256-colour index 204 is `#ff5f87` —
+//   near enough that the two are hard to tell apart side by side, which is the
+//   whole bar a 256 fallback has to clear.
+// - `Accent` at sixteen colours is deliberately **not** `LightRed`, even though
+//   the hue is nearer: `Role::Err` owns red at that level, and the accent is
+//   what a *user's own message* is drawn in. A goal line that reads as an error
+//   on a 16-colour terminal is worse than a goal line that reads as violet.
+//   This is also why a theme's sixteen-colour name is inherited from the
+//   built-in role rather than derived — nearest distance is precisely the
+//   metric that makes that mistake, and it cannot be told about intent.
+// - `Warn` is yellow at every level even though the 24-bit yellow is nearer to
+//   some oranges: a warning that changes hue between terminals is a warning
+//   somebody has to re-learn.
+// - `Ground` is only ever a foreground on an accent background, so it is chosen
+//   for contrast against the pink rather than for resemblance to anything.
+// - `Text` has no value here at all, and that is the point. It short-circuits
+//   to `Color::Reset` in `color` below, *before* the theme is consulted, so no
+//   theme can reach it however the file was written. The loader refuses
+//   `roles.text` by name as well — see the module doc for why a cream
+//   foreground on somebody else's white terminal reads as Emma being broken
+//   rather than as the theme being wrong.
+// ---------------------------------------------------------------------------
 
-/// The palette in force for this run.
+/// The palette in force for this run: how much colour, and which colours.
+///
+/// **`Copy`, and that is load-bearing.** Roughly thirty call sites pass a
+/// `Palette` — and the [`Skin`](super::render::Skin) that holds one — by value,
+/// and the whole of `term/` stores them in widgets. A theme is resolved to
+/// fixed-size data at load precisely so this stays true: a `Theme` holding
+/// `String`s would end `Copy` and cascade through every signature in the module.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub level: Level,
+    pub theme: Theme,
 }
 
 impl Palette {
+    /// The built-in theme at this fidelity — what Emma looks like out of the box.
     pub fn new(level: Level) -> Self {
-        Self { level }
+        Self {
+            level,
+            theme: super::theme::BUILTIN,
+        }
+    }
+
+    /// A resolved theme at this fidelity.
+    ///
+    /// **The level is an argument and is never re-decided here.** [`Level::of`]
+    /// reads the environment once, at startup; a theme swapped in mid-session
+    /// cannot turn a sixteen-colour terminal into a truecolor one and certainly
+    /// cannot overturn `NO_COLOR`. A theme says *which* colours; only the
+    /// terminal says *how many*.
+    pub fn with_theme(level: Level, theme: Theme) -> Self {
+        Self { level, theme }
     }
 
     /// The colour for a role, at whatever fidelity this terminal has.
+    ///
+    /// **The first line is the whole of the safety argument, and its position
+    /// is the argument.** `Level::None` — which is what `NO_COLOR`, a pipe and
+    /// `--print` all produce — and `Role::Text` both return before the theme is
+    /// read, so there is no path on which a theme is consulted and either of
+    /// them applies. That is stronger than a check inside the loader, because a
+    /// check can be forgotten by whoever adds the next method here.
     pub fn color(&self, role: Role) -> Color {
         if self.level == Level::None || role == Role::Text {
             return Color::Reset;
         }
-        let (r, g, b, idx, ansi) = table(role);
         match self.level {
-            Level::Truecolor => Color::Rgb(r, g, b),
-            Level::Ansi256 => Color::Indexed(idx),
-            _ => ansi,
+            Level::Truecolor => {
+                let (r, g, b) = self.theme.rgb(role);
+                Color::Rgb(r, g, b)
+            }
+            Level::Ansi256 => Color::Indexed(self.theme.indexed(role)),
+            _ => self.theme.ansi16(role),
         }
     }
 
@@ -236,10 +277,18 @@ impl Palette {
         self.style(role).add_modifier(Modifier::BOLD)
     }
 
-    /// The one place a background is painted: the `[y]` / `[n]` chips on the
-    /// approval prompt. Both halves are set, so it is legible on a light
+    /// One of the two places a background is painted: the `[y]` / `[n]` chips
+    /// on the approval prompt. Both halves are set, so it is legible on a light
     /// terminal and on a dark one, which is exactly why it is allowed here and
     /// nowhere else.
+    ///
+    /// **Its halves are roles, not a stored pair, because the background is the
+    /// caller's argument** — the prompt draws its answer key on
+    /// [`Role::Accent`] and its refusal on [`Role::Warn`], and a pair with a
+    /// fixed background could not say both. So the chip is themed the way
+    /// everything else is: through `color`, one role at a time. The schema's
+    /// `pairs.chip` exists for the halves a role cannot supply; the pair a
+    /// theme genuinely has to name for itself is [`Palette::band`]'s.
     pub fn chip(&self, role: Role) -> Style {
         if self.level == Level::None {
             // No colour to invert, so the emphasis has to come from somewhere:
@@ -251,6 +300,103 @@ impl Palette {
             .bg(self.color(role))
             .add_modifier(Modifier::BOLD)
     }
+
+    /// The other one: the sidebar's selected-session band, border to border.
+    ///
+    /// Measured off `notes/mockup-tui.png` (2026-08-13) — accent text on a
+    /// barely-raised near-black, rgb(25,27,30) against the rgb(13,15,19)
+    /// ground — and deliberately *not* [`Palette::chip`]'s dark-on-pink, which
+    /// an earlier draft reused and which reads as a second approval prompt.
+    /// It lived in `sidebar.rs` behind a note saying it was there only because
+    /// this file was not that workstream's to grow. It is this one's, and a
+    /// second private colour table outside the one substitution point is
+    /// exactly the drift a theme cannot be applied to.
+    ///
+    /// Both halves are always set, which is the invariant that makes a
+    /// background safe at all (module doc), and with no colour the pair
+    /// degrades to reversed video exactly as the chip does — the selection is
+    /// never carried by colour alone, and the `>` in the sidebar's lead
+    /// survives everything.
+    ///
+    /// **The two fidelities that are not a hex, and why they differ.** The 256
+    /// index is *derived* from the pair's own hex, because that is mechanical:
+    /// [`nearest_index`] puts rgb(25,27,30) on 234, the greyscale ramp's
+    /// `#1c1c1c` and the nearest step to the sampled band. The sixteen-colour
+    /// background is *not* derived, for the reason a theme's `ansi16` is
+    /// inherited rather than computed: nearest distance on a near-black picks
+    /// black, which is the terminal's own background on the machines this band
+    /// exists for, and a band the same colour as the ground is not a band.
+    /// `DarkGray` is chosen by intent and is as subtle as sixteen colours get.
+    /// The foreground at that fidelity comes from [`Role::Accent`], which a
+    /// theme *can* name — the half with a role behind it stays themed.
+    pub fn band(&self) -> Style {
+        if self.level == Level::None {
+            return Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD);
+        }
+        let (fg, bg) = self.theme.pair(Pair::Selection);
+        match self.level {
+            Level::Truecolor => Style::default()
+                .fg(Color::Rgb(fg.0, fg.1, fg.2))
+                .bg(Color::Rgb(bg.0, bg.1, bg.2)),
+            Level::Ansi256 => Style::default()
+                .fg(Color::Indexed(nearest_index(fg)))
+                .bg(Color::Indexed(nearest_index(bg))),
+            _ => Style::default()
+                .fg(self.color(Role::Accent))
+                .bg(BAND_ANSI16_BG),
+        }
+    }
+}
+
+/// The sixteen-colour background of the selection band. A named colour, chosen
+/// by intent — see [`Palette::band`] for why this one is not computed from the
+/// pair's hex the way the 256 index is.
+const BAND_ANSI16_BG: Color = Color::DarkGray;
+
+/// The nearest xterm-256 entry to a 24-bit colour, by squared RGB distance over
+/// the 6×6×6 cube (indices 16–231, levels 0/95/135/175/215/255) and the 24-step
+/// greyscale ramp (232–255, value `8 + 10i`).
+///
+/// **Only pairs come through here, and only for their 256-colour half.** A
+/// role's index is declared by the theme, because `notes/design-themes.md` §2.3
+/// measured this function against the seven hexes Emma ships and found it
+/// reproduces five of them exactly and disagrees with two by a shade of the
+/// same hue — good enough to derive from, not good enough to overwrite a
+/// deliberate choice with. A pair has no role to inherit an index from, so
+/// here derivation is the only honest answer available.
+///
+/// The consequence worth knowing: where a pair's half names a role whose index
+/// the theme *declared* against the derivation, the band will use the derived
+/// one. For the built-in they agree — accent derives to the 204 it declares,
+/// which is what the test below pins.
+fn nearest_index(rgb: (u8, u8, u8)) -> u8 {
+    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    fn dist(a: (u8, u8, u8), b: (u8, u8, u8)) -> i32 {
+        let d = |x: u8, y: u8| {
+            let d = i32::from(x) - i32::from(y);
+            d * d
+        };
+        d(a.0, b.0) + d(a.1, b.1) + d(a.2, b.2)
+    }
+    let cube = LEVELS.iter().enumerate().flat_map(|(r, &rv)| {
+        LEVELS.iter().enumerate().flat_map(move |(g, &gv)| {
+            LEVELS
+                .iter()
+                .enumerate()
+                .map(move |(b, &bv)| ((16 + 36 * r + 6 * g + b) as u8, (rv, gv, bv)))
+        })
+    });
+    let ramp = (0..24u8).map(|i| {
+        let v = 8 + 10 * i;
+        (232 + i, (v, v, v))
+    });
+    // A tie goes to the lower index — `min_by_key` keeps the first — so the
+    // cube wins over the ramp where both land on the same distance, which is
+    // the same order the two structures have in the palette itself.
+    cube.chain(ramp)
+        .min_by_key(|&(_, candidate)| dist(rgb, candidate))
+        .map(|(idx, _)| idx)
+        .expect("the cube and the ramp are both non-empty")
 }
 
 // endregion: The roles
@@ -408,6 +554,14 @@ mod tests {
 
     /// The rule that keeps Emma legible on a light background: body text is the
     /// user's own foreground at every fidelity, never Gruvbox's cream.
+    ///
+    /// **This one keeps its teeth under a theme, and by construction rather
+    /// than by fixture.** A theme carries a value for every role including
+    /// `Text`; removing the `role == Role::Text` short-circuit in
+    /// [`Palette::color`] would return that value, and at truecolor and 256 the
+    /// result is a `Color::Rgb`/`Color::Indexed`, neither of which can ever
+    /// equal `Color::Reset`. So the assertion below goes red for any theme at
+    /// all, not merely for one the fixture happens to have chosen.
     #[test]
     fn ordinary_text_is_never_given_a_colour_at_any_fidelity() {
         for level in [Level::None, Level::Ansi16, Level::Ansi256, Level::Truecolor] {
@@ -419,8 +573,11 @@ mod tests {
         }
     }
 
+    /// §2.4's widening: *the named pairs*, now that there are two of them.
+    /// Every role is a lone foreground and paints nothing; both pairs set both
+    /// halves, which is the invariant that makes a background safe at all.
     #[test]
-    fn nothing_paints_a_background_except_the_answer_keys() {
+    fn nothing_paints_a_background_except_the_named_pairs() {
         for level in [Level::Ansi16, Level::Ansi256, Level::Truecolor] {
             let p = Palette::new(level);
             for role in ROLES {
@@ -429,9 +586,13 @@ mod tests {
                     "{role:?} painted a background at {level:?}"
                 );
             }
-            // …and the chip sets both halves, which is what makes it safe.
-            let chip = p.chip(Role::Accent);
-            assert!(chip.fg.is_some() && chip.bg.is_some());
+            for (name, pair) in [("chip", p.chip(Role::Accent)), ("band", p.band())] {
+                assert!(
+                    pair.fg.is_some() && pair.bg.is_some(),
+                    "the {name} set only one half at {level:?}"
+                );
+                assert_ne!(pair.fg, pair.bg, "the {name} is invisible at {level:?}");
+            }
         }
     }
 
@@ -441,6 +602,203 @@ mod tests {
         // answer keys are the one thing on screen that must not be missed.
         let chip = Palette::new(Level::None).chip(Role::Accent);
         assert!(chip.add_modifier.contains(Modifier::REVERSED));
+    }
+
+    /// **`NO_COLOR` wins over a theme by construction, not by a check.**
+    ///
+    /// `Level::None` is what `NO_COLOR`, a pipe and `--print` all produce, and
+    /// [`Palette::color`] returns before the theme is read on that path. The
+    /// mutation this must not survive is moving the theme lookup above the
+    /// short-circuit: every role would then come back as a hex, an index or a
+    /// named colour, and none of those is `Color::Reset`.
+    ///
+    /// The pairs are checked here too, because they are the only two places a
+    /// background exists and they have their own early return to lose.
+    #[test]
+    fn with_no_colour_nothing_a_theme_could_say_reaches_the_screen() {
+        let p = Palette::new(Level::None);
+        for role in ROLES {
+            assert_eq!(p.color(role), Color::Reset, "{role:?} was coloured anyway");
+            assert!(p.style(role).bg.is_none(), "{role:?} painted a background");
+        }
+        for (name, pair) in [("chip", p.chip(Role::Accent)), ("band", p.band())] {
+            assert_eq!(pair.fg, None, "the {name} carried a foreground colour");
+            assert_eq!(pair.bg, None, "the {name} carried a background colour");
+            assert!(
+                pair.add_modifier.contains(Modifier::REVERSED),
+                "the {name} lost the one emphasis that survives no colour"
+            );
+        }
+    }
+
+    /// The selection band, at all four fidelities, pinned to what shipped.
+    ///
+    /// The literals are the numbers `sidebar.rs::band` held before this pair
+    /// moved into the palette — the whole point of the move being that nothing
+    /// about it changed except where it lives. `Color::Rgb(25, 27, 30)` is the
+    /// sampled band; `Indexed(234)` is what [`nearest_index`] makes of it, and
+    /// `Indexed(204)` is the accent's own cube entry, so the derived pair and
+    /// the declared role agree for the theme Emma ships.
+    #[test]
+    fn the_selection_band_is_the_measured_pair_at_every_fidelity() {
+        let truecolor = Palette::new(Level::Truecolor).band();
+        assert_eq!(truecolor.fg, Some(Color::Rgb(245, 84, 143)));
+        assert_eq!(truecolor.bg, Some(Color::Rgb(25, 27, 30)));
+
+        let indexed = Palette::new(Level::Ansi256).band();
+        assert_eq!(indexed.fg, Some(Color::Indexed(204)));
+        assert_eq!(indexed.bg, Some(Color::Indexed(234)));
+
+        let named = Palette::new(Level::Ansi16).band();
+        assert_eq!(named.fg, Some(Color::LightMagenta));
+        assert_eq!(named.bg, Some(Color::DarkGray));
+
+        let none = Palette::new(Level::None).band();
+        assert_eq!(
+            none,
+            Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
+        );
+
+        // …and it is not the approval chip, at any fidelity. This is the
+        // regression the owner reported by eye as "not formatted like the
+        // image", and it is a property rather than a literal on purpose.
+        for level in [Level::Ansi16, Level::Ansi256, Level::Truecolor] {
+            let p = Palette::new(level);
+            assert_ne!(p.band(), p.chip(Role::Accent), "at {level:?}");
+        }
+    }
+
+    /// **The safety of the whole theme change: with the built-in theme, every
+    /// role at every fidelity is the exact colour that shipped before the
+    /// values moved out of this file.**
+    ///
+    /// Written as a full table rather than as spot checks because the failure
+    /// it guards against is a single value drifting during the move — which no
+    /// property test can see, since every property here (degradation, accent ≠
+    /// error, no lone background) would still hold of a subtly different
+    /// palette. Somebody who changes a colour on purpose edits this table and
+    /// says so; nobody changes one by accident.
+    #[test]
+    fn the_built_in_theme_renders_exactly_what_shipped() {
+        let expected = [
+            // (role, truecolor, 256, 16)
+            (Role::Text, Color::Reset, Color::Reset, Color::Reset),
+            (
+                Role::Dim,
+                Color::Rgb(143, 143, 148),
+                Color::Indexed(245),
+                Color::DarkGray,
+            ),
+            (
+                Role::Ok,
+                Color::Rgb(184, 187, 38),
+                Color::Indexed(142),
+                Color::LightGreen,
+            ),
+            (
+                Role::Err,
+                Color::Rgb(251, 73, 52),
+                Color::Indexed(167),
+                Color::LightRed,
+            ),
+            (
+                Role::Warn,
+                Color::Rgb(250, 189, 47),
+                Color::Indexed(214),
+                Color::LightYellow,
+            ),
+            (
+                Role::Info,
+                Color::Rgb(142, 192, 124),
+                Color::Indexed(108),
+                Color::LightCyan,
+            ),
+            (
+                Role::Accent,
+                Color::Rgb(245, 84, 143),
+                Color::Indexed(204),
+                Color::LightMagenta,
+            ),
+            (
+                Role::Ground,
+                Color::Rgb(13, 13, 16),
+                Color::Indexed(233),
+                Color::Black,
+            ),
+        ];
+        for (role, truecolor, indexed, named) in expected {
+            for (level, want) in [
+                (Level::Truecolor, truecolor),
+                (Level::Ansi256, indexed),
+                (Level::Ansi16, named),
+                (Level::None, Color::Reset),
+            ] {
+                assert_eq!(
+                    Palette::new(level).color(role),
+                    want,
+                    "{role:?} at {level:?} is not what shipped"
+                );
+            }
+        }
+    }
+
+    /// `Palette::new` and `Palette::with_theme` are the same thing when the
+    /// theme is the built-in one — which is what keeps the ~30 call sites that
+    /// say `Palette::new(Level::…)` honest, and what makes a mid-session swap
+    /// back to the default a no-op rather than an approximation.
+    ///
+    /// And the level is carried, not re-decided: `with_theme` has no way to
+    /// detect anything, so a theme cannot promote a terminal's fidelity.
+    #[test]
+    fn a_theme_chooses_colours_and_never_how_many_of_them_there_are() {
+        for level in [Level::None, Level::Ansi16, Level::Ansi256, Level::Truecolor] {
+            let swapped = Palette::with_theme(level, super::super::theme::BUILTIN);
+            assert_eq!(swapped.level, level, "the swap moved the fidelity");
+            for role in ROLES {
+                assert_eq!(swapped.color(role), Palette::new(level).color(role));
+            }
+            assert_eq!(swapped.band(), Palette::new(level).band());
+        }
+    }
+
+    /// `Palette` and everything holding one are passed by value across `term/`.
+    /// A theme that ended `Copy` would cascade through every signature in the
+    /// module, which is why it is resolved to fixed-size data at load.
+    #[test]
+    fn a_palette_is_still_copy() {
+        fn assert_copy<T: Copy>() {}
+        assert_copy::<Palette>();
+        assert_copy::<Theme>();
+        assert_copy::<Level>();
+    }
+
+    /// The 256-colour derivation, against the seven hexes
+    /// `notes/design-themes.md` §2.3 measured — the one measured claim in that
+    /// document, reproduced here so it is a receipt rather than a citation.
+    ///
+    /// Five reproduce the shipping index exactly. Two do not, and the document
+    /// says so: `Err` derives to 203 where the customary Gruvbox terminal
+    /// mapping is 167, and `Dim` to 246 where it is 245 — one greyscale step.
+    /// Both divergences are pinned here rather than smoothed over, because the
+    /// reason the built-in theme *declares* those two indices is that this
+    /// function would otherwise quietly change what Emma looks like.
+    #[test]
+    fn the_256_derivation_reproduces_the_measured_table() {
+        assert_eq!(nearest_index((245, 84, 143)), 204, "Accent");
+        assert_eq!(nearest_index((184, 187, 38)), 142, "Ok");
+        assert_eq!(nearest_index((250, 189, 47)), 214, "Warn");
+        assert_eq!(nearest_index((142, 192, 124)), 108, "Info");
+        assert_eq!(nearest_index((13, 13, 16)), 233, "Ground");
+        assert_eq!(nearest_index((251, 73, 52)), 203, "Err diverges from 167");
+        assert_eq!(nearest_index((143, 143, 148)), 246, "Dim diverges from 245");
+        // The band's own background, which is the value this function exists
+        // for: the greyscale ramp's `#1c1c1c`, one step from the sampled band.
+        assert_eq!(nearest_index((25, 27, 30)), 234, "the selection band");
+        // The ends of both structures, so a cube-index or ramp-offset error
+        // cannot hide between the samples above.
+        assert_eq!(nearest_index((0, 0, 0)), 16);
+        assert_eq!(nearest_index((255, 255, 255)), 231);
+        assert_eq!(nearest_index((128, 128, 128)), 244);
     }
 
     const ROLES: [Role; 8] = [

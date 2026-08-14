@@ -34,6 +34,7 @@ use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 
 use super::palette::{Level, Palette, Role};
+use super::theme::Theme;
 
 // region: Glyphs
 // ---------------------------------------------------------------------------
@@ -142,6 +143,23 @@ pub struct Skin {
 impl Skin {
     pub fn new(palette: Palette, glyphs: Glyphs) -> Self {
         Self { palette, glyphs }
+    }
+
+    /// The same skin with a resolved theme in it, for a swap after boot.
+    ///
+    /// **The fidelity is passed in, not detected.** The one thing a mid-session
+    /// theme change must not do is re-answer "how much colour does this
+    /// terminal have" — `Level::of` reads the environment once, and a `/theme`
+    /// cannot turn a sixteen-colour console into a truecolor one or overturn
+    /// `NO_COLOR`. So this takes the level the caller is already running at and
+    /// changes nothing but the colours. Same reason the glyph set is an
+    /// argument: it came from a code-page read-back, and a theme has no
+    /// business in it.
+    pub fn with_theme(level: Level, glyphs: Glyphs, theme: Theme) -> Self {
+        Self {
+            palette: Palette::with_theme(level, theme),
+            glyphs,
+        }
     }
 
     /// A marked line: the glyph in its colour, then the text.
@@ -893,6 +911,32 @@ mod tests {
         let vague = s.tool_ok("a\nb", true, None);
         let text: String = vague.iter().map(plain).collect::<Vec<_>>().join("\n");
         assert!(text.contains("did not say by which limit"), "{text}");
+    }
+
+    /// A skin built with a theme is the same skin, and it is still `Copy` —
+    /// which is what lets `Term`, `Frame` and `View` keep storing one by value.
+    /// A theme that owned a `String` would end that and cascade through every
+    /// signature in this module, so the swap is a whole-value replacement of
+    /// fixed-size data or it is a much larger change than stage 1.
+    #[test]
+    fn a_skin_carrying_a_theme_is_still_copy_and_still_the_same_skin() {
+        fn assert_copy<T: Copy>() {}
+        assert_copy::<Skin>();
+        assert_copy::<Glyphs>();
+
+        for level in [Level::None, Level::Ansi16, Level::Ansi256, Level::Truecolor] {
+            let swapped = Skin::with_theme(level, UNICODE, super::super::theme::BUILTIN);
+            let built = Skin::new(Palette::new(level), UNICODE);
+            assert_eq!(swapped.palette.level, built.palette.level);
+            assert_eq!(swapped.glyphs, built.glyphs);
+            for role in [Role::Text, Role::Accent, Role::Err, Role::Ground] {
+                assert_eq!(
+                    swapped.palette.color(role),
+                    built.palette.color(role),
+                    "{role:?} at {level:?}"
+                );
+            }
+        }
     }
 
     #[test]

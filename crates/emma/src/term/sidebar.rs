@@ -47,7 +47,8 @@
 //! # The selected row
 //!
 //! Marked twice, like everything in [`super::render`]: a `>` in the lead
-//! *and* a full-width band from [`band`]. An earlier draft reused
+//! *and* a full-width band from [`Palette::band`](super::palette::Palette::band).
+//! An earlier draft reused
 //! [`Palette::chip`](super::palette::Palette::chip) here to avoid inventing a
 //! second fg+bg pair; the image refused it — the mockup's band is accent text
 //! on a subtle raised ground, and a solid pink chip row reads as a second
@@ -55,6 +56,12 @@
 //! and degrades to reversed video at
 //! [`Level::None`](super::palette::Level::None), so the selection is never
 //! carried by colour alone — the `>` survives everything.
+//!
+//! The band's own colours are no longer here. They were a private four-level
+//! table in this file, with a note saying it lived here only because
+//! `palette.rs` was not that workstream's to grow; it is now that file's, where
+//! the argument for the one substitution point already lives and where a theme
+//! can reach it. What survives here is the geometry.
 //!
 //! # Empty sections
 //!
@@ -75,11 +82,10 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Widget};
 
-use super::palette::{Level, Palette, Role};
+use super::palette::Role;
 use super::render::{cols, fit, Skin};
 
 // region: Width
@@ -429,33 +435,6 @@ fn header(name: &str, affordance: Option<&str>, w: usize, skin: &Skin) -> Line<'
     Line::from(spans)
 }
 
-/// The selected row's band, border to border. Measured off
-/// `notes/mockup-tui.png` (2026-08-13): accent text on a barely-raised
-/// near-black — rgb(25,27,30) against the rgb(13,15,19) ground — not the
-/// approval chip's dark-on-pink, which an earlier draft reused and which
-/// reads as a second approval prompt. `palette.rs` calls `chip()` the one
-/// sanctioned fg+bg pair; the design's §6 extends that exception to this
-/// band, and the pair lives here rather than in `palette.rs` because that
-/// file is not this workstream's to grow. Both halves are always set, so the
-/// band survives a light terminal; with no colour at all it degrades to
-/// reversed video, exactly as the chip does.
-fn band(p: &Palette) -> Style {
-    match p.level {
-        Level::None => Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
-        // DarkGray is as subtle as sixteen colours get; index 234 is the
-        // greyscale ramp's `#1c1c1c`, the nearest step to the sampled band.
-        Level::Ansi16 => Style::default()
-            .fg(p.color(Role::Accent))
-            .bg(Color::DarkGray),
-        Level::Ansi256 => Style::default()
-            .fg(p.color(Role::Accent))
-            .bg(Color::Indexed(234)),
-        Level::Truecolor => Style::default()
-            .fg(p.color(Role::Accent))
-            .bg(Color::Rgb(25, 27, 30)),
-    }
-}
-
 /// One list row at exactly `w` columns: ` > name        trailing  `.
 ///
 /// The geometry is the measured grid ([`LEAD`], [`RIGHT_PAD`]); the width
@@ -485,7 +464,7 @@ fn list_row(row: &Row, w: usize, skin: &Skin) -> Line<'static> {
         // The band: one style across every span, lead and padding included,
         // so the highlight is the full row and not a patchwork — the image
         // shows it running border to border.
-        let b = band(&skin.palette);
+        let b = skin.palette.band();
         return Line::from(vec![
             Span::styled(lead.to_string(), b),
             Span::styled(name, b),
@@ -625,7 +604,7 @@ fn fitted(mut lines: Vec<Line<'static>>, height: u16, skin: &Skin) -> Vec<Line<'
 
 #[cfg(test)]
 mod tests {
-    use ratatui::style::Modifier;
+    use ratatui::style::{Color, Modifier};
 
     use super::super::palette::{Level, Palette};
     use super::super::render::{plain, ASCII, UNICODE};
@@ -905,7 +884,7 @@ mod tests {
             26,
             &s,
         );
-        let b = band(&s.palette);
+        let b = s.palette.band();
         assert_eq!(line.width(), 26, "{:?}", plain(&line));
         for span in &line.spans {
             assert_eq!(span.style, b, "unbanded span {:?}", span.content);
@@ -917,6 +896,62 @@ mod tests {
             s.palette.chip(Role::Accent),
             "the chip pair came back: dark-on-pink is not the mockup's band"
         );
+    }
+
+    /// **The receipt for the move: the drawn row is byte-for-byte the row that
+    /// shipped, at every fidelity.**
+    ///
+    /// `band` moved out of this file and into the palette, where a theme can
+    /// reach it. The risk that carries is not that the pair stops existing —
+    /// the test above would catch that — but that one of its four fidelities
+    /// quietly changes value on the way across. So this asserts the painted
+    /// cells rather than the style object: the whole selected row, from the
+    /// left border to the right, against the exact colours the private table
+    /// used to produce. The `Ansi256` and `Ansi16` rows are the ones worth
+    /// having, because those are the two the palette now computes differently
+    /// — derived from the pair's hex, and inherited by name — where this file
+    /// used to write 234 and `DarkGray` as literals.
+    #[test]
+    fn the_selected_row_is_painted_exactly_as_it_was_before_the_band_moved() {
+        let expected = [
+            (
+                Level::Truecolor,
+                Some(Color::Rgb(245, 84, 143)),
+                Some(Color::Rgb(25, 27, 30)),
+            ),
+            (
+                Level::Ansi256,
+                Some(Color::Indexed(204)),
+                Some(Color::Indexed(234)),
+            ),
+            (
+                Level::Ansi16,
+                Some(Color::LightMagenta),
+                Some(Color::DarkGray),
+            ),
+        ];
+        for (level, fg, bg) in expected {
+            let sk = skin(level);
+            let rows = draw(&state(), &sk, 30, 22);
+            let y = rows
+                .iter()
+                .position(|r| r.contains("product-strategy"))
+                .unwrap() as u16;
+            let area = Rect::new(0, 0, 30, 22);
+            let mut buf = Buffer::empty(area);
+            render(area, &mut buf, &state(), &sk);
+            // 1..29: everything inside the border, which is where the image
+            // shows the band running.
+            for x in 1..29u16 {
+                let style = buf[(x, y)].style();
+                assert_eq!(style.fg, fg, "cell {x} at {level:?}");
+                assert_eq!(style.bg, bg, "cell {x} at {level:?}");
+            }
+            // The border keeps its own colour — the band is the row, not the
+            // pane. (A painted cell's background is `Reset` rather than `None`;
+            // the assertion is that it is not the band's.)
+            assert_ne!(buf[(0u16, y)].style().bg, bg, "the band ate the border");
+        }
     }
 
     // -----------------------------------------------------------------------

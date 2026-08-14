@@ -81,6 +81,7 @@ pub mod sidebar;
 pub mod spacing;
 pub mod statusbar;
 pub mod statusline;
+pub mod theme;
 pub mod transcript;
 pub mod view;
 pub mod welcome;
@@ -159,7 +160,14 @@ impl Term {
     /// pipe and a redirected run get the detection they always had, because
     /// changing a code page on a console nobody is looking at is a change to
     /// somebody's shell for no benefit at all.
-    pub fn interactive() -> Self {
+    /// **The theme is an argument, and the fidelity is not.** `theme` chooses
+    /// *which* colours; [`Level::detect`] decides how many of them this
+    /// terminal can be sent, and it is not one of the theme's inputs. That is
+    /// what makes `NO_COLOR` unarguable rather than merely respected: it
+    /// produces `Level::None`, and `Palette::color` returns before the theme is
+    /// consulted at all. The theme is passed in rather than loaded here because
+    /// resolving it needs the harness root, which `main` has and this does not.
+    pub fn interactive(theme: theme::Theme) -> Self {
         let color = std::io::stdout().is_terminal();
         let opted_out = std::env::var_os("EMMA_ASCII_FRAME").is_some();
         let framing = frame_wanted();
@@ -170,7 +178,7 @@ impl Term {
                 render::UNICODE
             }
         };
-        let palette = Palette::new(Level::detect(color));
+        let palette = Palette::with_theme(Level::detect(color), theme);
         // Only a run that is about to draw asks for UTF-8; everything else
         // takes the console as it found it.
         let skin = Skin::new(
@@ -210,11 +218,14 @@ impl Term {
         }
     }
 
-    pub fn printing() -> Self {
+    /// `-p`. The theme reaches the *side* channel and nothing else: assistant
+    /// prose goes to stdout unstyled, which is what keeps a piped answer free
+    /// of escape bytes whatever a theme says.
+    pub fn printing(theme: theme::Theme) -> Self {
         let color = std::io::stderr().is_terminal();
         Self {
             skin: Skin::new(
-                Palette::new(Level::detect(color)),
+                Palette::with_theme(Level::detect(color), theme),
                 if prefers_ascii(
                     std::env::var_os("EMMA_ASCII_FRAME").is_some(),
                     console_is_utf8(),
@@ -336,6 +347,17 @@ impl Term {
     /// the same thing twice — the hint row carries two of them — and for tests.
     pub fn framed(&self) -> bool {
         self.frame.is_some()
+    }
+
+    /// How much colour this run has, as `Level::of` decided it.
+    ///
+    /// For the one caller that has to say plainly that a setting will not
+    /// change anything here: `/theme` writes a preference, and on a terminal
+    /// running under `NO_COLOR` — or piped, or `EMMA_COLORS=none` — restarting
+    /// will look identical. A command that stayed quiet about that would be
+    /// promising something the palette will not deliver.
+    pub fn colour_level(&self) -> palette::Level {
+        self.skin.palette.level
     }
 
     /// The one reader of stdin, matched to how this terminal is being driven.
@@ -1504,7 +1526,7 @@ mod tests {
     fn printing_never_draws_a_viewport() {
         // `-p` is a script's stdout. A viewport in it is escape sequences in
         // somebody's pipeline, and raw mode on a process nobody is typing at.
-        assert!(!Term::printing().framed());
+        assert!(!Term::printing(theme::BUILTIN).framed());
     }
 }
 

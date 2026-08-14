@@ -78,6 +78,10 @@ pub const BUILTINS: &[(&str, &str)] = &[
         "start a fresh conversation — this session's grants are kept",
     ),
     (
+        "theme",
+        "the colours — /theme <name> selects one, from the next start",
+    ),
+    (
         "config",
         "what this run resolved: harness, tools, rules, key",
     ),
@@ -113,6 +117,14 @@ pub enum SessionCommand {
         instruction: Option<String>,
     },
     Clear,
+    /// `/theme`, `/theme <name>`.
+    ///
+    /// There is no `--save`, and that is not an omission: a theme is read once
+    /// at startup, so selecting one *is* writing it down. See the `/theme`
+    /// region for the whole of that argument.
+    Theme {
+        name: Option<String>,
+    },
     /// A built-in name with arguments it does not take. Carried rather than
     /// dropped so the answer is a usage line instead of a model call.
     Misuse {
@@ -154,6 +166,20 @@ pub fn parse(line: &str) -> Option<SessionCommand> {
         "config" => Some(SessionCommand::Config),
         "agents" => Some(SessionCommand::Agents),
         "clear" => Some(SessionCommand::Clear),
+        "theme" => Some(match args.as_slice() {
+            [] => SessionCommand::Theme { name: None },
+            // A flag is never a theme name, and `--save` is the one somebody
+            // will type here out of `/model` habit. It gets the usage line,
+            // which says why the flag does not exist — a flag that is silently
+            // accepted and does nothing is worse than one that is not there.
+            [one] if !one.starts_with('-') => SessionCommand::Theme {
+                name: Some((*one).to_string()),
+            },
+            _ => SessionCommand::Misuse {
+                name: "theme",
+                usage: THEME_USAGE,
+            },
+        }),
         "resume" => Some(SessionCommand::Resume(args.first().map(|s| s.to_string()))),
         "compact" => Some(match args.as_slice() {
             [] => SessionCommand::Compact {
@@ -196,6 +222,12 @@ const MODEL_USAGE: &str = "/model                     what is running, and what 
                            /model <id> --save         …and remember it for the next one\n\
                            /model --save              remember what is already running";
 
+const THEME_USAGE: &str =
+    "/theme                     what is available, and which one is selected\n\
+     /theme <name>              select it. There is no --save: a theme is read once, at\n\
+     \x20                          startup, so writing the name to settings.json is the\n\
+     \x20                          whole of it — and it is the next start that shows it.";
+
 // endregion: The vocabulary
 
 // region: What a command can reach
@@ -231,6 +263,14 @@ pub struct Session<'a, 'agent> {
     /// Where the transcript is, for the status row `/model` has to re-set.
     pub log_path: PathBuf,
     pub home: Option<PathBuf>,
+    /// The theme name `settings.json` held when this process started, which is
+    /// therefore the one on screen for the life of it.
+    ///
+    /// Snapshotted rather than re-read, because `/theme` writes that same key:
+    /// after one selection the file says one thing and the screen shows
+    /// another, and this is the only copy of the second fact. `None` is the
+    /// built-in.
+    pub theme_at_start: Option<String>,
 }
 
 /// Whether the loop keeps going. Two variants rather than plumbing a `break`
@@ -280,6 +320,7 @@ pub async fn run(cmd: SessionCommand, s: &mut Session<'_, '_>) -> Flow {
         } => compact(s, everything, instruction),
         SessionCommand::Clear => clear(s).await,
         SessionCommand::Model { id, save } => model(s, id, save),
+        SessionCommand::Theme { name } => theme(s, name),
     }
     Flow::Continue
 }
@@ -477,6 +518,362 @@ fn save_model(s: &Session<'_, '_>, id: &str) {
 }
 
 // endregion: /model
+
+// region: /theme
+// ---------------------------------------------------------------------------
+// /theme
+//
+// **This command selects; it does not switch.** A theme is read once, at
+// startup, and the owner ruled that this is enough — "we can set theme and
+// restart the console to see it". So nothing here touches a `Palette`, a
+// `Skin` or the frame. That is not a shortcut, it is what the ruling buys: a
+// live swap has to reach every drawn surface at once, and the transcript holds
+// already-styled rows drawn under the old colours, so the realistic outcome of
+// repainting is a half-recoloured screen. There is no half here. There is a
+// file, and a restart.
+//
+// What survives the cut, and is the whole of the risk that is left:
+//
+// - **The name is checked before it is written.** The loader is designed to
+//   fall back with notices rather than refuse, so a bad name could not brick a
+//   boot — but writing a selection already known to be broken is still writing
+//   a lie into somebody's configuration.
+// - **The write merges.** `~/.emma/settings.json` also holds the provider, the
+//   per-provider models and the user-tool block, and a write path that replaced
+//   a shared configuration document has already cost this project a stored
+//   key. [`write_theme`] goes through the same load-mutate-save round trip
+//   `commands::write_model` uses, for exactly that reason.
+// - **`NO_COLOR` is untouched and unarguable.** The level is decided by
+//   `Level::of` from the environment and a theme is not one of its inputs; at
+//   `Level::None` the palette returns before a theme is consulted at all. So
+//   `/theme` under `NO_COLOR` writes the preference and says plainly that the
+//   screen will not change, which is the honest answer rather than a refusal —
+//   the person may well be setting up for a terminal they will use later.
+// ---------------------------------------------------------------------------
+
+/// The compiled-in theme, and the one name a file may not claim.
+///
+/// Reserved so that a cloned repository cannot silently change what stock Emma
+/// looks like by shipping `themes/emma.json` — the single door that
+/// user-beats-project does not already close, since a project cannot select a
+/// theme at all.
+const BUILT_IN: &str = "emma";
+
+/// One theme this run can see.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Found {
+    name: String,
+    /// `None` for the built-in, which is not a file.
+    path: Option<PathBuf>,
+    scope: &'static str,
+    /// The file's own `about`, when it has one.
+    about: Option<String>,
+    /// Why this file is not the answer to its own name: it will not parse, or
+    /// something outranks it. Listed rather than hidden — a theme somebody
+    /// wrote and cannot see is what sends them hunting for a typo Emma has
+    /// already found.
+    problem: Option<String>,
+    /// Whether `/theme <name>` resolves to this entry.
+    live: bool,
+}
+
+/// The two directories, in the order a name is looked for in them.
+///
+/// **Yours beats the project's**, following the harness's own argument for
+/// skipping `~/.claude/`: a project cannot select a theme, so the only way a
+/// repository could change your colours is by shadowing a name you had already
+/// chosen, and this order is what closes that. The reverse — your file
+/// shadowing the project's — is not a risk, it is the preference working.
+fn theme_dirs(home: Option<&Path>, root: &Path) -> Vec<(&'static str, PathBuf)> {
+    let mut dirs = Vec::new();
+    if let Some(home) = home {
+        dirs.push(("yours", home.join(".emma").join("themes")));
+    }
+    // The harness root is already `.emma/` or `.claude/`, whichever this
+    // directory has, so themes ride the discovery that has already happened
+    // rather than getting a second rule to be wrong about.
+    dirs.push(("this project", root.join("themes")));
+    dirs
+}
+
+/// Everything nameable, built-in first, each directory sorted.
+fn available(home: Option<&Path>, root: &Path) -> Vec<Found> {
+    let mut all = vec![Found {
+        name: BUILT_IN.to_string(),
+        path: None,
+        scope: "built-in",
+        about: Some("what Emma looks like out of the box".to_string()),
+        problem: None,
+        live: true,
+    }];
+    for (scope, dir) in theme_dirs(home, root) {
+        let mut here: Vec<Found> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .map(|e| {
+                let path = e.path();
+                let name = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let (about, problem) = peek(&path);
+                Found {
+                    name,
+                    path: Some(path),
+                    scope,
+                    about,
+                    problem,
+                    live: false,
+                }
+            })
+            .collect();
+        here.sort_by(|a, b| a.name.cmp(&b.name));
+        for mut f in here {
+            f.live = f.problem.is_none() && !all.iter().any(|g| g.name == f.name);
+            if !f.live && f.problem.is_none() {
+                f.problem = Some(if f.name == BUILT_IN {
+                    format!("ignored — `{BUILT_IN}` is the built-in; copy it to another name")
+                } else {
+                    "ignored — your own theme of this name wins".to_string()
+                });
+            }
+            all.push(f);
+        }
+    }
+    all
+}
+
+/// What a theme file says about itself, and whether it can be read at all.
+///
+/// Deliberately only the outermost shape: this is the failure that would turn a
+/// selection into a boot-time fallback, and it is the one worth refusing over.
+/// A bad hex on one role is not — the loader applies the rest of the file and
+/// says so, which is a better answer than refusing the whole theme.
+fn peek(path: &Path) -> (Option<String>, Option<String>) {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(e) => return (None, Some(format!("cannot be read: {e}"))),
+    };
+    let doc: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(doc) => doc,
+        Err(e) => return (None, Some(format!("is not JSON: {e}"))),
+    };
+    match doc.as_object() {
+        Some(obj) => (
+            obj.get("about")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            None,
+        ),
+        None => (None, Some("is not a JSON object".to_string())),
+    }
+}
+
+fn theme(s: &Session<'_, '_>, name: Option<String>) {
+    let home = s.home.as_deref();
+    let root = s.harness.root.as_path();
+    let all = available(home, root);
+    let selected = home.and_then(|h| crate::settings::load(h).theme);
+
+    // The same listing whether it was asked for or is the answer to a name that
+    // is not there, because "what can I choose" is the question in both cases.
+    let listing = || {
+        list(
+            &all,
+            selected.as_deref(),
+            s.theme_at_start.as_deref(),
+            home,
+            root,
+        )
+        .join("\n")
+    };
+
+    let Some(name) = name else {
+        say(s.term, &listing());
+        return;
+    };
+
+    let Some(entry) = all.iter().find(|f| f.live && f.name == name) else {
+        // Nothing is written on this path, which is the point of doing the
+        // lookup before the write rather than after it.
+        s.term.warn(&refusal(&name, &all));
+        say(s.term, &listing());
+        return;
+    };
+
+    let Some(home) = home else {
+        s.term.warn(
+            "a theme is remembered in settings.json under your home directory, and this \
+             platform did not give one — so there is nowhere to write the selection.",
+        );
+        return;
+    };
+
+    // Loaded before it is saved. The notices are the loader's own — a role name
+    // that is a typo, a hex that is not one — and they are worth hearing at the
+    // moment the file is chosen rather than only at the next boot.
+    let (_, notices) = crate::term::theme::load(Some(home), Some(root), Some(&name));
+
+    let path = match write_theme(home, &name) {
+        Ok(path) => path,
+        Err(e) => {
+            s.term
+                .warn(&format!("the selection could not be written: {e}"));
+            return;
+        }
+    };
+
+    let mut lines = vec![
+        match &entry.path {
+            Some(file) => format!("theme     {name}  ·  {}", file.display()),
+            None => format!("theme     {name}  ·  the built-in"),
+        },
+        format!("written   {}", path.display()),
+    ];
+    let showing = s.theme_at_start.as_deref().unwrap_or(BUILT_IN);
+    lines.push(if showing == name {
+        "effect    already what this session started with, so nothing on screen changes."
+            .to_string()
+    } else {
+        format!(
+            "effect    the next start. A theme is read once, when Emma starts, so this screen\n\
+             \x20         keeps {showing} until you leave and come back."
+        )
+    });
+    for notice in notices {
+        lines.push(format!("note      {notice}"));
+    }
+    if s.term.colour_level() == crate::term::palette::Level::None {
+        // Said rather than refused: somebody configuring a machine they will
+        // use from a colour terminal later is doing a reasonable thing, and the
+        // preference is still worth storing. What would be wrong is letting
+        // them believe a restart will show it.
+        lines.push(
+            "note      this run has no colour at all — NO_COLOR, EMMA_COLORS, or output that\n\
+             \x20         is not a terminal — and that outranks every theme. Until that\n\
+             \x20         changes, restarting will not look any different."
+                .to_string(),
+        );
+    }
+    say(s.term, &lines.join("\n"));
+}
+
+/// `/theme <name>` for a name that is not there.
+///
+/// It refuses rather than keeping the current theme quietly, and it lists —
+/// `cli.rs`'s rule that a hint must be executable by the person reading it,
+/// applied to the case where the whole problem is not knowing what exists.
+fn refusal(name: &str, all: &[Found]) -> String {
+    let live: Vec<&str> = all
+        .iter()
+        .filter(|f| f.live)
+        .map(|f| f.name.as_str())
+        .collect();
+    let broken = all.iter().find(|f| f.name == name && f.problem.is_some());
+    match broken {
+        Some(f) => format!(
+            "`{name}` {} — so nothing was changed. What can be selected: {}.",
+            f.problem.as_deref().unwrap_or_default(),
+            live.join(", ")
+        ),
+        None => format!(
+            "there is no theme called `{name}`, so nothing was changed. What can be \
+             selected: {}.",
+            live.join(", ")
+        ),
+    }
+}
+
+/// The listing, and the empty case is the ordinary one.
+///
+/// A fresh machine has no theme files at all, so "nothing to show" is what most
+/// people will see first and it has to answer the next question by itself:
+/// what is running, where a file would go, and what the smallest one looks
+/// like. `commands.rs`'s `init` and the `/` menu both set that precedent — an
+/// empty list explains itself rather than showing nothing.
+fn list(
+    all: &[Found],
+    selected: Option<&str>,
+    at_start: Option<&str>,
+    home: Option<&Path>,
+    root: &Path,
+) -> Vec<String> {
+    let selected = selected.unwrap_or(BUILT_IN);
+    let showing = at_start.unwrap_or(BUILT_IN);
+    let mut lines = vec![format!("selected  {selected}")];
+    if showing != selected {
+        lines.push(format!(
+            "on screen {showing}  ·  a theme is read once, when Emma starts — restart to see\n\
+             \x20         {selected}."
+        ));
+    }
+    lines.push(String::new());
+    if all.len() == 1 {
+        lines.push(format!(
+            "available {BUILT_IN} (built-in), and nothing else: no theme files were found."
+        ));
+    } else {
+        lines.push("available".to_string());
+        for f in all {
+            let note = f
+                .problem
+                .as_deref()
+                .or(f.about.as_deref())
+                .unwrap_or_default();
+            // `live` as well as the name: two rows can carry one name — a
+            // shadowed file, or one called after the built-in — and marking
+            // both as selected points at the file that is being ignored. Found
+            // by looking at a real listing, not by a test.
+            let mark = if f.live && f.name == selected {
+                ">"
+            } else {
+                " "
+            };
+            lines.push(
+                format!("{mark} {:<14} {:<14} {note}", f.name, f.scope)
+                    .trim_end()
+                    .to_string(),
+            );
+        }
+    }
+    lines.push(String::new());
+    lines.push("where".to_string());
+    for (scope, dir) in theme_dirs(home, root) {
+        lines.push(format!(
+            "  {:<14} {}",
+            scope,
+            dir.join("<name>.json").display()
+        ));
+    }
+    lines.push(format!(
+        "  yours wins if both have the name, and `{BUILT_IN}` is the built-in — a file of\n\
+         \x20 that name is ignored. Everything in a theme is optional: the smallest one\n\
+         \x20 that works is {{\"roles\": {{\"accent\": \"#f5548f\"}}}}."
+    ));
+    lines.push(String::new());
+    lines.push(
+        "select    /theme <name>. It is written to settings.json — there is no --save —\n\
+         \x20         and it is the next start that shows it."
+            .to_string(),
+    );
+    lines
+}
+
+/// The one place the selection is written, and it is a round trip rather than a
+/// rewrite: `settings.json` also holds the provider, a model per provider, the
+/// validation block and the user-tool block, and every one of them has to
+/// survive somebody changing their colours. Same shape, same reason, as
+/// `commands::write_model`.
+fn write_theme(home: &Path, name: &str) -> anyhow::Result<PathBuf> {
+    let mut settings = crate::settings::load(home);
+    settings.theme = Some(name.to_string());
+    crate::settings::save(home, &settings)
+}
+
+// endregion: /theme
 
 // region: /compact and /clear
 
@@ -753,6 +1150,346 @@ mod tests {
         assert!(known.contains("128000"), "{known}");
         assert!(known.contains("effort up to"), "{known}");
     }
+
+    // region: /theme
+
+    /// A tiny machine: a home with `~/.emma/themes/` and a harness root with
+    /// `themes/`, so every rule about which of the two wins is exercised
+    /// against real files rather than against a mock of the filesystem.
+    struct Machine {
+        home: tempfile::TempDir,
+        project: tempfile::TempDir,
+    }
+
+    impl Machine {
+        fn new() -> Self {
+            let m = Self {
+                home: tempfile::tempdir().unwrap(),
+                project: tempfile::tempdir().unwrap(),
+            };
+            std::fs::create_dir_all(m.home.path().join(".emma").join("themes")).unwrap();
+            std::fs::create_dir_all(m.root().join("themes")).unwrap();
+            m
+        }
+        fn root(&self) -> PathBuf {
+            self.project.path().join(".emma")
+        }
+        fn mine(&self, name: &str, body: &str) {
+            std::fs::write(
+                self.home
+                    .path()
+                    .join(".emma")
+                    .join("themes")
+                    .join(format!("{name}.json")),
+                body,
+            )
+            .unwrap();
+        }
+        fn theirs(&self, name: &str, body: &str) {
+            std::fs::write(
+                self.root().join("themes").join(format!("{name}.json")),
+                body,
+            )
+            .unwrap();
+        }
+        fn available(&self) -> Vec<Found> {
+            available(Some(self.home.path()), &self.root())
+        }
+    }
+
+    #[test]
+    fn theme_takes_a_name_and_says_why_there_is_no_save_flag() {
+        assert_eq!(parse("/theme"), Some(SessionCommand::Theme { name: None }));
+        assert_eq!(
+            parse("/theme oxide"),
+            Some(SessionCommand::Theme {
+                name: Some("oxide".into())
+            })
+        );
+        // The flag somebody types out of `/model` habit gets a sentence rather
+        // than being quietly swallowed and doing nothing.
+        assert!(matches!(
+            parse("/theme oxide --save"),
+            Some(SessionCommand::Misuse { name: "theme", .. })
+        ));
+        assert!(matches!(
+            parse("/theme --save"),
+            Some(SessionCommand::Misuse { name: "theme", .. })
+        ));
+        assert!(THEME_USAGE.contains("no --save"), "{THEME_USAGE}");
+    }
+
+    /// The rule that closes the only door a repository has to your colours.
+    #[test]
+    fn your_own_theme_shadows_the_projects_and_the_built_in_name_is_reserved() {
+        let m = Machine::new();
+        m.mine("oxide", r#"{"about":"mine"}"#);
+        m.theirs("oxide", r#"{"about":"theirs"}"#);
+        m.theirs("house", r#"{"about":"the project's"}"#);
+        m.theirs(
+            BUILT_IN,
+            r#"{"about":"a repository repainting stock Emma"}"#,
+        );
+        let all = m.available();
+
+        let live: Vec<(&str, &str)> = all
+            .iter()
+            .filter(|f| f.live)
+            .map(|f| (f.name.as_str(), f.scope))
+            .collect();
+        assert_eq!(
+            live,
+            vec![
+                (BUILT_IN, "built-in"),
+                ("oxide", "yours"),
+                ("house", "this project")
+            ]
+        );
+        // The loser is listed, with the reason — a file somebody wrote that is
+        // simply absent from the list is what sends them hunting for a typo.
+        let shadowed = all
+            .iter()
+            .find(|f| f.name == "oxide" && f.scope == "this project")
+            .unwrap();
+        assert!(
+            shadowed.problem.as_deref().unwrap().contains("your own"),
+            "{shadowed:?}"
+        );
+        let reserved = all
+            .iter()
+            .find(|f| f.name == BUILT_IN && f.path.is_some())
+            .unwrap();
+        assert!(
+            reserved.problem.as_deref().unwrap().contains("built-in"),
+            "{reserved:?}"
+        );
+
+        // And the marker in the listing points at the one that is in force, not
+        // at every row sharing its name — the defect a real listing showed and
+        // the unit tests had not: two `emma` rows, both marked selected, one of
+        // them the file being ignored.
+        let text = list(&all, None, None, Some(m.home.path()), &m.root());
+        let marked: Vec<&String> = text.iter().filter(|l| l.starts_with('>')).collect();
+        assert_eq!(marked.len(), 1, "{text:#?}");
+        assert!(marked[0].contains("built-in"), "{marked:?}");
+    }
+
+    /// `BUILT_IN` here and `RESERVED` in `term::theme` are two spellings of one
+    /// fact, and this is the assertion that stops them drifting: the loader
+    /// itself must ignore a file under the name this module refuses to select.
+    #[test]
+    fn the_name_this_module_reserves_is_the_one_the_loader_reserves() {
+        let m = Machine::new();
+        m.mine(BUILT_IN, r##"{"roles":{"accent":"#010203"}}"##);
+        let (theme, notices) =
+            crate::term::theme::load(Some(m.home.path()), Some(&m.root()), Some(BUILT_IN));
+        assert_eq!(theme, crate::term::theme::BUILTIN);
+        assert!(
+            notices.iter().any(|n| n.contains("built-in")),
+            "{notices:?}"
+        );
+    }
+
+    /// A file that will not parse is refused *before* anything is written.
+    /// The loader would fall back with a notice rather than break the boot, so
+    /// this is not about safety — it is about not writing a name into somebody's
+    /// configuration that is already known to be wrong.
+    #[test]
+    fn a_file_that_is_not_a_json_object_is_listed_and_cannot_be_selected() {
+        let m = Machine::new();
+        m.mine("broken", "{ not json");
+        m.mine("array", "[1, 2, 3]");
+        m.mine("fine", r#"{}"#);
+        let all = m.available();
+        assert!(all.iter().any(|f| f.name == "fine" && f.live));
+        for bad in ["broken", "array"] {
+            let f = all.iter().find(|f| f.name == bad).unwrap();
+            assert!(!f.live, "{bad} was selectable");
+            assert!(f.problem.is_some(), "{bad} was listed with no reason");
+        }
+        let no = refusal("broken", &all);
+        assert!(no.contains("nothing was changed"), "{no}");
+        assert!(no.contains("is not JSON"), "{no}");
+        // …and it still says what *can* be chosen, which is the whole point of
+        // refusing out loud rather than keeping the current theme quietly.
+        assert!(no.contains("fine"), "{no}");
+        let missing = refusal("nowhere", &all);
+        assert!(missing.contains("no theme called `nowhere`"), "{missing}");
+        assert!(missing.contains("nothing was changed"), "{missing}");
+        assert!(missing.contains("fine"), "{missing}");
+    }
+
+    /// The one that has already cost this project a stored key: a write path
+    /// that replaces a shared configuration document instead of merging into
+    /// it. Everything else in `settings.json` must survive a colour change.
+    #[test]
+    fn selecting_a_theme_preserves_every_other_key_in_settings() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".emma")).unwrap();
+        std::fs::write(
+            crate::settings::path(home.path()),
+            r#"{"provider":"anthropic","models":{"anthropic":"claude-x","elsewhere":"model-y"},
+                "validated":{"anthropic":{"at":"2026-08-11T09:14:22Z","how":"forced"}},
+                "tools":{"editor":"C:\\Program Files\\odd name\\code.exe"}}"#,
+        )
+        .unwrap();
+
+        let path = write_theme(home.path(), "oxide").unwrap();
+        let back = crate::settings::load(home.path());
+        assert_eq!(back.theme.as_deref(), Some("oxide"));
+        assert_eq!(back.provider.as_deref(), Some("anthropic"));
+        assert_eq!(back.models.get("anthropic").unwrap(), "claude-x");
+        assert_eq!(back.models.get("elsewhere").unwrap(), "model-y");
+        assert_eq!(
+            back.tools.editor.as_deref(),
+            Some("C:\\Program Files\\odd name\\code.exe")
+        );
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("forced"), "{raw}");
+
+        // …and choosing again replaces the selection rather than accumulating.
+        write_theme(home.path(), "house").unwrap();
+        assert_eq!(
+            crate::settings::load(home.path()).theme.as_deref(),
+            Some("house")
+        );
+    }
+
+    /// The empty case is the normal case — a fresh machine has no theme files
+    /// at all — so the listing has to answer the next question by itself.
+    #[test]
+    fn an_empty_list_says_what_is_running_and_where_a_theme_file_would_go() {
+        let m = Machine::new();
+        let all = m.available();
+        assert_eq!(all.len(), 1);
+        let text = list(&all, None, None, Some(m.home.path()), &m.root()).join("\n");
+        assert!(text.contains("no theme files were found"), "{text}");
+        assert!(text.contains(BUILT_IN), "{text}");
+        // Both directories, spelled out, and the smallest file that works.
+        assert!(
+            text.contains(
+                &m.home
+                    .path()
+                    .join(".emma")
+                    .join("themes")
+                    .join("<name>.json")
+                    .display()
+                    .to_string()
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                &m.root()
+                    .join("themes")
+                    .join("<name>.json")
+                    .display()
+                    .to_string()
+            ),
+            "{text}"
+        );
+        assert!(text.contains("\"accent\""), "{text}");
+        assert!(text.contains("/theme <name>"), "{text}");
+    }
+
+    /// After a selection the file and the screen disagree on purpose, and the
+    /// listing is the only place that can say both. A list that reported one
+    /// number for both would be telling somebody their new theme is already on.
+    #[test]
+    fn the_listing_separates_what_is_selected_from_what_is_on_screen() {
+        let m = Machine::new();
+        m.mine("oxide", r#"{"about":"warmer"}"#);
+        let all = m.available();
+
+        let changed = list(&all, Some("oxide"), None, Some(m.home.path()), &m.root()).join("\n");
+        assert!(changed.contains("selected  oxide"), "{changed}");
+        assert!(changed.contains("on screen emma"), "{changed}");
+        assert!(changed.contains("restart"), "{changed}");
+        assert!(changed.contains("warmer"), "{changed}");
+
+        // Settled again: one fact, said once.
+        let settled = list(
+            &all,
+            Some("oxide"),
+            Some("oxide"),
+            Some(m.home.path()),
+            &m.root(),
+        )
+        .join("\n");
+        assert!(!settled.contains("on screen"), "{settled}");
+    }
+
+    /// `NO_COLOR` outranks every theme, by construction rather than by check:
+    /// it produces `Level::None`, and the palette returns before a theme is
+    /// consulted. This pins the property the command's own message depends on —
+    /// a selection changes not one colour on such a terminal.
+    #[test]
+    fn a_theme_changes_nothing_at_all_on_a_terminal_with_no_colour() {
+        use crate::term::palette::{Level, Palette, Role};
+        // Whatever a theme could possibly say, said as loudly as the schema
+        // allows — including the sixteen-colour names, which are *inherited*
+        // from the built-in role unless a file declares them. A fixture that
+        // declared only hexes would agree with the built-in at every fidelity
+        // below truecolor, and this test would then pass with the `Level::None`
+        // short-circuit removed. It was written that way first and the
+        // mutation walked straight through it.
+        let m = Machine::new();
+        m.mine(
+            "loud",
+            r##"{"roles":{
+                 "accent":{"hex":"#010203","ansi256":21,"ansi16":"blue"},
+                 "ok":{"hex":"#040506","ansi256":22,"ansi16":"cyan"},
+                 "err":{"hex":"#070809","ansi256":23,"ansi16":"magenta"},
+                 "warn":{"hex":"#0a0b0c","ansi256":24,"ansi16":"white"},
+                 "info":{"hex":"#0d0e0f","ansi256":25,"ansi16":"green"},
+                 "dim":{"hex":"#101112","ansi256":26,"ansi16":"yellow"},
+                 "ground":{"hex":"#131415","ansi256":27,"ansi16":"red"}}}"##,
+        );
+        let (theme, notices) =
+            crate::term::theme::load(Some(m.home.path()), Some(&m.root()), Some("loud"));
+        assert!(notices.is_empty(), "{notices:?}");
+        assert_ne!(
+            theme,
+            crate::term::theme::BUILTIN,
+            "the fixture did nothing"
+        );
+
+        let plain = Palette::new(Level::None);
+        let themed = Palette::with_theme(Level::None, theme);
+        for role in [
+            Role::Text,
+            Role::Dim,
+            Role::Ok,
+            Role::Err,
+            Role::Warn,
+            Role::Info,
+            Role::Accent,
+            Role::Ground,
+        ] {
+            assert_eq!(
+                themed.color(role),
+                plain.color(role),
+                "{role:?} changed under NO_COLOR"
+            );
+            assert_eq!(themed.style(role), plain.style(role), "{role:?}");
+        }
+        // …and the fixture really would have shown up anywhere else, which is
+        // what makes the equalities above a result rather than a tautology.
+        for level in [Level::Ansi16, Level::Ansi256, Level::Truecolor] {
+            assert_ne!(
+                Palette::with_theme(level, theme).color(Role::Accent),
+                Palette::new(level).color(Role::Accent),
+                "the fixture is indistinguishable from the built-in at {level:?}"
+            );
+        }
+        assert_eq!(
+            themed.chip(Role::Accent),
+            plain.chip(Role::Accent),
+            "the answer keys changed under NO_COLOR"
+        );
+    }
+
+    // endregion: /theme
 
     #[test]
     fn the_resume_advice_names_the_command_that_actually_works() {

@@ -110,6 +110,7 @@ impl Fixture {
             key: ApiKey::new("sk-ant-not-a-real-key"),
             log_path: self.log.path().to_path_buf(),
             home: Some(self.dir.path().to_path_buf()),
+            theme_at_start: None,
         };
         session_command::run(cmd, &mut session).await
     }
@@ -695,6 +696,69 @@ async fn config_reports_the_running_model_rather_than_the_stored_one() {
         .await;
     let said = f.said();
     assert!(said.contains("claude-sonnet-4-5  (this session"), "{said}");
+}
+
+/// `/theme` end to end, through the seam `main` uses.
+///
+/// The two halves that matter are on opposite sides of the same command: a name
+/// that is not there must leave `settings.json` exactly as it found it, and a
+/// name that is there must land in it without disturbing anything else living
+/// in that file.
+#[tokio::test]
+async fn theme_writes_the_selection_only_for_a_name_that_is_really_there() {
+    let f = fixture();
+    let provider = Fake::named("claude-opus-5", Vec::new());
+    let mut agent = f.agent(provider.clone());
+    let mut current: Arc<dyn Provider> = provider.clone();
+    let running = Running::new(provider.clone());
+    let settings = f.dir.path().join(".emma").join("settings.json");
+    std::fs::write(
+        &settings,
+        r#"{"provider":"anthropic","models":{"anthropic":"claude-x"}}"#,
+    )
+    .unwrap();
+
+    // Nothing is there yet, so the empty list has to answer by itself.
+    f.command(&mut agent, &mut current, &running, "/theme")
+        .await;
+    let said = f.said();
+    assert!(said.contains("no theme files were found"), "{said}");
+
+    // A name that does not exist changes nothing on disk.
+    f.command(&mut agent, &mut current, &running, "/theme oxide")
+        .await;
+    let raw = std::fs::read_to_string(&settings).unwrap();
+    assert!(!raw.contains("theme"), "{raw}");
+    let said = f.said();
+    assert!(said.contains("no theme called `oxide`"), "{said}");
+
+    // A file that is there and will not parse is the same answer, and this is
+    // the half worth having end to end: the loader would fall back with a
+    // notice rather than break the boot, so nothing stops the name being
+    // written except the check that happens before the write.
+    let themes = f.dir.path().join(".emma").join("themes");
+    std::fs::create_dir_all(&themes).unwrap();
+    std::fs::write(themes.join("broken.json"), "{ not json").unwrap();
+    f.command(&mut agent, &mut current, &running, "/theme broken")
+        .await;
+    let raw = std::fs::read_to_string(&settings).unwrap();
+    assert!(!raw.contains("theme"), "{raw}");
+    let said = f.said();
+    assert!(said.contains("is not JSON"), "{said}");
+
+    std::fs::write(themes.join("oxide.json"), r#"{"about":"warmer"}"#).unwrap();
+    assert_eq!(
+        f.command(&mut agent, &mut current, &running, "/theme oxide")
+            .await,
+        Flow::Continue
+    );
+    let back: Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    assert_eq!(back["theme"], "oxide");
+    // The key beside it, which a write that replaced the document would have
+    // taken with it.
+    assert_eq!(back["models"]["anthropic"], "claude-x");
+    let said = f.said();
+    assert!(said.contains("the next start"), "{said}");
 }
 
 // endregion: What a command must not do
