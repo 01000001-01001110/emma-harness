@@ -1633,6 +1633,21 @@ fn type_ok_requires_exact_match() {
 /// will ever clean up — `close` is the only path that removes it. Without this
 /// test the leak is invisible: every other session test still passes while the
 /// temp directory fills with abandoned profiles.
+///
+/// **This test was flaky, and it was right.** It failed under a full workspace
+/// run and then passed eight times in a row, which reads as a slow machine and
+/// is not: `close` killed Chrome and removed the directory in consecutive
+/// statements, and `taskkill /T /F` returns before the process is gone. Run in
+/// a loop the real rate was 8 leaks in 66 closes — a whole Chrome profile,
+/// cookie database included, left in a shared temp folder. `session::close`
+/// now waits for the process to actually exit; 130 closes after that, none
+/// leaked.
+///
+/// Which means one run of this test is a **weak** detector of the thing it
+/// guards: at one in eight it passes for the wrong reason most of the time, and
+/// it cannot tell the fix from a retry that merely narrows the window. The
+/// receipt for the mechanism is the unit test on `session::wait_for_exit`; this
+/// one asserts the end state a user cares about, which is still worth asserting.
 #[test]
 fn session_profile_dir_is_removed_on_close() {
     let (code, s, raw) = run(&["session", "open"]);

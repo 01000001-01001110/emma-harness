@@ -453,7 +453,7 @@ impl BrowserPool {
         // …and the kill regardless, because "polite close returned Ok" is a
         // claim about a message being sent, not about a process being gone.
         kill_pid(s.pid);
-        remove_profile(&s.profile_dir());
+        remove_profile(s.pid, &s.profile_dir());
         Some(s)
     }
 
@@ -482,7 +482,7 @@ impl BrowserPool {
         };
         for s in doomed {
             kill_pid(s.pid);
-            remove_profile(&s.profile_dir());
+            remove_profile(s.pid, &s.profile_dir());
         }
     }
 
@@ -618,20 +618,29 @@ fn kill_pid(pid: u32) {
     }
 }
 
-/// Remove a session's profile directory, allowing for the process not being
-/// dead yet.
+/// Remove a session's profile directory once the browser that owned it is gone.
 ///
 /// **Measured, not defensive.** After six live sessions the processes were all
 /// gone and three profile directories were still on disk: a kill returns as soon
 /// as the signal is delivered, and on Windows the files stay locked until the
 /// process actually exits, so the removal that follows immediately fails. The
 /// directory holds the session's cookies, which is exactly the thing not to
-/// leave in a shared temp folder, so it is worth up to a second of retrying — in
-/// teardown, where there is nothing else to do.
+/// leave in a shared temp folder, so it is worth waiting out in teardown, where
+/// there is nothing else to do.
 ///
-/// A failure after that is not fatal: `sweep_stale_profiles` on the next start
-/// is the backstop, which is what it is for.
-fn remove_profile(dir: &Path) {
+/// **That was measured again and sharpened, in the sibling that had no retry.**
+/// `chromehand::session::close` used the same kill-then-remove with nothing in
+/// between and leaked a profile on 8 of 66 closes; instrumenting the leaks found
+/// the killed Chrome still *running* every time. Hence
+/// [`chromehand::session::wait_for_exit`], which is now the first thing here:
+/// the retry below stops guessing at how long an exit takes and only covers the
+/// renderer children, which exit on their own schedule after the parent does.
+/// Neither half is redundant — the numbers for both are in `wait_for_exit`.
+///
+/// A failure even then is not fatal: `sweep_stale_profiles` on the next start
+/// is the backstop's backstop, which is what it is for.
+fn remove_profile(pid: u32, dir: &Path) {
+    chromehand::session::wait_for_exit(pid);
     for attempt in 0..10 {
         if !dir.exists() || std::fs::remove_dir_all(dir).is_ok() {
             return;

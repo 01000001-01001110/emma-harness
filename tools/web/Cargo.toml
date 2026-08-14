@@ -44,4 +44,7 @@ windows-sys.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-tokio = { workspace = true, features = ["rt", "macros", "net"] }
+# `sync` is for the test-only mutex that keeps `browser_lifecycle.rs` from
+# starting five Chromes at once; see `one_browser_at_a_time` there for why it
+# cannot be `std`'s.
+tokio = { workspace = true, features = ["rt", "macros", "net", "sync"] }

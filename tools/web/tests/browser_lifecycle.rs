@@ -131,6 +131,37 @@ fn alive(pid: u32) -> bool {
     }
 }
 
+/// Only one test in this file may have a Chrome starting at a time.
+///
+/// **Measured, and it was masquerading as a leak.** Every test here spawns a
+/// real browser, and `cargo test` runs them concurrently, so five cold Chrome
+/// starts land on the machine at once. That exceeds `session::open`'s 20-second
+/// CDP-endpoint budget often enough to fail **4 of 12** runs of this binary —
+/// and because each test panics at its own `open`, the name in the failure
+/// report is whichever test lost the race. `closing_a_session_ends_the_process_and_removes_its_profile`
+/// was reported as failing under a full workspace run on exactly this, which
+/// reads as the profile leak that test exists to catch and is not: the leak
+/// assertion is three lines further down and was never reached.
+///
+/// Serialised, the same binary failed **0 of 12**. Nothing about the assertions
+/// changes — a real leak still fails the same line for the same reason. What
+/// goes away is five tests competing for one machine's ability to start Chrome,
+/// which is not a property this file is trying to establish.
+///
+/// Held for the whole test rather than only across `open`, because a test that
+/// has finished spawning is still driving a browser the next one would contend
+/// with.
+///
+/// `tokio`'s mutex and not `std`'s: the guard is held across every `await` in
+/// the test body, which `clippy::await_holding_lock` rejects for `std` — and
+/// rightly, since a blocking guard on a runtime thread is a deadlock waiting
+/// for a reason. It also has no poisoning, so a panicking test hands the lock
+/// on rather than failing the next one for somebody else's reason.
+async fn one_browser_at_a_time() -> tokio::sync::MutexGuard<'static, ()> {
+    static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    LOCK.lock().await
+}
+
 fn wait_until_gone(pid: u32) -> bool {
     for _ in 0..50 {
         if !alive(pid) {
@@ -162,6 +193,7 @@ async fn dropping_the_pool_kills_the_browser_it_started() {
     if !chrome_present() {
         return;
     }
+    let _serial = one_browser_at_a_time().await;
     let port = serve();
     let pid = {
         let pool = BrowserPool::for_fixture_tests(None);
@@ -196,6 +228,7 @@ async fn closing_a_session_ends_the_process_and_removes_its_profile() {
     if !chrome_present() {
         return;
     }
+    let _serial = one_browser_at_a_time().await;
     let port = serve();
     let pool = BrowserPool::for_fixture_tests(None);
     let session = pool
@@ -232,6 +265,7 @@ async fn a_session_leaves_nothing_in_the_working_directory() {
     if !chrome_present() {
         return;
     }
+    let _serial = one_browser_at_a_time().await;
     let port = serve();
     let pool = BrowserPool::for_fixture_tests(None);
     let session = pool
@@ -273,6 +307,7 @@ async fn a_click_that_navigates_moves_the_recorded_location() {
     if !chrome_present() {
         return;
     }
+    let _serial = one_browser_at_a_time().await;
     let port = serve();
     let pool = Arc::new(BrowserPool::for_fixture_tests(None));
     let session = pool
@@ -312,6 +347,7 @@ async fn a_third_session_is_refused_and_names_the_cap() {
     if !chrome_present() {
         return;
     }
+    let _serial = one_browser_at_a_time().await;
     let port = serve();
     let url = format!("http://127.0.0.1:{port}/one");
     let pool = BrowserPool::for_fixture_tests(None);

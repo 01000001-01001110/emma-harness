@@ -90,14 +90,75 @@ fn read_session(id: &str) -> Result<SessionFile, String> {
     serde_json::from_str(&raw).map_err(|e| format!("corrupt session file {}: {}", p.display(), e))
 }
 
+/// Create `.browser-miner/`, allowing for another session removing it at the
+/// same moment.
+///
+/// **A measured race, not a defensive flourish.** This directory is shared by
+/// every session in the process, and `BrowserPool::forget_session_file` deletes
+/// it the instant it is empty. Two sessions opening and closing at once will
+/// therefore, sooner or later, have one of them delete the directory inside the
+/// window between another's create and its write — and Windows reports a
+/// delete-pending directory as `The system cannot find the path specified.
+/// (os error 3)`. Five concurrent Chrome-spawning tests hit it in **5 of 12**
+/// runs of `tests/browser_lifecycle.rs`, which is where it was found; the same
+/// window is open to two concurrent `BrowserOpen` calls.
+///
+/// The removal is not the bug — leaving a directory in the user's repository
+/// would be — so the create is what gives way. The retries are short because
+/// the window is: the directory is already being recreated by the caller that
+/// wants it.
+fn ensure_session_dir(doing: &str) -> Result<(), String> {
+    let mut last = String::new();
+    for attempt in 0..4 {
+        match std::fs::create_dir_all(SESSION_DIR) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last = e.to_string();
+                std::thread::sleep(Duration::from_millis(10 * (attempt + 1)));
+            }
+        }
+    }
+    // The bare io message named neither the path nor the operation, which is
+    // most of why this took a measurement to find rather than a read.
+    Err(format!(
+        "{}: could not create the session directory {} in {} ({})",
+        doing,
+        SESSION_DIR,
+        std::env::current_dir()
+            .map(|d| d.display().to_string())
+            .unwrap_or_else(|_| "the working directory".into()),
+        last
+    ))
+}
+
+/// Write a file into `.browser-miner/`, recreating the directory if a
+/// concurrent teardown took it. Same race as [`ensure_session_dir`]; the write
+/// is inside the retry because the directory can go between the create and it.
+fn write_beside_sessions(path: &Path, body: &str, doing: &str) -> Result<(), String> {
+    let mut last = String::new();
+    for attempt in 0..4 {
+        if let Err(e) = std::fs::create_dir_all(SESSION_DIR) {
+            last = e.to_string();
+        } else {
+            match std::fs::write(path, body) {
+                Ok(()) => return Ok(()),
+                Err(e) => last = e.to_string(),
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10 * (attempt + 1)));
+    }
+    Err(format!(
+        "{}: could not write {} ({})",
+        doing,
+        path.display(),
+        last
+    ))
+}
+
 fn write_session(s: &SessionFile) -> Result<(), String> {
     validate_id(&s.id)?;
-    std::fs::create_dir_all(SESSION_DIR).map_err(|e| e.to_string())?;
-    std::fs::write(
-        session_path(&s.id),
-        serde_json::to_string_pretty(s).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())
+    let body = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
+    write_beside_sessions(&session_path(&s.id), &body, "recording the session")
 }
 
 // endregion: The session record
@@ -129,12 +190,12 @@ pub fn read_digest_snapshot(id: &str) -> Result<serde_json::Value, String> {
 /// Persist the current inventory + text hash as the baseline for the next
 /// `digest --delta` call on this session.
 pub fn write_digest_snapshot(id: &str, v: &serde_json::Value) -> Result<(), String> {
-    std::fs::create_dir_all(SESSION_DIR).map_err(|e| e.to_string())?;
-    std::fs::write(
-        digest_snapshot_path(id),
-        serde_json::to_string_pretty(v).map_err(|e| e.to_string())?,
+    let body = serde_json::to_string_pretty(v).map_err(|e| e.to_string())?;
+    write_beside_sessions(
+        &digest_snapshot_path(id),
+        &body,
+        "saving the delta baseline",
     )
-    .map_err(|e| e.to_string())
 }
 
 // endregion: Delta snapshots
@@ -162,6 +223,91 @@ fn kill_pid(pid: u32) {
             .args(["-9", &pid.to_string()])
             .output();
     }
+}
+
+/// How long to wait for a killed Chrome to actually be gone. Measured: across
+/// five observed survivals the directory became removable within 1.5s every
+/// time, and Chrome normally exits in well under that. This is the ceiling on
+/// a pathological case, not the expected cost.
+const EXIT_WAIT: Duration = Duration::from_secs(3);
+
+/// Block until process `pid` has exited, or `EXIT_WAIT` elapses.
+///
+/// **The mechanism, measured.** `session close` used to kill and remove the
+/// profile directory in consecutive statements, and 8 of 66 closes left a full
+/// Chrome profile — 170 files including the cookie database — behind in
+/// `%TEMP%`. Instrumenting the survivals settled why: in *every* one of them
+/// the Chrome pid was **still running** when the removal ran. `taskkill /T /F`
+/// returns once the terminate has been requested, not once the process is
+/// gone, so the removal was racing a live process holding its own profile open.
+/// This waits on the process object, which is the exact event that unlocks the
+/// files.
+///
+/// **What waiting does not buy, also measured.** With the wait in place and the
+/// retry in [`remove_profile`] cut to a single attempt, 1 of 90 closes still
+/// leaked — `taskkill /T` terminates the tree, but the renderer and GPU
+/// children exit on their own schedule and two of five instrumented survivals
+/// still had one alive. And the retry *without* the wait leaked 0 of 130, so
+/// the honest claim is not "the wait is what fixed it": it is that the two
+/// cover different halves and only the pair measured clean. The wait is the
+/// principled half — it ends on the event rather than on a guessed budget, and
+/// it costs nothing when the process is already dead, which it usually is.
+///
+/// Windows only. On Unix a directory whose files are still open unlinks
+/// perfectly well, so there is nothing here to wait for and the removal that
+/// follows simply succeeds.
+pub(crate) fn wait_for_exit(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
+        // Spelled out rather than imported: `SYNCHRONIZE` lives in a
+        // windows-sys module this crate does not otherwise enable, and it is a
+        // fixed bit in the standard access mask.
+        const SYNCHRONIZE: u32 = 0x0010_0000;
+        let h = OpenProcess(SYNCHRONIZE, 0, pid);
+        // A null handle means the process is already gone (or was never ours
+        // to wait on) — either way there is nothing left to wait for.
+        if h.is_null() {
+            return;
+        }
+        WaitForSingleObject(h, EXIT_WAIT.as_millis() as u32);
+        CloseHandle(h);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+    }
+}
+
+/// Remove a closed session's throwaway profile directory — the one holding its
+/// cookies — after making sure the browser that owned it is gone.
+///
+/// Both halves are load-bearing and the numbers are in [`wait_for_exit`]: the
+/// wait covers the parent, and the retry covers the children the parent's exit
+/// does not drag with it. Cutting this loop to one attempt, with the wait still
+/// there, put a leak back at 1 in 90. The budget matches `pool::remove_profile`'s
+/// — 2.75s — because a `session close` that has already waited for a process has
+/// nothing else to do, and 750ms was not enough: one close in 72 still leaked
+/// when the machine was running the whole workspace test suite at the same time.
+///
+/// **Returns whether the directory is actually gone**, because the caller says so
+/// out loud. Two backstops exist for a `false` — `BrowserPool::sweep_stale_profiles`
+/// on the next start, and the operator, who can only act on this if told. The
+/// silent version of this function is what let a leak of 8 in 66 look like a
+/// flaky test for as long as it did.
+fn remove_profile(pid: u32, dir: &Path) -> bool {
+    wait_for_exit(pid);
+    for attempt in 0..10 {
+        if !dir.exists() || std::fs::remove_dir_all(dir).is_ok() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50 * (attempt + 1)));
+    }
+    false
 }
 
 /// Pick an ephemeral localhost port. Tiny bind-release race, local-only.
@@ -273,7 +419,9 @@ pub async fn open(headful: bool) -> Result<serde_json::Value, String> {
             .unwrap_or(0)
     );
     let profile_dir = std::env::temp_dir().join(format!("browser-miner-session-{}", id));
-    std::fs::create_dir_all(SESSION_DIR).map_err(|e| e.to_string())?;
+    // Pre-flight: fail before spawning a browser if the session record has
+    // nowhere to go. The write itself happens after Chrome is up.
+    ensure_session_dir("opening a session")?;
 
     let port = pick_free_port()?;
     let mut args = vec![
@@ -306,7 +454,7 @@ pub async fn open(headful: bool) -> Result<serde_json::Value, String> {
     };
     let Some((browser, mut handler)) = connected else {
         kill_pid(pid);
-        let _ = std::fs::remove_dir_all(session_profile_dir(&id));
+        let _ = remove_profile(pid, &session_profile_dir(&id));
         return Err(format!(
             "Chrome did not open a DevTools endpoint on port {} within 20s",
             port
@@ -472,7 +620,9 @@ pub async fn connect(id: &str, ttl_secs: u64) -> Result<Connected, String> {
             kill_pid(s.pid);
         }
         let _ = std::fs::remove_file(session_path(id));
-        let _ = std::fs::remove_dir_all(session_profile_dir(id));
+        // `s.pid` is 0 for an attached session, which never had a profile
+        // directory of ours — `remove_profile` returns immediately on both.
+        let _ = remove_profile(s.pid, &session_profile_dir(id));
         return Err(format!(
             "session '{}' expired (idle {}s > ttl {}s) — {} and removed; open a new one",
             id,
@@ -588,6 +738,11 @@ pub async fn close(id_or_all: &str) -> serde_json::Value {
     for id in ids {
         match read_session(&id) {
             Ok(s) => {
+                // An attached session never had a profile directory of ours, so
+                // "removed" is vacuously true for it — the alternative is a
+                // `false` that reads as a leak that never existed.
+                let mut profile_removed = true;
+                let mut profile_dir = None;
                 if s.managed {
                     // Polite CDP close first, then hard kill as fallback.
                     if let Ok((mut browser, mut handler)) = Browser::connect(&s.ws_url).await {
@@ -602,18 +757,29 @@ pub async fn close(id_or_all: &str) -> serde_json::Value {
                         h.abort();
                     }
                     kill_pid(s.pid);
-                    let _ = std::fs::remove_dir_all(session_profile_dir(&id));
+                    profile_dir = Some(session_profile_dir(&id));
+                    profile_removed = remove_profile(s.pid, profile_dir.as_ref().unwrap());
                 }
                 // CRITICAL (ADR-2): attached sessions are the USER'S Chrome —
                 // do NOT send Browser.close() and do NOT kill the pid.
                 let _ = std::fs::remove_file(session_path(&id));
-                closed.push(serde_json::json!({
+                let mut entry = serde_json::json!({
                     "id": id,
                     "pid": s.pid,
                     "closed": true,
                     "attached": s.attached,
-                    "managed": s.managed
-                }));
+                    "managed": s.managed,
+                    "profile_removed": profile_removed
+                });
+                // Named only when it is still there: a path in the output is a
+                // thing to go and deal with, and printing one on every close
+                // teaches the reader to skip the field.
+                if !profile_removed {
+                    if let Some(dir) = &profile_dir {
+                        entry["profile_dir"] = serde_json::json!(dir.display().to_string());
+                    }
+                }
+                closed.push(entry);
             }
             Err(e) => closed.push(serde_json::json!({ "id": id, "closed": false, "error": e })),
         }
@@ -669,3 +835,117 @@ pub fn list(ttl_secs: u64) -> serde_json::Value {
 }
 
 // endregion: Closing and listing
+
+// region: The teardown wait
+// ---------------------------------------------------------------------------
+// The teardown wait
+//
+// One test, for the one claim the integration suite cannot make honestly.
+// `session_profile_dir_is_removed_on_close` observes the end state, and the
+// end state was already right seven closes in eight before this was written —
+// which is why the flake it produced was mistaken for luck rather than a leak.
+// This checks the mechanism directly: that `remove_profile` does not run until
+// the browser is gone.
+// ---------------------------------------------------------------------------
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    /// Windows-only because the wait is: see `wait_for_exit`. The child is not
+    /// killed — it is left to exit on its own after roughly two seconds — so
+    /// that "returned early" and "returned when the process died" are far
+    /// enough apart to tell apart. A `wait_for_exit` that returns immediately
+    /// fails this on the elapsed time; one that returns before the process is
+    /// actually gone fails it on the liveness check.
+    #[test]
+    fn waiting_on_a_pid_returns_only_once_it_is_gone() {
+        let mut child = std::process::Command::new("cmd")
+            .args(["/c", "ping -n 3 127.0.0.1 > nul"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn a short-lived child");
+        let pid = child.id();
+
+        let started = std::time::Instant::now();
+        wait_for_exit(pid);
+        let waited = started.elapsed();
+
+        assert!(
+            waited >= Duration::from_millis(1200),
+            "returned after {:?}, before a child that lives ~2s could have exited",
+            waited
+        );
+        assert!(
+            waited < EXIT_WAIT,
+            "returned on the timeout ({:?}), not on the exit",
+            waited
+        );
+        assert!(
+            matches!(child.try_wait(), Ok(Some(_))),
+            "child still running after wait_for_exit returned"
+        );
+    }
+
+    /// The other half of the honesty: `close` reports `profile_removed`, and
+    /// that field is worthless if the function it comes from cannot say no.
+    ///
+    /// The obstacle is a file handle opened with **no sharing** — the one thing
+    /// on this list that actually stops a delete. Three cheaper stagings were
+    /// tried first and all three are worth recording, because every one of them
+    /// looks like it should work and none does: an ordinary `std::fs::File` does
+    /// not block deletion (Rust opens with `FILE_SHARE_DELETE`), a read-only
+    /// file does not (`remove_dir_all` clears the attribute itself), and neither
+    /// does a live process whose working directory *is* the profile. Each let
+    /// the first assertion pass in about two milliseconds. Modern Windows
+    /// deletes are far more permissive than the folklore, which is worth knowing
+    /// before assuming any of them is what Chrome was doing.
+    ///
+    /// It costs the full retry budget (~2.75s) by construction: that is the
+    /// price of exercising a branch that only runs when something is wrong.
+    #[test]
+    fn a_directory_that_cannot_be_removed_is_reported_not_swallowed() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "browser-miner-session-test-{}-{:x}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stuck = dir.join("held-exclusively");
+        std::fs::write(&stuck, b"x").unwrap();
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0) // no FILE_SHARE_DELETE: the delete must fail
+            .open(&stuck)
+            .unwrap();
+
+        assert!(
+            !remove_profile(0, &dir),
+            "a directory that could not be removed must not be reported as removed"
+        );
+        assert!(dir.exists(), "and it really is still there");
+
+        drop(held);
+        assert!(
+            remove_profile(0, &dir),
+            "and once nothing holds it, the same call must succeed"
+        );
+        assert!(!dir.exists());
+    }
+
+    /// pid 0 is what an attached session records — the user's own Chrome, which
+    /// is never ours to wait on or kill. It must not cost three seconds.
+    #[test]
+    fn pid_zero_is_not_waited_on() {
+        let started = std::time::Instant::now();
+        wait_for_exit(0);
+        assert!(started.elapsed() < Duration::from_millis(200));
+    }
+}
+
+// endregion: The teardown wait

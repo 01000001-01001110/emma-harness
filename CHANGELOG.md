@@ -28,6 +28,20 @@ out for themselves.
 
 ## Unreleased
 
+- Closing a browser session no longer leaves the session's Chrome profile
+  behind in your temp directory. It used to, on Windows, about one close in
+  eight — a whole profile, cookie database included, sitting in a shared folder
+  until something else swept it. Closing now waits for the browser to actually
+  exit before removing the directory.
+- Opening two browser sessions at the same time no longer fails one of them with
+  `The system cannot find the path specified. (os error 3)`. Both sessions share
+  the `.browser-miner` directory, and one closing could delete it while the
+  other was still writing its record. Failures that do get through now name the
+  operation and the path instead of a bare io message.
+- `browser-miner session close` says whether the profile directory really went:
+  each entry gains `profile_removed`, and a `profile_dir` naming the path when
+  it did not. It reported success unconditionally before, which is how the leak
+  stayed invisible.
 - The full-screen sidebar collapse now works by the routes a person actually
   tries: clicking the `[+]` on the SESSIONS header collapses the sidebar, and
   `Ctrl-B` still toggles it from the keyboard (listed in QUICK HELP and the
