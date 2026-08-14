@@ -96,17 +96,35 @@ async fn an_absolute_path_elsewhere_is_refused() {
     let error = sandbox.err("Read", json!({ "file_path": elsewhere })).await;
     assert_refused(error, elsewhere);
 
-    let target = if cfg!(windows) {
-        "C:/Windows/Temp/emma-pwned.txt"
-    } else {
-        "/tmp/emma-pwned.txt"
-    };
+    // Unique per run rather than a fixed name. The assertion below is "this
+    // file does not exist", and it is read against a real, world-writable,
+    // persistent directory — `/tmp` on unix survives reboots and is shared
+    // between users. A fixed name means any leftover, from an earlier failure
+    // or another checkout or somebody else entirely, fails this test with a
+    // message accusing the tool of a write it never made.
+    let target = format!(
+        "{}emma-pwned-{}-{:x}.txt",
+        if cfg!(windows) {
+            "C:/Windows/Temp/"
+        } else {
+            "/tmp/"
+        },
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0)
+    );
+    assert!(
+        !std::path::Path::new(&target).exists(),
+        "{target} existed before the write was even attempted"
+    );
     let error = sandbox
         .err("Write", json!({ "file_path": target, "content": "x" }))
         .await;
-    assert_refused(error, target);
+    assert_refused(error, &target);
     assert!(
-        !std::path::Path::new(target).exists(),
+        !std::path::Path::new(&target).exists(),
         "the refused write created {target} anyway"
     );
 }

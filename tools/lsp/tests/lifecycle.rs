@@ -99,14 +99,34 @@ fn process_alive(pid: u32) -> bool {
     }
 }
 
+/// Asked of `ps` rather than of `/proc` or `kill -0`, and both of those were
+/// here before.
+///
+/// `/proc/<pid>` does not exist on macOS at all, so on that platform the check
+/// silently fell through to the second clause; and on Linux the entry survives
+/// for a **zombie**, which is a process that has exited and not been waited on.
+/// `kill -0` has the same blindness from the other direction: it succeeds
+/// against a zombie. Either one can therefore report "outlived its owner" about
+/// a process that is already dead — the exact false accusation this test would
+/// make loudly and be believed about, since it is the one guarding a leak that
+/// really happened once. `ps -o state=` is the only one of the three that
+/// distinguishes them: `Z` means gone.
 #[cfg(not(windows))]
 fn process_alive(pid: u32) -> bool {
-    std::path::Path::new(&format!("/proc/{pid}")).exists()
-        || std::process::Command::new("kill")
+    match std::process::Command::new("ps")
+        .args(["-o", "state=", "-p", &pid.to_string()])
+        .output()
+    {
+        Ok(o) if o.stdout.iter().all(|b| b.is_ascii_whitespace()) => false,
+        Ok(o) => !String::from_utf8_lossy(&o.stdout).trim().starts_with('Z'),
+        // No `ps` on this box: fall back to the coarse question rather than
+        // answering "gone", which would make the assertion pass for free.
+        Err(_) => std::process::Command::new("kill")
             .args(["-0", &pid.to_string()])
             .status()
             .map(|s| s.success())
-            .unwrap_or(false)
+            .unwrap_or(false),
+    }
 }
 
 /// A death is reported once, with a reason, to everyone waiting.

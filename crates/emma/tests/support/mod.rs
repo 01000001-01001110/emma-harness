@@ -383,20 +383,32 @@ pub fn empty_harness(dir: &Path) -> PathBuf {
 /// The two platforms take different routes to the same verdict, and both are
 /// real dispatches through `hooks.rs`:
 ///
-/// - unix: a script that answers `{"decision":"deny", …}` — the deliberate
-///   denial.
-/// - windows: a program that exits non-zero, which `PreToolUse` resolves to
-///   deny because it is fail-closed. Spawning a shell script needs a shell,
-///   and `hooks.rs` execs the file directly with no `PATH` lookup and no
-///   interpreter — by design, so there is nothing to test around.
+/// Both arms answer `{"decision":"deny", …}` — the *deliberate* denial — and
+/// that symmetry is deliberate too. The Windows arm used to copy `where.exe`
+/// and rely on its non-zero exit, which resolves to deny by the fail-closed
+/// rule. Same verdict, different mechanism: every test built on this helper was
+/// then exercising the JSON-decision parser on unix only and the fail-closed
+/// fallback on Windows only, so a regression in either was invisible to half
+/// the world and no assertion changed to say so.
+///
+/// The script is a `.cmd` on Windows because `hooks.rs` execs the file directly
+/// — no `PATH` lookup, no interpreter — and `.cmd` is the one extension the
+/// standard library routes through a shell for us; a `#!` line means nothing
+/// there. (The fail-closed path has its own coverage in
+/// `crates/harness/tests/harness_hooks.rs`, on both platforms.)
 pub fn harness_denying(dir: &Path, tool: &str) -> PathBuf {
     let root = dir.join(".emma");
     let hooks = root.join("hooks");
     std::fs::create_dir_all(&hooks).unwrap();
 
     let command = if cfg!(windows) {
-        std::fs::copy("C:\\Windows\\System32\\where.exe", hooks.join("guard.exe")).unwrap();
-        "hooks/guard.exe"
+        let path = hooks.join("guard.cmd");
+        std::fs::write(
+            &path,
+            "@echo off\r\necho {\"decision\":\"deny\",\"reason\":\"policy forbids it\"}\r\n",
+        )
+        .unwrap();
+        "hooks/guard.cmd"
     } else {
         let path = hooks.join("guard.sh");
         std::fs::write(

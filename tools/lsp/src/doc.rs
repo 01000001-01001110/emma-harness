@@ -315,12 +315,15 @@ mod tests {
     fn a_unix_path_round_trips_and_keeps_its_leading_slash() {
         let uri = to_uri(Path::new("/home/a/src/main.rs"));
         assert_eq!(uri, "file:///home/a/src/main.rs");
-        if !cfg!(windows) {
-            assert_eq!(
-                from_uri(&uri).unwrap(),
-                PathBuf::from("/home/a/src/main.rs")
-            );
-        }
+        // Asserted on both platforms rather than only off Windows. `from_uri`
+        // rewrites `/` to `\` on Windows, but a `Path` comparison there is
+        // component-wise and treats the two separators as one, so this is the
+        // same claim on both — and the guard that used to be here meant the
+        // decode half of the round trip was tested on exactly one platform.
+        assert_eq!(
+            from_uri(&uri).unwrap(),
+            PathBuf::from("/home/a/src/main.rs")
+        );
     }
 
     #[test]
@@ -329,12 +332,13 @@ mod tests {
         assert!(uri.contains("%20"), "{uri}");
         assert!(uri.contains("%23"), "{uri}");
         assert!(!uri.contains(' '), "{uri}");
-        if !cfg!(windows) {
-            assert_eq!(
-                from_uri(&uri).unwrap(),
-                PathBuf::from("/home/a/my project/ünïcode #1.rs")
-            );
-        }
+        // Both platforms, for the reason given above — and this is the one that
+        // matters most, because percent-decoding is where a wrong answer is a
+        // path that exists but is not the one asked about.
+        assert_eq!(
+            from_uri(&uri).unwrap(),
+            PathBuf::from("/home/a/my project/ünïcode #1.rs")
+        );
     }
 
     #[test]

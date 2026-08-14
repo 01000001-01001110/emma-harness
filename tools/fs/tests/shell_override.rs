@@ -98,6 +98,40 @@ async fn the_override_selects_refuses_and_is_reported() {
     }
     // endregion: PowerShell, when this box has one
 
+    // region: A second POSIX shell, when this box has one
+    // The unix half of the same live claim, and it exists because without it
+    // the whole "an override selects a different shell and it really runs"
+    // guarantee was asserted on Windows only: `powershell_path` returns `None`
+    // off Windows by construction, so on macOS and Linux the region above is
+    // skipped and nothing left in this file proves the override *changes*
+    // anything — the default-shell region below would pass with `EMMA_SHELL`
+    // ignored entirely.
+    //
+    // A shell other than `/bin/sh`, so "it selected what I asked for" and "it
+    // fell back to the default" cannot look alike; and the probe reads the
+    // shell's own version variable, because a POSIX shell echoing a marker
+    // proves only that *some* POSIX shell ran.
+    if let Some((path, probe, marker)) = second_posix_shell() {
+        let _guard = Override::set(Some(&path));
+        let shell = emma_tools_fs::resolve_shell().expect("the named shell resolves");
+        assert_eq!(shell.kind, ShellKind::Posix, "{shell}");
+        assert_eq!(shell.path, std::path::Path::new(&path), "{shell}");
+
+        let outcome = sandbox.ok("Bash", json!({ "command": probe })).await;
+        assert_eq!(
+            outcome.content.lines().next().unwrap_or_default(),
+            shell.banner(),
+            "{outcome:?}"
+        );
+        assert!(
+            !outcome.content.contains("not-that-shell"),
+            "{marker} was unset, so the shell that ran was not {path}: {outcome:?}"
+        );
+    } else {
+        eprintln!("skipped: no second POSIX shell on this box");
+    }
+    // endregion: A second POSIX shell, when this box has one
+
     // region: Back to the default
     {
         let _guard = Override::set(None);
@@ -111,6 +145,26 @@ async fn the_override_selects_refuses_and_is_reported() {
         );
     }
     // endregion: Back to the default
+}
+
+/// A POSIX shell that is **not** the default `/bin/sh`, with a command that
+/// makes it identify itself and the name of the variable that does so.
+///
+/// `zsh` first because it is the one macOS ships and the one whose version
+/// variable a `sh` cannot fake; `bash` second for Linux. `None` on Windows,
+/// where `/bin/sh` is not the default anyway and the PowerShell region above
+/// carries this claim.
+fn second_posix_shell() -> Option<(String, String, &'static str)> {
+    for (path, marker) in [("/bin/zsh", "ZSH_VERSION"), ("/bin/bash", "BASH_VERSION")] {
+        if std::path::Path::new(path).is_file() {
+            return Some((
+                path.to_string(),
+                format!("echo \"${{{marker}:-not-that-shell}}\""),
+                marker,
+            ));
+        }
+    }
+    None
 }
 
 /// `None` where the platform has no PowerShell, so the block above skips

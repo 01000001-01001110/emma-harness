@@ -824,6 +824,17 @@ fn the_resolved_shell_is_inspectable_from_outside() {
             !lower.contains(r"\system32\") && !lower.contains(r"\windowsapps\"),
             "the automatic choice is the WSL launcher: {shell}"
         );
+    } else {
+        // The unix half of the same rule, which had no assertion at all: rule 1
+        // of the documented order is `/bin/sh`, and off Windows that is not a
+        // preference among candidates but the answer. Proved here only against
+        // the fake filesystem in `bash.rs` otherwise, which cannot tell whether
+        // the path it returns exists on this machine.
+        assert_eq!(
+            shell.path,
+            std::path::Path::new("/bin/sh"),
+            "the automatic choice off Windows must be /bin/sh: {shell}"
+        );
     }
     let described = shell.to_string();
     assert!(described.contains("posix"), "{described}");

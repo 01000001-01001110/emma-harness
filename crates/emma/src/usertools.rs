@@ -1046,10 +1046,10 @@ mod tests {
     struct Fake {
         os: Os,
         env: Vec<(&'static str, &'static str)>,
-        programs: Vec<(&'static str, &'static str)>,
-        files: Vec<&'static str>,
+        programs: Vec<(&'static str, String)>,
+        files: Vec<String>,
         tools: ToolSettings,
-        home: Option<&'static str>,
+        home: Option<String>,
     }
 
     impl Fake {
@@ -1061,11 +1061,42 @@ mod tests {
                 files: vec![],
                 tools: ToolSettings::default(),
                 home: Some(match os {
-                    Os::Windows => "C:\\Users\\test",
-                    _ => "/home/test",
+                    Os::Windows => host("C:\\Users\\test"),
+                    _ => host("/home/test"),
                 }),
             }
         }
+    }
+
+    /// Re-spell a fixture path so the **host's** `Path` API parses it the way
+    /// the fixture means it.
+    ///
+    /// The machine under test is fake — `Fake::new(Os::Windows)` models a
+    /// Windows box on any host, which is the whole point of `Machine` — but
+    /// `plan` resolves the paths it is handed with real `std::path`, and
+    /// `std::path` only knows the separator of the platform it was compiled
+    /// for. So a literal `C:\pwsh\pwsh.exe` is one filename on unix, whose
+    /// `file_stem` is `C:\pwsh\pwsh` and which `is_absolute` denies. That does
+    /// not make these tests fail on unix so much as make them assert something
+    /// else: `what` reads `C:\pwsh\pwsh in …`, a configured program is looked
+    /// for on `PATH` instead of on disk, and `nvim` stops being recognised as a
+    /// terminal editor. **The fake OS decides the behaviour; the host decides
+    /// the spelling**, and this is the second half.
+    ///
+    /// A drive letter is dropped rather than translated, because unix has
+    /// nothing to translate it to and no assertion here turns on which drive a
+    /// path is on — only on two fixture paths differing when they should.
+    fn host(path: &str) -> String {
+        if cfg!(windows) {
+            return path.to_string();
+        }
+        let bytes = path.as_bytes();
+        let rooted = if bytes.len() >= 3 && bytes[1] == b':' && bytes[2] == b'\\' {
+            &path[2..]
+        } else {
+            path
+        };
+        rooted.replace('\\', "/")
     }
 
     impl Machine for Fake {
@@ -1092,12 +1123,12 @@ mod tests {
             self.tools.clone()
         }
         fn home(&self) -> Option<PathBuf> {
-            self.home.map(PathBuf::from)
+            self.home.as_ref().map(PathBuf::from)
         }
     }
 
     fn cwd() -> PathBuf {
-        PathBuf::from("C:\\src\\emma")
+        PathBuf::from(host("C:\\src\\emma"))
     }
 
     #[test]
@@ -1134,21 +1165,28 @@ mod tests {
     fn windows_shell_probes_pwsh_then_powershell_then_cmd() {
         let mut m = Fake::new(Os::Windows);
         m.programs = vec![
-            ("cmd", "C:\\Windows\\System32\\cmd.exe"),
-            ("powershell", "C:\\ps\\powershell.exe"),
-            ("pwsh", "C:\\pwsh\\pwsh.exe"),
+            ("cmd", host("C:\\Windows\\System32\\cmd.exe")),
+            ("powershell", host("C:\\ps\\powershell.exe")),
+            ("pwsh", host("C:\\pwsh\\pwsh.exe")),
         ];
         let l = plan(Tool::Shell, &cwd(), &m).unwrap();
-        assert_eq!(l.program, PathBuf::from("C:\\pwsh\\pwsh.exe"));
-        assert_eq!(l.what, "pwsh in C:\\src\\emma");
+        assert_eq!(l.program, PathBuf::from(host("C:\\pwsh\\pwsh.exe")));
+        // Built from `cwd()` rather than spelled out: the claim is that the
+        // stem of the program and the directory it opens in are what `what`
+        // carries, and a hand-spelled Windows path turns that into a claim
+        // about the host's separator instead.
+        assert_eq!(l.what, format!("pwsh in {}", cwd().display()));
 
         m.programs.retain(|(k, _)| *k != "pwsh");
         let l = plan(Tool::Shell, &cwd(), &m).unwrap();
-        assert_eq!(l.program, PathBuf::from("C:\\ps\\powershell.exe"));
+        assert_eq!(l.program, PathBuf::from(host("C:\\ps\\powershell.exe")));
 
         m.programs.retain(|(k, _)| *k != "powershell");
         let l = plan(Tool::Shell, &cwd(), &m).unwrap();
-        assert_eq!(l.program, PathBuf::from("C:\\Windows\\System32\\cmd.exe"));
+        assert_eq!(
+            l.program,
+            PathBuf::from(host("C:\\Windows\\System32\\cmd.exe"))
+        );
 
         m.programs.clear();
         let e = plan(Tool::Shell, &cwd(), &m).unwrap_err();
@@ -1163,12 +1201,12 @@ mod tests {
         // The invariant settings.rs promises on ToolSettings. If anyone adds
         // word-splitting, the program below stops matching and this goes red.
         let mut m = Fake::new(Os::Windows);
-        m.tools.shell = Some("C:\\Program Files\\Odd Name\\pwsh.exe".into());
-        m.files = vec!["C:\\Program Files\\Odd Name\\pwsh.exe"];
+        m.tools.shell = Some(host("C:\\Program Files\\Odd Name\\pwsh.exe"));
+        m.files = vec![host("C:\\Program Files\\Odd Name\\pwsh.exe")];
         let l = plan(Tool::Shell, &cwd(), &m).unwrap();
         assert_eq!(
             l.program,
-            PathBuf::from("C:\\Program Files\\Odd Name\\pwsh.exe")
+            PathBuf::from(host("C:\\Program Files\\Odd Name\\pwsh.exe"))
         );
         assert!(
             l.args.is_empty(),
@@ -1183,7 +1221,7 @@ mod tests {
         // substitute is indistinguishable from success until the wrong
         // program opens.
         let mut m = Fake::new(Os::Windows);
-        m.programs = vec![("pwsh", "C:\\pwsh\\pwsh.exe")];
+        m.programs = vec![("pwsh", host("C:\\pwsh\\pwsh.exe"))];
         m.tools.shell = Some("fish".into());
         let e = plan(Tool::Shell, &cwd(), &m).unwrap_err();
         assert!(e.contains("fish"), "{e}");
@@ -1207,11 +1245,11 @@ mod tests {
     fn the_editor_chain_is_setting_then_visual_then_editor_then_probe() {
         let mut m = Fake::new(Os::Windows);
         m.programs = vec![
-            ("code", "C:\\vs\\code.cmd"),
-            ("cursor", "C:\\cur\\cursor.exe"),
-            ("visual-ed", "C:\\v\\visual-ed.exe"),
-            ("editor-ed", "C:\\e\\editor-ed.exe"),
-            ("set-ed", "C:\\s\\set-ed.exe"),
+            ("code", host("C:\\vs\\code.cmd")),
+            ("cursor", host("C:\\cur\\cursor.exe")),
+            ("visual-ed", host("C:\\v\\visual-ed.exe")),
+            ("editor-ed", host("C:\\e\\editor-ed.exe")),
+            ("set-ed", host("C:\\s\\set-ed.exe")),
         ];
         m.env = vec![("VISUAL", "visual-ed"), ("EDITOR", "editor-ed")];
         m.tools.editor = Some("set-ed".into());
@@ -1219,21 +1257,21 @@ mod tests {
         let (p, src) = resolve_editor(&m).unwrap();
         assert_eq!(
             (p, src.as_str()),
-            (PathBuf::from("C:\\s\\set-ed.exe"), "tools.editor")
+            (PathBuf::from(host("C:\\s\\set-ed.exe")), "tools.editor")
         );
 
         m.tools.editor = None;
         let (p, src) = resolve_editor(&m).unwrap();
         assert_eq!(
             (p, src.as_str()),
-            (PathBuf::from("C:\\v\\visual-ed.exe"), "$VISUAL")
+            (PathBuf::from(host("C:\\v\\visual-ed.exe")), "$VISUAL")
         );
 
         m.env = vec![("EDITOR", "editor-ed")];
         let (p, src) = resolve_editor(&m).unwrap();
         assert_eq!(
             (p, src.as_str()),
-            (PathBuf::from("C:\\e\\editor-ed.exe"), "$EDITOR")
+            (PathBuf::from(host("C:\\e\\editor-ed.exe")), "$EDITOR")
         );
 
         // Probe order: code beats cursor when both are present.
@@ -1241,7 +1279,7 @@ mod tests {
         let (p, src) = resolve_editor(&m).unwrap();
         assert_eq!(
             (p, src.as_str()),
-            (PathBuf::from("C:\\vs\\code.cmd"), "PATH")
+            (PathBuf::from(host("C:\\vs\\code.cmd")), "PATH")
         );
     }
 
@@ -1249,11 +1287,14 @@ mod tests {
     fn an_editor_env_var_holding_a_command_line_is_skipped_not_split() {
         let mut m = Fake::new(Os::Windows);
         m.env = vec![("EDITOR", "vim -u NONE")];
-        m.programs = vec![("vim", "C:\\vim\\vim.exe"), ("code", "C:\\vs\\code.cmd")];
+        m.programs = vec![
+            ("vim", host("C:\\vim\\vim.exe")),
+            ("code", host("C:\\vs\\code.cmd")),
+        ];
         let (p, _) = resolve_editor(&m).unwrap();
         // Split, this would be vim (with args smuggled somewhere); skipped
         // whole, the chain falls through to the probe and finds code.
-        assert_eq!(p, PathBuf::from("C:\\vs\\code.cmd"));
+        assert_eq!(p, PathBuf::from(host("C:\\vs\\code.cmd")));
     }
 
     #[test]
@@ -1263,14 +1304,14 @@ mod tests {
         // of launching it into the alternate screen.
         let mut m = Fake::new(Os::Linux);
         m.env = vec![("EDITOR", "vim")];
-        m.programs = vec![("vim", "/usr/bin/vim")];
+        m.programs = vec![("vim", host("/usr/bin/vim"))];
         let e = plan(Tool::Code, &cwd(), &m).unwrap_err();
         assert!(e.contains("terminal editor"), "{e}");
         assert!(e.contains("$EDITOR"), "{e}");
 
         let mut m = Fake::new(Os::Windows);
         m.env = vec![("EDITOR", "nvim")];
-        m.programs = vec![("nvim", "C:\\nvim\\nvim.exe")];
+        m.programs = vec![("nvim", host("C:\\nvim\\nvim.exe"))];
         let l = plan(Tool::Code, &cwd(), &m).unwrap();
         assert_eq!(l.window, Window::NewConsole);
     }
@@ -1295,9 +1336,9 @@ mod tests {
     fn gui_launches_are_detached_and_shells_get_their_own_console() {
         let mut m = Fake::new(Os::Windows);
         m.programs = vec![
-            ("pwsh", "C:\\pwsh\\pwsh.exe"),
-            ("code", "C:\\vs\\code.cmd"),
-            ("explorer", "C:\\Windows\\explorer.exe"),
+            ("pwsh", host("C:\\pwsh\\pwsh.exe")),
+            ("code", host("C:\\vs\\code.cmd")),
+            ("explorer", host("C:\\Windows\\explorer.exe")),
         ];
         assert_eq!(
             plan(Tool::Shell, &cwd(), &m).unwrap().window,
@@ -1317,12 +1358,12 @@ mod tests {
         for os in [Os::Mac, Os::Linux] {
             let mut m = Fake::new(os);
             m.programs = vec![
-                ("open", "/usr/bin/open"),
-                ("xdg-open", "/usr/bin/xdg-open"),
-                ("gnome-terminal", "/usr/bin/gnome-terminal"),
-                ("code", "/usr/bin/code"),
+                ("open", host("/usr/bin/open")),
+                ("xdg-open", host("/usr/bin/xdg-open")),
+                ("gnome-terminal", host("/usr/bin/gnome-terminal")),
+                ("code", host("/usr/bin/code")),
             ];
-            m.files = vec!["/home/test/.emma"];
+            m.files = vec![host("/home/test/.emma")];
             for tool in [
                 Tool::Shell,
                 Tool::Code,
@@ -1340,21 +1381,24 @@ mod tests {
     #[test]
     fn the_file_browser_opens_the_project_and_the_data_explorer_opens_the_data_dir() {
         let mut m = Fake::new(Os::Windows);
-        m.programs = vec![("explorer", "C:\\Windows\\explorer.exe")];
-        m.files = vec!["C:\\Users\\test\\.emma"];
+        m.programs = vec![("explorer", host("C:\\Windows\\explorer.exe"))];
+        m.files = vec![host("C:\\Users\\test\\.emma")];
 
         let fb = plan(Tool::FileBrowser, &cwd(), &m).unwrap();
-        assert_eq!(fb.args, vec![OsString::from("C:\\src\\emma")]);
+        assert_eq!(fb.args, vec![OsString::from(host("C:\\src\\emma"))]);
 
         let de = plan(Tool::DataExplorer, &cwd(), &m).unwrap();
-        assert_eq!(de.args, vec![OsString::from("C:\\Users\\test\\.emma")]);
+        assert_eq!(
+            de.args,
+            vec![OsString::from(host("C:\\Users\\test\\.emma"))]
+        );
         assert!(de.what.contains(".emma"), "{}", de.what);
 
         // A configured data_dir wins over the default.
-        m.tools.data_dir = Some("D:\\emma-data".into());
-        m.files = vec!["D:\\emma-data"];
+        m.tools.data_dir = Some(host("D:\\emma-data"));
+        m.files = vec![host("D:\\emma-data")];
         let de = plan(Tool::DataExplorer, &cwd(), &m).unwrap();
-        assert_eq!(de.args, vec![OsString::from("D:\\emma-data")]);
+        assert_eq!(de.args, vec![OsString::from(host("D:\\emma-data"))]);
     }
 
     #[test]
@@ -1363,8 +1407,8 @@ mod tests {
         // CreateProcessW cannot execute a cmd script, and routing it through
         // cmd.exe would re-open the handle inheritance question.
         let mut m = Fake::new(Os::Windows);
-        m.tools.shell = Some("C:\\shims\\pwsh.cmd".into());
-        m.files = vec!["C:\\shims\\pwsh.cmd"];
+        m.tools.shell = Some(host("C:\\shims\\pwsh.cmd"));
+        m.files = vec![host("C:\\shims\\pwsh.cmd")];
         let e = plan(Tool::Shell, &cwd(), &m).unwrap_err();
         assert!(e.contains("pwsh.cmd"), "{e}");
         assert!(e.contains(".exe"), "{e}");
@@ -1374,17 +1418,17 @@ mod tests {
         // takes the Detached path where std handles cmd.exe itself.
         let mut m = Fake::new(Os::Windows);
         m.env = vec![("EDITOR", "nvim")];
-        m.programs = vec![("nvim", "C:\\shims\\nvim.cmd")];
+        m.programs = vec![("nvim", host("C:\\shims\\nvim.cmd"))];
         assert!(plan(Tool::Code, &cwd(), &m).is_err());
         let mut m = Fake::new(Os::Windows);
-        m.programs = vec![("code", "C:\\vs\\code.cmd")];
+        m.programs = vec![("code", host("C:\\vs\\code.cmd"))];
         assert!(plan(Tool::Code, &cwd(), &m).is_ok());
     }
 
     #[test]
     fn a_missing_data_dir_is_named_not_opened() {
         let mut m = Fake::new(Os::Windows);
-        m.programs = vec![("explorer", "C:\\Windows\\explorer.exe")];
+        m.programs = vec![("explorer", host("C:\\Windows\\explorer.exe"))];
         // home exists but ~/.emma was never created on this machine
         let e = plan(Tool::DataExplorer, &cwd(), &m).unwrap_err();
         assert!(e.contains(".emma"), "{e}");
@@ -1424,7 +1468,7 @@ mod tests {
     #[test]
     fn a_failed_spawn_is_an_error_not_a_success() {
         let mut m = Fake::new(Os::Windows);
-        m.programs = vec![("pwsh", "C:\\pwsh\\pwsh.exe")];
+        m.programs = vec![("pwsh", host("C:\\pwsh\\pwsh.exe"))];
         let r = launch_on(Tool::Shell, &cwd(), &m, |_| Err("boom".to_string()));
         assert_eq!(r.unwrap_err(), "boom");
     }
@@ -1432,32 +1476,34 @@ mod tests {
     #[test]
     fn launch_returns_what_happened_in_words() {
         let mut m = Fake::new(Os::Windows);
-        m.programs = vec![("pwsh", "C:\\pwsh\\pwsh.exe")];
+        m.programs = vec![("pwsh", host("C:\\pwsh\\pwsh.exe"))];
         let r = launch_on(Tool::Shell, &cwd(), &m, |l| {
-            assert_eq!(l.program, PathBuf::from("C:\\pwsh\\pwsh.exe"));
+            assert_eq!(l.program, PathBuf::from(host("C:\\pwsh\\pwsh.exe")));
             Ok(())
         });
-        assert_eq!(r.unwrap(), "opened pwsh in C:\\src\\emma");
+        assert_eq!(r.unwrap(), format!("opened pwsh in {}", cwd().display()));
     }
 
     #[test]
     fn settings_opens_the_settings_file_with_the_editor_or_a_fallback() {
         let mut m = Fake::new(Os::Windows);
         m.programs = vec![
-            ("code", "C:\\vs\\code.cmd"),
-            ("notepad", "C:\\Windows\\notepad.exe"),
+            ("code", host("C:\\vs\\code.cmd")),
+            ("notepad", host("C:\\Windows\\notepad.exe")),
         ];
         let l = plan(Tool::Settings, &cwd(), &m).unwrap();
-        assert_eq!(l.program, PathBuf::from("C:\\vs\\code.cmd"));
+        assert_eq!(l.program, PathBuf::from(host("C:\\vs\\code.cmd")));
         assert_eq!(
             l.args,
-            vec![OsString::from("C:\\Users\\test\\.emma\\settings.json")]
+            vec![OsString::from(host(
+                "C:\\Users\\test\\.emma\\settings.json"
+            ))]
         );
 
         // No editor: notepad carries it, and the detail says notepad.
-        m.programs = vec![("notepad", "C:\\Windows\\notepad.exe")];
+        m.programs = vec![("notepad", host("C:\\Windows\\notepad.exe"))];
         let l = plan(Tool::Settings, &cwd(), &m).unwrap();
-        assert_eq!(l.program, PathBuf::from("C:\\Windows\\notepad.exe"));
+        assert_eq!(l.program, PathBuf::from(host("C:\\Windows\\notepad.exe")));
         assert!(l.what.starts_with("notepad on "), "{}", l.what);
 
         // Neither: both absences named, so the user can fix either one.
@@ -1471,9 +1517,12 @@ mod tests {
         // names the program that will actually appear.
         let mut m = Fake::new(Os::Linux);
         m.env = vec![("EDITOR", "vim")];
-        m.programs = vec![("vim", "/usr/bin/vim"), ("xdg-open", "/usr/bin/xdg-open")];
+        m.programs = vec![
+            ("vim", host("/usr/bin/vim")),
+            ("xdg-open", host("/usr/bin/xdg-open")),
+        ];
         let l = plan(Tool::Settings, &cwd(), &m).unwrap();
-        assert_eq!(l.program, PathBuf::from("/usr/bin/xdg-open"));
+        assert_eq!(l.program, PathBuf::from(host("/usr/bin/xdg-open")));
     }
 
     #[test]
@@ -1487,7 +1536,7 @@ mod tests {
 
         // A file with a choice in it survives the ensure untouched.
         let mut s = settings::load(home.path());
-        s.tools.editor = Some("C:\\somewhere\\code.exe".into());
+        s.tools.editor = Some(host("C:\\somewhere\\code.exe"));
         settings::save(home.path(), &s).unwrap();
         let before = std::fs::read_to_string(&path).unwrap();
         ensure_settings_file(home.path()).unwrap();
@@ -1498,24 +1547,27 @@ mod tests {
     #[test]
     fn mac_shell_opens_terminal_app_and_linux_probes_terminal_emulators() {
         let mut m = Fake::new(Os::Mac);
-        m.programs = vec![("open", "/usr/bin/open")];
+        m.programs = vec![("open", host("/usr/bin/open"))];
         let l = plan(Tool::Shell, &cwd(), &m).unwrap();
-        assert_eq!(l.program, PathBuf::from("/usr/bin/open"));
+        assert_eq!(l.program, PathBuf::from(host("/usr/bin/open")));
         assert_eq!(
             l.args,
             vec![
                 OsString::from("-a"),
                 OsString::from("Terminal"),
-                OsString::from("C:\\src\\emma"),
+                OsString::from(host("C:\\src\\emma")),
             ]
         );
 
         let mut m = Fake::new(Os::Linux);
-        m.programs = vec![("xterm", "/usr/bin/xterm"), ("konsole", "/usr/bin/konsole")];
+        m.programs = vec![
+            ("xterm", host("/usr/bin/xterm")),
+            ("konsole", host("/usr/bin/konsole")),
+        ];
         let l = plan(Tool::Shell, &cwd(), &m).unwrap();
         // konsole outranks xterm in the probe order; cwd rides on the spawn's
         // working directory, not on flags.
-        assert_eq!(l.program, PathBuf::from("/usr/bin/konsole"));
+        assert_eq!(l.program, PathBuf::from(host("/usr/bin/konsole")));
         assert!(l.args.is_empty());
         assert_eq!(l.cwd, cwd());
 
@@ -1544,6 +1596,42 @@ mod tests {
         // A name that already carries its extension is taken literally.
         let found = search_in(&path_var, "code.cmd").unwrap();
         assert_eq!(found, dir.path().join("code.cmd"));
+    }
+
+    /// The unix counterpart, and it asserts the opposite half of the same
+    /// contract: `available: true` must mean the spawn can start it.
+    ///
+    /// On Windows that means resolving the extension a `.cmd` shim hides
+    /// behind; on unix there are no extensions to resolve and the thing that
+    /// separates a program from a file is the **executable bit**, which
+    /// `is_program` consults and `p.is_file()` — the Windows arm of the same
+    /// function — does not. Without this, that `mode & 0o111` had no test on
+    /// any platform, and dropping it would have turned every readable file on
+    /// `PATH` into an installed editor.
+    #[cfg(unix)]
+    #[test]
+    fn the_path_probe_requires_the_executable_bit() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path_var = std::env::join_paths([dir.path()]).unwrap();
+        let file = dir.path().join("code");
+        std::fs::write(&file, "#!/bin/sh\n").unwrap();
+
+        // Readable but not executable: not a program, however much it looks
+        // like one.
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            search_in(&path_var, "code").is_none(),
+            "a non-executable file was offered as a program"
+        );
+
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(search_in(&path_var, "code"), Some(file));
+
+        // And no extension is invented: `code.cmd` is a different name here,
+        // not another spelling of this one.
+        assert!(search_in(&path_var, "code.cmd").is_none());
     }
 
     // region: Certification against the real machine

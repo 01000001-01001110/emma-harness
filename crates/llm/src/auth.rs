@@ -686,6 +686,37 @@ mod tests {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "rewritten {mode:o}");
     }
+
+    /// The counterpart to the two tests above, and the reason it looks so thin
+    /// is the point.
+    ///
+    /// Windows has no mode bits, so `check_permissions` is a deliberate
+    /// `Ok(())` and `write_private` is a plain write (see their `cfg(not(unix))`
+    /// arms). What has to be asserted on this platform is therefore not "the
+    /// file is owner-only" — nothing here can say that — but that the absence
+    /// is a *decision* rather than a hole somebody could fall into: a key
+    /// written on Windows is readable back, and read-back does **not** fail
+    /// closed on a permission check that cannot run. Without this, the whole
+    /// store/resolve round trip is asserted only on unix, and a Windows-only
+    /// regression in either half is invisible until a user hits it.
+    #[cfg(not(unix))]
+    #[test]
+    fn a_key_stored_where_there_are_no_mode_bits_still_round_trips() {
+        let home = Home::new("nomode");
+        let path = store(home.path(), "anthropic", &ApiKey::new("sk-ant-tight")).unwrap();
+        assert!(path.exists());
+        assert!(
+            !std::fs::metadata(&path).unwrap().permissions().readonly(),
+            "the file was left read-only, so the next store cannot rewrite it"
+        );
+        let key = resolve(&Anthropic, None, home.path()).expect("resolve what store wrote");
+        assert_eq!(key.expose(), "sk-ant-tight");
+        // And the second write — the read-modify-write a second provider costs,
+        // which is the step that would trip over a permission mistake.
+        store(home.path(), "other", &ApiKey::new("other-tight")).unwrap();
+        let key = resolve(&Anthropic, None, home.path()).expect("still readable after a rewrite");
+        assert_eq!(key.expose(), "sk-ant-tight");
+    }
 }
 
 // endregion: Tests

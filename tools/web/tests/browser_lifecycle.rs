@@ -123,11 +123,35 @@ fn alive(pid: u32) -> bool {
     }
     #[cfg(not(windows))]
     {
-        std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        // `kill -0` alone is the wrong question here, and answers it wrongly.
+        // The pool spawns Chrome with `std::process::Command` and drops the
+        // `Child` without reaping it (`chromehand/session.rs`), so after the
+        // kill the pid is a **zombie owned by this test binary** and stays one
+        // until the binary exits. `kill -0` succeeds against a zombie — a
+        // process that is already dead — so the check that was meant to say
+        // "the browser is still running" would instead report the leak this
+        // file exists to detect, every time, on every unix.
+        //
+        // `ps -o state=` distinguishes them: `Z` is an exited process nobody
+        // has waited on. That is *not* nothing — it is a pid-table entry Emma
+        // is holding open, and it is written up as a product defect — but it is
+        // not a browser still running, which is what this file asserts.
+        let out = std::process::Command::new("ps")
+            .args(["-o", "state=", "-p", &pid.to_string()])
+            .output();
+        match out {
+            // No row at all: reaped and gone.
+            Ok(o) if o.stdout.iter().all(|b| b.is_ascii_whitespace()) => false,
+            Ok(o) => !String::from_utf8_lossy(&o.stdout).trim().starts_with('Z'),
+            // `ps` itself failed to run: fall back to the coarse question
+            // rather than silently reporting "gone", which would make every
+            // assertion in this file pass for the wrong reason.
+            Err(_) => std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false),
+        }
     }
 }
 

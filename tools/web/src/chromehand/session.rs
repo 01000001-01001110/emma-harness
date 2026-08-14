@@ -848,7 +848,7 @@ pub fn list(ttl_secs: u64) -> serde_json::Value {
 // the browser is gone.
 // ---------------------------------------------------------------------------
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -858,6 +858,12 @@ mod tests {
     /// enough apart to tell apart. A `wait_for_exit` that returns immediately
     /// fails this on the elapsed time; one that returns before the process is
     /// actually gone fails it on the liveness check.
+    ///
+    /// The unix arm of the same guarantee is
+    /// [`waiting_is_a_no_op_where_the_unlink_never_needed_it`] below: there the
+    /// claim is the opposite one, and it has to be asserted rather than assumed
+    /// because "does nothing" and "was never called" look identical from here.
+    #[cfg(windows)]
     #[test]
     fn waiting_on_a_pid_returns_only_once_it_is_gone() {
         let mut child = std::process::Command::new("cmd")
@@ -887,6 +893,54 @@ mod tests {
         );
     }
 
+    /// The unix counterpart, asserting the claim `wait_for_exit`'s doc makes
+    /// about unix rather than leaving it as prose.
+    ///
+    /// Two halves, because either alone is satisfiable by a mistake. That the
+    /// call is cheap against a **live** pid — our own, which is the one pid a
+    /// test can be certain of — is what says "there is nothing here to wait
+    /// for"; a `wait_for_exit` that grew a unix arm waiting on the process
+    /// would blow the budget here rather than silently costing three seconds a
+    /// close. And that a directory whose file is still **open** removes anyway
+    /// is *why* there is nothing to wait for: it is the platform difference the
+    /// Windows test above exists because of, stated from the other side.
+    #[cfg(unix)]
+    #[test]
+    fn waiting_is_a_no_op_where_the_unlink_never_needed_it() {
+        let started = std::time::Instant::now();
+        wait_for_exit(std::process::id());
+        let waited = started.elapsed();
+        assert!(
+            waited < Duration::from_millis(200),
+            "waited {waited:?} on a live pid, so something here is waiting after all"
+        );
+
+        let dir = scratch_dir("no-wait");
+        let held = std::fs::File::create(dir.join("still-open")).unwrap();
+        assert!(
+            remove_profile(0, &dir),
+            "a profile whose file is still open must remove without a wait"
+        );
+        assert!(!dir.exists());
+        drop(held);
+    }
+
+    /// A temp directory nobody else will collide with. Named from the pid and
+    /// the clock rather than a fixed string: a panicked run leaves its
+    /// directory behind, and a fixed name makes the *next* run inherit it.
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "browser-miner-session-test-{tag}-{}-{:x}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     /// The other half of the honesty: `close` reports `profile_removed`, and
     /// that field is worthless if the function it comes from cannot say no.
     ///
@@ -903,19 +957,15 @@ mod tests {
     ///
     /// It costs the full retry budget (~2.75s) by construction: that is the
     /// price of exercising a branch that only runs when something is wrong.
+    ///
+    /// The *staging* is what is Windows-only here, not the guarantee — see the
+    /// unix twin below, which stages the same refusal a different way.
+    #[cfg(windows)]
     #[test]
     fn a_directory_that_cannot_be_removed_is_reported_not_swallowed() {
         use std::os::windows::fs::OpenOptionsExt;
 
-        let dir = std::env::temp_dir().join(format!(
-            "browser-miner-session-test-{}-{:x}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = scratch_dir("stuck");
         let stuck = dir.join("held-exclusively");
         std::fs::write(&stuck, b"x").unwrap();
         let held = std::fs::OpenOptions::new()
@@ -936,6 +986,43 @@ mod tests {
             "and once nothing holds it, the same call must succeed"
         );
         assert!(!dir.exists());
+    }
+
+    /// The unix twin of the test above: same guarantee, different obstacle.
+    ///
+    /// `profile_removed` is a cross-platform field and a `remove_profile` that
+    /// cannot say no makes it worthless on either platform, so the assertion is
+    /// the same one. Only the way to make a removal fail differs, and the unix
+    /// way had to avoid two traps. An open file does not block an unlink here —
+    /// that is the whole reason `wait_for_exit` is a no-op on unix — so the
+    /// Windows staging is not merely unavailable, it would assert the opposite.
+    /// And a read-only parent directory, the obvious second choice, is ignored
+    /// by root, so under `sudo` or in a container the test would pass without
+    /// ever entering the branch. A path that exists and is **not a directory**
+    /// fails `remove_dir_all` for a reason no privilege overrides.
+    ///
+    /// Costs the same ~2.75s retry budget as its twin, and for the same reason.
+    #[cfg(unix)]
+    #[test]
+    fn a_profile_that_cannot_be_removed_is_reported_not_swallowed() {
+        let dir = scratch_dir("stuck");
+        let not_a_dir = dir.join("profile");
+        std::fs::write(&not_a_dir, b"x").unwrap();
+
+        assert!(
+            !remove_profile(0, &not_a_dir),
+            "a profile that could not be removed must not be reported as removed"
+        );
+        assert!(not_a_dir.exists(), "and it really is still there");
+
+        std::fs::remove_file(&not_a_dir).unwrap();
+        std::fs::create_dir(&not_a_dir).unwrap();
+        assert!(
+            remove_profile(0, &not_a_dir),
+            "and a profile that is a directory must be removed and reported so"
+        );
+        assert!(!not_a_dir.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// pid 0 is what an attached session records — the user's own Chrome, which

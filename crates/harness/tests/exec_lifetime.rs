@@ -585,6 +585,19 @@ async fn certify_the_misreport_rate_over_twenty_trials() {
 /// that later writes, so variant A′ is expected to behave differently there
 /// unless the daemon ignores the signal — which is why the module doc on
 /// `hooks::exec` tells a hook author to redirect a daemon's output.
+///
+/// **What is and is not left uncovered off Windows**, since a `cfg` that hides
+/// a whole file is exactly the shape that quietly stops testing something. The
+/// portable half of what this file asserts — a hook's exit is what completion
+/// is keyed on, its stdout arrives whole, a hook that hangs is timed out rather
+/// than waited for — is covered on unix by `harness_hooks.rs`, whose fixtures
+/// are `#!/bin/sh` scripts with the executable bit set (its `script()` helper)
+/// and which runs in full on both platforms. What has **no** unix test anywhere
+/// is the case this file was built for: a hook that *daemonizes*, where the
+/// grandchild inherits the pipe. That gap is real, it is the one thing the
+/// ruling of 2026-08-14 turned into a guarantee, and it cannot be closed from a
+/// Windows box — a fixture written here and never run would be a claim, not a
+/// test.
 #[cfg(not(windows))]
 #[test]
 fn the_process_lifetime_fixtures_are_windows_only_and_this_says_so() {
