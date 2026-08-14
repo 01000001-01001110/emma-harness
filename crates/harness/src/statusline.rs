@@ -22,7 +22,21 @@
 //! - [`hooks::contain`] — the path must canonicalise inside `<root>/hooks/`.
 //! - [`hooks::contained_command`] — argv exec, no shell, environment cleared to
 //!   six names, `kill_on_drop`.
-//! - [`hooks::exec`] — both pipes read under a hard cap.
+//! - [`hooks::exec`] — waits on the child, drains both pipes under a hard cap
+//!   around that wait, and claims nothing about what the child started.
+//!
+//! **That last one carries a ruling this file inherits rather than makes.** A
+//! program that spawns something meant to outlive it is a supported use (owner,
+//! 2026-08-14), so `exec` abandons the pipe instead of waiting for an
+//! end-of-file the daemon holds open — which is what stops a status script that
+//! exited 0 from being reported as `timed out after 2000ms` on every debounced
+//! repaint. The *other* half of that ruling sits less comfortably here than it
+//! does on a hook: a status script runs many times a session, so one that
+//! daemonizes accumulates a process per burst. That is flagged for a second
+//! owner ruling in `notes/plan-process-lifetime.md` §4 and is deliberately
+//! **not** decided by growing `exec` a caller-chosen policy — one behaviour for
+//! both until somebody rules otherwise, for the same reason everything else on
+//! this list is shared.
 //!
 //! **The one place Emma refuses what Claude Code accepts.** There, `command`
 //! runs in a shell, so `jq -r '...'` inline is idiomatic. Here it cannot: Emma

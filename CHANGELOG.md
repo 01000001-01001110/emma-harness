@@ -28,6 +28,45 @@ out for themselves.
 
 ## Unreleased
 
+- Prompt caching now uses each model's own minimum cacheable prefix instead of
+  assuming Opus 5's 512 tokens. On models with a higher floor —
+  `claude-haiku-4-5` and `claude-opus-4-6` need 4,096 — Emma was marking
+  prefixes the API accepts but never caches, so those sessions paid full price
+  for the marked span, with no error and nothing on screen to show it. If you
+  ran `emma model claude-haiku-4-5`, switched with `/model`, or delegated to a
+  Haiku-typed agent, this was costing you money. Models Emma does not know are
+  gated at the highest known floor, which forgoes some caching rather than
+  silently wasting it.
+- A hook or `statusLine` program that starts something in the background and
+  then exits is no longer reported as having timed out. Emma waited for the
+  program's output pipe to close, and a background process it started held that
+  pipe open — so a script that answered in milliseconds was recorded as
+  `timed out after 5000ms` and its output thrown away, which for a status line
+  meant on every repaint. Emma now waits for the program itself. Anything the
+  program started is deliberately left running: Emma supervises the program it
+  ran and makes no claim about that program's children, so a hook that hangs
+  past its timeout is killed alone. Point a background process's output
+  somewhere other than the hook's stdout — Emma stops reading it, and on unix a
+  write into the closed pipe will kill an unprepared process.
+- A `domain:` permission rule that can never match a real host is now reported
+  at startup, the way `Bash(rm *)` already was: a non-ASCII domain
+  (`WebFetch(domain:bücher.example)`) or an unbracketed IPv6 address
+  (`WebFetch(domain:::1)`). Hosts arrive already punycode-encoded and bracketed,
+  so those rules match nothing — in a `deny` list, a protection that protects
+  nothing. The message says so and gives the spelling that works
+  (`xn--bcher-kva.example`, `[::1]`). **No rule's matching behaviour changed**:
+  anything that matched before still matches.
+- The delegation footer now accounts for every tool call a subagent made.
+  `WebFetch` gets its own `fetched (N):` line, `WebSearch` joins the existing
+  `searched for (N):` line, and anything else is listed as
+  `other tool calls: Skill ×1, TaskCreate ×3`. Before this, a call whose
+  arguments were not `file_path`, `pattern` or `command` was counted in the
+  total and named nowhere — five page fetches read as `files read: none` over
+  `5 tool calls`.
+- The footer's `files read (N):` line is now `files touched (N):`. `Write` and
+  `Edit` always landed in that list too, so "read" over-claimed. The
+  `files_read` field in the `delegation` session-log record keeps its name; two
+  new fields, `fetched` and `other_tool_calls`, sit beside it.
 - Closing a browser session no longer leaves the session's Chrome profile
   behind in your temp directory. It used to, on Windows, about one close in
   eight — a whole profile, cookie database included, sitting in a shared folder

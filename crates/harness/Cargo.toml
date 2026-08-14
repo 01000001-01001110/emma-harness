@@ -17,3 +17,13 @@ emma-tool-api.workspace = true
 [dev-dependencies]
 async-trait.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+# Tests only, Windows only, and only to ask whether a process is still running.
+# `tests/exec_lifetime.rs` asserts that a hook's daemon outlives Emma and that a
+# timed-out hook's own process does not; both answers have to come from
+# `OpenProcess(SYNCHRONIZE)` + `WaitForSingleObject` rather than from a kill's
+# return or a `tasklist` grep, which is the lesson in
+# `notes/lessons/a-flaky-test-was-the-only-symptom-of-a-real-leak.md`. The crate
+# itself has no Windows dependency and must not grow one.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys.workspace = true

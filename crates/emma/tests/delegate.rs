@@ -194,7 +194,7 @@ async fn a_delegation_runs_a_nested_loop_and_returns_its_conclusion_under_a_foot
     assert!(seen.contains("It is decided in src/retry.rs."), "{seen}");
     // …under a footer the sub did not write.
     assert!(seen.contains("ended: done"), "{seen}");
-    assert!(seen.contains("files read (1)"), "{seen}");
+    assert!(seen.contains("files touched (1)"), "{seen}");
     assert!(seen.contains("recorded by the harness"), "{seen}");
 }
 
@@ -203,7 +203,7 @@ async fn a_delegation_runs_a_nested_loop_and_returns_its_conclusion_under_a_foot
 /// The scripted subagent claims, in perfectly plausible prose, to have read two
 /// files and run a command that passed. It called no tool at all. Compose the
 /// footer from `outcome.text` rather than from the run's records and this goes
-/// red: the claimed paths appear under `files read`, and `cargo test → exit 0`
+/// red: the claimed paths appear under `files touched`, and `cargo test → exit 0`
 /// appears under `commands run`.
 ///
 /// Note what is *not* asserted: that the claim was removed. It is still there,
@@ -246,7 +246,7 @@ async fn the_footer_is_the_harnesss_record_and_not_the_subagents_account() {
         "the claim was censored: {seen}"
     );
     assert!(
-        seen.contains("files read: none"),
+        seen.contains("files touched: none"),
         "the footer credited files nothing opened: {seen}"
     );
     assert!(

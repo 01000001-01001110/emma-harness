@@ -33,8 +33,11 @@
 //! Note what is **not** here: the minimum cacheable prefix. It is the same
 //! class of per-model value, it is wrong for the same reason, and the models
 //! endpoint does not report it — so it cannot follow this table into discovery
-//! and needs its own answer. `anthropic.rs`'s `MIN_CACHEABLE_TOKENS` still owns
-//! it.
+//! and needs its own answer. `anthropic.rs`'s `MIN_CACHEABLE` owns it, as a
+//! second longest-prefix table with the same rows and a *different* fallback
+//! direction: this one guesses low for an unknown model because a high ceiling
+//! 400s, that one guesses high because a low floor silently overpays. Adding a
+//! model means adding a row to both.
 
 use crate::Effort;
 

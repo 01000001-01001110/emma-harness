@@ -468,6 +468,18 @@ struct Row {
     rules: Vec<(PermissionKind, &'static str)>,
     host: &'static str,
     want: Option<Decision>,
+    /// Does `Rules::parse` have something to say about this row's rules at
+    /// boot?
+    ///
+    /// **The default is `false`, and that is where most of the value is.**
+    /// Every ordinary row in this table is now also the assertion that a
+    /// working rule is silent — the hard half of any warning, and the half a
+    /// warning's own tests never cover, because a branch that fires on
+    /// everything passes every test written about the case it was meant for.
+    /// The rows that do warn ([`row_warned`]) keep their verdicts unchanged,
+    /// which is the other thing that has to be proven: the note is speech, and
+    /// speech must not move a match.
+    warned: bool,
 }
 
 const fn allow(rule: &'static str) -> (PermissionKind, &'static str) {
@@ -491,6 +503,21 @@ fn row(
         rules: rules.to_vec(),
         host,
         want,
+        warned: false,
+    }
+}
+
+/// A row whose rules Emma announces at boot: well-formed, kept, and incapable
+/// of meeting a host any URL produces.
+fn row_warned(
+    name: &'static str,
+    rules: &[(PermissionKind, &'static str)],
+    host: &'static str,
+    want: Option<Decision>,
+) -> Row {
+    Row {
+        warned: true,
+        ..row(name, rules, host, want)
     }
 }
 
@@ -498,11 +525,14 @@ impl Row {
     /// Parse this row's rules the way `main` parses a settings file, then ask
     /// the egress question.
     ///
-    /// A rule that does not survive parsing is an `Err` rather than a panic, so
-    /// one row that stops parsing does not hide the ninety-four behind it. It
-    /// is still a failure — a rule Emma cannot evaluate matches nothing, which
-    /// in a `deny` list is a protection that has quietly gone.
-    fn verdict(&self) -> Result<Option<Decision>, String> {
+    /// The notes come back rather than being treated as a failure on sight,
+    /// because two different things produce one: a rule that did not survive
+    /// parsing (always a failure — a rule Emma cannot evaluate matches nothing,
+    /// which in a `deny` list is a protection that has quietly gone), and a
+    /// rule this build deliberately announces. The caller tells them apart with
+    /// [`Row::warned`], so one row that starts or stops speaking does not hide
+    /// the ninety-odd behind it.
+    fn verdict(&self) -> (Option<Decision>, Vec<String>) {
         let entries: Vec<PermissionEntry> = self
             .rules
             .iter()
@@ -513,10 +543,7 @@ impl Row {
             })
             .collect();
         let (rules, notes) = Rules::parse(&entries);
-        if !notes.is_empty() {
-            return Err(format!("its rules no longer parse — {notes:?}"));
-        }
-        Ok(rules.for_egress("WebFetch", self.host))
+        (rules.for_egress("WebFetch", self.host), notes)
     }
 }
 
@@ -669,11 +696,14 @@ fn the_matching_matrix() {
         // pinned here rather than papered over.
         // -------------------------------------------------------------------
         row("idn/punycode-rule-matches-punycode-host", &[allow("WebFetch(domain:xn--bcher-kva.example)")], "xn--bcher-kva.example", Some(Allow)),
-        row("idn/a-unicode-rule-never-meets-a-punycode-host", &[allow("WebFetch(domain:b\u{fc}cher.example)")], "xn--bcher-kva.example", None),
-        row("idn/a-unicode-rule-does-match-a-unicode-host", &[allow("WebFetch(domain:b\u{fc}cher.example)")], "b\u{fc}cher.example", Some(Allow)),
+        row_warned("idn/a-unicode-rule-never-meets-a-punycode-host", &[allow("WebFetch(domain:b\u{fc}cher.example)")], "xn--bcher-kva.example", None),
+        row_warned("idn/a-unicode-rule-does-match-a-unicode-host", &[allow("WebFetch(domain:b\u{fc}cher.example)")], "b\u{fc}cher.example", Some(Allow)),
         // Case folding is ASCII-only, so a Unicode rule is case-sensitive in
         // the parts that are not ASCII. Documented, not desired.
-        row("idn/case-folding-is-ascii-only", &[allow("WebFetch(domain:b\u{fc}cher.example)")], "B\u{dc}CHER.example", None),
+        row_warned("idn/case-folding-is-ascii-only", &[allow("WebFetch(domain:b\u{fc}cher.example)")], "B\u{dc}CHER.example", None),
+        // The damage, as a row: a deny naming the host in the spelling a human
+        // reads, and the fetch it does not stop. `warned` is the whole repair.
+        row_warned("idn/a-unicode-deny-blocks-the-real-host-not-at-all", &[deny("WebFetch(domain:b\u{fc}cher.example)"), allow("WebFetch")], "xn--bcher-kva.example", Some(Allow)),
         row("idn/punycode-is-all-ascii-so-it-case-folds", &[allow("WebFetch(domain:XN--BCHER-KVA.example)")], "xn--bcher-kva.example", Some(Allow)),
 
         // -------------------------------------------------------------------
@@ -696,7 +726,17 @@ fn the_matching_matrix() {
         // IPv6 arrives from `Url::host_str` in brackets, and the brackets are
         // part of the label. A rule written without them matches nothing.
         row("ip/v6-bracketed-as-the-url-crate-writes-it", &[allow("WebFetch(domain:[::1])")], "[::1]", Some(Allow)),
-        row("ip/v6-an-unbracketed-rule-misses-a-bracketed-host", &[allow("WebFetch(domain:::1)")], "[::1]", None),
+        row_warned("ip/v6-an-unbracketed-rule-misses-a-bracketed-host", &[allow("WebFetch(domain:::1)")], "[::1]", None),
+        // The warning is speech and nothing else: the same rule still matches
+        // the unbracketed host a direct caller could hand the matcher. If this
+        // row ever changes verdict, the "warn, do not convert" ruling has been
+        // quietly reversed.
+        row_warned("ip/v6-an-unbracketed-rule-still-matches-an-unbracketed-host", &[allow("WebFetch(domain:::1)")], "::1", Some(Allow)),
+        // The two rows the whole warning exists for, stated as the damage
+        // rather than as a near-miss: a deny the operator wrote, a fetch that
+        // goes through anyway. Nothing here can be fixed by matching — only by
+        // saying so at boot, which is what `warned` asserts.
+        row_warned("ip/v6-a-deny-written-without-brackets-blocks-nothing", &[deny("WebFetch(domain:::1)"), allow("WebFetch")], "[::1]", Some(Allow)),
         row("localhost/exact", &[allow("WebFetch(domain:localhost)")], "localhost", Some(Allow)),
         row("localhost/is-not-a-suffix-of-a-real-domain", &[allow("WebFetch(domain:localhost)")], "localhost.attacker.net", None),
         row("localhost/a-star-rule-does-not-cover-the-bare-name", &[allow("WebFetch(domain:*.localhost)")], "localhost", None),
@@ -739,13 +779,27 @@ fn the_matching_matrix() {
     // names the invariant that went.
     let mut broken = Vec::new();
     for r in &matrix {
-        match r.verdict() {
-            Ok(got) if got == r.want => {}
-            Ok(got) => broken.push(format!(
+        let (got, notes) = r.verdict();
+        if got != r.want {
+            broken.push(format!(
                 "  {}: rules {:?} against `{}` gave {:?}, wanted {:?}",
                 r.name, r.rules, r.host, got, r.want
+            ));
+        }
+        // The other half, and the one that catches a warning which has grown
+        // too eager. A boot note on a working rule is the outage shape this
+        // repository keeps ruling against; a note that stopped firing on an
+        // inert rule is the silent-deny defect coming back.
+        match (r.warned, notes.is_empty()) {
+            (false, false) => broken.push(format!(
+                "  {}: rules {:?} were announced at boot and should have been silent — {notes:?}",
+                r.name, r.rules
             )),
-            Err(why) => broken.push(format!("  {}: {why}", r.name)),
+            (true, true) => broken.push(format!(
+                "  {}: rules {:?} match nothing a URL can produce and boot said nothing about it",
+                r.name, r.rules
+            )),
+            _ => {}
         }
     }
     assert!(

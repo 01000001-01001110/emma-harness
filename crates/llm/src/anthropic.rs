@@ -21,11 +21,12 @@
 //! result, and is called again seconds later. P is effectively 1.0, so the
 //! write pays back on the *second* call of the first turn and every call after
 //! that is 90% off on the prefix. That is why caching is on by default, and why
-//! [`MIN_CACHEABLE_TOKENS`] gates it: below 512 tokens the marker is accepted,
-//! silently does nothing, and the request pays the overhead for no entry. The
-//! honest summary is "worth it, but only because the loop is multi-call and
-//! only above the minimum" — [`Caching::Off`] exists so that claim can be
-//! measured rather than believed.
+//! [`MIN_CACHEABLE`] gates it *per model*: below that model's floor the marker
+//! is accepted, silently does nothing, and the request pays the overhead for no
+//! entry. The floor is 512 on `claude-opus-5` and 4,096 on `claude-haiku-4-5`,
+//! which is why it cannot be one constant. The honest summary is "worth it, but
+//! only because the loop is multi-call and only above the minimum" —
+//! [`Caching::Off`] exists so that claim can be measured rather than believed.
 //!
 //! The saving is smaller than tustle-agent's measured 84%, because there the
 //! cached prefix was a 33k-token corpus. Here the prefix is small and the real
@@ -59,20 +60,77 @@ const API_VERSION: &str = "2023-06-01";
 // marker is accepted, does nothing, and still costs.
 // ---------------------------------------------------------------------------
 
-/// Smallest prefix `claude-opus-5` will cache at all. Below it a
-/// `cache_control` marker is accepted and silently does nothing, so sending one
-/// buys request overhead and no entry — hence the size gate on every
-/// breakpoint below. Smaller models require more; this is the floor, not a
-/// guarantee.
-const MIN_CACHEABLE_TOKENS: usize = 512;
+/// Smallest prefix each model will cache at all, longest-prefix keyed so a
+/// dated snapshot (`claude-haiku-4-5-20251001`) resolves to the same row as its
+/// alias. Below its model's floor a `cache_control` marker is **accepted and
+/// silently does nothing** — no error, no entry, and the marked span still
+/// billed at the uncached rate. That is why every breakpoint below is gated,
+/// and why the gate cannot be one number: the floor is not monotonic with
+/// release date, and the newest models have the *lowest* floors. A single
+/// `512` was right for `claude-opus-5` and eight times too low for
+/// `claude-haiku-4-5`, which a user reaches with one `/model` or one
+/// Haiku-typed delegation.
+///
+/// Transcribed 2026-08-11 from Anthropic's published prompt-caching docs.
+/// **A snapshot of facts that change without asking us** — floors have moved
+/// with every model generation, so re-check this table when adding a model
+/// rather than pattern-matching from the rows above it.
+///
+/// Its twin is `models::TABLE`, and they are deliberately not one table:
+/// `Limits` is the shape `GET /v1/models` parses into, that endpoint reports no
+/// cache minimum, and the two unknown-model fallbacks argue in opposite
+/// directions (see [`MIN_CACHEABLE_UNKNOWN`]). The cost of the split is two
+/// tables to update per release; `notes/plan-caching-defects.md` §"Where it
+/// lives" carries the argument and the revisit trigger.
+const MIN_CACHEABLE: &[(&str, usize)] = &[
+    ("claude-opus-5", 512),
+    ("claude-fable-5", 512),
+    ("claude-mythos-5", 512),
+    ("claude-opus-4-8", 1_024),
+    ("claude-sonnet-5", 1_024),
+    ("claude-sonnet-4-6", 1_024),
+    ("claude-sonnet-4-5", 1_024),
+    ("claude-opus-4-7", 2_048),
+    ("claude-opus-4-6", 4_096),
+    ("claude-haiku-4-5", 4_096),
+];
+
+/// What we assume for a model this table has never heard of: **the highest
+/// floor anyone ships**, which is the opposite direction from
+/// [`models::UNKNOWN`]'s conservative *low* ceiling, and deliberately so.
+///
+/// - *Guess too low* and we reproduce the defect this table exists to fix:
+///   markers on prefixes under the real floor, the marked span billed
+///   uncached, no symptom anywhere except the invoice, unbounded in time.
+/// - *Guess too high* (chosen) and an unknown model whose real floor is lower
+///   goes unmarked while its estimated prefix sits under 4,096 tokens
+///   (~16 KB rendered). The cost is the forgone 0.9× read discount on that
+///   span — cents per call — and it ends by itself, because history grows past
+///   the threshold within a few turns.
+///
+/// Silent-and-forever versus visible-and-self-healing is the whole argument.
+const MIN_CACHEABLE_UNKNOWN: usize = 4_096;
+
+/// The smallest prefix `model` will cache, or [`MIN_CACHEABLE_UNKNOWN`] if this
+/// table has never heard of it.
+fn min_cacheable_tokens(model: &str) -> usize {
+    MIN_CACHEABLE
+        .iter()
+        .filter(|(id, _)| model.starts_with(id))
+        // Longest match wins, so a shorter row added later cannot swallow a
+        // model whose id it happens to prefix.
+        .max_by_key(|(id, _)| id.len())
+        .map(|(_, floor)| *floor)
+        .unwrap_or(MIN_CACHEABLE_UNKNOWN)
+}
 
 /// Conservative chars-per-token, used only to decide whether a prefix clears
 /// the minimum. Over-estimating tokens would waste a marker, so the estimate
 /// leans low.
 const CHARS_PER_TOKEN: usize = 4;
 
-fn clears_minimum(chars: usize) -> bool {
-    chars / CHARS_PER_TOKEN >= MIN_CACHEABLE_TOKENS
+fn clears_minimum(chars: usize, floor: usize) -> bool {
+    chars / CHARS_PER_TOKEN >= floor
 }
 
 /// 5-minute TTL. Not the 1-hour variant: that doubles the write price and only
@@ -115,13 +173,13 @@ fn mark_breakpoint(content: &mut Value) -> bool {
 /// `tools_chars` counts toward the minimum because the server renders
 /// `tools → system → messages`, so the prefix this breakpoint captures already
 /// includes the tools array.
-fn system_field(instructions: &str, tools_chars: usize, caching: Caching) -> Value {
+fn system_field(instructions: &str, tools_chars: usize, caching: Caching, floor: usize) -> Value {
     if instructions.is_empty() {
         // An empty text block is rejected outright; send the bare string.
         return Value::String(String::new());
     }
     let mut block = json!({ "type": "text", "text": instructions });
-    if caching == Caching::On && clears_minimum(tools_chars + instructions.len()) {
+    if caching == Caching::On && clears_minimum(tools_chars + instructions.len(), floor) {
         block["cache_control"] = ephemeral();
     }
     json!([block])
@@ -131,7 +189,7 @@ fn system_field(instructions: &str, tools_chars: usize, caching: Caching) -> Val
 ///
 /// The *rendered* length, not the length of the text inside — the quotes and
 /// the escapes are bytes the provider tokenises too, and this number is only
-/// ever compared against [`MIN_CACHEABLE_TOKENS`]. It was
+/// ever compared against the model's row in [`MIN_CACHEABLE`]. It was
 /// `m.content.to_string().len()` over `serde_json::Value` and is the same
 /// arithmetic over the typed form, deliberately: a breakpoint that moved
 /// because the estimator changed units would be a caching regression nothing
@@ -153,7 +211,11 @@ fn chars_of(messages: &[Message]) -> usize {
 /// a coding agent does all day — it reads, then edits, then runs the tests.
 /// The gate is that evidence, and it is a judgement, not a measurement: when
 /// `cache_read_input_tokens` data exists for real sessions, check it.
-fn messages_field(req: &Request, prefix_chars: usize) -> Result<Vec<Value>, LlmError> {
+fn messages_field(
+    req: &Request,
+    prefix_chars: usize,
+    floor: usize,
+) -> Result<Vec<Value>, LlmError> {
     let render = |m: &Message| {
         serde_json::to_value(m).map_err(|e| LlmError::Protocol(format!("render message: {e}")))
     };
@@ -169,7 +231,7 @@ fn messages_field(req: &Request, prefix_chars: usize) -> Result<Vec<Value>, LlmE
     }
 
     let history_chars = chars_of(&req.history);
-    if !req.history.is_empty() && clears_minimum(prefix_chars + history_chars) {
+    if !req.history.is_empty() && clears_minimum(prefix_chars + history_chars, floor) {
         if let Some(content) = rendered[req.history.len() - 1].get_mut("content") {
             mark_breakpoint(content);
         }
@@ -177,7 +239,9 @@ fn messages_field(req: &Request, prefix_chars: usize) -> Result<Vec<Value>, LlmE
 
     // More than one message in `query` means the user turn plus at least one
     // tool round-trip.
-    if req.query.len() > 1 && clears_minimum(prefix_chars + history_chars + chars_of(&req.query)) {
+    if req.query.len() > 1
+        && clears_minimum(prefix_chars + history_chars + chars_of(&req.query), floor)
+    {
         let last = rendered.len() - 1;
         if let Some(content) = rendered[last].get_mut("content") {
             mark_breakpoint(content);
@@ -256,8 +320,12 @@ impl AnthropicProvider {
         let tools_chars = serde_json::to_string(&req.tools)
             .map(|s| s.len())
             .unwrap_or(0);
-        let system = system_field(&req.instructions, tools_chars, req.caching);
-        let messages = messages_field(req, tools_chars + req.instructions.len())?;
+        // The cache floor is per-model and this is the only place the model and
+        // the gating are both in scope — the same argument as the clamping
+        // below, and the reason the floor is a parameter rather than a const.
+        let floor = min_cacheable_tokens(&self.model);
+        let system = system_field(&req.instructions, tools_chars, req.caching, floor);
+        let messages = messages_field(req, tools_chars + req.instructions.len(), floor)?;
 
         // The request says what Emma wants; the model says what it will take.
         // Clamping happens here because this is the only place both are in
@@ -1461,6 +1529,156 @@ mod tests {
             json!([{ "type": "text", "text": "short instructions" }])
         );
     }
+
+    // region: the per-model cache floor
+    // ------------------------------------------- the per-model cache floor --
+
+    /// The same `Request` through a provider pinned to `model`.
+    async fn sent_as(model: &str, req: Request) -> Value {
+        let s = stub(vec![Reply::json(batch_body())]).await;
+        let p = AnthropicProvider::new(ApiKey::new(TEST_KEY), Some(model.to_string()))
+            .with_base_url(s.url.clone());
+        let _ = p.send(req, Mode::Batch, None).await;
+        s.last()
+    }
+
+    /// Over 4,096 tokens at chars/4, so even the highest floor opens.
+    fn huge_instructions() -> String {
+        "You are Emma. ".repeat(1_400)
+    }
+
+    /// The defect, made into a regression guard. `big_instructions()` is ~700
+    /// estimated tokens: over Opus 5's 512 floor and well under Haiku 4.5's
+    /// 4,096. Before the per-model table this sent a marker that Haiku accepts
+    /// and ignores — no error, no cache entry, the marked span billed uncached,
+    /// forever and invisibly.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_prefix_over_one_models_floor_and_under_anothers_is_marked_only_for_the_first() {
+        let with_history = || {
+            request()
+                .with_history(vec![
+                    Message::user(big_instructions()),
+                    Message::assistant_text("older answer"),
+                ])
+                .with_query(vec![Message::user("the new question")])
+        };
+        assert_eq!(
+            cache_marks(&sent_as("claude-haiku-4-5", with_history()).await),
+            0,
+            "Haiku 4.5 caches nothing under 4,096 tokens, so a marker there is pure cost"
+        );
+        // …and the identical request on a model whose floor it does clear is
+        // still marked, so the fix is a per-model gate and not caching switched
+        // off in general.
+        assert_eq!(
+            cache_marks(&sent_as(DEFAULT_MODEL, with_history()).await),
+            2
+        );
+    }
+
+    /// Above Haiku's own floor the three breakpoints land exactly where the
+    /// placement tests pin them for Opus — the gate moved, the placement did
+    /// not.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_high_floor_model_still_gets_every_breakpoint_once_it_clears_it() {
+        let req = Request::new(huge_instructions(), vec![json!({ "name": "Read" })])
+            .with_history(vec![
+                Message::user(huge_instructions()),
+                Message::assistant_text("older answer"),
+            ])
+            .with_query(vec![
+                Message::user(huge_instructions()),
+                Message::assistant(vec![ContentBlock::ToolUse(ToolCall {
+                    id: "toolu_01".into(),
+                    name: "Read".into(),
+                    input: json!({}),
+                    ..Default::default()
+                })]),
+                Message::tool_results(vec![ToolResult::ok("toolu_01", "fn main() {}")]),
+            ]);
+        let sent = sent_as("claude-haiku-4-5", req).await;
+
+        assert_eq!(cache_marks(&sent), 3, "sent: {sent}");
+        assert_eq!(cache_marks(&sent["system"]), 1);
+        assert_eq!(cache_marks(&sent["messages"][1]), 1);
+        assert_eq!(cache_marks(&sent["messages"][4]), 1);
+    }
+
+    /// A dated snapshot is the spelling the console hands a user, and it must
+    /// not fall through to the unknown-model fallback by accident — here it
+    /// would happen to give the same answer, so this asserts against Opus 5,
+    /// where a missed row would be visibly wrong.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_dated_snapshot_resolves_to_its_alias_on_the_wire() {
+        assert_eq!(min_cacheable_tokens("claude-opus-5-20260101"), 512);
+        assert_eq!(min_cacheable_tokens("claude-haiku-4-5-20251001"), 4_096);
+        let sent = sent_as(
+            "claude-opus-5-20260101",
+            request().with_history(vec![Message::user(big_instructions())]),
+        )
+        .await;
+        assert_eq!(cache_marks(&sent), 2, "sent: {sent}");
+    }
+
+    /// An id this table has never heard of gets the highest floor anyone
+    /// ships, not the lowest — the reverse of `models::UNKNOWN`, and the whole
+    /// point of keeping the two tables apart.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unknown_model_is_gated_at_the_highest_known_floor() {
+        assert_eq!(
+            min_cacheable_tokens("claude-opus-9-unreleased"),
+            MIN_CACHEABLE
+                .iter()
+                .map(|(_, f)| *f)
+                .max()
+                .expect("table is not empty")
+        );
+        // ~700 estimated tokens: marked on Opus 5, unmarked here.
+        assert_eq!(
+            cache_marks(
+                &sent_as(
+                    "claude-opus-9-unreleased",
+                    request().with_history(vec![Message::user(big_instructions())])
+                )
+                .await
+            ),
+            0
+        );
+        // …and it is a gate, not a refusal: clear 4,096 and the markers return.
+        assert_eq!(
+            cache_marks(
+                &sent_as(
+                    "claude-opus-9-unreleased",
+                    Request::new(huge_instructions(), vec![])
+                        .with_history(vec![Message::user(huge_instructions())])
+                )
+                .await
+            ),
+            2
+        );
+    }
+
+    #[test]
+    fn no_cache_floor_row_shadows_another() {
+        // Prefix matching is only unambiguous while no id prefixes another —
+        // today none does, and `max_by_key` covers the day one is added. This
+        // asserts the property rather than the tie-break, because a row like
+        // `claude-opus` added later would silently swallow every Opus and no
+        // other test in this file would notice.
+        for (a, _) in MIN_CACHEABLE {
+            for (b, _) in MIN_CACHEABLE {
+                assert!(
+                    a == b || !b.starts_with(a),
+                    "{b} is shadowed by the shorter row {a}"
+                );
+            }
+        }
+        // The non-monotonicity that makes a single constant wrong: the newest
+        // model has the lowest floor and an older, smaller one the highest.
+        assert!(min_cacheable_tokens("claude-opus-5") < min_cacheable_tokens("claude-haiku-4-5"));
+    }
+
+    // endregion: the per-model cache floor
 
     #[tokio::test(flavor = "multi_thread")]
     async fn caching_off_sends_no_markers_at_all() {

@@ -31,7 +31,15 @@
 //! - The program failed, timed out or printed nothing — the built-in status
 //!   again, and the reason is written to the transcript **once per distinct
 //!   message**, so a script that is broken on every invocation says so once
-//!   rather than five times a second.
+//!   rather than five times a second. "Timed out" here now means the program
+//!   itself did not finish. Until 2026-08-14 it also caught a program that had
+//!   exited in milliseconds but had started something which inherited its
+//!   stdout: the supervisor was waiting for the pipe to close rather than for
+//!   the program to exit, so the row said `statusLine timed out after 2000ms`
+//!   on every debounced repaint of a script that had answered every time. The
+//!   fix is in `emma_harness::hooks::exec`; nothing in this file changed, which
+//!   is the argument for the status line reusing that supervisor rather than
+//!   owning one.
 //! - The program answered — its output, and the built-in status is gone. That
 //!   is the deal, and `notes/status-line.md` says so out loud: model, cwd,
 //!   elapsed, ctx and spend are Emma's line, and a script that does not print

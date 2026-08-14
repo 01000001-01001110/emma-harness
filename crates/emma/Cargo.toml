@@ -18,6 +18,10 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+# Only to spell a warning correctly. See the workspace manifest, and the
+# `domain:` note branch in `permissions.rs` — the matcher does no IDNA and is
+# not going to.
+idna.workspace = true
 rpassword.workspace = true
 serde.workspace = true
 serde_json.workspace = true

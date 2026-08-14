@@ -714,9 +714,67 @@ pub(crate) fn contained_command(program: &Path) -> tokio::process::Command {
     cmd
 }
 
-/// Spawn, feed stdin, read both pipes under a hard cap. A hook that writes past
-/// the cap blocks and hits the timeout, which is the right answer for a program
-/// that will not stop.
+/// How long the pipes get to finish draining **after** the hook has already
+/// exited, before Emma takes what it has and walks away.
+///
+/// **Why a budget and not an event.** A hook may start something meant to
+/// outlive it — that is a supported use, ruled 2026-08-14 — and that grandchild
+/// inherits the same stdout. So there is no longer any observable event meaning
+/// "the hook's own output is complete": end-of-file arrives when the *last*
+/// writer closes, which may be days later, and a pipe cannot say which writer a
+/// byte came from. What is knowable is that everything the hook itself wrote
+/// completed into the pipe buffer before `exit` could run, so a grace long
+/// enough to drain a local buffer captures all of it. 200ms is orders of
+/// magnitude more than that and a tenth of the tightest caller's whole budget
+/// (the status line's 2s), so in the overwhelmingly common case — no
+/// grandchild, EOF already there — it costs nothing measurable.
+///
+/// A daemon's bytes that happen to land inside the grace ride along. That is
+/// bounded by [`HOOK_OUTPUT_CAP`] and unavoidable without attribution the pipe
+/// does not offer.
+///
+/// **Say what could not be verified: on Windows nothing here is pinned by a
+/// test, because nothing could make its removal observable.** Deleting this
+/// grace entirely leaves every fixture in `tests/exec_lifetime.rs` green,
+/// including a 100-trial probe of a hook whose last write and exit are the same
+/// instant (0/100 lost either way). The mechanism explains it — tokio gives a
+/// child's stdio *overlapped* I/O on Windows, so the read is posted before the
+/// bytes exist and completes into our buffer as they arrive, ahead of the exit
+/// notification. On unix the same code is readiness-based: the bytes wait in the
+/// kernel for a poll that `select!`, which randomises its branches, may not
+/// reach before the wait wins. That is the platform where this constant is
+/// expected to earn its place and the one where the probe should be run. Until
+/// somebody runs it there, this is a reasoned bound with a measured cost of
+/// zero, not a demonstrated need.
+const EXEC_DRAIN_GRACE_MS: u64 = 200;
+
+/// Spawn, feed stdin, wait for the hook, take what it wrote, walk away.
+///
+/// **The order is the design, and it was the defect.** This used to read stdout
+/// to end-of-file and *then* wait. A hook that started a background process and
+/// exited 0 in milliseconds was therefore reported as `timed out after 5000ms`
+/// with its output discarded — not because anything was slow, but because the
+/// process it started inherited the write end of the pipe and EOF never came.
+/// Completion is the child's own exit; the pipes are drained around it, never
+/// waited on in front of it. See `notes/plan-process-lifetime.md` §2.
+///
+/// **What Emma claims, and what it does not.** It supervises the direct child it
+/// spawned — its budget, its pipes, its exit code — and claims nothing about
+/// that child's descendants. On the timeout path `kill_on_drop` kills the hook
+/// and only the hook. Whatever the hook started is left alone, because Emma
+/// cannot tell a broken hook's orphans from the daemon the operator meant to
+/// start, and under the ruling it must not guess.
+///
+/// **A note for hook authors: redirect a daemon's stdio.** Emma drops its read
+/// end here. On Windows that is nothing to the daemon — a write into a broken
+/// pipe is an error return it may ignore. On unix it is a `SIGPIPE`, which kills
+/// a process that has not asked otherwise. Inherited stdio is borrowed, which is
+/// why every daemon guide ever written says to point it at `/dev/null` (or
+/// `NUL`) first; the alternative — Emma keeping a reader alive for as long as
+/// somebody else's daemon lives — is an unbounded obligation and is refused.
+///
+/// A hook that writes past [`HOOK_OUTPUT_CAP`] blocks and hits the timeout,
+/// which is still the right answer for a program that will not stop.
 pub(crate) async fn exec(
     cmd: &mut tokio::process::Command,
     body: String,
@@ -728,13 +786,76 @@ pub(crate) async fn exec(
         let _ = stdin.write_all(body.as_bytes()).await;
     }
     let (mut out, mut err) = (Vec::new(), Vec::new());
-    if let Some(so) = child.stdout.take() {
-        so.take(HOOK_OUTPUT_CAP).read_to_end(&mut out).await?;
+    let (mut so, mut se) = (child.stdout.take(), child.stderr.take());
+
+    let status;
+    {
+        // Both pipes, concurrently with the wait. The buffers are borrowed
+        // rather than owned by the futures precisely so that abandoning a read
+        // keeps the bytes it already collected.
+        let both = async {
+            tokio::join!(
+                async {
+                    if let Some(r) = so.as_mut() {
+                        let _ = drain(r, &mut out).await;
+                    }
+                },
+                async {
+                    if let Some(r) = se.as_mut() {
+                        let _ = drain(r, &mut err).await;
+                    }
+                }
+            );
+        };
+        tokio::pin!(both);
+        let mut exited = None;
+        tokio::select! {
+            // Both pipes reached EOF (or the cap) first: the ordinary case with
+            // no grandchild anywhere, and `wait` below returns immediately.
+            _ = &mut both => {}
+            s = child.wait() => exited = Some(s?),
+        }
+        status = match exited {
+            Some(s) => {
+                // The hook is done. Give whatever is still in the pipes a
+                // moment to arrive, then stop: a write end we do not own may
+                // stay open indefinitely and is not ours to wait for.
+                let _ = tokio::time::timeout(Duration::from_millis(EXEC_DRAIN_GRACE_MS), &mut both)
+                    .await;
+                s
+            }
+            None => child.wait().await?,
+        };
     }
-    if let Some(se) = child.stderr.take() {
-        se.take(HOOK_OUTPUT_CAP).read_to_end(&mut err).await?;
+
+    // Emma's read ends, closed. The write ends belong to whatever still holds
+    // them and die with it; nothing is retained here.
+    drop(so);
+    drop(se);
+    Ok((status.code(), out, err))
+}
+
+/// Read until end-of-file or [`HOOK_OUTPUT_CAP`], into a buffer the caller owns.
+///
+/// Hand-rolled rather than `take(cap).read_to_end(buf)` because this future is
+/// **abandoned** when the grace expires, and `read_to_end` is documented as not
+/// cancellation-safe: what it has read so far is not guaranteed to be in the
+/// buffer. Here the boundary is one `read` call, and every byte that returned
+/// from one is already appended.
+async fn drain<R>(r: &mut R, buf: &mut Vec<u8>) -> std::io::Result<()>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut chunk = [0u8; 8 * 1024];
+    while (buf.len() as u64) < HOOK_OUTPUT_CAP {
+        let n = r.read(&mut chunk).await?;
+        if n == 0 {
+            return Ok(());
+        }
+        let room = HOOK_OUTPUT_CAP as usize - buf.len();
+        buf.extend_from_slice(&chunk[..n.min(room)]);
     }
-    Ok((child.wait().await?.code(), out, err))
+    Ok(())
 }
 
 // endregion: Dispatch

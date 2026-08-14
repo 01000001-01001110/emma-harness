@@ -42,6 +42,15 @@
 //! parse error carrying the file it came from. Neither is ever resolved by
 //! guessing.
 //!
+//! **Two `domain:` spellings are inert for a subtler reason and get the same
+//! treatment**: `WebFetch(domain:bücher.example)` and `WebFetch(domain:::1)`.
+//! Both parse, both are kept, and neither can ever meet a host — hosts arrive
+//! from `Url::host_str`, which has already punycoded a Unicode name and already
+//! bracketed an IPv6 literal. So they are announced at boot too, with the
+//! spelling that would work (`xn--bcher-kva.example`, `[::1]`) computed and
+//! offered. What is *not* done is converting them: see `Inert`. The matcher
+//! does no IDNA, deliberately.
+//!
 //! **The wildcard rules are the security surface of this file.** A rule that
 //! accidentally matches everything is the worst bug available here, so matching
 //! is label-wise and length-checked rather than substring-based:
@@ -327,6 +336,121 @@ fn normalise(host: &str) -> String {
     host.trim().trim_end_matches('.').to_ascii_lowercase()
 }
 
+/// Why a well-formed `domain:` rule will never meet a real host, when that is
+/// true of it.
+///
+/// **Two spellings a person writes and a URL never produces.** A host reaches
+/// [`Rules::for_egress`] from `Url::host_str`, which has already applied IDNA
+/// and already bracketed an IPv6 literal. So `domain:bücher.example` and
+/// `domain:::1` parse cleanly, match nothing any fetch can present, and — in a
+/// `deny` list — are a protection the operator believes they have. Exactly the
+/// `Bash(rm *)` shape, and it gets the same answer: speech, at boot, in the
+/// register the list deserves.
+///
+/// **Speech and not conversion**, decided rather than defaulted. Converting the
+/// pattern would move matching — the whole security surface of this file — from
+/// "compare ASCII labels" to "run UTS-46 over attacker-influencable strings",
+/// where a bug can *widen* a match; wildcards are not valid IDNA input and would
+/// need a label-skipping policy nobody has asked for; and the rule stays live
+/// for a caller that hands the matcher a Unicode host directly, which the
+/// matrix pins. A warning cannot widen anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Inert {
+    /// Non-ASCII: real hosts arrive punycode-encoded.
+    Unicode,
+    /// A colon outside brackets: `Url::host_str` writes IPv6 as `[::1]`, and
+    /// the brackets are part of the label this matcher compares.
+    UnbracketedColon,
+}
+
+impl Inert {
+    fn of(pattern: &str) -> Option<Self> {
+        if !pattern.is_ascii() {
+            return Some(Self::Unicode);
+        }
+        if pattern.contains(':') && !pattern.starts_with('[') {
+            return Some(Self::UnbracketedColon);
+        }
+        None
+    }
+
+    /// The clause explaining what this build will actually do with the rule.
+    fn because(self) -> &'static str {
+        match self {
+            Self::Unicode => {
+                "hosts reach this matcher already punycode-encoded, and a domain written in \
+                 Unicode never meets one"
+            }
+            Self::UnbracketedColon => {
+                "an IPv6 host arrives with its brackets, which are part of the name this \
+                 matcher compares, and an unbracketed rule never meets one"
+            }
+        }
+    }
+
+    /// How the operator should have spelled it, or `None` when this build
+    /// cannot say — in which case the note offers nothing rather than
+    /// inventing a rewrite that would not work either.
+    fn rewrite(self, pattern: &str) -> Option<String> {
+        match self {
+            Self::UnbracketedColon => Some(format!("[{pattern}]")),
+            // Label-wise, because a `domain:` pattern is not a domain: it may
+            // carry `*` in any label, and `*` is not valid IDNA input. An
+            // ASCII label is already its own answer, a wildcard label cannot be
+            // converted, and anything `idna` refuses ends the attempt — the
+            // do-not-fabricate rule applies to warnings too, and a
+            // hand-mangled suggestion is how `xn--bcher-kva` becomes
+            // `xn--bucher-kva`.
+            Self::Unicode => {
+                let mut out = Vec::new();
+                for label in pattern.split('.') {
+                    if label.is_ascii() {
+                        out.push(label.to_string());
+                    } else if label.contains('*') {
+                        return None;
+                    } else {
+                        let ascii = idna::domain_to_ascii(label).ok()?;
+                        if ascii.is_empty() || !ascii.is_ascii() {
+                            return None;
+                        }
+                        out.push(ascii);
+                    }
+                }
+                Some(out.join("."))
+            }
+        }
+    }
+}
+
+/// The boot note for one such rule, in the register its list deserves.
+///
+/// Two sentences for the same reason [`Rules::parse`]'s unsupported branch has
+/// two: an `allow` that evaluates to nothing costs a prompt, a `deny` that
+/// evaluates to nothing costs a protection.
+fn inert_note(source: &Path, rule: &Rule, kind: PermissionKind, why: Inert) -> String {
+    let source = source.display();
+    let fix = match why.rewrite(match &rule.spec {
+        Spec::Domain(d) => &d.raw,
+        _ => "",
+    }) {
+        Some(ascii) => format!(" Write `{}(domain:{ascii})` instead.", rule.tool),
+        None => String::new(),
+    };
+    match kind {
+        PermissionKind::Deny | PermissionKind::Ask => format!(
+            "{source}: `{rule}` is a {} rule that matches no real call — {}, so it blocks \
+             NOTHING.{fix}",
+            kind.word(),
+            why.because(),
+        ),
+        PermissionKind::Allow => format!(
+            "{source}: `{rule}` is an allow rule that matches no real call — {}, so it \
+             approves nothing and those calls will still ask.{fix}",
+            why.because(),
+        ),
+    }
+}
+
 // endregion: Matching a host
 
 // region: The rule set, and the order it is read in
@@ -404,6 +528,16 @@ impl Rules {
                     ),
                 });
                 continue;
+            }
+            // A rule this build parsed, kept, and will never match against
+            // anything a real fetch presents. Announced and then **kept**: it
+            // still answers for a caller that hands `for_egress` a Unicode
+            // host directly, and demoting it would be claiming more inertness
+            // than is true.
+            if let Spec::Domain(pattern) = &rule.spec {
+                if let Some(why) = Inert::of(&pattern.raw) {
+                    notes.push(inert_note(&entry.source, &rule, entry.kind, why));
+                }
             }
             match entry.kind {
                 PermissionKind::Deny => rules.deny.push(rule),
@@ -750,6 +884,106 @@ mod tests {
         assert_eq!(r.for_tool("Bash"), None);
         assert_eq!(r.for_egress("Bash", "docs.rs"), None);
         assert_eq!(r.for_egress("Bash", "anything.at.all"), None);
+    }
+
+    #[test]
+    fn a_unicode_domain_rule_is_announced_and_the_deny_wording_is_the_loud_one() {
+        // The defect: this parses, warns about nothing, and matches nothing,
+        // because every host `WebFetch` presents has already been punycoded by
+        // `Url::host_str`. In a deny list that is a protection that protects
+        // nothing, and nothing said so.
+        let (rules, notes) = Rules::parse(&[
+            entry(PermissionKind::Deny, "WebFetch(domain:b\u{fc}cher.example)"),
+            entry(
+                PermissionKind::Allow,
+                "WebFetch(domain:b\u{fc}cher.example)",
+            ),
+        ]);
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(notes[0].contains("blocks NOTHING"), "{}", notes[0]);
+        assert!(notes[1].contains("still ask"), "{}", notes[1]);
+        // The rewrite is computed, not left to the operator: hand-punycoding is
+        // how `xn--bcher-kva` becomes `xn--bucher-kva`.
+        for note in &notes {
+            assert!(
+                note.contains("WebFetch(domain:xn--bcher-kva.example)"),
+                "{note}"
+            );
+        }
+        // …and the rule is still live for a caller that presents a Unicode
+        // host directly. The warning changes no matching behaviour at all.
+        assert_eq!(
+            rules.for_egress("WebFetch", "b\u{fc}cher.example"),
+            Some(Decision::Deny)
+        );
+    }
+
+    #[test]
+    fn an_unbracketed_ipv6_rule_is_announced_with_the_brackets_it_needs() {
+        let (rules, notes) = Rules::parse(&[entry(PermissionKind::Deny, "WebFetch(domain:::1)")]);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("blocks NOTHING"), "{}", notes[0]);
+        assert!(notes[0].contains("WebFetch(domain:[::1])"), "{}", notes[0]);
+        // Still exactly as inert against the host a URL actually produces…
+        assert_eq!(rules.for_egress("WebFetch", "[::1]"), None);
+        // …and a rule that *is* written with brackets says nothing at boot.
+        let (_, quiet) = Rules::parse(&[entry(PermissionKind::Deny, "WebFetch(domain:[::1])")]);
+        assert!(quiet.is_empty(), "{quiet:?}");
+    }
+
+    #[test]
+    fn a_suggested_rewrite_keeps_the_wildcard_it_was_written_with() {
+        let (_, notes) = Rules::parse(&[entry(
+            PermissionKind::Deny,
+            "WebFetch(domain:*.b\u{fc}cher.example)",
+        )]);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes[0].contains("WebFetch(domain:*.xn--bcher-kva.example)"),
+            "{}",
+            notes[0]
+        );
+    }
+
+    #[test]
+    fn a_rewrite_that_cannot_be_computed_is_omitted_rather_than_invented() {
+        // Two ways this build declines to answer, and neither may guess. A
+        // wildcard is not valid IDNA input, so a label carrying both a star and
+        // a non-ASCII character cannot be converted at all; and anything `idna`
+        // itself refuses ends the attempt. A wrong `xn--` spelling in a warning
+        // is a chore that fails silently at the next boot.
+        for rule in [
+            "WebFetch(domain:b*cher\u{fc}.example)",
+            "WebFetch(domain:a\u{fffd}b.example)",
+        ] {
+            let (_, notes) = Rules::parse(&[entry(PermissionKind::Deny, rule)]);
+            assert_eq!(notes.len(), 1, "{rule}: {notes:?}");
+            assert!(notes[0].contains("blocks NOTHING"), "{}", notes[0]);
+            assert!(
+                !notes[0].contains("Write `"),
+                "a rewrite was invented for `{rule}`: {}",
+                notes[0]
+            );
+        }
+    }
+
+    #[test]
+    fn an_ordinary_ascii_rule_says_nothing_at_boot() {
+        // The half that is hard to get right: the warning must not fire on
+        // working configuration. `tests/permissions.rs` proves this over the
+        // whole matrix; this is the unit-level floor.
+        let (_, notes) = Rules::parse(&[
+            entry(PermissionKind::Deny, "WebFetch(domain:evil.example)"),
+            entry(PermissionKind::Allow, "WebFetch(domain:*.example.com)"),
+            entry(
+                PermissionKind::Allow,
+                "WebFetch(domain:xn--bcher-kva.example)",
+            ),
+            entry(PermissionKind::Allow, "WebFetch(domain:127.0.0.*)"),
+            entry(PermissionKind::Allow, "WebFetch(domain:[::1])"),
+            entry(PermissionKind::Allow, "WebSearch"),
+        ]);
+        assert!(notes.is_empty(), "{notes:?}");
     }
 
     #[test]

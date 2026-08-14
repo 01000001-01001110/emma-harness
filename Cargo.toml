@@ -28,6 +28,17 @@ chromiumoxide = "0.9"
 futures = "0.3"
 futures-util = "0.3"
 globset = "0.4"
+# UTS-46, used in exactly one place: composing the boot warning that tells an
+# operator what their non-ASCII `domain:` rule would have to be spelled as.
+# **Not** in the matcher — see `permissions.rs`, which stays byte-for-byte
+# ASCII comparison, because a conversion bug there can widen a match and a bug
+# here costs a wrong suggestion in a sentence. It compiles nothing new: `url`
+# (via `tools/web`) already pulls the same version in. Licence read from the
+# crate's own files rather than a badge, 2026-08-14: `LICENSE-MIT` is the
+# unmodified MIT text, "Copyright (c) 2013-2025 The rust-url developers", and
+# `LICENSE-APACHE` is the unmodified Apache-2.0 text — no rider, no additional
+# term, nothing naming a party.
+idna = "1"
 # Unix only, and only to ask how big the window is (`TIOCGWINSZ`). Windows
 # answers the same question through the console API, which is already a
 # dependency; this is the other half of one question, not a platform layer.

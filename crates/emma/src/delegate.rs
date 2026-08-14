@@ -666,7 +666,13 @@ impl Tool for Delegate {
                 "iterations": outcome.iterations,
                 "elapsed_ms": facts.elapsed_ms,
                 "tool_calls": facts.tool_calls,
+                // `files_read` keeps its name though the footer's word is now
+                // "touched": `emma agents` reads these keys, and renaming a
+                // JSONL field to match a cosmetic rewording breaks a consumer
+                // for nothing.
                 "files_read": facts.files.len(),
+                "fetched": facts.fetched.len(),
+                "other_tool_calls": facts.other.values().sum::<usize>(),
                 "commands": facts.commands.len(),
                 "failed_commands": facts.commands.iter().filter(|c| c.1 != Some(0)).count(),
                 "denied": facts.denied.len(),
@@ -810,6 +816,18 @@ impl DoneCheck for SubagentClaim {
 // during that run — `Facts::from` takes them and nothing else, and takes no
 // text the model produced.
 //
+// **Every recorded tool call appears in exactly one footer category, and a
+// call can be described coarsely but can never vanish.** That is the invariant
+// the categories are arranged around, and it is a repair rather than an
+// original virtue: the categories are keyed on argument names, so for a while
+// any call carrying none of `file_path`/`pattern`/`command` — `WebFetch(url)`,
+// `WebSearch(query)`, `Skill`, every `Task*` — was counted in `tool_calls` and
+// named nowhere, which reads as `files read: none` under a paragraph
+// describing five fetches. Coarseness is visible and self-correcting; a parent
+// reading `other tool calls: Frobnicate ×2` knows the record is coarse.
+// Silence is not: it is the footer partly believing the account it exists to
+// check.
+//
 // **What it proves and what it does not.** It proves what was looked at, what
 // was run, and how the run ended. It does not prove the conclusion follows from
 // any of it. The worst case of this whole design is that the footer becomes the
@@ -829,6 +847,15 @@ struct Facts {
     tool_calls: usize,
     files: Vec<String>,
     searches: Vec<String>,
+    /// Where it went. `url` is `WebFetch`'s argument name, and egress is the
+    /// class of call the rest of this design treats as the sensitive one — a
+    /// footer that reported five fetches as `files read: none` was
+    /// under-reporting precisely there.
+    fetched: Vec<String>,
+    /// Every call whose arguments matched no probe above, tallied by the tool
+    /// name **the loop recorded**. Coarse on purpose, and the reason it exists
+    /// is in the region doc: a call may be described coarsely, never omitted.
+    other: BTreeMap<String, usize>,
     /// The command, and the exit status its result reported. `None` is a command
     /// whose result never arrived — interrupted, or refused.
     commands: Vec<(String, Option<i64>)>,
@@ -858,12 +885,31 @@ impl Facts {
                     // already are: this file has no business knowing which
                     // tools a build registers, and an agent library names tools
                     // that do not exist here at all.
+                    //
+                    // **The last arm is the one that makes the convention
+                    // safe.** Keying on argument names means a tool naming its
+                    // arguments something else falls through every probe, and
+                    // until this arm existed it fell through into silence —
+                    // Emma's own `WebFetch(url)` and `WebSearch(query)` among
+                    // them, which is how five fetches footered as
+                    // `files read: none` over `5 tool calls`. The residual is
+                    // keyed on the tool name out of the record, which is a
+                    // fact the loop wrote and not knowledge of the registry.
                     if let Some(path) = str_of(&args, "file_path") {
                         push_unique(&mut facts.files, path);
                     } else if let Some(pattern) = str_of(&args, "pattern") {
                         push_unique(&mut facts.searches, pattern);
                     } else if let Some(command) = str_of(&args, "command") {
                         facts.commands.push((one_line(&command), None));
+                    } else if let Some(url) = str_of(&args, "url") {
+                        push_unique(&mut facts.fetched, url);
+                    } else if let Some(query) = str_of(&args, "query") {
+                        // A search by any other argument name is still a
+                        // search, so it joins the list it belongs in rather
+                        // than earning a line of its own.
+                        push_unique(&mut facts.searches, query);
+                    } else {
+                        *facts.other.entry(tool.clone()).or_default() += 1;
                     }
                     by_id.insert(id, (tool, args));
                 }
@@ -955,8 +1001,14 @@ impl Facts {
                 "note: it did not claim the work was finished, so read what follows as partial.\n",
             );
         }
-        out.push_str(&listed("files read", &self.files));
+        // "touched", not "read": `Write` and `Edit` carry `file_path` too, so
+        // a written file has always landed in this list. The neutral word
+        // costs nothing and stops the over-claim; splitting read from written
+        // would need the tool-name knowledge this file has deliberately
+        // refused.
+        out.push_str(&listed("files touched", &self.files));
         out.push_str(&listed("searched for", &self.searches));
+        out.push_str(&listed("fetched", &self.fetched));
         let commands: Vec<String> = self
             .commands
             .iter()
@@ -966,6 +1018,17 @@ impl Facts {
             })
             .collect();
         out.push_str(&listed("commands run", &commands));
+        // The residual. Named only when there is something in it — an empty
+        // bucket has nothing to disclose, and the categories above already say
+        // `none` for themselves.
+        if !self.other.is_empty() {
+            let other: Vec<String> = self
+                .other
+                .iter()
+                .map(|(tool, n)| format!("{tool} ×{n}"))
+                .collect();
+            out.push_str(&listed("other tool calls", &other));
+        }
         if !self.denied.is_empty() {
             out.push_str(&listed("refused or blocked", &self.denied));
         }
@@ -1086,7 +1149,110 @@ mod tests {
     fn a_run_with_no_record_of_its_ending_says_so_rather_than_implying_success() {
         let footer = Facts::from(&[]).footer();
         assert!(footer.contains("unknown"), "{footer}");
-        assert!(footer.contains("files read: none"), "{footer}");
+        assert!(footer.contains("files touched: none"), "{footer}");
+        assert!(footer.contains("fetched: none"), "{footer}");
+        // The residual is the one category that stays quiet when empty: there
+        // is nothing to disclose, and `other tool calls: none` on every footer
+        // is noise rather than honesty.
+        assert!(!footer.contains("other tool calls"), "{footer}");
+    }
+
+    #[test]
+    fn the_arguments_emmas_own_web_tools_use_reach_the_footer() {
+        // Not hypothetical: `WebFetch` takes `url` and `WebSearch` takes
+        // `query`, and neither is `file_path`/`pattern`/`command`. Before the
+        // probe covered them, a subagent that fetched five pages footered as
+        // `files touched: none · searched for: none · commands run: none` over
+        // `5 tool calls` — under-reporting the exact class of call the rest of
+        // this design treats as the sensitive one.
+        let facts = Facts::from(&[
+            call("t1", "WebFetch", json!({ "url": "https://apnews.com/x" })),
+            call("t2", "WebSearch", json!({ "query": "rust idna" })),
+            json!({ "kind": "sub.goal_finished", "ending": "done" }),
+        ]);
+        let footer = facts.footer();
+        assert!(footer.contains("fetched (1)"), "{footer}");
+        assert!(footer.contains("https://apnews.com/x"), "{footer}");
+        assert!(footer.contains("searched for (1)"), "{footer}");
+        assert!(footer.contains("rust idna"), "{footer}");
+        // …and neither is left in the coarse bucket as well as its own list.
+        assert!(!footer.contains("other tool calls"), "{footer}");
+    }
+
+    #[test]
+    fn a_call_whose_arguments_match_no_probe_is_named_coarsely_rather_than_dropped() {
+        let facts = Facts::from(&[
+            call("t1", "Frobnicate", json!({ "target": "x" })),
+            call("t2", "Frobnicate", json!({ "target": "y" })),
+            call("t3", "TaskCreate", json!({ "title": "ship it" })),
+            json!({ "kind": "sub.goal_finished", "ending": "done" }),
+        ]);
+        let footer = facts.footer();
+        assert!(footer.contains("Frobnicate ×2"), "{footer}");
+        assert!(footer.contains("TaskCreate ×1"), "{footer}");
+    }
+
+    #[test]
+    fn a_recognised_call_is_in_its_own_category_and_not_also_in_the_residual() {
+        // The residual must be the complement of the other lists, not a second
+        // copy of them: a parent that reads `Read ×3` beside three named files
+        // learns nothing and doubts both.
+        let facts = Facts::from(&[
+            call("t1", "Read", json!({ "file_path": "src/a.rs" })),
+            call("t2", "Grep", json!({ "pattern": "fn main" })),
+            call("t3", "Bash", json!({ "command": "cargo test" })),
+            call("t4", "WebFetch", json!({ "url": "https://docs.rs" })),
+            json!({ "kind": "sub.goal_finished", "ending": "done" }),
+        ]);
+        let footer = facts.footer();
+        assert!(!footer.contains("other tool calls"), "{footer}");
+        for named in ["Read", "Grep", "Bash", "WebFetch"] {
+            assert!(!footer.contains(&format!("{named} ×")), "{footer}");
+        }
+    }
+
+    #[test]
+    fn every_recorded_call_lands_in_exactly_one_footer_category() {
+        // The invariant, asserted as arithmetic rather than as prose: the
+        // categories partition `tool_calls`. A future probe added to the chain
+        // that forgets the residual, or a residual that double-counts, breaks
+        // this without anybody having to think of the tool it would happen to.
+        //
+        // Every argument below is distinct, deliberately: the lists dedupe, so
+        // the arithmetic is a partition only over calls that differ. The
+        // property under test is that no call is missing from every list, and
+        // duplicates would hide that behind a smaller number.
+        let records = vec![
+            call("t1", "Read", json!({ "file_path": "src/a.rs" })),
+            call("t2", "Read", json!({ "file_path": "src/b.rs" })),
+            call("t3", "Grep", json!({ "pattern": "fn main" })),
+            call("t4", "Bash", json!({ "command": "cargo test" })),
+            call("t5", "WebFetch", json!({ "url": "https://docs.rs" })),
+            call("t6", "WebSearch", json!({ "query": "rust idna" })),
+            call("t7", "Skill", json!({ "name": "release" })),
+            call("t8", "TaskCreate", json!({ "title": "ship it" })),
+            json!({ "kind": "sub.goal_finished", "ending": "done" }),
+        ];
+        let facts = Facts::from(&records);
+        let categorised = facts.files.len()
+            + facts.searches.len()
+            + facts.fetched.len()
+            + facts.commands.len()
+            + facts.other.values().sum::<usize>();
+        assert_eq!(
+            categorised,
+            facts.tool_calls,
+            "{} of {} calls are only in the count: {}",
+            facts.tool_calls - categorised,
+            facts.tool_calls,
+            facts.footer()
+        );
+        // And each tool that ran is findable somewhere in the footer text the
+        // parent actually reads.
+        let footer = facts.footer();
+        for name in ["Skill", "TaskCreate"] {
+            assert!(footer.contains(name), "{name} vanished: {footer}");
+        }
     }
 
     #[test]
@@ -1102,7 +1268,7 @@ mod tests {
             .collect();
         records.push(json!({ "kind": "sub.goal_finished", "ending": "done" }));
         let footer = Facts::from(&records).footer();
-        assert!(footer.contains("files read (30)"), "{footer}");
+        assert!(footer.contains("files touched (30)"), "{footer}");
         assert!(footer.contains("and 18 more"), "{footer}");
     }
 

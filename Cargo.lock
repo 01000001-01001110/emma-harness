@@ -369,6 +369,7 @@ dependencies = [
  "emma-tools-lsp",
  "emma-tools-tasks",
  "emma-tools-web",
+ "idna",
  "libc",
  "ratatui",
  "rpassword",
@@ -392,6 +393,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "tokio",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
