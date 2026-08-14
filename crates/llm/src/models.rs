@@ -103,7 +103,11 @@ const NO_XHIGH: &[Effort] = &[Effort::Low, Effort::Medium, Effort::High, Effort:
 ///
 /// Only models whose numbers were verified are listed. A model left out is not
 /// a model Emma refuses — it falls to [`UNKNOWN`], which is the point.
-const TABLE: &[(&str, Limits)] = &[
+// `pub(crate)` only so `anthropic.rs` can check its `MIN_CACHEABLE` names the
+// same models this does. The two tables are deliberately separate — see the
+// module doc — and the whole cost of that split is that nothing but a test
+// keeps their row sets together.
+pub(crate) const TABLE: &[(&str, Limits)] = &[
     (
         "claude-fable-5",
         Limits {

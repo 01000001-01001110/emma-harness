@@ -1678,6 +1678,45 @@ mod tests {
         assert!(min_cacheable_tokens("claude-opus-5") < min_cacheable_tokens("claude-haiku-4-5"));
     }
 
+    #[test]
+    fn both_per_model_tables_name_the_same_models() {
+        // The split between `MIN_CACHEABLE` and `models::TABLE` is argued in
+        // both module docs and is deliberate. Its whole cost is that adding a
+        // model means adding a row to each, and *nothing in the compiler
+        // notices* when only one is done — each table has an internal
+        // consistency test, and neither could see the other until this one.
+        //
+        // The two failures are not symmetric, which is why the messages differ.
+        // Missing from `MIN_CACHEABLE`, a model falls to
+        // `MIN_CACHEABLE_UNKNOWN` and merely forgoes caching it could have
+        // had — visible on an invoice, self-healing as history grows. Missing
+        // from `models::TABLE`, it falls to `models::UNKNOWN`'s 8,192 ceiling
+        // and a legitimate `max_tokens` above that is silently clamped, which
+        // truncates a real answer. So this fires on either direction, but the
+        // second is the one that costs a user something they cannot see.
+        let floors: std::collections::BTreeSet<_> =
+            MIN_CACHEABLE.iter().map(|(id, _)| *id).collect();
+        let limits: std::collections::BTreeSet<_> =
+            crate::models::TABLE.iter().map(|(id, _)| *id).collect();
+
+        let no_floor: Vec<_> = limits.difference(&floors).collect();
+        assert!(
+            no_floor.is_empty(),
+            "models::TABLE knows {no_floor:?} and MIN_CACHEABLE does not — \
+             they will be gated at MIN_CACHEABLE_UNKNOWN and cache less than \
+             they could. Add a row here, re-checking the real floor rather \
+             than copying the row above."
+        );
+
+        let no_limits: Vec<_> = floors.difference(&limits).collect();
+        assert!(
+            no_limits.is_empty(),
+            "MIN_CACHEABLE knows {no_limits:?} and models::TABLE does not — \
+             their max_tokens will be clamped to models::UNKNOWN's ceiling and \
+             a long answer silently truncated. Add a row to models::TABLE."
+        );
+    }
+
     // endregion: the per-model cache floor
 
     #[tokio::test(flavor = "multi_thread")]
