@@ -93,7 +93,12 @@ out for themselves.
   `/` is Search's surface, the command menu it already opens. A tool that
   cannot launch on this machine shows `n/a` in the key column, and every
   launch reports what happened, or why not, in the transcript. Bare letters
-  never launch anything; they type, as before.
+  never launch anything; they type, as before. Which programs the launches use
+  is configurable: a `tools` block in `~/.emma/settings.json` with `shell`,
+  `editor`, `file_browser` and `data_dir` keys. Each value is one program name
+  or an absolute path, never a command line — a value with arguments in it is
+  refused rather than word-split. An absent key means Emma probes the machine,
+  as it did before.
 - The full-screen layout now matches the mockup image where it previously did
   not: two columns of ground between the sidebar and the main pane, one blank
   row between the main pane and the status bar, panes floated one cell inside

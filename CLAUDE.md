@@ -136,7 +136,10 @@ the remedy — or says plainly that no argument raises it.
   release as the escape hatch.
 - **The `scrolling-regions` ratatui feature stays off.** The reversal above
   does not touch this. `crates/emma/Cargo.toml` explains why; `term/frame.rs`
-  has a test that reads the manifest and fails if it is ever named.
+  has a test that reads the manifest, comments stripped, and fails if the
+  feature is ever declared. (Stripped because the manifest names the feature
+  in a comment to explain why it is off — naming it is fine, enabling it is
+  not.)
 - **Piped and `-p` output contains zero escape bytes.** There is a test. Keep it.
 - **A tool failure is an observation, not an abort.** It comes back as a
   `tool_result` with `is_error` and the loop continues.
