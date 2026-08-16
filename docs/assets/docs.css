@@ -25,6 +25,7 @@
   --accent: #ff6ec7;
   --accent-dk: #b53d8b;
   --certified: #67e0a3;
+  --observed: #6ec4d8;
   --unverified: #f2b45e;
   --mono:
     ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas,
@@ -279,6 +280,17 @@ ol.body li {
   color: var(--certified);
   border: 1px solid #2b5c44;
   background: #12271d;
+}
+
+/* Observed once, and not repeatable on demand: a live API call whose transcript
+   is gone, something seen on a console, a number read out of a run nobody kept.
+   Added 2026-08-16 because `certified` was carrying both this and "run the
+   command and see it again", and two pages reached opposite confidence about
+   the same number without either noticing. Different evidence, different mark. */
+.chip.obs {
+  color: var(--observed);
+  border: 1px solid #2a4f5e;
+  background: #11242b;
 }
 .chip.test {
   color: var(--dim);

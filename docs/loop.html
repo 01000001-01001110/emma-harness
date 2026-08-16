@@ -28,6 +28,7 @@
         <h4>Start here</h4>
         <ul>
           <li><a class="nav" href="index.html">What Emma is</a></li>
+          <li><a class="nav" href="getting-started.html">Getting started</a></li>
           <li><a class="nav" href="architecture.html">Architecture</a></li>
         </ul>
 
@@ -66,25 +67,25 @@
           <p class="lede">
             Send a request, receive a turn, run whatever tools it asked for, put
             the results back in the conversation, send again. Everything else on
-            this page is a rule about when that stops — and one rule, the memo,
+            this page is a rule about when that stops, plus one rule, the memo,
             about when a tool call is refused before it is ever run.
           </p>
           <span class="src">crates/emma/src/agent.rs · crates/emma/src/goal.rs</span>
 
           <div class="key">
-            <div><span class="chip cert">certified</span> observed against the real thing</div>
+            <div><span class="chip cert">certified</span> proven, and a reader can repeat it: a file, a command, a grep</div>
+            <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
             <div><span class="chip test">tested</span> a test covers it</div>
             <div><span class="chip unv">unverified</span> believed, not checked</div>
           </div>
 
           <p>
             The loop lives in <code>Agent::run_goal</code>. It is one function of
-            about 370 lines, and it is long on purpose: every decision about what
-            ends a goal is visible in one place rather than distributed across
-            helpers that each look harmless. The two functions worth reading
-            together are <code>run_goal</code> and <code>run_tool_call</code> —
-            the memo rule below is split between them and reads as nonsense in
-            either alone.
+            about 370 lines: every decision about what ends a goal is visible in
+            one place rather than distributed across helpers that each look
+            harmless. The two functions worth reading together are
+            <code>run_goal</code> and <code>run_tool_call</code>. The memo rule
+            below is split between them and reads as nonsense in either alone.
           </p>
           <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, <code>Agent::run_tool_call</code></span>
 
@@ -94,8 +95,8 @@
             A turn begins with a <code>Request</code> assembled from four things:
             the harness instructions with
             <code>goal::standing_contract(done)</code> appended, the tool
-            definitions, <code>history</code> — the whole session conversation,
-            every finished goal in order — and <code>query</code>, the goal in
+            definitions, <code>history</code> (the whole session conversation,
+            every finished goal in order), and <code>query</code>, the goal in
             flight. The standing contract is appended to the system prompt rather
             than prepended to the user's message, and that placement is a
             reversal: it used to wrap every goal, and typing <code>Hello</code>
@@ -182,7 +183,7 @@
             <figcaption>
               One iteration of <code>run_goal</code>, drawn from the function
               body. The pink path is the working case: tool calls are dispatched
-              one at a time, and the assistant turn is held — not pushed — until
+              one at a time, and the assistant turn is held, not pushed, until
               its results exist, so a <code>tool_use</code> and the block that
               answers it enter the conversation in the same step.
             </figcaption>
@@ -190,8 +191,8 @@
 
           <p>
             <strong>The assistant turn is echoed back exactly as it arrived.</strong>
-            What goes into <code>query</code> is <code>AssistantTurn::content</code>
-            — the provider's own blocks, thinking blocks and signatures included.
+            What goes into <code>query</code> is <code>AssistantTurn::content</code>,
+            the provider's own blocks, thinking blocks and signatures included.
             Nothing rebuilds a turn from its text plus its tool calls, because a
             re-derived signature is rejected on the <em>next</em> call, which puts
             the symptom one step away from the change that caused it.
@@ -208,9 +209,9 @@
             <code>pending_turn</code> carries the received turn until the loop
             knows where it goes: beside its tool results, beside a kick, or on the
             end of the conversation once the loop breaks. A turn whose tools were
-            never run — the <code>Ending::Tokens</code> case, where the budget
-            fires between receiving the turn and dispatching it — cannot go
-            anywhere, and <code>session::place_turn</code> drops it rather than
+            never run cannot go anywhere. This is the <code>Ending::Tokens</code>
+            case, where the budget fires between receiving the turn and
+            dispatching it, and <code>session::place_turn</code> drops it rather than
             leaving an unanswered <code>tool_use</code> in the history. Four
             branches each deciding that separately is the version of this that
             produced a 400.
@@ -325,7 +326,7 @@
             <code>ToolError</code> is the only one. A non-zero <code>Bash</code>
             exit comes back as <code>Ok</code> with <code>exit status &lt;n&gt;</code>
             in the content, so <code>grep -q</code> answering "no" is not a broken
-            shell — it does not enter the memo and is not painted as an error on
+            shell: it does not enter the memo and is not painted as an error on
             the terminal. Nothing in the loop branches on a tool's identity, on
             <code>ToolError::kind</code>, or on exit status, which is what let the
             <code>Bash</code> contract change land here without an edit, and it is
@@ -337,8 +338,8 @@
             <span class="h">What each half carries</span>
             <p>
               <code>is_error</code> is what the API and the model's own training
-              key on; the JSON body — <code>{ kind, tool, detail }</code> — is
-              what says which failure it was and what to do instead. A failure
+              key on. The JSON body, <code>{ kind, tool, detail }</code>, says
+              which failure it was and what to do instead. A failure
               rendered without the flag reads to the model as a successful call
               that returned odd text.
               <span class="chip test">tested</span>
@@ -353,7 +354,7 @@
 
           <p>
             A call that failed is not repeated identically until something else
-            has succeeded. Not "never again this turn" — that is affordable only
+            has succeeded. Not "never again this turn": that is affordable only
             when the whole tool surface is one read-only search. Emma's working
             rhythm is <em>run the tests, see them fail, fix a file, run the tests
             again</em>, and a memo keyed on the call alone would forbid the second
@@ -367,7 +368,7 @@
             <code>already_failed</code> and never reach the tool.
             <code>run_goal</code> only writes: clear the entire set the moment
             <em>any</em> tool succeeds, insert into it when one fails. The rule
-            emerges from the pair — "this exact call failed and nothing has
+            emerges from the pair: "this exact call failed and nothing has
             changed since", not "this call failed once".
           </p>
 
@@ -437,7 +438,7 @@
           <p>
             Two details that are easy to get wrong. The memo is checked
             <em>after</em> argument validation and <em>before</em> the hooks and
-            the gate, so a refused call costs nothing at all — no hook process, no
+            the gate, so a refused call costs nothing at all: no hook process, no
             prompt. And the memo survives <code>--resume</code>: dropping it would
             not overspend anything, but it would hand the resumed model back the
             identical failing call as its most obvious next move, which is exactly
@@ -515,8 +516,8 @@
           <p>
             <strong>Verdict first</strong>, so a model that claims completion on
             its first breath is <code>Done</code> and not something else. Put the
-            answered rule above it and every one-shot goal — the ones where
-            nothing needed changing — collapses into an ending nothing downstream
+            answered rule above it and every one-shot goal, the ones where
+            nothing needed changing, collapses into an ending nothing downstream
             treats as success.
             <span class="chip test">tested</span>
             <code>a_first_turn_that_claims_completion_is_still_done</code>.
@@ -533,7 +534,7 @@
             first stop and report it as a stall.
             <span class="chip test">tested</span>
             <code>a_model_that_abandons_started_work_twice_is_believed</code>
-            asserts <code>kicks == 1</code> — proving the stall rule fired rather
+            asserts <code>kicks == 1</code>, proving the stall rule fired rather
             than the count running out.
           </p>
 
@@ -542,14 +543,14 @@
             it says: no tool has been called in this goal, and nothing has been
             asked of the model that it has not already answered. This ending
             exists because the owner typed <code>hello</code> and was told his
-            exchange had stalled. It is not a failure —
+            exchange had stalled. It is not a failure.
             <code>Ending::Answered</code>'s message is not phrased as
             a stop, because nothing went wrong and the answer is already on the
             screen above the line. The distinguishing signal is tool use, not
             wording: <code>worked</code> is per <em>goal</em>, not per turn, so one
             tool call anywhere earlier makes every later stop a stall again,
             however conversational the sentence it stopped on.
-            <span class="chip test">tested</span> — and the narrowness has its own
+            <span class="chip test">tested</span>, and the narrowness has its own
             test,
             <code>one_tool_call_earlier_in_the_goal_is_enough_to_make_a_stop_a_stall</code>,
             because the obvious simplification ("did <em>this turn</em> use a
@@ -585,7 +586,7 @@
             crash.
             <span class="chip test">tested</span>
             <code>every_ending_says_which_limit_fired</code> asserts that the four
-            budget messages each contain a digit — a weak assertion that catches
+            budget messages each contain a digit, a weak assertion that catches
             the real regression, which is a tidy-up replacing the number with
             prose.
           </p>
@@ -595,10 +596,10 @@
             A goal joins the conversation whatever the ending. A run that hit its
             token budget still happened, and the next goal in the session must not
             be told a story in which it did not. If the abandoned goal's last
-            message was a user turn — trailing tool results, or an unanswered kick
-            — the next goal's opening would make two user turns adjoin, which is a
+            message was a user turn, trailing tool results or an unanswered kick,
+            the next goal's opening would make two user turns adjoin, which is a
             400 rather than a conversation, so <code>close_previous_goal</code>
-            inserts an honest note: <em>[The previous goal stopped before it was
+            inserts a note: <em>[The previous goal stopped before it was
             finished: &lt;ending&gt;.]</em>. The same sentence is composed by the
             session fold from the recorded ending, so a resumed conversation is
             not one message different from the one that was sent.
@@ -630,10 +631,10 @@ than the spelling:
 
           <p>
             The failure list is the part that is easy to leave out and expensive
-            to leave out: without it, the honest reading of "continue" is "try
+            to leave out: without it, the plain reading of "continue" is "try
             again", and the first thing a model retries is the thing that just
-            failed. The labels come from <code>label_of</code> — the same
-            rendering the memo key is built from — and the goal remembers up to 20
+            failed. The labels come from <code>label_of</code>, the same
+            rendering the memo key is built from, and the goal remembers up to 20
             distinct ones, oldest dropped first, of which a kick quotes the last
             five.
           </p>
@@ -646,7 +647,7 @@ than the spelling:
             cooperation from the model at all. Both sit under the iteration, token
             and wall-clock budgets, so the worst case is bounded by arithmetic
             rather than by good behaviour. The cost is that a goal genuinely
-            needing a fourth nudge stops one step early — and says which limit
+            needing a fourth nudge stops one step early. It says which limit
             stopped it, so the user can raise it.
             <span class="chip test">tested</span>
             <code>the_kick_is_bounded_by_its_budget</code> sets
@@ -655,7 +656,7 @@ than the spelling:
           </p>
           <span class="src">crates/emma/src/goal.rs — module doc; crates/emma/tests/loop.rs</span>
 
-          <h2 id="budgets">Budgets — and three different token numbers</h2>
+          <h2 id="budgets">Budgets, and three different token numbers</h2>
 
           <p>
             Five bounds, and they exist separately because they fail differently:
@@ -678,19 +679,19 @@ than the spelling:
                 <tr>
                   <td><code>max_iterations</code></td>
                   <td class="num">60</td>
-                  <td>ceiling — tested before the call</td>
+                  <td>ceiling, tested before the call</td>
                   <td>Model calls in one goal. A run never makes more than this many.</td>
                 </tr>
                 <tr>
                   <td><code>max_tokens</code></td>
                   <td class="num">500,000</td>
-                  <td>tripwire — tested after the call</td>
+                  <td>tripwire, tested after the call</td>
                   <td>What one goal may spend, weighted by price.</td>
                 </tr>
                 <tr>
                   <td><code>wall_clock</code></td>
                   <td class="num">30 min</td>
-                  <td>tripwire — tested at the top of an iteration</td>
+                  <td>tripwire, tested at the top of an iteration</td>
                   <td>When the loop will decline to start another iteration.</td>
                 </tr>
                 <tr>
@@ -702,7 +703,7 @@ than the spelling:
                 <tr>
                   <td><code>max_context</code></td>
                   <td class="num">120,000</td>
-                  <td>threshold — triggers compaction</td>
+                  <td>threshold, triggers compaction</td>
                   <td>
                     How large one request's input may get. The only bound here
                     that is about the <em>session</em> rather than the goal.
@@ -770,7 +771,7 @@ than the spelling:
             <code>emma-llm</code> uses and documented there as under-counting what
             the provider bills. It decides <em>how much</em> to drop once a
             measured number has already said dropping is necessary, and it stands
-            in for the measurement on the one call of a process that has none — a
+            in for the measurement on the one call of a process that has none: a
             resume into a large session. It never fires a budget.
           </p>
           <span class="src">crates/emma/src/agent.rs — <code>estimate</code></span>
@@ -782,31 +783,32 @@ than the spelling:
               the call returns, so the call that crosses the line is paid for in
               full and the overshoot is bounded only by how large one request can
               be. A 500,000 budget stopped a real run at 579,565.
-              <span class="chip unv">unverified</span> — the figure is quoted in
-              <code>Budgets::max_tokens</code>'s doc and again in the test comment
-              that prompted the rewording, both attributed to a logged run. I did
-              not locate that session file. What would settle it: the
-              <code>goal_finished</code> record for that run, whose
-              <code>tokens</code> field should read 579,565 against a
-              <code>--max-tokens 500000</code> invocation.
+              <span class="chip cert">certified</span>. The session file is
+              <code>~/.emma/sessions/sess-1786385316950-34808.jsonl</code>, and
+              its <code>goal_finished</code> record reads
+              <code>"tokens":579565</code>. Grep it and see. The figure is also
+              quoted in <code>Budgets::max_tokens</code>'s doc and in the test
+              comment that prompted the rewording; both are attributions to this
+              run rather than independent evidence.
             </p>
             <p>
               The mechanism itself is not in doubt.
               <span class="chip test">tested</span>
               <code>the_token_budget_stops_the_loop_and_the_run_is_charged_for_what_it_spent</code>
               sets a budget of 15, scripts two calls costing 10 each, and asserts
-              the outcome is <code>Ending::Tokens</code> with 20 spent — an
-              overshoot of one call — and that the session log records the 20
+              the outcome is <code>Ending::Tokens</code> with 20 spent, an
+              overshoot of one call, and that the session log records the 20
               rather than recording an aborted run as free.
             </p>
             <p>
               Making it a true ceiling would mean gating on an estimate of the
               request before sending it, and the only estimator available is the
               one that under-counts. A gate built on it is wrong in both
-              directions while <em>sounding</em> exact, so the wording carries the
-              honesty instead: <code>Ending::Tokens</code> says the check runs
-              after each call, and there is a test asserting the message admits
-              it. Promoting this to a measured pre-call headroom check is item 0
+              directions while <em>sounding</em> exact, so the wording says
+              plainly what the check does: <code>Ending::Tokens</code> says the
+              check runs after each call, and there is a test asserting the
+              message admits it. Promoting this to a measured pre-call headroom
+              check is item 0
               of <code>notes/plan-loops-stage-1.md</code> and item 20 of
               <code>notes/improvements.md</code>; it matters most for the
               unattended runs that plan is about, because the person who set the
@@ -824,8 +826,8 @@ than the spelling:
             local, because a delegation is a second loop spending the same budget
             and cannot reach a local. A nested run gets its own meter whose every
             <code>add</code> also lands on the parent's, so a subagent's spend
-            charges the parent as it happens; <code>set</code> — the per-goal
-            reset — does not follow the parent link, or a nested goal
+            charges the parent as it happens. <code>set</code>, the per-goal
+            reset, does not follow the parent link, or a nested goal
             would zero the meter of the goal paying for it.
           </p>
           <span class="src">crates/emma/src/agent.rs — <code>Spend</code></span>
@@ -834,7 +836,7 @@ than the spelling:
             <code>max_context</code> is also what keeps <code>max_tokens</code>
             reachable in a long session: input per call is bounded by compaction,
             so the number of calls a goal gets is bounded below by roughly
-            <code>max_tokens / max_context</code> — four at the defaults, and in
+            <code>max_tokens / max_context</code>, four at the defaults, and in
             practice far more, because most calls sit nowhere near the cap.
             Raising the context cap without raising the token budget buys context
             by spending calls. When a goal opens with enough conversation behind it
@@ -848,7 +850,7 @@ than the spelling:
 
           <p>
             <code>DoneCheck</code> is the authority the loop consults when the
-            model stops. It is a trait with three methods —
+            model stops. It is a trait with three methods:
             <code>name()</code> for the log, <code>contract()</code> for what the
             model is told about how completion will be judged, and an
             <code>async verdict()</code> returning <code>Done::Yes</code> or
@@ -863,8 +865,8 @@ than the spelling:
             The shipped implementation is <code>MarkerClaim</code>: the model must
             end its final message with the line <code>GOAL COMPLETE</code>.
             Stopping without it is treated as stopping mid-work. The check is
-            tolerant about decoration — <code>**GOAL COMPLETE**</code> means the
-            same thing and spending a kick on formatting would be silly — and
+            tolerant about decoration (<code>**GOAL COMPLETE**</code> means the
+            same thing and spending a kick on formatting would be silly) and
             intolerant about position: the marker must own its line, so
             <em>"I will print GOAL COMPLETE when the tests pass"</em> is not a
             claim.
@@ -877,11 +879,11 @@ than the spelling:
             The marker never reaches the screen. <code>MarkerFilter</code> is a
             streaming state machine that holds only a line which could
             <em>still</em> become the marker and releases it the instant a
-            character rules that out — in prose, a one- or two-character pause on
+            character rules that out: in prose, a one- or two-character pause on
             a line beginning with <code>g</code>. It is applied on the way to the
             terminal only; <code>verdict</code> still reads the model's real text,
             and <code>Outcome::text</code> keeps it verbatim, marker and all.
-            <span class="chip test">tested</span> — including a marker cut across
+            <span class="chip test">tested</span>, including a marker cut across
             four streamed fragments, and the inverse case where a sentence
             <em>about</em> the marker must not be censored.
           </p>
@@ -892,10 +894,11 @@ than the spelling:
             <p>
               <code>MarkerClaim</code> asks the model that just did the work
               whether the work is done, and accepts a line of its own prose as the
-              answer. Nothing in the loop verifies the claim. The honest statement
-              of the guarantee is <strong>"the loop will not stop <em>before</em>
-              the model says it is finished"</strong> — not "the loop stops when
-              the work is finished". <code>goal.rs</code>'s module doc says this
+              answer. Nothing in the loop verifies the claim. The accurate
+              statement of the guarantee is <strong>"the loop will not stop
+              <em>before</em> the model says it is finished"</strong>, not "the
+              loop stops when the work is finished". <code>goal.rs</code>'s module
+              doc says this
               in its own words rather than leaving it to be discovered.
             </p>
           </div>
@@ -904,7 +907,7 @@ than the spelling:
           <p>
             Three other authorities were considered and each fails in a specific
             way. <em>Stopping when the model stops</em> costs nothing and catches
-            nothing — a model that runs one command, reads the first error and
+            nothing. A model that runs one command, reads the first error and
             writes "this looks like a session-API mismatch" has stopped, and the
             goal is untouched; that is the behaviour Emma exists to not have.
             <em>A check command exiting zero</em> touches reality and passes
@@ -914,7 +917,7 @@ than the spelling:
             remain</em> is the most legible, because a user can watch the file in
             an editor, and legible is not honest: a model that learns closing
             tasks ends the loop will close them, and a model that never opened one
-            has an empty list from turn zero — which reads as <em>done</em> before
+            has an empty list from turn zero, which reads as <em>done</em> before
             it has started.
           </p>
 
@@ -923,7 +926,7 @@ than the spelling:
             but to make bookkeeping insufficient: use the task count to decide
             when to <em>stop asking</em>, and gate the verdict behind something the
             model does not author. That is a second <code>impl</code> and a
-            different value in <code>Setup</code>, not surgery on the loop — which
+            different value in <code>Setup</code>, not surgery on the loop, which
             is the entire reason <code>DoneCheck</code> is a trait.
             <code>notes/plan-loops-stage-1.md</code> designs a third
             implementation along those lines: a cheap second model call as an
@@ -943,7 +946,7 @@ than the spelling:
               contract plus the paragraph telling a subagent that its final
               message is the only thing reaching its caller. The seam was used,
               and the doc predates the use.
-              <span class="chip cert">certified</span> — grepped for
+              <span class="chip cert">certified</span>. Grepped for
               <code>impl DoneCheck</code> across <code>crates/</code> at commit
               <code>20ac400</code>: three hits, of which one is a test double
               inside <code>goal.rs</code>'s own tests. Read
@@ -958,7 +961,7 @@ than the spelling:
             <code>notes/research-loops-goals-and-cost.md</code> collected the
             numbers behind "LLM-as-judge is brittle", and they are worth having
             before anyone builds the judge check, because the failure is not that
-            a judge is a coin flip — it is that the reassuring number is the wrong
+            a judge is a coin flip. It is that the reassuring number is the wrong
             number.
           </p>
 
@@ -978,7 +981,7 @@ than the spelling:
             <li>
               Position bias ranged 0.002 to 0.192 between judges, and two
               production models showed test-retest reliability above 0.95
-              <em>while</em> showing position bias above 0.10 — the
+              <em>while</em> showing position bias above 0.10, the
               "consistency-bias paradox". A loop cannot detect this by asking the
               judge twice.
             </li>
@@ -988,13 +991,13 @@ than the spelling:
             </li>
             <li>
               Separately, METR's evaluations of o3 and Claude 3.7 Sonnet found
-              reward hacking in <strong>30%+ of evaluation runs</strong> —
-              monkey-patching graders, manipulating scorers — which is the failure
+              reward hacking in <strong>30%+ of evaluation runs</strong>:
+              monkey-patching graders, manipulating scorers. That is the failure
               a verifier invites rather than prevents.
             </li>
           </ul>
           <p>
-            <span class="chip unv">unverified</span> — these are figures quoted
+            <span class="chip unv">unverified</span>. These are figures quoted
             from that note, not measurements taken here, and the note itself flags
             that the METR 30% figure came from a secondary aggregation it could
             not re-confirm against METR's raw report. What would settle them:
@@ -1020,14 +1023,14 @@ than the spelling:
           <span class="src">crates/emma/src/agent.rs — <code>Setup</code>; crates/emma/tests/support/mod.rs</span>
 
           <p>
-            The fake provider answers from a script of turns — text, tool calls, a
-            token cost, or a <code>BadRequest</code> rejection — and records every
+            The fake provider answers from a script of turns: text, tool calls, a
+            token cost, or a <code>BadRequest</code> rejection, and it records every
             request it was sent. That last half is what makes the tests assertions
             about behaviour rather than about return values: a test can check what
             the <em>model was told</em>, which is where most of this file's
             guarantees actually live. <code>the transcript contains
             "already_failed"</code>, <code>the kick restated the goal</code>,
-            <code>the model was told the denial cannot be approved away</code> —
+            <code>the model was told the denial cannot be approved away</code>:
             none of those is observable from an <code>Outcome</code>.
           </p>
           <span class="src">crates/emma/tests/support/mod.rs — <code>Fake</code>, <code>Say</code></span>
@@ -1036,9 +1039,9 @@ than the spelling:
             What it buys, concretely: 22 tests covering the failure-is-an-
             observation property, both halves of the memo, both budget shapes,
             every ending on the ladder, the approval ordering, and the byte-for-byte
-            round trip through the session file — all running without a network,
+            round trip through the session file, all running without a network,
             an API key, or a terminal.
-            <span class="chip cert">certified</span> —
+            <span class="chip cert">certified</span>.
             <code>cargo test -p emma --test loop</code> at commit
             <code>20ac400</code> printed
             <code>test result: ok. 22 passed; 0 failed</code> in 0.04s.
@@ -1066,7 +1069,7 @@ than the spelling:
           <p>
             <span class="chip unv">unverified</span>
             <code>tests/loop.rs</code>'s header states that every test in it was
-            validated by mutation — the guarantee removed from
+            validated by mutation: the guarantee removed from
             <code>agent.rs</code>, the test confirmed to fail, the guarantee
             restored. I ran the suite (22 passed at <code>20ac400</code>) but ran
             no mutations, because this task was not permitted to change source.
@@ -1095,15 +1098,15 @@ than the spelling:
             <span class="chip cert">certified</span> by reading the function:
             <code>started.elapsed() &gt; wall_clock</code> is tested only at the
             top of an iteration, and neither <code>tool.invoke</code> nor
-            <code>call_model</code> is wrapped in a deadline —
+            <code>call_model</code> is wrapped in a deadline:
             <code>call_model</code>'s <code>select!</code> races the stream
             against the interrupt only. So <code>wall_clock</code> bounds when the
             loop will decline to <em>start</em> another iteration, not how long a
             goal can take, and <code>Ending::Deadline</code>'s "hit the 1800s time
             limit" reads as a ceiling in exactly the way
             <code>Ending::Tokens</code> was reworded to stop doing. A long tool
-            call is bounded by that tool's own timeout — <code>Bash</code> has one
-            — and a tool that has none is bounded by nothing in this file. This is
+            call is bounded by that tool's own timeout: <code>Bash</code> has one,
+            and a tool that has none is bounded by nothing in this file. This is
             flagged, not fixed; see the defects note below.
           </p>
           <span class="src">crates/emma/src/agent.rs — <code>run_goal</code>, <code>call_model</code>; tools/fs/src/bash.rs</span>
@@ -1128,9 +1131,9 @@ than the spelling:
             <code>tool_failed</code>, <code>tool_fault</code> or
             <code>tool_unknown</code>, and it does not need one, because each of
             those paths also writes a <code>tool_result</code> record. That is
-            correct today — every one of them goes through the same
+            correct today. Every one of them goes through the same
             <code>fail()</code> closure, which calls
-            <code>log_result_block</code> — but it is a convention held by one
+            <code>log_result_block</code>, but it is a convention held by one
             closure rather than a property the type system enforces. A new failure
             path added anywhere in <code>run_tool_call</code> that returns without
             going through <code>fail()</code> would produce a session file that

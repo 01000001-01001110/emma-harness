@@ -18,6 +18,7 @@
   <h4>Start here</h4>
   <ul>
     <li><a class="nav here" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
     <li><a class="nav" href="architecture.html">Architecture</a></li>
   </ul>
 
@@ -57,7 +58,7 @@
 
   <p class="lede">
     A coding agent for one person on one machine: a goal-holding loop, its
-    tools, a consent gate, and a terminal — all of it in one binary you own.
+    tools, a consent gate, and a terminal. All of it in one binary you own.
   </p>
 
   <h2 id="goal">What it is for</h2>
@@ -73,9 +74,10 @@
 
   <p>
     Claude Code sends on the order of 30,000 tokens of system prompt before the
-    first user word. <span class="chip unv">unverified</span> — widely reported,
-    not measured here. Every token of that is one you paid for and cannot use
-    for the actual work, and it is paid again on every uncached call.
+    first user word. <span class="chip unv">unverified</span>: the figure is
+    widely reported, not measured here. Every token of that is one you paid for
+    and cannot use for the actual work, and it is paid again on every uncached
+    call.
   </p>
 
   <div class="note warn">
@@ -89,8 +91,8 @@
     <p>
       What would settle it: render one real request and count the system field
       and tool schemas with <code>/v1/messages/count_tokens</code>. That is the
-      same method that bracketed the cache floors, and costs about the same —
-      a fraction of a cent.
+      same method that bracketed the cache floors, and costs about the same: a
+      fraction of a cent.
     </p>
   </div>
 
@@ -111,7 +113,7 @@
   <p>
     Not an MCP server to install, configure and keep running beside it.
     <code>WebFetch</code> renders in real Chrome, and five tools drive a live
-    page — open, read, act, fill, close. A harness that can only fetch HTML is
+    page: open, read, act, fill, close. A harness that can only fetch HTML is
     guessing at anything rendered client-side. See <a href="tools.html">Tools</a>.
   </p>
 
@@ -119,7 +121,7 @@
 
   <p>
     Every decision lives in the library rather than <code>main.rs</code>, so a
-    scripted provider can drive the whole loop with no network — which is also
+    scripted provider can drive the whole loop with no network, which is also
     what makes the deciding parts testable. There is no service to depend on,
     no account to keep, and no release to wait for.
   </p>
@@ -136,16 +138,16 @@
 
   <p>
     A tool that truncates names the limit that cut it, how much was lost, and
-    how to get the rest — or says that no argument raises it. A tool that cannot
+    how to get the rest, or says that no argument raises it. A tool that cannot
     compute something says so instead of returning a plausible substitute. A
-    tool that fails returns a result the model reads and acts on; the loop does
-    not abort.
+    tool that fails returns a result the model reads and acts on, and the loop
+    does not abort.
   </p>
 
   <p>
     The approval gate is a consent interface rather than a sandbox. It enforces
     nothing a tool does not declare about itself, and <code>Bash</code> can do
-    anything — <a href="consent.html">the consent page</a> says where that ends,
+    anything. <a href="consent.html">The consent page</a> says where that ends,
     in more detail than most readers will expect.
   </p>
 
@@ -160,9 +162,10 @@
   <h2 id="reading">The marks on these pages</h2>
 
   <div class="key">
-    <div><span class="chip cert">certified</span> observed against the real API, terminal, or file on disk</div>
+    <div><span class="chip cert">certified</span> proven, and a reader can repeat it: a file, a command, a count</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
     <div><span class="chip test">tested</span> covered by a test shown to fail when the guarantee is removed</div>
-    <div><span class="chip unv">unverified</span> believed, not checked — with what would settle it</div>
+    <div><span class="chip unv">unverified</span> believed, not checked, with what would settle it</div>
   </div>
 
   <p>
@@ -195,7 +198,7 @@
     </a>
     <a class="card" href="consent.html">
       <b>Consent &amp; permissions</b>
-      <span>The gate, the precedence ladder, rules, hooks — and what none of it enforces.</span>
+      <span>The gate, the precedence ladder, rules, hooks, and what none of it enforces.</span>
     </a>
     <a class="card" href="delegation.html">
       <b>Delegation</b>

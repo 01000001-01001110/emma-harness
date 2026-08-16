@@ -28,6 +28,7 @@
         <h4>Start here</h4>
         <ul>
           <li><a class="nav" href="index.html">What Emma is</a></li>
+          <li><a class="nav" href="getting-started.html">Getting started</a></li>
           <li><a class="nav" href="architecture.html">Architecture</a></li>
         </ul>
 
@@ -79,7 +80,11 @@
           <div class="key">
             <div>
               <span class="chip cert">certified</span
-              ><span>proven against the live API or the real file</span>
+              ><span>proven, and a reader can repeat it: a file, a command, a frozen fixture</span>
+            </div>
+            <div>
+              <span class="chip obs">observed</span
+              ><span>seen once, live, not repeatable on demand</span>
             </div>
             <div>
               <span class="chip test">tested</span
@@ -98,11 +103,11 @@
             <code>send(request, mode, events)</code>. That is the whole surface
             between the agent loop and any model anywhere. <code>Mode</code>
             chooses between one JSON body and a stream of SSE frames, and both
-            produce the same <code>AssistantTurn</code> — the difference is only
+            produce the same <code>AssistantTurn</code>. The difference is only
             whether the caller receives <code>Event::TextDelta</code> on the way.
             The <code>events</code> channel is optional in both modes, and a
-            <code>Batch</code> call still emits <code>Event::Retrying</code> —
-            a retry the user cannot see is indistinguishable from a hang.
+            <code>Batch</code> call still emits <code>Event::Retrying</code>,
+            because a retry the user cannot see is indistinguishable from a hang.
           </p>
           <span class="src">crates/llm/src/lib.rs — <code>Provider</code>, <code>Mode</code>, <code>Event</code></span>
 
@@ -110,7 +115,7 @@
 
           <p>
             <code>Request</code> is <code>instructions</code>,
-            <code>tools</code>, <code>history</code>, <code>query</code> — in
+            <code>tools</code>, <code>history</code>, <code>query</code>, in
             that order, as four fields rather than one message list. The reason
             is the provider's cache, which is an exact prefix match: anything
             that varies per turn has to sit after everything that does not.
@@ -125,7 +130,7 @@
               specifically so that building a request with a per-turn byte at
               position zero is not expressible. A
               convention in a comment is one that a struct literal elsewhere in
-              the loop can ignore — and one did, for
+              the loop can ignore, and one did, for
               <code>max_tokens</code>, which is why the model clamping below
               happens at the wire boundary instead.
             </p>
@@ -149,7 +154,7 @@
             An <code>AssistantTurn</code> is <code>Vec&lt;ContentBlock&gt;</code>
             plus a stop reason plus <code>Usage</code>.
             <code>text()</code> and <code>tool_calls()</code> are views
-            <em>onto</em> the block list rather than fields beside it — they used
+            <em>onto</em> the block list rather than fields beside it. They used
             to be stored separately, which is two things that can disagree about
             what the model said.
           </p>
@@ -162,7 +167,7 @@
               <strong>uncached remainder</strong>. In tustle-agent, where this
               was learned, a 72,549-token turn was recorded as
               <code>input_tokens: 2</code>. The figure meaning "the context this
-              call carried" is <code>billable_input_tokens()</code> —
+              call carried" is <code>billable_input_tokens()</code>:
               <code>input + cache_creation + cache_read</code>; a cap folded from
               the bare field instead loosens by up to ~10× once caching starts
               hitting. <code>Usage</code> carries no <code>total()</code>, so the
@@ -176,7 +181,7 @@
 
           <p>
             Because <code>Provider</code> is the whole boundary, the agent loop's
-            test suite runs against <code>Fake</code> — a struct holding a
+            test suite runs against <code>Fake</code>, a struct holding a
             <code>VecDeque&lt;Say&gt;</code> of scripted turns and a
             <code>Vec&lt;Request&gt;</code> of everything it was sent. Each
             <code>Say</code> is some text, some tool calls, a token count, and an
@@ -204,8 +209,8 @@
           <p>
             <code>content.rs</code> exists to delete one field.
             <code>AssistantTurn</code> used to carry
-            <code>raw_content: serde_json::Value</code> — Anthropic's content
-            array, echoed back on the next call without ever being read — and the
+            <code>raw_content: serde_json::Value</code>, Anthropic's content
+            array, echoed back on the next call without ever being read, and the
             loop built its own <code>{"type":"tool_result",…}</code> objects to
             answer it. Between them, those two facts meant a second provider
             would have been a refactor of the loop rather than a second file
@@ -219,7 +224,7 @@
             and the cheapest way to guarantee byte-fidelity is to never look
             inside. The shape that replaces it is taken from
             <code>goose</code> (Block, Apache-2.0): opaque provider state becomes
-            a narrow named field on an otherwise fully typed block —
+            a narrow named field on an otherwise fully typed block:
             <code>ThinkingBlock { thinking, signature }</code>.
           </p>
           <span class="src">crates/llm/src/content.rs — module doc, <code>ThinkingBlock</code></span>
@@ -230,7 +235,7 @@
             The first version of this module decoded strictly:
             <code>deny_unknown_fields</code> everywhere, and any block carrying a
             key the client did not model was demoted to
-            <code>Passthrough</code> — kept whole, kept verbatim, but no longer a
+            <code>Passthrough</code>, kept whole, kept verbatim, but no longer a
             typed thing the loop could act on. It passed everything. All 712
             tests, clippy clean, and the rendered request bytes identical to the
             version it replaced.
@@ -250,7 +255,7 @@
             zero tool calls in a turn that contained one, took the success path,
             and a real goal ended on turn one reported as
             <em>"answered — no tools were needed"</em>.
-            <span class="chip cert">certified</span> — observed on a live call,
+            <span class="chip cert">certified</span>, observed on a live call,
             2026-08-11; the exact block is frozen as a fixture in
             <code>a_real_tool_use_block_is_a_tool_call_and_still_round_trips</code>.
           </p>
@@ -295,7 +300,7 @@
           <p>
             <code>extra</code> is written only by
             <code>ContentBlock::from_value</code>, read only by
-            <code>to_value</code>, and nothing branches on its contents — a key
+            <code>to_value</code>, and nothing branches on its contents. A key
             Emma needs to <em>act</em> on becomes a field promoted out of it
             rather than a lookup into it. <code>with_extra</code> inserts rather
             than merges, with a <code>debug_assert!</code> that fires if a
@@ -306,15 +311,15 @@
           <p>
             The bytes were compared rather than assumed: commit
             <code>4645d5e</code> was rebuilt from <code>git archive</code>, both
-            trees rendered one request exercising every content shape — all three
+            trees rendered one request exercising every content shape: all three
             cache breakpoints, signed and unsigned thinking, redacted thinking, an
             unknown block type, <code>tool_result</code> with and without
-            <code>is_error</code>, and a <code>caller</code> key — and the two
+            <code>is_error</code>, and a <code>caller</code> key. The two
             outputs were compared. 6,410 bytes, identical.
             <span class="chip cert">certified</span> That request is frozen as
             <code>the_whole_request_body_is_pinned_byte_for_byte</code>, a single
             golden string. It catches the class of change the placement tests
-            cannot see — a byte that moved <em>inside</em> a block, such as a
+            cannot see: a byte that moved <em>inside</em> a block, such as a
             <code>signature</code> that stopped being emitted or an
             <code>is_error</code> that started being emitted as
             <code>false</code>.
@@ -326,7 +331,7 @@
             the minting model can validate. Nothing calls it yet. Whether a
             signature survives a mid-session model change is untested here, and
             an in-session <code>/model</code> is the first thing that would need
-            to know — under <code>raw_content</code>, finding those blocks meant
+            to know. Under <code>raw_content</code>, finding those blocks meant
             re-parsing Anthropic's format at the call site. <span class="chip unv">unverified</span> Nothing records
             which model produced a signed block; settling it means continuing one
             conversation across two models and seeing whether the second accepts
@@ -370,7 +375,7 @@
             <em>at or below</em> the ask, or <code>None</code>. An
             <code>xhigh</code> ask on Opus 4.6 lands on <code>high</code>, not on
             <code>max</code>. <code>None</code> means <em>send no
-            <code>output_config</code> at all</em>, never "send low" — on Sonnet
+            <code>output_config</code> at all</em>, never "send low". On Sonnet
             4.5 and Haiku 4.5 the field's presence is itself the error, and
             clamping upward to "the nearest supported" would send a model harder
             than the caller asked for, which on a <code>Low</code> request for a
@@ -391,8 +396,8 @@
 
           <p>
             The table is keyed by prefix rather than equality, so
-            <code>claude-haiku-4-5-20251001</code> — the dated spelling the
-            console hands a user — resolves to the same row as its alias.
+            <code>claude-haiku-4-5-20251001</code>, the dated spelling the
+            console hands a user, resolves to the same row as its alias.
             <code>max_by_key(id.len())</code> makes the longest match win, and
             <code>no_row_shadows_another</code> asserts that no id currently
             prefixes another, because a row like <code>claude-opus</code> added
@@ -460,9 +465,9 @@
               Every row's <code>max_tokens</code> and effort set was transcribed
               on <strong>2026-08-11</strong> from Anthropic's published model
               list. <span class="chip unv">unverified</span> None of it has been
-              measured against the API. <code>GET /v1/models</code> reports both
-              — <code>max_tokens</code> as a field and the levels under
-              <code>capabilities.effort.&lt;level&gt;.supported</code> — and
+              measured against the API. <code>GET /v1/models</code> reports both:
+              <code>max_tokens</code> as a field and the levels under
+              <code>capabilities.effort.&lt;level&gt;.supported</code>.
               <code>Limits</code> is shaped as what that response parses into, so
               a later stage can replace the <em>lookup</em> without touching the
               clamping. That stage is not built.
@@ -474,7 +479,7 @@
 
           <p>
             Emma has no corpus. The only stable prefix is the instructions plus
-            the tool schema — a few thousand tokens, not fifty — so caching had to
+            the tool schema, a few thousand tokens, not fifty, so caching had to
             be argued rather than assumed. At list price, with the published
             multipliers (write 1.25×, read 0.1×) and a 512-token floor on
             <code>claude-opus-5</code>:
@@ -494,7 +499,7 @@
             result, and is called again seconds later. P is effectively 1.0, so the
             write pays back on the second call of the first turn. That is why
             caching is <code>On</code> by default, and why
-            <code>--no-cache</code> exists — so the claim can be measured rather
+            <code>--no-cache</code> exists: so the claim can be measured rather
             than believed. The saving is smaller than tustle-agent's measured 84%,
             because there the cached prefix was a 33k-token corpus; here the prefix
             is small and the real money is in the conversation, which is why the
@@ -624,7 +629,7 @@
             The 0.28 threshold says a marker on the query needs P(another call) ≳
             0.28 to pay for its write, and the reason for gating on
             <code>query.len() &gt; 1</code> is that a coding turn which has
-            already called one tool usually calls another — reads, then edits,
+            already called one tool usually calls another: reads, then edits,
             then runs the tests. That second half is a judgement, not a
             measurement.
             <span class="chip unv">unverified</span> It is settled by counting
@@ -654,7 +659,7 @@
 
           <p>
             Three other clauses of the caching contract go unaccounted for.
-            <span class="chip unv">unverified</span> in every case — they are read
+            <span class="chip unv">unverified</span> in every case: they are read
             from Anthropic's documentation as fetched 2026-08-11 and nothing here
             has been run against them.
           </p>
@@ -716,12 +721,14 @@ claude-haiku-4-5: 4129 tokens, marker present -&gt; cache_creation = <span class
               Haiku 4.5's gate opens between <strong>4,069 and 4,129</strong> real
               tokens; Opus 5's between <strong>483 and 543</strong>. Consistent
               with the documented 4,096 and 512. Under a cent for both models.
-              <span class="chip cert">certified</span> — live, 2026-08-14.
+              <span class="chip obs">observed</span>: bisected live against the
+              API, 2026-08-14; no raw request or response body was kept, only
+              the printed pass/fail lines above.
             </p>
             <p>
               What is written down is the result, not a transcript. No raw request
               or response body from those calls survives in
-              <code>notes/</code> — the record is the status line above and the
+              <code>notes/</code>: the record is the status line above and the
               two-line table, which is the whole of it.
             </p>
           </div>
@@ -732,7 +739,7 @@ claude-haiku-4-5: 4129 tokens, marker present -&gt; cache_creation = <span class
             a 400. <code>models.rs</code> exists because too high a
             <code>max_tokens</code> is a 400; <code>retry.rs</code> classifies by
             status; the wire tests assert the bytes that avoid a 400. None of that
-            machinery can see this one, because there is nothing to see — the same
+            machinery can see this one, because there is nothing to see: the same
             status, the same body shape, and a field that is <code>0</code> instead
             of a number. A single <code>MIN_CACHEABLE_TOKENS = 512</code> had been
             wrong for every non-Opus-5 model since it was written, and no test, no
@@ -769,9 +776,9 @@ claude-haiku-4-5: 4129 tokens, marker present -&gt; cache_creation = <span class
           <p>
             <code>MIN_CACHEABLE</code> is a longest-prefix table with the same ten
             model ids as <code>models::TABLE</code>. The floors are
-            <strong>not monotonic with release date</strong> — the newest models
-            have the lowest floors, and an older, smaller model the highest — which
-            is exactly why a single constant cannot be right.
+            <strong>not monotonic with release date</strong>: the newest models
+            have the lowest floors, and an older, smaller model the highest, which
+            is why a single constant cannot be right.
           </p>
 
           <div class="tw">
@@ -788,8 +795,8 @@ claude-haiku-4-5: 4129 tokens, marker present -&gt; cache_creation = <span class
                   <td><code>claude-opus-5</code></td>
                   <td class="num">512</td>
                   <td>
-                    <span class="chip cert">certified</span> gate opens between
-                    483 and 543, live 2026-08-14
+                    <span class="chip obs">observed</span>: gate opens between
+                    483 and 543, bisected live 2026-08-14, no raw body kept
                   </td>
                 </tr>
                 <tr>
@@ -836,8 +843,8 @@ claude-haiku-4-5: 4129 tokens, marker present -&gt; cache_creation = <span class
                   <td><code>claude-haiku-4-5</code></td>
                   <td class="num">4,096</td>
                   <td>
-                    <span class="chip cert">certified</span> gate opens between
-                    4,069 and 4,129, live 2026-08-14
+                    <span class="chip obs">observed</span>: gate opens between
+                    4,069 and 4,129, bisected live 2026-08-14, no raw body kept
                   </td>
                 </tr>
               </tbody>
@@ -864,7 +871,7 @@ claude-haiku-4-5: 4129 tokens, marker present -&gt; cache_creation = <span class
           <p>
             The table is also shorter than the documentation it came from.
             <code>notes/research-caching-mechanics.md</code>'s floor table names
-            four ids the shipped rows dropped — <code>Opus 4.1</code> at 1,024,
+            four ids the shipped rows dropped: <code>Opus 4.1</code> at 1,024,
             <code>Mythos Preview</code> and <code>Haiku 3.5</code> at 2,048, and
             <code>Opus 4.5</code> at 4,096. A user who names one of those today
             falls to <code>MIN_CACHEABLE_UNKNOWN</code> and is gated at 4,096, so
@@ -890,7 +897,7 @@ claude-haiku-4-5: 4129 tokens, marker present -&gt; cache_creation = <span class
           <h3>An unknown model guesses <em>high</em> here</h3>
 
           <p>
-            <code>MIN_CACHEABLE_UNKNOWN = 4_096</code> — the highest floor anyone
+            <code>MIN_CACHEABLE_UNKNOWN = 4_096</code>, the highest floor anyone
             ships. That is the opposite direction from
             <code>models::UNKNOWN</code>'s low ceiling. The two failures:
           </p>
@@ -904,8 +911,8 @@ claude-haiku-4-5: 4129 tokens, marker present -&gt; cache_creation = <span class
             <li>
               <strong>Guess too high</strong> and an unknown model whose real floor
               is lower goes unmarked while its estimated prefix sits under 4,096
-              tokens (~16 KB rendered). The cost is a forgone read discount — cents
-              per call — and it ends by itself, because history grows past the
+              tokens (~16 KB rendered). The cost is a forgone read discount, cents
+              per call, and it ends by itself, because history grows past the
               threshold within a few turns.
             </li>
           </ul>
@@ -913,7 +920,7 @@ claude-haiku-4-5: 4129 tokens, marker present -&gt; cache_creation = <span class
           <p>
             <code>an_unknown_model_is_gated_at_the_highest_known_floor</code> pins
             both halves: an unknown model gets no markers on a ~700-token prefix,
-            and gets them back once the prefix clears 4,096 — a gate, not a refusal.
+            and gets them back once the prefix clears 4,096. That is a gate, not a refusal.
             <span class="chip test">tested</span>
           </p>
           <span class="src">crates/llm/src/anthropic.rs — <code>MIN_CACHEABLE_UNKNOWN</code></span>
@@ -957,7 +964,7 @@ claude-haiku-4-5: 4129 tokens, marker present -&gt; cache_creation = <span class
             internal-consistency test and neither could see the other, so adding a
             model to one and forgetting the other compiled, passed, and went wrong
             quietly. The architecture map found that gap the same day the second
-            table shipped — in the same work that argued for the split.
+            table shipped, in the same work that argued for the split.
           </p>
 
           <p>
@@ -1000,7 +1007,7 @@ claude-haiku-4-5: 4129 tokens, marker present -&gt; cache_creation = <span class
             and says the floors table is short; adding a model to the floors table
             alone names it and says the limits table is. Both restored green.
             <span class="chip test">tested</span> The row sets agreed at the time
-            the guard landed — it is the missing guard, not a live mismatch.
+            the guard landed: it is the missing guard, not a live mismatch.
           </p>
           <span class="src">crates/llm/src/anthropic.rs — <code>both_per_model_tables_name_the_same_models</code>; commit <code>8922850</code></span>
 
@@ -1009,7 +1016,7 @@ claude-haiku-4-5: 4129 tokens, marker present -&gt; cache_creation = <span class
           <p>
             The three usage fields make this answerable exactly, from records
             already on disk, with no second run and no estimation. Against the
-            no-cache counterfactual — the same request with no markers, which sends
+            no-cache counterfactual, the same request with no markers, which sends
             byte-identical content by construction:
           </p>
 
@@ -1030,7 +1037,7 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
 
           <p>
             <strong>The number goes negative exactly when the harness is paying
-            write premiums it never reads back</strong> — which is what a broken
+            write premiums it never reads back.</strong> That is what a broken
             prefix produces, and what the accepted-and-inert defect above produced
             for every non-Opus-5 model. It does not credit latency, and it assumes
             the no-cache run would send the same bytes, which is true here because
@@ -1056,7 +1063,7 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
               <span class="chip unv">unverified</span> Nobody has run this over
               real sessions and got a number. Checked 2026-08-14, the sessions
               directory on the owner's machine held 86 files, most of them 0 bytes
-              and the largest ~4.7 KB — too few real turns to decide anything. Two
+              and the largest ~4.7 KB, too few real turns to decide anything. Two
               claims on this page wait on it: whether breakpoint 3 pays for itself,
               and whether the 5-minute TTL is the right one. Settling both means
               one controlled live session and this query.
@@ -1065,8 +1072,8 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
           <span class="src">notes/plan-caching-defects.md §"Stage A — measure, from data already on disk"</span>
 
           <p>
-            Two companion views sit alongside it. <em>Cached fraction</em> —
-            <code>read / (input + creation + read)</code> — is a health gauge
+            Two companion views sit alongside it. <em>Cached fraction</em>,
+            <code>read / (input + creation + read)</code>, is a health gauge
             rather than a cost claim, and reads low at the start of a session
             where history is small, so the tail is the part that means anything.
             And an <em>expected-hit regression</em>: within a TTL, call N should
@@ -1076,7 +1083,7 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
 
           <p>
             For a sense of the target: Claude Code sessions measured in the wild
-            ran a <strong>97.2% cache hit ratio</strong> — 40M cache-read tokens
+            ran a <strong>97.2% cache hit ratio</strong>, 40M cache-read tokens
             against 653K direct input tokens across eight sessions.
             <span class="chip unv">unverified</span> That is a third party's
             number for a different harness, quoted as a magnitude to aim at rather
@@ -1115,8 +1122,8 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
             </li>
             <li>
               <strong>Believe <code>retry-after</code>.</strong> It overrides the
-              curve entirely — the provider is the only party that knows when the
-              bucket refills — but is still clamped to the 20-second cap, because
+              curve entirely, because the provider is the only party that knows when the
+              bucket refills, but is still clamped to the 20-second cap, because
               <code>retry-after: 3600</code> for an interactive tool means "tell the
               user now", not "sleep for an hour". The header is carried on
               <code>RateLimited</code> only; a 5xx that happens to send one backs
@@ -1154,7 +1161,7 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
             Two sources, in order: the environment variable for that provider, then
             <code>~/.emma/credentials.json</code>. <strong>Never the project
             directory.</strong> Emma works inside repositories, and a key written
-            next to the code is a key that gets committed — the first person to
+            next to the code is a key that gets committed. The first person to
             notice is usually the scanner that finds it in a public push. Nothing in
             <code>auth.rs</code> resolves a path relative to the current directory:
             the home path is computed, never searched upward, and
@@ -1186,7 +1193,7 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
           <p>
             The file used to hold exactly one key under a flat top-level
             <code>api_key</code>, and <code>read_keys</code> still reads that
-            spelling — for as long as anybody has a file written by the old
+            spelling, for as long as anybody has a file written by the old
             <code>emma api</code>, which is one machine and no expiry date. It can
             only ever have meant Anthropic, since nothing else was implemented when
             it was written. <strong>Reading is what migrates; nothing rewrites the
@@ -1202,7 +1209,7 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
             <p>
               <code>store</code> used to write a fresh document. The Brave Search key
               lives in that same file, at the top level, put there by an unrelated
-              part of the program — so <strong>every <code>emma api</code> call
+              part of the program, so <strong>every <code>emma api</code> call
               silently deleted it</strong>. Nothing errored. The symptom arrived
               later as a tool that had stopped being registered, with no connection
               to the command that caused it.
@@ -1212,9 +1219,14 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
               back everything else. It also <em>refuses</em> a credentials file it
               cannot parse rather than overwriting it, for the same reason:
               overwriting is exactly how the other keys got lost.
-              <span class="chip cert">certified</span> — certified against the
-              owner's real <code>~/.emma/</code>, backed up and restored, with the
-              Brave key intact afterwards.
+              <span class="chip obs">observed</span>: checked once against the
+              owner's real <code>~/.emma/</code> around the <code>da0352a</code>
+              fix (2026-08-11), backed up and restored by hand, with the Brave
+              key intact afterwards. The same shape is covered on demand by
+              <code>a_key_written_by_the_old_emma_api_still_reads</code>
+              (<code>crates/llm/src/auth.rs</code>), which writes a fixture
+              file carrying both keys and asserts the Brave key survives a
+              write. <span class="chip test">tested</span>
             </p>
           </div>
           <span class="src">crates/llm/src/auth.rs — <code>store</code>; commit <code>da0352a</code></span>
@@ -1235,7 +1247,7 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
             <code>AnthropicProvider</code> holds the key and scrubbed what it built;
             <code>Assembly::apply</code> and <code>turn_from_message</code> are free
             functions the key was never handed to, so they built <code>Api</code>
-            variants out of raw provider prose — and the class-level promise read as
+            variants out of raw provider prose, and the class-level promise read as
             held while two paths did not hold it. Formatting is the one path every
             variant from every site takes to reach a terminal or a log.
           </p>
@@ -1245,7 +1257,7 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
             <code>err.message</code> directly still gets the
             provider's bytes on those two paths; a key this process never wrapped in
             <code>ApiKey</code> is not in the list; and an echo that is not
-            byte-identical — base64ed, truncated, re-cased by a gateway — defeats a
+            byte-identical (base64ed, truncated, re-cased by a gateway) defeats a
             substring replace.
           </p>
           <span class="src">crates/llm/src/lib.rs — <code>impl Display for LlmError</code>, <code>remember_secret</code></span>
@@ -1255,7 +1267,7 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
             poison, and a test poisons the lock from another thread and then checks
             that formatting still scrubs. The first version propagated, which meant
             one unrelated panic anywhere in the process turned redaction off for
-            every error printed for the rest of the run — a security control
+            every error printed for the rest of the run: a security control
             degrading to no control, on a condition nobody observes. The recovery
             holds only while the data behind the lock has no invariant a panic could
             break, which a <code>Vec&lt;String&gt;</code> does not.
@@ -1264,15 +1276,15 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
           <span class="src">crates/llm/src/lib.rs — <code>secrets</code>, <code>a_poisoned_scrub_list_still_redacts</code></span>
 
           <p>
-            On disk the file is created <code>0600</code> — created that way rather
+            On disk the file is created <code>0600</code>, created that way rather
             than created-then-chmodded, because between those two calls the key is
-            world-readable — and a file whose mode allows group or other access is
+            world-readable, and a file whose mode allows group or other access is
             <em>refused</em> rather than warned about. On Windows there are no mode
             bits: <code>check_permissions</code> returns <code>Ok(())</code> and
             <code>write_private</code> is a plain write into the user's profile,
             whose default ACL already excludes other users.
             <span class="chip unv">unverified</span> The two unix permission tests
-            have never been run on the owner's machine — they are compile-checked
+            have never been run on the owner's machine: they are compile-checked
             only. Settling that takes one <code>cargo test</code> on a unix box.
           </p>
           <span class="src">crates/llm/src/auth.rs — <code>write_private</code>, <code>check_permissions</code></span>
@@ -1281,7 +1293,7 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
 
           <p>
             <code>ProviderKind</code> is separate from <code>Provider</code> because
-            it answers questions that come <em>before</em> a key or a model exists —
+            it answers questions that come <em>before</em> a key or a model exists:
             a name, an environment variable, a default model, and how to build one.
             <code>emma set-provider</code> has a name and nothing else.
             <code>KINDS</code> holds one entry, and that list is what an unknown
@@ -1293,8 +1305,8 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
             <code>emma set-provider antropic</code> quietly running on Anthropic
             would look exactly like a correctly-set one until the bill or the output
             said otherwise, and there is no way to notice in between. Names are
-            matched case-insensitively — <code>Anthropic</code> is not a different
-            provider — and nothing else is normalised: a typo is a typo and gets the
+            matched case-insensitively (<code>Anthropic</code> is not a different
+            provider) and nothing else is normalised: a typo is a typo and gets the
             list. <span class="chip test">tested</span>
           </p>
           <span class="src">crates/llm/src/kind.rs — <code>kind</code>, <code>a_misspelled_provider_is_refused_and_told_what_exists</code></span>
@@ -1325,7 +1337,7 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
               <tbody>
                 <tr>
                   <td>
-                    8 of the 10 <code>MIN_CACHEABLE</code> floors — everything
+                    8 of the 10 <code>MIN_CACHEABLE</code> floors: everything
                     except Opus 5 and Haiku 4.5. Transcription dated 2026-08-11.
                   </td>
                   <td>
@@ -1337,7 +1349,7 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
                 </tr>
                 <tr>
                   <td>
-                    Every row of <code>models::TABLE</code> — the
+                    Every row of <code>models::TABLE</code>: the
                     <code>max_tokens</code> ceilings and the effort sets. Same
                     2026-08-11 transcription, none of it measured.
                   </td>
@@ -1379,7 +1391,7 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
                 </tr>
                 <tr>
                   <td>
-                    How much the <code>chars / 4</code> estimator under-marks — the
+                    How much the <code>chars / 4</code> estimator under-marks: the
                     cacheable-but-ungated band, wider on high-floor models.
                   </td>
                   <td>
@@ -1436,7 +1448,7 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
 
           <footer class="pg">
             <p>
-              Subject: <code>crates/llm</code> — <code>lib.rs</code>,
+              Subject: <code>crates/llm</code>: <code>lib.rs</code>,
               <code>anthropic.rs</code>, <code>content.rs</code>,
               <code>models.rs</code>, <code>retry.rs</code>,
               <code>auth.rs</code>, <code>kind.rs</code>. Reasoning drawn from

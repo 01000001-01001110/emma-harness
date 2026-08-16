@@ -128,16 +128,27 @@ Stated plainly, because the alternative is you finding out.
 
 ## Documentation
 
-|                           |                                                            |
-| ------------------------- | ---------------------------------------------------------- |
-| [docs/getting-started.md] | install, key, `init`, and `.claude/` compatibility         |
-| [docs/architecture.md]    | the crates, what each owns, and the boundaries that matter |
-| [docs/the-loop.md]        | one goal end to end, and the properties that were paid for |
-| [docs/harness.md]         | `.emma/`, personas, skills, commands, hooks, discovery     |
-| [docs/approval.md]        | the gate, both of its axes, and what it does not cover     |
+**Open [`docs/index.html`](docs/index.html) in a browser.** It needs no server
+and no build step. Thirteen pages covering the loop, sessions, providers, tools,
+consent, delegation, the terminal, configuration, the house rules, the backlog,
+and a list of everything believed but not checked.
 
-[docs/getting-started.md]: docs/getting-started.md
-[docs/architecture.md]: docs/architecture.md
-[docs/the-loop.md]: docs/the-loop.md
-[docs/harness.md]: docs/harness.md
-[docs/approval.md]: docs/approval.md
+Claims on those pages cite the file they came from and carry one of three marks:
+`certified` for something observed against the real API, terminal or file on
+disk; `tested` for something a test covers; `unverified` for something believed
+but unchecked, with what would settle it.
+
+|                                                  |                                            |
+| ------------------------------------------------ | ------------------------------------------ |
+| [docs/index.html](docs/index.html)               | what Emma is for, and how to read the site |
+| [docs/architecture.html](docs/architecture.html) | eight crates and the edges between them    |
+| [docs/loop.html](docs/loop.html)                 | one goal end to end, and what bounds it    |
+| [docs/consent.html](docs/consent.html)           | the gate, and what it does not enforce     |
+| [docs/roadmap.html](docs/roadmap.html)           | known defects, planned work, refused ideas |
+
+The five Markdown files beside it (`getting-started.md`, `architecture.md`,
+`the-loop.md`, `harness.md`, `approval.md`) are **superseded** and carry a
+banner saying so. They were last revised on 2026-08-10 and at least one of them
+is now wrong: `architecture.md` says seven crates where there are eight. They
+are kept only until the content the HTML site lacks, chiefly installing and
+first run, has been ported across.

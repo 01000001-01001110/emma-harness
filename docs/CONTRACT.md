@@ -38,11 +38,19 @@ age well. **An assertion nobody can check does not belong here.**
 **Every non-obvious claim carries an evidence chip**, and this is the part that
 matters most:
 
-| Chip                                       | Means                                                                                                             |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `<span class="chip cert">certified</span>` | Proven against the real thing — a live API call, a real terminal, the actual file on disk. Say what was observed. |
-| `<span class="chip test">tested</span>`    | Covered by a test that has been shown to fail when the guarantee is removed.                                      |
-| `<span class="chip unv">unverified</span>` | Believed, not checked. **Say what would settle it.**                                                              |
+| Chip                                       | Means                                                                                                                                                                            |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<span class="chip cert">certified</span>` | Proven against the real thing, **and a reader can repeat it**: a file they can grep, a command they can run, a count they can redo. Say how.                                     |
+| `<span class="chip obs">observed</span>`   | Seen once, live, and **not repeatable on demand**: an API call whose transcript is gone, something read off a console, a number from a run nobody kept. Say who saw it and when. |
+| `<span class="chip test">tested</span>`    | Covered by a test that has been shown to fail when the guarantee is removed.                                                                                                     |
+| `<span class="chip unv">unverified</span>` | Believed, not checked. **Say what would settle it.**                                                                                                                             |
+
+The split between the first two exists because they were one chip until
+2026-08-16, and two pages then reached opposite confidence about the same number
+without either author noticing. One had counted it off disk. The other could not
+find the file. Both wrote what they honestly knew, and a reader had no way to
+adjudicate. "I saw this happen" and "you can see this happen" are different
+claims, and the mark now says which.
 
 A page with no amber chips anywhere is not a page that got everything right; it
 is a page that has not been honest yet. The chips are how this site stays
@@ -143,6 +151,51 @@ collide on an id:
 
 Those two hexes are `--dimmer` and `--accent`. They are the one place a literal
 colour is allowed, and only because the format leaves no alternative.
+
+## Before you report the page done
+
+Run these. They are the whole of what a later cleanup pass would have caught, so
+running them here means no cleanup pass is needed. **A page that needs a
+copy-edit afterwards is a page whose author skipped this list.**
+
+```bash
+# em-dashes in prose the reader actually sees: a handful per page.
+# The naive `grep -o '—' | wc -l` is the wrong instrument. It counts diagram
+# labels, quoted program output, citation separators and the invisible nav
+# comment, so a finished page reports as half-done. Strip those first.
+python -c "
+import re, html
+s = open('docs/PAGE.html', encoding='utf-8').read()
+for pat in [r'<svg.*?</svg>', r'<pre.*?</pre>', r'<!--.*?-->', r'<span class=\"src\">.*?</span>']:
+    s = re.sub(pat, '', s, flags=re.S)
+s = html.unescape(s)   # &mdash; is an em-dash too, and no character grep sees it
+print(s.count('—') + s.count('–'))
+"
+
+# self-approving narration: expect zero hits outside quoted source
+grep -oi 'deliberately\|by design\|on purpose\|load-bearing\|is not decoration\|not an accident\|the right call\|precisely the\|principled\|rigorous' docs/PAGE.html
+
+# every page links the shared stylesheet and ships no private one
+grep -c 'href="assets/docs.css"' docs/PAGE.html   # 1
+grep -c '<style\|<script\|href="http\|src="http' docs/PAGE.html   # 0
+
+# the sidebar differs from the canonical one by exactly the `here` class
+diff <(sed -n '/<nav class="side">/,/<\/nav>/p' docs/PAGE.html) \
+     <(sed -n '/<nav class="side">/,/<\/nav>/p' docs/assets/NAV.html)
+
+# amber exists somewhere: a page with no unverified claims has not been honest
+grep -c 'chip unv' docs/PAGE.html
+```
+
+Then read the page aloud, or as close as you can get. Uniform rhythm survives
+every grep: sentences all one length, paragraphs all three sentences, list items
+all opening with a bolded phrase. That is what makes prose read as generated,
+and no command will find it.
+
+**Check that each command produced non-empty output before believing it.** A
+`grep` that silently matched nothing and a `grep` that failed look identical
+from the exit code, and this project has already shipped a comparison of two
+empty files reported as a match.
 
 ## Keeping it true
 

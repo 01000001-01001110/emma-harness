@@ -18,6 +18,7 @@
   <h4>Start here</h4>
   <ul>
     <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
     <li><a class="nav here" href="architecture.html">Architecture</a></li>
   </ul>
 
@@ -146,7 +147,7 @@
     Both need to decide whether a path is inside the working directory, and
     path containment has one implementation rather than three. Containment
     written twice is containment that disagrees with itself on the third
-    unusual input — a symlink, a UNC path, a trailing dot — and the disagreement
+    unusual input: a symlink, a UNC path, a trailing dot. That disagreement
     surfaces as one tool refusing what another allowed.
   </p>
 
@@ -163,8 +164,8 @@
   <h3><code>llm</code>'s dependency on <code>tool-api</code> is dev-only</h3>
 
   <p>
-    The provider layer does not need the tool vocabulary to build a request —
-    tool schemas arrive as already-rendered JSON. It needs the vocabulary only
+    The provider layer does not need the tool vocabulary to build a request.
+    Tool schemas arrive as already-rendered JSON. It needs the vocabulary only
     to test the seam where the two meet, so the dependency sits under
     <code>[dev-dependencies]</code> and the seam test is inline in
     <code>anthropic.rs</code> rather than in a <code>tests/</code> directory.
@@ -186,18 +187,18 @@
   </p>
 
   <div class="note warn">
-    <span class="h">The gap this leaves — <code>ToolCtx</code> has no session slot</span>
+    <span class="h">The gap this leaves: <code>ToolCtx</code> has no session slot</span>
     <p>
       There is nowhere in the context for per-session state, so read-tracking
       and anything else a tool needs to remember across calls has no home.
       Constructing tools individually compiles and then silently misbehaves.
     </p>
     <p>
-      <strong>Three crates document this separately</strong> — <code>tools/fs</code>,
+      <strong>Three crates document this separately:</strong> <code>tools/fs</code>,
       <code>tools/lsp</code> and <code>tools/web</code> each warn about it in
       their own words, which is what a missing shared abstraction looks like
       from below. Backlog item 17.
-      <span class="chip unv">unverified</span> — the failure is described in
+      <span class="chip unv">unverified</span>. The failure is described in
       three comments; no test reproduces it. What would settle it: construct two
       tools separately, exercise the shared state, and assert the divergence.
     </p>
@@ -208,8 +209,8 @@
   <p>
     Everything that makes a decision lives in the library. <code>main.rs</code>
     parses arguments and starts things. The reason is testability: a scripted
-    <code>Provider</code> can drive an entire goal — tool calls, approvals,
-    compaction, endings — with no network and no API key, which is how most of
+    <code>Provider</code> can drive an entire goal (tool calls, approvals,
+    compaction, endings) with no network and no API key, which is how most of
     the loop's behaviour is covered at all.
   </p>
 
@@ -220,7 +221,7 @@
       <code>run()</code> is 634 lines of policy sitting above the point a
       scripted provider attaches, so the code that decides what happens before
       the loop starts is the part the seam cannot reach.
-      <span class="chip unv">unverified</span> — found by reading, in
+      <span class="chip unv">unverified</span>. Found by reading, in
       <code>notes/map-architecture.md</code>; no measurement of what that code
       does that is untested. Backlog item 19.
     </p>
@@ -259,7 +260,7 @@
       The dependency edges were read from the manifests on 2026-08-16 and are
       accurate for commit <code>20ac400</code>. A manifest change moves them and
       nothing here notices.
-      <span class="chip unv">unverified</span> — what would settle it
+      <span class="chip unv">unverified</span>. What would settle it
       continuously: a test that reads the manifests and asserts the edge set.
     </li>
     <li>

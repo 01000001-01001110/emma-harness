@@ -29,6 +29,7 @@
   <h4>Start here</h4>
   <ul>
     <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
     <li><a class="nav" href="architecture.html">Architecture</a></li>
   </ul>
 
@@ -69,12 +70,13 @@
   <p class="lede">
     One append-only JSONL file per session, written as the run happens. It is
     what <code>--resume</code> folds back into a message list, what compaction
-    edits, and — since the interactive frame moved to the alternate screen —
-    the only surviving record of a run once Emma exits.
+    edits, and, since the interactive frame moved to the alternate screen, the
+    only surviving record of a run once Emma exits.
   </p>
 
   <div class="key">
-    <div><span class="chip cert">certified</span> proven against the real thing</div>
+    <div><span class="chip cert">certified</span> proven, and repeatable: a file, a command, a count you can redo</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
     <div><span class="chip test">tested</span> a test that was shown to fail</div>
     <div><span class="chip unv">unverified</span> believed, not checked</div>
   </div>
@@ -96,10 +98,10 @@
     <code>sess-&lt;unix-millis, 13 digits&gt;-&lt;pid&gt;</code>: zero-padded
     so ids sort lexically by time, and stamped with the process id so two
     <code>emma</code> processes starting in the same millisecond cannot
-    collide. Both consumers that scan the directory —
-    <code>locate</code> for bare <code>--resume</code>, and the first-run check
-    behind the welcome — sort by <em>id</em> rather than by mtime, because
-    copying a file moves its mtime and does not move its id.
+    collide. Both consumers that scan the directory, <code>locate</code> for
+    bare <code>--resume</code> and the first-run check behind the welcome,
+    sort by <em>id</em> rather than by mtime, because copying a file moves its
+    mtime and does not move its id.
   </p>
   <span class="src">crates/emma/src/session.rs — <code>SessionLog::new_id</code>, <code>default_dir</code>, <code>locate</code>, <code>first_run</code></span>
 
@@ -119,7 +121,7 @@
       SQLite pays for itself against concurrent writers and against a
       crash-recovery fold that has to decide whether a side-effecting tool
       already ran. Emma has one process, one user, one writer, and no recovery
-      requirement — a crashed run is re-run, because what it was doing is in
+      requirement. A crashed run is re-run, because what it was doing is in
       the working tree where you can see it. What a database would add is a
       dependency, a schema, a migration story and a binary file you cannot
       <code>grep</code>.
@@ -128,8 +130,8 @@
       Three changes would reverse that, and the module doc names them: a second
       writer (a daemon, a watch mode, two processes on one session id),
       exactly-once tool semantics across a crash, or queries across sessions.
-      The last already costs something — <code>locate</code> is a directory
-      scan — and is the one that will arrive first.
+      The last already costs something: <code>locate</code> is a directory
+      scan, and it is the one that will arrive first.
     </p>
   </div>
 
@@ -139,7 +141,7 @@
     Leave a torn final line, and nothing else. <code>SessionLog::read</code>
     parses line by line and drops anything that will not parse, so everything
     written before the kill still reads.
-    <span class="chip test">tested</span> —
+    <span class="chip test">tested</span>:
     <code>a_torn_final_line_costs_only_that_line</code> writes
     <code>{"kind":"goal",…}\n{"kind":"assis</code> and asserts one record comes
     back.
@@ -150,7 +152,7 @@
     Write failures after <code>open</code> are swallowed: a full disk would
     otherwise kill a run halfway through editing your source tree. The price is
     that a session which stops being written stops silently.
-    <span class="chip unv">unverified</span> — nothing in the tree exercises a
+    <span class="chip unv">unverified</span>: nothing in the tree exercises a
     write failure. Filling a volume, or opening the log on a read-only mount
     after creation, would settle whether anything is said at all.
   </p>
@@ -230,7 +232,7 @@
     </div>
     <figcaption>
       Drawn from <code>Fold::record</code> and <code>restore_records</code> in
-      <code>session.rs</code> — the two <code>match</code> statements are the
+      <code>session.rs</code>. The two <code>match</code> statements are the
       two lanes, and a record with no arm in either is written for a human with
       <code>grep</code>. <code>tool_result</code> and
       <code>goal_finished</code> are the two both readers consume, for
@@ -276,13 +278,13 @@
       </tr>
       <tr>
         <td><code>cleared</code></td>
-        <td><code>Agent::clear</code> — <code>/clear</code></td>
+        <td><code>Agent::clear</code> (<code>/clear</code>)</td>
         <td><code>goals</code>, <code>messages</code></td>
         <td>fold, which empties both lists</td>
       </tr>
       <tr>
         <td><code>model_changed</code></td>
-        <td><code>Agent::set_provider</code> — <code>/model &lt;id&gt;</code></td>
+        <td><code>Agent::set_provider</code> (<code>/model &lt;id&gt;</code>)</td>
         <td><code>from</code>, <code>to</code></td>
         <td>nobody; a human reading the file</td>
       </tr>
@@ -345,7 +347,7 @@
         <td><code>assistant</code></td>
         <td>once per turn, whatever the turn contained</td>
         <td><code>text</code> (the plain prose, for <code>grep</code>),
-            <code>raw_content</code> (the provider's own content array — the
+            <code>raw_content</code> (the provider's own content array, the
             only field resume can use)</td>
       </tr>
       <tr>
@@ -379,7 +381,7 @@
       </tr>
       <tr>
         <td><code>tool_fault</code></td>
-        <td>the tool claimed the session cannot continue — which it does not
+        <td>the tool claimed the session cannot continue, which it does not
             get to decide; it becomes a result the model reads</td>
         <td><code>id</code>, <code>tool</code>, <code>detail</code></td>
       </tr>
@@ -404,7 +406,7 @@
       <code>tool_unknown</code>, <code>tool_fault</code>) and then the
       <code>tool_result</code> that was actually sent. Two failure classes
       produce a <code>tool_result</code> with no preceding
-      <code>tool_call</code> at all — a schema violation and the
+      <code>tool_call</code> at all: a schema violation and the
       already-failed memo, both refused before dispatch. Anything joining calls
       to results by <code>id</code> will meet results with no call.
       <code>restore_records</code> hits the same thing and states the cost:
@@ -427,7 +429,7 @@
     would close the parent's held turn without its results, fail the
     every-call-answered check, and drop that whole turn from every future
     resume of the session.
-    <span class="chip test">tested</span> — <code>tests/delegate.rs</code>
+    <span class="chip test">tested</span>: <code>tests/delegate.rs</code>
     folds a session containing a delegation and asserts the parent's message
     list is unchanged.
   </p>
@@ -435,8 +437,8 @@
 
   <p>
     That view also keeps its records in memory. <code>Delegate</code> reads
-    them back — the tool calls, the results, the denials, the ending — and
-    builds the footer the parent sees from them, so the parent's account of a
+    them back: the tool calls, the results, the denials, the ending. It builds
+    the footer the parent sees from them, so the parent's account of a
     delegation comes from the loop rather than from the subagent's prose. See
     <a href="delegation.html">Delegation</a>.
   </p>
@@ -462,7 +464,7 @@
     equally a result answering nothing. A run killed between the model call and
     the last of its tools leaves exactly that in the file, and keeping the half
     that survived produces a message list the next request cannot send.
-    <span class="chip test">tested</span> — I replaced the
+    <span class="chip test">tested</span>: I replaced the
     <code>answered</code> check in <code>place_turn</code> with a constant and
     <code>a_partly_answered_turn_is_dropped_whole</code> and
     <code>a_turn_whose_tool_calls_were_never_answered_is_dropped</code> both
@@ -473,8 +475,8 @@
   <p>
     The same rule swallows an older-format record: an <code>assistant</code>
     written before <code>raw_content</code> existed drops its whole turn, and
-    the kick answering it goes too. There is no reconstruction available —
-    rebuilding a turn from <code>text</code> is what invalidates a
+    the kick answering it goes too. There is no reconstruction available,
+    because rebuilding a turn from <code>text</code> is what invalidates a
     thinking-block signature, and the symptom would arrive later, as a resumed
     run dying on its first call with an error naming a signature nobody in the
     file mentions.
@@ -508,10 +510,10 @@
     The messages, and four things a message list cannot express:
     <code>tokens</code>, <code>iterations</code> and <code>kicks</code> spent
     on the goal being continued, and the failed-call memo. Without the
-    counters, resume is a way to spend past a cap — a goal that ended on the
+    counters, resume is a way to spend past a cap. A goal that ended on the
     token budget could be resumed indefinitely and the limit it hit would mean
     nothing.
-    <span class="chip test">tested</span> — <code>tests/resume.rs</code> has
+    <span class="chip test">tested</span>: <code>tests/resume.rs</code> has
     one test per counter (<code>a_resumed_run_inherits_the_tokens_the_first_one_spent</code>
     and its three siblings), all passing on commit <code>20ac400</code>.
   </p>
@@ -521,12 +523,12 @@
     Every counter resets at each <code>goal</code> record, so a file with three
     finished goals hands the fourth the spend of the goal it is continuing
     rather than the sum of all of them. The token sum is
-    <code>cost_tokens</code> — cache-weighted, the same units the budget
-    enforces — falling back to <code>billable_total_tokens</code> for records
+    <code>cost_tokens</code> (cache-weighted, the same units the budget
+    enforces), falling back to <code>billable_total_tokens</code> for records
     written before the weighting existed. That fallback is live: of 100 session
     files on this machine, 36 carry <code>cost_tokens</code> and the rest do
     not.
-    <span class="chip cert">certified</span> — counted with
+    <span class="chip cert">certified</span>: counted with
     <code>grep -l cost_tokens *.jsonl</code> in
     <code>~/.emma/sessions/</code>, 2026-08-16.
   </p>
@@ -548,14 +550,14 @@
     model rather than being closed behind its back. Re-running them would
     re-run a <code>Write</code> or a <code>Bash</code> against a working tree
     that has moved on.
-    <span class="chip test">tested</span> —
+    <span class="chip test">tested</span>:
     <code>a_resumed_run_replays_no_tools</code>.
   </p>
   <span class="src">crates/emma/src/session.rs, "Resume" region header</span>
 
   <p>
     Nor does the split between finished and in-flight come back. The restored
-    messages all go into <code>query</code> — the goal in progress — because
+    messages all go into <code>query</code>, the goal in progress, because
     the file does not record where the split was, and guessing wrong is a
     message list the API refuses. Two things follow. The chapters would have
     carried a cache breakpoint that stayed byte-stable for the rest of the
@@ -568,16 +570,16 @@
   <h3>Continuity</h3>
 
   <p>
-    The last <code>goal</code> record's account of the harness —
-    <code>instructions_hash</code>, <code>tool_schema_hash</code>,
-    <code>model</code> — is compared against the run about to continue it, and
+    The last <code>goal</code> record's account of the harness,
+    <code>instructions_hash</code>, <code>tool_schema_hash</code> and
+    <code>model</code>, is compared against the run about to continue it, and
     each difference is printed as a sentence naming the field, the old value,
     the new one, and what it costs. <strong>It warns and does not refuse.</strong>
     Declining would leave you with a transcript and no way to use it; what is
     dangerous is not the change but the change being invisible. An empty
     recorded value produces no warning, because a warning derived from a field
     that did not exist yet trains people to ignore warnings.
-    <span class="chip test">tested</span> —
+    <span class="chip test">tested</span>:
     <code>resuming_into_a_changed_harness_names_what_changed</code>.
   </p>
   <span class="src">crates/emma/src/session.rs — <code>Continuity::differences</code></span>
@@ -677,8 +679,8 @@
 
   <p>
     <code>notes/design-session-and-context.md</code> §2 surveyed six shipped
-    tools and recommended what all of them do: summarise with one model call —
-    same model, tools absent, effort low — against a fixed template asking for
+    tools and recommended what all of them do: summarise with one model call,
+    same model, tools absent, effort low, against a fixed template asking for
     objectives, what was verified, decisions and why, what failed, files
     touched, what is next. It also recommended trigger-high/compact-low
     hysteresis (cross ~120k, compact down to 30–40k), and that the
@@ -697,10 +699,10 @@
       <code>agent.rs</code> makes them: it would spend the budget of whichever
       goal happens to be running; it can fail in the middle of one; and it
       produces a claim about the conversation where the mechanical version
-      produces a record of it. The note conceded the same failure mode — "the
+      produces a record of it. The note conceded the same failure mode: "the
       summary is written by the same process that is being summarised, and it
-      will sometimes be wrong" — and offered two mitigations it described as
-      neither being a fix.
+      will sometimes be wrong". It offered two mitigations, and described
+      neither as a fix.
     </li>
     <li>
       <strong>Half the cap, not a fixed floor.</strong>
@@ -726,7 +728,7 @@
     <code>/compact</code> takes the same path with a different count: every
     finished goal, or with <code>all</code>, every goal including the one that
     just ended. <code>/compact &lt;words&gt;</code> is refused rather than
-    ignored, and the refusal says why — an instruction can only be honoured by
+    ignored, and the refusal says why: an instruction can only be honoured by
     a model. The workaround it offers works: ask for the summary as an ordinary
     goal first, because a goal's <em>answer</em> survives compaction.
   </p>
@@ -739,11 +741,11 @@
     abandoned. That case turns up in practice: the note is roughly three
     hundred characters, so two four-word goals compact <em>upward</em>. The
     first live run of <code>/compact</code> reported "already summarised" about
-    two goals that were nothing of the sort — the arithmetic was right and the
+    two goals that were nothing of the sort: the arithmetic was right and the
     sentence was wrong. There are now two branches: one for a conversation that
     really is all summaries, and one that quotes the before and after and says
     the note is longer than what it would replace.
-    <span class="chip test">tested</span> —
+    <span class="chip test">tested</span>:
     <code>compaction_stops_when_there_is_nothing_left_to_win</code>.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>compact</code>, the <code>after &gt;= before</code> branch</span>
@@ -753,7 +755,7 @@
   <p>
     <strong>The trigger is measured, not estimated.</strong>
     <code>compact_if_needed</code> is handed the provider's own
-    <code>billable_input_tokens</code> for the previous call — the whole
+    <code>billable_input_tokens</code> for the previous call, the whole
     request, so the system prompt and the tool schemas count as well as the
     conversation. That number is what is compared to <code>max_context</code>.
   </p>
@@ -772,7 +774,7 @@
 
   <p>
     <code>chars / 4</code> over the <em>rendered</em> JSON length of each
-    message — quotes and escapes included, because the provider tokenises those
+    message, quotes and escapes included, because the provider tokenises those
     too. Four is the same constant <code>emma-llm</code>'s packer uses, and
     both places document it as under-counting what the provider bills. The
     under-count has a direction, and it lands differently on each consumer:
@@ -786,20 +788,20 @@
         <td>compaction trigger at goal open</td>
         <td>the cap looks further away than it is; compaction fires later, or
             not at all, on the first call</td>
-        <td>tolerable — the next call reports a measured number and the check
+        <td>tolerable: the next call reports a measured number and the check
             runs again before the request goes out</td>
       </tr>
       <tr>
         <td>how many chapters to take</td>
         <td>every chapter looks smaller, so slightly more may be taken than
             strictly needed</td>
-        <td>tolerable — the error is toward compacting more, not less</td>
+        <td>tolerable: the error is toward compacting more, not less</td>
       </tr>
       <tr>
         <td>the cache-breakpoint gate in <code>emma-llm</code></td>
         <td>a prefix that really does clear the model's floor is judged not to,
             and the marker is withheld</td>
-        <td>a bill — the forgone 0.9× read discount on that span, with no
+        <td>a bill: the forgone 0.9× read discount on that span, with no
             symptom anywhere except the invoice</td>
       </tr>
     </tbody>
@@ -818,7 +820,7 @@
     a prefix of a couple of kilobytes. At 4,096 it is a prefix of roughly
     sixteen kilobytes going unmarked, and one <code>/model</code> or one
     Haiku-typed delegation is enough to reach that floor.
-    <span class="chip unv">unverified</span> — the direction of the error is
+    <span class="chip unv">unverified</span>: the direction of the error is
     stated in both source files and matches English-plus-JSON tokenising at
     closer to 3.5 characters per token, but nobody in this tree has measured
     Emma's own wire bytes against a token count. What would settle it: send a
@@ -835,7 +837,7 @@
       with the cache multipliers applied; no estimate is involved. It is
       tested after each call rather than before, so the call that crosses it is
       paid for in full: a 500,000 budget stopped a real run at 579,565.
-      <span class="chip cert">certified</span> — that overshoot is not a
+      <span class="chip cert">certified</span>: that overshoot is not a
       recollection. It is the largest <code>goal_finished.tokens</code> in the
       100 session files on this machine, read back today.
     </p>
@@ -846,9 +848,9 @@
   <p>
     A compacted goal becomes two messages: a user message that is the goal text
     verbatim, and an assistant message that is the final answer plus a fixed
-    note. Empty fields get stated placeholders —
+    note. Empty fields get stated placeholders,
     <code>[an earlier goal]</code> and
-    <code>[this goal ended without a final message]</code> — rather than blank
+    <code>[this goal ended without a final message]</code>, rather than blank
     strings.
   </p>
 
@@ -863,13 +865,13 @@ Message { role: <span class="k">Assistant</span>, content: Text(
   <span class="src">crates/emma/src/agent.rs — <code>summarise</code>, <code>COMPACTED_NOTE</code></span>
 
   <p>
-    Gone: every tool call and every result — file contents, command output,
-    diffs — and every intermediate assistant turn, with their thinking blocks.
+    Gone: every tool call and every result (file contents, command output,
+    diffs), and every intermediate assistant turn, with their thinking blocks.
     Kept for the life of the session: every goal's words and every goal's final
     answer. The note is there because a model that does not know a file has
     left its context answers from a memory of it, and a confident wrong answer
     costs more than a second read.
-    <span class="chip test">tested</span> —
+    <span class="chip test">tested</span>:
     <code>compaction_drops_the_oldest_tool_traffic_and_keeps_the_words</code>
     asserts the file body is absent, the goal present, the answer present and
     the note present, in the bytes the fake provider actually received.
@@ -887,10 +889,10 @@ Message { role: <span class="k">Assistant</span>, content: Text(
     record it splices: drop <code>drop_messages</code> off the front of the
     folded history, insert the recorded <code>messages</code> in their place.
     That is what both halves of the record are for, and why there is no
-    summarising code in <code>session.rs</code> — a second implementation would
+    summarising code in <code>session.rs</code>. A second implementation would
     be a resumed conversation that differs from the one that was sent, in the
     cases neither is tested on.
-    <span class="chip test">tested</span> — I replaced the splice with a no-op
+    <span class="chip test">tested</span>: I replaced the splice with a no-op
     and <code>compaction_drops_the_oldest_tool_traffic_and_keeps_the_words</code>
     failed on its last assertion, <em>"the folded session is not the
     conversation that was held"</em>, with the left side still carrying the
@@ -905,7 +907,7 @@ Message { role: <span class="k">Assistant</span>, content: Text(
 
   <p>
     <code>/clear</code> is the other thing that shortens a conversation, and it
-    is not compaction. Its record makes the fold discard everything before it —
+    is not compaction. Its record makes the fold discard everything before it,
     both lists, and the in-goal flag with them. Without that arm
     <code>/clear</code> would fail quietly: the in-memory conversation empty,
     the next <code>--resume</code> folding the whole file, and the cleared
@@ -945,7 +947,7 @@ Message { role: <span class="k">Assistant</span>, content: Text(
                                   1 "kind":"cleared"
 <span class="c">// and none at all of these:</span>
       <span class="w">0</span> "kind":"compacted"</code></pre>
-  <span class="chip cert">certified</span> — the commands above, run against the real directory, 2026-08-16.
+  <span class="chip cert">certified</span>: the commands above, run against the real directory, 2026-08-16.
 
   <p>
     Four things come out of that.
@@ -954,7 +956,7 @@ Message { role: <span class="k">Assistant</span>, content: Text(
   <p>
     <strong>Half the corpus is empty files.</strong> 48 of 100 are 0 bytes.
     <code>SessionLog::open</code> creates the file at startup, so a run that
-    never gets as far as a goal — start, look, <code>/exit</code> — leaves an
+    never gets as far as a goal (start, look, <code>/exit</code>) leaves an
     empty one behind, and nothing prunes them. The readers cope
     (<code>restore</code> refuses a file with no <code>goal</code> record;
     <code>locate</code> and the first-run scan skip them); every count anyone
@@ -964,8 +966,8 @@ Message { role: <span class="k">Assistant</span>, content: Text(
   <p>
     <strong>Compaction has never fired here.</strong> Not once in 100 files and
     174 model calls. The largest input any call carried is 95,524 tokens
-    against a 120,000 default cap — close, and never over.
-    <span class="chip cert">certified</span> — computed over every
+    against a 120,000 default cap, close, and never over.
+    <span class="chip cert">certified</span>: computed over every
     <code>model_call</code> record in the directory. So everything above about
     the compaction <em>trigger</em> rests on tests and on reading, with no
     production firing behind it. The <em>mechanism</em> is exercised by tests
@@ -987,7 +989,7 @@ Message { role: <span class="k">Assistant</span>, content: Text(
     <em>one</em> <code>delegation</code> record in the entire corpus. The
     blocker is not file size; it is that delegation has barely been used on
     this machine, and ordinary session growth does not fix that.
-    <span class="chip cert">certified</span> — one record, in one file, out of
+    <span class="chip cert">certified</span>: one record, in one file, out of
     100.
   </p>
   <span class="src">notes/improvements.md §6; ~/.emma/sessions/ as read on 2026-08-16</span>
@@ -1005,7 +1007,7 @@ Message { role: <span class="k">Assistant</span>, content: Text(
       <strong>The chars-per-token ratio.</strong> Both source files call
       <code>chars / 4</code> an under-count; nobody has measured it against a
       real token count.
-      <span class="chip unv">unverified</span> — settle it by comparing
+      <span class="chip unv">unverified</span>: settle it by comparing
       <code>wire_len / 4</code> for a request of known content against the
       <code>input_tokens</code> the API reports for it with caching off.
     </li>
@@ -1013,7 +1015,7 @@ Message { role: <span class="k">Assistant</span>, content: Text(
       <strong>Automatic compaction against a live provider.</strong> Zero
       <code>compacted</code> records exist in the real corpus, so every claim
       here about the trigger comes from tests with an artificially small cap.
-      <span class="chip unv">unverified</span> — settle it by running a real
+      <span class="chip unv">unverified</span>: settle it by running a real
       session with <code>--max-context</code> set to something an ordinary
       conversation crosses, and reading the <code>compacted</code> record back.
     </li>
@@ -1022,7 +1024,7 @@ Message { role: <span class="k">Assistant</span>, content: Text(
       The test writes a truncated line by hand. Whether a Windows write of a
       few hundred bytes can be torn mid-line at all, and whether the tail after
       a real kill looks like the fixture, has not been observed.
-      <span class="chip unv">unverified</span> — settle it by killing a run
+      <span class="chip unv">unverified</span>: settle it by killing a run
       mid-tool-result and reading the last line of the file.
     </li>
     <li>
@@ -1031,7 +1033,7 @@ Message { role: <span class="k">Assistant</span>, content: Text(
       model's signed thinking blocks are accepted by another is stated in
       <code>agent.rs</code> as not established in this tree, which is why the
       compact-and-retry recovery exists at all.
-      <span class="chip unv">unverified</span> — settle it by resuming a
+      <span class="chip unv">unverified</span>: settle it by resuming a
       session recorded on one model under another and reading what the provider
       says.
     </li>
@@ -1039,9 +1041,9 @@ Message { role: <span class="k">Assistant</span>, content: Text(
       <strong>How this page looks in a browser.</strong> The two SVGs were
       hand-authored against the source and their geometry checked by
       arithmetic; the tag structure parses and the sidebar matches
-      <code>assets/NAV.html</code> byte for byte. No renderer has drawn them —
-      no browser was reachable from the session that wrote this.
-      <span class="chip unv">unverified</span> — settle it by opening
+      <code>assets/NAV.html</code> byte for byte. No renderer has drawn them,
+      because no browser was reachable from the session that wrote this.
+      <span class="chip unv">unverified</span>: settle it by opening
       <code>docs/session.html</code> from <code>file://</code> and checking
       that no label overflows its box and the two figures fit their columns.
     </li>
@@ -1051,7 +1053,7 @@ Message { role: <span class="k">Assistant</span>, content: Text(
       while still dropping <code>drop_messages</code> off the front, so a
       record whose replacement cannot be read would turn compaction into
       deletion. Nothing writes such a record today.
-      <span class="chip unv">unverified</span> — settle it by hand-writing a
+      <span class="chip unv">unverified</span>: settle it by hand-writing a
       <code>compacted</code> record with a non-array <code>messages</code>
       field and folding the file.
     </li>

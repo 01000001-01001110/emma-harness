@@ -18,6 +18,7 @@
   <h4>Start here</h4>
   <ul>
     <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
     <li><a class="nav" href="architecture.html">Architecture</a></li>
   </ul>
 
@@ -67,7 +68,7 @@
     <span class="h">What the gate does not enforce</span>
     <p>
       <strong>It is a consent interface, not a sandbox.</strong> It asks a tool
-      two questions — can you damage this machine, do you send bytes off it — and
+      two questions: can you damage this machine, do you send bytes off it. It
       believes both answers. Nothing here stops a tool from opening a socket or
       writing a file after declaring it would not. <code>Bash</code> declares
       <code>read_only: false</code> and <code>reaches_network: false</code>, and
@@ -86,7 +87,7 @@
       Other harnesses do enforce: <code>codex-rs</code> sandboxes with Seatbelt
       on macOS, Landlock on Linux and restricted tokens on Windows. Emma has no
       equivalent, and everything below describes what is checked and in what
-      order — not what is prevented.
+      order, not what is prevented.
     </p>
     <span class="src">crates/tool-api/src/lib.rs — ToolMeta · notes/improvements.md item 9</span>
   </div>
@@ -95,7 +96,7 @@
 
   <p>
     <code>ToolMeta</code> carries two bits the gate reads before a tool runs.
-    <code>read_only</code> asks whether the call can change local state — a file
+    <code>read_only</code> asks whether the call can change local state: a file
     written, a process spawned. <code>reaches_network</code> asks whether it
     sends bytes off the machine. They are separate because they are separate
     risks: writing is something the model chooses, and egress is how a
@@ -108,7 +109,7 @@
 
   <p>
     <code>WebFetch</code> and <code>WebSearch</code> declare
-    <code>read_only: true</code> — neither can damage anything on this machine —
+    <code>read_only: true</code>, since neither can damage anything on this machine,
     and both are how bytes leave it. Flipping them to
     <code>read_only: false</code> was the obvious alternative and was refused: a
     gate that fires on every page read teaches the operator to answer without
@@ -143,7 +144,7 @@
   <p>
     A tool that declares <code>reaches_network: true</code> and returns
     <code>None</code> is denied. The gate cannot grant a destination nobody
-    named, and the other reading — "no target, so nothing to gate" — gives silent
+    named, and the other reading, "no target, so nothing to gate", gives silent
     network access to whichever tool forgets to implement the method. The denial
     text tells the model this is a defect in that tool rather than something to
     work around. <span class="chip test">tested</span>
@@ -154,7 +155,7 @@
 
   <p>
     An answer at the network prompt grants one <strong>host</strong>, for this
-    process — not one call, and not one tool. The first fetch to
+    process, not one call, and not one tool. The first fetch to
     <code>docs.rs</code> asks; every later fetch to <code>docs.rs</code> in this
     process does not; a fetch elsewhere asks again. A host approved while running
     <code>WebSearch</code> is approved for <code>WebFetch</code> as well, because
@@ -170,7 +171,7 @@
     about what comes back: an approved host is a destination the user chose, not
     a source they trust, and the page that arrives is attacker-controlled text
     entering the model's context. It does not cover a tool that reaches the
-    network incidentally — <code>Bash</code> can <code>curl</code> and declares
+    network incidentally: <code>Bash</code> can <code>curl</code> and declares
     <code>reaches_network: false</code>. <code>Bash</code> is gated by the local
     question instead, which shows a human the command itself, and a command is
     more information than a host name. Declaring <code>true</code> would demand a
@@ -288,7 +289,7 @@
     first thing <code>decide</code> read and is now the third. The argument for
     moving it: a deny rule is something the operator wrote down and can go and
     read, and the bypass is a flag typed to get a script through. Claude Code
-    makes the same ruling — if a tool is denied at any level, no other level can
+    makes the same ruling: if a tool is denied at any level, no other level can
     allow it. <span class="chip test">tested</span>
   </p>
   <span class="src">crates/emma/src/approval.rs — Approvals::decide, Approvals::egress; tests::a_deny_rule_beats_the_bypass_flag</span>
@@ -314,8 +315,8 @@
 
   <p>
     So a narrower-than-bypass unattended mode already exists, and nothing
-    announces it. It is tool-wide only: the narrowing somebody would reach for —
-    <code>Bash(git log:*)</code> — parses into <code>Spec::Unsupported</code>,
+    announces it. It is tool-wide only: the narrowing somebody would reach for,
+    <code>Bash(git log:*)</code>, parses into <code>Spec::Unsupported</code>,
     matches nothing in any list, and is announced at boot as a rule that does
     nothing. The choice available to a script today is the whole tool unprompted,
     or nothing. <span class="chip unv">unverified</span> The block's position
@@ -335,7 +336,7 @@
   <p>
     The hook denial is not enforced in <code>approval.rs</code>. The loop runs
     <code>PreToolUse</code>, and on a denial it writes the record and
-    <code>return</code>s before <code>Approvals::request</code> is reached — so
+    <code>return</code>s before <code>Approvals::request</code> is reached, so
     no code in the gate can undo it, and no test in the gate can exercise it
     either. A source-order assertion was written inside <code>approval.rs</code>
     first and then removed: it passed against a mutation that disabled the denial
@@ -361,11 +362,11 @@
       <tr><th>Key</th><th>Grants</th><th>Lives for</th><th>Writes a file</th></tr>
     </thead>
     <tbody>
-      <tr><td><code>y</code></td><td>this one call — or, on the network question, this host</td><td>the call / the process</td><td>no</td></tr>
+      <tr><td><code>y</code></td><td>this one call, or, on the network question, this host</td><td>the call / the process</td><td>no</td></tr>
       <tr><td><code>n</code>, or empty</td><td>nothing</td><td>—</td><td>no</td></tr>
       <tr><td><code>a</code></td><td>this tool. On the network question it means what <code>y</code> means and no more</td><td>the process</td><td>no</td></tr>
       <tr><td><code>r</code></td><td>the narrow rule: the host on the network question, the tool on the local one</td><td>until the line is deleted</td><td><code>settings.local.json</code></td></tr>
-      <tr><td><code>t</code></td><td>the tool-wide rule — every call, any host. Network question only</td><td>until the line is deleted</td><td><code>settings.local.json</code></td></tr>
+      <tr><td><code>t</code></td><td>the tool-wide rule: every call, any host. Network question only</td><td>until the line is deleted</td><td><code>settings.local.json</code></td></tr>
     </tbody>
   </table>
   </div>
@@ -374,7 +375,7 @@
   <p>
     An empty line is <code>n</code>, not <code>y</code>: somebody hitting return
     to get their prompt back has not read anything. A key that was not offered
-    does not work — <code>r</code> and <code>t</code> are guarded on the offer
+    does not work. <code>r</code> and <code>t</code> are guarded on the offer
     rather than on the question, so there is no undocumented answer that writes
     to disk. Lines typed before the question appeared are dropped rather than
     consumed, and the drop is announced, because the line most likely to be
@@ -388,7 +389,7 @@
     that infers width, because <code>t</code> is a larger grant and inferring
     which one somebody meant is how people grant more than they read. The rule
     text appears on screen before the key that writes it is pressed, and it is
-    the same <code>String</code> the file receives — one <code>Rule</code>,
+    the same <code>String</code> the file receives, one <code>Rule</code>,
     formatted once. <span class="chip test">tested</span>
   </p>
   <span class="src">crates/emma/src/approval.rs — Offers; tests::the_prompt_names_the_rule_it_would_write, tests::remembering_writes_the_rule_shown_and_stops_the_next_prompt</span>
@@ -409,22 +410,22 @@
     saying they agreed. <code>Bash</code> shows the command, <code>Write</code>
     and <code>Edit</code> show a diff computed against the file on disk,
     <code>Delegate</code> shows the agent type and the first twelve lines of the
-    brief, and the network question shows the host on one line and the errand —
-    the URL, the query — on the next. Anything without an arm falls back to
+    brief, and the network question shows the host on one line and the errand,
+    the URL, the query, on the next. Anything without an arm falls back to
     pretty JSON. <span class="chip test">tested</span>
   </p>
   <span class="src">crates/emma/src/approval.rs — preview, network_preview, BRIEF_LINES</span>
 
   <p>
     The <code>Write</code> arm used to print a path and a byte count and withhold
-    the change. It now carries the diff, and every case that cannot be diffed — a
-    binary file, one too large to read, a changed region too large to line up —
+    the change. It now carries the diff, and every case that cannot be diffed (a
+    binary file, one too large to read, a changed region too large to line up)
     becomes a sentence saying so rather than a rendering that looks like a diff
     and is not. The renderer is on <a href="terminal.html">the terminal</a>.
   </p>
   <span class="src">crates/emma/src/approval.rs — preview; crates/emma/src/term/diff.rs</span>
 
-  <h2 id="exempt">EXEMPT — the hole, by name</h2>
+  <h2 id="exempt">EXEMPT: the hole, by name</h2>
 
   <pre><code><span class="c">// Writers that do not prompt, and the whole argument for each one.</span>
 const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span class="s">"TaskUpdate"</span>];</code></pre>
@@ -436,7 +437,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     <code>read_only: true</code> to dodge the gate, since a tool that misreports
     itself leaves the gate protecting nothing in general rather than only for
     that tool. The write is confined to the tool's own bookkeeping file, and it
-    is the write a model performs several times per goal — "TaskUpdate wants to
+    is the write a model performs several times per goal: "TaskUpdate wants to
     tick a checkbox, allow?" fifteen times in one goal is the prompt that teaches
     somebody to hold down <code>y</code>, including through the
     <code>Bash</code> call that follows it.
@@ -446,7 +447,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     <span class="h">A bypass keyed by name, not by property</span>
     <p>
       <code>EXEMPT</code> is a <code>const &amp;[&amp;str]</code> compared against
-      <code>tool.name()</code>. Nothing about a listed tool is checked — a name
+      <code>tool.name()</code>. Nothing about a listed tool is checked. A name
       added to that array stops prompting, whatever it writes. The test is
       written about what is <em>not</em> on the list: it asserts
       <code>Bash</code>, <code>Write</code> and <code>Edit</code> are absent and
@@ -461,7 +462,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
       <code>ToolMeta</code> has since gained a second axis and it is a different
       one: <code>reaches_network</code> splits egress out of
       <code>read_only</code> and does nothing for these two tools. There is no
-      backlog item for a write-scope axis either — it exists only as this
+      backlog item for a write-scope axis either; it exists only as this
       comment.
     </p>
     <span class="src">crates/emma/src/approval.rs — EXEMPT, tests::the_exemption_covers_the_task_writers_and_nothing_that_touches_the_tree; notes/improvements.md (no item)</span>
@@ -479,9 +480,9 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
   <h2 id="floor">The floor that is not there</h2>
 
   <p>
-    <code>EXEMPT</code> is an always-<em>allow</em> hole. The opposite shape — a
+    <code>EXEMPT</code> is an always-<em>allow</em> hole. The opposite shape, a
     small, hardcoded, non-overridable <em>deny</em> list that no rule, no flag
-    and no remembered grant can relax — does not exist in Emma. It is
+    and no remembered grant can relax, does not exist in Emma. It is
     <code>notes/improvements.md</code> item 14, and it is open.
   </p>
 
@@ -490,10 +491,10 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     <code>tool_permissions</code> has three regex tiers plus built-in protections
     its documentation illustrates with <code>rm -rf /</code>, which no rule can
     override. <code>avala-ai/agent-code</code> blocks <code>.git/</code> and
-    <code>node_modules/</code> unconditionally. And <code>c4pt0r/pie</code> —
-    read at commit <code>b725796</code>, <strong>MIT, plain, no rider, read from
+    <code>node_modules/</code> unconditionally. And <code>c4pt0r/pie</code>,
+    read at commit <code>b725796</code> (<strong>MIT, plain, no rider, read from
     the repo-root <code>LICENSE</code></strong>, so it can be copied with
-    attribution — has it written in Rust already, in a 491-line module including
+    attribution), has it written in Rust already, in a 491-line module including
     tests: an unconditional-deny corpus where each entry carries a label naming
     what it protects and that label is carried into the denial reason;
     token-aware predicates for <code>rm</code> that survive flag permutations and
@@ -507,23 +508,23 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     <span class="h">The counter-argument, recorded because it may win</span>
     <p>
       An unconditional refusal that fires on a legitimate command is an outage,
-      not a safety property — a rule that fires on correct configuration, which
+      not a safety property. A rule that fires on correct configuration, which
       this codebase rejects elsewhere by name. If the floor is built, the list
       has to be short and every entry has to name what it protects.
     </p>
     <p>
       That becomes a condition on copying: take pie's predicates and its corpus,
-      not its regexes. Pie's are substring matches that accept false positives —
+      not its regexes. Pie's are substring matches that accept false positives:
       <code>\bsudo\b</code> fires on <code>echo "sudo"</code>, and
-      <code>reboot</code> fires inside any quoted string containing the word —
-      and pie's own module doc states the trade as "the permission layer must
+      <code>reboot</code> fires inside any quoted string containing the word.
+      Pie's own module doc states the trade as "the permission layer must
       close, not minimize". That trade is the failure the counter-argument
       predicts.
     </p>
     <p>
       One further idea from pie transfers even though its mechanism does not: it
       treats writes to the harness's own configuration as their own permission
-      category. Emma has the same hazard in file form — a <code>Write</code> to
+      category. Emma has the same hazard in file form: a <code>Write</code> to
       <code>.claude/hooks/</code>, <code>settings.local.json</code>,
       <code>agents/</code> or <code>skills/</code> is a persistent behaviour
       change that classifies today as an ordinary file write, and it is the one
@@ -552,7 +553,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     The block is <code>permissions: { allow: [], deny: [], ask: [] }</code> and a
     rule is <code>Tool</code> or <code>Tool(specifier)</code>. Emma's own
     <code>.emma/config.json</code> spine accepts the same block under the same
-    names — a block that had to be re-typed to move between the two directories
+    names, and a block that had to be re-typed to move between the two directories
     would defeat the reason it is read at all.
   </p>
   <span class="src">crates/emma/src/permissions.rs — module doc; crates/harness/src/lib.rs — Spine::permissions, PermissionBlock</span>
@@ -562,8 +563,8 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     a section arguing there must be no persistent always-allow, because "a
     permission the user cannot see is a permission they have forgotten they
     granted, and the place they would not see it is a config file written six
-    weeks ago". That was reversed against one goal — <em>search the web for AI
-    news</em> — which cost five prompts and re-asked all five on the next run.
+    weeks ago". That was reversed against one goal, <em>search the web for AI
+    news</em>, which cost five prompts and re-asked all five on the next run.
     What replaced it keeps the visibility the argument was actually about: a rule
     is written only when the user picks the answer that says so, it is shown
     before it is written, it lands in a JSON file that can be read, diffed and
@@ -582,7 +583,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
       <tr><td><code>WebSearch(*)</code></td><td>both questions</td><td>the same thing; Claude Code documents them as equivalent</td></tr>
       <tr><td><code>WebFetch(domain:*)</code></td><td>both questions</td><td>also the same thing, normalised back to the bare shape at parse time</td></tr>
       <tr><td><code>WebFetch(domain:apnews.com)</code></td><td>egress only</td><td>that host, for that tool</td></tr>
-      <tr><td><code>WebFetch(domain:*.example.com)</code></td><td>egress only</td><td>a strict subdomain at any depth — <strong>not</strong> <code>example.com</code> itself</td></tr>
+      <tr><td><code>WebFetch(domain:*.example.com)</code></td><td>egress only</td><td>a strict subdomain at any depth, <strong>not</strong> <code>example.com</code> itself</td></tr>
       <tr><td><code>WebFetch(domain:example.*)</code></td><td>egress only</td><td><code>example.org</code>; the <code>*</code> is one label and cannot cross a dot</td></tr>
       <tr><td><code>Bash(git log:*)</code></td><td>nothing</td><td>parses, <strong>never matches</strong>, and is said out loud at boot</td></tr>
       <tr><td><code>*</code>, <code>Web*</code>, <code>mcp__*</code></td><td>nothing</td><td>a parse error. Claude Code permits globbing the tool name for deny rules; Emma refuses it in all three lists</td></tr>
@@ -602,11 +603,11 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
 
   <p>
     Anything that is not a clean parse is an error rather than a rule that
-    matches nothing — <code>WebFetch(</code>, <code>(domain:x)</code>,
+    matches nothing: <code>WebFetch(</code>, <code>(domain:x)</code>,
     <code>WebFetch(domain:)</code>, <code>Web Fetch</code>. The distinction is
     about the <code>deny</code> list: a rule the operator wrote and Emma dropped
     without a word is a protection they believe they have.
-    <code>Spec::Unsupported</code> covers the other case — a specifier that is
+    <code>Spec::Unsupported</code> covers the other case: a specifier that is
     well-formed but outside this build's vocabulary is kept as a value so the
     boot can announce it. The matcher arm that makes it match nothing is tested
     through <code>adopt</code>, because a mutation flipping that arm to
@@ -665,14 +666,14 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     would have given Emma an unprompted shell in every repository on that machine
     on the first run after the feature shipped. A file that cannot be read is
     skipped rather than fatal, since the only thing taken from it is
-    restrictions — failing to read it can only make Emma ask more often.
+    restrictions. Failing to read it can only make Emma ask more often.
     <span class="chip test">tested</span>
   </p>
   <span class="src">crates/harness/src/lib.rs — user_permissions; crates/harness/tests/permissions.rs</span>
 
   <p>
     A remembered grant lands in <code>settings.local.json</code> beside whichever
-    harness the project loaded — not always <code>.claude/</code>, and never
+    harness the project loaded, not always <code>.claude/</code>, and never
     <code>~</code>. A project that has <code>.emma/</code> would otherwise
     acquire a <code>.claude/</code> directory because somebody answered a prompt,
     which is Emma creating configuration for a different program without being
@@ -684,7 +685,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
 
   <p>
     The write merges rather than replaces: the file is read, parsed as a whole
-    document, and written back with every key it had — <code>hooks</code>,
+    document, and written back with every key it had: <code>hooks</code>,
     <code>statusLine</code>, <code>env</code>, anything else. A file that does not
     parse as JSON, or is not an object, or whose <code>permissions</code> or
     <code>permissions.allow</code> are the wrong shape, is not written to at all;
@@ -700,7 +701,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
   <h3>Precedence inside the rule set</h3>
 
   <p>
-    <strong>deny, then ask, then allow — the first list with a match wins, and
+    <strong>deny, then ask, then allow: the first list with a match wins, and
     rule specificity does not change that.</strong> A narrow <code>allow</code>
     does not carve an exception out of a broad <code>deny</code>; a broad
     <code>allow</code> still covers every host a narrow <code>deny</code> does not
@@ -767,7 +768,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
   <span class="src">crates/emma/src/permissions.rs — DomainPattern::matches, label_matches; tests::a_domain_rule_does_not_match_a_lookalike_host, tests::a_leading_star_is_a_strict_subdomain_and_not_the_host_itself, tests::a_star_inside_a_label_cannot_cross_a_dot</span>
 
   <p>
-    Case and a trailing dot are the same host on both sides —
+    Case and a trailing dot are the same host on both sides.
     <code>NetworkTarget</code> already treats them so, and a matcher that
     disagreed would re-prompt for a host approved a second earlier.
     Normalisation is <code>trim → strip trailing dots → to_ascii_lowercase</code>,
@@ -785,7 +786,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     which has already applied IDNA and already bracketed an IPv6 literal, so the
     matcher only ever sees <code>xn--bcher-kva.example</code> and
     <code>[::1]</code>. In an <code>allow</code> list that costs a prompt. In a
-    <code>deny</code> list it is a protection that protects nothing — the same
+    <code>deny</code> list it is a protection that protects nothing, the same
     shape as <code>Bash(rm *)</code>, and it gets the same answer: a warning at
     boot. <span class="chip test">tested</span>
   </p>
@@ -793,13 +794,13 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
 
   <p>
     The warning names the file, quotes the rule, states the consequence for the
-    list it is in — <em>blocks NOTHING</em> for deny and ask, <em>approves
-    nothing and those calls will still ask</em> for allow — and gives the
+    list it is in (<em>blocks NOTHING</em> for deny and ask, <em>approves
+    nothing and those calls will still ask</em> for allow), and gives the
     spelling that would work, computed rather than left to the reader, because
     hand-punycoding is how <code>xn--bcher-kva</code> becomes
     <code>xn--bucher-kva</code>. The rewrite is built label by label. Where it
-    cannot be computed — a label carrying both a <code>*</code> and a non-ASCII
-    character, or anything <code>idna</code> refuses — the suggestion is omitted
+    cannot be computed (a label carrying both a <code>*</code> and a non-ASCII
+    character, or anything <code>idna</code> refuses), the suggestion is omitted
     rather than guessed at. <span class="chip test">tested</span>
   </p>
   <span class="src">crates/emma/src/permissions.rs — Inert::rewrite; tests::a_rewrite_that_cannot_be_computed_is_omitted_rather_than_invented</span>
@@ -821,7 +822,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     </p>
     <p>
       One premise of the plan that built this turned out false:
-      <code>idna</code> returns <code>Ok</code> for a wrong answer —
+      <code>idna</code> returns <code>Ok</code> for a wrong answer:
       <code>b*cherü.example</code> converts to
       <code>xn--b*cher-8ya.example</code>, the wildcard swallowed into punycode
       with no error. "If <code>idna</code> refuses a label, omit the suggestion"
@@ -861,7 +862,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     means canonicalising and containment-checking the path, refusing a
     non-executable file, clearing the environment down to a six-name allowlist,
     hashing the executable, anchoring the matcher, bounding the wall clock,
-    capping both pipes and deciding what a malformed answer means — a subprocess
+    capping both pipes and deciding what a malformed answer means. That makes it a subprocess
     supervisor rather than configuration, which is why it is a file of its own.
   </p>
   <span class="src">crates/harness/src/hooks.rs — module doc</span>
@@ -902,19 +903,19 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
         <td><code>PreToolUse</code></td>
         <td>before every matching tool call</td>
         <td>deny the call, with a reason; append context</td>
-        <td><strong>fail-closed</strong> — the call is stopped, so a broken policy check does not become no policy check</td>
+        <td><strong>fail-closed</strong>: the call is stopped, so a broken policy check does not become no policy check</td>
       </tr>
       <tr>
         <td><code>PostToolUse</code></td>
         <td>after the call, on success and on a tool error</td>
         <td>append text to the model-visible result; it can annotate, never rewrite</td>
-        <td><strong>fail-open</strong> — the tool ran and the side effect happened, so refusing now would make the log disagree with what the model saw</td>
+        <td><strong>fail-open</strong>: the tool ran and the side effect happened, so refusing now would make the log disagree with what the model saw</td>
       </tr>
       <tr>
         <td><code>UserPromptSubmit</code></td>
         <td>once, on the words a person typed, before the goal opens</td>
-        <td>block the prompt; add context in front of the model — the only event that can add rather than only refuse</td>
-        <td><strong>fail-open, with a notice</strong> — the prompt proceeds without the context and one sentence per silent hook reaches the terminal</td>
+        <td>block the prompt; add context in front of the model, the only event that can add rather than only refuse</td>
+        <td><strong>fail-open, with a notice</strong>: the prompt proceeds without the context and one sentence per silent hook reaches the terminal</td>
       </tr>
     </tbody>
   </table>
@@ -924,7 +925,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
   <p>
     The third ruling is neither of the other two. Resolving an enrichment failure
     to deny would mean a hook script with a syntax error locks the user out of
-    their own agent — every prompt refused, by the program that was supposed to
+    their own agent: every prompt refused, by the program that was supposed to
     add the branch name to it. Losing the enrichment silently is what the notices
     prevent; losing it visibly is a bad turn the user can see and fix. Blocking
     is still available on that event, because a hook that says
@@ -944,8 +945,8 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     are <code>deny_unknown_fields</code>, which is what stops a misspelled
     <code>raeson</code> from silently allowing. On <code>UserPromptSubmit</code>,
     unparseable stdout <em>is</em> the context: that is the documented primary
-    form, and requiring JSON there made a hook doing the ordinary thing —
-    <code>echo</code> a line, exit 0 — record "unparseable stdout" and discard
+    form, and requiring JSON there made a hook doing the ordinary thing,
+    <code>echo</code> a line, exit 0, record "unparseable stdout" and discard
     the line. Found by running one. Injected context is capped at 10,000
     characters and the cut is named in the text the model reads.
   </p>
@@ -957,9 +958,9 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     Ruled by the owner on 2026-08-14, reversing the first draft of the plan that
     was written to stop it: <strong>a hook that starts something meant to outlive
     it is a supported use, not a leak.</strong> That removed the draft's central
-    mechanism — a Windows job object with
+    mechanism: a Windows job object with
     <code>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</code> plus a Unix process group and
-    a <code>kill(-pgid)</code> drop-guard — and the plan records it as dead so it
+    a <code>kill(-pgid)</code> drop-guard. The plan records it as dead so it
     is not rebuilt.
   </p>
   <span class="src">notes/plan-process-lifetime.md §1, §7</span>
@@ -968,11 +969,17 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     The defect was never that a grandchild lives. It was that <code>exec</code>
     read stdout to end-of-file and <em>then</em> waited, so a hook that started a
     background process and exited 0 in milliseconds was reported as
-    <code>timed out after 5000ms</code> with its output discarded — not because
+    <code>timed out after 5000ms</code> with its output discarded, not because
     anything was slow, but because the process it started inherited the write end
     of the pipe and EOF never came. Reproduced as a rate: <strong>20 of 20
     invocations misreported before the fix, 0 of 20 after, with the daemon
-    surviving 20 of 20 in both.</strong> <span class="chip cert">certified</span>
+    surviving 20 of 20 in both.</strong> <span class="chip obs">observed</span>:
+    the before/after comparison ran once, 2026-08-14, logged in
+    <code>notes/plan-process-lifetime.md</code> §6 &mdash; the "before" state
+    needs the reverted code to reproduce. The "after" half is on demand:
+    <code>cargo test -p emma-harness --test exec_lifetime
+    certify_the_misreport_rate_over_twenty_trials -- --ignored</code>
+    <span class="chip test">tested</span>
   </p>
   <span class="src">notes/plan-process-lifetime.md header, §6; crates/harness/src/hooks.rs — exec</span>
 
@@ -1067,12 +1074,12 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     <p>
       On unix, closing the read end means a daemon that later <em>writes</em> to
       that stdout gets <code>SIGPIPE</code> and, by default, dies. Two things
-      bound it: this is not new — the timeout path already dropped the pipe, and
+      bound it: this is not new, since the timeout path already dropped the pipe, and
       a long-lived reader was never on offer; and the daemon idiom exists because
       inherited stdio is borrowed. <strong>A hook that starts a daemon should
       redirect its stdio to <code>/dev/null</code> (or <code>NUL</code>)
-      first.</strong> The alternative — Emma keeping a reader alive for as long
-      as somebody else's daemon lives — is an unbounded obligation and is
+      first.</strong> The alternative, Emma keeping a reader alive for as long
+      as somebody else's daemon lives, is an unbounded obligation and is
       refused.
     </p>
     <p>
@@ -1080,7 +1087,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
       only. On Windows nothing pins the 200 ms grace either, because nothing
       makes its removal observable: deleting it leaves every fixture green,
       including a 100-trial probe of a hook whose last write and exit are the
-      same instant — 0 of 100 lost either way. <em>What would settle both:</em> a
+      same instant: 0 of 100 lost either way. <em>What would settle both:</em> a
       Linux or WSL run of the same fixtures, where the readiness-based path means
       the bytes wait in the kernel for a poll the randomised <code>select!</code>
       may not reach before the wait wins, and where a write-looping daemon is
@@ -1092,7 +1099,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
 
   <p>
     The lifetime rule, once: <strong>Emma supervises the direct child it spawned
-    — its budget, its pipes, its exit code — and claims nothing about that
+    (its budget, its pipes, its exit code) and claims nothing about that
     child's descendants.</strong> On the timeout path <code>kill_on_drop</code>
     kills the hook and only the hook. Whatever the hook started is left, because
     Emma cannot tell a broken hook's orphans from the daemon the operator meant
@@ -1105,7 +1112,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
 
   <p>
     One question is open rather than answered: <code>StatusLine::run</code> calls
-    the same <code>exec</code>, so it inherits both the fix and the ruling — and
+    the same <code>exec</code>, so it inherits both the fix and the ruling. And
     a status script runs on a debounced trigger many times per session, so one
     that daemonizes accumulates a process per burst. One behaviour for both
     shipped. <span class="chip unv">unverified</span> <em>What would settle
@@ -1142,7 +1149,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     <li>
       <strong>An <code>allow</code> rule under <code>-p</code> has no test.</strong>
       <a href="#unattended">Above</a>. The mutation above proves the block sits
-      above the unattended denial — three tests go red when it is moved — but
+      above the unattended denial (three tests go red when it is moved), but
       all three exercise <code>read_only</code> and <code>EXEMPT</code>. The
       <code>allow</code>-rule arm itself is unexercised at that gate.
     </li>

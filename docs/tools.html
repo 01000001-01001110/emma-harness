@@ -28,6 +28,7 @@
         <h4>Start here</h4>
         <ul>
           <li><a class="nav" href="index.html">What Emma is</a></li>
+          <li><a class="nav" href="getting-started.html">Getting started</a></li>
           <li><a class="nav" href="architecture.html">Architecture</a></li>
         </ul>
 
@@ -72,7 +73,8 @@
           </p>
 
           <div class="key">
-            <div><span class="chip cert">certified</span> proven against the real thing</div>
+            <div><span class="chip cert">certified</span> proven, and a reader can repeat it: a file, a command, a grep</div>
+            <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
             <div><span class="chip test">tested</span> a test that fails without it</div>
             <div><span class="chip unv">unverified</span> believed, not checked</div>
           </div>
@@ -93,7 +95,7 @@ tool schema    ce26c5f39467e4f0</code></pre>
             <code>20ac400</code> on Windows 11 with a Brave key and a Chrome
             present. Two more tools can appear in that list and do not here:
             <code>Skill</code> registers only when the harness resolved skills,
-            and <code>Task</code> only with agent types configured — both were
+            and <code>Task</code> only with agent types configured. Both were
             <code>(none)</code> on this box. See
             <a href="delegation.html">Delegation</a> for those two.
           </p>
@@ -105,8 +107,8 @@ tool schema    ce26c5f39467e4f0</code></pre>
             <code>tool-api</code> is one file. That is a decision with a stated
             cost rather than an accident of size: it holds the error taxonomy,
             the success type, the two structs the runtime reads, the trait, and
-            a registry — and nothing else, so that adding a tool stays “a crate
-            plus one registry line”. Twice in this project's history the gate
+            a registry, and nothing else. That is why adding a tool stays “a
+            crate plus one registry line”. Twice in this project's history the gate
             grew knowledge of a particular tool's arguments (a hard-coded
             <code>query</code> check, and inferring retrieval from an empty
             <code>chunks</code> array), and both times that promise became
@@ -155,8 +157,8 @@ tool schema    ce26c5f39467e4f0</code></pre>
                 <td>
                   Where <em>this call</em> would send bytes. Defaults to
                   <code>None</code>. A <code>None</code> from a tool declaring
-                  <code>reaches_network: true</code> is a refusal, not a pass —
-                  the gate cannot grant a destination nobody named.
+                  <code>reaches_network: true</code> is a refusal, not a pass,
+                  because the gate cannot grant a destination nobody named.
                 </td>
               </tr>
               <tr>
@@ -183,7 +185,8 @@ tool schema    ce26c5f39467e4f0</code></pre>
 
           <p>
             <strong>The predecessor's struct had a <code>needs_approval</code>
-            field that nothing ever read.</strong> It was not ported — a declaration pretending to be a mechanism is worse than no
+            field that nothing ever read.</strong> It was not ported. A
+            declaration pretending to be a mechanism is worse than no
             declaration, because reviewers stop asking the question the field
             appears to answer. What is left is three bits, and each one has a
             reader:
@@ -200,7 +203,7 @@ tool schema    ce26c5f39467e4f0</code></pre>
                 <td><code>read_only</code></td>
                 <td>
                   Cannot change local state: no file written, no process
-                  spawned. <strong>Not</strong> “cannot reach the network” —
+                  spawned. <strong>Not</strong> “cannot reach the network”:
                   <code>WebFetch</code> and <code>WebSearch</code> both declare
                   <code>true</code> and both talk to the outside.
                 </td>
@@ -212,8 +215,8 @@ tool schema    ce26c5f39467e4f0</code></pre>
                   Sends bytes off this machine by construction. A separate axis
                   because writing is a risk the model states in the call, while
                   egress is how a prompt-injected page turns a read tool into an
-                  exfiltration channel — and passes every local-damage check on
-                  the way out.
+                  exfiltration channel. That channel passes every local-damage
+                  check on the way out.
                 </td>
                 <td>the approval gate, per host</td>
               </tr>
@@ -230,8 +233,8 @@ tool schema    ce26c5f39467e4f0</code></pre>
 
           <p>
             That last row is the interesting one. <code>idempotent</code> was
-            for a while declared by every tool and consulted by nothing — the
-            exact shape the <code>needs_approval</code> deletion rejects. It was
+            for a while declared by every tool and consulted by nothing. That
+            is the exact shape the <code>needs_approval</code> deletion rejects. It was
             not deleted, because the answer is a genuine per-tool fact; it was
             given a reader instead. <code>Registry::register</code> panics on
             the pair <code>read_only: true, idempotent: false</code>, because a
@@ -248,7 +251,7 @@ tool schema    ce26c5f39467e4f0</code></pre>
             control that stops the check being satisfied by refusing everything.
             Each tool crate additionally runs its <code>read_only</code> tools
             against a populated sandbox and fingerprints the tree before and
-            after, <em>plus</em> pins which tools claim the bit — the pin is what
+            after, <em>plus</em> pins which tools claim the bit. The pin is what
             notices a new claim rather than merely leaving it unexercised.
           </p>
           <span class="src">tools/fs/tests/read_only.rs — <code>the_read_only_declarations_are_the_expected_ones</code></span>
@@ -279,7 +282,7 @@ tool schema    ce26c5f39467e4f0</code></pre>
                 <td><code>tool_unavailable</code></td>
                 <td><code>Unavailable</code></td>
                 <td>
-                  The machinery is absent or unconfigured — no key, no binary,
+                  The machinery is absent or unconfigured: no key, no binary,
                   no permission. Phrased “I cannot do this”, never “this cannot
                   be done”.
                 </td>
@@ -294,7 +297,7 @@ tool schema    ce26c5f39467e4f0</code></pre>
                 <td><code>BadArguments</code></td>
                 <td>
                   Wrong arguments, including the kind only discoverable at run
-                  time — <code>validate_args</code> cannot stat a path or know
+                  time, because <code>validate_args</code> cannot stat a path or know
                   whether a string occurs once in a file.
                 </td>
               </tr>
@@ -314,7 +317,7 @@ tool schema    ce26c5f39467e4f0</code></pre>
             <strong>That rule was written about the filesystem and did not
             survive contact with <code>Bash</code>.</strong> A non-zero exit had
             been documented as <code>Failed</code>, which makes
-            <code>grep -q</code> answering “no” a tool failure — and the loop
+            <code>grep -q</code> answering “no” a tool failure. The loop
             refuses to repeat a call that already failed with nothing changed
             since, so one legitimate miss would have blocked that command for
             the rest of the turn. The line is now <em>whether the command
@@ -385,7 +388,7 @@ tool schema    ce26c5f39467e4f0</code></pre>
                 <td><code>fs_tools()</code></td>
                 <td>
                   A <code>Write</code> holding a tracker its <code>Read</code>
-                  does not share <strong>never refuses anything</strong> — the
+                  does not share <strong>never refuses anything</strong>. The
                   read-before-write rule quietly stops existing. A fresh tracker
                   is the mirror image: it refuses every overwrite.
                 </td>
@@ -413,7 +416,7 @@ tool schema    ce26c5f39467e4f0</code></pre>
             <strong>The same warning is written down three separate times, in
             three crates, in three sets of words.</strong> That is the argument
             for the fix belonging in <code>tool-api</code> rather than in any of
-            them — and it is a real trade rather than an obvious win, because
+            them. That is a real trade rather than an obvious win, because
             <code>tool-api</code> is kept small. The current state is that
             the contract is enforced by three comments and nothing else.
           </p>
@@ -424,7 +427,7 @@ tool schema    ce26c5f39467e4f0</code></pre>
             <p>
               Each crate's <code>*_tools()</code> function is the only supported
               way to build its set. Constructing a member directly is caught by
-              nothing — not the compiler, not the registry's coherence check, not
+              nothing: not the compiler, not the registry's coherence check, not
               any test in the workspace.
             </p>
             <p>
@@ -438,7 +441,7 @@ tool schema    ce26c5f39467e4f0</code></pre>
           <p>
             <span class="chip test">tested</span> Each of the three crates pins
             the sharing with an <code>Arc::strong_count</code> assertion on the
-            set its builder returns —
+            set its builder returns:
             <code>the_surface_is_five_tools_sharing_one_pool</code> expects 6,
             <code>the_surface_is_the_four_tools_and_they_share_one_pool</code>
             expects 5. That catches a builder that stopped sharing; it cannot
@@ -544,8 +547,8 @@ tool schema    ce26c5f39467e4f0</code></pre>
             <code>validate_args</code> runs <em>before</em> the approval prompt,
             so a malformed call never spends a human's attention. The
             <code>PreToolUse</code> hook runs before it too, because a policy
-            denial is not something the person at the keyboard gets a vote on —
-            a gate a human can wave through is advice.
+            denial is not something the person at the keyboard gets a vote on.
+            A gate a human can wave through is advice.
           </p>
           <span class="src">crates/emma/src/agent.rs — <code>run_tool_call</code></span>
 
@@ -558,12 +561,12 @@ tool schema    ce26c5f39467e4f0</code></pre>
             argument that would get the rest. A tool knows all three at the
             moment it cuts and nothing downstream can reconstruct them, so it
             says them in <code>truncation</code> and the runtime passes that on
-            verbatim — to the model in the result, and to the human on the
+            verbatim: to the model in the result, and to the human on the
             terminal line.
           </p>
 
           <p>
-            <strong>The rule: name the limit, name the loss, name the remedy —
+            <strong>The rule: name the limit, name the loss, name the remedy,
             or say plainly that no argument raises it.</strong> The shape, from
             a real <code>Glob</code> call in this repository:
           </p>
@@ -599,7 +602,7 @@ returns the rest]</code></pre>
             <code>Bash</code> past their caps in one sandbox and demands of each:
             the flag set, a <code>truncation</code> reason over 40 characters
             containing a digit, and <code>[truncated:</code> present in
-            <code>content</code> as well — because the model reads the content,
+            <code>content</code> as well, because the model reads the content,
             not the struct. <code>a_whole_answer_claims_nothing</code> is the
             other half: an uncut result must carry neither, or the file would be
             satisfiable by marking everything truncated.
@@ -607,7 +610,7 @@ returns the rest]</code></pre>
           <span class="src">tools/fs/tests/truncation.rs</span>
 
           <p>
-            <code>ToolOutcome::truncated()</code> — the flag with no reason —
+            <code>ToolOutcome::truncated()</code> (the flag with no reason)
             still exists and still compiles. It is the weaker form, kept because
             several tools explain their own cut inside <code>content</code>, and
             it is never the right choice for a new tool. When a tool uses it the
@@ -691,7 +694,7 @@ limit cut it. Narrow the request if you need the rest.]</code></pre>
             </div>
             <figcaption>
               Three crates, one containment check. <code>resolve</code> returns
-              the path the caller then uses for I/O — checking one path and
+              the path the caller then uses for I/O. Checking one path and
               operating on another is the classic way this check becomes
               decorative. Drawn from <code>tools/fs/src/path.rs</code>, <code>tools/tasks/src/store.rs</code> and <code>tools/lsp/src/tools.rs</code>.
             </figcaption>
@@ -701,7 +704,7 @@ limit cut it. Narrow the request if you need the rest.]</code></pre>
             The check is not “does the string contain <code>..</code>”. A
             symlink inside the root pointing outward is an escape containing no
             <code>..</code> at all, and a path that does not exist yet cannot be
-            canonicalised at all — which <code>Write</code> needs, since it has
+            canonicalised at all, which <code>Write</code> needs, since it has
             to name a file it is about to create. So resolution is three moves:
             normalise lexically, canonicalise the longest part that actually
             exists, re-attach the part that does not. Searching for the
@@ -713,8 +716,8 @@ limit cut it. Narrow the request if you need the rest.]</code></pre>
           <p>
             Two details that would fail open if they were got wrong. The root
             is canonicalised once per call, so on Windows the comparison is
-            against the <code>\\?\</code> verbatim spelling the OS uses —
-            comparing a verbatim path to a non-verbatim one silently never
+            against the <code>\\?\</code> verbatim spelling the OS uses.
+            Comparing a verbatim path to a non-verbatim one silently never
             matches. And containment uses <code>Path::starts_with</code>, which
             is component-wise: <code>/work</code> and <code>/workspace</code> do
             not match, where a string prefix test would have said they did.
@@ -727,7 +730,7 @@ limit cut it. Narrow the request if you need the rest.]</code></pre>
               is not detectable this way: there is no “real” path to
               canonicalise towards, both names are equally the file, and
               <code>canonicalize</code> returns the inside one. Verified rather
-              than assumed — on Windows <code>mklink /H</code> needs no
+              than assumed. On Windows <code>mklink /H</code> needs no
               privilege at all. The same is true of a bind mount. This is a
               boundary against paths, not against an operator who has already
               placed a link inside the tree.
@@ -747,14 +750,14 @@ limit cut it. Narrow the request if you need the rest.]</code></pre>
             mid-path, an absolute path elsewhere on the machine, a symlinked file
             and a symlinked directory read through, a file created through a
             symlinked directory, and <code>Glob</code>/<code>Grep</code> walking
-            out through a link. It also carries the positive control — an
-            absolute path <em>inside</em> the root still works — because the
+            out through a link. It also carries the positive control: an
+            absolute path <em>inside</em> the root still works, because the
             cheapest wrong way to pass every escape test is to reject all
             absolute paths.
           </p>
 
           <div class="note warn">
-            <span class="h">Suspected defect — flagged, not fixed</span>
+            <span class="h">Suspected defect: flagged, not fixed</span>
             <p>
               <code>path::display</code> replaces <code>\</code> with
               <code>/</code> unconditionally, so a unix filename legally
@@ -772,8 +775,8 @@ limit cut it. Narrow the request if you need the rest.]</code></pre>
 
           <p>
             Six names, Claude Code's exactly. Three of them declare
-            <code>read_only: true</code> and run without a prompt —
-            <code>Read</code>, <code>Glob</code>, <code>Grep</code> — and three
+            <code>read_only: true</code> and run without a prompt:
+            <code>Read</code>, <code>Glob</code>, <code>Grep</code>. Three
             do not. Every argument is refused in the same words by a shared
             <code>args</code> module, including unknown keys: a silently dropped
             <code>replace_all</code> looks to the model exactly like a flag that
@@ -789,7 +792,7 @@ limit cut it. Narrow the request if you need the rest.]</code></pre>
               <tr><th>Argument</th><th>Type</th><th>Meaning</th></tr>
               <tr><td><code>file_path</code> <em>required</em></td><td>string</td><td>Relative to the working directory, or absolute inside it.</td></tr>
               <tr><td><code>offset</code></td><td>integer ≥ 1</td><td>1-based line to start at. Default 1.</td></tr>
-              <tr><td><code>limit</code></td><td>integer ≥ 1</td><td>Lowers the 2000-line cap. <strong>Cannot raise it</strong> — the schema says so, because “capped at 2000” reads as an invitation to pass 5000.</td></tr>
+              <tr><td><code>limit</code></td><td>integer ≥ 1</td><td>Lowers the 2000-line cap. <strong>Cannot raise it.</strong> The schema says so, because “capped at 2000” reads as an invitation to pass 5000.</td></tr>
             </table>
           </div>
 
@@ -797,7 +800,7 @@ limit cut it. Narrow the request if you need the rest.]</code></pre>
             <code>read_only: true</code>. Every line comes back labelled
             <code>&lt;number&gt;#&lt;hash&gt;</code>, right-aligned in six columns
             and separated from the text by a tab. Reading an empty file succeeds
-            and returns nothing — the content stays genuinely empty rather than
+            and returns nothing. The content stays genuinely empty rather than
             gaining a prose stand-in, which would be indistinguishable from file
             content the next time the model quotes it back. Reading past the end
             is not an error either; the useful answer is the line count.
@@ -816,7 +819,7 @@ limit cut it. Narrow the request if you need the rest.]</code></pre>
           <p>
             Any of the three sets <code>truncated</code>, and
             <code>render</code> states each one that fired rather than merging
-            them — “truncated” alone does not tell the model whether to page
+            them. “truncated” alone does not tell the model whether to page
             forward, narrow the range, or stop expecting the rest of a line. The
             line cap's sentence names the number that actually bound, which
             differs by caller:
@@ -883,7 +886,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
           <p>
             All three are <code>BadArguments</code>, because all three are
             entirely actionable. Creating a file that does not exist needs no
-            prior read — there is nothing to lose. Nothing before the refusal
+            prior read. There is nothing to lose. Nothing before the refusal
             touches the filesystem, not even <code>create_dir_all</code>, which
             is what makes a refusal actually a refusal.
           </p>
@@ -916,7 +919,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             Every way of choosing among three matches is wrong in a way that is
             hard to see afterwards: the first edits code the model was not
             looking at, the last is the same bug with different luck, all three
-            is a refactor nobody asked for — and all three return
+            is a refactor nobody asked for. And all three return
             <code>Ok</code>, with the damage surfacing later as a test failure in
             a file the transcript never mentions. So a match count other than one
             is <code>BadArguments</code> <em>naming the count</em>, which is what
@@ -926,7 +929,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
 
           <p>
             The two forms are mutually exclusive and a call supplying both or
-            neither is refused rather than resolved by precedence — precedence
+            neither is refused rather than resolved by precedence. Precedence
             means silently ignoring one of two things the model asked for. Why
             one tool and not two: a second tool would cost its whole description
             in every request forever, hand the model a choice it has no basis
@@ -944,8 +947,8 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             <li>
               <strong>The endpoints still say what the model says they say.</strong>
               Catches a model aiming with a line number it worked out four turns
-              ago. This is the only check the model's own quoted hash can make —
-              the tracker knows what the world last looked like, and has no idea
+              ago. This is the only check the model's own quoted hash can make.
+              The tracker knows what the world last looked like, and has no idea
               what the model thinks it looks like.
             </li>
             <li>
@@ -968,7 +971,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             text move”, and only the first is this check's business. Comparing in
             place looks equivalent until something inserts a line above, at which
             point every number below shifts and a range nobody touched is
-            refused — including the corrected retry that the relocation refusal
+            refused, including the corrected retry that the relocation refusal
             explicitly tells the model to make. <strong>That contradiction was
             found by watching a real model take the advice and be refused for
             following it</strong>, not by review.
@@ -1008,7 +1011,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             </p>
             <p>
               The reword worked as far as it can. <strong>What it did not do is
-              stop the re-read</strong> — in both observed runs the model read
+              stop the re-read.</strong> In both observed runs the model read
               the file again anyway before retrying. So the claim made here is
               the smaller one: the corrected address the refusal offers is one
               this tool accepts. No token saving is claimed from it.
@@ -1030,7 +1033,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
               <tr><th>Measured</th><th>Result</th></tr>
               <tr>
                 <td>Addressed edit vs <code>old_string</code>, 14 real single-line edits from this repository</td>
-                <td><strong>26% fewer output tokens</strong> — 842 against 1140, because the anchor stops having to be long enough to be unique</td>
+                <td><strong>26% fewer output tokens</strong>: 842 against 1140, because the anchor stops having to be long enough to be unique</td>
               </tr>
               <tr>
                 <td>Labelling, over 2000 lines of this repository's Rust</td>
@@ -1056,7 +1059,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             <span class="h">The 61% figure is not this change's number</span>
             <p>
               The widely-quoted −61% is the format author's own benchmark of
-              their own scheme — 180 tasks × 3 runs over ~16 models — and −61% is
+              their own scheme (180 tasks × 3 runs over ~16 models), and −61% is
               <strong>Grok 4 Fast, the best case, not a median</strong>; the
               README does not say which of two baselines it is against. Better
               than a bare marketing line, still vendor-run and independently
@@ -1072,7 +1075,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
 
           <p>
             The hash is FNV-1a: four hex characters rendered, 64 bits stored.
-            Non-cryptographic — what is being defended against is
+            Non-cryptographic: what is being defended against is
             <em>accident</em>, and an attacker who can rewrite the file being
             edited already has everything a collision would buy. The exposure is
             one comparison at 1 in 65,536, and the endpoints are checked twice
@@ -1087,7 +1090,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             control (without it, the safe way to pass every refusal test is to
             refuse every addressed edit), a second edit made <em>from the first
             edit's output</em> with no <code>Read</code> between them, and a CRLF
-            fixture — rebuilding from <code>str::lines</code> would convert every
+            fixture. Rebuilding from <code>str::lines</code> would convert every
             CRLF file to LF on the first one-line edit and add a newline to a file
             that never had one, both whole-file rewrites disguised as one-line
             changes.
@@ -1101,15 +1104,15 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             nothing succeeds with an empty list: “there are no <code>.proto</code>
             files here” is a fact about the repository and often the exact fact
             being checked. Results come back newest first with the path as
-            tiebreak, so two calls over an unchanged tree return identical bytes
-            — the output rides in the conversation and the conversation rides in
+            tiebreak, so two calls over an unchanged tree return identical bytes.
+            The output rides in the conversation, and the conversation rides in
             the cached prefix.
           </p>
 
           <p>
             <strong>The walk does not follow symlinks</strong>, and not for cycle
             safety. A directory symlink pointing outside the root would let a
-            glob enumerate — and then a read reach — anything on the machine
+            glob enumerate, and then a read reach, anything on the machine
             without a single <code>..</code> in the pattern. Containment guards
             the arguments; refusing to follow links guards the traversal.
           </p>
@@ -1162,7 +1165,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
 
           <p>
             The <code>head_limit</code> sentence says a different thing depending
-            on who bound it — a model that asked for 20 and got 20 can raise its
+            on who bound it: a model that asked for 20 and got 20 can raise its
             own number, and a model that asked for nothing and got 500 has hit a
             ceiling <code>head_limit</code> cannot move. Naming the knob and
             stopping is the shape of the <code>WebFetch</code> defect
@@ -1171,13 +1174,13 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
 
           <p>
             The two skips are not the same admission and only one is reported.
-            <strong>A file that is not text is a file with no lines</strong> — a
+            <strong>A file that is not text is a file with no lines.</strong> A
             JPEG genuinely contains no match, and reporting one would put a
             truncation warning on every search of a tree containing an icon.
             <strong>A large text file is a file nobody looked in</strong>, and it
             may be the 20 MB log that holds the answer. The first live run of the
             naïve version reported <em>499 files not opened</em>, every one an
-            <code>.rlib</code> or <code>.pdb</code> under <code>target/</code> —
+            <code>.rlib</code> or <code>.pdb</code> under <code>target/</code>:
             true, worthless, and how a warning stops being read. So the size cap
             sniffs a prefix for a NUL byte and valid UTF-8 before deciding which
             of the two it is looking at.
@@ -1192,7 +1195,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
               relative path is empty, so passing <code>path</code> and
               <code>glob</code> together for one file matches nothing. Naming one
               file and then filtering the set of one is a redundant call, which is
-              why it has not bitten — but it is a real asymmetry rather than a
+              why it has not bitten. It is still a real asymmetry rather than a
               rule.
             </p>
           </div>
@@ -1210,14 +1213,14 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
           </div>
 
           <p>
-            A shell, not an argv array. The argv alternative is genuinely safer —
+            A shell, not an argv array. The argv alternative is genuinely safer:
             no quoting, no word splitting, no dependence on what <code>sh</code>
-            happens to be — and unusable for what this tool is for, since almost
+            happens to be. It is also unusable for what this tool is for, since almost
             every command a coding agent needs is a shell construct. The failure
             mode of argv exec is that the model emits <code>sh -c "…"</code> as
             the argv anyway: a shell with the safety story removed and nobody's
             caps applied. The injection argument also does not survive the threat
-            model — there is no untrusted string being interpolated, the model
+            model: there is no untrusted string being interpolated, the model
             composes the whole command, and a model that wants to delete
             something can do it through argv just as easily.
           </p>
@@ -1237,14 +1240,14 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
           <p>
             The search used to be “the first <code>bash</code> on
             <code>PATH</code>”. On a stock Windows box that is
-            <code>C:\Windows\System32\bash.exe</code>, the WSL launcher — and a
+            <code>C:\Windows\System32\bash.exe</code>, the WSL launcher. A
             real run showed <code>pwd</code> coming back
             <code>/mnt/e/Projects/emma</code> for a directory Emma had contained
             as <code>C:\src\emma</code>, with <code>.wslconfig</code>
             warnings mixed into the tool output. The two agreed only because WSL
             happened to translate the directory. Measured on the same box, when
-            it <em>cannot</em> translate — a <code>subst</code> drive, a UNC path
-            — <strong>WSL starts in the user's home directory instead, prints
+            it <em>cannot</em> translate (a <code>subst</code> drive, a UNC path),
+            <strong>WSL starts in the user's home directory instead, prints
             nothing, and exits 0</strong>. That is a command running outside the
             approved root, reported as success, and it is a hole rather than
             something the model can route around, because nothing in the result
@@ -1252,7 +1255,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
           </p>
 
           <ol class="body">
-            <li><code>EMMA_SHELL</code>, if set to anything but whitespace. If what it names is not there the call is <code>Unavailable</code> and says where it looked. <strong>It never falls back</strong> — a tool that runs a different shell than the one you asked for is worse than one that stops.</li>
+            <li><code>EMMA_SHELL</code>, if set to anything but whitespace. If what it names is not there the call is <code>Unavailable</code> and says where it looked. <strong>It never falls back.</strong> A tool that runs a different shell than the one you asked for is worse than one that stops.</li>
             <li><code>/bin/sh</code>, on unix.</li>
             <li>A native POSIX <code>bash</code> then <code>sh</code>: the Git for Windows locations first, then <code>PATH</code>, skipping the WSL launcher wherever it appears.</li>
             <li>Nothing. <strong>PowerShell, WSL and <code>cmd.exe</code> are never chosen automatically.</strong> The model writes POSIX on the strength of being told it has a shell, and Windows PowerShell 5.1 has no <code>&amp;&amp;</code> at all; auto-selecting it would turn every such command into a wrong answer shaped like the command's own output.</li>
@@ -1271,7 +1274,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             <code>/bin/sh</code>, <code>bash.exe</code>,
             <code>Program Files</code>, <code>System32</code>,
             <code>wsl</code>, <code>sh -c</code> or <code>EMMA_SHELL</code>, and
-            the positive half — that it does say where the answer is.
+            the positive half: that it does say where the answer is.
           </p>
           <span class="src">tools/fs/src/bash.rs — <code>Shell::banner</code>, <code>resolve_with</code></span>
 
@@ -1303,7 +1306,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             <span class="h">The grandchild-holds-the-pipe race</span>
             <p>
               Both streams are drained concurrently with the wait, and drained
-              <em>past</em> the 64 KiB cap rather than stopping — a reader that
+              <em>past</em> the 64 KiB cap rather than stopping. A reader that
               stops fills the pipe buffer and the child blocks forever on a write
               nobody consumes, so the timeout becomes the only exit and every
               noisy command takes the full two minutes. After the wait, the
@@ -1318,14 +1321,14 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
               that never returns. The two cuts call for opposite moves and get
               different sentences: the cap means the body is a prefix of what was
               said, while a lost race means the whole output is missing and the
-              body is assembled from nothing — telling the model “cut at 65536
+              body is assembled from nothing. Telling the model “cut at 65536
               bytes” there would name a limit that never fired and invite it to
               trust an empty body as short output.
             </p>
             <p>
               <span class="chip unv">unverified</span> Only the cap is tested.
               The lost-race branch “needs a grandchild holding the pipe open,
-              which no fixture can arrange reliably” — the truncation suite says
+              which no fixture can arrange reliably”. The truncation suite says
               so in its own comment. Settled by spawning something like
               <code>(sleep 30 &amp;) ; echo done</code> under a short timeout on
               both platforms and checking which of the two sentences comes back.
@@ -1334,12 +1337,12 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
           <span class="src">tools/fs/src/bash.rs — <code>Bash::run</code>, <code>drain</code>; tools/fs/tests/truncation.rs</span>
 
           <div class="note warn">
-            <span class="h">Suspected defect — <code>classify</code> is not platform-gated</span>
+            <span class="h">Suspected defect: <code>classify</code> is not platform-gated</span>
             <p>
               <code>classify</code> calls any shell whose parent directory's last
               component is <code>system32</code>, <code>syswow64</code>,
               <code>sysnative</code> or <code>windowsapps</code> the WSL
-              launcher — <strong>on every platform</strong>. Unlike every other
+              launcher, <strong>on every platform</strong>. Unlike every other
               decision in that module it does not take the injected
               <code>windows</code> flag. On unix, a checkout containing a
               directory of either name yields a refusal that talks about WSL.
@@ -1375,17 +1378,17 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
               <tr><th>Tool</th><th>Arguments</th><th>meta</th></tr>
               <tr>
                 <td><code>TaskCreate</code></td>
-                <td><code>tasks</code> — array, <code>minItems: 1</code>; each item a string, or an object with <code>text</code> and optional <code>status</code> of <code>pending</code>/<code>in_progress</code>/<code>completed</code></td>
+                <td><code>tasks</code>: array, <code>minItems: 1</code>; each item a string, or an object with <code>text</code> and optional <code>status</code> of <code>pending</code>/<code>in_progress</code>/<code>completed</code></td>
                 <td>write, not idempotent</td>
               </tr>
               <tr>
                 <td><code>TaskGet</code></td>
-                <td><code>id</code> — the handle, leading <code>#</code> optional</td>
+                <td><code>id</code>: the handle, leading <code>#</code> optional</td>
                 <td>read-only</td>
               </tr>
               <tr>
                 <td><code>TaskList</code></td>
-                <td><code>status</code> — <code>open</code> (default), <code>all</code>, <code>pending</code>, <code>in_progress</code>, <code>completed</code></td>
+                <td><code>status</code>: <code>open</code> (default), <code>all</code>, <code>pending</code>, <code>in_progress</code>, <code>completed</code></td>
                 <td>read-only</td>
               </tr>
               <tr>
@@ -1411,7 +1414,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             numeric limit is not a cut but an exhaustion: handles are 16 bits, so
             a file can in principle hold 65,536 tasks and then panic with
             <code>all 65536 task handles in this file are in use</code>. Its doc
-            corrects an earlier claim that the space could not be exhausted —
+            corrects an earlier claim that the space could not be exhausted:
             “nobody would” is not the same as “cannot”.
           </p>
           <span class="src">tools/tasks/src/doc.rs — <code>first_free_id</code></span>
@@ -1429,7 +1432,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
           <p>
             You cannot lock a file a person is editing in VS Code. So every call
             reads, changes and writes inside one <code>invoke</code>, guarded by
-            a hash of the whole file — <strong>not mtime</strong>, which has
+            a hash of the whole file, <strong>not mtime</strong>, which has
             second granularity on some filesystems, and a stamp that can silently
             fail to change is a stale-read guard that fails open. The write goes
             to <code>tasks.md.tmp</code> <em>beside</em> the file, never in the
@@ -1446,7 +1449,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
               An editor holds the whole file in memory. If a person opened
               <code>tasks.md</code> at 10:00, Emma writes at 10:01, and the
               person hits Ctrl-S at 10:02, their editor writes its entire buffer
-              and Emma's line is gone — no error, no conflict. The guard's own
+              and Emma's line is gone: no error, no conflict. The guard's own
               window is not zero either: a write landing between the confirming
               read and the rename is lost. It is microseconds wide, and it is not
               closed, only made small and admitted.
@@ -1455,9 +1458,9 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
 
           <p>
             <span class="chip test">tested</span>
-            <code>tests/round_trip.rs</code> holds hand-written fixtures —
-            untidy bullets, trailing prose, notes, hand-ticked boxes, a CRLF file
-            — and asserts each survives an update. <code>tests/tools.rs</code>
+            <code>tests/round_trip.rs</code> holds hand-written fixtures
+            (untidy bullets, trailing prose, notes, hand-ticked boxes, a CRLF file)
+            and asserts each survives an update. <code>tests/tools.rs</code>
             asserts an exact file rather than a <code>contains</code>, because
             every rejected alternative design passes a <code>contains</code>
             check and fails an equality one.
@@ -1468,7 +1471,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             <code>read_only: false</code> and are then named in the
             approval gate's <code>EXEMPT</code> list. The dodge belongs there
             rather than in a false declaration, and the gate's own comment says
-            the list is owed a fix — an axis on <code>ToolMeta</code> for the
+            the list is owed a fix: an axis on <code>ToolMeta</code> for the
             <em>scope</em> of a write. See <a href="consent.html">Consent</a>.
           </p>
           <span class="src">crates/emma/src/approval.rs — <code>EXEMPT</code></span>
@@ -1490,7 +1493,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
 
           <p>
             <code>query</code> (required) and <code>count</code> (default 10,
-            capped 20 — Brave's own per-request ceiling, so asking for more would
+            capped 20, Brave's own per-request ceiling, so asking for more would
             be silently clamped by the API and make the count in the result
             disagree with the request). <code>read_only: true</code>,
             <code>reaches_network: true</code>. The key travels in an
@@ -1504,7 +1507,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             engine's summaries, and a model that answers from them is quoting a
             summary of a page it never opened. Zero results is
             <code>Ok</code>. Status handling is split by what the model can do
-            about it — 401/403 is <code>Unavailable</code> (check the key), 422 is
+            about it: 401/403 is <code>Unavailable</code> (check the key), 422 is
             <code>BadArguments</code> (Brave refused the query), 429 is
             <code>Failed</code> and says the condition is temporary.
           </p>
@@ -1514,7 +1517,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             <code>network_target</code> takes the host from
             <code>base_url</code> rather than a constant, so a test pointed at a
             loopback stub gates on the stub, and its <code>detail</code> is the
-            query verbatim — the query <em>is</em> the thing leaving the machine,
+            query verbatim: the query <em>is</em> the thing leaving the machine,
             and a prompt naming a host without saying what is being sent there is
             one nobody can evaluate.
           </p>
@@ -1525,7 +1528,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             <table>
               <tr><th>Argument</th><th>Default</th><th>Ceiling</th></tr>
               <tr><td><code>url</code> <em>required</em></td><td>—</td><td>http/https only; loopback, <code>file:</code> and <code>chrome:</code> refused</td></tr>
-              <tr><td><code>max_chars</code></td><td class="num">8000</td><td class="num">200,000 — bounds the prose only</td></tr>
+              <tr><td><code>max_chars</code></td><td class="num">8000</td><td class="num">200,000 (bounds the prose only)</td></tr>
               <tr><td><code>max_links</code></td><td class="num">50</td><td class="num">120, which is also the most this browser collects from one page</td></tr>
             </table>
           </div>
@@ -1555,7 +1558,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
               </tr>
               <tr>
                 <td>links</td>
-                <td><code>{n} of {total} links shown (main-content links first), {dropped} dropped by max_links={n}; re-read with max_links={total} for the rest</code> — and when the total reaches 120, <code>— 120 is the most this browser collects from one page, so links beyond that were never captured</code></td>
+                <td><code>{n} of {total} links shown (main-content links first), {dropped} dropped by max_links={n}; re-read with max_links={total} for the rest</code>. When the total reaches 120: <code>— 120 is the most this browser collects from one page, so links beyond that were never captured</code></td>
               </tr>
               <tr>
                 <td>JSON-LD, 2000 chars</td>
@@ -1576,7 +1579,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
           <p>
             <span class="chip unv">unverified</span> The upstream project's
             4.6–5.9× token-economy figure for this digest format is <em>not</em>
-            reproducible here and the source says so — the live-network bench
+            reproducible here, and the source says so. The live-network bench
             that produced it stayed upstream. Settled by re-running a digest-size
             comparison against a fixed set of live pages from this fork.
           </p>
@@ -1596,7 +1599,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
               <tr><td><code>BrowserOpen</code></td><td><code>url</code>, <code>headful</code> (default false)</td><td>false</td></tr>
               <tr><td><code>BrowserRead</code></td><td><code>session</code>, <code>delta</code> (default <strong>true</strong>), <code>max_chars</code>, <code>max_links</code>, <code>selectors</code></td><td>true</td></tr>
               <tr><td><code>BrowserAct</code></td><td><code>session</code>, <code>action</code>, plus <code>selector</code>/<code>text</code>/<code>value</code>/<code>url</code>/<code>timeout_ms</code></td><td>false</td></tr>
-              <tr><td><code>BrowserFill</code></td><td><code>session</code>, <code>fields</code> — each <code>selector</code> with <code>value</code> or <code>checked</code></td><td>false</td></tr>
+              <tr><td><code>BrowserFill</code></td><td><code>session</code>, <code>fields</code>: each <code>selector</code> with <code>value</code> or <code>checked</code></td><td>false</td></tr>
               <tr><td><code>BrowserClose</code></td><td><code>session</code>, optional</td><td>true</td></tr>
             </table>
           </div>
@@ -1606,8 +1609,8 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             reason: it leaves a live browser running with an
             unauthenticated CDP port on localhost, and while that exists any
             local process can puppet it. At most
-            <strong><code>MAX_SESSIONS</code> = 2</strong> may be open — each is
-            a few hundred megabytes of Chrome — and a third is refused by name.
+            <strong><code>MAX_SESSIONS</code> = 2</strong> may be open (each is
+            a few hundred megabytes of Chrome), and a third is refused by name.
           </p>
 
           <p>
@@ -1622,7 +1625,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
           <span class="src">tools/web/src/browser/tools.rs — <code>BrowserClose::meta</code></span>
 
           <p>
-            <code>BrowserAct</code> never returns page content — its result is a
+            <code>BrowserAct</code> never returns page content. Its result is a
             snapshot line and an instruction to call <code>BrowserRead</code> to
             see what changed, and a test asserts the content is under 400
             characters. A negative answer is <code>Ok</code> rather than an error:
@@ -1637,7 +1640,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             <strong>Nothing here can submit a form, and that is two decisions
             rather than an omission.</strong> The upstream library's submit
             requires a second key in a config file resolved against the process's
-            working directory — which, inside Emma, is the user's repository, and
+            working directory, which, inside Emma, is the user's repository, and
             <code>Bash</code> can write it. A second key both parties can turn is
             one key. Separately, “the payload was shown” cannot be guaranteed from
             inside a tool: the prompt is rendered by the approval gate, and an
@@ -1645,14 +1648,14 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             cannot force its own gate.
             <span class="chip test">tested</span> A recursive schema walk asserts
             no registered tool offers a submit argument, and
-            <code>BrowserFill</code> passes <code>file: None</code> always — the
+            <code>BrowserFill</code> passes <code>file: None</code> always. The
             library's file-attach is a different capability entirely, since it
             sends a file off this machine.
           </p>
           <span class="src">tools/web/src/browser/tools.rs — <code>BrowserFill</code></span>
 
           <div class="note warn">
-            <span class="h">Suspected defect — the allowlist refusal names the wrong file</span>
+            <span class="h">Suspected defect: the allowlist refusal names the wrong file</span>
             <p>
               Click, type and select require a user-owned domain allowlist, and
               with none they are refused outright. The refusal is produced by the
@@ -1672,7 +1675,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
               The cross-origin re-ask is <strong>one call late</strong>: the
               bytes for a redirect or a click-through have already gone by the
               time the pool learns the host changed. What it protects is
-              everything after. And prompt injection is not solved — a page can
+              everything after. And prompt injection is not solved: a page can
               contain text that persuades the model to click a button on that
               page, and nothing here prevents that.
             </p>
@@ -1698,7 +1701,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
           <p>
             All four are <code>read_only: true</code>,
             <code>reaches_network: false</code>, <code>idempotent: true</code>,
-            and prompt nobody. Three take the same position schema —
+            and prompt nobody. Three take the same position schema:
             <code>file_path</code>, <code>line</code> (1-based),
             <code>symbol</code>, and <code>occurrence</code> when the name appears
             more than once on the line. <strong>Emma finds the column and refuses
@@ -1715,7 +1718,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             that it is a text search: it cannot tell a definition from a mention,
             and it will match the same name in an unrelated crate.</em> When no
             server can be found at all, the refusal likewise declines to
-            substitute — <em>Emma will not answer these questions with text
+            substitute: <em>Emma will not answer these questions with text
             search instead: a reference list produced by grep is a different
             answer to a different question, and nothing in the result would say
             so.</em>
@@ -1725,7 +1728,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
           <p>
             Containment comes first, before the file is read and before a process
             is started: a path outside the root must not so much as cause a spawn.
-            Results are contained on the way <em>out</em> too — a language server
+            Results are contained on the way <em>out</em> too. A language server
             will happily answer about
             <code>…\.cargo\registry\…</code>, and hits outside the root are
             counted and named rather than shown. That outbound check
@@ -1745,7 +1748,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             Traced against rust-analyzer 0.3.3008 on a two-file crate,
             <strong>that count reaches zero three times before the index
             exists</strong>. The first version of this crate declared ready at
-            0.36s, asked, and got <code>[]</code> — the confidently-wrong empty
+            0.36s, asked, and got <code>[]</code>. That is the confidently-wrong empty
             result the crate exists to prevent, produced by the machinery built to
             prevent it. It was caught by <code>tests/real_server.rs</code> and by
             nothing else: every fake passes, because a fake emits the tokens its
@@ -1758,8 +1761,8 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             <code>experimental/serverStatus</code> notification with
             <code>quiescent: true</code>, requested in <code>initialize</code>.
             The token-counting heuristic survives as a fallback with a 1.5-second
-            settle window — roughly five times the largest observed gap between
-            phases — and is switched off entirely once the authoritative signal
+            settle window (roughly five times the largest observed gap between
+            phases), and is switched off entirely once the authoritative signal
             has been seen once.
           </p>
 
@@ -1767,7 +1770,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             <strong>An unready request still runs and still returns
             <code>Ok</code></strong>, with the readiness attached, because the
             loop will not repeat a call that already failed with nothing changed
-            since — an error would forbid the one correct response. The
+            since. An error would forbid the one correct response. The
             distinction lands in the sentence a result carries when it is empty:
           </p>
 
@@ -1792,7 +1795,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
           <div class="tw">
             <table>
               <tr><th>Cap</th><th>Value</th><th>Raised by</th></tr>
-              <tr><td><code>MAX_LOCATIONS</code></td><td class="num">100</td><td>nothing — no schema offers a limit argument</td></tr>
+              <tr><td><code>MAX_LOCATIONS</code></td><td class="num">100</td><td>nothing: no schema offers a limit argument</td></tr>
               <tr><td><code>MAX_SYMBOLS</code></td><td class="num">300</td><td>nothing</td></tr>
               <tr><td>source line clip</td><td class="num">300 chars</td><td>nothing; does not set the flag</td></tr>
             </table>
@@ -1805,7 +1808,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
           </p>
 
           <div class="note warn">
-            <span class="h">Gap — this crate uses the weaker truncation form</span>
+            <span class="h">Gap: this crate uses the weaker truncation form</span>
             <p>
               <code>render.rs</code> calls the bare
               <code>ToolOutcome::truncated()</code> and puts its explanation in
@@ -1822,7 +1825,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
           <p>
             The server is started with checking, build scripts and
             <strong>proc macros</strong> all disabled, and
-            <code>cargo.extraArgs: ["--offline"]</code> — which is what makes the
+            <code>cargo.extraArgs: ["--offline"]</code>, which is what makes the
             <code>read_only</code> and <code>reaches_network: false</code>
             declarations true. The stated cost: items generated by
             <code>derive</code> and by attribute macros are not in the index, so
@@ -1833,7 +1836,7 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
           <p>
             One server per canonical root, started lazily, restarted up to
             <code>MAX_CRASHES</code> = 3 and then refused with the last recorded
-            reason. <strong>Nothing reaps an idle server</strong> — it stays until
+            reason. <strong>Nothing reaps an idle server.</strong> It stays until
             the pool is dropped, which the source says plainly rather than
             implying a cleanup that does not exist.
           </p>
@@ -1872,11 +1875,11 @@ ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
             </li>
             <li>
               <strong>Two doc comments in <code>tools/lsp</code> cite files that
-              do not exist</strong> — a <code>tests/read_only.rs</code> and a
+              do not exist:</strong> a <code>tests/read_only.rs</code> and a
               <code>tests/fake_server.rs</code> in that crate. The guarantees they
               point at are covered elsewhere (<code>tests/tools.rs</code> and
               <code>tests/support/mod.rs</code>), so this is a stale citation
-              rather than a missing test — but a citation nobody can follow is the
+              rather than a missing test. Still, a citation nobody can follow is the
               thing this site exists to prevent.
             </li>
             <li>

@@ -14,10 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it. That is the deal, and is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -29,6 +29,7 @@
   <h4>Start here</h4>
   <ul>
     <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
     <li><a class="nav" href="architecture.html">Architecture</a></li>
   </ul>
 
@@ -70,13 +71,14 @@
     Emma reads seven kinds of file across three scopes, and they do not all fail
     the same way. A mistake in the project's harness refuses the boot and names
     the file; a mistake in a personal preference costs the preference and says
-    so; a key belonging to another program is ignored on purpose. This page is
+    so; a key belonging to another program is ignored. This page is
     the one to read when something you configured did not happen, so it goes
     through every file, every key, and the order they are consulted in.
   </p>
 
   <div class="key">
-    <div><span class="chip cert">certified</span> proven against the real thing</div>
+    <div><span class="chip cert">certified</span> proven, and a reader can repeat it: a file, a command, a count</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
     <div><span class="chip test">tested</span> a test that was shown to fail</div>
     <div><span class="chip unv">unverified</span> believed, not checked</div>
   </div>
@@ -109,7 +111,7 @@ model          claude-sonnet-5  (settings.json)
 api key        found (stored file)
 
 no model was called.</code></pre>
-  <span class="chip cert">certified</span> — the real binary, in the real repository, output pasted unedited apart from truncating the tool list.
+  <span class="chip cert">certified</span>: the real binary, in the real repository, output pasted unedited apart from truncating the tool list.
 
   <h2 id="files">What is read, from where</h2>
 
@@ -154,7 +156,7 @@ no model was called.</code></pre>
         <td><code>~/.claude/settings.json</code></td>
         <td>user</td>
         <td><code>emma-harness</code></td>
-        <td><code>permissions.deny</code> <em>only</em> — never
+        <td><code>permissions.deny</code> <em>only</em>: never
             <code>allow</code>, never <code>ask</code></td>
         <td>skipped in silence; the run continues with no user-scope rules</td>
       </tr>
@@ -191,7 +193,7 @@ no model was called.</code></pre>
     <code>settings.rs</code>'s own module doc and is worth carrying: the
     project's configuration is shared by everyone who clones the repository, so
     a personal default written there would be two files answering one question
-    with no rule for disagreeing — and the answer that won would be the
+    with no rule for disagreeing, and the answer that won would be the
     repository's, on somebody else's screen. Nothing personal is settable from
     the project, and nothing about the project is settable from the home
     directory.
@@ -203,8 +205,8 @@ no model was called.</code></pre>
     The harness is found the way git finds <code>.git</code>: walk up from the
     working directory until a directory named <code>.emma/</code> or
     <code>.claude/</code> turns up. <strong>Nearest ancestor wins, and within
-    one directory <code>.emma/</code> beats <code>.claude/</code> outright</strong>
-    — the loser is ignored entirely, never merged. Merging would mean "which
+    one directory <code>.emma/</code> beats <code>.claude/</code> outright</strong>.
+    The loser is ignored entirely, never merged. Merging would mean "which
     file did this instruction come from" stops having an answer.
   </p>
   <span class="src">crates/harness/src/lib.rs — <code>discover_in</code></span>
@@ -284,12 +286,12 @@ no model was called.</code></pre>
   <p>
     <strong><code>~/.claude/</code> is never adopted as a harness</strong>, and
     it is skipped so completely that it does not even appear in the
-    not-found error — a refusal listing a path Emma declined to consider reads
+    not-found error. A refusal listing a path Emma declined to consider reads
     as a bug in the search. It is another program's user-scope configuration:
     global permissions, global agents, global skills, chosen in sessions Emma
     was not part of. Booting on it would be standing instructions from a
     directory nobody associated with this project.
-    <span class="chip cert">certified</span> — <code>~/.claude/</code> exists on
+    <span class="chip cert">certified</span>: <code>~/.claude/</code> exists on
     this machine (<code>ls -d ~/.claude</code> → <code>/c/Users/owner/.claude/</code>)
     and the search list below ends without it.
   </p>
@@ -305,11 +307,11 @@ Error: no `.emma/` or `.claude/` found. Searched, nearest first:
   C:\Users\owner\AppData\.claude
   C:\Users\owner\<span class="s">.emma (present, but holds no config.json or personas/, so it is not a harness)</span>
 <span class="c">// and that is the last line. No C:\Users\owner\.claude, and nothing above home.</span></code></pre>
-  <span class="chip cert">certified</span> — run in a scratch tree today; paths middle-elided, the last line is verbatim.
+  <span class="chip cert">certified</span>: run in a scratch tree today; paths middle-elided, the last line is verbatim.
 
   <p>
     <code>~/.emma/</code> gets the second rule, and it was paid for. It used to
-    be eligible for existing — and <code>emma api</code> creates it to store a
+    be eligible for existing, and <code>emma api</code> creates it to store a
     key. From the moment somebody saved a credential, every project without a
     harness of its own adopted the home directory and booted with no
     instructions, no persona and the full write-capable tool surface. Nobody
@@ -318,7 +320,7 @@ Error: no `.emma/` or `.claude/` found. Searched, nearest first:
     <code>config.json</code> or <code>personas/</code>. <code>credentials.json</code>,
     <code>sessions/</code> and <code>settings.json</code> are Emma's own
     bookkeeping and say nothing about how Emma is configured.
-    <span class="chip cert">certified</span> — the line above is that rule
+    <span class="chip cert">certified</span>: the line above is that rule
     firing on the owner's real <code>~/.emma/</code>, which holds
     <code>settings.json</code> and nothing else that counts.
   </p>
@@ -328,7 +330,7 @@ Error: no `.emma/` or `.claude/` found. Searched, nearest first:
     <span class="h">The comparison that decides "is this the home directory"</span>
     <p>
       Both sides are canonicalised rather than compared as strings. Case is only
-      one of the ways two spellings of one directory differ — a trailing
+      one of the ways two spellings of one directory differ: a trailing
       separator, a <code>..</code> in the middle, a Windows 8.3 short name and a
       home reached through a symlink are the others. The case bug is the one
       that actually bit: <code>C:\Users\Owner</code> against
@@ -341,7 +343,7 @@ Error: no `.emma/` or `.claude/` found. Searched, nearest first:
 
   <p>
     <code>EMMA_ROOT=&lt;dir&gt;</code> replaces the whole walk, and a value that
-    is not a directory is an error rather than a fall-back to searching — an
+    is not a directory is an error rather than a fall-back to searching. An
     override that quietly searched would boot the agent on configuration nobody
     asked for. Which flavour the directory is read as comes from its
     <em>name</em>: a directory called <code>.claude</code> is read as Claude
@@ -366,7 +368,7 @@ Error: no `.emma/` or `.claude/` found. Searched, nearest first:
     different amounts of each.
   </p>
 
-  <h3><code>.emma/config.json</code> — every key</h3>
+  <h3><code>.emma/config.json</code>: every key</h3>
 
   <div class="tw">
   <table>
@@ -416,7 +418,7 @@ Error: no `.emma/` or `.claude/` found. Searched, nearest first:
   <p>
     <strong>Every one of those structs carries <code>deny_unknown_fields</code>,
     and a sixth key is a load error.</strong> This is Emma's own format, so a key
-    Emma does not recognise can only be a typo — and the typo this costs one
+    Emma does not recognise can only be a typo, and the typo this costs one
     attribute to prevent is a misspelled <code>mathcer</code> in a hook, which
     would produce a guard matching every tool while looking like it worked.
   </p>
@@ -429,20 +431,20 @@ Error: …\t2\.emma\config.json is malformed
 Caused by:
     <span class="w">unknown field `mathcer`, expected one of `default_persona`, `personas`,
     `hooks`, `statusLine`, `permissions` at line 1 column 32</span></code></pre>
-  <span class="chip cert">certified</span> — real binary, scratch directory, output verbatim. The error lists the whole key vocabulary, which is also the shortest correct answer to "what can go in this file".
+  <span class="chip cert">certified</span>: real binary, scratch directory, output verbatim. The error lists the whole key vocabulary, which is also the shortest correct answer to "what can go in this file".
 
   <p>
     A persona's <code>tools</code> list is a real filter and not an assertion.
     An operator writing <code>"tools": ["Read", "Grep"]</code> and getting
     <code>Bash</code> anyway would have a permission boundary that is a
     comment, at the one place where the failure costs them their working tree. A
-    name the binary does not register is still a load error — filtering without
+    name the binary does not register is still a load error: filtering without
     asserting turns <code>"Bahs"</code> into "no shell for you" with no
     explanation.
   </p>
   <span class="src">crates/harness/src/lib.rs — <code>Harness::select_tools</code></span>
 
-  <h3><code>.claude/settings.json</code> — three keys of many</h3>
+  <h3><code>.claude/settings.json</code>: three keys of many</h3>
 
   <p>
     Emma reads <code>hooks</code>, <code>statusLine</code> and
@@ -459,8 +461,8 @@ Caused by:
       not run, and denying them would mean refusing to boot in essentially every
       real Claude Code repository. <strong>A rule that fires on correct
       configuration is an outage, not a safety property.</strong> So the outer
-      object is permissive, and the <code>hooks</code> block inside it is strict
-      — which is where a silently-ignored key would cost something.
+      object is permissive, and the <code>hooks</code> block inside it is strict,
+      which is where a silently-ignored key would cost something.
     </p>
     <p>
       This matters if you are adding a key Emma should read: adding it to the
@@ -475,7 +477,7 @@ Caused by:
       The same relaxation is made in two further places for the same reason:
       skill frontmatter under <code>.claude/skills/</code>, and agent
       frontmatter under <code>.claude/agents/</code>. The agent struct's doc
-      states it outright — measured against a real library of 90 agent files,
+      states it outright: measured against a real library of 90 agent files,
       <code>category</code> and <code>version</code> appear throughout and every
       one of them would have been a boot failure.
     </p>
@@ -491,7 +493,7 @@ Caused by:
 ['$schema', 'agentPushNotifEnabled', 'effortLevel', 'enabledPlugins',
  'extraKnownMarketplaces', 'feedbackSurveyState', 'hooks', <span class="s">'permissions'</span>,
  'remoteControlAtStartup', 'skipDangerousModePermissionPrompt']</code></pre>
-  <span class="chip cert">certified</span> — the real file on this machine, 2026-08-16.
+  <span class="chip cert">certified</span>: the real file on this machine, 2026-08-16.
 
   <h3>What a hook command may be</h3>
 
@@ -524,7 +526,7 @@ Caused by:
   <p>
     One filename in both flavours, sitting beside whichever spine loaded. It
     carries a <code>permissions</code> block and nothing else Emma reads, and it
-    is where a grant you ask Emma to remember is written — beside the harness
+    is where a grant you ask Emma to remember is written, beside the harness
     that actually loaded, so answering a prompt in a <code>.emma/</code> project
     cannot conjure a <code>.claude/</code> directory for a program that is not
     running.
@@ -533,7 +535,7 @@ Caused by:
 
   <p>
     <strong>A malformed one fails the boot</strong>, which is a different ruling
-    from a rule Emma cannot evaluate — that is only a note. An unevaluatable
+    from a rule Emma cannot evaluate, which is only a note. An unevaluatable
     rule is a file written correctly for a program with a larger vocabulary;
     unparseable JSON is a file that says nothing at all, and booting past it
     would mean running with a <code>deny</code> list the operator believes is in
@@ -545,7 +547,7 @@ Error: …\t1\.claude\settings.local.json is malformed
 
 Caused by:
     key must be a string at line 1 column 3</code></pre>
-  <span class="chip cert">certified</span> — scratch harness, real binary, today.
+  <span class="chip cert">certified</span>: scratch harness, real binary, today.
 
   <h3>Permission rules live here and are explained elsewhere</h3>
 
@@ -562,8 +564,8 @@ Caused by:
 
   <p>
     Two facts about <em>reading</em> them belong here, though. Permission lists
-    <strong>merge across scopes</strong> rather than override — nearest-wins is
-    not how these compose — and the merge is safe because <code>deny</code> beats
+    <strong>merge across scopes</strong> rather than override; nearest-wins is
+    not how these compose. The merge is safe because <code>deny</code> beats
     <code>allow</code> at match time, so a restrictive rule in any file survives
     a permissive rule in any other. And from the user scope,
     <strong>only <code>deny</code> crosses</strong>.
@@ -589,7 +591,7 @@ Caused by:
       enough to be worth importing, not permissive enough to be dangerous.
     </p>
     <p>
-      <span class="chip cert">certified</span> — that file today holds
+      <span class="chip cert">certified</span>: that file today holds
       <strong>64</strong> <code>allow</code> rules, <code>"defaultMode":
       "auto"</code>, and no <code>deny</code> list at all. Emma's
       <code>config check</code> in this repository accordingly prints
@@ -603,12 +605,12 @@ Caused by:
 
   <p>
     All three are directories under the harness root, and all three use the same
-    layout in <code>.emma/</code> and <code>.claude/</code> — which is the whole
+    layout in <code>.emma/</code> and <code>.claude/</code>, which is the whole
     point of reading the second directory name at all. A skill or command
     already written for Claude Code works unchanged.
   </p>
 
-  <h3>Skills — <code>skills/&lt;name&gt;/SKILL.md</code></h3>
+  <h3>Skills: <code>skills/&lt;name&gt;/SKILL.md</code></h3>
 
   <p>
     Markdown with YAML frontmatter. Emma reads two fields, <code>name</code> and
@@ -623,7 +625,7 @@ Caused by:
   <p>
     <strong>What a skill can do is add text to one turn.</strong> It is loaded
     by a tool call, so its body reaches the model only when the model asks for
-    it by name from a closed enum — a tool that took a model-supplied
+    it by name from a closed enum. A tool that took a model-supplied
     <em>path</em> would be an arbitrary-file-read tool with a friendly
     description. Nothing the runtime branches on may live in a skill; that
     belongs in the spine.
@@ -634,14 +636,14 @@ Caused by:
     <code>settings.json</code> one level down. Under <code>.emma/</code> the
     frontmatter is strict and both fields are required, so a bad file fails the
     boot. Under <code>.claude/</code> unknown keys are ignored and a file that
-    cannot be read at all is <em>skipped with a warning on stderr</em> — real
+    cannot be read at all is <em>skipped with a warning on stderr</em>. Real
     skills carry <code>model-role</code>, <code>version</code> and
     <code>allowed-tools</code>, and under the strict struct every one of them
     took the whole boot down. Two further tolerances exist for
     <code>.claude/</code> only: an HTML comment (a licence header) above the
     frontmatter is stepped over, and comments and blank lines are the only
     things that may precede it. Not covered: a <code>---\r\n</code> opener or a
-    byte-order mark on a skill file — both are skipped-with-a-warning rather
+    byte-order mark on a skill file. Both are skipped-with-a-warning rather
     than fatal, which is the property that mattered.
   </p>
   <span class="src">crates/harness/src/lib.rs — <code>Front</code>, <code>ClaudeFront</code>, <code>after_licence_header</code></span>
@@ -650,7 +652,7 @@ Caused by:
     A harness with no skills does not register the <code>Skill</code> tool at
     all. Offering a capability that cannot work is a trap with a description
     attached.
-    <span class="chip cert">certified</span> — the <code>tools</code> line from
+    <span class="chip cert">certified</span>: the <code>tools</code> line from
     <code>config check</code> in this repository (no skills) has no
     <code>Skill</code>; the same line in a scratch harness carrying one
     <code>SKILL.md</code> reads
@@ -658,7 +660,7 @@ Caused by:
   </p>
   <span class="src">crates/harness/src/lib.rs — <code>Harness::skill_catalog</code>, and its <code>None</code> case</span>
 
-  <h3>Commands — <code>commands/&lt;name&gt;.md</code></h3>
+  <h3>Commands: <code>commands/&lt;name&gt;.md</code></h3>
 
   <p>
     Top-level <code>*.md</code> only; the file stem is the name. Typing
@@ -666,7 +668,7 @@ Caused by:
     tail appended after a blank line when there is one. The body is trimmed at
     both ends, which is the second of the two places the "nothing is trimmed"
     prompt rule is bent, and it is bent because a command body is not
-    always-on prompt text — it is text a person typed a <code>/name</code> to
+    always-on prompt text: it is text a person typed a <code>/name</code> to
     summon.
   </p>
   <span class="src">crates/harness/src/lib.rs — <code>load_commands</code>, <code>expand_command</code></span>
@@ -677,7 +679,7 @@ Caused by:
     through as ordinary text.
   </p>
 
-  <h3>Agents — <code>agents/&lt;name&gt;.md</code></h3>
+  <h3>Agents: <code>agents/&lt;name&gt;.md</code></h3>
 
   <p>
     One file format doing two jobs with opposite selection rules. As a
@@ -693,7 +695,7 @@ Caused by:
     <li>
       <strong>Top-level <code>*.md</code> only</strong>, and the file stem is
       the name. A <code>name:</code> in frontmatter that disagrees loses and
-      produces a note — the stem is what <code>EMMA_PERSONA</code> names and the
+      produces a note: the stem is what <code>EMMA_PERSONA</code> names and the
       only one of the two guaranteed unique. Subdirectories are not walked: a
       real library had 23 of them holding 205 files, and flattening two
       namespaces would resolve a collision by directory iteration order.
@@ -711,7 +713,7 @@ Caused by:
       personas <em>are</em> the prompt, so unselected persona content means Emma
       would have started without a prompt somebody wrote. In
       <code>.claude/</code> the prompt is <code>CLAUDE.md</code> and
-      <code>agents/</code> is optional — a normal repository has a dozen and
+      <code>agents/</code> is optional: a normal repository has a dozen and
       selects none.
     </li>
     <li>
@@ -728,8 +730,8 @@ Caused by:
   <p>
     Line endings on an agent file are tolerated, and that is a scar rather than
     tidiness. The parser required <code>---\n</code> exactly, so every CRLF
-    agent file — every one of them on a Windows machine, and 90 out of 90 in the
-    library it was measured against — fell through to "no frontmatter": its
+    agent file (every one of them on a Windows machine, and 90 out of 90 in the
+    library it was measured against) fell through to "no frontmatter": its
     <code>tools</code> was ignored, its <code>description</code> was invisible,
     and its <code>name:</code>, <code>model:</code> and <code>category:</code>
     lines were handed to the model as standing instructions. Nothing failed; the
@@ -758,9 +760,9 @@ permissions    2 rule(s)
                <span class="w">! `Bash(ls:*)` is an allow rule Emma cannot evaluate — `ls:*` is not a
                specifier this build understands, so it approves nothing and those
                calls will still ask.</span></code></pre>
-  <span class="chip cert">certified</span> — a scratch <code>.claude/</code> built today and read by the release binary; the settings file also carried <code>$schema</code>, <code>model</code> and <code>enabledPlugins</code>, none of which caused a murmur.
+  <span class="chip cert">certified</span>: a scratch <code>.claude/</code> built today and read by the release binary; the settings file also carried <code>$schema</code>, <code>model</code> and <code>enabledPlugins</code>, none of which caused a murmur.
 
-  <h2 id="personal">The personal file — <code>~/.emma/settings.json</code></h2>
+  <h2 id="personal">The personal file: <code>~/.emma/settings.json</code></h2>
 
   <p>
     Never in the working tree, for the same reason the key is not: Emma runs
@@ -779,8 +781,8 @@ permissions    2 rule(s)
         <td><code>provider</code></td>
         <td>string</td>
         <td>Which provider this build should use. <strong>An unknown one is an
-            error, never a fallback</strong> — falling back to Anthropic would
-            make a mis-set provider indistinguishable from a correct one.</td>
+            error, never a fallback</strong>, because falling back to Anthropic
+            would make a mis-set provider indistinguishable from a correct one.</td>
       </tr>
       <tr>
         <td><code>models</code></td>
@@ -822,14 +824,14 @@ permissions    2 rule(s)
   <p>
     <strong>This struct has no <code>deny_unknown_fields</code>, and a file that
     will not parse is read as an empty one.</strong> A preference store that
-    refused to start would be the tail wagging the dog — but the consequence is
+    refused to start would be the tail wagging the dog, but the consequence is
     that a typo here is <em>silence</em>, not a message. A file with
     <code>"provdier": "anthropic"</code> boots happily on the built-in default.
     The check available is the <code>config check</code> line, which names the
     source of each answer:
     <code>provider anthropic (settings.json)</code> versus
     <code>(built-in default)</code>.
-    <span class="chip test">tested</span> —
+    <span class="chip test">tested</span>:
     <code>a_corrupt_settings_file_is_not_a_startup_failure</code> writes
     <code>{ not json</code> and asserts both sources come back as
     <code>built-in default</code>.
@@ -839,13 +841,13 @@ permissions    2 rule(s)
     The legacy migration is live rather than historical. The owner's real file
     today is <code>{"model": …}</code> and nothing else, and the resolved model
     in the <code>config check</code> at the top of this page is
-    <code>claude-sonnet-5 (settings.json)</code> — that migration firing.
+    <code>claude-sonnet-5 (settings.json)</code>: that migration firing.
     Migration happens at <em>read</em>, so <code>emma</code> and
     <code>emma config check</code> can never disagree about the model while
     waiting for something to write.
-    <span class="chip cert">certified</span> — the file's only key is
+    <span class="chip cert">certified</span>: the file's only key is
     <code>model</code>, read on this machine today.
-    <span class="chip test">tested</span> —
+    <span class="chip test">tested</span>:
     <code>a_model_set_before_providers_existed_still_runs</code> pins the owner's
     file byte for byte, and its comment says why: if it goes red, an upgrade
     silently moved somebody off the model they chose.
@@ -854,7 +856,7 @@ permissions    2 rule(s)
   <h3>The <code>tools</code> block</h3>
 
   <p>
-    Four optional strings, all read by <code>usertools</code> — the sidebar keys
+    Four optional strings, all read by <code>usertools</code>: the sidebar keys
     a <em>person</em> presses, not anything the model can reach.
   </p>
 
@@ -879,7 +881,7 @@ permissions    2 rule(s)
       <tr>
         <td><code>file_browser</code></td>
         <td>The file manager.</td>
-        <td>The OS default — <code>explorer</code>, <code>open</code>,
+        <td>The OS default: <code>explorer</code>, <code>open</code>,
             <code>xdg-open</code>.</td>
       </tr>
       <tr>
@@ -897,7 +899,7 @@ permissions    2 rule(s)
     command line.</strong> A bare name is looked up on <code>PATH</code>; an
     absolute path is checked for existence. Splitting a string on spaces is the
     first half of running text through a shell, and a path with a space in it is
-    not an argument boundary — so a value carrying arguments is not split, it
+    not an argument boundary. So a value carrying arguments is not split: it
     fails, and the failure names the rule:
   </p>
 
@@ -906,12 +908,12 @@ permissions    2 rule(s)
   <span class="src">crates/emma/src/usertools.rs — <code>resolve_value</code>, the whitespace arm</span>
 
   <p>
-    That message exists because the generic one — "which is not on PATH" — sends
+    That message exists because the generic one, "which is not on PATH", sends
     somebody to check their PATH for a program that was never the problem. A
     value that does not resolve is an error naming it and is <strong>never</strong>
     quietly swapped for a probed default: a silent substitution looks identical
     to success right up until the wrong program opens.
-    <span class="chip unv">unverified</span> — the two messages are read off the
+    <span class="chip unv">unverified</span>: the two messages are read off the
     source and the resolution layer is pure and testable, but nothing on this
     page ran the sidebar. Settle it by setting <code>tools.editor</code> to
     <code>code --wait</code> and pressing <code>c</code> in the frame.
@@ -928,8 +930,8 @@ permissions    2 rule(s)
   <p>
     Two smaller behaviours worth knowing. A <code>.cmd</code> or
     <code>.bat</code> target is refused with a sentence saying to point the
-    setting at the underlying <code>.exe</code> — a script cannot own a console
-    window. And <code>settings.json</code> is re-read on <em>every</em> call
+    setting at the underlying <code>.exe</code>, because a script cannot own a
+    console window. And <code>settings.json</code> is re-read on <em>every</em> call
     rather than cached, so the Settings tool's own writes appear on the next
     frame; <code>PATH</code> lookups are cached for the life of the process, so
     a program installed mid-session appears after a restart.
@@ -942,10 +944,10 @@ permissions    2 rule(s)
     Two sources, in order: the provider's environment variable, then
     <code>~/.emma/credentials.json</code>. <strong>Never the project
     directory.</strong> Nothing in <code>auth.rs</code> resolves a path relative
-    to the working directory — the home path is computed, not searched upward.
+    to the working directory: the home path is computed, not searched upward.
     A key written next to the code is a key that gets committed, and the first
     person to notice is usually the scanner that finds it in a public push.
-    <span class="chip test">tested</span> —
+    <span class="chip test">tested</span>:
     <code>a_credentials_file_in_the_project_directory_is_ignored</code> plants a
     real <code>credentials.json</code> in a scratch cwd, runs both providers,
     and asserts the error names a path under the fake home.
@@ -954,7 +956,7 @@ permissions    2 rule(s)
 
   <p>
     The environment wins because that is how CI and one-off overrides work. The
-    variable it wins with is the <em>provider's</em> — that is why resolution
+    variable it wins with is the <em>provider's</em>, which is why resolution
     takes a <code>ProviderKind</code> rather than a name, so there is no way to
     check the wrong variable. An exported-but-empty variable is not a key: a
     forgotten <code>ANTHROPIC_API_KEY=</code> falls through to the stored file
@@ -968,7 +970,7 @@ permissions    2 rule(s)
     <code>{"providers": {"anthropic": {"api_key": …}}}</code>. It used to hold
     exactly one key under a top-level <code>api_key</code>, and that spelling is
     <strong>still read</strong>, for as long as anybody has a file written by
-    the old <code>emma api</code> — one machine, no expiry date. Reading
+    the old <code>emma api</code> (one machine, no expiry date). Reading
     migrates; nothing rewrites the file for having been read. The keyed shape
     wins over the legacy field for the same provider, and the first
     <em>write</em> carries the legacy value into <code>providers</code> and drops
@@ -981,8 +983,8 @@ permissions    2 rule(s)
     <p>
       This file holds more than one program's secrets. The web tools keep
       <code>brave_search_api_key</code> at its top level, beside the provider
-      entries. A write that serialised a fresh document — the obvious
-      implementation — deleted whichever keys the caller did not happen to know
+      entries. A write that serialised a fresh document, the obvious
+      implementation, deleted whichever keys the caller did not happen to know
       about, silently, and the symptom arrived hours later as a tool that had
       stopped being registered.
     </p>
@@ -990,11 +992,11 @@ permissions    2 rule(s)
       <strong>What it does now:</strong> <code>store</code> reads the file,
       replaces one provider's entry, and writes back everything else it found.
       And a file that <em>cannot be parsed</em> is an error rather than
-      something to overwrite — for exactly the same reason, since overwriting is
+      something to overwrite, for the same reason: overwriting is
       how the other keys are lost.
     </p>
     <p>
-      <span class="chip test">tested</span> —
+      <span class="chip test">tested</span>:
       <code>a_key_written_by_the_old_emma_api_still_reads</code> plants the
       owner's live file (a flat <code>api_key</code> and a Brave key beside it),
       stores a key for a <em>different</em> provider, and asserts
@@ -1008,14 +1010,14 @@ permissions    2 rule(s)
 
   <p>
     Two more properties. Every key in the file is built through
-    <code>ApiKey::new</code> at load — <em>including the ones nobody asked
-    for</em> — because that constructor is what registers a secret for
+    <code>ApiKey::new</code> at load, <em>including the ones nobody asked
+    for</em>, because that constructor is what registers a secret for
     scrubbing, so a key belonging to a provider this run is not using still
     cannot appear in an error message. And an <code>ApiKey</code> has no
     <code>Display</code> and a <code>Debug</code> that prints
     <code>ApiKey([redacted])</code>, so it cannot reach a log through a
     <code>{:?}</code> on some struct three layers up.
-    <span class="chip test">tested</span> — <code>a_key_never_prints_itself</code>
+    <span class="chip test">tested</span>: <code>a_key_never_prints_itself</code>
     and <code>a_key_belonging_to_another_provider_is_still_scrubbed</code>.
   </p>
 
@@ -1028,14 +1030,14 @@ permissions    2 rule(s)
     bits: the file lands in the user's profile, whose default ACL already
     excludes other users, and tightening it further would mean an ACL API this
     crate has no other reason to link. The Windows test asserts what can be
-    asserted — that the round trip works and that the absent check does not fail
-    closed — and its doc explains that the thinness is the point.
+    asserted: that the round trip works and that the absent check does not fail
+    closed. Its doc explains that the thinness is the point.
   </p>
   <span class="src">crates/llm/src/auth.rs — <code>write_private</code>, <code>check_permissions</code>, and their <code>cfg(not(unix))</code> arms</span>
 
   <p>
     <code>emma config check</code> prints <code>api key found (stored file)</code>
-    or the environment, by name and never by value — it answers "did I store
+    or the environment, by name and never by value. It answers "did I store
     that key?" without being a way to read one back.
   </p>
 
@@ -1064,7 +1066,7 @@ permissions    2 rule(s)
   <p>
     <strong>Selection lives only in <code>~/.emma/settings.json</code></strong>
     under <code>theme</code>, and the project's <code>config.json</code> has no
-    counterpart — the same ruling as the model, applied a second time. Theme
+    counterpart: the same ruling as the model, applied a second time. Theme
     <em>files</em> may live in either place; the choice is personal.
   </p>
 
@@ -1088,7 +1090,7 @@ permissions    2 rule(s)
     <p>
       <code>load</code> returns notices and no error, and the granularity is
       per-field. A hex that is not a hex loses <em>that role</em> and leaves the
-      other seven applied — a theme thrown away over one character is a theme
+      other seven applied: a theme thrown away over one character is a theme
       its author cannot debug. A file that is not JSON loses the theme and keeps
       the boot, quoting serde's own line and column. A key that is not a theme
       key is noted and ignored, because a build that adds a key should not make
@@ -1100,7 +1102,7 @@ permissions    2 rule(s)
       Two things a theme may not do, and both concern a screen nobody here can
       see. It may not set <code>roles.text</code>: a foreground chosen against
       one background is invisible on the opposite one, and the person it breaks
-      for reads it as Emma being broken. And it may not set a bare background —
+      for reads it as Emma being broken. And it may not set a bare background:
       backgrounds are declared as <em>pairs</em> (<code>chip</code>,
       <code>selection</code>), fg and bg together, because a pair is legible
       whatever is behind it and a lone background is a colour against an unknown
@@ -1110,9 +1112,9 @@ permissions    2 rule(s)
   <span class="src">crates/emma/src/term/theme.rs — <code>apply</code>, <code>apply_roles</code>, <code>role_entry</code>, <code>MAX_NOTICES</code></span>
 
   <p>
-    The colour model itself — the roles, the three fidelities, what
+    The colour model itself (the roles, the three fidelities, what
     <code>NO_COLOR</code> does, and why the 16-colour name is inherited rather
-    than derived — is <a href="terminal.html">The terminal</a>. One consequence
+    than derived) is <a href="terminal.html">The terminal</a>. One consequence
     belongs here: under <code>NO_COLOR</code>, <code>/theme</code> writes the
     preference and says plainly that the screen will not change, rather than
     refusing. The person may well be setting up for a terminal they will use
@@ -1131,7 +1133,7 @@ permissions    2 rule(s)
     This is the common one, and it has three causes: <code>.emma/</code> beat a
     <code>.claude/</code> sitting beside it, a <em>nearer</em> ancestor had a
     harness you forgot about, or <code>EMMA_ROOT</code> is exported in that
-    shell. Run <code>emma config check</code> and read the first three lines —
+    shell. Run <code>emma config check</code> and read the first three lines:
     <code>cwd</code>, <code>harness</code>, <code>flavor</code>. If
     <code>harness</code> is not the directory you edited, nothing below matters.
   </p>
@@ -1148,7 +1150,7 @@ permissions    2 rule(s)
     <tbody>
       <tr><td><code>theme</code>, <code>provider</code>, <code>model</code>, <code>tools</code></td>
           <td><code>.emma/config.json</code></td>
-          <td><code>~/.emma/settings.json</code> — and the spine would have
+          <td><code>~/.emma/settings.json</code>, and the spine would have
               <em>refused to start</em> over it, so if Emma booted, that is not
               what happened</td></tr>
       <tr><td><code>permissions.allow</code></td>
@@ -1157,8 +1159,8 @@ permissions    2 rule(s)
               scope contributes <code>deny</code> only, silently</td></tr>
       <tr><td>a hook for <code>SessionStart</code>, <code>Stop</code>, <code>PreCompact</code></td>
           <td>either spine</td>
-          <td>nowhere — Emma has three events, and this is a startup error
-              rather than a skip, so again: if Emma booted, this is not it</td></tr>
+          <td>nowhere: Emma has three events, and this is a startup error
+              rather than a skip, so again, if Emma booted, this is not it</td></tr>
       <tr><td>a skill or agent in a subdirectory</td>
           <td><code>agents/&lt;sub&gt;/x.md</code></td>
           <td>top level. <code>agents/</code> reads <code>*.md</code> at the top
@@ -1175,8 +1177,8 @@ permissions    2 rule(s)
     at its outer level, and <code>~/.emma/settings.json</code> entirely. In both,
     a misspelling is silence. <code>.emma/config.json</code> is the opposite and
     would have named the key and the whole valid vocabulary. So: if you edited a
-    permissive file, compare your key against the tables above by eye —
-    there is no spelling check available, and that is the price of one format
+    permissive file, compare your key against the tables above by eye.
+    There is no spelling check available, and that is the price of one format
     belonging to another program and the other being a preference store that
     must not refuse to start.
   </p>
@@ -1186,7 +1188,7 @@ permissions    2 rule(s)
     <em>shape</em>. <code>tools: []</code> in an agent file means inherit, not
     nothing. A theme role spelled wrongly is a notice, not a failure. A skill
     under <code>.claude/</code> whose frontmatter will not parse is skipped with
-    a line on stderr that scrolls past on a busy start —
+    a line on stderr that scrolls past on a busy start.
     <code>emma config check</code> is where to see the surviving list.
   </p>
 
@@ -1207,7 +1209,7 @@ permissions    2 rule(s)
     A rule Emma cannot evaluate is the clearest case: it is in the file, it is
     listed by <code>config check</code>, and it approves nothing. That is a
     <em>note</em> rather than a refusal, because a file written correctly for a
-    program with a larger vocabulary is not a broken file — see the
+    program with a larger vocabulary is not a broken file. See the
     <code>Bash(ls:*)</code> line in the certified output above. A configured
     editor that is not on <code>PATH</code>, an agent with no
     <code>description</code>, and a status-line program outside
@@ -1219,7 +1221,7 @@ permissions    2 rule(s)
     <span class="h">Two failures that are not configuration at all</span>
     <p>
       <strong>Approval.</strong> If Emma keeps asking about something you
-      granted, the rule may be right and simply not matching — that is
+      granted, the rule may be right and simply not matching. That is
       <a href="consent.html">Consent &amp; permissions</a>, not this page. And
       the gate is a consent interface, not a sandbox: it enforces nothing a tool
       does not honestly declare.
@@ -1240,9 +1242,9 @@ permissions    2 rule(s)
       <code>tools.shell</code>, <code>tools.editor</code>,
       <code>tools.file_browser</code> and <code>tools.data_dir</code> comes from
       reading <code>usertools.rs</code>, whose decision layer is pure and
-      testable — but no program was launched from a running frame in the session
+      testable, but no program was launched from a running frame in the session
       that wrote this.
-      <span class="chip unv">unverified</span> — settle it by setting
+      <span class="chip unv">unverified</span>. Settle it by setting
       <code>tools.editor</code> to a value with an argument in it, pressing
       <code>c</code>, and pasting the sentence the frame prints.
     </li>
@@ -1250,7 +1252,7 @@ permissions    2 rule(s)
       <strong>A theme end to end.</strong> The failure rules are read off
       <code>theme.rs</code> and the notice strings are quoted from it; no theme
       file was written, selected and looked at on a screen here.
-      <span class="chip unv">unverified</span> — settle it by writing
+      <span class="chip unv">unverified</span>. Settle it by writing
       <code>~/.emma/themes/x.json</code> with one bad hex and one good one,
       running <code>/theme x</code>, restarting, and reading which notices
       appear above the first prompt and which role changed.
@@ -1260,16 +1262,16 @@ permissions    2 rule(s)
       <em>read</em> and what a command string may be. Whether a hook actually
       runs, what its payload contains and how a timeout behaves is
       <code>hooks.rs</code>, and nothing here exercised it.
-      <span class="chip unv">unverified</span> — settle it by putting a script
+      <span class="chip unv">unverified</span>. Settle it by putting a script
       in <code>.emma/hooks/</code>, attaching it to <code>PreToolUse</code>, and
       reading the <code>hook</code> records in the session JSONL.
     </li>
     <li>
       <strong>The Windows credential ACL.</strong> The claim is that a file in
       the user's profile is already protected by the profile's default ACL.
-      Nothing in this tree reads an ACL, and the source says the same — the
+      Nothing in this tree reads an ACL, and the source says the same: the
       Windows test asserts a round trip, not a permission.
-      <span class="chip unv">unverified</span> — settle it with
+      <span class="chip unv">unverified</span>. Settle it with
       <code>icacls %USERPROFILE%\.emma\credentials.json</code> on a machine with
       a second local account.
     </li>
@@ -1278,7 +1280,7 @@ permissions    2 rule(s)
       quoted from source comments in <code>claude.rs</code>, which record a
       measurement made against a real library at some earlier date. They were not
       re-counted for this page and the library has certainly moved.
-      <span class="chip unv">unverified</span> — settle it by counting
+      <span class="chip unv">unverified</span>. Settle it by counting
       <code>~/.claude/agents/</code> again, or by treating the numbers as what
       they are: evidence that the permissive ruling was measured, not a current
       inventory.
@@ -1289,7 +1291,7 @@ permissions    2 rule(s)
       arithmetic; the sidebar matches <code>assets/NAV.html</code> and every
       class used is one <code>docs.css</code> already defines. No renderer has
       drawn it.
-      <span class="chip unv">unverified</span> — settle it by opening
+      <span class="chip unv">unverified</span>. Settle it by opening
       <code>docs/config.html</code> from <code>file://</code> and checking that
       no label overflows its box and no table forces the page to scroll
       sideways.

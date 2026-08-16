@@ -28,6 +28,7 @@
         <h4>Start here</h4>
         <ul>
           <li><a class="nav" href="index.html">What Emma is</a></li>
+          <li><a class="nav" href="getting-started.html">Getting started</a></li>
           <li><a class="nav" href="architecture.html">Architecture</a></li>
         </ul>
 
@@ -69,14 +70,18 @@
             a pinned input dock and a status bar. The other is a stream of lines
             with no escape byte in it. The second one runs whenever the first
             cannot, and most of the rules in this subsystem are about the seam
-            between them &mdash; and about giving the terminal back exactly as it
+            between them, and about giving the terminal back exactly as it
             was found.
           </p>
 
           <div class="key">
             <div>
               <span class="chip cert">certified</span
-              ><span>proven against the real thing</span>
+              ><span>proven, and a reader can repeat it: a file, a command, a grep</span>
+            </div>
+            <div>
+              <span class="chip obs">observed</span
+              ><span>seen once, live, not repeatable on demand</span>
             </div>
             <div>
               <span class="chip test">tested</span
@@ -179,12 +184,12 @@
             The read-back matters because the bit also selects which of
             crossterm&rsquo;s two code paths runs: with VT on it writes escape
             sequences, and without it makes WinAPI calls in
-            <em>screen-buffer</em> coordinates &mdash; and on Windows the buffer
+            <em>screen-buffer</em> coordinates. On Windows the buffer
             is usually far taller than the window, so a repaint aimed at
             &ldquo;row 40&rdquo; of a nine-thousand-row buffer goes somewhere
             invisible. The UTF-8 output code page follows the same shape: set it,
             read it back, believe only the read-back. Detection alone was tried
-            and was useless &mdash; a normal PowerShell window reports code page
+            and was useless: a normal PowerShell window reports code page
             437, so the answer was always no and the box was always
             <code>+---+</code>. The code page is changed only for a run that will
             draw; <em>&ldquo;changing a code page on a console nobody is looking
@@ -319,8 +324,8 @@
           <p>
             The full-screen frame carves the window in one function:
             <code>regions(area, sidebar_w, dock_h) -&gt; Regions</code>. The two
-            inputs that depend on state &mdash; how wide the sidebar is, how tall
-            the dock needs to be &mdash; are computed before the call, so the
+            inputs that depend on state, how wide the sidebar is and how tall
+            the dock needs to be, are computed before the call, so the
             carve itself is arithmetic over three numbers and runs without a
             terminal.
           </p>
@@ -333,7 +338,7 @@
             <em>&ldquo;the prose description of that image was wrong in five
             recorded places, and the design note&rsquo;s §1.1 sampled table,
             though pixel-derived, still missed three facts.&rdquo;</em> One of the
-            three is the two columns of ground between the panes &mdash;
+            three is the two columns of ground between the panes:
             <em>&ldquo;sidebar right edge ≈338px, main pane left edge ≈362px, at
             ≈11.3px per cell — two columns, not shared borders.&rdquo;</em>
             <span class="chip test">tested</span>
@@ -438,8 +443,8 @@
 
           <p>
             <strong>The dock is not a widget of its own.</strong> It is a
-            rectangle that <code>View</code>&rsquo;s existing renderers paint into
-            &mdash; the same <code>render_input</code> and
+            rectangle that <code>View</code>&rsquo;s existing renderers paint into:
+            the same <code>render_input</code> and
             <code>render_prompt</code> the inline viewport uses, marked
             <code>pub(crate)</code> with the argument attached:
             <em>&ldquo;a consent interface with two renderings is two
@@ -474,8 +479,8 @@
           <h3>1. The plain fallback never touches the alternate screen</h3>
 
           <p>
-            The alternate screen is entered by one constant, written at one place
-            &mdash; inside <code>Frame::install</code>, after
+            The alternate screen is entered by one constant, written at one place,
+            inside <code>Frame::install</code>, after
             <code>fallback_reason</code> has returned <code>None</code> and, on
             Windows, after VT has been proved. A run without a
             <code>Frame</code> cannot emit those bytes because there is no other
@@ -494,8 +499,8 @@
             knowledge.&rdquo;</em> The no-escape-bytes half rests elsewhere.
             <code>Term::side</code> writes through
             <code>render::for_stream</code>, which branches on the palette level:
-            at <code>Level::None</code> &mdash; which a pipe, <code>NO_COLOR</code>
-            and <code>--print</code> all produce &mdash; it emits
+            at <code>Level::None</code> (which a pipe, <code>NO_COLOR</code>
+            and <code>--print</code> all produce) it emits
             <code>plain(line)</code> and never <code>sgr(line)</code>. Four
             modules carry a test named
             <code>with_no_colour_not_one_escape_byte_is_emitted</code>.
@@ -507,7 +512,7 @@
             <span class="h">One residual escape route, and it is upstream</span>
             <p>
               <code>Term::delta</code> passes the model&rsquo;s own characters
-              through untouched on the fallback path &mdash; which is what keeps
+              through untouched on the fallback path, which is what keeps
               <code>emma … | tee</code> free of anything <em>Emma</em> invented,
               and also means an escape sequence written <em>by the model</em> is
               not filtered there. Inside the frame it is:
@@ -515,7 +520,7 @@
               before a cell is written, and
               <code>an_escape_byte_in_the_models_prose_never_reaches_a_cell</code>
               covers it. On the pipe, the bytes are the model&rsquo;s.
-              <span class="chip unv">unverified</span> &mdash; reported from a
+              <span class="chip unv">unverified</span>: reported from a
               reading of <code>Term::delta</code>; a run piping a model reply
               containing <code>\x1b</code> would settle it.
             </p>
@@ -572,8 +577,8 @@
                   <td>Ctrl-C</td>
                   <td>
                     Raw mode turns off the terminal&rsquo;s signal generation on
-                    both platforms &mdash; <code>ISIG</code> on unix,
-                    <code>ENABLE_PROCESSED_INPUT</code> on Windows &mdash; so
+                    both platforms (<code>ISIG</code> on unix,
+                    <code>ENABLE_PROCESSED_INPUT</code> on Windows), so
                     <code>tokio::signal</code> will not fire and the keystroke is
                     the only delivery there is. <code>term/input.rs</code> owns
                     it; the run then unwinds through the paths above.
@@ -646,7 +651,7 @@
               <em>&ldquo;§2.4&rsquo;s restore path covers the exits this process
               can see; it cannot cover the ones where the process is still alive
               and the terminal is not.&rdquo;</em>
-              <span class="chip unv">unverified</span> &mdash; no tmux or ssh
+              <span class="chip unv">unverified</span>: no tmux or ssh
               certification exists in the tree.
             </p>
             <span class="src">crates/emma/src/term/frame.rs module doc; notes/design-tui-fullscreen.md §2.1</span>
@@ -656,8 +661,8 @@
 
           <p>
             The old inline viewport was not deleted. One environment variable
-            selects it, tested narrowly &mdash;
-            <code>eq_ignore_ascii_case("inline")</code> &mdash; so that
+            selects it, tested narrowly
+            (<code>eq_ignore_ascii_case("inline")</code>), so that
             <em>&ldquo;anything else, including the variable being unset, which is
             the ordinary case, is the full-screen app.&rdquo;</em> It is kept
             <strong>for one release</strong>, as a soak period, so the flip&rsquo;s
@@ -668,10 +673,10 @@
           <p>
             The two are different code, not a flag inside one renderer. Inline,
             transcript lines go out through ratatui&rsquo;s
-            <code>Terminal::insert_before</code> &mdash;
+            <code>Terminal::insert_before</code>:
             <em>&ldquo;cursor to the last row, newlines, the one mechanism a
-            terminal captures into scrollback&rdquo;</em> &mdash; the frame drifts
-            to the bottom rather than being walked there, a streamed fragment is
+            terminal captures into scrollback.&rdquo;</em> The frame drifts
+            to the bottom rather than being walked there. A streamed fragment is
             held back in the viewport because
             <em>&ldquo;a fragment inserted above the viewport could never be
             extended&rdquo;</em> (so a paragraph streamed without newlines would
@@ -765,7 +770,7 @@
                   <td>
                     Nothing replaces it: <em>&ldquo;scrolling the shell up an hour
                     later to re-read styled output. Gone.&rdquo;</em> What exists
-                    is a pointer &mdash; <code>Term</code>&rsquo;s
+                    is a pointer. <code>Term</code>&rsquo;s
                     <code>Drop</code> prints <code>session: &lt;path&gt;</code>
                     onto the restored normal screen, after the alt screen has
                     left, naming the session JSONL. On the inline path the pointer
@@ -787,7 +792,7 @@
             answered it. The other three are open: the terminal&rsquo;s own
             cross-run search is gone and in-app search would be one field over one
             Emma buffer rather than a replacement; <strong>screen readers need
-            work that has not been done</strong> &mdash; a full-screen app paints
+            work that has not been done</strong>, because a full-screen app paints
             cells where inline output was ordinary text, and
             <em>&ldquo;a question nobody hears is consent nobody gave&rdquo;</em>;
             and multiplexers add the restore-failure class named above.
@@ -803,13 +808,13 @@
             session&rsquo;s memory footprint, and it has not been
             taken.&rdquo;</em> When the cap binds, the dropped entries are gone
             entirely; what survives is two counters and a marker row rendered at
-            the top of the buffer &mdash; <code>… older output dropped (N blocks,
+            the top of the buffer: <code>… older output dropped (N blocks,
             M rows) — all of it is in {path}</code>. The marker is never removed,
             <em>&ldquo;because the fact that output is missing does not
             expire,&rdquo;</em> and it wraps rather than truncating: an earlier
             version cut it to one row, and what fell off the end at eighty columns
             was the path to the complete record, which is the whole remedy the row
-            exists to carry. <span class="chip test">tested</span> &mdash;
+            exists to carry. <span class="chip test">tested</span>:
             <code>the_marker_keeps_its_remedy_at_every_width</code>.
           </p>
           <span class="src">crates/emma/src/term/transcript.rs — <code>Cap</code>, <code>enforce_cap</code>, <code>dropped_marker</code></span>
@@ -823,7 +828,7 @@
             ten more rows of tool output is no longer over the same text, so a
             scrolled view has its offset grown by whatever was appended below it.
             Reaching the bottom re-latches follow-tail. Scrolling stays live while
-            a goal runs and while a question is pending &mdash;
+            a goal runs and while a question is pending:
             <em>&ldquo;reading the evidence above an approval prompt is exactly
             when scrolling matters most.&rdquo;</em> <span class="chip test">tested</span>
           </p>
@@ -865,8 +870,8 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
             are constructed in the file (a third construction site would be a path
             around the install gate), and the alternate screen&rsquo;s enter and
             leave sequences occur once each. Their needles are assembled at
-            runtime &mdash; <code>format!("View{}", "port::")</code>,
-            <code>format!("?10{}h", "49")</code> &mdash; because
+            runtime (<code>format!("View{}", "port::")</code>,
+            <code>format!("?10{}h", "49")</code>) because
             <em>&ldquo;this file is its own haystack and a literal would match
             itself.&rdquo;</em> A source-grep test that matched its own assertion
             has already cost this project once.
@@ -880,9 +885,9 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
 
           <p>
             Nothing names a colour at the point of use. Text is given a
-            <strong>role</strong> &mdash; <code>Text</code>, <code>Dim</code>,
+            <strong>role</strong> (<code>Text</code>, <code>Dim</code>,
             <code>Ok</code>, <code>Err</code>, <code>Warn</code>,
-            <code>Info</code>, <code>Accent</code>, <code>Ground</code> &mdash;
+            <code>Info</code>, <code>Accent</code>, <code>Ground</code>)
             and the role is resolved at one point,
             <code>Palette::color</code>. A terminal that cannot render a value
             substitutes there and nowhere else, which is what makes the
@@ -898,7 +903,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
               <strong>Ordinary text is never given a colour.</strong> Emma cannot
               ask the terminal what its background is. Gruvbox&rsquo;s foreground
               is <code>#ebdbb2</code>, a cream that is invisible on white, so body
-              text is <code>Color::Reset</code> &mdash; whatever the user already
+              text is <code>Color::Reset</code>, whatever the user already
               chose.
             </li>
             <li>
@@ -910,8 +915,8 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
             </li>
             <li>
               <strong>Nothing paints a lone background.</strong> The two places a
-              background exists &mdash; the approval prompt&rsquo;s answer keys,
-              the sidebar&rsquo;s selection band &mdash; set foreground and
+              background exists (the approval prompt&rsquo;s answer keys,
+              the sidebar&rsquo;s selection band) set foreground and
               background together, which is what makes them legible against an
               unknown ground. Both degrade to reversed video at
               <code>Level::None</code>.
@@ -925,7 +930,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
             How much colour a terminal gets is one function of six arguments:
             whether the stream is a terminal, <code>NO_COLOR</code>,
             <code>EMMA_COLORS</code>, <code>COLORTERM</code>, <code>TERM</code>,
-            and whether this is Windows Terminal &mdash; which does 24-bit and
+            and whether this is Windows Terminal, which does 24-bit and
             sets neither a useful <code>COLORTERM</code> nor a useful
             <code>TERM</code>. The environment is an argument rather than a
             global, which is what makes the whole ladder testable.
@@ -938,7 +943,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
             it is looking at a terminal Emma guessed wrong about; then
             <code>NO_COLOR</code> and &ldquo;this is not a terminal at all&rdquo;;
             then the environment&rsquo;s own claims. An unreadable override value
-            resolves to <code>Ansi16</code> rather than to truecolor &mdash;
+            resolves to <code>Ansi16</code> rather than to truecolor:
             <em>&ldquo;an unreadable value is not permission to guess
             loudly.&rdquo;</em> A theme is not one of the six inputs, which is
             what stops <code>/theme</code> from promoting a sixteen-colour console.
@@ -1006,8 +1011,8 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
           </p>
 
           <p>
-            The guarding test names the mutation it must survive &mdash; moving
-            the theme lookup above the short-circuit &mdash; and its assertion is
+            The guarding test names the mutation it must survive (moving
+            the theme lookup above the short-circuit), and its assertion is
             what fails under it: every role would then come back as a hex, an
             index or a named colour, none of which equals
             <code>Color::Reset</code>. It therefore holds for any theme, not for
@@ -1024,7 +1029,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
             <code>Skin</code> are passed by value into roughly thirty call sites,
             and a theme holding a <code>String</code> would end <code>Copy</code>
             and cascade through every signature in <code>term/</code>.
-            <span class="chip test">tested</span> &mdash;
+            <span class="chip test">tested</span>:
             <code>a_palette_is_still_copy</code>.
           </p>
           <span class="src">crates/emma/src/term/theme.rs module doc, <code>struct Theme</code>; crates/emma/src/term/palette.rs tests</span>
@@ -1034,8 +1039,8 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
             theme is read once at startup, so the command writes a key to
             <code>~/.emma/settings.json</code> and touches no
             <code>Palette</code>, no <code>Skin</code> and no frame. The owner
-            ruled the scope &mdash; <em>&ldquo;we can set theme and restart the
-            console to see it&rdquo;</em> &mdash; and the alternative is priced in
+            ruled the scope: <em>&ldquo;we can set theme and restart the
+            console to see it.&rdquo;</em> The alternative is priced in
             the file: a live swap has to reach every drawn surface at once, and
             the transcript holds rows already styled under the old colours, so
             <em>&ldquo;the realistic outcome of repainting is a half-recoloured
@@ -1054,9 +1059,9 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
               words. Nothing in the loader returns a <code>Result</code>, because
               <em>&ldquo;a <code>?</code> anywhere in it would throw away the
               seven roles that parsed because the eighth did not.&rdquo;</em>
-              Notices stop at five &mdash; past that the count and the path are
+              Notices stop at five: past that the count and the path are
               what a reader needs, since the file is where they are going to go
-              and look. <span class="chip test">tested</span> &mdash;
+              and look. <span class="chip test">tested</span>:
               <code>a_wrecked_file_cannot_fill_the_screen_with_warnings</code>.
             </li>
             <li>
@@ -1064,11 +1069,11 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
               inherited.</strong> Derivation reproduces five of the seven shipped
               indices exactly and misses two by a shade of the same hue, which is
               close enough to compute. At sixteen colours the same nearest-distance
-              arithmetic makes <code>Accent</code> <code>LightRed</code> &mdash;
-              and <code>Role::Err</code> owns red at that level, so every goal line
+              arithmetic makes <code>Accent</code> <code>LightRed</code>, and
+              <code>Role::Err</code> owns red at that level, so every goal line
               would read as an error. A name is therefore either declared by the
               theme author or kept from the built-in role.
-              <span class="chip test">tested</span> &mdash;
+              <span class="chip test">tested</span>:
               <code>the_256_derivation_reproduces_the_measured_table</code> pins
               both divergences (167 against 203, 245 against 246) instead of
               smoothing them, and
@@ -1078,11 +1083,11 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
             </li>
             <li>
               <strong><code>Role::Text</code> cannot be themed.</strong> The
-              loader refuses <code>roles.text</code> by name &mdash; while still
+              loader refuses <code>roles.text</code> by name, while still
               listing it among the valid names, so
               <em>&ldquo;a typo of <code>text</code> should be told about
               <code>text</code>, not about seven names that do not include
-              it&rdquo;</em> &mdash; and <code>Palette::color</code> returns before
+              it.&rdquo;</em> <code>Palette::color</code> returns before
               the theme is read. A theme author has one terminal; their foreground
               is what makes Emma unreadable for the person with the opposite
               background, who reads it as Emma being broken.
@@ -1093,13 +1098,13 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
 
           <p>
             Two smaller rules with the same shape. A project cannot
-            <em>select</em> a theme &mdash; only
-            <code>~/.emma/settings.json</code> can &mdash; so on a name collision
+            <em>select</em> a theme (only
+            <code>~/.emma/settings.json</code> can), so on a name collision
             the user&rsquo;s theme wins, closing the one route by which a cloned
             repository could repaint somebody&rsquo;s screen. And the name
             <code>emma</code> is reserved, so shipping
             <code>themes/emma.json</code> cannot change what stock Emma looks like.
-            <span class="chip test">tested</span> &mdash;
+            <span class="chip test">tested</span>:
             <code>a_project_theme_never_shadows_a_user_theme_of_the_same_name</code>.
           </p>
           <span class="src">crates/emma/src/term/theme.rs — <code>load</code>, <code>RESERVED</code>; crates/emma/src/session_command.rs — <code>theme_dirs</code></span>
@@ -1126,9 +1131,9 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
             chord would be and dims the label, so the row reads as switched off
             rather than as a key that would do nothing when pressed. The catalogue
             can run on every draw, so PATH lookups are cached for the life of the
-            process &mdash; which also makes &ldquo;a program installed
+            process (which also makes &ldquo;a program installed
             mid-session appears after a restart&rdquo; true by construction rather
-            than intermittently &mdash; while
+            than intermittently), while
             <code>settings.json</code> is re-read each call, so the Settings
             tool&rsquo;s own writes show up on the next frame.
           </p>
@@ -1138,9 +1143,9 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
 
           <p>
             The mockup showed bare <code>s</code> / <code>c</code> /
-            <code>f</code> bindings. The design refused them &mdash;
+            <code>f</code> bindings. The design refused them:
             <em>&ldquo;a bare letter that acts while the input box exists is a
-            footgun&rdquo;</em> &mdash; and the softer rule, <em>only when the
+            footgun.&rdquo;</em> The softer rule, <em>only when the
             editor is empty</em>, fails on a fact the approval-gate keys never
             meet:
           </p>
@@ -1160,12 +1165,12 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
             is not consulted. Ctrl is excluded from the match because AltGr
             arrives as Ctrl+Alt on Windows layouts and produces real characters.
             Which letters are bound is the catalogue&rsquo;s knowledge rather than
-            the key handler&rsquo;s &mdash; <code>tool_key</code> returns the
-            character and the frame looks it up &mdash; and every chord is dead
+            the key handler&rsquo;s (<code>tool_key</code> returns the
+            character and the frame looks it up), and every chord is dead
             while a question is pending, as is <code>Ctrl-B</code>. Scrolling is
             the exception, and it is argued rather than assumed:
             <em>&ldquo;a scroll offset cannot answer a question.&rdquo;</em>
-            <span class="chip test">tested</span> &mdash;
+            <span class="chip test">tested</span>:
             <code>a_bare_letter_is_never_a_tool_shortcut</code>, whose doc says
             <em>&ldquo;if this test goes red, that refuted idea is back,&rdquo;</em>
             and <code>alt_chords_launch_tools_and_die_under_a_prompt</code>.
@@ -1176,7 +1181,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
 
           <p>
             The interactive frame owns the alternate screen, so a child process
-            that writes to that console wrecks the display &mdash; and unlike a
+            that writes to that console wrecks the display. Unlike a
             dead key, the user cannot tell what happened. On Windows,
             <strong>every spawn shape <code>std::process</code> can express fails
             that requirement</strong>, and each was refuted by measurement.
@@ -1205,16 +1210,16 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td><code>CREATE_NEW_CONSOLE</code> + null stdio</td>
                   <td>
                     An interactive shell reads a NUL stdout as redirection and
-                    dies &mdash; measured: a conhost-hosted client under NUL
+                    dies. Measured: a conhost-hosted client under NUL
                     handles exits instantly without running.
                   </td>
                 </tr>
                 <tr>
                   <td>hosting under <code>conhost.exe</code></td>
                   <td>
-                    Flips modes on the same axis &mdash; a real window with no
-                    handle info, a headless ConPTY renderer when handed pipes
-                    &mdash; so it inherits the same problem.
+                    Flips modes on the same axis (a real window with no
+                    handle info, a headless ConPTY renderer when handed pipes),
+                    so it inherits the same problem.
                   </td>
                 </tr>
                 <tr>
@@ -1240,7 +1245,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
             and could not have: an inherited handle bypasses the test
             harness&rsquo;s own capture, so the write reaches the console without
             passing through anything an assertion can see. What caught it was a
-            canary &mdash; a known string the spawned child prints &mdash; and a
+            canary (a known string the spawned child prints) and a
             human reading the run&rsquo;s scrollback for its absence. That method
             is now the test.
             <code>certify_a_new_console_child_gets_a_real_console_that_is_not_ours</code>
@@ -1255,7 +1260,10 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
             must be the launch directory, proving the cwd survives the conhost
             hop.
             <span class="chip cert">certified</span> by the run that found the
-            defect; <span class="chip unv">unverified</span> here &mdash; the
+            defect, and repeatable on demand:
+            <code>cargo test -p emma usertools::tests::certify -- --ignored --nocapture</code>,
+            reading the output rather than trusting the pass.
+            <span class="chip unv">unverified</span> here: the
             ignored tests were not re-run for this page.
           </p>
           <span class="src">crates/emma/src/usertools.rs — the <em>Certification against the real machine</em> region</span>
@@ -1263,9 +1271,9 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
           <p>
             The non-console case takes the ordinary path:
             <code>CREATE_NO_WINDOW</code> plus null stdio, which gives a GUI
-            program &mdash; or a <code>.cmd</code> shim like VS Code&rsquo;s, which
-            runs through <code>cmd.exe</code> and would otherwise flash or attach
-            &mdash; a console with no window. On unix every spawn gets null stdio
+            program (or a <code>.cmd</code> shim like VS Code&rsquo;s, which
+            runs through <code>cmd.exe</code> and would otherwise flash or attach)
+            a console with no window. On unix every spawn gets null stdio
             and its own process group, and anything needing a terminal is refused
             at planning time rather than launched into a wrecked screen. That is
             why the unix Shell tool opens the terminal <em>application</em>
@@ -1281,14 +1289,14 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
             absolute path, never a command line.</strong> Splitting a string on
             spaces is the first half of running text through a shell, and a path
             with a space in it is not an argument boundary. A value that does not
-            resolve produces an error naming it &mdash; never word-split, never
+            resolve produces an error naming it: never word-split, never
             swapped for a probed default, because
             <em>&ldquo;a substitution looks identical to success right up until
             the wrong program opens.&rdquo;</em>
             <code>$VISUAL</code>/<code>$EDITOR</code> get one concession, since the
             wider world does put command lines in them: a value there that does
-            not resolve as a whole is skipped and the chain continues &mdash;
-            skipped, not split. <span class="chip test">tested</span>
+            not resolve as a whole is skipped and the chain continues, skipped
+            rather than split. <span class="chip test">tested</span>
           </p>
           <span class="src">crates/emma/src/usertools.rs module doc, <code>plan</code>; test <code>the_editor_chain_is_setting_then_visual_then_editor_then_probe</code></span>
 
@@ -1298,7 +1306,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
             One shape recurs across the directory: the modules that decide take no
             terminal and hold no lock, and the modules that touch a console stay
             small. <code>app.rs</code> gives the reason for keeping the split where
-            it is &mdash; <em>&ldquo;the terminal, the locks and the entry/leave
+            it is: <em>&ldquo;the terminal, the locks and the entry/leave
             bytes stay in <code>frame.rs</code>, which has already shipped two
             invisible-to-tests defects and does not need a third file&rsquo;s worth
             of chances.&rdquo;</em>
@@ -1378,7 +1386,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td>
                     The full-screen built-in bottom row. A field whose value was
                     never measured is absent rather than zero, and fields drop
-                    whole rather than truncating &mdash; a
+                    whole rather than truncating: a
                     <code>total 34k/50</code> that ran out of room is a number that
                     is wrong rather than one that is missing.
                   </td>
@@ -1411,7 +1419,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td class="num">1,335</td>
                   <td>
                     What a write would change, computed before it happens, as
-                    unified hunks &mdash; the approval gate&rsquo;s evidence. A
+                    unified hunks, the approval gate&rsquo;s evidence. A
                     hand-rolled LCS rather than <code>similar</code>, because the
                     requirement is that it be bounded on an interactive path.
                   </td>
@@ -1430,8 +1438,8 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td><code>view.rs</code></td>
                   <td class="num">1,074</td>
                   <td>
-                    The inline viewport&rsquo;s contents &mdash; input box, menu,
-                    approval panel, hint, status row &mdash; two of whose renderers
+                    The inline viewport&rsquo;s contents (input box, menu,
+                    approval panel, hint, status row), two of whose renderers
                     the full-screen dock reuses.
                   </td>
                 </tr>
@@ -1490,13 +1498,13 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
             an event becomes <code>Line</code>s, with no <code>Rect</code> and no
             <code>Buffer</code> in sight, and it also owns the <em>inline</em>
             status row (<code>Skin::status</code>). <code>view.rs</code> is the
-            inline viewport&rsquo;s layout &mdash; it takes a rectangle and a
+            inline viewport&rsquo;s layout. It takes a rectangle and a
             buffer and arranges the box, menu, panel, hint and status row.
             <code>statusbar.rs</code> is the full-screen successor to
             <code>Skin::status</code>, and names the inheritance itself:
             <em>&ldquo;it inherits that row&rsquo;s one law: everything on it is
             true.&rdquo;</em> <code>statusline.rs</code> is somebody else&rsquo;s
-            program &mdash; a configured script whose first line replaces whichever
+            program: a configured script whose first line replaces whichever
             built-in row is in play, its ANSI bytes parsed into styles rather than
             passed through, because
             <em>&ldquo;an escape byte written into a cell is a byte ratatui counts
@@ -1539,7 +1547,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
             idempotent, which is what stops two callers stacking separators; blanks
             the content wrote are never removed, since a blank line inside a fenced
             code block is part of what the reader copies out.
-            <span class="chip test">tested</span> &mdash; six tests, including
+            <span class="chip test">tested</span>: six tests, including
             <code>blank_rows_a_block_wrote_itself_are_left_alone</code>, whose doc
             frames it as the assertion that stops &ldquo;collapse blank runs&rdquo;
             from looking like a reasonable simplification.
@@ -1571,8 +1579,8 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
             swapped for <code>│</code>, because the swap
             <em>&ldquo;would put a character into the copy that the model never
             wrote.&rdquo;</em> A fenced block is split at the exact column and
-            never at a word &mdash; wrapping code at a word boundary changes what it
-            says &mdash; and the rows concatenate back to the source.
+            never at a word, because wrapping code at a word boundary changes what
+            it says. The rows concatenate back to the source.
           </p>
           <span class="src">crates/emma/src/term/markdown.rs module doc, <code>code_rows</code>; test <code>a_fenced_code_block_is_never_reflowed_and_never_loses_a_character</code></span>
 
@@ -1593,8 +1601,8 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
             Four limits keep the diff off the interactive path&rsquo;s critical
             list: 2&nbsp;MiB read, 50,000 lines a side, 250,000 LCS cells, and 40
             drawn body rows. Exceeding the third produces a
-            <em>coarse</em> patch &mdash; one block of removals then one block of
-            additions, labelled as such rather than guessed at &mdash; and the row
+            <em>coarse</em> patch (one block of removals then one block of
+            additions, labelled as such rather than guessed at), and the row
             budget is then split down the middle, because taking the first forty
             rows of a coarse patch would take forty removals and show no additions
             at all, drawing a thousand-line rewrite as a thousand-line deletion.
@@ -1609,7 +1617,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
           <p>
             Found while reading, reported rather than repaired. Each names a file
             and a function. None is a crash on a realistic input; several are what
-            this project calls a false receipt &mdash; a test or a comment claiming
+            this project calls a false receipt: a test or a comment claiming
             cover it does not have.
           </p>
 
@@ -1637,14 +1645,14 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                     pre-flip world at the head of the subsystem&rsquo;s most
                     important module.
                   </td>
-                  <td><span class="chip cert">certified</span> — one non-test construction site</td>
+                  <td><span class="chip cert">certified</span>: one non-test construction site</td>
                 </tr>
                 <tr>
-                  <td><code>input.rs</code> — <code>LineSource::raw</code></td>
+                  <td><code>input.rs</code>: <code>LineSource::raw</code></td>
                   <td>
                     A comment says <em>&ldquo;a poll rather than a blocking read,
                     so a frame that has been torn down does not leave a thread
-                    wedged inside the console driver&rdquo;</em> &mdash; and the
+                    wedged inside the console driver.&rdquo;</em> The
                     line below it is <code>event::read()</code>, which blocks. The
                     stated failure is not prevented by the mechanism the comment
                     credits.
@@ -1652,10 +1660,10 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td><span class="chip unv">unverified</span></td>
                 </tr>
                 <tr>
-                  <td><code>input.rs</code> — <code>pane_key</code> doc</td>
+                  <td><code>input.rs</code>: <code>pane_key</code> doc</td>
                   <td>
                     Says &ldquo;plain arrows stay with history and the menu.&rdquo;
-                    There is no history &mdash; the module doc says so, and
+                    There is no history: the module doc says so, and
                     <code>Editor::key</code> maps bare <code>Up</code>/<code>Down</code>
                     to <code>Action::Ignore</code>. A reader would conclude
                     <code>Up</code> recalls the previous goal.
@@ -1663,7 +1671,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td><span class="chip unv">unverified</span></td>
                 </tr>
                 <tr>
-                  <td><code>sidebar.rs</code> — <code>COLLAPSE_HINT</code> doc</td>
+                  <td><code>sidebar.rs</code>: <code>COLLAPSE_HINT</code> doc</td>
                   <td>
                     Says <em>&ldquo;what it does not do is accept a click … until
                     it routes a mouse press here this is a label for
@@ -1689,11 +1697,11 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
               </thead>
               <tbody>
                 <tr>
-                  <td><code>diff.rs</code> — <code>an_addition_and_a_removal_differ_in_gutter_as_well_as_in_colour</code></td>
+                  <td><code>diff.rs</code>: <code>an_addition_and_a_removal_differ_in_gutter_as_well_as_in_colour</code></td>
                   <td>
                     Loops <code>for level in [Level::None, Level::Ansi16,
                     Level::Ansi256]</code> and never uses <code>level</code> except
-                    in the failure message &mdash; <code>to_text</code> takes no
+                    in the failure message: <code>to_text</code> takes no
                     <code>Skin</code>. The identical assertion runs three times
                     while the comment claims coverage of three fidelities. The
                     colour half of the test is genuine.
@@ -1701,7 +1709,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td><span class="chip unv">unverified</span></td>
                 </tr>
                 <tr>
-                  <td><code>view.rs</code> — <code>a_viewport_with_almost_no_rows_still_draws_something</code> and <code>a_menu_on_a_viewport_with_no_room_above_the_box_draws_nothing_and_panics_at_nothing</code></td>
+                  <td><code>view.rs</code>: <code>a_viewport_with_almost_no_rows_still_draws_something</code> and <code>a_menu_on_a_viewport_with_no_room_above_the_box_draws_nothing_and_panics_at_nothing</code></td>
                   <td>
                     Both discard their results
                     (<code>let (_rows, _cursor) = draw(…)</code>) and assert
@@ -1712,7 +1720,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td><span class="chip unv">unverified</span></td>
                 </tr>
                 <tr>
-                  <td><code>statusbar.rs</code> — <code>an_empty_value_takes_its_label_with_it</code></td>
+                  <td><code>statusbar.rs</code>: <code>an_empty_value_takes_its_label_with_it</code></td>
                   <td>
                     Asserts the absence of the label <code>TOTAL</code>, which the
                     module no longer emits under any input, so that element of the
@@ -1722,7 +1730,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td><span class="chip unv">unverified</span></td>
                 </tr>
                 <tr>
-                  <td><code>app.rs</code> — <code>the_sidebar_latch_honours_the_user_over_the_width</code></td>
+                  <td><code>app.rs</code>: <code>the_sidebar_latch_honours_the_user_over_the_width</code></td>
                   <td>
                     A binding named <code>user_open</code> is built with
                     <code>by_user: false</code>, so it re-tests the automatic
@@ -1749,7 +1757,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
               </thead>
               <tbody>
                 <tr>
-                  <td><code>app.rs</code> — <code>App::render</code></td>
+                  <td><code>app.rs</code>: <code>App::render</code></td>
                   <td>
                     Calls <code>dock_height(view, area.height)</code>, passing the
                     <em>window</em> height as <code>room</code>.
@@ -1759,10 +1767,10 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                     <code>Layout::vertical</code> clamps rather than panicking, so
                     the symptom is a chat area squeezed toward zero.
                   </td>
-                  <td><span class="chip cert">certified</span> — read at the call site</td>
+                  <td><span class="chip cert">certified</span>: read at the call site</td>
                 </tr>
                 <tr>
-                  <td><code>transcript.rs</code> — <code>visible_tagged</code></td>
+                  <td><code>transcript.rs</code>: <code>visible_tagged</code></td>
                   <td>
                     Calls <code>tagged</code>, which walks every entry and clones
                     every line for the whole buffer, then truncates to the window.
@@ -1771,10 +1779,10 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                     show about forty rows. The measured claim in this module covers
                     resize cost, not per-frame assembly.
                   </td>
-                  <td><span class="chip unv">unverified</span> — no measurement of the paint path exists</td>
+                  <td><span class="chip unv">unverified</span>: no measurement of the paint path exists</td>
                 </tr>
                 <tr>
-                  <td><code>transcript.rs</code> — <code>set_width</code></td>
+                  <td><code>transcript.rs</code>: <code>set_width</code></td>
                   <td>
                     Recomputes the row total but never calls
                     <code>enforce_cap</code>. Narrowing the window multiplies rows;
@@ -1785,18 +1793,18 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td><span class="chip unv">unverified</span></td>
                 </tr>
                 <tr>
-                  <td><code>transcript.rs</code> — <code>enforce_cap</code></td>
+                  <td><code>transcript.rs</code>: <code>enforce_cap</code></td>
                   <td>
                     <code>dropped_rows</code> sums row counts taken at whatever
                     width was current when each entry was dropped, and the marker
                     prints the sum as one figure. After a resize it corresponds to
-                    no width the user ever had &mdash; in the one row whose job is
+                    no width the user ever had, in the one row whose job is
                     to be accurate about loss.
                   </td>
                   <td><span class="chip unv">unverified</span></td>
                 </tr>
                 <tr>
-                  <td><code>render.rs</code> — <code>fit</code></td>
+                  <td><code>render.rs</code>: <code>fit</code></td>
                   <td>
                     <code>keep = budget.saturating_sub(cols(ellipsis))</code>, so a
                     budget below the ellipsis width returns a string wider than the
@@ -1805,21 +1813,21 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                     <code>a_cut_never_lands_inside_a_wide_character</code>
                     hardcodes <code>…</code> and does not reach it.
                   </td>
-                  <td><span class="chip unv">unverified</span> — reachable per a reading of <code>render_menu</code>; not reproduced</td>
+                  <td><span class="chip unv">unverified</span>: reachable per a reading of <code>render_menu</code>; not reproduced</td>
                 </tr>
                 <tr>
-                  <td><code>render.rs</code> — <code>Skin::status</code> / <code>live_fields</code></td>
+                  <td><code>render.rs</code>: <code>Skin::status</code> / <code>live_fields</code></td>
                   <td>
                     The identity half sheds four ways as the drop level rises; the
                     live half is always appended, and the last attempt returns
                     unconditionally. At a small width the row can exceed it and be
-                    clipped &mdash; producing the <code>total 34k/50</code> the doc
+                    clipped, producing the <code>total 34k/50</code> the doc
                     says must never happen. The width tests run at 60 and 34.
                   </td>
                   <td><span class="chip unv">unverified</span></td>
                 </tr>
                 <tr>
-                  <td><code>markdown.rs</code> — <code>rule</code>, <code>flow</code></td>
+                  <td><code>markdown.rs</code>: <code>rule</code>, <code>flow</code></td>
                   <td>
                     Both can emit a row wider than the window: a long info string
                     (<code>```typescript</code>) at a narrow width, and a list item
@@ -1827,10 +1835,10 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                     the invariant <code>frame.rs</code> reserves inline rows
                     against.
                   </td>
-                  <td><span class="chip unv">unverified</span> — reasoned from the arithmetic; a two-case test at width 8 would settle it</td>
+                  <td><span class="chip unv">unverified</span>: reasoned from the arithmetic; a two-case test at width 8 would settle it</td>
                 </tr>
                 <tr>
-                  <td><code>diff.rs</code> — <code>Change::creation</code></td>
+                  <td><code>diff.rs</code>: <code>Change::creation</code></td>
                   <td>
                     Skips the NUL scan (which lives in <code>compute</code>), so a
                     <code>Write</code> creating a new file with NUL bytes is drawn
@@ -1842,7 +1850,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td><span class="chip unv">unverified</span></td>
                 </tr>
                 <tr>
-                  <td><code>diff.rs</code> — <code>Change::out</code></td>
+                  <td><code>diff.rs</code>: <code>Change::out</code></td>
                   <td>
                     <code>Out::Hunk</code> header rows are pushed without
                     decrementing <code>room</code>, so a patch with many small
@@ -1853,7 +1861,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td><span class="chip unv">unverified</span></td>
                 </tr>
                 <tr>
-                  <td><code>view.rs</code> — <code>render_input</code></td>
+                  <td><code>view.rs</code>: <code>render_input</code></td>
                   <td>
                     No horizontal scrolling: past the box&rsquo;s inner width the
                     text is clipped and <code>cursor_at</code> clamps, so neither
@@ -1863,18 +1871,18 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td><span class="chip unv">unverified</span></td>
                 </tr>
                 <tr>
-                  <td><code>statusline.rs</code> — <code>parse_params</code></td>
+                  <td><code>statusline.rs</code>: <code>parse_params</code></td>
                   <td>
                     Splits on <code>;</code> and <code>:</code> alike, so the
                     ITU-T subparameter form <code>38:2::250:189:47</code> parses as
                     <code>[38, 2, 0, 250, 189, 47]</code> and yields
-                    <code>(0, 250, 189)</code> &mdash; a visibly wrong colour. No
+                    <code>(0, 250, 189)</code>, a visibly wrong colour. No
                     escape survives, so it is a wrong answer rather than a leak.
                   </td>
                   <td><span class="chip unv">unverified</span></td>
                 </tr>
                 <tr>
-                  <td><code>sidebar.rs</code> — <code>fitted</code></td>
+                  <td><code>sidebar.rs</code>: <code>fitted</code></td>
                   <td>
                     The overflow row is the one assembled line in the file that
                     does not pass through <code>clipped</code>, and
@@ -1886,7 +1894,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td><span class="chip unv">unverified</span></td>
                 </tr>
                 <tr>
-                  <td><code>app.rs</code> — <code>App::click</code></td>
+                  <td><code>app.rs</code>: <code>App::click</code></td>
                   <td>
                     Hard-codes <code>header_row = r.y + 1</code>, assuming SESSIONS
                     is the sidebar&rsquo;s first inner row. Nothing in
@@ -1895,7 +1903,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td><span class="chip unv">unverified</span></td>
                 </tr>
                 <tr>
-                  <td><code>chat.rs</code> — <code>indicator</code></td>
+                  <td><code>chat.rs</code>: <code>indicator</code></td>
                   <td>
                     The &ldquo;n rows below&rdquo; overlay is truncated by
                     <code>set_stringn</code> with no ellipsis when the pane is
@@ -1905,7 +1913,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td><span class="chip unv">unverified</span></td>
                 </tr>
                 <tr>
-                  <td><code>statusbar.rs</code> — <code>filled</code></td>
+                  <td><code>statusbar.rs</code>: <code>filled</code></td>
                   <td>
                     <code>f.min(segments - 1)</code> underflows at
                     <code>segments == 0</code>. Unreachable today, since
@@ -1915,7 +1923,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td><span class="chip unv">unverified</span></td>
                 </tr>
                 <tr>
-                  <td><code>markdown.rs</code> — <code>heading</code>, <code>sanitise</code></td>
+                  <td><code>markdown.rs</code>: <code>heading</code>, <code>sanitise</code></td>
                   <td>
                     <code>trim_end_matches('#')</code> drops a trailing hash that
                     is part of the text, so <code>&#35; C&#35;</code> renders as
@@ -1954,7 +1962,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
               </thead>
               <tbody>
                 <tr>
-                  <td>The frame is legible &mdash; sidebar, gutter, meter and bar as intended</td>
+                  <td>The frame is legible: sidebar, gutter, meter and bar as intended</td>
                   <td>Every test here reads a cell buffer.</td>
                   <td>
                     A real run at several window sizes in Windows Terminal,
@@ -1970,9 +1978,9 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                     <code>frame.rs</code> says as much of <code>enter_modes</code>.
                   </td>
                   <td>
-                    Run the binary and take each exit in turn &mdash; quit, Ctrl-C,
-                    an induced panic, the <code>process::exit</code> route &mdash;
-                    then check the shell echoes, the prior content is back, and a
+                    Run the binary and take each exit in turn: quit, Ctrl-C,
+                    an induced panic, the <code>process::exit</code> route. Then
+                    check the shell echoes, the prior content is back, and a
                     paste carries no <code>ESC[200~</code>.
                   </td>
                 </tr>
@@ -2009,9 +2017,9 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td>
                     <strong>No mutation was run for this page.</strong> Every
                     <span class="chip test">tested</span> chip means the test
-                    exists and passes at <code>20ac400</code>, plus &mdash; where
-                    the test&rsquo;s own doc names the mutation it must not survive
-                    &mdash; that argument read and found sound.
+                    exists and passes at <code>20ac400</code>, plus, where
+                    the test&rsquo;s own doc names the mutation it must not survive,
+                    that argument read and found sound.
                   </td>
                   <td>
                     Run the mutations the test docs name: move the theme lookup
@@ -2027,7 +2035,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                     guesses: <em>&ldquo;the measurement that should set them is a
                     real session&rsquo;s memory footprint, and it has not been
                     taken.&rdquo;</em> The one measurement that exists is resize
-                    cost &mdash; 3.5&nbsp;ms release / 21&nbsp;ms debug for 5,000
+                    cost: 3.5&nbsp;ms release / 21&nbsp;ms debug for 5,000
                     rows re-wrapped 120&rarr;80 columns, and roughly 35&nbsp;ms at
                     the full cap, dated 2026-08-11 on Windows 11 / Ryzen.
                   </td>
@@ -2043,7 +2051,7 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
                   <td>Recorded as a known regression. Inline output was ordinary terminal text; a full-screen app paints cells.</td>
                   <td>
                     Run under NVDA, VoiceOver and Orca and check whether the
-                    approval prompt is spoken &mdash; a question nobody hears is
+                    approval prompt is spoken. A question nobody hears is
                     consent nobody gave.
                   </td>
                 </tr>
@@ -2064,12 +2072,12 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
               <code>palette.rs</code> (all 814 lines, tests included);
               <code>frame.rs</code> (module doc, the Restoring, Terminal modes and
               Synchronized output regions, <code>install</code>, the write methods
-              and both manifest tests &mdash; roughly half of 2,159 lines);
+              and both manifest tests, roughly half of 2,159 lines);
               <code>term.rs</code> (module doc, constructors, the fallback and
               platform regions, <code>Drop</code>); <code>usertools.rs</code>
               (module doc, the contract, the Spawning region, the certification
               tests); <code>theme.rs</code> (module doc, the resolved-theme and
-              derivation regions, the head of the loader &mdash; about a third);
+              derivation regions, the head of the loader, about a third);
               <code>app.rs</code>&rsquo;s layout region; <code>sidebar.rs</code>&rsquo;s
               module doc and constants; <code>input.rs</code>&rsquo;s
               <code>tool_key</code>. Call it a third of the directory by line.
@@ -2096,8 +2104,8 @@ assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span cl
           </ul>
 
           <p>
-            The <code>emma</code> library suite &mdash; 477 tests, 3 ignored
-            &mdash; was run at <code>20ac400</code> and is green. Nothing on this
+            The <code>emma</code> library suite (477 tests, 3 ignored)
+            was run at <code>20ac400</code> and is green. Nothing on this
             page rests on that alone.
           </p>
 
