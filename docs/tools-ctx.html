@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ToolCtx · Tools · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav here" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<p class="eyebrow">Doing work</p>
+<h1><code>ToolCtx</code>, and the state it has no room for</h1>
+
+<nav class="chapter">
+  <a class="up" href="tools.html">Tools</a>
+  <a href="tools-trait.html">the trait</a>
+  <a href="tools-outcome.html">outcomes</a>
+  <a href="tools-truncation.html">truncation</a>
+  <span class="now">ToolCtx</span>
+  <a href="tools-containment.html">containment</a>
+  <a href="tools-files.html">files</a>
+  <a href="tools-edit.html">Edit</a>
+  <a href="tools-bash.html">Bash</a>
+  <a href="tools-tasks.html">tasks</a>
+  <a href="tools-web.html">web</a>
+  <a href="tools-lsp.html">LSP</a>
+</nav>
+
+<p class="lede">
+  Three fields, and one absence that three separate crates have each worked
+  around in their own words. This is the sharpest edge in the tool layer: an
+  invariant the type system does not hold, guarded by three comments and
+  nothing else.
+</p>
+
+<pre><code><span class="c">/// What a tool is told about the call it is serving.</span>
+<span class="c">///</span>
+<span class="c">/// Note what is missing: there is nowhere here for **session state**. The</span>
+<span class="c">/// read-tracking that makes `Write`'s refusal-to-clobber meaningful therefore</span>
+<span class="c">/// lives in the tool structs instead, which means "these tools share one</span>
+<span class="c">/// tracker" is a wiring convention rather than something the type system holds</span>
+<span class="c">/// — a `Write` built with the wrong tracker refuses nothing, and it compiles.</span>
+<span class="c">/// Known, and cheaper to fix at six tools than at sixteen.</span>
+<span class="k">pub struct</span> ToolCtx {
+    <span class="c">/// Every relative path resolves against this, and nothing may escape it.</span>
+    <span class="k">pub</span> cwd: std::path::PathBuf,
+    <span class="k">pub</span> session_id: String,
+    <span class="k">pub</span> turn_id: String,
+}</code></pre>
+<span class="src">crates/tool-api/src/lib.rs — <code>ToolCtx</code></span>
+
+<p>
+  <code>cwd</code> is the containment root, canonicalised once per call by
+  <a href="tools-containment.html"><code>path::root</code></a>.
+  <code>session_id</code> keys the read tracker, so a resumed process cannot
+  inherit an earlier session's claim to have looked at a file.
+  <code>turn_id</code> is carried for logging and is read by nothing in the four
+  tool crates.
+</p>
+<span class="src">tools/fs/src/session.rs — <code>ReadTracker::state</code></span>
+
+<h2 id="three">Three sets of tools, three shared objects</h2>
+
+<p>
+  Because there is nowhere in <code>ToolCtx</code> to put it, state that has to
+  outlive one call lives in the tool structs behind an <code>Arc</code>, handed
+  to every member at construction. Each crate exposes one builder that does the
+  handing.
+</p>
+
+<figure>
+  <div class="figwrap">
+    <svg viewBox="0 0 700 300" role="img" aria-label="Three builder functions each construct their tools around one shared object: fs_tools gives Read, Write and Edit one ReadTracker; lsp_tools gives the four code-intelligence tools one ServerPool; browser_tools gives the five browser tools one BrowserPool. tools/tasks needs no builder invariant because the file on disk is its state.">
+      <defs>
+        <marker id="tx-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+        </marker>
+        <marker id="tx-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+        </marker>
+      </defs>
+
+      <rect class="box" x="10" y="20" width="140" height="34" rx="4" />
+      <text class="lbl" x="26" y="42">fs_tools()</text>
+      <path class="edge-hl" d="M150 37 L214 37" marker-end="url(#tx-arrow-hl)" />
+      <rect class="hl" x="214" y="19" width="150" height="36" rx="4" />
+      <text class="lbl" x="230" y="42">Arc&lt;ReadTracker&gt;</text>
+      <text class="sm" x="384" y="34">Read · Write · Edit</text>
+      <text class="tiny" x="384" y="49">wrong wiring: nothing is ever refused</text>
+
+      <rect class="box" x="10" y="94" width="140" height="34" rx="4" />
+      <text class="lbl" x="26" y="116">lsp_tools()</text>
+      <path class="edge-hl" d="M150 111 L214 111" marker-end="url(#tx-arrow-hl)" />
+      <rect class="hl" x="214" y="93" width="150" height="36" rx="4" />
+      <text class="lbl" x="230" y="116">Arc&lt;Pool&gt;</text>
+      <text class="sm" x="384" y="108">the four LSP tools</text>
+      <text class="tiny" x="384" y="123">wrong wiring: four rust-analyzers, one workspace</text>
+
+      <rect class="box" x="10" y="168" width="140" height="34" rx="4" />
+      <text class="lbl" x="26" y="190">browser_tools()</text>
+      <path class="edge-hl" d="M150 185 L214 185" marker-end="url(#tx-arrow-hl)" />
+      <rect class="hl" x="214" y="167" width="150" height="36" rx="4" />
+      <text class="lbl" x="230" y="190">Arc&lt;BrowserPool&gt;</text>
+      <text class="sm" x="384" y="182">the five browser tools</text>
+      <text class="tiny" x="384" y="197">wrong wiring: BrowserClose cannot see BrowserOpen</text>
+
+      <rect class="box" x="10" y="242" width="140" height="34" rx="4" />
+      <text class="lbl" x="26" y="264">task_tools()</text>
+      <path class="edge-dash" d="M150 259 L214 259" marker-end="url(#tx-arrow)" />
+      <text class="sm" x="222" y="256">no shared object</text>
+      <text class="tiny" x="222" y="271">the file on disk is the state, re-read every call</text>
+    </svg>
+  </div>
+  <figcaption>
+    Three builders that carry an invariant and one that does not. Drawn from
+    <code>tools/fs/src/lib.rs</code>, <code>tools/lsp/src/lib.rs</code>,
+    <code>tools/web/src/browser/mod.rs</code> and
+    <code>tools/tasks/src/lib.rs</code>.
+  </figcaption>
+</figure>
+
+<pre><code><span class="c">/// The whole surface, wired to one read tracker.</span>
+<span class="c">///</span>
+<span class="c">/// Returns the tracker as well so a caller that wants to inspect or reset it —</span>
+<span class="c">/// a test, or a harness starting a new session — can, without any tool having</span>
+<span class="c">/// to expose it.</span>
+<span class="k">pub fn</span> fs_tools() -&gt; (Vec&lt;Arc&lt;<span class="k">dyn</span> Tool&gt;&gt;, Arc&lt;ReadTracker&gt;) {
+    <span class="k">let</span> tracker = Arc::new(ReadTracker::new());
+    <span class="k">let</span> tools: Vec&lt;Arc&lt;<span class="k">dyn</span> Tool&gt;&gt; = vec![
+        Arc::new(Read::new(tracker.clone())),
+        Arc::new(Write::new(tracker.clone())),
+        Arc::new(Edit::new(tracker.clone())),
+        Arc::new(Glob::new()),
+        Arc::new(Grep::new()),
+        Arc::new(Bash::new()),
+    ];
+    (tools, tracker)
+}</code></pre>
+<span class="src">tools/fs/src/lib.rs — <code>fs_tools</code></span>
+
+<h2 id="failures">What a wrong wiring does, per crate</h2>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Shared</th><th>Builder</th><th>The failure, if a member is built alone</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>ReadTracker</code><br /><em>Read, Write, Edit</em></td>
+        <td><code>fs_tools()</code></td>
+        <td>
+          A <code>Write</code> holding a tracker its <code>Read</code> does not
+          share never refuses anything, and the read-before-write rule quietly
+          stops existing. A fresh tracker is the mirror image: it refuses every
+          overwrite.
+        </td>
+      </tr>
+      <tr>
+        <td><code>Pool</code><br /><em>the four LSP tools</em></td>
+        <td><code>lsp_tools()</code></td>
+        <td>Four tools with four pools is four rust-analyzers indexing one workspace, each holding hundreds of megabytes of index.</td>
+      </tr>
+      <tr>
+        <td><code>BrowserPool</code><br /><em>the five browser tools</em></td>
+        <td><code>browser_tools()</code></td>
+        <td>Five independent registries, four of which cannot see the session the fifth opened. <code>BrowserClose</code> would then be unable to close what <code>BrowserOpen</code> started, which is how a Chrome outlives the process with a live CDP port.</td>
+      </tr>
+      <tr>
+        <td>nothing</td>
+        <td><code>task_tools()</code></td>
+        <td>No failure. The four task tools share no mutable state; the markdown file is the state and is re-read inside every <code>invoke</code>.</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<span class="src">tools/fs/src/session.rs; tools/lsp/src/lib.rs; tools/web/src/browser/mod.rs; tools/tasks/src/lib.rs</span>
+
+<p>
+  Every one of those compiles. Nothing in the workspace catches a caller that
+  constructs a member directly: not the compiler, not the registry's coherence
+  check, not any test.
+</p>
+
+<h2 id="threetimes">The same warning, three times, in three sets of words</h2>
+
+<p>
+  Each crate wrote the hazard down where it lives, and none of them wrote it in
+  <code>tool-api</code>, where the missing field is.
+</p>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>File</th><th>How it puts it</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>tools/fs/src/session.rs</code></td>
+        <td>"A caller that builds <code>Write</code> with a fresh tracker gets a <code>Write</code> that refuses every overwrite, and a caller that builds it with a tracker <code>Read</code> does not share gets a <code>Write</code> that never refuses. Nothing in the type system stops either."</td>
+      </tr>
+      <tr>
+        <td><code>tools/lsp/src/lib.rs</code></td>
+        <td>"Four tools built with four pools is four rust-analyzers indexing the same workspace, and it compiles. The same known defect <code>tools/fs</code> records about its read tracker, recorded here for the same reason: cheaper to notice at four tools than at fourteen."</td>
+      </tr>
+      <tr>
+        <td><code>tools/web/src/browser/mod.rs</code></td>
+        <td>"Five tools built with five pools is five independent registries, four of which cannot see the session the fifth opened — and it compiles."</td>
+      </tr>
+      <tr>
+        <td><code>crates/tool-api/src/lib.rs</code></td>
+        <td>The fourth copy, on <code>ToolCtx</code> itself: "Known, and cheaper to fix at six tools than at sixteen." Written when there were six.</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  Four statements of one fact is the argument for the fix belonging in
+  <code>tool-api</code>. It is a real trade rather than a free win, because
+  <code>tool-api</code> is kept to one file, and a session-state slot
+  on <code>ToolCtx</code> would have to answer what its lifetime is and who
+  clears it. The current state is that the contract is enforced by four
+  comments.
+</p>
+<span class="src">notes/improvements.md item 17</span>
+
+<div class="note warn">
+  <span class="h">Nothing catches a bypassed builder</span>
+  <p>
+    Each crate's builder is the only supported way to construct its set. The
+    tests below check that the builder <em>still</em> shares, which is a
+    different question from whether a caller used it. Emma's own
+    <code>main.rs</code> is the only production caller, so today the invariant
+    holds by there being one call site.
+  </p>
+</div>
+
+<h3>What the tests do cover</h3>
+
+<pre><code>        <span class="c">// Five tools holding a clone, plus the one returned: six. This is the</span>
+        <span class="c">// only thing that catches "five tools, five pools", which compiles fine</span>
+        <span class="c">// and would mean BrowserClose could not find BrowserOpen's session.</span>
+        assert_eq!(Arc::strong_count(&amp;pool), 6);</code></pre>
+<span class="src">tools/web/src/browser/mod.rs — <code>the_surface_is_five_tools_sharing_one_pool</code></span>
+
+<p>
+  <span class="chip test">tested</span> <code>tools/lsp</code> makes the same
+  assertion with 5 in
+  <code>the_surface_is_the_four_tools_and_they_share_one_pool</code>. A
+  <code>strong_count</code> assertion goes red the moment a builder stops
+  sharing, and stays green for a caller that bypassed the builder entirely.
+  <code>tools/fs</code> has no equivalent count; its sharing is checked
+  indirectly, by
+  <code>the_result_labels_its_new_lines_so_the_next_edit_needs_no_read</code>
+  in <code>tests/addressed.rs</code>, which makes a second edit from the first
+  edit's output with no <code>Read</code> between them. That only works if
+  <code>Edit</code> and <code>Read</code> hold the same tracker.
+</p>
+
+<h2 id="unverified">What is not verified here</h2>
+
+<p>
+  <span class="chip cert">certified</span> No production code outside the four
+  builders constructs a member directly.
+  <code>grep -rn 'Read::new(\|Write::new(\|Edit::new(\|BrowserOpen::new(\|FindReferences::new(' crates/ tools/ --include=*.rs</code>
+  at commit <code>a3eba74</code> returns sixteen lines: the builders themselves
+  and thirteen inside test modules and integration tests. So the invariant
+  currently holds by there being one way in, not by anything enforcing it.
+</p>
+
+<p>
+  <span class="chip cert">certified</span> <code>turn_id</code> is read by no
+  tool. <code>grep -rn turn_id tools/ --include=*.rs</code> returns nine lines,
+  every one of them a struct literal building a <code>ToolCtx</code>: seven in
+  tests, one in <code>tools/tasks/src/lib.rs</code>'s <code>open_count</code>,
+  which passes <code>String::new()</code>. Nothing reads the field back.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> "Nothing catches a bypassed builder"
+  is a claim about the absence of a test, made by reading the four crates' test
+  files rather than by exhaustive search, and an absence is the hardest thing
+  to be sure of. Settled by writing a member with a private tracker in a
+  scratch branch, running <code>cargo test --workspace</code>, and confirming
+  the suite stays green.
+</p>
+</div>
+</main>
+</div>
+</body>
+</html>

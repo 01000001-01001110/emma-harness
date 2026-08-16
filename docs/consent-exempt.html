@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EXEMPT and the floor · Consent &amp; permissions · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav here" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <h1><code>EXEMPT</code>, and the floor that is not there</h1>
+
+  <nav class="chapter">
+    <a class="up" href="consent.html">Consent &amp; permissions</a>
+    <a href="consent-axes.html">The two axes</a>
+    <a href="consent-ladder.html">The ladder</a>
+    <a href="consent-egress.html">The egress question</a>
+    <a href="consent-answers.html">The five answers</a>
+    <span class="now">EXEMPT and the floor</span>
+    <a href="consent-rules.html">Permission rules</a>
+    <a href="consent-matching.html">Matching a host</a>
+    <a href="consent-hooks.html">Hooks</a>
+  </nav>
+
+  <p class="lede">
+    Two tool names skip the local question. Nothing anywhere is the opposite
+    shape: there is no name, pattern or command in Emma that a rule, a flag and a
+    remembered grant cannot together permit.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — EXEMPT; notes/improvements.md item 14</span>
+
+  <h2 id="list">The list</h2>
+
+  <pre><code><span class="c">/// Writers that do not prompt, and the whole argument for each one.</span>
+const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span class="s">"TaskUpdate"</span>];</code></pre>
+  <span class="src">crates/emma/src/approval.rs — EXEMPT</span>
+
+  <p>
+    <span class="chip cert">certified</span> Two entries and no more, at commit
+    <code>a3eba74</code>: <code>grep -n "const EXEMPT" crates/emma/src/approval.rs</code>
+    returns one line and it is the one above.
+  </p>
+
+  <p>
+    The two task tools rewrite <code>.emma/tasks/tasks.md</code>. They declare
+    <code>read_only: false</code>, which is honest, and were not declared
+    <code>read_only: true</code> to dodge the gate. A tool that misreports itself
+    leaves the gate protecting nothing in general rather than only for that tool,
+    which is why the hole is a list of names in one place rather than a lie in a
+    tool crate.
+  </p>
+
+  <p>
+    The write is confined to the tool's own bookkeeping file, and it is the write
+    a model performs several times per goal. The argument on the list quotes the
+    module's own rule back at itself: a prompt the user cannot evaluate is worse
+    than no prompt, and "TaskUpdate wants to tick a checkbox, allow?" fifteen
+    times in one goal is the prompt that teaches somebody to hold down
+    <code>y</code>, including through the <code>Bash</code> call that follows it.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — EXEMPT, doc comment</span>
+
+  <div class="note warn">
+    <span class="h">A bypass keyed by name, not by property</span>
+    <p>
+      <code>EXEMPT</code> is a <code>const &amp;[&amp;str]</code> compared against
+      <code>tool.name()</code> with <code>contains</code>. Nothing about a listed
+      tool is checked: not its <code>ToolMeta</code>, not what it writes, not
+      where. A name added to that array stops prompting, whatever the tool behind
+      it does.
+    </p>
+    <p>
+      The test is written about what is <em>not</em> on the list. It asserts
+      <code>Bash</code>, <code>Write</code> and <code>Edit</code> are absent and
+      that all three are still gated under <code>Gate::Unattended</code>, which is
+      what would catch a later edit adding a tool that writes the user's source
+      tree. It also loops over <code>EXEMPT</code> itself and asserts each entry
+      is allowed, so shrinking the list to nothing would fail too.
+      <span class="chip test">tested</span>
+    </p>
+    <span class="src">crates/emma/src/approval.rs — Approvals::decide; tests::the_exemption_covers_the_task_writers_and_nothing_that_touches_the_tree</span>
+  </div>
+
+  <h2 id="bounds">The two things that bound it</h2>
+
+  <p>
+    A <code>PreToolUse</code> hook denial is resolved in the loop before approvals
+    are consulted, so an operator can block these by name. And an
+    <code>ask</code> rule reaches them, because the <code>ask</code> check sits
+    above the exemption in <code>decide</code>. Every call, exempt or not, is
+    written to the session log by the loop.
+    <span class="chip test">tested</span>
+    <code>an_ask_rule_reaches_even_a_read_only_tool_and_an_exempt_one</code> puts
+    <code>Read</code> and <code>EXEMPT[0]</code> in the <code>ask</code> list with
+    an empty answer queue and asserts both are denied, which they can only be if
+    the prompt was reached.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — tests::an_ask_rule_reaches_even_a_read_only_tool_and_an_exempt_one; crates/emma/src/agent.rs — the PreToolUse block</span>
+
+  <h2 id="axis">The axis that was supposed to delete this list</h2>
+
+  <p>
+    The comment says the missing piece is an axis on <code>ToolMeta</code> for the
+    <em>scope</em> of a write rather than its existence, that it belongs in
+    <code>tool-api</code>, and that when it lands this list is to be deleted
+    because tools would classify themselves. It has not landed.
+    <code>ToolMeta</code> has since gained a second axis and it is a different
+    one: <code>reaches_network</code> splits egress out of <code>read_only</code>
+    and does nothing for these two tools. The comment itself now says so.
+  </p>
+
+  <p>
+    <span class="chip cert">certified</span> No backlog item names a write-scope
+    axis. At commit <code>a3eba74</code>,
+    <code>grep -in "write scope\|scope of a write\|write-scope"
+    notes/improvements.md</code> exits 1 with no output.
+    <span class="chip unv">unverified</span> That no item describes the same idea
+    in other words: the file's 36 headed entries were not all read for this page.
+    <em>What would settle it:</em> reading the backlog through and either filing
+    the item or citing the one that already covers it.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — EXEMPT; notes/improvements.md</span>
+
+  <h2 id="floor">The opposite shape does not exist</h2>
+
+  <p>
+    <code>EXEMPT</code> is an always-<em>allow</em> hole. A small, hardcoded,
+    non-overridable <em>deny</em> list that no rule, no flag and no remembered
+    grant can relax is <code>notes/improvements.md</code> item 14, and it is open.
+    <code>rm -rf /</code> in a <code>Bash</code> call is a prompt like any other,
+    and answering <code>y</code> runs it.
+  </p>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 760 236" role="img"
+           aria-label="The gate has a ceiling and no floor. Above the prompt sit deny rules and hook denials, which can refuse anything. Below the prompt sits EXEMPT, an always-allow list. Where an unconditional deny would sit, there is nothing.">
+        <defs>
+          <marker id="floor-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
+          </marker>
+          <marker id="floor-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
+          </marker>
+        </defs>
+
+        <rect class="box" x="30" y="20" width="420" height="30" rx="3"/>
+        <text class="lbl" x="44" y="40">hook denial · deny rule — refuse anything</text>
+        <text class="tiny" x="470" y="40">configurable, and can be removed</text>
+
+        <rect class="box" x="30" y="62" width="420" height="30" rx="3"/>
+        <text class="lbl" x="44" y="82">--dangerously-skip-permissions · allow rule</text>
+        <text class="tiny" x="470" y="82">permit anything the two above did not name</text>
+
+        <rect class="hl" x="30" y="104" width="420" height="30" rx="3"/>
+        <text class="lbl" x="44" y="124">the prompt — y runs it, whatever it is</text>
+        <text class="tiny" x="470" y="124">rm -rf / arrives here like any command</text>
+
+        <rect class="box" x="30" y="146" width="420" height="30" rx="3"/>
+        <text class="lbl" x="44" y="166">EXEMPT — always allow, keyed by name</text>
+        <text class="tiny" x="470" y="166">TaskCreate, TaskUpdate</text>
+
+        <path class="edge-dash" d="M30 200 L450 200"/>
+        <text class="tiny" x="44" y="194">where an unconditional deny would sit</text>
+        <text class="tiny" x="470" y="204">nothing. improvements.md item 14, open</text>
+        <path class="edge-hl" d="M240 178 L240 194" marker-end="url(#floor-arrow-hl)"/>
+        <text class="tiny" x="30" y="228">Every layer above the dashed line can be edited, flagged or answered away by whoever runs Emma.</text>
+      </svg>
+    </div>
+    <figcaption>
+      Drawn from <code>Approvals::decide</code> and <code>EXEMPT</code>. The
+      dashed line is not a component; it marks the place item 14 proposes to put
+      one.
+    </figcaption>
+  </figure>
+
+  <h2 id="priorart">Three projects that built the floor</h2>
+
+  <p>
+    Zed's <code>tool_permissions</code> has three regex tiers plus built-in
+    protections its documentation illustrates with <code>rm -rf /</code>, which no
+    rule can override. <code>avala-ai/agent-code</code> blocks
+    <code>.git/</code> and <code>node_modules/</code> unconditionally. And
+    <code>c4pt0r/pie</code> has it written in Rust already, in
+    <code>crates/agent/src/harness/permission.rs</code>, a 491-line module
+    including its tests: an unconditional-deny corpus where each entry carries a
+    label naming what it protects and that label is carried into the denial
+    reason; token-aware predicates for <code>rm</code> that survive flag
+    permutations and one layer of quote stripping; clause splitting on
+    <code>;</code>, <code>&amp;&amp;</code>, <code>||</code> and <code>|</code>;
+    and roughly forty dangerous-command cases beside a false-positive suite.
+  </p>
+  <span class="src">notes/improvements.md item 14 · notes/survey-pie.md §1.1 · notes/survey-harnesses-2.md §4</span>
+
+  <p>
+    Pie was read at commit <code>b725796</code> and is <strong>MIT, plain, no
+    rider, read from the repo-root <code>LICENSE</code></strong>, so it can be
+    copied with attribution. It is a stated 1:1 port of a TypeScript upstream, so
+    a copied file attributes both.
+  </p>
+  <span class="src">notes/improvements.md item 14 · notes/survey-pie.md</span>
+
+  <div class="note">
+    <span class="h">The counter-argument, recorded because it may win</span>
+    <p>
+      An unconditional refusal that fires on a legitimate command is an outage,
+      not a safety property. That is the "rule that fires on correct
+      configuration" shape this codebase rejects elsewhere by name. If the floor
+      is built, the list has to be short and every entry has to name what it
+      protects.
+    </p>
+    <p>
+      That becomes a condition on copying: take pie's predicates and its corpus,
+      not its regexes. Pie's are substring matches that accept false positives.
+      <code>\bsudo\b</code> fires on <code>echo "sudo"</code>, and
+      <code>reboot</code> fires inside any quoted string containing the word.
+      Pie's own module doc states the trade as "the permission layer must close,
+      not minimize", which is the failure the counter-argument predicts.
+    </p>
+    <p>
+      One further idea from pie transfers even though its mechanism does not: it
+      treats writes to the harness's own configuration as their own permission
+      category. Emma has the same hazard in file form. A <code>Write</code> to
+      <code>.claude/hooks/</code>, <code>settings.local.json</code>,
+      <code>agents/</code> or <code>skills/</code> is a persistent behaviour
+      change that classifies today as an ordinary file write, and it is the one
+      edit that can disable the check that would have caught it.
+    </p>
+    <span class="src">notes/improvements.md item 14 · notes/survey-pie.md §1.1, §2.1</span>
+  </div>
+
+  <h2 id="unsettled">What is not settled here</h2>
+
+  <p>
+    <span class="chip unv">unverified</span> Nothing has been copied and nothing
+    has been built. The survey read roughly 2,700 of pie's ~75,000 Rust lines,
+    about 4%, and executed none of it. It names its own weakest claim: "wired
+    unconditionally at <code>main.rs:753</code>" is one grep hit plus the absence
+    of a bypass-flag hit, with 5,100 unread lines of
+    <code>main.rs</code> and <code>commands.rs</code> that could hold one.
+    <em>What would settle it:</em> reading pie's <code>main.rs</code> around 753
+    and its <code>commands.rs</code> through before adapting anything out of them.
+  </p>
+  <span class="src">notes/survey-pie.md §5</span>
+
+  <p>
+    <span class="chip unv">unverified</span> The Zed and
+    <code>agent-code</code> descriptions come from
+    <code>notes/survey-harnesses-2.md</code> §4 and were not re-read from either
+    project for this page. <em>What would settle it:</em> opening Zed's
+    <code>tool_permissions</code> documentation and <code>agent-code</code>'s
+    blocking code and quoting the lines.
+  </p>
+
+  <footer class="pg">
+    Emma 0.1.0 · read at commit <code>a3eba74</code> ·
+    <code>crates/emma/src/approval.rs</code> ·
+    <code>notes/improvements.md</code> item 14 ·
+    <a href="consent.html">back to the chapter</a>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

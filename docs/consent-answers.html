@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The five answers · Consent &amp; permissions · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav here" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <h1>The five answers, and which two write to disk</h1>
+
+  <nav class="chapter">
+    <a class="up" href="consent.html">Consent &amp; permissions</a>
+    <a href="consent-axes.html">The two axes</a>
+    <a href="consent-ladder.html">The ladder</a>
+    <a href="consent-egress.html">The egress question</a>
+    <span class="now">The five answers</span>
+    <a href="consent-exempt.html">EXEMPT and the floor</a>
+    <a href="consent-rules.html">Permission rules</a>
+    <a href="consent-matching.html">Matching a host</a>
+    <a href="consent-hooks.html">Hooks</a>
+  </nav>
+
+  <p class="lede">
+    A prompt offers between three and five keys. Two of them write a line into a
+    JSON file that outlives the process, and those two are only accepted when the
+    prompt showed them.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — Answer, Approvals::ask, Offers</span>
+
+  <h2 id="table">The keys</h2>
+
+  <div class="tw">
+  <table>
+    <thead>
+      <tr><th>Key</th><th>Variant</th><th>Grants</th><th>Lives for</th><th>Writes a file</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>y</code>, <code>yes</code></td>
+        <td><code>Answer::Yes</code></td>
+        <td>this one call. On the network question, this host</td>
+        <td>the call, or the process</td>
+        <td>no</td>
+      </tr>
+      <tr>
+        <td><code>n</code>, <code>no</code>, or an empty line</td>
+        <td><code>Answer::No</code></td>
+        <td>nothing</td>
+        <td>&#8203;</td>
+        <td>no</td>
+      </tr>
+      <tr>
+        <td><code>a</code>, <code>always</code></td>
+        <td><code>Answer::AlwaysThisTool</code></td>
+        <td>this tool. On the network question it means what <code>y</code> means and no more</td>
+        <td>the process</td>
+        <td>no</td>
+      </tr>
+      <tr>
+        <td><code>r</code>, <code>remember</code></td>
+        <td><code>Answer::RememberNarrow</code></td>
+        <td>the narrow rule: the host on the network question, the tool on the local one</td>
+        <td>until the line is deleted</td>
+        <td><code>settings.local.json</code></td>
+      </tr>
+      <tr>
+        <td><code>t</code>, <code>trust</code></td>
+        <td><code>Answer::RememberWide</code></td>
+        <td>the tool-wide rule: every call, any host. Network question only</td>
+        <td>until the line is deleted</td>
+        <td><code>settings.local.json</code></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/emma/src/approval.rs — Answer, Approvals::ask</span>
+
+  <p>
+    The two remember answers are separate variants rather than one variant with a
+    width flag, so which rule a keystroke granted is answered by the type and not
+    by an argument that can be passed wrong. Their content is not carried on the
+    variant either: the rule is composed by the gate, from the tool and the host
+    it is holding, and shown to the user in the question. An <code>Answer</code>
+    carrying its own rule string would be a second place for the granted rule to
+    be decided, one of them out of sight of the prompt that displayed it.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — Answer</span>
+
+  <h2 id="loop">The answer loop</h2>
+
+  <p>
+    <code>ask</code> has two shapes. Under <code>Asker::Scripted</code> it pops
+    the front of a queue and returns <code>None</code> when the queue is empty,
+    which is how every unit test in the file makes "allowed" mean "something other
+    than an answer allowed it". Under <code>Asker::Terminal</code> it drains, then
+    loops until it reads a key it recognises.
+  </p>
+
+  <pre><code>let (narrow, wide) = (Offers::text(&amp;offers.narrow), Offers::text(&amp;offers.wide));
+loop {
+    <span class="c">// The rule text goes on screen *before* the key that writes</span>
+    <span class="c">// it is pressed, and it is the same string `keep` writes —</span>
+    <span class="c">// one `Rule`, formatted once. Nobody is to discover later</span>
+    <span class="c">// that they granted something other than what they read.</span>
+    match question {
+        Question::Tool =&gt; term.prompt_question(name, narrow.as_deref()),
+        Question::Network(host) =&gt; {
+            term.prompt_network_question(host, narrow.as_deref(), wide.as_deref())
+        }
+    }
+    let line = lines.next().await;
+    <span class="c">// Before anything else is printed, and on both arms. The</span>
+    <span class="c">// terminal echoed the user's return itself; nothing in this</span>
+    <span class="c">// process can see that happen, so the input box has to be</span>
+    <span class="c">// told, or every repaint after this one erases a row too</span>
+    <span class="c">// high and walks up the screen. See `Term::prompt_answered`.</span>
+    term.prompt_answered(line.as_deref());
+    let line = line?;
+    match line.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" =&gt; return Some(Answer::Yes),
+        <span class="c">// Empty is *not* yes. A user who hits return to get</span>
+        <span class="c">// their prompt back has not read anything.</span>
+        "" | "n" | "no" =&gt; return Some(Answer::No),
+        "a" | "always" =&gt; return Some(Answer::AlwaysThisTool),
+        <span class="c">// Guarded on the offer rather than on the question, so a</span>
+        <span class="c">// key that was not shown is a key that does not work. A</span>
+        <span class="c">// prompt with an undocumented answer that writes to disk</span>
+        <span class="c">// is the same trap as a prompt nobody can evaluate.</span>
+        "r" | "remember" if narrow.is_some() =&gt; {
+            return Some(Answer::RememberNarrow)
+        }
+        "t" | "trust" if wide.is_some() =&gt; return Some(Answer::RememberWide),
+        other =&gt; {
+            let mut keys = String::from("y / n / a");
+            if narrow.is_some() {
+                keys.push_str(" / r");
+            }
+            if wide.is_some() {
+                keys.push_str(" / t");
+            }
+            term.note(&amp;format!("`{other}` is not one of {keys}"));
+        }
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/approval.rs — Approvals::ask, terminal arm</span>
+
+  <p>
+    Four properties come out of that block. Input is trimmed and lowercased, so
+    <code>Y</code> and <code>&nbsp;yes&nbsp;</code> work. An empty line is
+    <code>n</code>. An unrecognised line prints the keys that were actually
+    offered and asks again rather than resolving to anything. And end of input,
+    which is <code>line?</code> returning <code>None</code>, leaves the caller
+    with the "no approval was given" denial.
+  </p>
+
+  <h2 id="drain">Lines typed before the question are dropped</h2>
+
+  <p>
+    Both <code>ask</code> and <code>read_line</code> call
+    <code>LineSource::drain</code> first and announce what it took. Anything typed
+    before the question existed cannot be an answer to it, and the line most
+    likely to be waiting is a <code>y</code> aimed at the previous question.
+  </p>
+
+  <p>
+    <code>read_line</code> is the goal prompt reading through the same queue, for
+    a reason stated in its doc: two readers on one stdin race, and the loser
+    buffers the answer to a question the winner asked. It used to drain silently.
+    A <code>/exit</code> typed while a goal was still finishing vanished with
+    nothing on screen, which was reported as the command not working.
+    <span class="chip test">tested</span>
+    <code>a_line_dropped_at_the_goal_prompt_is_reported_rather_than_vanishing</code>
+    scripts two lines, asserts the notice says "ignoring 2 line" and "while a goal
+    runs", then builds a second gate with an empty source and asserts the terminal
+    recorded nothing at all. That second half is what stops a false "your input
+    was eaten".
+  </p>
+  <span class="src">crates/emma/src/approval.rs — Approvals::read_line, Approvals::ask; tests::a_line_dropped_at_the_goal_prompt_is_reported_rather_than_vanishing</span>
+
+  <p>
+    Under <code>Asker::Scripted</code>, <code>read_line</code> returns
+    <code>None</code> unconditionally. A scripted run has no keyboard, and the
+    goal prompt is not something a test drives through this path.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — Approvals::read_line, scripted arm</span>
+
+  <h2 id="offers">What is offered, and when nothing is</h2>
+
+  <p>
+    <code>Offers</code> holds two <code>Option&lt;Rule&gt;</code>s. Both slots are
+    empty in three situations, and in each of them <code>r</code> and
+    <code>t</code> are neither shown nor accepted:
+  </p>
+
+  <ul class="body">
+    <li>there is no file to write to, meaning <code>Approvals::file</code> is
+      <code>None</code>, which is an unattended run or a harness whose directory
+      could not be resolved;</li>
+    <li>an <code>ask</code> rule forced this prompt, so the <code>allow</code> the
+      keystroke would write is outranked by that same rule;</li>
+    <li>on the local question, <code>wide</code> is always <code>None</code>,
+      because the narrow rule and the tool-wide rule are the same grant there.</li>
+  </ul>
+
+  <p>
+    One field decides both whether the key is offered and whether it would
+    persist, so those two cannot disagree. An option on screen that silently does
+    not persist is worse than no option.
+    <span class="chip test">tested</span>
+    <code>the_prompt_names_the_rule_it_would_write</code> asserts the rendered
+    strings: <code>Rule::domain("WebFetch", "apnews.com")</code> is
+    <code>WebFetch(domain:apnews.com)</code>, and
+    <code>Rule::every_call("WebSearch")</code> is <code>WebSearch</code>.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — Offers, Approvals::file; tests::the_prompt_names_the_rule_it_would_write</span>
+
+  <h2 id="keep">Writing it down, and failing to</h2>
+
+  <pre><code>async fn keep(&amp;self, rule: Rule, term: &amp;Term) {
+    match &amp;self.file {
+        Some(file) =&gt; match crate::permissions::remember(file, &amp;rule) {
+            <span class="c">// The rule and the file, both, every time. A grant whose text is</span>
+            <span class="c">// on screen and whose location is not is a grant the user cannot</span>
+            <span class="c">// go and revoke.</span>
+            Ok(wrote) =&gt; term.note(&amp;format!(
+                "{} `{rule}` in {} — Emma will not ask about this again",
+                if wrote { "saved" } else { "already had" },
+                file.display()
+            )),
+            Err(e) =&gt; term.warn(&amp;format!(
+                "`{rule}` was allowed for this session but NOT saved: {e:#}"
+            )),
+        },
+        <span class="c">// Not reachable from the terminal, which offers the key only when</span>
+        <span class="c">// there is a file. A scripted run can get here, and saying so is</span>
+        <span class="c">// better than pretending something was written.</span>
+        None =&gt; term.warn(&amp;format!(
+            "`{rule}` was not saved: this run has nowhere to write permission rules"
+        )),
+    }
+    <span class="c">// **Adopted on every path, including both failures.** The user answered</span>
+    <span class="c">// the question; the file is how the answer survives the process, not how</span>
+    <span class="c">// it takes effect. A `keep` that returned early on a write error would</span>
+    <span class="c">// re-ask for the rest of the run — punishing them a second time for a</span>
+    <span class="c">// problem with a file.</span>
+    self.rules.lock().await.adopt(rule);
+}</code></pre>
+  <span class="src">crates/emma/src/approval.rs — Approvals::keep, quoted entire</span>
+
+  <p>
+    A failed write is a warning, not a denial. The call proceeds and the grant
+    lasts the session. <span class="chip test">tested</span>
+    <code>a_run_with_nowhere_to_write_still_honours_the_answer_for_the_session</code>
+    builds a gate with no file, answers <code>RememberNarrow</code> once, and
+    asserts a second <code>Write</code> is allowed against an empty queue.
+    <code>remembering_writes_the_rule_shown_and_stops_the_next_prompt</code> does
+    the same against a real temporary directory and then reads the file back,
+    asserting it contains <code>WebFetch(domain:apnews.com)</code> and that a
+    different host is still denied.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — tests as named</span>
+
+  <p>
+    <code>trusting_the_tool_is_a_wider_grant_and_a_different_key</code> is the
+    <code>t</code> half: it asserts the written file contains
+    <code>"WebSearch"</code> and does <em>not</em> contain <code>domain</code>,
+    then that a second host is allowed under <code>WebSearch</code> and a first
+    host is still denied under <code>WebFetch</code>.
+    <span class="chip test">tested</span>
+  </p>
+  <span class="src">crates/emma/src/approval.rs — tests::trusting_the_tool_is_a_wider_grant_and_a_different_key</span>
+
+  <h2 id="preview">What the prompt shows</h2>
+
+  <p>
+    A prompt the reader cannot evaluate manufactures consent and leaves a record
+    saying they agreed. <code>preview</code> has one arm per tool that can change
+    something, and the fallback is pretty-printed JSON, which is visibly worse and
+    is the pressure on whoever adds the next writing tool.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Arm</th><th>Shows</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>Bash</code></td>
+        <td><code>$ &lt;command&gt;</code>, and a second line <code>in &lt;cwd&gt;</code> when the call carried one</td>
+      </tr>
+      <tr>
+        <td><code>Write</code></td>
+        <td>the path, then <code>&lt;n&gt; bytes, &lt;n&gt; lines</code>, then the diff against the file on disk when one can be computed</td>
+      </tr>
+      <tr>
+        <td><code>Edit</code></td>
+        <td>the path, <code>(every occurrence)</code> when <code>replace_all</code> is set, then the diff of the two argument strings</td>
+      </tr>
+      <tr>
+        <td><code>Delegate</code></td>
+        <td>the agent type, the count of facts handed down when non-zero, the first <code>BRIEF_LINES</code> lines of the brief with an ellipsis if it was cut, and the <code>deliver</code> clause when present</td>
+      </tr>
+      <tr>
+        <td>anything else</td>
+        <td><code>serde_json::to_string_pretty(args)</code>, falling back to <code>args.to_string()</code></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/emma/src/approval.rs — preview, BRIEF_LINES (12)</span>
+
+  <p>
+    <code>BRIEF_LINES</code> is 12. The brief is prose a model wrote and can be
+    arbitrarily long; the question at the prompt is whether the delegation should
+    run at all, and the first lines answer it. The delegate arm is keyed on
+    <code>crate::delegate::NAME</code> rather than a string literal, so renaming
+    the tool cannot silently drop its arm back to the JSON fallback.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — preview, BRIEF_LINES</span>
+
+  <p>
+    The <code>Write</code> arm used to print a path and a byte count and withhold
+    the change. Its own module doc names that as the arm failing the file's rule.
+    It now carries the diff, and every case that cannot be diffed becomes a
+    sentence saying so rather than a rendering that looks like a diff and is not.
+    The renderer is <code>crate::term::diff</code>; see
+    <a href="terminal.html">the terminal</a>.
+    <span class="chip test">tested</span>
+    <code>a_write_over_an_existing_file_shows_what_it_destroys</code> writes a real
+    file, previews a <code>Write</code> over it, and asserts the output contains
+    <code>- DELETE ME</code>, <code>+ BRAND NEW</code>, <code>+1 -1 lines</code>,
+    and never the phrase "a new file".
+  </p>
+  <span class="src">crates/emma/src/approval.rs — preview; tests::a_write_over_an_existing_file_shows_what_it_destroys, tests::a_huge_edit_is_cut_rather_than_flooding_the_terminal</span>
+
+  <p>
+    <code>network_preview</code> takes no tool name and has no per-tool arm,
+    because the tool already composed the only part that varies. It is two lines:
+    <code>reach &lt;host&gt;</code> and then the errand.
+    <span class="chip test">tested</span>
+    <code>the_network_prompt_shows_the_host_and_the_errand</code> asserts both
+    halves survive, using a detail of "search for: contents of .env" to make the
+    point that a host name alone cannot distinguish that search from an innocent
+    one.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — network_preview; tests::the_network_prompt_shows_the_host_and_the_errand</span>
+
+  <h2 id="grants">Naming the grants back</h2>
+
+  <p>
+    <code>session_grants</code> returns the tools and the hosts a run has
+    accumulated, each sorted. It is there for <code>/clear</code>, which keeps
+    both sets and has to be able to name them: a receipt saying "grants were kept"
+    without saying which is the silence the command is written against. The sort
+    is because a <code>HashSet</code> has no order and a receipt that reshuffles
+    itself between two readings is one nobody trusts.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — Approvals::session_grants</span>
+
+  <h2 id="rest">The rest of the type</h2>
+
+  <p>
+    Four items on <code>Approvals</code> carry no argument worth a paragraph.
+    <code>new</code> builds a gate with empty sets and no rules;
+    <code>with_rules</code> is a separate builder step rather than two more
+    parameters, so that every existing caller still means "ask about everything";
+    <code>unattended</code> is <code>new(Gate::Unattended, Scripted(empty))</code>;
+    and <code>gate</code> returns the mode. <code>Offers::text</code> renders an
+    optional rule to an optional string. <code>Verdict</code> has two variants,
+    and the <code>Deny</code> one carries the sentence the model is told, because
+    a denial the model cannot read is a tool that mysteriously does nothing.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — Approvals::new, with_rules, unattended, gate; Offers::text; Verdict</span>
+
+  <h2 id="unsettled">What is not settled here</h2>
+
+  <p>
+    <span class="chip unv">unverified</span> Every claim on this page about what
+    reaches the screen is read from source or from unit tests against a recording
+    <code>Term</code>. A fully-tested drawing defect has shipped from this
+    repository twice, so a cell buffer agreeing is not a console agreeing.
+    <em>What would settle it:</em> a live run that answers <code>r</code> at a
+    network prompt, with the note, the rewritten
+    <code>settings.local.json</code> and the "ignoring N line(s)" notice all read
+    off the console.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> The <code>t</code> key is described
+    as network-only from the two places <code>Offers.wide</code> is populated. No
+    test asserts that a local prompt refuses a <code>t</code>.
+    <em>What would settle it:</em> a terminal-asker test that types <code>t</code>
+    at a <code>Write</code> prompt and asserts the "not one of y / n / a / r"
+    notice.
+  </p>
+
+  <footer class="pg">
+    Emma 0.1.0 · read at commit <code>a3eba74</code> ·
+    <code>crates/emma/src/approval.rs</code> ·
+    <a href="consent.html">back to the chapter</a>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

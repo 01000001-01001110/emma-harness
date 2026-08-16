@@ -57,6 +57,47 @@ is a page that has not been honest yet. The chips are how this site stays
 trustworthy as it ages — an amber chip is a standing invitation to go and settle
 something, and it is supposed to be uncomfortable.
 
+## Chapters and their pages
+
+A page that has grown past one screenful of a subject becomes a **chapter**: it
+keeps its name and its place in the sidebar, and its sections move to pages of
+their own.
+
+- **Naming.** `<chapter>-<section>.html`, lowercase, hyphenated:
+  `loop-one-turn.html`, `providers-caching.html`, `consent-precedence.html`.
+  The prefix means a directory listing sorts a chapter together.
+- **The sidebar does not grow.** It lists the fourteen chapters and nothing
+  more. Sixty pages each carrying a sixty-entry sidebar would mean every nav
+  change lands in sixty files, and the whole reason these pages open from
+  `file://` is that there is no build step to fix that for us.
+- **The chapter page becomes a contents page.** It keeps its lede, a short
+  orientation, and a list of its sub-pages with a sentence each. The detail
+  moves out. A reader who wants the shape reads the chapter; a reader who wants
+  the mechanism opens one page.
+- **Every sub-page carries a chapter strip** directly under its `<h1>`: the
+  chapter name linked, then its sibling pages, with the current one marked. Use
+  `<nav class="chapter">`; it is the sub-page's local map and the sidebar's job
+  stops at the chapter.
+- **`<h1>` is the section title, not the chapter's.** `<title>` is
+  `Section · Chapter · Emma`.
+
+### What a sub-page owes that a chapter page did not
+
+**Show the code.** A sub-page about a mechanism quotes the function it
+describes, from the file, in a `<pre><code>` block, with the file and the
+function named above it. Not a paraphrase of the code and not the whole file:
+the part the argument turns on, long enough to read on its own. Quote it
+exactly, including the comments, because the comments carry the reasoning this
+project puts there deliberately.
+
+**Cover the file, not the highlights.** The bar is that somebody could rebuild
+the behaviour from the page. Every public item, every branch that changes an
+outcome, every constant that encodes a decision, every error path. Where a
+function is uninteresting, one line saying so is coverage; silence is not.
+
+**Say what you did not read.** A sub-page claiming to cover a file, written by
+someone who read half of it, is worse than one that says which half.
+
 ## Voice
 
 **Write for a reader who wants to know how Emma works.** Not for a contributor
@@ -172,19 +213,41 @@ s = html.unescape(s)   # &mdash; is an em-dash too, and no character grep sees i
 print(s.count('—') + s.count('–'))
 "
 
-# self-approving narration: expect zero hits outside quoted source
-grep -oi 'deliberately\|by design\|on purpose\|load-bearing\|is not decoration\|not an accident\|the right call\|precisely the\|principled\|rigorous' docs/PAGE.html
+# self-approving narration: expect zero hits in YOUR prose.
+# Strip <pre> first. Quoted source legitimately contains these words, because
+# this codebase writes "load-bearing" and "deliberately" in its own comments,
+# and a raw grep reports a finished page as dirty. Never edit a word out of a
+# code quote to satisfy this check: the quote must match the file.
+python -c "
+import re
+s = open('docs/PAGE.html', encoding='utf-8').read()
+for pat in [r'<pre.*?</pre>', r'<!--.*?-->']:
+    s = re.sub(pat, '', s, flags=re.S)
+import sys
+hits = re.findall(r'deliberately|by design|on purpose|load-bearing|is not decoration|not an accident|the right call|precisely the|principled|rigorous', s, re.I)
+print(hits if hits else 'clean')
+"
 
 # every page links the shared stylesheet and ships no private one
 grep -c 'href="assets/docs.css"' docs/PAGE.html   # 1
 grep -c '<style\|<script\|href="http\|src="http' docs/PAGE.html   # 0
 
-# the sidebar differs from the canonical one by exactly the `here` class
+# the sidebar differs from the canonical one by exactly the `here` class.
+# Copy NAV.html byte for byte, column zero included: this diff is sensitive to
+# indentation, and a sidebar indented to match its surroundings fails it.
 diff <(sed -n '/<nav class="side">/,/<\/nav>/p' docs/PAGE.html) \
      <(sed -n '/<nav class="side">/,/<\/nav>/p' docs/assets/NAV.html)
 
 # amber exists somewhere: a page with no unverified claims has not been honest
 grep -c 'chip unv' docs/PAGE.html
+
+# every quoted code line still matches the file it came from.
+# A page that misquotes the source is worse than one that omits it, because the
+# reader has no reason to doubt a block that looks copied. Check each <pre>
+# against its cited file; the lines that legitimately differ are formulas,
+# shell one-liners and captured console output, and you should be able to name
+# every one of them. Written after a chapter checked 1,110 quoted lines this
+# way and could account for all 11 mismatches.
 ```
 
 Then read the page aloud, or as close as you can get. Uniform rhythm survives

@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>How a goal ends · The agent loop · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav here" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">The agent loop</p>
+  <h1>How a goal ends</h1>
+
+  <nav class="chapter">
+    <a class="up" href="loop.html">The agent loop</a>
+    <a href="loop-one-turn.html">One turn</a>
+    <a href="loop-failure.html">Failure</a>
+    <a href="loop-memo.html">The memo</a>
+    <span class="now">Endings</span>
+    <a href="loop-kick.html">The kick</a>
+    <a href="loop-budgets.html">Budgets</a>
+    <a href="loop-done.html">Done</a>
+    <a href="loop-seam.html">Seams</a>
+  </nav>
+
+  <p class="lede">
+    Nine endings, and four of them are decided by a ladder that runs when a turn
+    contains no tool calls. The rungs are order-dependent, and each is written to
+    be true only given that the ones above it already answered no.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Ending</code>, <code>Agent::run_goal</code></span>
+
+  <h2 id="ladder">The ladder</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::run_goal</span>
+if turn.tool_calls().is_empty() {
+    <span class="c">// The model stopped. Everything from here to `continue` is the
+    // goal being held rather than a conversation ending.</span>
+    let why = match self.s.done.verdict(goal, &amp;text).await {
+        Done::Yes =&gt; break Ending::Done,
+        Done::No(why) =&gt; why,
+    };
+    <span class="c">// The model has answered the kick without doing anything. A
+    // third attempt is the loop arguing with itself.</span>
+    if tool_calls_since_kick == 0 &amp;&amp; kicked {
+        break Ending::Stalled;
+    }
+    <span class="c">// Nothing was ever attempted. There is no work in flight to
+    // nudge back into motion, so this is a reply, and the run ends
+    // reporting it rather than spending a model call to discover
+    // that nobody was working.
+    //
+    // The order of these three is the whole rule and none of it is
+    // spare. After the verdict, so a first turn that claims
+    // completion is still `Done`. After the stall rule, so a model
+    // that was already nudged is judged by the rule written about
+    // being nudged. Which leaves this one meaning exactly what it
+    // says: no tool has been called in this goal, and nothing has
+    // been asked of the model that it has not already answered.</span>
+    if !worked {
+        break Ending::Answered;
+    }
+    if kicks &gt;= self.s.budgets.max_kicks {
+        break Ending::KicksExhausted;
+    }
+    kicks += 1;
+    kicked = true;
+    tool_calls_since_kick = 0;
+    <span class="c">// `text` is the composed message, not a second copy of `why`:
+    // `why` is the reason for a human reading the file, and the
+    // message is what the model was sent — the two differ by the
+    // restated goal and the list of what has already failed, and it
+    // is the message the fold has to put back.</span>
+    let kick_text = goal::kick(goal, &amp;why, &amp;tail(&amp;failed_ever, 5));
+    self.s.log.append(
+        "kick",
+        json!({ "turn_id": turn_id, "n": kicks, "why": why, "text": kick_text }),
+    );
+    self.s.term.kick(kicks, self.s.budgets.max_kicks);
+    <span class="c">// The provider's own blocks, verbatim. Never rebuilt from
+    // `text` plus the tool calls.</span>
+    place(&amp;mut query, &amp;mut pending_turn, Vec::new());
+    query.push(Message::user(kick_text));
+    continue;
+}</code></pre>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 700 320" role="img" aria-label="Four rules in a fixed order after a turn with no tool calls: the done verdict, then the stall rule, then the answered rule, then the kick budget. Falling through all four sends a kick and continues the loop.">
+        <rect class="hl" x="16" y="16" width="336" height="46" rx="4" />
+        <text class="lbl" x="28" y="38">1 · done.verdict(goal, text)</text>
+        <text class="tiny" x="28" y="55">the completion claim, whatever check is in force</text>
+        <path class="edge" d="M352 39 H448" marker-end="url(#en-arrow)" />
+        <rect class="box" x="448" y="23" width="236" height="32" rx="3" />
+        <text class="sm" x="460" y="44">Done::Yes → Ending::Done</text>
+
+        <path class="edge" d="M184 62 V88" marker-end="url(#en-arrow)" />
+        <rect class="box" x="16" y="88" width="336" height="46" rx="4" />
+        <text class="lbl" x="28" y="110">2 · tool_calls_since_kick == 0 &amp;&amp; kicked</text>
+        <text class="tiny" x="28" y="127">nudged, and did nothing about it</text>
+        <path class="edge" d="M352 111 H448" marker-end="url(#en-arrow)" />
+        <rect class="box" x="448" y="95" width="236" height="32" rx="3" />
+        <text class="sm" x="460" y="116">→ Ending::Stalled</text>
+
+        <path class="edge" d="M184 134 V160" marker-end="url(#en-arrow)" />
+        <rect class="box" x="16" y="160" width="336" height="46" rx="4" />
+        <text class="lbl" x="28" y="182">3 · !worked</text>
+        <text class="tiny" x="28" y="199">no tool attempted anywhere in this goal</text>
+        <path class="edge" d="M352 183 H448" marker-end="url(#en-arrow)" />
+        <rect class="box" x="448" y="167" width="236" height="32" rx="3" />
+        <text class="sm" x="460" y="188">→ Ending::Answered</text>
+
+        <path class="edge" d="M184 206 V232" marker-end="url(#en-arrow)" />
+        <rect class="box" x="16" y="232" width="336" height="46" rx="4" />
+        <text class="lbl" x="28" y="254">4 · kicks &gt;= max_kicks</text>
+        <text class="tiny" x="28" y="271">the nudge budget is spent</text>
+        <path class="edge" d="M352 255 H448" marker-end="url(#en-arrow)" />
+        <rect class="box" x="448" y="239" width="236" height="32" rx="3" />
+        <text class="sm" x="460" y="260">→ Ending::KicksExhausted</text>
+
+        <path class="edge-hl" d="M184 278 V302 H448" marker-end="url(#en-arrow-hl)" />
+        <text class="sm" x="460" y="306">otherwise: kick, and continue</text>
+
+        <defs>
+          <marker id="en-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          </marker>
+          <marker id="en-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          </marker>
+        </defs>
+      </svg>
+    </div>
+    <figcaption>
+      The ladder in source order. Moving a rung changes what the endings mean
+      rather than reordering equivalent checks, and the paragraphs below say
+      what each move would cost.
+    </figcaption>
+  </figure>
+
+  <h2 id="rungs">What each rung is protecting</h2>
+
+  <p>
+    <strong>Verdict first</strong>, so a model that claims completion on its
+    first breath is <code>Done</code> and not something else. Put the answered
+    rule above it and every one-shot goal, the ones where nothing needed
+    changing, collapses into an ending nothing downstream treats as success.
+    <span class="chip test">tested</span>
+    <code>a_first_turn_that_claims_completion_is_still_done</code>.
+  </p>
+
+  <p>
+    <strong>Stall second</strong>, so a model that has already been nudged is
+    judged by the rule written about being nudged. The condition is <em>no tool
+    call since the last kick, and a kick has been sent in this run</em>. Note
+    <code>kicked</code> rather than <code>kicks &gt; 0</code>: the kick count
+    comes back across a resume, but a resumed run's last nudge was answered by a
+    human typing a new goal, so reading the budget here would end every resumed
+    run on its first stop and report it as a stall.
+    <span class="chip test">tested</span>
+    <code>a_model_that_abandons_started_work_twice_is_believed</code> asserts
+    <code>kicks == 1</code>, which proves the stall rule fired rather than the
+    count running out.
+  </p>
+
+  <p>
+    <strong>Answered third</strong>, which leaves it meaning what it says: no
+    tool has been attempted in this goal, and nothing has been asked of the model
+    that it has not already answered. The ending exists because the owner typed
+    <code>hello</code> and was told his exchange had stalled. The distinguishing
+    signal is tool use rather than wording, and <code>worked</code> is per
+    <em>goal</em> rather than per turn, so one tool call anywhere earlier makes
+    every later stop a stall however conversational the sentence it stopped on.
+    <span class="chip test">tested</span> by
+    <code>a_conversational_turn_is_answered_not_stalled</code>, and the
+    narrowness has its own test,
+    <code>one_tool_call_earlier_in_the_goal_is_enough_to_make_a_stop_a_stall</code>,
+    because the obvious simplification, asking whether <em>this turn</em> used a
+    tool, passes every other test in the file while deleting the stall rule.
+  </p>
+
+  <p>
+    <strong>Kick budget last.</strong> Reaching it means the goal was genuinely
+    being worked and the nudges ran out.
+    <code>Ending::KicksExhausted</code>'s message adds the sentence that matters
+    after an unfinished run: what was changed is on disk, and nothing was rolled
+    back.
+    <span class="chip cert">certified</span> that these four are the whole
+    ladder and are in this order: the block quoted above is the entire
+    <code>if turn.tool_calls().is_empty()</code> branch, from the
+    <code>verdict</code> call to the <code>continue</code>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, <code>Ending</code>; crates/emma/tests/loop.rs</span>
+
+  <h2 id="worked">Three variables carry the ladder's state</h2>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Variable</th><th>Set where</th><th>What it means</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>worked</code></td>
+        <td>On every tool-call <em>attempt</em>, before the gate</td>
+        <td>This goal has tried to do something. Seeded <code>true</code> on a resume, because a resume only ever continues a goal already in flight.</td>
+      </tr>
+      <tr>
+        <td><code>kicked</code></td>
+        <td>Beside <code>kicks += 1</code></td>
+        <td>This <em>process</em> has nudged. Never restored from a resume.</td>
+      </tr>
+      <tr>
+        <td><code>tool_calls_since_kick</code></td>
+        <td>Incremented per call; zeroed when a kick is sent</td>
+        <td>Whether the model did anything about the last nudge.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::run_goal, the declarations</span>
+<span class="c">// Whether this goal has ever attempted work. It is what separates a
+// conversational turn from a stall — see [`Ending::Answered`] — and it
+// is deliberately per *goal* rather than per turn: a model that ran a
+// command and then stopped talking has abandoned something, however
+// chatty the sentence it stopped on.
+//
+// A resumed run starts as though it had, because a resume only ever
+// continues a goal that was already in flight. The error this refuses
+// to make is the asymmetric one: mistaking a stall for an answer ends a
+// real goal early and silently, while mistaking an answer for a stall
+// costs one model call and is what the loop did before today.</span>
+let mut worked = resuming_a_goal_in_flight;</code></pre>
+
+  <p>
+    <code>worked</code> is set on the attempt rather than on success, so a model
+    whose only call was denied at the approval prompt is still mid-task and the
+    stop that follows is a stall to be nudged rather than a greeting. The
+    asymmetry named in the comment is the reason the seeding goes this way:
+    calling a stall an answer ends a real goal silently, while calling an answer
+    a stall costs one model call.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, <code>Ending::Answered</code></span>
+
+  <h2 id="enum">The nine endings</h2>
+
+  <p>
+    Four come off the ladder. The rest are the budgets, the user and the
+    provider.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Variant</th><th><code>as_str</code></th><th>Fires when</th></tr></thead>
+    <tbody>
+      <tr><td><code>Done</code></td><td><code>done</code></td><td>The <code>DoneCheck</code> said yes.</td></tr>
+      <tr><td><code>KicksExhausted</code></td><td><code>kicks_exhausted</code></td><td>The nudge budget is spent and the goal is still not proven met.</td></tr>
+      <tr><td><code>Stalled</code></td><td><code>stalled</code></td><td>The model stopped twice with no tool call in between.</td></tr>
+      <tr><td><code>Answered</code></td><td><code>answered</code></td><td>The model answered and never attempted any work.</td></tr>
+      <tr><td><code>Iterations</code></td><td><code>iterations</code></td><td>Tested before the call: a run never makes more than <code>max_iterations</code>.</td></tr>
+      <tr><td><code>Tokens</code></td><td><code>tokens</code></td><td>Tested after the call, so the call that crossed the line is paid for.</td></tr>
+      <tr><td><code>Deadline</code></td><td><code>deadline</code></td><td>Tested at the top of an iteration against <code>wall_clock</code>.</td></tr>
+      <tr><td><code>Interrupted</code></td><td><code>interrupted</code></td><td>Ctrl-C, either at the top of an iteration or during a model call.</td></tr>
+      <tr><td><code>Provider(String)</code></td><td><code>provider_error</code></td><td>The provider failed in a way retrying will not fix.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/emma/src/agent.rs — <code>Ending</code>, <code>Ending::as_str</code></span>
+
+  <p>
+    <code>as_str</code> returns a <code>&amp;'static str</code> and drops the
+    payload of <code>Provider</code>, which is why the
+    <code>goal_finished</code> record carries a separate
+    <code>detail</code> field holding the message for that one variant. The
+    short string is what the session fold matches on and what
+    <code>ended_note</code> interpolates, so changing one of these nine strings
+    changes what a resumed conversation says about a previous goal.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Ending::as_str</code>, <code>Agent::run_goal</code>, <code>ended_note</code></span>
+
+  <h2 id="message">Every ending names the limit that fired</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// What the user is told. Named the limit that fired, because "I stopped"
+/// without a reason is indistinguishable from a crash.</span>
+pub fn message(&amp;self, b: &amp;Budgets) -&gt; String {
+    match self {
+        Self::Done =&gt; "goal complete".into(),
+        Self::KicksExhausted =&gt; format!(
+            "stopped: the goal was not confirmed done after {} nudges. What was changed is \
+             on disk; nothing was rolled back.",
+            b.max_kicks
+        ),
+        Self::Stalled =&gt; "stopped: the model stopped twice without using a tool, so it has \
+             nothing further to do here."
+            .into(),
+        <span class="c">// Deliberately not phrased as a stop. Nothing went wrong, nothing
+        // was abandoned, and the answer itself is already on the screen
+        // above this line — so this says what kind of turn it was and
+        // claims nothing else.</span>
+        Self::Answered =&gt; {
+            "answered — no tools were needed, so there was no goal to hold.".into()
+        }
+        Self::Iterations =&gt; format!("stopped: hit the {} model-call limit.", b.max_iterations),
+        <span class="c">// Deliberately not "hit the N token budget", which is what it used
+        // to say and which reads as "stopped at N". It does not stop at N.
+        // See `Budgets::max_tokens`: the check runs after the call, so the
+        // spend reported beside this sentence is larger — by 79,565 on the
+        // run that prompted the rewording — and a sentence that implies
+        // otherwise contradicts the number printed next to it.</span>
+        Self::Tokens =&gt; format!(
+            "stopped: went past the {} token budget, which counts cached input at what it \
+             costs rather than at its size, and is checked after each call — so the call \
+             that crossed it is included in the total below.",
+            b.max_tokens
+        ),
+        Self::Deadline =&gt; format!("stopped: hit the {}s time limit.", b.wall_clock.as_secs()),
+        Self::Interrupted =&gt; "interrupted. The partial turn is in the session log.".into(),
+        Self::Provider(e) =&gt; format!("stopped: {e}"),
+    }
+}</code></pre>
+
+  <p>
+    Four of the nine interpolate a number from <code>Budgets</code>, which is
+    what the test asserts.
+    <span class="chip test">tested</span>
+    <code>every_ending_says_which_limit_fired</code> checks that
+    <code>KicksExhausted</code>, <code>Iterations</code>, <code>Tokens</code> and
+    <code>Deadline</code> each contain an ASCII digit. That is a weak assertion
+    and it catches the real regression, which is a tidy-up replacing a number
+    with prose.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Ending::message</code> and its unit test</span>
+
+  <p>
+    <code>Iterations</code> and <code>Tokens</code> are worded differently on
+    purpose and a second test guards the difference.
+    <span class="chip test">tested</span>
+    <code>the_token_budget_is_described_as_the_tripwire_it_is</code> asserts the
+    tokens message contains the word "after", and separately that the iterations
+    message still contains "limit", so a tidy-up that unified the two would make
+    one of them false. Why the token budget is a tripwire at all is on
+    <a href="loop-budgets.html">Budgets</a>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — its unit tests</span>
+
+  <p>
+    <code>Answered</code> is the one variant whose message is not phrased as a
+    stop. Nothing went wrong, nothing was abandoned, and the answer is already
+    on the screen above the line.
+  </p>
+
+  <h2 id="outcome">What the caller gets, and what the file records</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — after the loop breaks</span>
+place(&amp;mut query, &amp;mut pending_turn, Vec::new());
+self.s.term.goal_ended();
+
+let outcome = Outcome {
+    ending,
+    text: last_text,
+    tokens: self.s.spend.get(),
+    iterations,
+    kicks,
+};
+self.s.log.append(
+    "goal_finished",
+    json!({
+        "ending": outcome.ending.as_str(),
+        "detail": match &amp;outcome.ending { Ending::Provider(e) =&gt; Some(e.clone()), _ =&gt; None },
+        "tokens": outcome.tokens,
+        "iterations": outcome.iterations,
+        "kicks": outcome.kicks,
+        "elapsed_ms": started.elapsed().as_millis() as u64,
+    }),
+);</code></pre>
+
+  <p>
+    The final <code>place</code> runs for every ending. For <code>Done</code>,
+    <code>Answered</code>, <code>Stalled</code> and
+    <code>KicksExhausted</code> that puts the model's last message into the
+    conversation, which is what makes a follow-up question possible at all: the
+    answer has to be in the conversation and not merely in the
+    <code>Outcome</code>. For <code>Tokens</code> the held turn is one whose
+    tools were never run, and <code>place_turn</code> drops it.
+    <code>Outcome::text</code> is verbatim, completion marker included, because
+    the screen is where the marker is removed and this is the record. See
+    <a href="loop-done.html">Done</a>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, <code>Outcome</code></span>
+
+  <p>
+    A goal joins the conversation whatever the ending, so the next goal in the
+    session is not told a story in which it did not happen. If the abandoned
+    goal's last message was a user turn, trailing tool results or an unanswered
+    kick, the next goal's opening would make two user turns adjoin, which the API
+    rejects, so <code>close_previous_goal</code> inserts <em>[The previous goal
+    stopped before it was finished: &lt;ending&gt;.]</em>. See
+    <a href="loop-one-turn.html">One turn</a>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::close_previous_goal</code>, <code>ended_note</code></span>
+
+  <h2 id="coverage">Functions this page covers</h2>
+
+  <p>
+    <code>Ending</code> and all nine variants, <code>Ending::as_str</code>,
+    <code>Ending::message</code>, the <code>Outcome</code> type, and the
+    no-tool-calls branch of <code>run_goal</code> including the
+    <code>worked</code>, <code>kicked</code> and
+    <code>tool_calls_since_kick</code> bookkeeping.
+  </p>
+
+  <h2 id="unverified">What is not verified here</h2>
+
+  <p>
+    <span class="chip unv">unverified</span> <strong>That
+    <code>Ending::Provider</code> is only reached for failures retrying will not
+    fix.</strong> The variant's doc says so and the retries themselves live in
+    <code>emma-llm</code>, which this page did not read. What would settle it:
+    read <code>crates/llm</code>'s retry policy and list which
+    <code>LlmError</code> variants can still reach this arm.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Ending::Provider</code>; crates/llm/</span>
+
+  <p>
+    <span class="chip unv">unverified</span> <strong>What
+    <code>Ending::Answered</code> looks like on a real terminal.</strong> Its
+    message is asserted as a string and the tests run with
+    <code>Term::silent()</code>. Nothing here checked how the line renders in a
+    live frame. What would settle it: type <code>hello</code> into an
+    interactive session and read the line under the answer.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Ending::message</code>; crates/emma/src/term/</span>
+
+  <footer class="pg">
+    <p>
+      Written against commit <code>a3eba74</code>. Next:
+      <a href="loop-kick.html">The kick</a>, which is what happens when the
+      ladder falls through all four rungs.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

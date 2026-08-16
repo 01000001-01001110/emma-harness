@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Path containment · Tools · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav here" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<p class="eyebrow">Doing work</p>
+<h1>Path containment, in one implementation</h1>
+
+<nav class="chapter">
+  <a class="up" href="tools.html">Tools</a>
+  <a href="tools-trait.html">the trait</a>
+  <a href="tools-outcome.html">outcomes</a>
+  <a href="tools-truncation.html">truncation</a>
+  <a href="tools-ctx.html">ToolCtx</a>
+  <span class="now">containment</span>
+  <a href="tools-files.html">files</a>
+  <a href="tools-edit.html">Edit</a>
+  <a href="tools-bash.html">Bash</a>
+  <a href="tools-tasks.html">tasks</a>
+  <a href="tools-web.html">web</a>
+  <a href="tools-lsp.html">LSP</a>
+</nav>
+
+<p class="lede">
+  <code>tools/fs/src/path.rs</code> is 206 lines and six functions, and it is
+  the only answer in the workspace to "is this path inside the root".
+  <code>tools/tasks</code> and <code>tools/lsp</code> both depend on
+  <code>tools/fs</code> to reach it.
+</p>
+
+<p>
+  That matters more than code reuse usually does. A second implementation would
+  not merely duplicate the check, it would eventually <em>disagree</em> with the
+  first, and the disagreement would be silent in the direction that fails open.
+  One tool would refuse a path another accepted, and nothing in either result
+  would say the two had different ideas of the boundary.
+</p>
+
+<figure>
+  <div class="figwrap">
+    <svg viewBox="0 0 640 250" role="img" aria-label="tools/tasks and tools/lsp both depend on tools/fs so that path::resolve is the single containment implementation; the resolved path is the one the caller then uses for I/O. Bash starts inside the root but is a shell and can walk out, and hard links and bind mounts are outside what the check can see.">
+      <defs>
+        <marker id="tp-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+        </marker>
+        <marker id="tp-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+        </marker>
+      </defs>
+
+      <rect class="box" x="12" y="16" width="150" height="34" rx="4" />
+      <text class="lbl" x="28" y="38">tools/tasks</text>
+      <rect class="box" x="12" y="70" width="150" height="34" rx="4" />
+      <text class="lbl" x="28" y="92">tools/lsp</text>
+      <rect class="box" x="12" y="124" width="150" height="34" rx="4" />
+      <text class="lbl" x="28" y="146">tools/fs</text>
+
+      <path class="edge" d="M162 33 L240 33 L240 129 L286 129" marker-end="url(#tp-arrow)" />
+      <path class="edge" d="M162 87 L215 87 L215 129 L286 129" marker-end="url(#tp-arrow)" />
+      <path class="edge" d="M162 141 L286 141" marker-end="url(#tp-arrow)" />
+
+      <rect class="hl" x="286" y="112" width="200" height="58" rx="4" />
+      <text class="lbl" x="302" y="134">path::resolve</text>
+      <text class="tiny" x="302" y="152">normalise · canonicalise · contain</text>
+
+      <path class="edge-hl" d="M486 141 L556 141" marker-end="url(#tp-arrow-hl)" />
+      <text class="sm" x="500" y="126">the path</text>
+      <text class="sm" x="500" y="160">used for I/O</text>
+
+      <path class="edge-dash" d="M88 158 L88 206" marker-end="url(#tp-arrow)" />
+      <rect class="box" x="12" y="206" width="150" height="34" rx="4" />
+      <text class="lbl" x="28" y="228">Bash</text>
+      <text class="sm" x="176" y="222">starts in the root; `cd ..` leaves</text>
+      <text class="tiny" x="176" y="238">hard links and bind mounts: not detectable</text>
+    </svg>
+  </div>
+  <figcaption>
+    Three crates, one containment check. <code>resolve</code> returns the path
+    the caller then uses for I/O; checking one path and operating on another is
+    the classic way this check becomes decorative. Drawn from
+    <code>tools/fs/src/path.rs</code>, <code>tools/tasks/src/store.rs</code> and
+    <code>tools/lsp/src/tools.rs</code>.
+  </figcaption>
+</figure>
+
+<h2 id="root">The root, canonicalised once per call</h2>
+
+<pre><code><span class="c">/// The canonical root. Canonicalised once per call so that comparisons below</span>
+<span class="c">/// are against the same spelling the OS uses — on Windows that means the</span>
+<span class="c">/// `\\?\` verbatim form, and comparing a verbatim path to a non-verbatim one</span>
+<span class="c">/// silently never matches, which would fail *open* if the check were inverted.</span>
+<span class="k">pub fn</span> root(ctx: &amp;ToolCtx) -&gt; Result&lt;PathBuf, ToolError&gt; {
+    ctx.cwd.canonicalize().map_err(|e| {
+        ToolError::Unavailable(format!(
+            <span class="s">"working directory {} cannot be resolved: {e}"</span>,
+            ctx.cwd.display()
+        ))
+    })
+}</code></pre>
+<span class="src">tools/fs/src/path.rs — <code>root</code></span>
+
+<p>
+  A working directory that cannot be canonicalised is <code>Unavailable</code>
+  rather than <code>BadArguments</code>, because the model did not choose it and
+  cannot fix it by passing something else. The same verbatim-spelling problem
+  reappears in <code>tools/lsp</code>, where it is the reason results are
+  canonicalised on the way <em>out</em> as well; see
+  <a href="tools-lsp.html">the LSP page</a>.
+</p>
+
+<h2 id="resolve">Three moves, because a file that does not exist yet still has to be contained</h2>
+
+<p>
+  The check is not "does the string contain <code>..</code>". A symlink inside
+  the root pointing outward is an escape containing no <code>..</code> at all,
+  and a path that does not exist yet cannot be canonicalised at all, which
+  <code>Write</code> needs since it has to name a file it is about to create.
+</p>
+
+<pre><code><span class="c">/// `starts_with` is `Path`'s, so the comparison is component-wise. A sibling</span>
+<span class="c">/// directory whose name merely begins with the root's — `/work` and</span>
+<span class="c">/// `/workspace` — does not match, which a string prefix test would have got</span>
+<span class="c">/// wrong in the direction that fails open.</span>
+<span class="k">pub fn</span> resolve(root: &amp;Path, raw: &amp;<span class="k">str</span>) -&gt; Result&lt;PathBuf, ToolError&gt; {
+    <span class="k">if</span> raw.trim().is_empty() {
+        <span class="k">return</span> Err(ToolError::BadArguments(<span class="s">"path is empty"</span>.into()));
+    }
+
+    <span class="k">let</span> asked = Path::new(raw);
+    <span class="k">let</span> joined = <span class="k">if</span> asked.is_absolute() {
+        asked.to_path_buf()
+    } <span class="k">else</span> {
+        root.join(asked)
+    };
+
+    <span class="k">let</span> lexical = lexical_normalize(&amp;joined);
+    <span class="k">let</span> (<span class="k">mut</span> out, tail) = canonical_prefix(&amp;lexical);
+    <span class="k">for</span> component <span class="k">in</span> tail {
+        out.push(component);
+    }
+
+    <span class="k">if</span> !out.starts_with(root) {
+        <span class="k">return</span> Err(ToolError::BadArguments(format!(
+            <span class="s">"{raw} resolves to {}, which is outside the working directory {}"</span>,
+            out.display(),
+            root.display()
+        )));
+    }
+    Ok(out)
+}</code></pre>
+<span class="src">tools/fs/src/path.rs — <code>resolve</code></span>
+
+<p>
+  An absolute path is taken as given rather than rejected, then contained like
+  everything else. Absolute-inside-the-root is a call the model makes
+  constantly, and the containment assertion is what tells the two apart. The
+  refusal names the resolved path as well as the raw one, so a model that
+  passed <code>../../etc/passwd</code> sees where that landed.
+</p>
+
+<h3>The two halves</h3>
+
+<p>
+  <code>lexical_normalize</code> drops <code>.</code> and resolves
+  <code>..</code> textually, and popping past the filesystem root is a no-op,
+  matching POSIX <code>/..</code>. It is the containment assertion and not this
+  function that rejects the attempt, which keeps the normaliser from having an
+  opinion about policy.
+</p>
+
+<pre><code><span class="c">/// Searching from the deepest cut downwards is what makes a symlinked parent</span>
+<span class="c">/// visible: `escape/planted.txt` cannot be canonicalised, but `escape` can, and</span>
+<span class="c">/// it canonicalises to wherever the link points — so the containment check sees</span>
+<span class="c">/// the outside path rather than the inside spelling.</span>
+<span class="c">///</span>
+<span class="c">/// When nothing at all canonicalises the input is returned unchanged with an</span>
+<span class="c">/// empty tail. That is not a bypass: an uncanonicalisable path is one whose</span>
+<span class="c">/// every ancestor is missing, so there is no link to have been followed, and it</span>
+<span class="c">/// still faces the same containment assertion in [`resolve`].</span>
+<span class="k">fn</span> canonical_prefix(p: &amp;Path) -&gt; (PathBuf, Vec&lt;OsString&gt;) {
+    <span class="k">let</span> comps: Vec&lt;Component&gt; = p.components().collect();
+    <span class="k">for</span> cut <span class="k">in</span> (1..=comps.len()).rev() {
+        <span class="k">let</span> candidate: PathBuf = comps[..cut].iter().collect();
+        <span class="k">if let</span> Ok(canon) = candidate.canonicalize() {
+            <span class="k">let</span> tail = comps[cut..]
+                .iter()
+                .map(|c| c.as_os_str().to_os_string())
+                .collect();
+            <span class="k">return</span> (canon, tail);
+        }
+    }
+    (p.to_path_buf(), Vec::new())
+}</code></pre>
+<span class="src">tools/fs/src/path.rs — <code>canonical_prefix</code></span>
+
+<p>
+  Because the input is already lexically normal, the tail can never contain
+  <code>..</code>, so re-attaching it cannot walk anywhere the prefix did not
+  permit. That ordering is the whole reason the two functions are separate.
+</p>
+
+<h2 id="existing">The variant that demands the file be there</h2>
+
+<pre><code><span class="c">/// Resolve a path that must already exist, reporting the two failures</span>
+<span class="c">/// separately: `BadArguments` when the path is wrong, `Unavailable` when the</span>
+<span class="c">/// filesystem will not answer. The model routes differently on each — a wrong</span>
+<span class="c">/// path is fixed by naming another, an unreadable mount is not fixed by</span>
+<span class="c">/// retrying.</span>
+<span class="k">pub fn</span> resolve_existing(root: &amp;Path, raw: &amp;<span class="k">str</span>) -&gt; Result&lt;(PathBuf, std::fs::Metadata), ToolError&gt; {</code></pre>
+
+<p>
+  It stats twice, and the comment says why: <code>symlink_metadata</code> first,
+  to tell "not there" from "cannot stat", then <code>metadata</code> through the
+  link, because <code>resolve</code> has already proven the target is inside the
+  root and reporting the link's own zero length would be a lie about the file.
+  A missing path is <code>{raw} does not exist</code>; an unreadable one is
+  <code>{raw} cannot be stat'd: {e}</code> as <code>Failed</code>.
+</p>
+<span class="src">tools/fs/src/path.rs — <code>resolve_existing</code></span>
+
+<h2 id="display">How a path reads back</h2>
+
+<pre><code><span class="k">pub fn</span> display(root: &amp;Path, path: &amp;Path) -&gt; String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace(<span class="s">'\\'</span>, <span class="s">"/"</span>)
+}</code></pre>
+
+<p>
+  Relative to the root when it is inside it, because absolute paths in tool
+  output are noise the model then copies. Backslashes become forward slashes so
+  a path reads the same whichever machine produced it, and so a path the model
+  copies into a <code>Glob</code> pattern is already in the spelling the matcher
+  expects.
+</p>
+<span class="src">tools/fs/src/path.rs — <code>display</code></span>
+
+<div class="note warn">
+  <span class="h">Suspected defect: the separator swap is unconditional</span>
+  <p>
+    A unix filename may legally contain a backslash. <code>display</code>
+    rewrites it to a forward slash, so the model is told a spelling
+    <code>resolve</code> will not find, and a round trip through
+    <code>Glob</code> and <code>Read</code> would fail on a file that exists.
+    Recorded by the platform sweep; no test covers it.
+    <span class="chip unv">unverified</span> Settled by creating a file named
+    <code>a\b.txt</code> on Linux and round-tripping the name through
+    <code>Glob</code> and <code>Read</code>.
+  </p>
+</div>
+<span class="src">notes/lessons/a-fake-machine-still-parses-paths-with-the-hosts-separator.md §4</span>
+
+<h2 id="cannot">What containment cannot catch</h2>
+
+<div class="note warn">
+  <span class="h">Hard links, bind mounts, and the shell</span>
+  <p>
+    A <strong>hard link</strong> inside the root to a file outside it is not
+    detectable this way. There is no "real" path to canonicalise towards, both
+    names are equally the file, and <code>canonicalize</code> returns the inside
+    one. The module doc marks this as verified rather than assumed, and notes
+    that on Windows <code>mklink /H</code> needs no privilege at all. A bind
+    mount is the same shape. This is a boundary against paths, not against an
+    operator who has already placed a link inside the tree.
+  </p>
+  <p>
+    <code>Bash</code> is wider than either and is documented as a hole rather
+    than papered over. Its <code>cwd</code> <em>argument</em> is contained; the
+    shell it starts is not, and <code>cd ..</code> leaves.
+  </p>
+</div>
+<span class="src">tools/fs/src/path.rs — module doc; tools/fs/src/bash.rs — module doc</span>
+
+<h2 id="traversal">Containment guards arguments; not following links guards the walk</h2>
+
+<p>
+  A directory symlink pointing outside the root would let a glob enumerate, and
+  then a read reach, anything on the machine without a single <code>..</code>
+  in the pattern. So the shared walk passes <code>follow_links(false)</code>,
+  and the two guards are separate because they cover different attacks.
+</p>
+<span class="src">tools/fs/src/walk.rs — <code>files_within</code>; tools/fs/src/glob.rs — module doc</span>
+
+<h2 id="tests">Every escape is attempted rather than assumed</h2>
+
+<p>
+  <span class="chip test">tested</span> <code>tools/fs/tests/containment.rs</code>
+  tries <code>..</code> leading and buried mid-path, an absolute path elsewhere
+  on the machine, a symlinked file and a symlinked directory read through, a
+  file created through a symlinked directory, and <code>Glob</code> and
+  <code>Grep</code> walking out through a link. It also carries the positive
+  control, an absolute path <em>inside</em> the root still working, because the
+  cheapest wrong way to pass every escape test is to reject all absolute paths.
+  <span class="chip cert">certified</span> 10 tests, all passing, from
+  <code>cargo test -p emma-tools-fs</code> at commit <code>a3eba74</code> on
+  this box.
+</p>
+
+<p>
+  <code>tools/tasks</code> carries three more in its own
+  <code>tests/containment.rs</code>, which exist because
+  <code>store::tasks_path</code> resolves a constant relative path and could
+  plausibly have been written to skip the check. Its comment gives the reason it
+  does not: <code>.emma</code> is often a symlink into a shared configuration
+  directory, and a second containment implementation disagreeing about that
+  case is the bug the reuse is here to prevent.
+</p>
+<span class="src">tools/tasks/src/store.rs — <code>tasks_path</code></span>
+
+<h2 id="unverified">What is not verified here</h2>
+
+<p>
+  <span class="chip unv">unverified</span> The backslash-in-a-unix-filename
+  defect above. Nobody has run it.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> The hard-link claim is repeated from
+  the module doc, which says it was verified rather than assumed but does not
+  say when or on what. Nothing in the test suite exercises a hard link. Settled
+  by <code>mklink /H</code> inside a sandbox root pointing at a file outside it
+  and watching <code>Read</code> return the contents.
+</p>
+</div>
+</main>
+</div>
+</body>
+</html>

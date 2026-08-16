@@ -1,14 +1,15 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Tools · Emma</title>
-    <link rel="stylesheet" href="assets/docs.css" />
-  </head>
-  <body>
-    <div class="shell">
-      <!-- ===========================================================================
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tools · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
      THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
@@ -19,1892 +20,200 @@
      file and every page's copy of it — which is the deal, and is why the list
      is kept short.
      =========================================================================== -->
-      <nav class="side">
-        <div class="brand">
-          <a href="index.html"><b>emma<i>·</i>harness</b></a>
-          <span>0.1.0 · single-user · rust</span>
-        </div>
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
 
-        <h4>Start here</h4>
-        <ul>
-          <li><a class="nav" href="index.html">What Emma is</a></li>
-          <li><a class="nav" href="getting-started.html">Getting started</a></li>
-          <li><a class="nav" href="architecture.html">Architecture</a></li>
-        </ul>
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
 
-        <h4>Running a goal</h4>
-        <ul>
-          <li><a class="nav" href="loop.html">The agent loop</a></li>
-          <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
-          <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
-        </ul>
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
 
-        <h4>Doing work</h4>
-        <ul>
-          <li><a class="nav here" href="tools.html">Tools</a></li>
-          <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
-          <li><a class="nav" href="delegation.html">Delegation</a></li>
-        </ul>
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav here" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
 
-        <h4>Surface</h4>
-        <ul>
-          <li><a class="nav" href="terminal.html">The terminal</a></li>
-          <li><a class="nav" href="config.html">Configuration</a></li>
-        </ul>
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
 
-        <h4>The project</h4>
-        <ul>
-          <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
-          <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
-          <li><a class="nav" href="unverified.html">What is not verified</a></li>
-        </ul>
-      </nav>
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
 
-      <main>
-        <div class="col">
-          <p class="eyebrow">Doing work</p>
-          <h1>Tools</h1>
-          <p class="lede">
-            Twenty-one tools across four crates, behind one trait with five
-            methods. Everything on this page is what a tool <em>declares</em>
-            about itself and what it does when called; whether a human is asked
-            first is <a href="consent.html">the gate's business</a>, not the
-            tool's.
-          </p>
+<main>
+<div class="col">
 
-          <div class="key">
-            <div><span class="chip cert">certified</span> proven, and a reader can repeat it: a file, a command, a grep</div>
-            <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
-            <div><span class="chip test">tested</span> a test that fails without it</div>
-            <div><span class="chip unv">unverified</span> believed, not checked</div>
-          </div>
+<p class="eyebrow">Doing work</p>
+<h1>Tools</h1>
+<p class="lede">
+  Twenty-one tools across four crates, behind one trait with seven methods,
+  two of which have defaults. This chapter is what a tool <em>declares</em>
+  about itself and what it does when called. Whether a human is asked first is
+  <a href="consent.html">the gate's business</a>, not the tool's.
+</p>
 
-          <p>
-            The surface on the machine this page was written on, printed by the
-            binary rather than counted from the source:
-          </p>
+<div class="key">
+  <div><span class="chip cert">certified</span> proven, and a reader can repeat it: a file, a command, a grep</div>
+  <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+  <div><span class="chip test">tested</span> a test that fails when the guarantee is removed</div>
+  <div><span class="chip unv">unverified</span> believed, not checked</div>
+</div>
 
-          <pre><code><span class="c">$ cargo run -q -p emma -- config check</span>
+<h2 id="surface">The surface, printed by the binary</h2>
+
+<pre><code><span class="c">$ cargo run -q -p emma -- config check</span>
 tools          Read, Write, Edit, Glob, Grep, Bash, TaskCreate, TaskGet,
                TaskList, TaskUpdate, FindReferences, GoToDefinition, Hover,
                DocumentSymbols, WebFetch, WebSearch, BrowserOpen, BrowserRead,
                BrowserAct, BrowserFill, BrowserClose
 tool schema    ce26c5f39467e4f0</code></pre>
-          <p>
-            <span class="chip cert">certified</span> Run at commit
-            <code>20ac400</code> on Windows 11 with a Brave key and a Chrome
-            present. Two more tools can appear in that list and do not here:
-            <code>Skill</code> registers only when the harness resolved skills,
-            and <code>Task</code> only with agent types configured. Both were
-            <code>(none)</code> on this box. See
-            <a href="delegation.html">Delegation</a> for those two.
-          </p>
-          <span class="src">crates/emma/src/main.rs — <code>run</code></span>
-
-          <h2 id="trait">What a tool is</h2>
-
-          <p>
-            <code>tool-api</code> is one file. That is a decision with a stated
-            cost rather than an accident of size: it holds the error taxonomy,
-            the success type, the two structs the runtime reads, the trait, and
-            a registry, and nothing else. That is why adding a tool stays “a
-            crate plus one registry line”. Twice in this project's history the gate
-            grew knowledge of a particular tool's arguments (a hard-coded
-            <code>query</code> check, and inferring retrieval from an empty
-            <code>chunks</code> array), and both times that promise became
-            false.
-          </p>
-          <span class="src">crates/tool-api/src/lib.rs — module doc, <code>NetworkTarget</code></span>
-
-          <h3>The five methods</h3>
-
-          <div class="tw">
-            <table>
-              <tr>
-                <th>Method</th>
-                <th>Answers</th>
-              </tr>
-              <tr>
-                <td><code>name()</code></td>
-                <td>
-                  Claude Code's spelling, exactly. A hook matcher or an
-                  allow-list written for one harness matches the other; a rename
-                  breaks every such rule silently, because a matcher that
-                  matches nothing looks identical to a tool nobody called.
-                </td>
-              </tr>
-              <tr>
-                <td><code>description()</code></td>
-                <td>
-                  Shown to the model verbatim. The built-in tools keep theirs in
-                  a markdown file beside the source and <code>include_str!</code>
-                  it, so a prose change is reviewable as a diff. It returns
-                  <code>&amp;str</code> and not <code>&amp;'static str</code>
-                  so that <code>Skill</code> can compose its description
-                  from a file at load time.
-                </td>
-              </tr>
-              <tr>
-                <td><code>input_schema()</code></td>
-                <td>JSON Schema, sent on the wire and hashed.</td>
-              </tr>
-              <tr>
-                <td><code>meta()</code></td>
-                <td>Three booleans, below.</td>
-              </tr>
-              <tr>
-                <td><code>network_target(args)</code></td>
-                <td>
-                  Where <em>this call</em> would send bytes. Defaults to
-                  <code>None</code>. A <code>None</code> from a tool declaring
-                  <code>reaches_network: true</code> is a refusal, not a pass,
-                  because the gate cannot grant a destination nobody named.
-                </td>
-              </tr>
-              <tr>
-                <td><code>validate_args(args)</code></td>
-                <td>
-                  Cheap, synchronous, no I/O. Anything needing the filesystem
-                  belongs in <code>invoke</code> and comes back as
-                  <code>BadArguments</code>.
-                </td>
-              </tr>
-              <tr>
-                <td><code>invoke(ctx, args)</code></td>
-                <td>
-                  <code>anyhow::Result&lt;Result&lt;ToolOutcome, ToolError&gt;&gt;</code>.
-                  The outer error claims the session cannot continue; almost
-                  every failure is the inner one.
-                </td>
-              </tr>
-            </table>
-          </div>
-          <span class="src">crates/tool-api/src/lib.rs — <code>trait Tool</code></span>
-
-          <h3 id="meta"><code>ToolMeta</code>: three bits, and one that was deleted</h3>
-
-          <p>
-            <strong>The predecessor's struct had a <code>needs_approval</code>
-            field that nothing ever read.</strong> It was not ported. A
-            declaration pretending to be a mechanism is worse than no
-            declaration, because reviewers stop asking the question the field
-            appears to answer. What is left is three bits, and each one has a
-            reader:
-          </p>
-
-          <div class="tw">
-            <table>
-              <tr>
-                <th>Field</th>
-                <th>Means</th>
-                <th>Read by</th>
-              </tr>
-              <tr>
-                <td><code>read_only</code></td>
-                <td>
-                  Cannot change local state: no file written, no process
-                  spawned. <strong>Not</strong> “cannot reach the network”:
-                  <code>WebFetch</code> and <code>WebSearch</code> both declare
-                  <code>true</code> and both talk to the outside.
-                </td>
-                <td>the approval gate</td>
-              </tr>
-              <tr>
-                <td><code>reaches_network</code></td>
-                <td>
-                  Sends bytes off this machine by construction. A separate axis
-                  because writing is a risk the model states in the call, while
-                  egress is how a prompt-injected page turns a read tool into an
-                  exfiltration channel. That channel passes every local-damage
-                  check on the way out.
-                </td>
-                <td>the approval gate, per host</td>
-              </tr>
-              <tr>
-                <td><code>idempotent</code></td>
-                <td>
-                  Running it twice has the same effect as once.
-                  <code>Edit</code> declares <code>false</code> and means it.
-                </td>
-                <td><code>Registry::register</code>, and nothing else</td>
-              </tr>
-            </table>
-          </div>
-
-          <p>
-            That last row is the interesting one. <code>idempotent</code> was
-            for a while declared by every tool and consulted by nothing. That
-            is the exact shape the <code>needs_approval</code> deletion rejects. It was
-            not deleted, because the answer is a genuine per-tool fact; it was
-            given a reader instead. <code>Registry::register</code> panics on
-            the pair <code>read_only: true, idempotent: false</code>, because a
-            call that changes no local state cannot have a different effect the
-            second time: that is one fact and its negation, and
-            <code>read_only</code> is the one the gate is about to trust.
-          </p>
-          <span class="src">crates/tool-api/src/lib.rs — <code>Registry::register</code></span>
-          <p>
-            <span class="chip test">tested</span>
-            <code>a_read_only_tool_cannot_also_declare_itself_unsafe_to_repeat</code>
-            is a <code>#[should_panic]</code>, and
-            <code>the_two_honest_shapes_both_register</code> is the positive
-            control that stops the check being satisfied by refusing everything.
-            Each tool crate additionally runs its <code>read_only</code> tools
-            against a populated sandbox and fingerprints the tree before and
-            after, <em>plus</em> pins which tools claim the bit. The pin is what
-            notices a new claim rather than merely leaving it unexercised.
-          </p>
-          <span class="src">tools/fs/tests/read_only.rs — <code>the_read_only_declarations_are_the_expected_ones</code></span>
-
-          <div class="note">
-            <span class="h">There is no <code>Default</code></span>
-            <p>
-              <code>ToolMeta</code> does not derive <code>Default</code>, so adding a
-              field breaks every construction site in the workspace and each
-              tool has to state the new bit rather than inherit it. The predecessor added a defaulted
-              field and thereby granted a safety property to every tool written
-              afterwards, chosen by nobody and noticed by no review.
-            </p>
-          </div>
-
-          <h3 id="errors">An error is a fact about the call</h3>
-
-          <p>
-            Three variants, a stable <code>kind</code> string the model routes
-            on, and prose kept separate from it so rewording a message never
-            changes the taxonomy.
-          </p>
-
-          <div class="tw">
-            <table>
-              <tr><th><code>kind()</code></th><th>Variant</th><th>Means</th></tr>
-              <tr>
-                <td><code>tool_unavailable</code></td>
-                <td><code>Unavailable</code></td>
-                <td>
-                  The machinery is absent or unconfigured: no key, no binary,
-                  no permission. Phrased “I cannot do this”, never “this cannot
-                  be done”.
-                </td>
-              </tr>
-              <tr>
-                <td><code>tool_failed</code></td>
-                <td><code>Failed</code></td>
-                <td>It ran and did not succeed.</td>
-              </tr>
-              <tr>
-                <td><code>bad_arguments</code></td>
-                <td><code>BadArguments</code></td>
-                <td>
-                  Wrong arguments, including the kind only discoverable at run
-                  time, because <code>validate_args</code> cannot stat a path or know
-                  whether a string occurs once in a file.
-                </td>
-              </tr>
-            </table>
-          </div>
-
-          <p>
-            <strong>Emptiness is a result.</strong> A read of an empty file
-            succeeds and returns nothing. A glob matching zero paths succeeds
-            with an empty list. A grep with no hits succeeds. Blurring that
-            turns “I could not look” and “I looked and there was nothing” into
-            one message, and the model cannot route around a failure it has been
-            told is an answer.
-          </p>
-
-          <p>
-            <strong>That rule was written about the filesystem and did not
-            survive contact with <code>Bash</code>.</strong> A non-zero exit had
-            been documented as <code>Failed</code>, which makes
-            <code>grep -q</code> answering “no” a tool failure. The loop
-            refuses to repeat a call that already failed with nothing changed
-            since, so one legitimate miss would have blocked that command for
-            the rest of the turn. The line is now <em>whether the command
-            ran</em>: could-not-spawn, timed-out and killed are
-            <code>Failed</code>; anything that started and finished is
-            <code>Ok</code>. It was not resolved as “<code>Bash</code> is the
-            documented exception”, because “except X” is how a rule starts
-            becoming folklore.
-          </p>
-          <span class="src">crates/tool-api/src/lib.rs — module doc; tools/fs/src/bash.rs — <code>Bash::run</code></span>
-
-          <h3 id="outcome"><code>ToolOutcome</code>: one type, two audiences</h3>
-
-          <pre><code><span class="k">pub struct</span> ToolOutcome {
-    <span class="k">pub</span> content: String,          <span class="c">// what the model sees</span>
-    <span class="k">pub</span> display: Option&lt;String&gt;, <span class="c">// what the terminal shows</span>
-    <span class="k">pub</span> truncated: bool,
-    <span class="k">pub</span> truncation: Option&lt;String&gt;,
-}</code></pre>
-
-          <p>
-            <code>display</code> exists because a full dump is often noise on a
-            terminal and never noise to a model. <code>Write</code> returns
-            <code>replaced src/lib.rs (151 lines, 4021 bytes)</code> as content
-            and <code>replaced src/lib.rs</code> as display; <code>Read</code>
-            returns the labelled file as content and
-            <code>src/lib.rs: 151 lines</code> as display. <code>None</code>
-            means the terminal shows only that the tool ran.
-          </p>
-          <span class="src">crates/tool-api/src/lib.rs — <code>ToolOutcome</code>; tools/fs/src/write.rs</span>
-
-          <h2 id="ctx">The trap: <code>ToolCtx</code> has no session slot</h2>
-
-          <p>
-            <code>ToolCtx</code> is what a tool is told about the call it is
-            serving: <code>cwd</code>, <code>session_id</code>,
-            <code>turn_id</code>. There is nowhere in it for
-            <strong>session state</strong>, and that absence is the single
-            sharpest edge on this page.
-          </p>
-
-          <pre><code><span class="k">pub struct</span> ToolCtx {
-    <span class="k">pub</span> cwd: std::path::PathBuf,
-    <span class="k">pub</span> session_id: String,
-    <span class="k">pub</span> turn_id: String,
-}</code></pre>
-          <span class="src">crates/tool-api/src/lib.rs — <code>ToolCtx</code></span>
-
-          <p>
-            Three tool sets need state that outlives one call, so each keeps it
-            in the tool structs behind an <code>Arc</code> and hands the same
-            instance to every member at construction. The invariant “these tools
-            share one X” is therefore a wiring convention and not something the
-            type system holds. <strong>Building the tools individually compiles
-            and then silently misbehaves</strong>, and each failure is quiet in
-            its own way:
-          </p>
-
-          <div class="tw">
-            <table>
-              <tr>
-                <th>Shared</th>
-                <th>Builder</th>
-                <th>What a wrong wiring does</th>
-              </tr>
-              <tr>
-                <td><code>ReadTracker</code><br /><em>Read, Write, Edit</em></td>
-                <td><code>fs_tools()</code></td>
-                <td>
-                  A <code>Write</code> holding a tracker its <code>Read</code>
-                  does not share <strong>never refuses anything</strong>. The
-                  read-before-write rule quietly stops existing. A fresh tracker
-                  is the mirror image: it refuses every overwrite.
-                </td>
-              </tr>
-              <tr>
-                <td><code>ServerPool</code><br /><em>the four LSP tools</em></td>
-                <td><code>lsp_tools()</code></td>
-                <td>
-                  Four tools with four pools is four rust-analyzers indexing one
-                  workspace.
-                </td>
-              </tr>
-              <tr>
-                <td><code>BrowserPool</code><br /><em>the five browser tools</em></td>
-                <td><code>browser_tools()</code></td>
-                <td>
-                  Five independent registries, four of which cannot see the
-                  session the fifth opened.
-                </td>
-              </tr>
-            </table>
-          </div>
-
-          <p>
-            <strong>The same warning is written down three separate times, in
-            three crates, in three sets of words.</strong> That is the argument
-            for the fix belonging in <code>tool-api</code> rather than in any of
-            them. That is a real trade rather than an obvious win, because
-            <code>tool-api</code> is kept small. The current state is that
-            the contract is enforced by three comments and nothing else.
-          </p>
-          <span class="src">notes/improvements.md item 17; tools/fs/src/session.rs; tools/lsp/src/lib.rs and pool.rs; tools/web/src/browser/mod.rs</span>
-
-          <div class="note warn">
-            <span class="h">Nothing catches a bypassed builder</span>
-            <p>
-              Each crate's <code>*_tools()</code> function is the only supported
-              way to build its set. Constructing a member directly is caught by
-              nothing: not the compiler, not the registry's coherence check, not
-              any test in the workspace.
-            </p>
-            <p>
-              <code>tools/tasks</code> escapes the whole problem: its four tools
-              share no mutable state, because the file on disk is the state and
-              is re-read on every call.
-            </p>
-          </div>
-          <span class="src">tools/tasks/src/lib.rs — <code>task_tools</code></span>
-
-          <p>
-            <span class="chip test">tested</span> Each of the three crates pins
-            the sharing with an <code>Arc::strong_count</code> assertion on the
-            set its builder returns:
-            <code>the_surface_is_five_tools_sharing_one_pool</code> expects 6,
-            <code>the_surface_is_the_four_tools_and_they_share_one_pool</code>
-            expects 5. That catches a builder that stopped sharing; it cannot
-            catch a caller that bypassed the builder.
-          </p>
-
-          <h2 id="dispatch">How a call reaches a tool</h2>
-
-          <figure>
-            <div class="figwrap">
-              <svg
-                viewBox="0 0 720 430"
-                role="img"
-                aria-label="A tool_use block passes through registry lookup, validate_args, the already-failed memo, the PreToolUse hook and the approval gate before invoke runs; the resulting ToolOutcome splits into a content block for the model and a display line for the terminal, while a ToolError becomes a tool_result the loop continues from."
-              >
-                <rect class="box" x="8" y="12" width="150" height="34" rx="4" />
-                <text class="lbl" x="24" y="34">tool_use block</text>
-
-                <path class="edge" d="M83 46 L83 74" marker-end="url(#tools-arrow)" />
-                <defs>
-                  <marker
-                    id="tools-arrow"
-                    viewBox="0 0 10 10"
-                    refX="9"
-                    refY="5"
-                    markerWidth="6"
-                    markerHeight="6"
-                    orient="auto-start-reverse"
-                  >
-                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
-                  </marker>
-                  <marker
-                    id="tools-arrow-hl"
-                    viewBox="0 0 10 10"
-                    refX="9"
-                    refY="5"
-                    markerWidth="6"
-                    markerHeight="6"
-                    orient="auto-start-reverse"
-                  >
-                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
-                  </marker>
-                </defs>
-
-                <rect class="box" x="8" y="74" width="150" height="34" rx="4" />
-                <text class="lbl" x="24" y="96">Registry::get</text>
-                <text class="sm" x="172" y="96">miss → no_such_tool, names the rest</text>
-
-                <path class="edge" d="M83 108 L83 136" marker-end="url(#tools-arrow)" />
-                <rect class="box" x="8" y="136" width="150" height="34" rx="4" />
-                <text class="lbl" x="24" y="158">validate_args</text>
-                <text class="sm" x="172" y="158">pure; no filesystem; no approval spent</text>
-
-                <path class="edge" d="M83 170 L83 198" marker-end="url(#tools-arrow)" />
-                <rect class="box" x="8" y="198" width="150" height="34" rx="4" />
-                <text class="lbl" x="24" y="220">failed-now memo</text>
-                <text class="sm" x="172" y="220">same call, same turn, nothing changed</text>
-
-                <path class="edge" d="M83 232 L83 260" marker-end="url(#tools-arrow)" />
-                <rect class="box" x="8" y="260" width="150" height="34" rx="4" />
-                <text class="lbl" x="24" y="282">PreToolUse hook</text>
-                <text class="sm" x="172" y="282">policy, resolved before any human is asked</text>
-
-                <path class="edge-hl" d="M83 294 L83 322" marker-end="url(#tools-arrow-hl)" />
-                <rect class="hl" x="8" y="322" width="150" height="46" rx="4" />
-                <text class="lbl" x="24" y="342">approval gate</text>
-                <text class="tiny" x="24" y="358">meta() · network_target()</text>
-                <text class="sm" x="172" y="342">the only caller of network_target</text>
-                <text class="tiny" x="172" y="358">see consent.html</text>
-
-                <path class="edge-hl" d="M83 368 L83 396" marker-end="url(#tools-arrow-hl)" />
-                <rect class="hl" x="8" y="396" width="150" height="30" rx="4" />
-                <text class="lbl" x="24" y="416">invoke(ToolCtx)</text>
-
-                <path class="edge-dash" d="M158 411 L470 411 L470 138" marker-end="url(#tools-arrow)" />
-                <rect class="box" x="404" y="96" width="132" height="40" rx="4" />
-                <text class="lbl" x="418" y="114">ToolOutcome</text>
-                <text class="tiny" x="418" y="129">or ToolError</text>
-
-                <path class="edge" d="M470 96 L470 68 L560 68" marker-end="url(#tools-arrow)" />
-                <rect class="box" x="560" y="50" width="150" height="36" rx="4" />
-                <text class="lbl" x="574" y="66">content →</text>
-                <text class="tiny" x="574" y="80">model, + [truncated: …]</text>
-
-                <path class="edge" d="M536 116 L620 116 L620 146" marker-end="url(#tools-arrow)" />
-                <rect class="box" x="560" y="146" width="150" height="36" rx="4" />
-                <text class="lbl" x="574" y="162">display →</text>
-                <text class="tiny" x="574" y="176">terminal line</text>
-              </svg>
-            </div>
-            <figcaption>
-              One <code>tool_use</code> block, from
-              <code>Agent::run_tool_call</code>. Five things can end the call
-              before the tool runs, and each produces a
-              <code>tool_result</code> the model reads rather than an aborted
-              turn. The approval gate is the only caller of
-              <code>network_target</code>. Drawn from <code>crates/emma/src/agent.rs</code>, <code>run_tool_call</code>.
-            </figcaption>
-          </figure>
-
-          <p>
-            The order matters in two places.
-            <code>validate_args</code> runs <em>before</em> the approval prompt,
-            so a malformed call never spends a human's attention. The
-            <code>PreToolUse</code> hook runs before it too, because a policy
-            denial is not something the person at the keyboard gets a vote on.
-            A gate a human can wave through is advice.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — <code>run_tool_call</code></span>
-
-          <h2 id="truncation">The truncation rule</h2>
-
-          <p>
-            <code>truncated</code> alone is half an admission. “Output was
-            truncated” is true and useless: it does not say whether the prose or
-            an inventory was lost, does not say how much, and does not name the
-            argument that would get the rest. A tool knows all three at the
-            moment it cuts and nothing downstream can reconstruct them, so it
-            says them in <code>truncation</code> and the runtime passes that on
-            verbatim: to the model in the result, and to the human on the
-            terminal line.
-          </p>
-
-          <p>
-            <strong>The rule: name the limit, name the loss, name the remedy,
-            or say plainly that no argument raises it.</strong> The shape, from
-            a real <code>Glob</code> call in this repository:
-          </p>
-
-          <pre><code>[truncated: 1000 of 64097 matching paths shown — the 1000 most recently
-modified — and 63097 dropped by a fixed 1000-result cap no argument raises.
-A pattern matching 64097 paths is usually reaching into build output; narrow
-`pattern` or set `path` to a subdirectory, which is the only thing that
-returns the rest]</code></pre>
-          <span class="src">tools/fs/src/glob.rs — <code>cuts</code></span>
-
-          <p>
-            <span class="chip test">tested</span> The number that must not
-            appear in that sentence is <code>max_results</code>.
-            <code>the_result_cap_names_itself_the_loss_and_a_remedy_that_works</code>
-            asserts the invented knob is absent, because the defect this whole
-            mechanism was built after was <code>WebFetch</code> advising the
-            model to narrow a request when what had been dropped was an
-            inventory it had no way to narrow. A remedy that cannot work is the
-            failure being engineered against.
-          </p>
-
-          <p>
-            When several caps fire at once they stay several sentences, joined
-            with <code>; also </code>. Merging them is how a reader concludes
-            the pattern was too broad when it was the traversal that gave up.
-          </p>
-
-          <p>
-            <span class="chip test">tested</span>
-            <code>no_tool_here_cuts_without_naming_the_cap</code> drives
-            <code>Glob</code>, <code>Grep</code>, <code>Read</code> and
-            <code>Bash</code> past their caps in one sandbox and demands of each:
-            the flag set, a <code>truncation</code> reason over 40 characters
-            containing a digit, and <code>[truncated:</code> present in
-            <code>content</code> as well, because the model reads the content,
-            not the struct. <code>a_whole_answer_claims_nothing</code> is the
-            other half: an uncut result must carry neither, or the file would be
-            satisfiable by marking everything truncated.
-          </p>
-          <span class="src">tools/fs/tests/truncation.rs</span>
-
-          <p>
-            <code>ToolOutcome::truncated()</code> (the flag with no reason)
-            still exists and still compiles. It is the weaker form, kept because
-            several tools explain their own cut inside <code>content</code>, and
-            it is never the right choice for a new tool. When a tool uses it the
-            runtime prints a fallback that says so rather than guessing:
-          </p>
-
-          <pre><code>[truncated: this is not the whole output, and this tool did not say which
-limit cut it. Narrow the request if you need the rest.]</code></pre>
-          <span class="src">crates/emma/src/agent.rs — <code>truncation_note</code></span>
-
-          <h2 id="containment">Path containment, in one implementation</h2>
-
-          <p>
-            <code>tools/tasks</code> and <code>tools/lsp</code> both depend on
-            <code>tools/fs</code> so that <code>path::resolve</code> is the only
-            answer to “is this path inside the root”. That matters more than
-            code reuse usually does: a second implementation would not merely
-            duplicate the check, it would eventually <em>disagree</em> with the
-            first, and the disagreement would be silent in the direction that
-            fails open. One tool would refuse a path another accepted, and
-            nothing in either result would say the two had different ideas of
-            the boundary.
-          </p>
-
-          <figure>
-            <div class="figwrap">
-              <svg
-                viewBox="0 0 640 250"
-                role="img"
-                aria-label="tools/tasks and tools/lsp both depend on tools/fs so that path::resolve is the single containment implementation; Bash starts inside the root but is a shell and can walk out, and hard links and bind mounts are outside what the check can see."
-              >
-                <rect class="box" x="12" y="16" width="150" height="34" rx="4" />
-                <text class="lbl" x="28" y="38">tools/tasks</text>
-                <rect class="box" x="12" y="70" width="150" height="34" rx="4" />
-                <text class="lbl" x="28" y="92">tools/lsp</text>
-                <rect class="box" x="12" y="124" width="150" height="34" rx="4" />
-                <text class="lbl" x="28" y="146">tools/fs</text>
-
-                <path class="edge" d="M162 33 L240 33 L240 129 L286 129" marker-end="url(#toolspath-arrow)" />
-                <path class="edge" d="M162 87 L215 87 L215 129 L286 129" marker-end="url(#toolspath-arrow)" />
-                <path class="edge" d="M162 141 L286 141" marker-end="url(#toolspath-arrow)" />
-                <defs>
-                  <marker
-                    id="toolspath-arrow"
-                    viewBox="0 0 10 10"
-                    refX="9"
-                    refY="5"
-                    markerWidth="6"
-                    markerHeight="6"
-                    orient="auto-start-reverse"
-                  >
-                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
-                  </marker>
-                  <marker
-                    id="toolspath-arrow-hl"
-                    viewBox="0 0 10 10"
-                    refX="9"
-                    refY="5"
-                    markerWidth="6"
-                    markerHeight="6"
-                    orient="auto-start-reverse"
-                  >
-                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
-                  </marker>
-                </defs>
-
-                <rect class="hl" x="286" y="112" width="200" height="58" rx="4" />
-                <text class="lbl" x="302" y="134">path::resolve</text>
-                <text class="tiny" x="302" y="152">normalise · canonicalise · contain</text>
-
-                <path class="edge-hl" d="M486 141 L556 141" marker-end="url(#toolspath-arrow-hl)" />
-                <text class="sm" x="500" y="126">the path</text>
-                <text class="sm" x="500" y="160">used for I/O</text>
-
-                <path class="edge-dash" d="M88 158 L88 206" marker-end="url(#toolspath-arrow)" />
-                <rect class="box" x="12" y="206" width="150" height="34" rx="4" />
-                <text class="lbl" x="28" y="228">Bash</text>
-                <text class="sm" x="176" y="222">starts in the root; `cd ..` leaves</text>
-                <text class="tiny" x="176" y="238">hard links and bind mounts: not detectable</text>
-              </svg>
-            </div>
-            <figcaption>
-              Three crates, one containment check. <code>resolve</code> returns
-              the path the caller then uses for I/O. Checking one path and
-              operating on another is the classic way this check becomes
-              decorative. Drawn from <code>tools/fs/src/path.rs</code>, <code>tools/tasks/src/store.rs</code> and <code>tools/lsp/src/tools.rs</code>.
-            </figcaption>
-          </figure>
-
-          <p>
-            The check is not “does the string contain <code>..</code>”. A
-            symlink inside the root pointing outward is an escape containing no
-            <code>..</code> at all, and a path that does not exist yet cannot be
-            canonicalised at all, which <code>Write</code> needs, since it has
-            to name a file it is about to create. So resolution is three moves:
-            normalise lexically, canonicalise the longest part that actually
-            exists, re-attach the part that does not. Searching for the
-            canonicalisable prefix from the deepest cut downwards is what makes
-            a symlinked <em>parent</em> visible.
-          </p>
-          <span class="src">tools/fs/src/path.rs — <code>resolve</code>, <code>canonical_prefix</code></span>
-
-          <p>
-            Two details that would fail open if they were got wrong. The root
-            is canonicalised once per call, so on Windows the comparison is
-            against the <code>\\?\</code> verbatim spelling the OS uses.
-            Comparing a verbatim path to a non-verbatim one silently never
-            matches. And containment uses <code>Path::starts_with</code>, which
-            is component-wise: <code>/work</code> and <code>/workspace</code> do
-            not match, where a string prefix test would have said they did.
-          </p>
-
-          <div class="note warn">
-            <span class="h">What containment cannot catch</span>
-            <p>
-              A <strong>hard link</strong> inside the root to a file outside it
-              is not detectable this way: there is no “real” path to
-              canonicalise towards, both names are equally the file, and
-              <code>canonicalize</code> returns the inside one. Verified rather
-              than assumed. On Windows <code>mklink /H</code> needs no
-              privilege at all. The same is true of a bind mount. This is a
-              boundary against paths, not against an operator who has already
-              placed a link inside the tree.
-            </p>
-            <p>
-              <code>Bash</code> is a wider hole than either, and is documented as
-              one rather than papered over. Its <code>cwd</code>
-              <em>argument</em> is contained; the shell it starts is not.
-            </p>
-          </div>
-          <span class="src">tools/fs/src/path.rs — module doc</span>
-
-          <p>
-            <span class="chip test">tested</span>
-            <code>tools/fs/tests/containment.rs</code> attempts each escape
-            rather than assuming it fails: <code>..</code> leading and buried
-            mid-path, an absolute path elsewhere on the machine, a symlinked file
-            and a symlinked directory read through, a file created through a
-            symlinked directory, and <code>Glob</code>/<code>Grep</code> walking
-            out through a link. It also carries the positive control: an
-            absolute path <em>inside</em> the root still works, because the
-            cheapest wrong way to pass every escape test is to reject all
-            absolute paths.
-          </p>
-
-          <div class="note warn">
-            <span class="h">Suspected defect: flagged, not fixed</span>
-            <p>
-              <code>path::display</code> replaces <code>\</code> with
-              <code>/</code> unconditionally, so a unix filename legally
-              containing a backslash is reported to the model in a spelling
-              <code>resolve</code> will not find. Recorded by the platform sweep;
-              no test covers it.
-              <span class="chip unv">unverified</span> Settled by creating a file
-              named <code>a\b.txt</code> on Linux and round-tripping the name
-              through <code>Glob</code> and <code>Read</code>.
-            </p>
-          </div>
-          <span class="src">notes/lessons/a-fake-machine-still-parses-paths-with-the-hosts-separator.md §4</span>
-
-          <h2 id="fs">The filesystem: <code>Read Write Edit Glob Grep Bash</code></h2>
-
-          <p>
-            Six names, Claude Code's exactly. Three of them declare
-            <code>read_only: true</code> and run without a prompt:
-            <code>Read</code>, <code>Glob</code>, <code>Grep</code>. Three
-            do not. Every argument is refused in the same words by a shared
-            <code>args</code> module, including unknown keys: a silently dropped
-            <code>replace_all</code> looks to the model exactly like a flag that
-            had no effect, and it will conclude the behaviour is impossible
-            rather than that it misspelled the key.
-          </p>
-          <span class="src">tools/fs/src/lib.rs — <code>fs_tools</code>; tools/fs/src/args.rs — <code>deny_unknown</code></span>
-
-          <h3 id="read"><code>Read</code></h3>
-
-          <div class="tw">
-            <table>
-              <tr><th>Argument</th><th>Type</th><th>Meaning</th></tr>
-              <tr><td><code>file_path</code> <em>required</em></td><td>string</td><td>Relative to the working directory, or absolute inside it.</td></tr>
-              <tr><td><code>offset</code></td><td>integer ≥ 1</td><td>1-based line to start at. Default 1.</td></tr>
-              <tr><td><code>limit</code></td><td>integer ≥ 1</td><td>Lowers the 2000-line cap. <strong>Cannot raise it.</strong> The schema says so, because “capped at 2000” reads as an invitation to pass 5000.</td></tr>
-            </table>
-          </div>
-
-          <p>
-            <code>read_only: true</code>. Every line comes back labelled
-            <code>&lt;number&gt;#&lt;hash&gt;</code>, right-aligned in six columns
-            and separated from the text by a tab. Reading an empty file succeeds
-            and returns nothing. The content stays genuinely empty rather than
-            gaining a prose stand-in, which would be indistinguishable from file
-            content the next time the model quotes it back. Reading past the end
-            is not an error either; the useful answer is the line count.
-          </p>
-
-          <p><strong>Three caps, all fixed:</strong></p>
-          <div class="tw">
-            <table>
-              <tr><th>Cap</th><th>Value</th><th>Raised by</th></tr>
-              <tr><td><code>MAX_LINES</code></td><td class="num">2000</td><td>nothing; <code>limit</code> only lowers</td></tr>
-              <tr><td><code>MAX_LINE_CHARS</code></td><td class="num">2000</td><td>nothing</td></tr>
-              <tr><td><code>MAX_BYTES</code></td><td class="num">262144</td><td>nothing</td></tr>
-            </table>
-          </div>
-
-          <p>
-            Any of the three sets <code>truncated</code>, and
-            <code>render</code> states each one that fired rather than merging
-            them. “truncated” alone does not tell the model whether to page
-            forward, narrow the range, or stop expecting the rest of a line. The
-            line cap's sentence names the number that actually bound, which
-            differs by caller:
-          </p>
-
-          <pre><code>[truncated: showing lines 1-2000 of 2500, cut by the fixed 2000-line
-ceiling, which `limit` cannot raise; continue with offset 2001]</code></pre>
-          <span class="src">tools/fs/src/read.rs — <code>render</code></span>
-
-          <p>
-            A clipped line gets <code>#----</code> in place of a hash, because
-            the model has seen its front and not its end and the label must
-            never stand for text it was not shown. <code>Edit</code> refuses
-            that marker by name.
-          </p>
-
-          <p>
-            <strong>A partial read is recorded as partial.</strong> A truncated
-            read, or any read with <code>offset &gt; 1</code>, leaves a sighting
-            marked incomplete. That is what later refuses a whole-file
-            <code>Write</code> while still permitting an anchored
-            <code>Edit</code>.
-          </p>
-
-          <h3 id="write"><code>Write</code></h3>
-
-          <p>
-            <code>file_path</code> and <code>content</code>, both required, and
-            nothing else. <strong>There is no <code>force</code> and no
-            <code>create_only</code>:</strong> the refusal below is the
-            tool's reason to exist, and a flag that turns it off is a flag a
-            model under pressure will find.
-          </p>
-
-          <p>
-            The destructive move that looks like progress is a whole-file write
-            from an assumption. An agent asked to “add a function to utils.rs”
-            can satisfy that by writing a file containing exactly that function;
-            the tool returns <code>Ok</code>, the file exists, the function is in
-            it, and everything that used to be there is gone with nothing in the
-            transcript saying so. So <strong>a whole-file write requires a
-            whole-file read, in this session</strong>, and there are three ways
-            that read can fail to license it:
-          </p>
-
-          <div class="tw">
-            <table>
-              <tr><th>State</th><th>Refusal</th></tr>
-              <tr>
-                <td><code>Never</code></td>
-                <td><code>{path} exists and has not been read in this session; Read it first so the overwrite is not blind</code></td>
-              </tr>
-              <tr>
-                <td><code>Partial</code></td>
-                <td><code>{path} was only read in part; Read it in full before replacing it, or use Edit to change the part you saw</code></td>
-              </tr>
-              <tr>
-                <td><code>Stale</code></td>
-                <td><code>{path} changed on disk after you read it; Read it again before overwriting so the change is not discarded</code></td>
-              </tr>
-            </table>
-          </div>
-
-          <p>
-            All three are <code>BadArguments</code>, because all three are
-            entirely actionable. Creating a file that does not exist needs no
-            prior read. There is nothing to lose. Nothing before the refusal
-            touches the filesystem, not even <code>create_dir_all</code>, which
-            is what makes a refusal actually a refusal.
-          </p>
-          <span class="src">tools/fs/src/write.rs — <code>Write::run</code></span>
-
-          <p>
-            Staleness is length and mtime, keyed by session so a resumed process
-            cannot inherit an earlier session's claim to have looked at a file.
-            <code>Write</code> declares <code>idempotent: true</code>: the same
-            bytes twice leave the same file, and the mtime moves, which nothing
-            here consults.
-          </p>
-          <span class="src">tools/fs/src/session.rs — <code>ReadTracker</code></span>
-
-          <h3 id="edit"><code>Edit</code>, and its two ways of saying where</h3>
-
-          <div class="tw">
-            <table>
-              <tr><th>Argument</th><th>Type</th><th>Meaning</th></tr>
-              <tr><td><code>file_path</code> <em>required</em></td><td>string</td><td></td></tr>
-              <tr><td><code>new_string</code> <em>required</em></td><td>string</td><td>The replacement. With <code>lines</code>, empty deletes.</td></tr>
-              <tr><td><code>old_string</code></td><td>string</td><td>Exact text, must occur once. <em>This or <code>lines</code>.</em></td></tr>
-              <tr><td><code>lines</code></td><td>string</td><td><code>12#a3f9</code>, or <code>12#a3f9-15#b7c1</code> for an inclusive range. <em>This or <code>old_string</code>.</em></td></tr>
-              <tr><td><code>replace_all</code></td><td>boolean</td><td>Default false. <strong>Only valid with <code>old_string</code></strong>.</td></tr>
-            </table>
-          </div>
-
-          <p>
-            <strong>An ambiguous anchor is a refusal, never a guess.</strong>
-            Every way of choosing among three matches is wrong in a way that is
-            hard to see afterwards: the first edits code the model was not
-            looking at, the last is the same bug with different luck, all three
-            is a refactor nobody asked for. And all three return
-            <code>Ok</code>, with the damage surfacing later as a test failure in
-            a file the transcript never mentions. So a match count other than one
-            is <code>BadArguments</code> <em>naming the count</em>, which is what
-            makes it actionable: zero matches and four matches are different
-            problems and get different messages.
-          </p>
-
-          <p>
-            The two forms are mutually exclusive and a call supplying both or
-            neither is refused rather than resolved by precedence. Precedence
-            means silently ignoring one of two things the model asked for. Why
-            one tool and not two: a second tool would cost its whole description
-            in every request forever, hand the model a choice it has no basis
-            for making, and break the six-Claude-Code-names compatibility
-            promise. Why not replace <code>old_string</code>: every model already
-            knows how to drive it, while the addressed form can only be driven by
-            a model that has seen a <code>Read</code> from <em>this</em> harness
-            in <em>this</em> conversation.
-          </p>
-          <span class="src">tools/fs/src/edit.rs — module doc</span>
-
-          <h4 class="body">Three checks stand between an address and the disk</h4>
-
-          <ol class="body">
-            <li>
-              <strong>The endpoints still say what the model says they say.</strong>
-              Catches a model aiming with a line number it worked out four turns
-              ago. This is the only check the model's own quoted hash can make.
-              The tracker knows what the world last looked like, and has no idea
-              what the model thinks it looks like.
-            </li>
-            <li>
-              <strong>Every line in the range is text this harness has shown.</strong>
-              The model sends two hashes; this is the other ninety-eight, matched
-              against the tracker's record. It closes the known failure of
-              per-line hashing, which is that a range can drift in the middle
-              while both its ends look untouched.
-            </li>
-            <li>
-              <strong>No line in the range is longer than <code>Read</code> will show.</strong>
-              Replacing a line whose end nobody has seen discards text nobody
-              read.
-            </li>
-          </ol>
-
-          <p>
-            Check 2 matches the run <em>wherever it appears</em> in the record
-            rather than at the same line numbers. It is the difference between asking “did this text change” and “did this
-            text move”, and only the first is this check's business. Comparing in
-            place looks equivalent until something inserts a line above, at which
-            point every number below shifts and a range nobody touched is
-            refused, including the corrected retry that the relocation refusal
-            explicitly tells the model to make. <strong>That contradiction was
-            found by watching a real model take the advice and be refused for
-            following it</strong>, not by review.
-          </p>
-          <span class="src">tools/fs/src/session.rs — <code>ReadTracker::contains_run</code></span>
-
-          <p>
-            Because the checks are per-line, <code>lines</code> accepts a
-            <code>Stale</code> file where <code>old_string</code> still refuses
-            one. That is a sharper rule rather than a weaker one: a literal
-            anchor on a drifted file can match text that moved somewhere it does
-            not belong, and nothing about the match would reveal it.
-          </p>
-
-          <p>
-            A successful addressed edit hands back the replacement lines
-            <em>with their new numbers and new hashes</em> (up to
-            <code>ECHO_LIMIT</code> = 20, beyond which it says to re-read for the
-            labels), plus a sentence saying how far everything below moved. Every
-            edit shifts the numbering underneath it, and a model working from
-            pre-edit numbers aims its next one wrong.
-          </p>
-
-          <div class="note">
-            <span class="h">The refusal that was rewritten after watching a model read it</span>
-            <p>
-              The first draft of the moved-line refusal opened with “Edit.lines
-              addressed 5#73b2, but line 5 now reads …” and closed by offering a
-              re-read as a coequal option. Sonnet 4.5 replied <em>“I see — I made
-              an error. Let me re-read the file”</em> and spent the whole
-              <code>Read</code> the hint existed to save. Two faults, both in the
-              prose: it did not say the file changed (which reads as <em>you
-              counted wrong</em>, and the fix for counting wrong is to look
-              again), and it offered the re-read as an equal option (a model
-              choosing between “retry” and “read again” under uncertainty reads
-              again, every time).
-            </p>
-            <p>
-              The reword worked as far as it can. <strong>What it did not do is
-              stop the re-read.</strong> In both observed runs the model read
-              the file again anyway before retrying. So the claim made here is
-              the smaller one: the corrected address the refusal offers is one
-              this tool accepts. No token saving is claimed from it.
-            </p>
-          </div>
-          <span class="src">tools/fs/src/edit.rs — <code>moved</code></span>
-
-          <h4 class="body">What the addressing actually costs, measured</h4>
-
-          <p>
-            The labels are a real cost paid on every <code>Read</code> to make
-            some edits cheaper, and the measurement is closer than the idea's
-            reputation suggests. Counted with Anthropic's
-            <code>count_tokens</code> endpoint on 2026-08-11:
-          </p>
-
-          <div class="tw">
-            <table>
-              <tr><th>Measured</th><th>Result</th></tr>
-              <tr>
-                <td>Addressed edit vs <code>old_string</code>, 14 real single-line edits from this repository</td>
-                <td><strong>26% fewer output tokens</strong>: 842 against 1140, because the anchor stops having to be long enough to be unique</td>
-              </tr>
-              <tr>
-                <td>Labelling, over 2000 lines of this repository's Rust</td>
-                <td><strong>+3.6 tokens a line, +23%</strong> on every read. Irreducible: base36 at the same width is worse (3.97), dropping the <code>#</code> saves 0.5, three hex characters saves 0.7 at four times the collision exposure</td>
-              </tr>
-              <tr>
-                <td>Break-even, at list prices</td>
-                <td>≈14 edits per read uncached; ≈1.5 once the read is cached, which it normally is within a turn</td>
-              </tr>
-            </table>
-          </div>
-
-          <p>
-            <strong>So on tokens alone it is close to a wash, and the case does
-            not rest on it.</strong> It rests on the call that no longer happens:
-            an <code>old_string</code> edit against a drifted file was refused
-            outright and cost a full re-read plus a re-emitted edit every time,
-            and that is the common case on a machine where somebody has the file
-            open in an editor.
-          </p>
-
-          <div class="note warn">
-            <span class="h">The 61% figure is not this change's number</span>
-            <p>
-              The widely-quoted −61% is the format author's own benchmark of
-              their own scheme (180 tasks × 3 runs over ~16 models), and −61% is
-              <strong>Grok 4 Fast, the best case, not a median</strong>; the
-              README does not say which of two baselines it is against. Better
-              than a bare marketing line, still vendor-run and independently
-              unverified. It does not describe Emma's implementation, which is a
-              different scheme: the source project tags each <em>file</em> with
-              one hash and addresses lines by bare number, and normalises
-              trailing whitespace away before hashing, so a formatter stripping
-              trailing spaces is invisible to its staleness check. Emma hashes
-              per line, including trailing whitespace, and catches that.
-            </p>
-          </div>
-          <span class="src">notes/improvements.md item 2; tools/fs/src/read.rs and hashline.rs — module docs</span>
-
-          <p>
-            The hash is FNV-1a: four hex characters rendered, 64 bits stored.
-            Non-cryptographic: what is being defended against is
-            <em>accident</em>, and an attacker who can rewrite the file being
-            edited already has everything a collision would buy. The exposure is
-            one comparison at 1 in 65,536, and the endpoints are checked twice
-            over: at 16 bits by the model's claim and at 64 bits by the tracker's
-            record.
-          </p>
-          <span class="src">tools/fs/src/hashline.rs — module doc</span>
-
-          <p>
-            <span class="chip test">tested</span>
-            <code>tools/fs/tests/addressed.rs</code> carries the positive
-            control (without it, the safe way to pass every refusal test is to
-            refuse every addressed edit), a second edit made <em>from the first
-            edit's output</em> with no <code>Read</code> between them, and a CRLF
-            fixture. Rebuilding from <code>str::lines</code> would convert every
-            CRLF file to LF on the first one-line edit and add a newline to a file
-            that never had one, both whole-file rewrites disguised as one-line
-            changes.
-          </p>
-
-          <h3 id="glob"><code>Glob</code></h3>
-
-          <p>
-            <code>pattern</code> (required) matched against paths relative to the
-            search root, and an optional <code>path</code> directory. Matching
-            nothing succeeds with an empty list: “there are no <code>.proto</code>
-            files here” is a fact about the repository and often the exact fact
-            being checked. Results come back newest first with the path as
-            tiebreak, so two calls over an unchanged tree return identical bytes.
-            The output rides in the conversation, and the conversation rides in
-            the cached prefix.
-          </p>
-
-          <p>
-            <strong>The walk does not follow symlinks</strong>, and not for cycle
-            safety. A directory symlink pointing outside the root would let a
-            glob enumerate, and then a read reach, anything on the machine
-            without a single <code>..</code> in the pattern. Containment guards
-            the arguments; refusing to follow links guards the traversal.
-          </p>
-
-          <p>
-            <code>MAX_RESULTS</code> is 1000 and <strong>no argument reaches
-            it</strong>. The call that surfaced this
-            returned 1000 of 64,097 paths in this repository, and 63,097 of them
-            were build output under <code>target/</code>. A
-            <code>max_results</code> knob would have turned a useless answer into
-            a sixty-times larger useless answer and still not said the thing the
-            model needed to know, which is that the pattern was too broad. The
-            fix for this cap is the sentence it prints.
-          </p>
-          <span class="src">tools/fs/src/glob.rs — <code>MAX_RESULTS</code>, <code>cuts</code></span>
-
-          <h3 id="grep"><code>Grep</code></h3>
-
-          <div class="tw">
-            <table>
-              <tr><th>Argument</th><th>Type</th><th>Meaning</th></tr>
-              <tr><td><code>pattern</code> <em>required</em></td><td>string</td><td>Regular expression, matched per line.</td></tr>
-              <tr><td><code>path</code></td><td>string</td><td>File or directory. Defaults to the working directory.</td></tr>
-              <tr><td><code>glob</code></td><td>string</td><td>Only search files whose relative path matches.</td></tr>
-              <tr><td><code>case_insensitive</code></td><td>boolean</td><td>Default false.</td></tr>
-              <tr><td><code>output_mode</code></td><td>enum</td><td><code>content</code> (default), <code>files_with_matches</code>, <code>count</code>.</td></tr>
-              <tr><td><code>head_limit</code></td><td>integer ≥ 1</td><td>Lowers the 500-line ceiling; cannot raise it.</td></tr>
-            </table>
-          </div>
-
-          <p>
-            No hits is a successful search, and that is why this tool exists
-            alongside <code>Bash</code>: <code>rg pattern .</code> through a
-            shell answers “no matches” with <strong>exit code 1</strong>, and
-            telling “no matches” from “ripgrep is not installed” then becomes a
-            matter of parsing stderr. Here they are structurally different
-            outcomes.
-          </p>
-
-          <p>Four independent cuts, each its own sentence:</p>
-          <div class="tw">
-            <table>
-              <tr><th>Cut</th><th>Limit</th><th>Raised by</th></tr>
-              <tr><td>output lines</td><td><code>MAX_OUTPUT_LINES</code> 500</td><td>nothing; <code>head_limit</code> only lowers</td></tr>
-              <tr><td>walk ceiling</td><td><code>MAX_VISITED</code> 200,000 entries <em>visited</em></td><td>nothing; narrow <code>path</code></td></tr>
-              <tr><td>match line length</td><td><code>MAX_MATCH_CHARS</code> 400</td><td>nothing; <code>Read</code> the line</td></tr>
-              <tr><td>files not opened</td><td><code>MAX_FILE_BYTES</code> 8 MiB</td><td>nothing; <code>Read</code> or <code>Bash</code> by name</td></tr>
-            </table>
-          </div>
-
-          <p>
-            The <code>head_limit</code> sentence says a different thing depending
-            on who bound it: a model that asked for 20 and got 20 can raise its
-            own number, and a model that asked for nothing and got 500 has hit a
-            ceiling <code>head_limit</code> cannot move. Naming the knob and
-            stopping is the shape of the <code>WebFetch</code> defect
-            this whole mechanism was built after.
-          </p>
-
-          <p>
-            The two skips are not the same admission and only one is reported.
-            <strong>A file that is not text is a file with no lines.</strong> A
-            JPEG genuinely contains no match, and reporting one would put a
-            truncation warning on every search of a tree containing an icon.
-            <strong>A large text file is a file nobody looked in</strong>, and it
-            may be the 20 MB log that holds the answer. The first live run of the
-            naïve version reported <em>499 files not opened</em>, every one an
-            <code>.rlib</code> or <code>.pdb</code> under <code>target/</code>:
-            true, worthless, and how a warning stops being read. So the size cap
-            sniffs a prefix for a NUL byte and valid UTF-8 before deciding which
-            of the two it is looking at.
-          </p>
-          <span class="src">tools/fs/src/grep.rs — <code>readable_text</code>, <code>looks_like_text</code></span>
-
-          <div class="note warn">
-            <span class="h">Known rough edge, flagged in the source</span>
-            <p>
-              The <code>glob</code> filter matches against the path relative to
-              the search base. When <code>path</code> names a single file, that
-              relative path is empty, so passing <code>path</code> and
-              <code>glob</code> together for one file matches nothing. Naming one
-              file and then filtering the set of one is a redundant call, which is
-              why it has not bitten. It is still a real asymmetry rather than a
-              rule.
-            </p>
-          </div>
-          <span class="src">tools/fs/src/grep.rs — <code>Grep::run</code></span>
-
-          <h3 id="bash"><code>Bash</code></h3>
-
-          <div class="tw">
-            <table>
-              <tr><th>Argument</th><th>Type</th><th>Meaning</th></tr>
-              <tr><td><code>command</code> <em>required</em></td><td>string</td><td>A shell command line.</td></tr>
-              <tr><td><code>timeout_ms</code></td><td>integer ≥ 1</td><td>Default 120,000, clamped at 600,000. Zero is refused; an over-large value is clamped, because “wait an hour” is a real intention the engine will not honour.</td></tr>
-              <tr><td><code>cwd</code></td><td>string</td><td>Must resolve inside the working directory. Defaults to it.</td></tr>
-            </table>
-          </div>
-
-          <p>
-            A shell, not an argv array. The argv alternative is genuinely safer:
-            no quoting, no word splitting, no dependence on what <code>sh</code>
-            happens to be. It is also unusable for what this tool is for, since almost
-            every command a coding agent needs is a shell construct. The failure
-            mode of argv exec is that the model emits <code>sh -c "…"</code> as
-            the argv anyway: a shell with the safety story removed and nobody's
-            caps applied. The injection argument also does not survive the threat
-            model: there is no untrusted string being interpolated, the model
-            composes the whole command, and a model that wants to delete
-            something can do it through argv just as easily.
-          </p>
-
-          <p>
-            The child's environment is <strong>cleared and rebuilt</strong> from a
-            16-name allowlist rather than filtered, so an API key exported by
-            whatever launched Emma cannot appear in it by default.
-            <code>EMMA_SHELL</code> is absent from that list: it
-            selects Emma's shell and has no business being visible to the
-            commands that shell runs.
-          </p>
-          <span class="src">tools/fs/src/bash.rs — <code>ENV_ALLOWLIST</code></span>
-
-          <h4 class="body">Which shell, and why WSL is refused</h4>
-
-          <p>
-            The search used to be “the first <code>bash</code> on
-            <code>PATH</code>”. On a stock Windows box that is
-            <code>C:\Windows\System32\bash.exe</code>, the WSL launcher. A
-            real run showed <code>pwd</code> coming back
-            <code>/mnt/e/Projects/emma</code> for a directory Emma had contained
-            as <code>C:\src\emma</code>, with <code>.wslconfig</code>
-            warnings mixed into the tool output. The two agreed only because WSL
-            happened to translate the directory. Measured on the same box, when
-            it <em>cannot</em> translate (a <code>subst</code> drive, a UNC path),
-            <strong>WSL starts in the user's home directory instead, prints
-            nothing, and exits 0</strong>. That is a command running outside the
-            approved root, reported as success, and it is a hole rather than
-            something the model can route around, because nothing in the result
-            says it happened.
-          </p>
-
-          <ol class="body">
-            <li><code>EMMA_SHELL</code>, if set to anything but whitespace. If what it names is not there the call is <code>Unavailable</code> and says where it looked. <strong>It never falls back.</strong> A tool that runs a different shell than the one you asked for is worse than one that stops.</li>
-            <li><code>/bin/sh</code>, on unix.</li>
-            <li>A native POSIX <code>bash</code> then <code>sh</code>: the Git for Windows locations first, then <code>PATH</code>, skipping the WSL launcher wherever it appears.</li>
-            <li>Nothing. <strong>PowerShell, WSL and <code>cmd.exe</code> are never chosen automatically.</strong> The model writes POSIX on the strength of being told it has a shell, and Windows PowerShell 5.1 has no <code>&amp;&amp;</code> at all; auto-selecting it would turn every such command into a wrong answer shaped like the command's own output.</li>
-          </ol>
-
-          <p>
-            The model is told which shell it got <strong>in the result, not in
-            the description</strong>. The description is hashed into
-            <code>tool_schema_hash</code>, which is how anyone tells which tool
-            surface produced a given answer, and a description naming the local
-            shell would make that hash a property of the machine. So every result
-            opens with <code>shell: posix — /bin/sh</code>.
-            <span class="chip test">tested</span>
-            <code>nothing_machine_specific_reaches_the_hashed_surface</code>
-            asserts the hashed surface contains none of
-            <code>/bin/sh</code>, <code>bash.exe</code>,
-            <code>Program Files</code>, <code>System32</code>,
-            <code>wsl</code>, <code>sh -c</code> or <code>EMMA_SHELL</code>, and
-            the positive half: that it does say where the answer is.
-          </p>
-          <span class="src">tools/fs/src/bash.rs — <code>Shell::banner</code>, <code>resolve_with</code></span>
-
-          <h4 class="body">Exit status is not failure</h4>
-
-          <p>
-            Could-not-spawn, timed-out and killed are <code>Failed</code>.
-            Anything that started and finished is <code>Ok</code>, carrying
-            <code>exit status &lt;n&gt;</code> under the shell banner.
-          </p>
-
-          <p>
-            <strong>This contract was stated three ways for a while, and the
-            copy that was wrong is the one the model reads.</strong> The
-            description went on calling a non-zero exit a failure long after the
-            code stopped treating it as one, because changing it moves the
-            registry's schema hash, which kept the edit looking too consequential
-            to make in passing. That deferral cost more than the edit: it taught
-            the model to avoid <code>Bash</code> for the commands it
-            should use it for, and to append <code>|| true</code>, which discards
-            the status the tool now reports correctly. All three have agreed since
-            2026-08-10.
-          </p>
-          <span class="src">tools/fs/src/bash.rs — module doc</span>
-
-          <h4 class="body">Two sharp edges, both known</h4>
-
-          <div class="note warn">
-            <span class="h">The grandchild-holds-the-pipe race</span>
-            <p>
-              Both streams are drained concurrently with the wait, and drained
-              <em>past</em> the 64 KiB cap rather than stopping. A reader that
-              stops fills the pipe buffer and the child blocks forever on a write
-              nobody consumes, so the timeout becomes the only exit and every
-              noisy command takes the full two minutes. After the wait, the
-              drains are given <strong>5 seconds</strong> and no more, because a
-              background grandchild holding the pipe open outlives the kill and
-              waiting on it would turn a timeout into a hang.
-            </p>
-            <p>
-              Losing that race <strong>discards whatever had already been
-              drained</strong> and reports both streams as cut. That loses
-              output, which is the lesser harm against a <code>Bash</code> call
-              that never returns. The two cuts call for opposite moves and get
-              different sentences: the cap means the body is a prefix of what was
-              said, while a lost race means the whole output is missing and the
-              body is assembled from nothing. Telling the model “cut at 65536
-              bytes” there would name a limit that never fired and invite it to
-              trust an empty body as short output.
-            </p>
-            <p>
-              <span class="chip unv">unverified</span> Only the cap is tested.
-              The lost-race branch “needs a grandchild holding the pipe open,
-              which no fixture can arrange reliably”. The truncation suite says
-              so in its own comment. Settled by spawning something like
-              <code>(sleep 30 &amp;) ; echo done</code> under a short timeout on
-              both platforms and checking which of the two sentences comes back.
-            </p>
-          </div>
-          <span class="src">tools/fs/src/bash.rs — <code>Bash::run</code>, <code>drain</code>; tools/fs/tests/truncation.rs</span>
-
-          <div class="note warn">
-            <span class="h">Suspected defect: <code>classify</code> is not platform-gated</span>
-            <p>
-              <code>classify</code> calls any shell whose parent directory's last
-              component is <code>system32</code>, <code>syswow64</code>,
-              <code>sysnative</code> or <code>windowsapps</code> the WSL
-              launcher, <strong>on every platform</strong>. Unlike every other
-              decision in that module it does not take the injected
-              <code>windows</code> flag. On unix, a checkout containing a
-              directory of either name yields a refusal that talks about WSL.
-            </p>
-            <p>
-              <strong>Its unit test asserts the behaviour unconditionally, so it
-              can never go red.</strong>
-              <code>the_wsl_launcher_is_recognised_wherever_windows_keeps_it</code>
-              passes on Linux and on Windows alike, for the same reason the
-              defect exists: <code>classify</code> gives the same answer on both.
-              Flagged here rather than fixed.
-            </p>
-          </div>
-          <span class="src">tools/fs/src/bash.rs — <code>classify</code>; notes/lessons/a-fake-machine-still-parses-paths-with-the-hosts-separator.md §3</span>
-
-          <h2 id="tasks">The task list: <code>TaskCreate TaskGet TaskList TaskUpdate</code></h2>
-
-          <p>
-            <strong>The file is the product and the tools are the accessor.</strong>
-            <code>.emma/tasks/tasks.md</code> is not a serialisation format that
-            happens to be text; it is a document somebody has open in an editor
-            while the agent works. Every constraint in the parser follows from
-            that: a line nobody changed is written back byte for byte, nothing is
-            ever reordered, and completing a task ticks a box where it sits. The
-            moment a person's edit disappears they stop trusting the file, then
-            stop reading it, and a task list nobody reads is theatre with a write
-            amplification problem.
-          </p>
-          <span class="src">tools/tasks/src/lib.rs — module doc</span>
-
-          <div class="tw">
-            <table>
-              <tr><th>Tool</th><th>Arguments</th><th>meta</th></tr>
-              <tr>
-                <td><code>TaskCreate</code></td>
-                <td><code>tasks</code>: array, <code>minItems: 1</code>; each item a string, or an object with <code>text</code> and optional <code>status</code> of <code>pending</code>/<code>in_progress</code>/<code>completed</code></td>
-                <td>write, not idempotent</td>
-              </tr>
-              <tr>
-                <td><code>TaskGet</code></td>
-                <td><code>id</code>: the handle, leading <code>#</code> optional</td>
-                <td>read-only</td>
-              </tr>
-              <tr>
-                <td><code>TaskList</code></td>
-                <td><code>status</code>: <code>open</code> (default), <code>all</code>, <code>pending</code>, <code>in_progress</code>, <code>completed</code></td>
-                <td>read-only</td>
-              </tr>
-              <tr>
-                <td><code>TaskUpdate</code></td>
-                <td><code>id</code> required, plus <code>status</code> and/or <code>text</code></td>
-                <td>write, <strong>idempotent</strong></td>
-              </tr>
-            </table>
-          </div>
-
-          <p>
-            <code>TaskUpdate</code> declaring <code>idempotent: true</code> where
-            <code>Edit</code> declares false is the distinction working: setting
-            a status to what it already is leaves the same file, and there is no
-            anchor to consume, so a replay is safe. <code>TaskCreate</code> is
-            not idempotent because two genuinely identical steps in a plan are a
-            thing that happens and nothing here deduplicates by text.
-          </p>
-
-          <p>
-            <strong>Nothing is truncated anywhere in this crate.</strong> No cap,
-            no constant, no <code>truncated</code> flag ever set. The one hard
-            numeric limit is not a cut but an exhaustion: handles are 16 bits, so
-            a file can in principle hold 65,536 tasks and then panic with
-            <code>all 65536 task handles in this file are in use</code>. Its doc
-            corrects an earlier claim that the space could not be exhausted:
-            “nobody would” is not the same as “cannot”.
-          </p>
-          <span class="src">tools/tasks/src/doc.rs — <code>first_free_id</code></span>
-
-          <p>
-            An id that is not in the file is <code>BadArguments</code>, never an
-            empty result: returning nothing would teach the model that the task
-            it just created has vanished, and its next move would be to create it
-            again. A missing file, no tasks, and no tasks matching a filter are
-            all <code>Ok</code>.
-          </p>
-
-          <h3>Two writers, no lock</h3>
-
-          <p>
-            You cannot lock a file a person is editing in VS Code. So every call
-            reads, changes and writes inside one <code>invoke</code>, guarded by
-            a hash of the whole file, <strong>not mtime</strong>, which has
-            second granularity on some filesystems, and a stamp that can silently
-            fail to change is a stale-read guard that fails open. The write goes
-            to <code>tasks.md.tmp</code> <em>beside</em> the file, never in the
-            system temp directory, because a rename across filesystems is a copy
-            and a copy is not atomic. A collision retries three times, then
-            <code>Failed</code>: three collisions in a row is a file being
-            rewritten in a loop.
-          </p>
-          <span class="src">tools/tasks/src/store.rs — <code>edit</code>, <code>write_atomically</code>, <code>hash</code></span>
-
-          <div class="note warn">
-            <span class="h">What the guard cannot catch, in its own words</span>
-            <p>
-              An editor holds the whole file in memory. If a person opened
-              <code>tasks.md</code> at 10:00, Emma writes at 10:01, and the
-              person hits Ctrl-S at 10:02, their editor writes its entire buffer
-              and Emma's line is gone: no error, no conflict. The guard's own
-              window is not zero either: a write landing between the confirming
-              read and the rename is lost. It is microseconds wide, and it is not
-              closed, only made small and admitted.
-            </p>
-          </div>
-
-          <p>
-            <span class="chip test">tested</span>
-            <code>tests/round_trip.rs</code> holds hand-written fixtures
-            (untidy bullets, trailing prose, notes, hand-ticked boxes, a CRLF file)
-            and asserts each survives an update. <code>tests/tools.rs</code>
-            asserts an exact file rather than a <code>contains</code>, because
-            every rejected alternative design passes a <code>contains</code>
-            check and fails an equality one.
-          </p>
-
-          <p>
-            <code>TaskCreate</code> and <code>TaskUpdate</code> declare
-            <code>read_only: false</code> and are then named in the
-            approval gate's <code>EXEMPT</code> list. The dodge belongs there
-            rather than in a false declaration, and the gate's own comment says
-            the list is owed a fix: an axis on <code>ToolMeta</code> for the
-            <em>scope</em> of a write. See <a href="consent.html">Consent</a>.
-          </p>
-          <span class="src">crates/emma/src/approval.rs — <code>EXEMPT</code></span>
-
-          <h2 id="web">The web: <code>WebSearch WebFetch</code> and five browser tools</h2>
-
-          <p>
-            <strong>Neither is registered unless it can work.</strong>
-            <code>web_tools()</code> resolves Chrome and the Brave key first and
-            returns only what is usable, plus a line per omission that
-            <code>main.rs</code> prints. The predecessor shipped a
-            <code>web_search</code> that registered with no key and failed on
-            every call; a turn that touched it died, and the model had no way to
-            learn the tool was decoration.
-          </p>
-          <span class="src">tools/web/src/lib.rs — <code>web_tools</code></span>
-
-          <h3><code>WebSearch</code></h3>
-
-          <p>
-            <code>query</code> (required) and <code>count</code> (default 10,
-            capped 20, Brave's own per-request ceiling, so asking for more would
-            be silently clamped by the API and make the count in the result
-            disagree with the request). <code>read_only: true</code>,
-            <code>reaches_network: true</code>. The key travels in an
-            <code>X-Subscription-Token</code> header, never in the query string,
-            and never appears in an error message.
-          </p>
-
-          <p>
-            It returns <strong>places to look, not an answer</strong>, and the
-            content says so above the results: the snippets are the search
-            engine's summaries, and a model that answers from them is quoting a
-            summary of a page it never opened. Zero results is
-            <code>Ok</code>. Status handling is split by what the model can do
-            about it: 401/403 is <code>Unavailable</code> (check the key), 422 is
-            <code>BadArguments</code> (Brave refused the query), 429 is
-            <code>Failed</code> and says the condition is temporary.
-          </p>
-          <span class="src">tools/web/src/search.rs — <code>classify_status</code></span>
-
-          <p>
-            <code>network_target</code> takes the host from
-            <code>base_url</code> rather than a constant, so a test pointed at a
-            loopback stub gates on the stub, and its <code>detail</code> is the
-            query verbatim: the query <em>is</em> the thing leaving the machine,
-            and a prompt naming a host without saying what is being sent there is
-            one nobody can evaluate.
-          </p>
-
-          <h3><code>WebFetch</code></h3>
-
-          <div class="tw">
-            <table>
-              <tr><th>Argument</th><th>Default</th><th>Ceiling</th></tr>
-              <tr><td><code>url</code> <em>required</em></td><td>—</td><td>http/https only; loopback, <code>file:</code> and <code>chrome:</code> refused</td></tr>
-              <tr><td><code>max_chars</code></td><td class="num">8000</td><td class="num">200,000 (bounds the prose only)</td></tr>
-              <tr><td><code>max_links</code></td><td class="num">50</td><td class="num">120, which is also the most this browser collects from one page</td></tr>
-            </table>
-          </div>
-
-          <p>
-            It renders one page in real Chrome and returns markdown: title, URL,
-            status, an anti-bot warning placed <em>above</em> the prose, content,
-            tables, JSON-LD, links main-content-first, interactive elements, and
-            a “Not read” section for cross-origin iframes. The status line is
-            <code>HTTP 404, …</code> or <code>HTTP status not observed, …</code>
-            and is never invented. A blocked page, a rendered 404 and an empty
-            page are all <code>Ok</code>.
-          </p>
-
-          <p>
-            <strong>This tool is where the truncation rule was learned.</strong>
-            Its cuts are the model for every other one on this page, and they
-            distinguish what can be raised from what cannot:
-          </p>
-
-          <div class="tw">
-            <table>
-              <tr><th>Cut</th><th>Says</th></tr>
-              <tr>
-                <td>page text</td>
-                <td><code>page text cut to {shown} of {total} characters by max_chars={n}; re-read with max_chars={total} for the whole page</code></td>
-              </tr>
-              <tr>
-                <td>links</td>
-                <td><code>{n} of {total} links shown (main-content links first), {dropped} dropped by max_links={n}; re-read with max_links={total} for the rest</code>. When the total reaches 120: <code>— 120 is the most this browser collects from one page, so links beyond that were never captured</code></td>
-              </tr>
-              <tr>
-                <td>JSON-LD, 2000 chars</td>
-                <td><code>cut … by a fixed cap no argument raises; the page's text and links above are the whole of what this tool can return</code></td>
-              </tr>
-            </table>
-          </div>
-
-          <p>
-            Several cuts join with <code>; also </code>.
-            <span class="chip test">tested</span>
-            <code>the_schema_offers_the_argument_the_truncation_notice_advertises</code>
-            is the one that closes the original defect: the notice may only name
-            a knob that exists, and a raised budget must actually return more.
-          </p>
-          <span class="src">tools/web/src/digest_md.rs; tools/web/src/fetch.rs</span>
-
-          <p>
-            <span class="chip unv">unverified</span> The upstream project's
-            4.6–5.9× token-economy figure for this digest format is <em>not</em>
-            reproducible here, and the source says so. The live-network bench
-            that produced it stayed upstream. Settled by re-running a digest-size
-            comparison against a fixed set of live pages from this fork.
-          </p>
-
-          <h3>The five browser tools</h3>
-
-          <p>
-            A stateless fetch launches Chrome, reads, and throws it away.
-            <code>BrowserOpen</code> keeps the browser and hands back a session
-            id, which is a different capability: inside a session the model acts
-            as the user, on a page that may hold their login.
-          </p>
-
-          <div class="tw">
-            <table>
-              <tr><th>Tool</th><th>Arguments</th><th><code>read_only</code></th></tr>
-              <tr><td><code>BrowserOpen</code></td><td><code>url</code>, <code>headful</code> (default false)</td><td>false</td></tr>
-              <tr><td><code>BrowserRead</code></td><td><code>session</code>, <code>delta</code> (default <strong>true</strong>), <code>max_chars</code>, <code>max_links</code>, <code>selectors</code></td><td>true</td></tr>
-              <tr><td><code>BrowserAct</code></td><td><code>session</code>, <code>action</code>, plus <code>selector</code>/<code>text</code>/<code>value</code>/<code>url</code>/<code>timeout_ms</code></td><td>false</td></tr>
-              <tr><td><code>BrowserFill</code></td><td><code>session</code>, <code>fields</code>: each <code>selector</code> with <code>value</code> or <code>checked</code></td><td>false</td></tr>
-              <tr><td><code>BrowserClose</code></td><td><code>session</code>, optional</td><td>true</td></tr>
-            </table>
-          </div>
-
-          <p>
-            <code>BrowserOpen</code> declares <code>read_only: false</code> for a
-            reason: it leaves a live browser running with an
-            unauthenticated CDP port on localhost, and while that exists any
-            local process can puppet it. At most
-            <strong><code>MAX_SESSIONS</code> = 2</strong> may be open (each is
-            a few hundred megabytes of Chrome), and a third is refused by name.
-          </p>
-
-          <p>
-            <code>BrowserClose</code> declares <code>read_only: true</code>, and
-            that departs from the letter of the field, which
-            says “no process spawned”. This ends one. The alternative is a prompt
-            on cleanup, whose failure mode is that somebody answers <code>n</code>
-            and a browser survives with a live remote-control port. This crate
-            has already leaked a Chrome once; gating the thing that prevents it
-            is how it happens again.
-          </p>
-          <span class="src">tools/web/src/browser/tools.rs — <code>BrowserClose::meta</code></span>
-
-          <p>
-            <code>BrowserAct</code> never returns page content. Its result is a
-            snapshot line and an instruction to call <code>BrowserRead</code> to
-            see what changed, and a test asserts the content is under 400
-            characters. A negative answer is <code>Ok</code> rather than an error:
-            <code>Condition NOT met within {n} ms — the page never reached that
-            state; this is the answer, not a failure to look</code>.
-            <code>BrowserFill</code> re-reads each field from the live page
-            afterwards, so what it reports is what is actually there rather than
-            what was sent.
-          </p>
-
-          <p>
-            <strong>Nothing here can submit a form, and that is two decisions
-            rather than an omission.</strong> The upstream library's submit
-            requires a second key in a config file resolved against the process's
-            working directory, which, inside Emma, is the user's repository, and
-            <code>Bash</code> can write it. A second key both parties can turn is
-            one key. Separately, “the payload was shown” cannot be guaranteed from
-            inside a tool: the prompt is rendered by the approval gate, and an
-            <code>allow</code> rule or an <code>a</code> answer skips it. A tool
-            cannot force its own gate.
-            <span class="chip test">tested</span> A recursive schema walk asserts
-            no registered tool offers a submit argument, and
-            <code>BrowserFill</code> passes <code>file: None</code> always. The
-            library's file-attach is a different capability entirely, since it
-            sends a file off this machine.
-          </p>
-          <span class="src">tools/web/src/browser/tools.rs — <code>BrowserFill</code></span>
-
-          <div class="note warn">
-            <span class="h">Suspected defect: the allowlist refusal names the wrong file</span>
-            <p>
-              Click, type and select require a user-owned domain allowlist, and
-              with none they are refused outright. The refusal is produced by the
-              vendored policy module and reads
-              <code>create data/browser-allowlist.json … or pass --allowlist &lt;path&gt;</code>.
-              Emma reads <code>~/.emma/browser-allowlist.json</code> and has no
-              <code>--allowlist</code> flag, so the message sends the user to a
-              path that will not be consulted. The tool descriptions the model
-              sees name the correct path; the runtime refusal does not.
-            </p>
-          </div>
-          <span class="src">tools/web/src/chromehand/policy.rs — <code>check_interaction</code>; tools/web/src/fetch.rs — <code>home_allowlist</code></span>
-
-          <div class="note warn">
-            <span class="h">What the gate does not cover, stated by the source</span>
-            <p>
-              The cross-origin re-ask is <strong>one call late</strong>: the
-              bytes for a redirect or a click-through have already gone by the
-              time the pool learns the host changed. What it protects is
-              everything after. And prompt injection is not solved: a page can
-              contain text that persuades the model to click a button on that
-              page, and nothing here prevents that.
-            </p>
-          </div>
-          <span class="src">tools/web/src/browser/tools.rs — module doc</span>
-
-          <p>
-            <span class="chip unv">unverified</span> Two numbers here rest on
-            prose rather than on a constant. The delta renderer prints
-            <code>chromehand caps each delta category at 60 items</code> as a
-            hardcoded English string with no matching constant found in the
-            enforcing code; and the profile-cleanup notes record “after six live
-            sessions the processes were all gone and three profile directories
-            were still on disk”, with a related count of a leaked profile on 8 of
-            66 closes. Settled by a live session run with
-            <code>cargo test -p emma-tools-web --test browser_live -- --ignored</code>
-            and a count of the directories left behind.
-          </p>
-          <span class="src">tools/web/src/browser/render.rs; tools/web/src/chromehand/session.rs</span>
-
-          <h2 id="lsp">Code intelligence: <code>FindReferences GoToDefinition Hover DocumentSymbols</code></h2>
-
-          <p>
-            All four are <code>read_only: true</code>,
-            <code>reaches_network: false</code>, <code>idempotent: true</code>,
-            and prompt nobody. Three take the same position schema:
-            <code>file_path</code>, <code>line</code> (1-based),
-            <code>symbol</code>, and <code>occurrence</code> when the name appears
-            more than once on the line. <strong>Emma finds the column and refuses
-            rather than guessing</strong> if the name is ambiguous;
-            <code>FindReferences</code> adds <code>include_declaration</code>
-            (default true), and <code>DocumentSymbols</code> takes only a path.
-          </p>
-          <span class="src">tools/lsp/src/tools.rs — <code>position_schema</code>; tools/lsp/src/doc.rs — <code>locate</code></span>
-
-          <p>
-            Rust only. <code>rust-analyzer</code> is the one server wired, and a
-            non-Rust file is <code>Unavailable</code> with a refusal that names
-            the alternative and its limits: <em>use Grep for a text search, knowing
-            that it is a text search: it cannot tell a definition from a mention,
-            and it will match the same name in an unrelated crate.</em> When no
-            server can be found at all, the refusal likewise declines to
-            substitute: <em>Emma will not answer these questions with text
-            search instead: a reference list produced by grep is a different
-            answer to a different question, and nothing in the result would say
-            so.</em>
-          </p>
-          <span class="src">tools/lsp/src/server.rs — <code>unsupported_language</code>, <code>nothing_found</code></span>
-
-          <p>
-            Containment comes first, before the file is read and before a process
-            is started: a path outside the root must not so much as cause a spawn.
-            Results are contained on the way <em>out</em> too. A language server
-            will happily answer about
-            <code>…\.cargo\registry\…</code>, and hits outside the root are
-            counted and named rather than shown. That outbound check
-            canonicalises first, and the source is explicit that this “is not belt
-            and braces — it is the check working at all”, because the root is
-            <code>\\?\E:\…</code> on Windows while a URI round trip yields
-            <code>E:\…</code>, and the mismatch would report every in-project hit
-            as outside.
-          </p>
-          <span class="src">tools/lsp/src/render.rs — <code>locations</code>; tools/lsp/Cargo.toml</span>
-
-          <h3>Readiness, and the 0.36-second lie</h3>
-
-          <p>
-            The obvious readiness mechanism is to count open work-done progress
-            tokens and call the server ready when the count returns to zero.
-            Traced against rust-analyzer 0.3.3008 on a two-file crate,
-            <strong>that count reaches zero three times before the index
-            exists</strong>. The first version of this crate declared ready at
-            0.36s, asked, and got <code>[]</code>. That is the confidently-wrong empty
-            result the crate exists to prevent, produced by the machinery built to
-            prevent it. It was caught by <code>tests/real_server.rs</code> and by
-            nothing else: every fake passes, because a fake emits the tokens its
-            author expected.
-          </p>
-          <span class="src">tools/lsp/src/client.rs — module doc</span>
-
-          <p>
-            What replaced it: the authoritative
-            <code>experimental/serverStatus</code> notification with
-            <code>quiescent: true</code>, requested in <code>initialize</code>.
-            The token-counting heuristic survives as a fallback with a 1.5-second
-            settle window (roughly five times the largest observed gap between
-            phases), and is switched off entirely once the authoritative signal
-            has been seen once.
-          </p>
-
-          <p>
-            <strong>An unready request still runs and still returns
-            <code>Ok</code></strong>, with the readiness attached, because the
-            loop will not repeat a call that already failed with nothing changed
-            since. An error would forbid the one correct response. The
-            distinction lands in the sentence a result carries when it is empty:
-          </p>
-
-          <pre><code><span class="s">ready:</span>     No references found. The index was complete when this was
-           asked, so this is an answer: there are none.
-
-<span class="w">not ready:</span> No references came back, and the index was not complete — so
-           this is not an answer, it is a question that could not be
-           answered yet. Do not conclude that none exist; ask again once
-           indexing has finished.</code></pre>
-          <span class="src">tools/lsp/src/render.rs — <code>no_results_line</code></span>
-
-          <p>
-            <span class="chip test">tested</span> Both directions, and the
-            settle window itself: <code>tests/readiness.rs</code> asserts the
-            gaps-then-settles case takes at least 1.4 seconds, so a future edit
-            that skips the window fails rather than merely getting lucky.
-          </p>
-
-          <h3>Caps</h3>
-
-          <div class="tw">
-            <table>
-              <tr><th>Cap</th><th>Value</th><th>Raised by</th></tr>
-              <tr><td><code>MAX_LOCATIONS</code></td><td class="num">100</td><td>nothing: no schema offers a limit argument</td></tr>
-              <tr><td><code>MAX_SYMBOLS</code></td><td class="num">300</td><td>nothing</td></tr>
-              <tr><td>source line clip</td><td class="num">300 chars</td><td>nothing; does not set the flag</td></tr>
-            </table>
-          </div>
-
-          <p>
-            The location notice tells the model to ask a narrower question rather
-            than advertising a knob: <code>[truncated: 100 of {n} shown. Ask a
-            narrower question rather than assuming the rest are like these.]</code>
-          </p>
-
-          <div class="note warn">
-            <span class="h">Gap: this crate uses the weaker truncation form</span>
-            <p>
-              <code>render.rs</code> calls the bare
-              <code>ToolOutcome::truncated()</code> and puts its explanation in
-              <code>content</code> only, so <code>truncation</code> is
-              <code>None</code>. The model still reads a specific sentence, but
-              the terminal line gets the runtime's vague fallback, and the model
-              gets that fallback appended <em>as well as</em> the specific note.
-              The API's own doc calls this form “never the preferred one for a
-              new tool”. Flagged, not fixed.
-            </p>
-          </div>
-          <span class="src">tools/lsp/src/render.rs; crates/tool-api/src/lib.rs — <code>ToolOutcome::truncation</code></span>
-
-          <p>
-            The server is started with checking, build scripts and
-            <strong>proc macros</strong> all disabled, and
-            <code>cargo.extraArgs: ["--offline"]</code>, which is what makes the
-            <code>read_only</code> and <code>reaches_network: false</code>
-            declarations true. The stated cost: items generated by
-            <code>derive</code> and by attribute macros are not in the index, so
-            references <em>into</em> macro-generated code will be missed.
-          </p>
-          <span class="src">tools/lsp/src/client.rs — <code>INIT_OPTIONS</code></span>
-
-          <p>
-            One server per canonical root, started lazily, restarted up to
-            <code>MAX_CRASHES</code> = 3 and then refused with the last recorded
-            reason. <strong>Nothing reaps an idle server.</strong> It stays until
-            the pool is dropped, which the source says plainly rather than
-            implying a cleanup that does not exist.
-          </p>
-          <span class="src">tools/lsp/src/pool.rs</span>
-
-          <h2 id="unverified">What is not verified</h2>
-
-          <p>
-            Amber chips above carry the specific cases. Collected here, with
-            what would settle each:
-          </p>
-
-          <ul class="body">
-            <li>
-              <strong>The <code>Bash</code> drain-race branch has no test.</strong>
-              The lost-race sentence is reachable only with a grandchild holding
-              the pipe open, and the suite says no fixture arranges that
-              reliably. Everything about that path is argument, not evidence.
-            </li>
-            <li>
-              <strong><code>classify</code> can never fail its own test.</strong>
-              Platform-independent behaviour asserted platform-independently. A
-              unix box with a <code>system32</code> directory in the checkout
-              settles it in one run.
-            </li>
-            <li>
-              <strong><code>path::display</code> on a unix filename containing a
-              backslash.</strong> Reported to the model in a spelling
-              <code>resolve</code> will not find. Never tested.
-            </li>
-            <li>
-              <strong>The web numbers.</strong> The 4.6–5.9× digest figure is
-              upstream's and explicitly not reproducible here; the 60-item delta
-              cap is prose with no constant behind it; the profile-leak counts
-              come from a handful of live runs.
-            </li>
-            <li>
-              <strong>Two doc comments in <code>tools/lsp</code> cite files that
-              do not exist:</strong> a <code>tests/read_only.rs</code> and a
-              <code>tests/fake_server.rs</code> in that crate. The guarantees they
-              point at are covered elsewhere (<code>tests/tools.rs</code> and
-              <code>tests/support/mod.rs</code>), so this is a stale citation
-              rather than a missing test. Still, a citation nobody can follow is the
-              thing this site exists to prevent.
-            </li>
-            <li>
-              <strong>Everything on this page below the crate boundary is source
-              reading plus one green run of <code>tools/fs</code>.</strong>
-              <code>cargo test -p emma-tools-fs</code> passed 38 + 3 + 1 + 7 tests
-              at commit <code>20ac400</code> on this box; the other three crates'
-              suites were not run for this page, and the live-network and
-              real-server tests in them skip by default rather than failing when
-              their dependency is absent.
-            </li>
-          </ul>
-
-          <footer class="pg">
-            <p>
-              Written against commit <code>20ac400</code>. The gate that decides
-              whether any of this runs is on
-              <a href="consent.html">Consent &amp; permissions</a>;
-              <code>Skill</code> and <code>Task</code> are on
-              <a href="delegation.html">Delegation</a>; the loop that dispatches
-              is on <a href="loop.html">The agent loop</a>.
-            </p>
-          </footer>
-        </div>
-      </main>
-    </div>
-  </body>
+<p>
+  <span class="chip cert">certified</span> Run at commit <code>a3eba74</code> on
+  Windows 11 with a Brave key present and a Chrome installed; the list wraps in
+  this quotation and is one line in the terminal. Two further tools can appear
+  there and do not here. <code>Skill</code> registers only when the harness
+  resolved skills and <code>Task</code> only with agent types configured, and
+  both printed <code>(none)</code> on this box. They are on
+  <a href="delegation.html">Delegation</a>.
+</p>
+<span class="src">crates/emma/src/main.rs — <code>run</code></span>
+
+<h2 id="shape">Four crates, one trait, and the thing the trait cannot hold</h2>
+
+<p>
+  <code>tools/fs</code> is six tools over the filesystem and a shell.
+  <code>tools/tasks</code> is four tools over one markdown file.
+  <code>tools/web</code> is two stateless tools plus five that drive a live
+  Chrome. <code>tools/lsp</code> is four that ask rust-analyzer instead of
+  guessing from text. Each crate exposes one builder function, and calling it
+  is the only supported way to get the set, because three of the four share
+  mutable state that <code>ToolCtx</code> has no room for.
+</p>
+
+<p>
+  Two rules run through every crate and are worth carrying into any page below.
+  <strong>Emptiness is a result</strong>: a read of an empty file, a glob
+  matching nothing, a grep with no hits and a search with no results all
+  succeed. And <strong>a cut says what was lost and what would get it back</strong>,
+  or says plainly that nothing would.
+</p>
+<span class="src">crates/tool-api/src/lib.rs — module doc</span>
+
+<ol class="contents">
+  <li>
+    <a href="tools-trait.html">The <code>Tool</code> trait, and what a tool declares</a>
+    <span>Seven methods, three booleans, three error variants, and a registry
+    that panics on a declaration contradicting itself. Includes the field that
+    was deleted for having no reader, and the one that was kept by being given
+    one.</span>
+  </li>
+  <li>
+    <a href="tools-outcome.html"><code>ToolOutcome</code>: one type, two audiences</a>
+    <span>Why every result is written twice, what each tool puts in
+    <code>display</code>, and the four constructors.</span>
+  </li>
+  <li>
+    <a href="tools-truncation.html">The truncation rule</a>
+    <span>Name the limit, name the loss, name the remedy, or say that no
+    argument raises it. Every cut in the workspace, tabulated, with the defect
+    the rule was written after.</span>
+  </li>
+  <li>
+    <a href="tools-ctx.html"><code>ToolCtx</code>, and the state it has no room for</a>
+    <span>Three fields and one absence. Three crates keep session state in
+    their tool structs instead, and each documents the same hazard in different
+    words.</span>
+  </li>
+  <li>
+    <a href="tools-containment.html">Path containment, in one implementation</a>
+    <span><code>resolve</code>, <code>canonical_prefix</code>, and the two
+    escapes it catches against the two it cannot. Plus a suspected defect in
+    <code>display</code>.</span>
+  </li>
+  <li>
+    <a href="tools-files.html"><code>Read</code>, <code>Write</code>, <code>Glob</code>, <code>Grep</code></a>
+    <span>Every argument, every cap, every refusal message. The read tracker
+    that makes <code>Write</code>'s refusal mean something, and the two skips
+    <code>Grep</code> reports differently.</span>
+  </li>
+  <li>
+    <a href="tools-edit.html"><code>Edit</code>, and its two ways of saying where</a>
+    <span>A literal anchor and a hash-checked address, in one tool. Three
+    checks, the refusal rewritten after watching a model read it, and the
+    measured cost of the labels.</span>
+  </li>
+  <li>
+    <a href="tools-bash.html"><code>Bash</code>: a shell, and what that costs</a>
+    <span>Shell selection and why WSL is refused, the 16-name environment
+    allowlist, exit status as an answer, the drain race, and a test that cannot
+    go red.</span>
+  </li>
+  <li>
+    <a href="tools-tasks.html">The task list: four tools over one file</a>
+    <span>A markdown document a person keeps open while the agent works. The
+    parser that re-emits untouched bytes, the hash-guarded write, and the two
+    writers named in the gate's exempt list.</span>
+  </li>
+  <li>
+    <a href="tools-web.html">The web: two tools, five more, and a browser</a>
+    <span>Registration that refuses to ship a tool that cannot work, the
+    per-host grant, the cross-origin re-ask, and a refusal that names a file
+    Emma never reads.</span>
+  </li>
+  <li>
+    <a href="tools-lsp.html">Code intelligence: asking rust-analyzer</a>
+    <span>Four read-only tools, the readiness signal that replaced a heuristic
+    declaring ready at 0.36 seconds, containment applied to what comes back,
+    and the crate that uses the weak truncation form.</span>
+  </li>
+</ol>
+
+<h2 id="notverified">What this chapter does not settle</h2>
+
+<p>
+  Each page carries its own amber. Collected, the largest gaps are that
+  <code>Bash</code>'s lost-drain branch has no test that can reach it, that
+  <code>classify</code>'s unit test passes on every platform for the same
+  reason the defect exists, and that the browser crate's two live numbers rest
+  on prose and on a handful of runs nobody kept.
+  <span class="chip unv">unverified</span> The claim that these are the
+  <em>largest</em> gaps is a judgement, not a count. Settled by an audit that
+  lists every behavioural claim across the eleven pages and marks the ones with
+  no repeatable evidence behind them.
+</p>
+
+<footer class="pg">
+  <p>
+    Written against commit <code>a3eba74</code>. The gate that decides whether
+    any of this runs is <a href="consent.html">Consent &amp; permissions</a>;
+    <code>Skill</code> and <code>Task</code> are on
+    <a href="delegation.html">Delegation</a>; the loop that dispatches is
+    <a href="loop.html">The agent loop</a>.
+  </p>
+</footer>
+</div>
+</main>
+</div>
+</body>
 </html>

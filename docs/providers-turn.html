@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The turn that comes back · Providers &amp; models · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav here" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/llm</p>
+  <h1>The turn that comes back</h1>
+
+  <nav class="chapter">
+    <a class="up" href="providers.html">Providers &amp; models</a>
+    <a href="providers-boundary.html">The boundary</a>
+    <a href="providers-content.html">Content blocks</a>
+    <span class="now">The turn back</span>
+    <a href="providers-models.html">Model limits</a>
+    <a href="providers-caching.html">Caching</a>
+    <a href="providers-floor.html">The cache floor</a>
+    <a href="providers-retry.html">Retry</a>
+    <a href="providers-credentials.html">Credentials</a>
+  </nav>
+
+  <p class="lede">
+    One JSON body and a few dozen SSE fragments have to produce the same
+    <code>AssistantTurn</code>, down to the signature on a thinking block,
+    because that turn goes straight back out on the next call. The type it
+    produces carries a counter whose name lies: with caching in play,
+    <code>input_tokens</code> is not the input.
+  </p>
+
+  <h2 id="usage">Four counters, and the one that is not what it says</h2>
+
+  <p class="faint">crates/llm/src/lib.rs · <code>struct Usage</code></p>
+  <pre><code>/// Provider-reported token counts for one model call.
+///
+/// **`input_tokens` is not the input.** With prompt caching in play the
+/// Messages API splits the input three ways and `input_tokens` carries only the
+/// *uncached remainder* — the bytes that were neither read from nor written to
+/// the cache. In tustle-agent, where this was learned the expensive way, a
+/// 72,549-token turn was recorded as `input_tokens: 2`. Anything that means
+/// "the context this call carried" must use [`Usage::billable_input_tokens`]
+/// or [`Usage::billable_total_tokens`]; summing the bare field under-counts by
+/// up to ~10× the moment caching starts hitting, which silently loosens every
+/// cap folded from it.
+///
+/// The two cache fields default to `0`, which covers providers that do not
+/// report them and requests that sent no `cache_control` at all. A `0` here
+/// means "nothing cached", never "unknown".
+///
+/// There is deliberately no `total()`. tustle-agent had to keep one and
+/// `#[deprecated]` it so the wrong call compiled wrong rather than merely
+/// reading wrong; Emma has no callers predating caching, so the trap cannot
+/// recur here — the only way to get a total is to ask for the honest one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Usage {
+    /// Uncached input only. See the type-level note before summing this.
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    /// Input tokens written into the cache on this call (billed at 1.25×).
+    #[serde(default)]
+    pub cache_creation_input_tokens: i64,
+    /// Input tokens served from the cache on this call (billed at 0.1×).
+    #[serde(default)]
+    pub cache_read_input_tokens: i64,
+}</code></pre>
+  <span class="src">crates/llm/src/lib.rs — <code>Usage</code></span>
+
+  <div class="tw">
+    <table>
+      <thead>
+        <tr>
+          <th>Field</th>
+          <th>What it counts</th>
+          <th class="num">Price vs base</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>input_tokens</code></td>
+          <td>The uncached remainder only. Neither read from nor written to the cache.</td>
+          <td class="num">1.0×</td>
+        </tr>
+        <tr>
+          <td><code>cache_creation_input_tokens</code></td>
+          <td>Written into the cache on this call. <code>0</code> when the marker was ignored.</td>
+          <td class="num">1.25×</td>
+        </tr>
+        <tr>
+          <td><code>cache_read_input_tokens</code></td>
+          <td>Served from an entry a previous call wrote.</td>
+          <td class="num">0.1×</td>
+        </tr>
+        <tr>
+          <td><code>output_tokens</code></td>
+          <td>Everything generated, thinking included.</td>
+          <td class="num">output rate</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    <code>billable_input_tokens()</code> adds the first three;
+    <code>billable_total_tokens()</code> adds output on top. Neither is
+    weighted by price, because a cost view applies the three multipliers
+    separately while cap semantics count tokens. There is no
+    <code>total()</code>, so those two methods are the only ways to get one.
+    <code>billable_counts_all_three_input_fields</code> pins the arithmetic and
+    then states the scar as an assertion:
+    <code>assert!(usage.billable_input_tokens() &gt; usage.input_tokens * 100)</code>
+    on a fixture where the bare field is 41 and the truth is 32,241.
+    <span class="chip test">tested</span> The mutation was not run here; the
+    claim rests on reading the assertion, which cannot pass if the sum drops a
+    field.
+  </p>
+
+  <p>
+    Both cache fields carry <code>#[serde(default)]</code>, so a response that
+    omits them parses rather than failing.
+    <code>absent_cache_fields_parse_as_zero_not_as_an_error</code> sends a
+    usage object with two keys and asserts both cache fields read
+    <code>0</code> and the billable input equals the bare input.
+    <span class="chip test">tested</span> The cost of that default is that a
+    provider which stopped reporting the fields would look identical to one
+    that cached nothing, which is a real ambiguity the type accepts and its
+    doc names.
+  </p>
+
+  <h2 id="turn">The turn, and two views onto it</h2>
+
+  <p class="faint">crates/llm/src/lib.rs · <code>AssistantTurn::text</code>, <code>AssistantTurn::tool_calls</code></p>
+  <pre><code>pub struct AssistantTurn {
+    /// The turn itself, in order, including the thinking blocks that must be
+    /// echoed back unedited. This is the whole turn — [`AssistantTurn::text`]
+    /// and [`AssistantTurn::tool_calls`] are views onto it.
+    pub content: Vec&lt;ContentBlock&gt;,
+    pub stop_reason: String,
+    pub usage: Usage,
+}
+
+/// Every text block concatenated — what a human read.
+///
+/// Derived rather than stored, and that is the point: this and `content`
+/// used to be two fields, which is two things that can disagree about what
+/// the model said. A projection cannot drift from what it projects.
+pub fn text(&amp;self) -&gt; String { … }
+
+/// Every tool call in the turn, in the order the model made them.
+pub fn tool_calls(&amp;self) -&gt; Vec&lt;&amp;ToolCall&gt; { … }</code></pre>
+  <span class="src">crates/llm/src/lib.rs — <code>AssistantTurn</code></span>
+
+  <p>
+    Both are <code>filter_map</code> over <code>content</code>.
+    <code>text()</code> concatenates <code>Text</code> blocks with no separator,
+    so two adjacent text blocks join without a space, which is what the API
+    means by them. <code>tool_calls()</code> borrows rather than clones, in the
+    order the model emitted them, which is the order the loop dispatches in.
+  </p>
+
+  <h2 id="batch">The batch path</h2>
+
+  <p>
+    <code>read_batch</code> reads the body to a string, parses it, and hands it
+    to <code>turn_from_message</code>. A parse failure becomes
+    <code>LlmError::Protocol</code> carrying the serde message and the trimmed
+    body, so an HTML error page from a proxy shows up as prose rather than as
+    "invalid JSON".
+  </p>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>turn_from_message</code></p>
+  <pre><code>/// Batch mode: the whole message arrived at once.
+fn turn_from_message(msg: &amp;Value) -&gt; Result&lt;AssistantTurn, LlmError&gt; {
+    if msg.get("type").and_then(Value::as_str) == Some("error") {
+        return Err(LlmError::Api {
+            status: 200,
+            message: api_message(&amp;msg.to_string()),
+        });
+    }
+    let content = msg
+        .get("content")
+        .cloned()
+        .ok_or_else(|| LlmError::Protocol("the response carried no content array".into()))?;
+    let usage: Usage = msg
+        .get("usage")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| LlmError::Protocol(format!("usage: {e}")))?
+        .unwrap_or_default();
+    let stop_reason = msg
+        .get("stop_reason")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    turn_from_content(content, stop_reason, usage)
+}</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>turn_from_message</code></span>
+
+  <p>
+    Four outcomes live in that function. An error-shaped body arrives with HTTP
+    200 and never reaches <code>classify</code>, so it is turned into
+    <code>Api { status: 200 }</code> here. A missing <code>content</code> is a
+    protocol error. A <code>usage</code> object that will not deserialize is a
+    protocol error naming the field; a <code>usage</code> that is absent
+    entirely defaults to four zeros. A missing <code>stop_reason</code> becomes
+    the empty string rather than an error, which means a truncated response can
+    reach the loop with no stop reason at all.
+  </p>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>turn_from_content</code></p>
+  <pre><code>/// The single place a typed turn is derived from content blocks, so batch and
+/// streaming cannot drift apart in what they extract.
+///
+/// This is the whole of the Anthropic-to-Emma translation for a turn, and it is
+/// three lines because [`ContentBlock::from_value`] does the deciding — text and
+/// tool calls used to be pulled out here by hand into fields beside the blob,
+/// and they are now views on the parsed blocks. What a block this client does
+/// not model becomes is that function's business too, and the answer is that it
+/// is kept whole.
+fn turn_from_content(
+    content: Value,
+    stop_reason: String,
+    usage: Usage,
+) -&gt; Result&lt;AssistantTurn, LlmError&gt; {
+    let Value::Array(blocks) = content else {
+        return Err(LlmError::Protocol(
+            "content was not an array of blocks".into(),
+        ));
+    };
+    Ok(AssistantTurn {
+        content: blocks.into_iter().map(ContentBlock::from_value).collect(),
+        stop_reason,
+        usage,
+    })
+}</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>turn_from_content</code></span>
+
+  <h2 id="stream">The stream path</h2>
+
+  <p>
+    <code>read_stream</code> accumulates bytes into a <code>String</code>, cuts
+    frames on <code>\n\n</code>, takes the line starting <code>data: </code>,
+    parses it as JSON and applies it. A frame with no <code>data:</code> line
+    and a <code>data:</code> line that will not parse are both skipped with
+    <code>continue</code>, so the <code>event: x</code> lines and any keep-alive
+    comment pass through harmlessly. Bytes are decoded with
+    <code>from_utf8_lossy</code> per chunk, which would corrupt a multi-byte
+    character split across a TCP read boundary.
+    <span class="chip unv">unverified</span> Nothing in the suite splits a chunk
+    mid-character; settling it means a stub that writes a two-byte UTF-8
+    sequence one byte at a time and asserting the assembled text.
+  </p>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 760 320" role="img"
+           aria-label="SSE frames are routed by type: message_start seeds the four usage counters, content_block_start creates a Partial keyed by index, content_block_delta appends to the matching Partial by delta type, message_delta sets the stop reason and guards the output count, and an error frame ends the turn. finish() renders each Partial back to a wire block and hands the array to turn_from_content, the same function the batch path uses.">
+        <defs>
+          <marker id="trn-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          </marker>
+          <marker id="trn-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          </marker>
+        </defs>
+
+        <text class="tiny" x="14" y="16">frames, in arrival order</text>
+        <rect class="box" x="14" y="26" width="188" height="26" rx="4" />
+        <text class="sm" x="26" y="44">message_start</text>
+        <rect class="box" x="14" y="58" width="188" height="26" rx="4" />
+        <text class="sm" x="26" y="76">content_block_start</text>
+        <rect class="box" x="14" y="90" width="188" height="26" rx="4" />
+        <text class="sm" x="26" y="108">content_block_delta</text>
+        <rect class="box" x="14" y="122" width="188" height="26" rx="4" />
+        <text class="sm" x="26" y="140">message_delta</text>
+        <rect class="box" x="14" y="154" width="188" height="26" rx="4" />
+        <text class="sm" x="26" y="172">error</text>
+        <rect class="box" x="14" y="186" width="188" height="26" rx="4" />
+        <text class="sm" x="26" y="204">anything else</text>
+
+        <line class="edge" x1="204" y1="39" x2="284" y2="60" marker-end="url(#trn-arrow)" />
+        <line class="edge" x1="204" y1="71" x2="284" y2="122" marker-end="url(#trn-arrow)" />
+        <line class="edge" x1="204" y1="103" x2="284" y2="140" marker-end="url(#trn-arrow)" />
+        <line class="edge" x1="204" y1="135" x2="284" y2="76" marker-end="url(#trn-arrow)" />
+        <line class="edge-dash" x1="204" y1="167" x2="284" y2="210" />
+        <line class="edge-dash" x1="204" y1="199" x2="264" y2="199" />
+        <text class="tiny" x="212" y="216">dropped</text>
+
+        <rect class="box" x="286" y="40" width="200" height="52" rx="4" />
+        <text class="lbl" x="298" y="60">Assembly.usage</text>
+        <text class="tiny" x="298" y="80">output_tokens guarded: 0 never overwrites</text>
+
+        <rect class="hl" x="286" y="102" width="200" height="60" rx="4" />
+        <text class="lbl" x="298" y="122">blocks: BTreeMap</text>
+        <text class="tiny" x="298" y="140">index =&gt; Partial</text>
+        <text class="tiny" x="298" y="154">Text | Thinking | Tool | Opaque</text>
+
+        <rect class="box" x="286" y="172" width="200" height="52" rx="4" />
+        <text class="lbl" x="298" y="192">Err(LlmError::Api)</text>
+        <text class="tiny" x="298" y="210">status 200, the turn stops</text>
+
+        <line class="edge-hl" x1="488" y1="132" x2="556" y2="132" marker-end="url(#trn-arrow-hl)" />
+        <rect class="hl" x="558" y="102" width="188" height="60" rx="4" />
+        <text class="lbl" x="570" y="124">finish()</text>
+        <text class="tiny" x="570" y="142">each Partial back to a wire block,</text>
+        <text class="tiny" x="570" y="156">in index order</text>
+
+        <line class="edge-hl" x1="652" y1="164" x2="652" y2="234" marker-end="url(#trn-arrow-hl)" />
+        <rect class="hl" x="500" y="236" width="246" height="50" rx="4" />
+        <text class="lbl" x="514" y="258">turn_from_content</text>
+        <text class="tiny" x="514" y="276">shared with the batch path</text>
+
+        <line class="edge" x1="240" y1="262" x2="496" y2="262" marker-end="url(#trn-arrow)" />
+        <rect class="box" x="14" y="236" width="224" height="50" rx="4" />
+        <text class="lbl" x="26" y="258">read_batch</text>
+        <text class="tiny" x="26" y="276">one body, via turn_from_message</text>
+      </svg>
+    </div>
+    <figcaption>
+      Both modes converge on <code>turn_from_content</code>, which is why they
+      cannot disagree about what a turn contains. The
+      <code>content_block_delta</code> arrow carries four sub-cases keyed by
+      the delta's own type: <code>text_delta</code>,
+      <code>thinking_delta</code>, <code>signature_delta</code> and
+      <code>input_json_delta</code>, each appending to the <code>Partial</code>
+      at that index and silently doing nothing if the index holds a different
+      variant. Drawn from <code>Assembly::apply</code> and
+      <code>Assembly::finish</code>.
+    </figcaption>
+  </figure>
+  <span class="src">crates/llm/src/anthropic.rs — <code>Assembly</code>, <code>read_stream</code>, <code>read_batch</code></span>
+
+  <h3>Why the blocks are a map and not a vector</h3>
+
+  <p>
+    <code>Assembly.blocks</code> is a <code>BTreeMap&lt;usize, Partial&gt;</code>
+    keyed by the index the API assigns each block, so the reconstructed turn is
+    in the order it was sent regardless of frame arrival. <code>finish</code>
+    iterates the map, which yields keys in order, and renders each
+    <code>Partial</code> back to the wire object the batch path would have
+    received.
+  </p>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>enum Partial</code></p>
+  <pre><code>/// A block type this client does not know how to build. Kept verbatim from
+/// `content_block_start` so it still round-trips back to the API — dropping
+/// an unknown block would silently corrupt the turn on replay.
+///
+/// This variant exists because of a bug found by porting: tustle-agent's
+/// equivalent match arm was `_ => {}`, so every block that was not `text`
+/// or `tool_use` — thinking blocks among them — was dropped on the floor
+/// and never reached the content echoed back on the next call. The failure
+/// is invisible until a turn depends on the block being there.
+Opaque(Value),</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>Partial::Opaque</code></span>
+
+  <p>
+    <code>Partial</code> has four variants and only three of them accumulate.
+    <code>Opaque</code> is captured whole at <code>content_block_start</code>
+    and never appended to, so an unknown block type that streams its body in
+    deltas would come out with an empty body.
+    <span class="chip unv">unverified</span> Whether any block type does that
+    is unknown here; <code>server_tool_use</code> is the next candidate, and
+    settling it means one live call that provokes a server-side tool.
+  </p>
+
+  <h3>The one guarded assignment</h3>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>Assembly::apply</code>, the <code>message_delta</code> arm</p>
+  <pre><code>"message_delta" =&gt; {
+    if let Some(sr) = ev.pointer("/delta/stop_reason").and_then(Value::as_str) {
+        self.stop_reason = sr.to_string();
+    }
+    let u = ev.get("usage");
+    let out = pick(u, "output_tokens");
+    // Guarded rather than assigned: `pick` cannot tell "absent"
+    // from "zero", so an unguarded write would let a
+    // `message_delta` carrying only a stop reason erase the count
+    // that `message_start` established.
+    if out != 0 {
+        self.usage.output_tokens = out;
+    }
+}</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>Assembly::apply</code>, <code>pick</code></span>
+
+  <p>
+    <code>pick</code> returns <code>0</code> for a missing key, a null, and a
+    genuine zero alike, which is the ambiguity that guard exists for. It costs
+    one case: a turn that really did generate zero output tokens keeps whatever
+    <code>message_start</code> reported, which is also zero, so nothing is lost
+    in practice. <code>str_at</code> is its string twin and returns an empty
+    string for anything missing, which is why a <code>tool_use</code> with no
+    <code>id</code> assembles as a call with an empty id rather than failing.
+  </p>
+
+  <h3>An error frame ends the turn</h3>
+
+  <p>
+    A frame of type <code>error</code> returns <code>LlmError::Api</code> with
+    status 200 and the provider's message, prefixed <em>the stream ended in an
+    error</em>. It is not retried: the response was already a success and bytes
+    may have reached the terminal.
+    <code>a_mid_stream_error_frame_ends_the_turn</code> asserts both the
+    message and that the stub saw exactly one request.
+    <span class="chip test">tested</span> The same path is where a gateway
+    could echo an API key into an error, which
+    <a href="providers-credentials.html">credentials</a> covers.
+  </p>
+
+  <h3>Truncated tool arguments</h3>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>parse_tool_input</code></p>
+  <pre><code>/// A tool call whose arguments did not parse is a fault, not an empty call:
+/// invoking a tool with `{}` because the JSON was truncated would run the wrong
+/// action with default arguments.
+///
+/// The empty-string case is not that case and is deliberately `{}`: a
+/// `tool_use` block that carried no `input_json_delta` at all is a call to a
+/// tool that takes no arguments, not a truncated one. Truncation leaves a
+/// partial fragment behind, and a fragment does not parse.
+fn parse_tool_input(json: &amp;str) -&gt; Result&lt;Value, LlmError&gt; {
+    if json.trim().is_empty() {
+        return Ok(json!({}));
+    }
+    serde_json::from_str(json)
+        .map_err(|e| LlmError::Protocol(format!("tool arguments were not valid JSON: {e}")))
+}</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>parse_tool_input</code></span>
+
+  <p>
+    <code>a_truncated_tool_argument_is_a_fault_not_an_empty_call</code> streams
+    <code>{"path":</code> and nothing more, then asserts the turn came back as
+    <code>LlmError::Protocol</code> mentioning "tool arguments". The comment
+    names what it prevents: invoking <code>Write</code> with <code>{}</code>
+    because the JSON was cut off. <span class="chip test">tested</span>
+  </p>
+
+  <h2 id="parity">The parity test</h2>
+
+  <p>
+    <code>streaming_assembles_the_same_turn_as_batch</code> sends the same
+    assistant turn twice, once as a batch body and once as 19 SSE frames, and
+    asserts the two parsed turns are equal in text, tool calls, stop reason,
+    usage, content blocks, and finally as whole values. It then asserts the
+    first block is a <code>ThinkingBlock</code> with
+    <code>signature: Some("sig-abc")</code>, with the comment that a thinking
+    block which lost its signature in reassembly is rejected on the next call.
+    Last, it asserts the streaming run produced exactly the two text deltas
+    <code>["Reading ", "them now."]</code> and that the batch run produced
+    none. <span class="chip test">tested</span>
+  </p>
+
+  <p>
+    That is the test that would catch a divergence between the two paths, and
+    it is worth being precise about what it cannot catch: both sides are
+    fixtures written by the same author, so a key the real API sends and
+    neither fixture carries is invisible to it. That is exactly the shape of
+    the failure on <a href="providers-content.html">the previous page</a>.
+  </p>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    From <code>lib.rs</code>: <code>Usage</code> with
+    <code>billable_input_tokens</code> and <code>billable_total_tokens</code>,
+    and <code>AssistantTurn</code> with <code>text</code> and
+    <code>tool_calls</code>. Four functions, bringing this file's running total
+    with <a href="providers-boundary.html">the boundary</a> to 15 of 28.
+  </p>
+
+  <p>
+    From <code>anthropic.rs</code>: <code>read_batch</code>,
+    <code>read_stream</code>, <code>Assembly::apply</code>,
+    <code>Assembly::finish</code>, <code>parse_tool_input</code>,
+    <code>pick</code>, <code>str_at</code>, <code>turn_from_message</code> and
+    <code>turn_from_content</code>. Nine, bringing the running total to 16 of
+    28. <code>api_message</code> and <code>notify</code> are named on
+    <a href="providers-retry.html">retry</a>, which is where their branches
+    matter.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="providers-models.html">what a model will take</a>, the two
+      values in a request that are properties of the model rather than of the
+      request. Back to <a href="providers.html">Providers &amp; models</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

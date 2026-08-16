@@ -1,0 +1,589 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Prompt caching · Providers &amp; models · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav here" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/llm/src/anthropic.rs</p>
+  <h1>Prompt caching, and the three breakpoints</h1>
+
+  <nav class="chapter">
+    <a class="up" href="providers.html">Providers &amp; models</a>
+    <a href="providers-boundary.html">The boundary</a>
+    <a href="providers-content.html">Content blocks</a>
+    <a href="providers-turn.html">The turn back</a>
+    <a href="providers-models.html">Model limits</a>
+    <span class="now">Caching</span>
+    <a href="providers-floor.html">The cache floor</a>
+    <a href="providers-retry.html">Retry</a>
+    <a href="providers-credentials.html">Credentials</a>
+  </nav>
+
+  <p class="lede">
+    Emma has no corpus. The only stable prefix is the instructions plus the
+    tool schema, a few thousand tokens rather than fifty, so caching had to be
+    argued rather than assumed. The argument turns on the loop being multi-call,
+    and the code that implements it is four small functions and one number
+    divided by four.
+  </p>
+
+  <h2 id="arithmetic">Whether it is worth it here</h2>
+
+  <p>
+    At list price, with the published multipliers of 1.25× to write and 0.1× to
+    read, and a 512-token floor on <code>claude-opus-5</code>:
+  </p>
+
+  <ul class="body">
+    <li>A 2,000-token prefix costs <strong>+500 token-equivalents</strong> to write once.</li>
+    <li>Every later call that reads it saves <strong>1,800</strong>.</li>
+    <li>
+      Break-even is therefore P(at least one more call reads this entry inside
+      the 5-minute TTL) ≳ <strong>0.28</strong>.
+    </li>
+  </ul>
+
+  <p>
+    A coding turn is never one model call: the model reads a file, gets the
+    result, and is called again seconds later. P is effectively 1.0, so the
+    write pays back on the second call of the first turn and every call after
+    that is 90% off on the prefix. That is why caching is <code>On</code> by
+    default, and why <code>--no-cache</code> exists, so the claim can be
+    measured rather than believed. The saving is smaller than tustle-agent's
+    measured 84%, because there the cached prefix was a 33k-token corpus. Here
+    the prefix is small and the real money is in the conversation, which is why
+    the history gets a breakpoint too.
+  </p>
+  <span class="src">crates/llm/src/anthropic.rs — module doc §"Caching, and whether it is worth it here"</span>
+
+  <h2 id="placement">Where the three breakpoints sit</h2>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 760 372" role="img"
+           aria-label="The server renders tools, then system, then messages. Emma places at most three cache_control breakpoints: on the last system block, on the last message of history, and on the last message of the query, the third only once a tool round-trip is already in flight. Each is gated on the estimated prefix up to that point clearing the model's minimum cacheable size.">
+        <!-- The prefix spine: the order the server concatenates in, which
+             is what the exact-prefix cache match is computed over. Drawn
+             from AnthropicProvider::render + system_field + messages_field. -->
+        <defs>
+          <marker id="cch-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          </marker>
+          <marker id="cch-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          </marker>
+        </defs>
+
+        <text class="tiny" x="12" y="18">server renders in this order</text>
+
+        <line class="edge" x1="20" y1="34" x2="20" y2="344" marker-end="url(#cch-arrow)" />
+
+        <rect class="box" x="40" y="30" width="392" height="42" rx="4" />
+        <text class="lbl" x="56" y="49">tools[]</text>
+        <text class="sm" x="56" y="65">Registry::wire_definitions()</text>
+        <text class="tiny" x="446" y="56">counted toward the gate, never marked</text>
+
+        <rect class="hl" x="40" y="86" width="392" height="42" rx="4" />
+        <text class="lbl" x="56" y="105">system[0]</text>
+        <text class="sm" x="56" y="121">instructions, verbatim</text>
+        <circle class="edge-hl" cx="452" cy="107" r="11" fill="none" />
+        <text class="lbl" x="447" y="112">1</text>
+        <text class="tiny" x="472" y="103">gate: tools + instructions</text>
+        <text class="tiny" x="472" y="117">byte-identical all session</text>
+
+        <rect class="box" x="40" y="142" width="392" height="30" rx="4" />
+        <text class="sm" x="56" y="161">messages[0 … n-2], completed turns</text>
+        <rect class="hl" x="40" y="176" width="392" height="42" rx="4" />
+        <text class="lbl" x="56" y="195">messages[n-1]</text>
+        <text class="sm" x="56" y="211">last message of history</text>
+        <circle class="edge-hl" cx="452" cy="197" r="11" fill="none" />
+        <text class="lbl" x="447" y="202">2</text>
+        <text class="tiny" x="472" y="193">gate: + history</text>
+        <text class="tiny" x="472" y="207">stable to the last completed turn</text>
+
+        <rect class="box" x="40" y="232" width="392" height="30" rx="4" />
+        <text class="sm" x="56" y="251">query[0], the user's message</text>
+        <rect class="box" x="40" y="266" width="392" height="30" rx="4" />
+        <text class="sm" x="56" y="285">query[1], assistant tool_use</text>
+        <rect class="hl" x="40" y="300" width="392" height="42" rx="4" />
+        <text class="lbl" x="56" y="319">query[last]</text>
+        <text class="sm" x="56" y="335">newest tool_result</text>
+        <circle class="edge-hl" cx="452" cy="321" r="11" fill="none" />
+        <text class="lbl" x="447" y="326">3</text>
+        <text class="tiny" x="472" y="317">gate: + query, and query.len() &gt; 1</text>
+        <text class="tiny" x="472" y="331">absent on the first call of a turn</text>
+
+        <line class="edge-dash" x1="740" y1="86" x2="740" y2="342" />
+        <text class="tiny" x="446" y="360">
+          every gate above: chars/4 ≥ MIN_CACHEABLE[model]
+        </text>
+      </svg>
+    </div>
+    <figcaption>
+      The three <code>cache_control</code> breakpoints, and what each one is
+      gated on. The <code>tools</code> array carries no marker of its own but
+      its rendered length counts toward every gate, because the server
+      concatenates <code>tools</code>, then <code>system</code>, then
+      <code>messages</code>, so the system breakpoint captures the tools array
+      in its prefix. Breakpoint 3 requires <code>query.len() &gt; 1</code>: on
+      the first call of a turn a marker there is a 1.25× write nothing is
+      guaranteed to read. Drawn from <code>render</code>,
+      <code>system_field</code> and <code>messages_field</code>.
+    </figcaption>
+  </figure>
+  <span class="src">crates/llm/src/anthropic.rs — <code>system_field</code>, <code>messages_field</code>, <code>mark_breakpoint</code></span>
+
+  <h3>Breakpoint 1, on the system block</h3>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>system_field</code></p>
+  <pre><code>/// `system` as a block array carrying the cross-turn anchor.
+///
+/// This block is byte-identical for every call of every turn until the
+/// instructions or the tool registry change, so it is written once and read
+/// for the rest of the session. Nothing here introduces bytes of its own: the
+/// text is `instructions` verbatim.
+///
+/// `tools_chars` counts toward the minimum because the server renders
+/// `tools → system → messages`, so the prefix this breakpoint captures already
+/// includes the tools array.
+fn system_field(instructions: &amp;str, tools_chars: usize, caching: Caching, floor: usize) -&gt; Value {
+    if instructions.is_empty() {
+        // An empty text block is rejected outright; send the bare string.
+        return Value::String(String::new());
+    }
+    let mut block = json!({ "type": "text", "text": instructions });
+    if caching == Caching::On &amp;&amp; clears_minimum(tools_chars + instructions.len(), floor) {
+        block["cache_control"] = ephemeral();
+    }
+    json!([block])
+}</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>system_field</code></span>
+
+  <p>
+    Three outcomes. Empty instructions send a bare JSON string, because an
+    empty text block is rejected outright. Non-empty instructions always send a
+    one-element block array, marked or not, which
+    <code>a_prefix_below_the_minimum_is_never_marked</code> asserts by checking
+    the small system prompt still arrives as
+    <code>[{"type":"text","text":"short instructions"}]</code> with zero
+    markers. <span class="chip test">tested</span> One shape for both paths
+    means turning caching on or off does not change the message structure,
+    only the marker.
+  </p>
+
+  <h3>Breakpoints 2 and 3, in the message list</h3>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>messages_field</code></p>
+  <pre><code>/// `messages` as `history ++ query`, with up to two more breakpoints.
+///
+/// **End of history.** Byte-stable for the whole session up to the last
+/// completed turn, so it is read by every remaining call of this turn and by
+/// every later turn.
+///
+/// **End of the query, but only once a tool round-trip is already in flight.**
+/// A marker here is written on this call and can only be read if the model
+/// calls another tool, so it needs P(another call) ≳ 0.28 to pay for its 1.25×
+/// write. Before the first tool call that is a coin flip; after one it is what
+/// a coding agent does all day — it reads, then edits, then runs the tests.
+/// The gate is that evidence, and it is a judgement, not a measurement: when
+/// `cache_read_input_tokens` data exists for real sessions, check it.
+fn messages_field(
+    req: &amp;Request,
+    prefix_chars: usize,
+    floor: usize,
+) -&gt; Result&lt;Vec&lt;Value&gt;, LlmError&gt; {
+    let render = |m: &amp;Message| {
+        serde_json::to_value(m).map_err(|e| LlmError::Protocol(format!("render message: {e}")))
+    };
+    let mut rendered: Vec&lt;Value&gt; = req
+        .history
+        .iter()
+        .chain(req.query.iter())
+        .map(render)
+        .collect::&lt;Result&lt;_, _&gt;&gt;()?;
+
+    if req.caching == Caching::Off {
+        return Ok(rendered);
+    }
+
+    let history_chars = chars_of(&amp;req.history);
+    if !req.history.is_empty() &amp;&amp; clears_minimum(prefix_chars + history_chars, floor) {
+        if let Some(content) = rendered[req.history.len() - 1].get_mut("content") {
+            mark_breakpoint(content);
+        }
+    }
+
+    // More than one message in `query` means the user turn plus at least one
+    // tool round-trip.
+    if req.query.len() &gt; 1
+        &amp;&amp; clears_minimum(prefix_chars + history_chars + chars_of(&amp;req.query), floor)
+    {
+        let last = rendered.len() - 1;
+        if let Some(content) = rendered[last].get_mut("content") {
+            mark_breakpoint(content);
+        }
+    }
+    Ok(rendered)
+}</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>messages_field</code>, <code>chars_of</code></span>
+
+  <p>
+    Five conditions decide the two markers. <code>Caching::Off</code> returns
+    early with none. Breakpoint 2 needs a non-empty history and a prefix, of
+    tools plus instructions plus history, clearing the floor. Breakpoint 3
+    needs more than one message in <code>query</code>, which is the user turn
+    plus at least one tool round-trip, and the whole prefix clearing the floor.
+    Both use <code>get_mut("content")</code>, so a message that somehow
+    rendered without a content key is skipped rather than panicking.
+  </p>
+
+  <p>
+    Note the gate for breakpoint 3 counts <em>all</em> of query, not just the
+    part before the marker. That over-counts relative to what the marked prefix
+    actually contains, in a direction that opens the gate slightly early.
+    <span class="chip unv">unverified</span> Whether that matters depends on
+    how close a real prefix runs to the floor at the moment of the second tool
+    call; settling it means comparing the gated estimate against
+    <code>cache_creation_input_tokens</code> on a live run near the boundary.
+  </p>
+
+  <h3>Attaching the marker</h3>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>mark_breakpoint</code>, <code>ephemeral</code></p>
+  <pre><code>/// 5-minute TTL. Not the 1-hour variant: that doubles the write price and only
+/// pays at ≥3 reads per entry, and Emma has no measured session cadence to
+/// justify it. Revisit with `cache_read_input_tokens` data, not with intuition.
+fn ephemeral() -&gt; Value {
+    json!({ "type": "ephemeral" })
+}
+
+/// Attach a breakpoint to the last content block of `content`, promoting a
+/// plain string to a one-element block array because `cache_control` only
+/// exists on blocks.
+fn mark_breakpoint(content: &amp;mut Value) -&gt; bool {
+    match content {
+        Value::String(s) =&gt; {
+            if s.is_empty() {
+                return false;
+            }
+            *content = json!([{ "type": "text", "text": s.clone(), "cache_control": ephemeral() }]);
+            true
+        }
+        Value::Array(items) =&gt; match items.last_mut().and_then(|b| b.as_object_mut()) {
+            Some(obj) =&gt; {
+                obj.insert("cache_control".to_string(), ephemeral());
+                true
+            }
+            None =&gt; false,
+        },
+        _ =&gt; false,
+    }
+}</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>mark_breakpoint</code>, <code>ephemeral</code></span>
+
+  <p>
+    Four outcomes, and two of them are refusals. An empty string is not marked,
+    because an empty text block is rejected by the API. An array whose last
+    element is not an object is not marked. A non-empty string is promoted to a
+    one-element block array carrying the marker, which is the only case where
+    marking changes a message's shape and not just its keys. Anything else, a
+    number or a null that should never appear, returns false. The return value
+    is not read by either caller.
+  </p>
+
+  <p>
+    A marked user string therefore renders as
+    <code>[{"type":"text","text":…,"cache_control":{"type":"ephemeral"}}]</code>
+    while an unmarked one stays a bare string. Both forms are in the golden
+    request body, which is what makes that literal worth its length.
+    <span class="chip cert">certified</span>: read
+    <code>the_whole_request_body_is_pinned_byte_for_byte</code>, where the
+    history user message is <code>"content":"&lt;&lt;H&gt;&gt;"</code> and the
+    marker instead lands on the assistant turn's last block.
+  </p>
+
+  <h3>The size gate</h3>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>CHARS_PER_TOKEN</code>, <code>clears_minimum</code>, <code>chars_of</code></p>
+  <pre><code>/// Conservative chars-per-token, used only to decide whether a prefix clears
+/// the minimum. Over-estimating tokens would waste a marker, so the estimate
+/// leans low.
+const CHARS_PER_TOKEN: usize = 4;
+
+fn clears_minimum(chars: usize, floor: usize) -&gt; bool {
+    chars / CHARS_PER_TOKEN &gt;= floor
+}
+
+/// How many bytes a message list renders to.
+///
+/// The *rendered* length, not the length of the text inside — the quotes and
+/// the escapes are bytes the provider tokenises too, and this number is only
+/// ever compared against the model's row in [`MIN_CACHEABLE`]. It was
+/// `m.content.to_string().len()` over `serde_json::Value` and is the same
+/// arithmetic over the typed form, deliberately: a breakpoint that moved
+/// because the estimator changed units would be a caching regression nothing
+/// on screen would report.
+fn chars_of(messages: &amp;[Message]) -&gt; usize {
+    messages.iter().map(|m| m.content.wire_len()).sum()
+}</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>clears_minimum</code>, <code>chars_of</code>; crates/llm/src/content.rs — <code>wire_len</code></span>
+
+  <p>
+    Dividing characters by four leans low, so a prefix that would in fact cache
+    can go unmarked but a prefix that would not cache is never marked. The cost
+    of that lean is a band of prefixes wide enough to cache and narrow enough
+    to be gated out, and it is wider on high-floor models.
+    <span class="chip unv">unverified</span> Nobody has measured how wide.
+    Settling it means comparing <code>count_tokens</code> against
+    <code>chars_of</code> over real session content, per model.
+  </p>
+
+  <h2 id="limit">Three of the four markers, and one held back</h2>
+
+  <p>
+    The API allows four explicit breakpoints per request, counted across tools,
+    system and messages together, and exceeding it is a hard 400. The research
+    note cites a real harness that emitted five and had every request fail.
+    Emma uses three and keeps one spare. A fourth was considered and declined:
+    there is no stable boundary left for it to sit on.
+  </p>
+
+  <p>
+    The placement is pinned in three directions.
+    <code>breakpoints_land_on_the_stable_prefix_and_nowhere_else</code> asserts
+    exactly two markers before any tool call, one on system and one on the last
+    history message, and none on the query.
+    <code>a_turn_already_using_tools_marks_its_newest_result</code> asserts the
+    third appears on the <code>tool_result</code> once a round-trip is in
+    flight, and that the assistant <code>tool_use</code> message between them
+    gets none. The golden-body test pins all three as literal bytes.
+    <code>caching_off_sends_no_markers_at_all</code> holds the other end.
+    <span class="chip test">tested</span>
+  </p>
+
+  <h2 id="unaccounted">Three clauses of the contract that go unaccounted for</h2>
+
+  <p>
+    <span class="chip unv">unverified</span> in every case. They are read from
+    Anthropic's documentation as fetched 2026-08-11 and nothing here has been
+    run against them.
+  </p>
+
+  <ul class="body">
+    <li>
+      <strong>A cache read walks back at most 20 content blocks</strong>
+      looking for an entry a prior request wrote. A single agentic turn with
+      many <code>tool_use</code> and <code>tool_result</code> pairs can add
+      more than 20 blocks, which would push the new breakpoint out of range of
+      the last write; the documented remedy is an intermediate breakpoint
+      roughly every 15 blocks in long turns. Emma places breakpoint 3 on the
+      newest result only, however many rounds a turn has taken. Settling it
+      means a long tool-heavy turn against the real API, watching whether
+      <code>cache_read_input_tokens</code> collapses past the twentieth block.
+    </li>
+    <li>
+      <strong>The TTL clock runs from request start, not response end.</strong>
+      The docs are quoted in the research note: if a response takes four
+      minutes to stream, a follow-up reusing the same prefix must start within
+      about one minute of that response completing. High-effort turns on Opus 5
+      are exactly that shape, so some fraction of writes may be expiring before
+      the next call begins. Reading an entry refreshes its TTL at no extra
+      write cost, so a session calling at least every five minutes keeps an
+      entry alive indefinitely; the risk is the single long call, not the long
+      session.
+    </li>
+    <li>
+      <strong>An entry is readable only once the first response begins
+      streaming.</strong> N identical requests fired in parallel all pay the
+      full write price. Emma's own loop is serial, but delegation means several
+      subagents can be in flight at once.
+    </li>
+  </ul>
+  <span class="src">notes/research-caching-mechanics.md §"What can and cannot carry a marker", §TTL, §Concurrency</span>
+
+  <p>
+    One more clause is worth knowing because it is the one Emma is safe on:
+    changes invalidate their own tier and below. Touching the tool array or
+    switching model invalidates everything; changing a message invalidates only
+    the messages cache. Caches are model-scoped, so there is no cross-model
+    reuse at all. <span class="chip unv">unverified</span> from the same
+    documentation snapshot.
+  </p>
+
+  <h2 id="measuring">Is caching actually paying?</h2>
+
+  <p>
+    The three usage fields make this answerable exactly, from records already
+    on disk, with no second run and no estimation. Against the no-cache
+    counterfactual, which sends byte-identical content by construction because
+    it is the same request:
+  </p>
+
+  <pre><code><span class="c">// p = the model's base input price</span>
+actual          = p · (<span class="k">1.0</span>·input + <span class="k">1.25</span>·write + <span class="k">0.1</span>·read)
+counterfactual  = p · (<span class="k">1.0</span>·(input + write + read))
+
+savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.25</span>·write)</code></pre>
+
+  <p>
+    <code>write</code> is <code>cache_creation_input_tokens</code>,
+    <code>read</code> is <code>cache_read_input_tokens</code>. A cached read
+    costs 0.1× of base, so it saves 0.9×; a cached write costs 1.25×, so it
+    loses 0.25×. Emma sends only 5-minute markers, so the general form's
+    <code>− 1.0·write_1h</code> term drops out. <strong>The number goes
+    negative exactly when the harness is paying write premiums it never reads
+    back.</strong> That is what a broken prefix produces, and what the
+    accepted-and-inert defect on
+    <a href="providers-floor.html">the next page</a> produced for every
+    non-Opus-5 model. It does not credit latency.
+  </p>
+
+  <p>
+    The inputs are persisted per call: <code>sub.model_call</code> records in
+    <code>~/.emma/sessions/*.jsonl</code> carry all four usage fields. A
+    starting query, from the caching plan:
+  </p>
+
+  <pre><code>jq -s '[.[] | select(.kind=="sub.model_call")] | group_by(.sub_id)
+  | map(sort_by(.at_ms) | {sub_id: .[0].sub_id, agent: .[0].agent,
+      first_write: .[0].cache_creation_input_tokens, calls: length,
+      net: (map(<span class="s">0.9</span>*.cache_read_input_tokens - <span class="w">0.25</span>*.cache_creation_input_tokens)|add)})' \
+  ~/.emma/sessions/sess-*.jsonl</code></pre>
+
+  <div class="note warn">
+    <span class="h">the corpus does not exist yet</span>
+    <p>
+      <span class="chip unv">unverified</span> Nobody has run this over real
+      sessions and got a number. Checked 2026-08-14, the sessions directory on
+      the owner's machine held 86 files, most of them 0 bytes and the largest
+      about 4.7 KB, too few real turns to decide anything. Two claims on this
+      page wait on it: whether breakpoint 3 pays for itself, and whether the
+      5-minute TTL is the right one for Emma's cadence. Settling both means one
+      controlled live session and this query.
+    </p>
+  </div>
+  <span class="src">notes/plan-caching-defects.md §"Stage A — measure, from data already on disk"</span>
+
+  <p>
+    Two companion views sit alongside it. <em>Cached fraction</em>,
+    <code>read / (input + creation + read)</code>, is a health gauge rather
+    than a cost claim, and reads low at the start of a session where history is
+    small, so the tail is the part that means anything. And an
+    <em>expected-hit regression</em>: within a TTL, call N should read at least
+    what call N−1 established, which catches a change that silently breaks the
+    prefix.
+  </p>
+
+  <p>
+    For a sense of the target: Claude Code sessions measured in the wild ran a
+    <strong>97.2% cache hit ratio</strong>, 40M cache-read tokens against 653K
+    direct input tokens across eight sessions.
+    <span class="chip unv">unverified</span> That is a third party's number for
+    a different harness, quoted as a magnitude to aim at rather than a bar Emma
+    has been held to, and nobody has computed the same ratio for a real Emma
+    session.
+  </p>
+
+  <p>
+    One known thing will drag that number down and cannot be fixed with
+    breakpoints: <strong>compaction invalidates the message half of the prefix
+    entirely, every time it fires.</strong> The first call afterwards re-writes
+    what it would have read, at 1.25× instead of 0.1×. No placement of markers
+    avoids it, because the bytes genuinely changed. That mechanism belongs to
+    <a href="session.html">sessions &amp; context</a>; it is named here because
+    it is the largest single term in Emma's caching bill, and a reader watching
+    the arithmetic go negative should suspect it first.
+  </p>
+  <span class="src">notes/audit-caching-emma.md §"Does it invalidate the cached prefix?"</span>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    Six functions and one constant from <code>anthropic.rs</code>:
+    <code>ephemeral</code>, <code>mark_breakpoint</code>,
+    <code>system_field</code>, <code>chars_of</code>,
+    <code>clears_minimum</code>, <code>messages_field</code> and
+    <code>CHARS_PER_TOKEN</code>. That brings the file's running total across
+    <a href="providers-boundary.html">the boundary</a>,
+    <a href="providers-turn.html">the turn back</a> and this page to 22 of 28.
+    <code>MIN_CACHEABLE</code>, <code>MIN_CACHEABLE_UNKNOWN</code> and
+    <code>min_cacheable_tokens</code> are the subject of
+    <a href="providers-floor.html">the next page</a>; the four remaining
+    functions are <code>classify</code>, <code>execute</code>,
+    <code>api_message</code> and <code>notify</code>, on
+    <a href="providers-retry.html">retry</a>.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="providers-floor.html">the cache floor</a>, a provider
+      feature that is accepted, inert, and invisible except on the invoice.
+      Back to <a href="providers.html">Providers &amp; models</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The boundary &amp; the request · Providers &amp; models · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav here" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/llm</p>
+  <h1>The boundary, and the request that crosses it</h1>
+
+  <nav class="chapter">
+    <a class="up" href="providers.html">Providers &amp; models</a>
+    <span class="now">The boundary</span>
+    <a href="providers-content.html">Content blocks</a>
+    <a href="providers-turn.html">The turn back</a>
+    <a href="providers-models.html">Model limits</a>
+    <a href="providers-caching.html">Caching</a>
+    <a href="providers-floor.html">The cache floor</a>
+    <a href="providers-retry.html">Retry</a>
+    <a href="providers-credentials.html">Credentials</a>
+  </nav>
+
+  <p class="lede">
+    Two methods and one struct are the whole surface between Emma's loop and
+    any model anywhere. The struct's field order is not cosmetic: it is the
+    order the provider's cache hashes over, and it is a type rather than a
+    convention because a convention in a comment is one a struct literal
+    elsewhere can ignore.
+  </p>
+
+  <h2 id="trait">Two methods, and nothing else</h2>
+
+  <p>
+    <code>Provider</code> is small enough to quote whole. A model id, and a
+    send.
+  </p>
+
+  <p class="faint">crates/llm/src/lib.rs · <code>trait Provider</code></p>
+  <pre><code>#[async_trait]
+pub trait Provider: Send + Sync {
+    fn model_id(&amp;self) -&gt; &amp;str;
+
+    /// `events` is optional in both modes: pass `None` and the call is silent,
+    /// pass a sender and retries become visible even in `Batch`.
+    async fn send(
+        &amp;self,
+        request: Request,
+        mode: Mode,
+        events: Option&lt;mpsc::Sender&lt;Event&gt;&gt;,
+    ) -&gt; Result&lt;AssistantTurn, LlmError&gt;;
+}</code></pre>
+  <span class="src">crates/llm/src/lib.rs — <code>Provider</code></span>
+
+  <p>
+    <code>Mode</code> picks between one JSON body and a stream of SSE frames.
+    Both produce the same <code>AssistantTurn</code>, so the difference a
+    caller sees is only whether <code>Event::TextDelta</code> arrives on the
+    way. A terminal wants <code>Stream</code>; a <code>--print</code> run or an
+    internal sub-call is content with <code>Batch</code>.
+  </p>
+
+  <p class="faint">crates/llm/src/lib.rs · <code>enum Event</code></p>
+  <pre><code>/// Anything worth showing a human while the call is in flight.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Event {
+    /// Assistant text, as it arrives. Streaming mode only.
+    TextDelta(String),
+    /// A tool call has started; its arguments are still streaming.
+    ToolUseStarted { id: String, name: String },
+    /// A request failed and is being retried. Emitted in both modes, because a
+    /// retry the user cannot see is indistinguishable from a hang.
+    Retrying {
+        attempt: u32,
+        max_attempts: u32,
+        delay: Duration,
+        reason: String,
+    },
+}</code></pre>
+  <span class="src">crates/llm/src/lib.rs — <code>Event</code>, <code>Mode</code></span>
+
+  <p>
+    Only <code>TextDelta</code> and <code>ToolUseStarted</code> are streaming-only;
+    <code>Retrying</code> is emitted from <code>execute</code>, which runs
+    identically in both modes. A batch caller that passes a sender therefore
+    still sees its retries. <span class="chip test">tested</span> by
+    <code>a_429_is_retried_after_the_delay_the_api_asked_for_and_is_visible</code>,
+    which runs in <code>Mode::Batch</code> and asserts two
+    <code>Retrying</code> events with the comment <em>a silent retry is a
+    hang</em>. That test's mutation was not run here: it is claimed on the
+    assertion's own shape, not on a red run somebody watched.
+  </p>
+
+  <h2 id="request">A request names its four parts in prefix order</h2>
+
+  <p>
+    <code>Request</code> is four fields rather than one message list, and the
+    order of the fields is the order the bytes go out in.
+  </p>
+
+  <p class="faint">crates/llm/src/lib.rs · <code>struct Request</code>, <code>Request::new</code></p>
+  <pre><code>/// One model call, in prefix order.
+///
+/// `history` is every completed turn; `query` is this turn only — the user's
+/// message first, then the `tool_use` / `tool_result` pairs the loop appends as
+/// it works. Keeping them apart is what lets the renderer mark the end of the
+/// history without guessing where the stable part stops.
+#[derive(Debug, Clone)]
+pub struct Request {
+    /// Instructions. First, and byte-identical across every call of a session.
+    pub instructions: String,
+    /// The tool surface, exactly as `Registry::wire_definitions()` renders it.
+    pub tools: Vec&lt;serde_json::Value&gt;,
+    pub history: Vec&lt;Message&gt;,
+    pub query: Vec&lt;Message&gt;,
+    /// Caps thinking **and** answer together on this model family, so a value
+    /// sized around the answer alone truncates mid-thought.
+    ///
+    /// A ceiling the caller wants, not one the model promised. Every model has
+    /// its own maximum and exceeding it is a 400, so the provider lowers this
+    /// to the model's when the model's is lower — see [`models`].
+    pub max_tokens: u32,
+    /// Likewise an ask: the provider clamps it down to the best level the
+    /// chosen model actually implements, or drops it entirely for a model with
+    /// no effort parameter.
+    pub effort: Effort,
+    pub caching: Caching,
+}</code></pre>
+  <span class="src">crates/llm/src/lib.rs — <code>Request</code></span>
+
+  <p>
+    The cache is an exact prefix match, so anything that varies per turn has to
+    sit after everything that does not. That is the whole argument for the
+    order. Keeping <code>history</code> and <code>query</code> as separate
+    fields is what lets the renderer find the end of the stable part without
+    inspecting messages to guess where a turn began.
+  </p>
+
+  <div class="note">
+    <span class="h">why a struct and not a convention</span>
+    <p>
+      The module doc states the reason: the ordering is a type so that
+      building a request with a per-turn byte at position zero is not something
+      the type lets you express. A convention in a renderer comment is one a
+      struct literal somewhere in the loop can ignore, and one did, for
+      <code>max_tokens</code>. That is why the model clamping happens at the
+      wire boundary rather than in <code>Request::new</code>.
+    </p>
+  </div>
+  <span class="src">crates/llm/src/lib.rs — module doc §"The one shape that must not drift"</span>
+
+  <p>
+    <code>Request::new</code> takes instructions and tools and leaves the rest
+    empty. Its two constants are asks, and its comment says so:
+  </p>
+
+  <p class="faint">crates/llm/src/lib.rs · <code>Request::new</code></p>
+  <pre><code>pub fn new(instructions: impl Into&lt;String&gt;, tools: Vec&lt;serde_json::Value&gt;) -&gt; Self {
+    Self {
+        instructions: instructions.into(),
+        tools,
+        history: Vec::new(),
+        query: Vec::new(),
+        // What Emma wants, not what it will necessarily get. xhigh is the
+        // documented setting for coding and agentic work and Emma is
+        // nothing else, and 32,000 is a budget rather than a ceiling — a
+        // model that caps lower gets its own cap, a model without xhigh
+        // gets the best level it has. `models` holds both, and the
+        // provider applies them, because a `Request` does not know which
+        // model it will be sent to.
+        max_tokens: 32_000,
+        effort: Effort::XHigh,
+        caching: Caching::On,
+    }
+}</code></pre>
+  <span class="src">crates/llm/src/lib.rs — <code>Request::new</code></span>
+
+  <p>
+    <code>with_history</code> and <code>with_query</code> are the two builders,
+    each a move-assign-return. There is no <code>with_tools</code>: tools are a
+    constructor argument, because a request without them is not a shape Emma
+    ever sends.
+  </p>
+
+  <h3>Messages, and the four ways one gets built</h3>
+
+  <p>
+    <code>Role</code> has two variants and no room for a third:
+    <code>User</code> and <code>Assistant</code> are what the Messages API
+    accepts in <code>messages</code>, and instructions travel in the top-level
+    <code>system</code> field, which is where the prefix ordering wants them
+    anyway.
+  </p>
+
+  <p>
+    The four constructors differ in what they promise, not just in convenience.
+    <code>Message::assistant</code> takes blocks because rebuilding a turn from
+    its text loses the thinking signature and makes the <em>next</em> call
+    fail. <code>Message::assistant_text</code> exists beside it for turns Emma
+    composed rather than received, such as a compaction summary or the note
+    that says a previous goal stopped short.
+  </p>
+
+  <p class="faint">crates/llm/src/lib.rs · <code>Message::assistant_text</code>, <code>Message::tool_results</code></p>
+  <pre><code>/// An assistant turn Emma composed rather than received — a compaction
+/// summary, or the note that says the previous goal stopped short. Separate
+/// from [`Message::assistant`] because these two have nothing in common
+/// except their role: one is a record of what a model said, the other is a
+/// sentence written here, and neither should be able to be passed where the
+/// other is meant.
+pub fn assistant_text(text: impl Into&lt;String&gt;) -&gt; Self { … }
+
+/// The user turn that carries results back for one or more tool calls. The
+/// API requires every `tool_use` in the preceding assistant turn to be
+/// answered in a single user message, so this takes all of them at once.
+pub fn tool_results(results: Vec&lt;ToolResult&gt;) -&gt; Self { … }</code></pre>
+  <span class="src">crates/llm/src/lib.rs — <code>Message</code></span>
+
+  <p>
+    <code>Message::user</code> is the fourth and is a one-line wrapper around
+    <code>Content::Text</code>. It is uninteresting except for what it does not
+    do: a plain user message stays a JSON string on the wire rather than
+    becoming a one-element block array, which is a byte difference the cache
+    would notice. <span class="chip cert">certified</span> by the golden body
+    in <code>the_whole_request_body_is_pinned_byte_for_byte</code>, where the
+    two user messages render as <code>"content":"HISTORY …"</code> and not as
+    arrays. Grep the test for <code>"content":"</code>.
+  </p>
+
+  <h3>Effort is a ladder with holes in it</h3>
+
+  <p class="faint">crates/llm/src/lib.rs · <code>Effort::rank</code></p>
+  <pre><code>/// Position on the ladder, for "the best level at or below this one".
+///
+/// A number rather than `#[derive(PartialOrd)]` because deriving it would
+/// also make `&lt;` work on the enum everywhere, and a comparison between two
+/// efforts only means something in the one place that clamps them — a
+/// model's supported set has holes, so `a &lt; b` says nothing about whether
+/// `b` can be sent where `a` can.
+pub(crate) fn rank(self) -&gt; u8 {
+    match self {
+        Self::Low =&gt; 0,
+        Self::Medium =&gt; 1,
+        Self::High =&gt; 2,
+        Self::XHigh =&gt; 3,
+        Self::Max =&gt; 4,
+    }
+}</code></pre>
+  <span class="src">crates/llm/src/lib.rs — <code>Effort</code></span>
+
+  <p>
+    <code>rank</code> is <code>pub(crate)</code> and has exactly one caller,
+    <code>Limits::clamp_effort</code>. <code>Effort::as_str</code> is the wire
+    spelling and has one caller too, in <code>render</code> below. What each is
+    for is on the <a href="providers-models.html">model limits</a> page;
+    <code>Caching</code> is two variants, <code>On</code> and <code>Off</code>,
+    and belongs to <a href="providers-caching.html">caching</a>.
+  </p>
+
+  <h2 id="render">Where the ask meets the model</h2>
+
+  <p>
+    <code>send</code> is two lines: render the body, execute it. Everything
+    interesting about the outgoing request is in <code>render</code>, and it is
+    short enough to read whole.
+  </p>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>AnthropicProvider::render</code></p>
+  <pre><code>fn render(&amp;self, req: &amp;Request, mode: Mode) -&gt; Result&lt;Value, LlmError&gt; {
+    let tools_chars = serde_json::to_string(&amp;req.tools)
+        .map(|s| s.len())
+        .unwrap_or(0);
+    // The cache floor is per-model and this is the only place the model and
+    // the gating are both in scope — the same argument as the clamping
+    // below, and the reason the floor is a parameter rather than a const.
+    let floor = min_cacheable_tokens(&amp;self.model);
+    let system = system_field(&amp;req.instructions, tools_chars, req.caching, floor);
+    let messages = messages_field(req, tools_chars + req.instructions.len(), floor)?;
+
+    // The request says what Emma wants; the model says what it will take.
+    // Clamping happens here because this is the only place both are in
+    // scope, and because it is the last point every request passes through
+    // however it was built — a struct literal somewhere in the loop gets
+    // the same treatment as `Request::new`.
+    let limits = models::limits(&amp;self.model);
+
+    // serde_json orders object keys deterministically, which is what the
+    // cache needs: two identical requests must render identical bytes.
+    let mut body = json!({
+        "model": self.model,
+        "max_tokens": limits.clamp_max_tokens(req.max_tokens),
+        "system": system,
+        "messages": messages,
+        "tools": req.tools,
+    });
+    // Absent rather than defaulted: on a model with no effort parameter the
+    // field itself is the 400, so there is no value that would be safe to
+    // send. Omitting it takes the provider's own default, which is the
+    // closest thing to "as hard as this model works".
+    if let Some(effort) = limits.clamp_effort(req.effort) {
+        body["output_config"] = json!({ "effort": effort.as_str() });
+    }
+    if mode == Mode::Stream {
+        body["stream"] = json!(true);
+    }
+    Ok(body)
+}</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>AnthropicProvider::render</code></span>
+
+  <p>
+    Five branches change the outgoing bytes. The floor and the two field
+    builders decide where cache markers land; <code>clamp_max_tokens</code>
+    can lower the number; <code>clamp_effort</code> can lower the level or drop
+    <code>output_config</code> entirely; and <code>stream</code> appears only
+    in <code>Mode::Stream</code>, which
+    <code>the_wire_order_is_instructions_then_tools_then_history_then_query</code>
+    asserts by checking <code>sent.get("stream") == None</code> in batch mode.
+    <span class="chip test">tested</span>
+  </p>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 760 330" role="img"
+           aria-label="A Request's four content fields and its two asks enter render(); the four become system and messages, the two asks are lowered against the model's row before becoming max_tokens and output_config, and the rendered body's keys come out in serde_json's sorted order: max_tokens, messages, model, output_config, system, tools.">
+        <defs>
+          <marker id="bnd-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          </marker>
+          <marker id="bnd-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          </marker>
+        </defs>
+
+        <text class="tiny" x="14" y="16">Request</text>
+        <rect class="box" x="14" y="26" width="180" height="26" rx="4" />
+        <text class="sm" x="26" y="44">instructions</text>
+        <rect class="box" x="14" y="58" width="180" height="26" rx="4" />
+        <text class="sm" x="26" y="76">tools</text>
+        <rect class="box" x="14" y="90" width="180" height="26" rx="4" />
+        <text class="sm" x="26" y="108">history</text>
+        <rect class="box" x="14" y="122" width="180" height="26" rx="4" />
+        <text class="sm" x="26" y="140">query</text>
+        <rect class="hl" x="14" y="166" width="180" height="26" rx="4" />
+        <text class="sm" x="26" y="184">max_tokens: 32_000</text>
+        <rect class="hl" x="14" y="198" width="180" height="26" rx="4" />
+        <text class="sm" x="26" y="216">effort: XHigh</text>
+        <text class="tiny" x="14" y="242">asks, not settings</text>
+
+        <line class="edge" x1="196" y1="88" x2="272" y2="88" marker-end="url(#bnd-arrow)" />
+        <line class="edge-hl" x1="196" y1="196" x2="272" y2="196" marker-end="url(#bnd-arrow-hl)" />
+
+        <rect class="box" x="274" y="26" width="180" height="122" rx="4" />
+        <text class="lbl" x="288" y="48">system_field</text>
+        <text class="lbl" x="288" y="70">messages_field</text>
+        <text class="tiny" x="288" y="90">cache markers, gated on</text>
+        <text class="tiny" x="288" y="104">min_cacheable_tokens(model)</text>
+        <text class="tiny" x="288" y="130">tools travel verbatim</text>
+
+        <rect class="hl" x="274" y="166" width="180" height="58" rx="4" />
+        <text class="lbl" x="288" y="188">models::limits(model)</text>
+        <text class="tiny" x="288" y="208">clamp down, never up</text>
+
+        <line class="edge" x1="456" y1="88" x2="524" y2="88" marker-end="url(#bnd-arrow)" />
+        <line class="edge-hl" x1="456" y1="196" x2="524" y2="196" marker-end="url(#bnd-arrow-hl)" />
+
+        <text class="tiny" x="526" y="16">rendered body, key order as sent</text>
+        <rect class="hl" x="526" y="26" width="216" height="24" rx="4" />
+        <text class="sm" x="538" y="43">"max_tokens"</text>
+        <rect class="box" x="526" y="54" width="216" height="24" rx="4" />
+        <text class="sm" x="538" y="71">"messages"</text>
+        <rect class="box" x="526" y="82" width="216" height="24" rx="4" />
+        <text class="sm" x="538" y="99">"model"</text>
+        <rect class="hl" x="526" y="110" width="216" height="24" rx="4" />
+        <text class="sm" x="538" y="127">"output_config"  (may be absent)</text>
+        <rect class="box" x="526" y="138" width="216" height="24" rx="4" />
+        <text class="sm" x="538" y="155">"system"</text>
+        <rect class="box" x="526" y="166" width="216" height="24" rx="4" />
+        <text class="sm" x="538" y="183">"tools"</text>
+        <rect class="box" x="526" y="194" width="216" height="24" rx="4" />
+        <text class="sm" x="538" y="211">"stream"  (Mode::Stream only)</text>
+        <text class="tiny" x="526" y="238">sorted, because serde_json's map is</text>
+        <text class="tiny" x="526" y="252">ordered: identical requests, identical bytes</text>
+
+        <line class="edge-dash" x1="14" y1="278" x2="742" y2="278" />
+        <text class="tiny" x="14" y="298">The four content fields keep their prefix order inside "system" and "messages".</text>
+        <text class="tiny" x="14" y="314">The two asks never reach the wire unlowered.</text>
+      </svg>
+    </div>
+    <figcaption>
+      What <code>render</code> does to a <code>Request</code>. Pink marks the
+      values a model's row can change. The key order on the right is not the
+      order of the <code>json!</code> literal in the source: serde_json's map
+      is ordered, so the body comes out sorted, which is what makes two
+      identical requests render identical bytes for the cache to match on.
+      Drawn from <code>render</code> and confirmed against the golden body in
+      <code>the_whole_request_body_is_pinned_byte_for_byte</code>, which opens
+      <code>{"max_tokens":32000,"messages":[…</code>.
+    </figcaption>
+  </figure>
+  <span class="src">crates/llm/src/anthropic.rs — <code>render</code>, <code>the_whole_request_body_is_pinned_byte_for_byte</code></span>
+
+  <p>
+    Three things are absent from that body and each absence is a 400 avoided.
+    There is no <code>thinking</code> block: the fixed <code>budget_tokens</code>
+    budget was removed on this model family and sending it returns 400, so
+    depth is controlled by <code>output_config.effort</code> alone. There are no
+    sampling parameters, for the same reason. And <code>output_config</code>
+    itself is omitted rather than defaulted when the model has no effort
+    parameter. The first two are asserted directly:
+    <code>assert!(sent.get("thinking").is_none())</code> and the same for
+    <code>temperature</code>. <span class="chip test">tested</span>
+  </p>
+  <span class="src">crates/llm/src/anthropic.rs — module doc; <code>the_wire_order_is_instructions_then_tools_then_history_then_query</code></span>
+
+  <h2 id="construction">Constructing the provider</h2>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>AnthropicProvider::new</code></p>
+  <pre><code>pub fn new(key: ApiKey, model: Option&lt;String&gt;) -&gt; Self {
+    Self {
+        http: reqwest::Client::builder()
+            // Generous: a long agentic turn at high effort can think for
+            // minutes before the first byte in batch mode.
+            .timeout(Duration::from_secs(600))
+            .build()
+            .expect("reqwest client"),
+        key,
+        model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+        // Deliberately not read from the environment. Emma runs inside
+        // repositories with whatever env the shell carries; an env var that
+        // redirects where the key is sent is a credential-exfiltration
+        // switch, and no feature here is worth that.
+        base_url: API_URL.to_string(),
+        retry: Retry::default(),
+    }
+}</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>AnthropicProvider::new</code>, <code>DEFAULT_MODEL</code>, <code>API_URL</code>, <code>API_VERSION</code></span>
+
+  <p>
+    Four constants live at the top of the file: <code>DEFAULT_MODEL</code> is
+    <code>claude-opus-5</code>, <code>API_URL</code> is
+    <code>https://api.anthropic.com/v1/messages</code>,
+    <code>API_VERSION</code> is <code>2023-06-01</code> and goes out as the
+    <code>anthropic-version</code> header, and the client timeout is 600
+    seconds. The timeout is the one a reader is likeliest to want to change,
+    and it is not configurable today.
+  </p>
+
+  <p>
+    <code>base_url</code> is settable only through <code>with_base_url</code>,
+    at construction, which the tests use to point at a loopback stub. Reading
+    it from the environment would be a switch that redirects where the key is
+    sent, in a program that runs inside repositories with whatever environment
+    the shell carries. <code>with_retry</code> is the same shape and swaps the
+    policy; the provider tests use it to make backoff milliseconds rather than
+    seconds.
+  </p>
+
+  <p>
+    <code>Debug</code> is hand-written so no field added later can print the
+    key by existing:
+  </p>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>impl Debug for AnthropicProvider</code></p>
+  <pre><code>// Hand-written so no future field can print the key by being added.
+impl std::fmt::Debug for AnthropicProvider {
+    fn fmt(&amp;self, f: &amp;mut std::fmt::Formatter&lt;'_&gt;) -&gt; std::fmt::Result {
+        f.debug_struct("AnthropicProvider")
+            .field("model", &amp;self.model)
+            .field("base_url", &amp;self.base_url)
+            .field("retry", &amp;self.retry)
+            .finish_non_exhaustive()
+    }
+}</code></pre>
+  <p>
+    <span class="chip test">tested</span> at the end of
+    <code>a_formatted_error_never_contains_the_key</code>, which formats the
+    provider itself and asserts the test key is absent. The wider redaction
+    story is on <a href="providers-credentials.html">credentials</a>.
+  </p>
+  <span class="src">crates/llm/src/anthropic.rs — <code>a_formatted_error_never_contains_the_key</code></span>
+
+  <h2 id="fake">A scripted provider drives the loop with no socket and no key</h2>
+
+  <p>
+    Because the trait is the whole boundary, the agent loop's test suite runs
+    against <code>Fake</code>: a <code>VecDeque</code> of scripted turns and a
+    <code>Vec</code> of every <code>Request</code> it was handed. Each scripted
+    turn carries text, tool calls, a token count, and an optional failure that
+    answers with <code>LlmError::BadRequest</code>. Running out of script is
+    itself a <code>BadRequest</code>, so a test that calls the model more times
+    than it meant to fails rather than quietly ending the goal.
+  </p>
+
+  <p>
+    Two details of the fake are there because of live failures. It emits a
+    signed thinking block on every turn, so the assertion that the loop hands a
+    turn back untouched is asserting about a turn with something fragile in it.
+    And every scripted <code>tool_use</code> carries
+    <code>extra: {"caller": {"type": "direct"}}</code>, because the real API
+    sends that key and a fake without it would not exercise the path a live run
+    found broken. That path is
+    <a href="providers-content.html">the next page</a>.
+  </p>
+  <span class="src">crates/emma/tests/support/mod.rs — <code>Fake</code>, <code>Say</code></span>
+
+  <h2 id="coverage">What this page covers, and what it leaves</h2>
+
+  <p>
+    From <code>lib.rs</code>: the module doc, <code>Role</code>,
+    <code>Message</code> and its four constructors, <code>Effort</code> with
+    <code>as_str</code> and <code>rank</code>, <code>Caching</code>,
+    <code>Request</code> with <code>new</code>, <code>with_history</code> and
+    <code>with_query</code>, <code>Event</code>, <code>Mode</code> and
+    <code>Provider</code>. That is 11 of the file's 28 functions.
+    <code>Usage</code> and <code>AssistantTurn</code> are on
+    <a href="providers-turn.html">the turn back</a>; everything under
+    <code>LlmError</code> is on
+    <a href="providers-credentials.html">credentials</a> and
+    <a href="providers-retry.html">retry</a>.
+  </p>
+
+  <p>
+    From <code>anthropic.rs</code>: <code>new</code>,
+    <code>with_retry</code>, <code>with_base_url</code>, <code>Debug</code>,
+    <code>model_id</code>, <code>send</code> and <code>render</code>, 7 of 28.
+    <code>model_id</code> returns the field and <code>send</code> calls
+    <code>render</code> then <code>execute</code>; neither has a branch in it.
+  </p>
+
+  <div class="note warn">
+    <span class="h">what is not verified here</span>
+    <p>
+      The 600-second HTTP timeout has never been reached in a run anybody
+      recorded, so whether it is generous enough for a
+      <code>max</code>-effort Opus 5 batch call is a guess.
+      <span class="chip unv">unverified</span> Settling it means one long
+      high-effort batch call with the elapsed time recorded, or an argument
+      from the model's published maximum thinking time, which nothing in this
+      tree cites.
+    </p>
+  </div>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="providers-content.html">typed content blocks and the
+      strict-decoder incident</a>, which is what a
+      <code>Message</code>'s content is made of. Back to
+      <a href="providers.html">Providers &amp; models</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

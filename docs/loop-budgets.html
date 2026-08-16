@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Budgets, and three token numbers · The agent loop · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav here" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">The agent loop</p>
+  <h1>Budgets, and three token numbers</h1>
+
+  <nav class="chapter">
+    <a class="up" href="loop.html">The agent loop</a>
+    <a href="loop-one-turn.html">One turn</a>
+    <a href="loop-failure.html">Failure</a>
+    <a href="loop-memo.html">The memo</a>
+    <a href="loop-endings.html">Endings</a>
+    <a href="loop-kick.html">The kick</a>
+    <span class="now">Budgets</span>
+    <a href="loop-done.html">Done</a>
+    <a href="loop-seam.html">Seams</a>
+  </nav>
+
+  <p class="lede">
+    Five bounds, three token numbers that are not each other, and one meter that
+    a delegated run can reach. The bounds are separate because they fail
+    differently: a model calling one cheap tool forever is caught by iterations
+    and not by tokens, and a model reading enormous files is caught by tokens and
+    not by iterations.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Budgets</code>, <code>Spend</code>, <code>cost_tokens</code></span>
+
+  <h2 id="five">The five</h2>
+
+  <div class="tw">
+  <table>
+    <thead>
+      <tr><th>Bound</th><th>Default</th><th>Shape</th><th>What it bounds</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>max_iterations</code></td>
+        <td class="num">60</td>
+        <td>ceiling, tested before the call</td>
+        <td>Model calls in one goal. A run never makes more than this many.</td>
+      </tr>
+      <tr>
+        <td><code>max_tokens</code></td>
+        <td class="num">500,000</td>
+        <td>tripwire, tested after the call</td>
+        <td>What one goal may spend, weighted by price.</td>
+      </tr>
+      <tr>
+        <td><code>wall_clock</code></td>
+        <td class="num">30 min</td>
+        <td>tripwire, tested at the top of an iteration</td>
+        <td>When the loop will decline to start another iteration.</td>
+      </tr>
+      <tr>
+        <td><code>max_kicks</code></td>
+        <td class="num">3</td>
+        <td>ceiling</td>
+        <td>Nudges after the model stops without claiming completion.</td>
+      </tr>
+      <tr>
+        <td><code>max_context</code></td>
+        <td class="num">120,000</td>
+        <td>threshold, triggers compaction</td>
+        <td>How large one request's input may get. The only bound here that is about the <em>session</em> rather than the goal.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+impl Default for Budgets {
+    fn default() -&gt; Self {
+        Self {
+            max_iterations: 60,
+            max_tokens: 500_000,
+            wall_clock: Duration::from_secs(30 * 60),
+            max_kicks: 3,
+            max_context: 120_000,
+        }
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/agent.rs — <code>Budgets</code>, <code>Budgets::default</code></span>
+
+  <p>
+    <code>Budgets</code> is <code>Copy</code>, so it is passed by value into
+    <code>Setup</code> and into <code>Ending::message</code>, and a nested run
+    can be given a different set without disturbing its parent's.
+    <span class="chip cert">certified</span> by the derive on the type:
+    <code>#[derive(Debug, Clone, Copy)]</code>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Budgets</code></span>
+
+  <h2 id="shapes">Ceiling, tripwire, threshold</h2>
+
+  <p>
+    The three shapes are not interchangeable and the code says which is which at
+    each site. <code>max_iterations</code> is tested at the top of the loop
+    before anything is sent, so it is a ceiling: a run never makes more calls
+    than that. <code>max_tokens</code> is tested after a call returns, so the
+    call that crosses the line is paid for in full. <code>wall_clock</code> is
+    tested at the top of an iteration and bounds when the loop will decline to
+    <em>start</em> another one, not how long a goal can take.
+    <code>max_context</code> is neither: passing it triggers compaction rather
+    than an ending.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
+
+  <div class="note warn">
+    <span class="h">The token budget is a tripwire, not a ceiling</span>
+    <p>
+      <code>spend.get() &gt; max_tokens</code> is tested <em>after</em> the call
+      returns, so the overshoot is bounded only by how large one request can be.
+      A 500,000 budget stopped a real run at 579,565.
+      <span class="chip cert">certified</span>. The session file is
+      <code>~/.emma/sessions/sess-1786385316950-34808.jsonl</code>;
+      <code>grep -o '"tokens":[0-9]*' </code> over it prints
+      <code>"tokens":519662</code> and <code>"tokens":579565</code>, and the
+      file holds two <code>goal_finished</code> records. Run at commit
+      <code>a3eba74</code> on the owner's machine. The same figure is quoted in
+      <code>Budgets::max_tokens</code>'s doc and in a test comment; those are
+      attributions to this run rather than independent evidence.
+    </p>
+    <p>
+      The mechanism is covered.
+      <span class="chip test">tested</span>
+      <code>the_token_budget_stops_the_loop_and_the_run_is_charged_for_what_it_spent</code>
+      sets a budget of 15, scripts two calls costing 10 each, and asserts the
+      outcome is <code>Ending::Tokens</code> with 20 spent, an overshoot of one
+      call, and that the session log records the 20 rather than recording an
+      aborted run as free.
+    </p>
+    <p>
+      Making it a true ceiling would mean gating on an estimate of the request
+      before sending it, and the only estimator available under-counts. A gate
+      built on it refuses calls that would have fit and still overshoots on the
+      ones it lets through, while sounding exact. So the wording admits what the
+      check does, and there is a test asserting the message says "after".
+      Promoting this to a measured pre-call headroom check is item 0 of
+      <code>notes/plan-loops-stage-1.md</code> and item 20 of
+      <code>notes/improvements.md</code>. It matters most for unattended runs,
+      where the person who set the budget is no longer watching the meter.
+    </p>
+  </div>
+  <span class="src">crates/emma/src/agent.rs — <code>Budgets::max_tokens</code>, <code>Ending::Tokens</code>, <code>the_token_budget_is_described_as_the_tripwire_it_is</code></span>
+
+  <h2 id="numbers">Three token numbers, three jobs</h2>
+
+  <p>
+    Every model call produces three different token figures, and assuming any two
+    are the same is how this project got a budget that fired on the length of the
+    conversation instead of on the bill.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Number</th><th>Arithmetic</th><th>Job</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>cost_tokens(usage)</code></td>
+        <td><code>input + 1.25×cache_write + 0.1×cache_read + output</code></td>
+        <td>The only number <code>max_tokens</code> is tested against. Weighted, because a cache read is billed at a tenth of what it weighs.</td>
+      </tr>
+      <tr>
+        <td><code>billable_total_tokens()</code></td>
+        <td>the provider's own unweighted total</td>
+        <td>Logged raw beside the four provider fields. Answers "how much context did this call carry", which is a different question.</td>
+      </tr>
+      <tr>
+        <td><code>billable_input_tokens()</code></td>
+        <td>the provider's reported input for the call</td>
+        <td>Stored as <code>last_input</code> and tested against <code>max_context</code> to decide compaction. Measured, so it includes the system prompt and the tool schemas.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// Tokens weighted by what they cost, which is what a budget should count.
+///
+/// The multipliers are the provider's: a cache read is billed at 0.1× and a
+/// cache write at 1.25×, and `Usage::billable_total_tokens` deliberately counts
+/// neither — it answers "how much context did this call carry", which is a
+/// different question and the right one for the field it is on. Emma asks both:
+/// the size question decides compaction, and this one decides the budget. See
+/// [`Budgets::max_tokens`] for what went wrong when one number answered both.
+///
+/// Integer arithmetic, so a cache read under ten tokens weighs nothing. At the
+/// scale a budget is set in, that is not a rounding error worth a float.</span>
+fn cost_tokens(u: &amp;emma_llm::Usage) -&gt; i64 {
+    u.input_tokens
+        + (u.cache_creation_input_tokens * 5) / 4
+        + u.cache_read_input_tokens / 10
+        + u.output_tokens
+}</code></pre>
+
+  <p>
+    The weighting had to arrive when the session started carrying its whole
+    conversation. At a 100,000 token context every call charges roughly 100,000
+    against an unweighted cap, so a 500,000 default fires five calls into a
+    barely-started goal while the actual bill for those five calls is a few
+    cents. A cap that fires on how long the conversation is rather than on spend
+    is not what somebody typing <code>--max-tokens</code> is asking for. The
+    provider's own numbers are still logged raw; only the arithmetic that
+    enforces the cap is weighted.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Budgets::max_tokens</code>, <code>cost_tokens</code></span>
+
+  <p>
+    Both <code>cost_tokens</code> and <code>billable_total_tokens()</code> go
+    into the <code>model_call</code> record, next to the four raw provider
+    fields and the running goal total. So a session file can be read back to
+    answer either question without re-deriving the weighting from the code that
+    was in force at the time.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
+
+  <h2 id="fourth">A fourth number that enforces nothing</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// Roughly how many tokens a message list is worth.
+///
+/// `chars / 4`, the same conservative ratio `emma-llm`'s packer uses to decide
+/// whether a prefix is worth a cache breakpoint, and documented there as
+/// under-counting what the provider bills. It is used here for two things that
+/// tolerate it — deciding *how much* to drop once a measured number has already
+/// said dropping is necessary, and standing in for that measurement on the one
+/// call of a process that has none. It is never what fires a budget.</span>
+fn estimate(messages: &amp;[Message]) -&gt; i64 {
+    let chars: usize = messages.iter().map(|m| m.content.wire_len()).sum();
+    (chars / 4) as i64
+}</code></pre>
+
+  <p>
+    Three callers: <code>Agent::estimated_context</code>, which is what
+    <code>/compact</code> and the arrival warning quote;
+    <code>compact_if_needed</code>, when no measured number exists yet; and
+    <code>compact</code>, to size chapters against each other and to report a
+    before and after. It never decides that a budget was exceeded.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>estimate</code>, <code>Agent::estimated_context</code></span>
+
+  <h2 id="spend">The meter, and why it is not a local</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// The token meter one goal is charged against, shared with anything it
+/// delegates to.
+///
+/// **Why it is not a local.** `run_goal` kept `let mut tokens` and tested it
+/// after every call, which is exactly right for a loop that is the only thing
+/// spending. A delegation is a second loop spending the same budget, and it
+/// cannot reach a local — so the owner's ruling that a subagent spends the
+/// parent's budget is either this type or an `if call.name == "Delegate"` in
+/// `run_tool_call` adding the tool's self-reported cost. The second is the loop
+/// branching on a tool's identity, which the module doc forbids and which this
+/// project has already paid to remove twice.
+///
+/// **The parent link, and why `set` does not follow it.** A nested run gets a
+/// meter of its own whose every `add` also lands on its parent's, so the sub's
+/// spend charges the parent as it happens and the parent's `tokens &gt; max_tokens`
+/// test sees it on its very next iteration. `set` is the per-goal reset and
+/// stays local: a nested `run_goal` opening its own goal would otherwise zero
+/// the meter of the goal that is paying for it.</span>
+pub struct Spend {
+    counted: std::sync::atomic::AtomicI64,
+    parent: Option&lt;Arc&lt;Spend&gt;&gt;,
+}
+
+impl Spend {
+    pub fn new() -&gt; Arc&lt;Self&gt; { Arc::new(Self::default()) }
+
+    <span class="c">/// A meter of its own that also charges `parent`.</span>
+    pub fn child(parent: &amp;Arc&lt;Self&gt;) -&gt; Arc&lt;Self&gt; {
+        Arc::new(Self {
+            counted: std::sync::atomic::AtomicI64::new(0),
+            parent: Some(parent.clone()),
+        })
+    }
+
+    <span class="c">/// Charge, and answer what this meter now reads.</span>
+    pub fn add(&amp;self, tokens: i64) -&gt; i64 {
+        if let Some(parent) = &amp;self.parent {
+            parent.add(tokens);
+        }
+        self.counted.fetch_add(tokens, Ordering::SeqCst) + tokens
+    }
+
+    pub fn get(&amp;self) -&gt; i64 { self.counted.load(Ordering::SeqCst) }
+
+    <span class="c">/// The per-goal reset. Local by design — see the type's doc.</span>
+    pub fn set(&amp;self, tokens: i64) { self.counted.store(tokens, Ordering::SeqCst); }
+}</code></pre>
+
+  <p>
+    <code>add</code> charges the parent first and recurses, so a chain of nested
+    runs charges every ancestor. It returns this meter's own new reading rather
+    than the parent's, which is what the <code>model_call</code> record shows as
+    <code>goal_total_so_far</code>. <code>set</code> writes only this meter, so a
+    nested goal cannot zero the goal paying for it. <code>get</code> is what the
+    budget test reads, rather than the value <code>add</code> returned, because a
+    tool call earlier in the same turn may have been a delegation and what bounds
+    this goal is everything charged to it.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Spend</code>, <code>Agent::run_goal</code></span>
+
+  <p>
+    <strong>Usage is recorded before the budget is tested</strong>, so a run that
+    dies on the cap is recorded having spent what it spent. In the predecessor
+    project the counter only reached the log on a completed turn, which made
+    aborting the cheapest way to spend money.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — module doc, <code>Agent::run_goal</code></span>
+
+  <h2 id="arrival">The warning before the first call</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+fn warn_if_the_budget_is_nearly_spent_on_arrival(&amp;self) {
+    let carried = estimate(&amp;self.conversation());
+    if carried &lt;= 0 || carried * 4 &lt; self.s.budgets.max_tokens {
+        return;
+    }
+    self.s.term.warn(&amp;format!(
+        "this goal opens with roughly {carried} tokens of conversation behind it, so the \
+         {} token budget is about {} model calls at that size. Raise it with --max-tokens, \
+         lower --max-context, or start a new session.",
+        self.s.budgets.max_tokens,
+        (self.s.budgets.max_tokens / carried.max(1)).max(1)
+    ));
+}</code></pre>
+
+  <p>
+    The trigger is <code>carried * 4 &gt;= max_tokens</code>, so it fires when the
+    budget is worth about four calls at the size the conversation already is. At
+    the defaults that is roughly 125,000 estimated tokens of conversation. The
+    number in the sentence is an estimate and is described as "roughly", and it
+    is not what any budget is tested against.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::warn_if_the_budget_is_nearly_spent_on_arrival</code></span>
+
+  <p>
+    <code>max_context</code> is what keeps <code>max_tokens</code> reachable in a
+    long session: input per call is bounded by compaction, so the number of calls
+    a goal gets is bounded below by roughly
+    <code>max_tokens / max_context</code>, four at the defaults, and in practice
+    far more, because most calls sit nowhere near the cap. Raising the context cap
+    without raising the token budget buys context by spending calls.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Budgets::max_context</code></span>
+
+  <h2 id="compaction">The context cap, and the functions it drives</h2>
+
+  <p>
+    Compaction belongs to <a href="session.html">Sessions &amp; context</a>, which
+    is where the summary format and the fold that replays it are described. Its
+    code lives in <code>agent.rs</code>, so what follows is what the loop does
+    with it and where each function fits.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+fn compact_if_needed(&amp;mut self, measured: Option&lt;i64&gt;, why: &amp;str) {
+    let cap = self.s.budgets.max_context;
+    if cap &lt;= 0 {
+        return;
+    }
+    let size = measured.unwrap_or_else(|| estimate(&amp;self.conversation()));
+    if size &lt;= cap {
+        return;
+    }
+    <span class="c">// Half the cap rather than all of it: the goal now running needs room
+    // to work in, and compacting to exactly the limit would mean compacting
+    // again on the next call.</span>
+    let target = (cap / 2).max(1);
+    <span class="c">// Measured once per chapter rather than once per step. Re-summing the
+    // whole conversation on every iteration of the loop below is quadratic
+    // in a list whose elements are file contents.</span>
+    let sizes: Vec&lt;i64&gt; = self.chapters.iter().map(|c| estimate(&amp;c.messages)).collect();
+    let mut remaining: i64 = sizes.iter().sum();
+    let mut take = 0;
+    while take &lt; sizes.len() &amp;&amp; remaining &gt; target {
+        remaining -= sizes[take];
+        take += 1;
+    }
+    self.compact(take, size, why);
+}</code></pre>
+
+  <p>
+    <code>cap &lt;= 0</code> disables compaction entirely, which is the escape
+    hatch for a run that wants none. The trigger is measured whenever a
+    measurement exists: <code>last_input</code>, the provider's own input count
+    for the previous call. The estimate stands in for exactly one case, the first
+    check of a goal on a process that has not called the model yet, which is a
+    resume into a large session.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::compact_if_needed</code></span>
+
+  <p>
+    It is called from two places in <code>run_goal</code>: once before the first
+    request of a goal, with <code>None</code>, so a goal never opens already over
+    the cap; and once per iteration between the budget tests and the request,
+    with <code>last_input</code>, so the request that goes out is the compacted
+    one.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
+
+  <p>
+    The rest of the compaction code covers as follows, each in one line.
+    <code>Agent::compact</code> is the single implementation: it replaces the
+    oldest <em>n</em> chapters with their summaries, refuses when the replacement
+    would not be smaller, writes the <code>compacted</code> record the fold
+    replays, and narrates itself on the terminal unless the caller was
+    <code>/compact</code>. <code>Agent::compact_now</code> is the user-facing
+    door, counting every finished goal or every one but the last, and returning
+    a <code>Compacted::Nothing</code> with a reason when there is nothing to do.
+    <code>summarise</code> turns one chapter into two messages, the goal and the
+    answer, with <code>COMPACTED_NOTE</code> appended.
+    <code>COMPACTED_NOTE</code> is the sentence telling the model that the tool
+    results are gone and to read anything it needs again.
+    <code>Agent::clear</code> drops the conversation without ending the session,
+    returning a counted <code>Cleared</code> and writing a <code>cleared</code>
+    record the fold honours, and it drops an unspent <code>Resumed</code> as well
+    while keeping <code>turn_seq</code>, because turn ids must stay unique inside
+    a session file that is not being cleared.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::compact</code>, <code>Agent::compact_now</code>, <code>summarise</code>, <code>COMPACTED_NOTE</code>, <code>Agent::clear</code>, <code>Compacted</code>, <code>Cleared</code></span>
+
+  <div class="note">
+    <span class="h">A compaction that would grow the conversation is refused</span>
+    <p>
+      <code>compact</code> compares the estimated size of the replacement against
+      what it replaces and returns <code>Compacted::Nothing</code> when the
+      replacement is not smaller. The two reasons it can give are different
+      sentences, because the first live run of <code>/compact</code> said
+      "already summarised" about two goals that plainly were not: those goals
+      were four words long and <code>COMPACTED_NOTE</code> is around three
+      hundred characters, so the replacement was <em>larger</em> than what it
+      replaced. The sentence was true of the arithmetic and false about the
+      conversation.
+      <span class="chip obs">observed</span> by whoever ran that first
+      <code>/compact</code>; the transcript is not in this tree, and what
+      survives is the comment written from it and the two-branch code it
+      produced.
+    </p>
+  </div>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::compact</code></span>
+
+  <h2 id="coverage">Functions this page covers</h2>
+
+  <p>
+    <code>Budgets</code> and its five fields, <code>Budgets::default</code>,
+    <code>cost_tokens</code>, <code>estimate</code>, all five
+    <code>Spend</code> methods, <code>Agent::estimated_context</code>,
+    <code>Agent::warn_if_the_budget_is_nearly_spent_on_arrival</code>,
+    <code>Agent::compact_if_needed</code>, <code>Agent::compact</code>,
+    <code>Agent::compact_now</code>, <code>Agent::clear</code>,
+    <code>summarise</code>, <code>COMPACTED_NOTE</code>, and the
+    <code>Compacted</code> and <code>Cleared</code> types.
+  </p>
+
+  <h2 id="unverified">What is not verified here</h2>
+
+  <p>
+    <span class="chip cert">certified</span> <strong>The wall clock is a tripwire
+    and is not worded like one.</strong> By reading the function:
+    <code>started.elapsed() &gt; wall_clock</code> is tested only at the top of an
+    iteration, and neither <code>tool.invoke</code> nor <code>call_model</code>
+    is wrapped in a deadline, since <code>call_model</code>'s
+    <code>select!</code> races the stream against the interrupt only. So
+    <code>wall_clock</code> bounds when the loop will decline to <em>start</em>
+    another iteration, and <code>Ending::Deadline</code>'s "hit the 1800s time
+    limit" reads as a ceiling in the way <code>Ending::Tokens</code> was reworded
+    to stop doing. A long tool call is bounded by that tool's own timeout;
+    <code>Bash</code> has one, and a tool that has none is bounded by nothing in
+    this file. Flagged, not fixed.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, <code>Agent::call_model</code>; tools/fs/src/bash.rs</span>
+
+  <p>
+    <span class="chip unv">unverified</span> <strong>The cache multipliers.</strong>
+    1.25× on a write and 0.1× on a read are the provider's published prices as
+    recorded in the comment, and nothing in this tree checks them against a
+    current price list or an invoice. If they change, the budget silently counts
+    the wrong thing. What would settle it: compare a month of
+    <code>model_call</code> records against the billed amount for the same
+    period.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>cost_tokens</code></span>
+
+  <p>
+    <span class="chip unv">unverified</span> <strong>That a delegated run's
+    spend reaches the parent's cap in a live run.</strong> The parent link is
+    read from the type and the arithmetic is plain, and no test in
+    <code>tests/loop.rs</code> constructs a <code>Spend::child</code> and asserts
+    the parent ends on <code>Ending::Tokens</code>. What would settle it: a
+    scripted delegation whose sub-run costs more than the parent's remaining
+    budget, asserting the parent stops on its next iteration.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Spend::child</code>; crates/emma/src/delegate.rs</span>
+
+  <footer class="pg">
+    <p>
+      Written against commit <code>a3eba74</code>. Next:
+      <a href="loop-done.html">The goal, and how done is decided</a>, the other
+      half of the file this chapter covers.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

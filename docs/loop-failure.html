@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Failure as an observation · The agent loop · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav here" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">The agent loop</p>
+  <h1>Failure as an observation</h1>
+
+  <nav class="chapter">
+    <a class="up" href="loop.html">The agent loop</a>
+    <a href="loop-one-turn.html">One turn</a>
+    <span class="now">Failure</span>
+    <a href="loop-memo.html">The memo</a>
+    <a href="loop-endings.html">Endings</a>
+    <a href="loop-kick.html">The kick</a>
+    <a href="loop-budgets.html">Budgets</a>
+    <a href="loop-done.html">Done</a>
+    <a href="loop-seam.html">Seams</a>
+  </nav>
+
+  <p class="lede">
+    Nothing a tool does ends a goal. Seven different things can go wrong inside
+    <code>run_tool_call</code> and all seven come back as a
+    <code>tool_result</code> with <code>is_error</code> set, which the model
+    reads and works from. The loop's own budgets stay the only things that stop
+    a run.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code>, module doc</span>
+
+  <p>
+    The property is here because it was paid for elsewhere. In the predecessor
+    project five of eight failure classes ended turns silently, the user saw
+    <em>"Something went wrong on my side"</em>, and the model never learned
+    anything had failed.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — module doc</span>
+
+  <h2 id="fail">One closure, seven callers</h2>
+
+  <p>
+    The guarantee is checkable rather than merely asserted because every failure
+    path converges. <code>fail()</code> is defined at the top of
+    <code>run_tool_call</code> and is the only non-success exit from the
+    function.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// Everything that happens to one `tool_use` block.
+///
+/// Returns the result block, whether the tool actually ran and succeeded,
+/// and a label for the kick when it did not.</span>
+async fn run_tool_call(
+    &amp;self,
+    call: &amp;ToolCall,
+    turn_id: &amp;str,
+    failed_now: &amp;HashSet&lt;String&gt;,
+) -&gt; (ToolResult, bool, Option&lt;String&gt;) {
+    let label = label_of(&amp;call.name, &amp;call.input);
+    let fail = |kind: &amp;str, detail: String| {
+        let block = failure_result(&amp;call.id, &amp;call.name, kind, &amp;detail);
+        <span class="c">// A failure block is a block that was sent, so it is recorded under
+        // the same kind as a successful one — the fold rebuilds the user
+        // turn from these and would otherwise reconstruct a turn that
+        // answers only the calls that worked, which the API rejects. The
+        // record immediately above this one (`tool_failed`, `denied`,
+        // `tool_unknown`, …) is the prose a human reads; this is the wire.</span>
+        self.log_result_block(turn_id, call, &amp;block, None);
+        (block, false, Some(label.clone()))
+    };</code></pre>
+
+  <p>
+    The three-part return is what the caller needs and no more: the block to
+    send, whether a tool ran and succeeded, and the label a kick will quote.
+    The middle value is what clears or writes the memo; the third is
+    <code>None</code> on success so the caller cannot record a label for a call
+    that worked.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code></span>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 700 420" role="img" aria-label="Seven failure classes — unknown tool, invalid arguments, the memo refusal, a hook denial, a refused approval, a typed ToolError and an outer tool fault — all converge on one fail closure, which builds a tool_result with is_error set, logs it under the tool_result kind, and returns it to the loop, which pushes it into the results and continues.">
+        <rect class="box" x="16" y="14" width="240" height="26" rx="3" />
+        <text class="sm" x="26" y="31">no_such_tool · registry.get miss</text>
+        <rect class="box" x="16" y="48" width="240" height="26" rx="3" />
+        <text class="sm" x="26" y="65">validate_args · e.kind()</text>
+        <rect class="box" x="16" y="82" width="240" height="26" rx="3" />
+        <text class="sm" x="26" y="99">already_failed · the memo</text>
+        <rect class="box" x="16" y="116" width="240" height="26" rx="3" />
+        <text class="sm" x="26" y="133">blocked_by_policy · PreToolUse</text>
+        <rect class="box" x="16" y="150" width="240" height="26" rx="3" />
+        <text class="sm" x="26" y="167">not_approved · the gate</text>
+        <rect class="box" x="16" y="184" width="240" height="26" rx="3" />
+        <text class="sm" x="26" y="201">ToolError · e.kind(), e.detail()</text>
+        <rect class="box" x="16" y="218" width="240" height="26" rx="3" />
+        <text class="sm" x="26" y="235">tool_fault · the outer Err</text>
+
+        <path class="edge" d="M256 27 H292 V116" />
+        <path class="edge" d="M256 61 H292" />
+        <path class="edge" d="M256 95 H292" />
+        <path class="edge" d="M256 129 H292" />
+        <path class="edge" d="M256 163 H292" />
+        <path class="edge" d="M256 197 H292" />
+        <path class="edge" d="M256 231 H292 V129" />
+        <path class="edge-hl" d="M292 129 H336" marker-end="url(#fl-arrow-hl)" />
+
+        <rect class="hl" x="336" y="104" width="130" height="50" rx="4" />
+        <text class="lbl" x="346" y="126">fail(kind,</text>
+        <text class="lbl" x="346" y="144">detail)</text>
+
+        <path class="edge-hl" d="M466 129 H510" marker-end="url(#fl-arrow-hl)" />
+        <rect class="box" x="510" y="90" width="174" height="80" rx="4" />
+        <text class="sm" x="520" y="110">failure_result(...)</text>
+        <text class="tiny" x="520" y="128">is_error = true</text>
+        <text class="tiny" x="520" y="144">body {kind, tool, detail}</text>
+        <text class="tiny" x="520" y="160">log_result_block(...)</text>
+
+        <path class="edge-hl" d="M597 170 V300" marker-end="url(#fl-arrow-hl)" />
+        <rect class="box" x="336" y="300" width="348" height="48" rx="4" />
+        <text class="lbl" x="346" y="322">results.push(block) · the goal continues</text>
+        <text class="tiny" x="346" y="339">no failure class returns early from run_goal</text>
+
+        <path class="edge-dash" d="M400 300 H150 V272" marker-end="url(#fl-arrow)" />
+        <rect class="box" x="16" y="272" width="268" height="46" rx="4" />
+        <text class="sm" x="26" y="292">failed_now.insert(memo_key(call))</text>
+        <text class="tiny" x="26" y="309">failed_ever.push(label), capped at 20</text>
+
+        <defs>
+          <marker id="fl-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          </marker>
+          <marker id="fl-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          </marker>
+        </defs>
+      </svg>
+    </div>
+    <figcaption>
+      Every failure class in <code>run_tool_call</code> reaching the same
+      closure. The convergence is what makes the guarantee reviewable: one
+      function to check for the <code>is_error</code> flag and one call site for
+      the log record, rather than seven independent claims a regression could
+      break one at a time.
+    </figcaption>
+  </figure>
+
+  <h2 id="order">The order of the checks, and what each one costs</h2>
+
+  <p>
+    The seven are not interchangeable. Each sits where it does because of what
+    the checks above it have already ruled out, and because of what it would
+    cost to run later.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::run_tool_call, in source order</span>
+let Some(tool) = self.s.tools.get(&amp;call.name) else {
+    self.s.log.append(
+        "tool_unknown",
+        json!({ "turn_id": turn_id, "tool": call.name, "id": call.id }),
+    );
+    return fail(
+        "no_such_tool",
+        format!(
+            "`{}` is not available. Available: {}",
+            call.name,
+            self.s.tools.names().join(", ")
+        ),
+    );
+};
+
+if let Err(e) = tool.validate_args(&amp;call.input) {
+    return fail(e.kind(), e.detail().to_string());
+}
+
+if failed_now.contains(&amp;memo_key(call)) {
+    return fail(
+        "already_failed",
+        format!(
+            "this exact {} call already failed and nothing has changed since, so it \
+             was not run again. Change the arguments or take a different route.",
+            call.name
+        ),
+    );
+}
+
+self.s.term.tool_started(&amp;call.name, &amp;call.input);
+self.s.log.append(
+    "tool_call",
+    json!({ "turn_id": turn_id, "id": call.id, "tool": call.name, "args": call.input }),
+);</code></pre>
+
+  <p>
+    An unknown tool is told which tools exist, from
+    <code>Registry::names()</code>, because a model that guessed a name has no
+    other way to find the right one. Argument validation runs before the memo,
+    so a call with different bad arguments is a different failure rather than a
+    memo hit. The memo runs before the terminal banner, the log record, the
+    hooks and the gate, so a refused repeat costs no hook process and no prompt
+    at all. See <a href="loop-memo.html">The memo</a>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code></span>
+
+  <div class="note">
+    <span class="h">Three failures leave no <code>tool_call</code> record</span>
+    <p>
+      <code>no_such_tool</code>, an argument-validation failure and
+      <code>already_failed</code> all return before the
+      <code>tool_call</code> record is written, so the session file carries a
+      <code>tool_result</code> for them with no matching <code>tool_call</code>
+      above it. Only the first of the three logs anything of its own, as
+      <code>tool_unknown</code>. That is enough for the fold, which rebuilds the
+      user turn from <code>tool_result</code> records, but a human grepping for
+      a call that never appeared will find only its result.
+      <span class="chip cert">certified</span> by reading the function: the
+      three <code>return fail(...)</code> statements above precede the
+      <code>self.s.log.append("tool_call", ...)</code> line.
+    </p>
+  </div>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code></span>
+
+  <h2 id="gate">Policy before consent, consent before invocation</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::run_tool_call</span>
+<span class="c">// Policy before convenience. A `PreToolUse` denial is not something the
+// person at the keyboard gets a vote on, so it is resolved before they
+// are asked — a gate a human can wave through is advice.</span>
+let hook_call = HookCall {
+    tool_name: &amp;call.name,
+    tool_call_id: &amp;call.id,
+    args: &amp;call.input,
+    session_id: &amp;self.s.session_id,
+    turn_id,
+    result: None,
+};
+let pre = self.s.harness.run_hooks(HookEvent::PreToolUse, &amp;hook_call).await;
+self.log_hooks(turn_id, &amp;pre.runs);
+if let Some(reason) = pre.denied {
+    <span class="c">// Its own treatment on screen, and not a warning: no answer at the
+    // prompt could have allowed this, and a user who reads it as "I
+    // could have said yes" goes looking for a prompt that never comes.</span>
+    self.s.term.tool_blocked(&amp;call.name, &amp;reason);
+    self.s.log.append(
+        "denied",
+        json!({ "turn_id": turn_id, "id": call.id, "by": "hook", "reason": reason }),
+    );
+    return fail(
+        "blocked_by_policy",
+        format!("{reason} This is configured policy and cannot be approved away."),
+    );
+}
+
+match self.s.approvals.request(tool.as_ref(), &amp;call.input, self.s.term).await {
+    Verdict::Allow =&gt; {}
+    Verdict::Deny(reason) =&gt; {
+        <span class="c">// Said on screen as well as in the log. A call that vanishes
+        // between "wants to run" and the next thing is a tool that
+        // mysteriously did nothing.</span>
+        self.s.term.tool_refused(&amp;call.name);
+        self.s.log.append(
+            "denied",
+            json!({ "turn_id": turn_id, "id": call.id, "by": "user", "reason": reason }),
+        );
+        return fail("not_approved", reason);
+    }
+}</code></pre>
+
+  <p>
+    Both denials write a <code>denied</code> record and differ by the
+    <code>by</code> field, <code>"hook"</code> or <code>"user"</code>. The
+    sentence sent to the model differs too: a policy denial appends <em>"This is
+    configured policy and cannot be approved away"</em>, so a model that would
+    otherwise ask the user to approve it is told not to bother.
+    <span class="chip test">tested</span>
+    <code>a_hook_denial_overrides_every_approval</code> and
+    <code>a_hook_denial_outranks_a_network_grant</code> in
+    <code>tests/loop.rs</code> assert the ordering; the consent side of it is on
+    <a href="consent.html">Consent &amp; permissions</a>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code>; crates/emma/tests/loop.rs</span>
+
+  <h2 id="invoke">Two errors, one of which is the tool giving up on the session</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::run_tool_call</span>
+let ctx = ToolCtx {
+    cwd: self.s.cwd.clone(),
+    session_id: self.s.session_id.clone(),
+    turn_id: turn_id.to_string(),
+};
+let outcome = match tool.invoke(&amp;ctx, call.input.clone()).await {
+    Ok(Ok(outcome)) =&gt; outcome,
+    Ok(Err(e)) =&gt; {
+        <span class="c">// The line this whole design exists for. A typed failure is an
+        // observation the model acts on; the goal continues.</span>
+        self.s.log.append(
+            "tool_failed",
+            json!({ "turn_id": turn_id, "id": call.id, "tool": call.name,
+                    "kind": e.kind(), "detail": e.detail() }),
+        );
+        self.s.term.tool_failed(&amp;call.name, e.detail());
+        self.run_post_hooks(turn_id, call, e.detail(), false, Some(e.kind()))
+            .await;
+        return fail(e.kind(), e.detail().to_string());
+    }
+    <span class="c">// The outer `Result` is the tool claiming the session cannot
+    // continue. Even that is not allowed to abort silently: it becomes
+    // a result the model can read, and the loop's own budgets remain
+    // the only thing that ends a goal.</span>
+    Err(fault) =&gt; {
+        self.s.log.append(
+            "tool_fault",
+            json!({ "turn_id": turn_id, "id": call.id, "tool": call.name,
+                    "detail": fault.to_string() }),
+        );
+        self.s.term.tool_failed(&amp;call.name, &amp;fault.to_string());
+        return fail("tool_fault", fault.to_string());
+    }
+};</code></pre>
+
+  <p>
+    <code>invoke</code> returns
+    <code>Result&lt;Result&lt;Outcome, ToolError&gt;&gt;</code>. The inner error
+    is an ordinary failed call and keeps its own <code>kind</code>, which is
+    passed straight through to <code>fail</code> rather than being flattened to
+    a single "tool failed" string. The outer error is the tool saying the
+    session cannot continue, and it becomes a result too. Neither returns early
+    from <code>run_goal</code>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code></span>
+
+  <div class="note warn">
+    <span class="h">Post-hooks fire on a <code>ToolError</code> and not on a fault</span>
+    <p>
+      The <code>Ok(Err(e))</code> arm calls
+      <code>run_post_hooks(..., Some(e.kind()))</code> before failing. The
+      <code>Err(fault)</code> arm does not call it at all. So a
+      <code>PostToolUse</code> hook watching a tool sees its typed failures and
+      not its faults, even though the tool ran in both cases.
+      <span class="chip cert">certified</span> by reading the two arms above:
+      there is one <code>run_post_hooks</code> call in the first and none in the
+      second. Whether that asymmetry is intended is not stated anywhere in
+      <code>agent.rs</code>; it is flagged here rather than changed.
+    </p>
+  </div>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code>, <code>Agent::run_post_hooks</code></span>
+
+  <h2 id="success">The success path, and what gets appended to it</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::run_tool_call</span>
+let mut content = outcome.content.clone();
+if outcome.truncated {
+    content.push_str(&amp;truncation_note(outcome.truncation.as_deref()));
+}
+let post = self
+    .run_post_hooks(turn_id, call, &amp;content, outcome.truncated, None)
+    .await;
+for extra in post {
+    content.push_str("\n\n");
+    content.push_str(&amp;extra);
+}
+
+self.s.term.tool_result(
+    outcome.display.as_deref(),
+    &amp;content,
+    outcome.truncated,
+    outcome.truncation.as_deref(),
+);
+<span class="c">// A typed result, not Anthropic's wire shape. This site and
+// `failure_result` used to build `{"type":"tool_result", …}` objects by
+// hand, and that — with the old `raw_content` blob — was the whole of
+// what made this loop Anthropic-only: OpenAI expresses a result as a
+// separate message with `role: "tool"` and a `tool_call_id`, not as a
+// block inside a user message. Both sites now say what happened and
+// leave the spelling to the provider.</span>
+let block = ToolResult::ok(&amp;call.id, content);
+self.log_result_block(turn_id, call, &amp;block, Some(outcome.truncated));
+(block, true, None)</code></pre>
+
+  <p>
+    The truncation note goes on before the post-hooks run, so a hook watching
+    output sees the same string the model will. Hook context is appended after,
+    separated by a blank line, in the order the harness returned it. The
+    terminal is handed the raw pieces rather than the assembled string, so it
+    can render a short <code>display</code> line instead of the whole body.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code></span>
+
+  <h2 id="wire">What a failure looks like on the wire</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// A tool that failed, as the observation the model reads and the loop keeps
+/// going from.
+///
+/// `is_error` as well as the kind in the body: the flag is what the API and the
+/// model's own training key on, and the body is what says which failure it was
+/// and what to do instead. Both halves are load-bearing and neither substitutes
+/// for the other.</span>
+fn failure_result(id: &amp;str, tool: &amp;str, kind: &amp;str, detail: &amp;str) -&gt; ToolResult {
+    ToolResult::failed(
+        id,
+        json!({ "kind": kind, "tool": tool, "detail": detail }).to_string(),
+    )
+}</code></pre>
+
+  <p>
+    Two halves with two jobs. <code>is_error</code> is the flag the API and the
+    model's training key on; the JSON body says which failure it was and what to
+    do instead. A failure rendered without the flag reads to the model as a
+    successful call that returned odd text.
+    <span class="chip test">tested</span>
+    <code>a_failure_block_is_flagged_and_typed</code>, a unit test in
+    <code>agent.rs</code> itself, asserts the flag survives to
+    <code>ContentBlock::ToolResult(b).to_value()</code> and, in the same test,
+    that a <em>success</em> carries no <code>is_error</code> key at all. Run it
+    with <code>cargo test -p emma --lib a_failure_block</code>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>failure_result</code> and its unit test</span>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+fn log_result_block(
+    &amp;self,
+    turn_id: &amp;str,
+    call: &amp;ToolCall,
+    block: &amp;ToolResult,
+    truncated: Option&lt;bool&gt;,
+) {
+    self.s.log.append(
+        "tool_result",
+        json!({ "turn_id": turn_id, "id": call.id, "tool": call.name,
+                <span class="c">// Written as the content block it becomes, `type` tag and
+                // all, because that is the shape the fold reads back and the
+                // shape `restore_records` tests `is_error` on.</span>
+                "block": ContentBlock::ToolResult(block.clone()),
+                "truncated": truncated }),
+    );
+}</code></pre>
+
+  <p>
+    The record carries the block rather than the rendered content string,
+    because the string alone cannot be turned back into a message: the block
+    also carries the <code>tool_use_id</code> that pairs it with its call, and
+    <code>is_error</code> when it failed. The content is still greppable, one
+    JSON string deeper than before. <code>truncated</code> is
+    <code>None</code> on every failure path, because a failure has no output to
+    have cut.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::log_result_block</code></span>
+
+  <h2 id="truncation">Truncation notes, verbatim rather than summarised</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+fn truncation_note(reason: Option&lt;&amp;str&gt;) -&gt; String {
+    match reason {
+        Some(reason) =&gt; format!("\n[truncated: {reason}]"),
+        None =&gt; "\n[truncated: this is not the whole output, and this tool did not say which \
+                 limit cut it. Narrow the request if you need the rest.]"
+            .to_string(),
+    }
+}</code></pre>
+
+  <p>
+    A tool that knows which cap bound says so itself, with the amount and the
+    argument that raises it, and that sentence is repeated rather than
+    reworded. The numbers are the entire content: a page whose <em>link list</em>
+    was cut and a page whose <em>prose</em> was cut both read as "truncated",
+    and only one of them is fixed by asking for fewer characters. The fallback
+    admits that nobody named a limit rather than sending the model to guess at
+    one.
+    <span class="chip test">tested</span>
+    <code>a_stated_reason_reaches_the_model_verbatim</code> asserts the reason
+    string survives unmodified and that the generic line contains "did not say
+    which limit".
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>truncation_note</code> and its unit test</span>
+
+  <h2 id="exit">Exit status is not a failure signal</h2>
+
+  <p>
+    <code>ToolError</code> is the only failure signal in this file. A non-zero
+    <code>Bash</code> exit comes back as <code>Ok</code> with
+    <code>exit status &lt;n&gt;</code> in the content, so <code>grep -q</code>
+    answering "no" is not a broken shell: it does not enter the memo and is not
+    painted as an error on the terminal. Nothing in the loop branches on a
+    tool's identity, on <code>ToolError::kind</code>, or on exit status, which
+    is why the <code>Bash</code> contract change landed without an edit here and
+    why <code>Delegate</code> is an ordinary tool.
+    <span class="chip cert">certified</span>:
+    <code>grep -n 'call.name ==\|name() ==' crates/emma/src/agent.rs</code>
+    returns exactly one line, and it is inside <code>Spend</code>'s doc comment,
+    naming the <code>if call.name == "Delegate"</code> that was rejected. No
+    executable line in the file branches on a tool's name.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — module doc; tools/fs/src/bash.rs</span>
+
+  <h2 id="labels">The label a failure is remembered by</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// The label a kick quotes, from the same two fields — see [`memo_key_of`] for
+/// why this is shared rather than re-derived.</span>
+pub(crate) fn label_of(name: &amp;str, input: &amp;Value) -&gt; String {
+    format!("{}({})", name, compact(input))
+}
+
+<span class="c">/// Arguments, short enough to sit inside a kick.</span>
+fn compact(args: &amp;Value) -&gt; String {
+    let s = args
+        .as_object()
+        .and_then(|o| {
+            o.get("command")
+                .or_else(|| o.get("file_path"))
+                .or_else(|| o.get("pattern"))
+        })
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| args.to_string());
+    let s = s.replace('\n', " ");
+    if s.chars().count() &gt; 60 {
+        format!("{}…", s.chars().take(60).collect::&lt;String&gt;())
+    } else {
+        s
+    }
+}</code></pre>
+
+  <p>
+    Three argument names are privileged, in this order:
+    <code>command</code>, <code>file_path</code>, <code>pattern</code>. A call
+    with none of them falls back to the whole JSON object. Newlines collapse to
+    spaces so a label stays one line, and the cut is at 60
+    <em>characters</em> rather than bytes, so a multi-byte argument is not
+    sliced in half. The label is computed once, at the top of
+    <code>run_tool_call</code>, and is what
+    <a href="loop-kick.html">the kick</a> quotes back.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>label_of</code>, <code>compact</code></span>
+
+  <h2 id="hooks">The two hook helpers</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+async fn run_post_hooks(
+    &amp;self,
+    turn_id: &amp;str,
+    call: &amp;ToolCall,
+    content: &amp;str,
+    truncated: bool,
+    error: Option&lt;&amp;str&gt;,
+) -&gt; Vec&lt;String&gt; {
+    let hook_call = HookCall {
+        tool_name: &amp;call.name,
+        tool_call_id: &amp;call.id,
+        args: &amp;call.input,
+        session_id: &amp;self.s.session_id,
+        turn_id,
+        result: Some(HookResult { content, truncated, error }),
+    };
+    let verdict = self.s.harness.run_hooks(HookEvent::PostToolUse, &amp;hook_call).await;
+    self.log_hooks(turn_id, &amp;verdict.runs);
+    verdict.context
+}
+
+fn log_hooks(&amp;self, turn_id: &amp;str, runs: &amp;[emma_harness::HookRun]) {
+    for run in runs {
+        self.s.log.append("hook", json!({ "turn_id": turn_id, "run": run }));
+    }
+}</code></pre>
+
+  <p>
+    <code>run_post_hooks</code> returns only <code>verdict.context</code>. A
+    <code>PostToolUse</code> denial has nothing left to deny, since the tool has
+    already run, so the field is not read. <code>log_hooks</code> writes one
+    <code>hook</code> record per run and is called from both hook sites, which
+    is why a hook that produced no output still appears in the session file.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_post_hooks</code>, <code>Agent::log_hooks</code></span>
+
+  <h2 id="coverage">Functions this page covers</h2>
+
+  <p>
+    <code>run_tool_call</code> in full, <code>failure_result</code>,
+    <code>log_result_block</code>, <code>run_post_hooks</code>,
+    <code>log_hooks</code>, <code>truncation_note</code>,
+    <code>label_of</code> and the free function <code>compact</code>.
+    <code>memo_key</code> appears here as a call and is explained on
+    <a href="loop-memo.html">The memo</a>.
+  </p>
+
+  <h2 id="unverified">What is not verified here</h2>
+
+  <p>
+    <span class="chip unv">unverified</span> <strong>Whether any real tool ever
+    returns the outer <code>Err</code>.</strong> The <code>tool_fault</code>
+    path is reachable by type and no test in <code>tests/loop.rs</code> scripts
+    it. What would settle it: grep the tool crates for a tool whose
+    <code>invoke</code> returns <code>Err</code> at the outer level, and if none
+    does, say so on this page instead.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code>; tools/</span>
+
+  <p>
+    <span class="chip cert">certified</span> <strong>The session fold's reliance
+    on a convention.</strong> Reading both files: the fold has no arm for
+    <code>denied</code>, <code>tool_failed</code>, <code>tool_fault</code> or
+    <code>tool_unknown</code>, and needs none, because each of those paths also
+    writes a <code>tool_result</code> record. That is correct today because all
+    of them go through <code>fail()</code>, which calls
+    <code>log_result_block</code>. It is a convention held by one closure rather
+    than a property the type system enforces. A new failure path that returned
+    without going through <code>fail()</code> would produce a session file that
+    folds into a conversation the API rejects, and nothing would say so until a
+    resume.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code>; crates/emma/src/session.rs — <code>fold</code>; notes/map-architecture.md §9 item 19</span>
+
+  <footer class="pg">
+    <p>
+      Written against commit <code>a3eba74</code>. Next:
+      <a href="loop-memo.html">The memo rule</a>, which is the one refusal on
+      this page that the loop, rather than a tool or a hook, decided.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

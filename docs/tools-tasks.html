@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The task list · Tools · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav here" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<p class="eyebrow">Doing work</p>
+<h1>The task list: four tools over one file</h1>
+
+<nav class="chapter">
+  <a class="up" href="tools.html">Tools</a>
+  <a href="tools-trait.html">the trait</a>
+  <a href="tools-outcome.html">outcomes</a>
+  <a href="tools-truncation.html">truncation</a>
+  <a href="tools-ctx.html">ToolCtx</a>
+  <a href="tools-containment.html">containment</a>
+  <a href="tools-files.html">files</a>
+  <a href="tools-edit.html">Edit</a>
+  <a href="tools-bash.html">Bash</a>
+  <span class="now">tasks</span>
+  <a href="tools-web.html">web</a>
+  <a href="tools-lsp.html">LSP</a>
+</nav>
+
+<p class="lede">
+  <code>.emma/tasks/tasks.md</code> is not a serialisation format that happens
+  to be text. It is a document somebody has open in an editor while the agent
+  works, and every constraint in the parser follows from that.
+</p>
+
+<p>
+  A line nobody changed is written back byte for byte, nothing is ever
+  reordered, and completing a task ticks a box where it sits. The moment a
+  person's edit disappears they stop trusting the file, then stop reading it,
+  and a task list nobody reads is theatre with a write amplification problem.
+</p>
+<span class="src">tools/tasks/src/lib.rs — module doc</span>
+
+<h2 id="tools">The four tools</h2>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Tool</th><th>Arguments</th><th>meta</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>TaskCreate</code></td>
+        <td><code>tasks</code>: array, <code>minItems: 1</code>. Each item is a plain string, or an object with <code>text</code> and an optional <code>status</code> of <code>pending</code> / <code>in_progress</code> / <code>completed</code></td>
+        <td>write, not idempotent</td>
+      </tr>
+      <tr>
+        <td><code>TaskGet</code></td>
+        <td><code>id</code>: the handle, leading <code>#</code> optional</td>
+        <td>read-only</td>
+      </tr>
+      <tr>
+        <td><code>TaskList</code></td>
+        <td><code>status</code>: <code>open</code> (default), <code>all</code>, <code>pending</code>, <code>in_progress</code>, <code>completed</code></td>
+        <td>read-only</td>
+      </tr>
+      <tr>
+        <td><code>TaskUpdate</code></td>
+        <td><code>id</code> required, plus <code>status</code> and/or <code>text</code></td>
+        <td>write, <strong>idempotent</strong></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  <code>TaskUpdate</code> declaring <code>idempotent: true</code> where
+  <code>Edit</code> declares false is the distinction working. Setting a status
+  to what it already is leaves the same file and there is no anchor to consume,
+  so a replay is safe. <code>TaskCreate</code> is not idempotent because two
+  genuinely identical steps in a plan happen, and nothing here deduplicates by
+  text.
+</p>
+
+<h3>Every refusal, by tool</h3>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Call</th><th>Refusal, all <code>BadArguments</code></th></tr></thead>
+    <tbody>
+      <tr><td><code>TaskCreate</code>, empty array</td><td><code>TaskCreate.tasks is empty; there is nothing to create</code></td></tr>
+      <tr><td><code>TaskCreate</code>, empty string entry</td><td><code>TaskCreate.tasks[{n}] is empty</code></td></tr>
+      <tr><td><code>TaskCreate</code>, object with a stray key</td><td><code>TaskCreate.tasks[{n}] does not take {keys}; accepted keys are text, status</code></td></tr>
+      <tr><td><code>TaskCreate</code>, bad status</td><td><code>TaskCreate.tasks[{n}].status is {s}; it must be pending, in_progress or completed</code></td></tr>
+      <tr><td><code>TaskCreate</code>, entry of the wrong type</td><td><code>TaskCreate.tasks[{n}] must be a string or an object with a text field, got {a number}</code></td></tr>
+      <tr><td><code>TaskGet</code> / <code>TaskUpdate</code>, empty id</td><td><code>{tool}.id is empty</code></td></tr>
+      <tr><td><code>TaskGet</code> / <code>TaskUpdate</code>, unknown id</td><td><code>no task with id {bare} in .emma/tasks/tasks.md ({total} tasks there); TaskList shows the ids that exist</code></td></tr>
+      <tr><td><code>TaskUpdate</code>, neither field</td><td><code>TaskUpdate needs status, text, or both; as written it would change nothing</code></td></tr>
+      <tr><td><code>TaskUpdate</code>, empty text</td><td><code>TaskUpdate.text is empty; to drop a task, delete its line by hand or mark it completed</code></td></tr>
+      <tr><td><code>TaskList</code>, unknown filter</td><td><code>TaskList.status is {s}; it must be one of open, all, pending, in_progress, completed</code></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  An id that is not in the file is an argument error rather than an empty
+  result, and that is the one worth arguing for. Returning nothing would teach
+  the model that the task it just created has vanished, and its next move would
+  be to create it again. A missing file, no tasks at all, and no tasks matching
+  a filter are all <code>Ok</code>.
+</p>
+<span class="src">tools/tasks/src/{create,get,list,update}.rs</span>
+
+<p>
+  <code>TaskCreate</code> parses its whole list twice, once in
+  <code>validate_args</code> and once in <code>run</code>. That is stated as a
+  choice: <code>validate_args</code> is part of the trait's contract and callers
+  may invoke it alone, so it cannot be the thing that produces the value, and
+  <code>run</code> cannot assume it was called. The guarantee bought is that a
+  plan with a bad fourth entry writes none of the first three.
+</p>
+<span class="src">tools/tasks/src/create.rs — <code>Requested</code></span>
+
+<h2 id="format">The format</h2>
+
+<pre><code># Tasks
+
+&lt;!-- Emma maintains this file while it works. Edit it freely: reword a task,
+     tick a box, add notes underneath one, reorder them, add headings of your
+     own. Emma re-reads the file immediately before every write and keeps
+     whatever it finds, including lines it did not write.
+
+     `[ ]` not started   `[~]` in progress   `[x]` done
+     Headings are yours; Emma reads the box, not the section.
+
+     The `#abcd` at the end of a line is how Emma refers to that task. Reword
+     the text as much as you like — keep the handle if you want the reference
+     to survive. --&gt;
+
+- [ ] port the auth middleware `#a3f1`
+- [~] write the migration `#7b02`
+      needs the staging database back first
+- [x] read the vendor's docs `#0c94`</code></pre>
+<span class="src">tools/tasks/src/doc.rs — <code>PREAMBLE</code></span>
+
+<p>
+  The path is fixed at <code>.emma/tasks/tasks.md</code>, because a configurable
+  location would mean two agents in one project maintaining two lists neither
+  knows about. Status lives in the checkbox glyph and nowhere else. The obvious
+  alternative, <code>## In progress</code> and <code>## Done</code> sections,
+  was rejected: making a heading authoritative means changing a status
+  <em>moves a line</em>, which relocates the note a human wrote under it and
+  reshuffles an order they chose. Rewriting one character in place does neither.
+</p>
+
+<p>
+  An unrecognised glyph parses as pending rather than as an error. Somebody
+  typing <code>[?]</code> in an editor meant "a task", and refusing to see it
+  would hide their work rather than surface it.
+</p>
+
+<p>
+  There is no <code>Blocked</code> status, and the reason is written into the
+  enum: it is a relation, not a state. The moment it exists as a variant it asks
+  "blocked by what?", and this format has nowhere to put the answer, so it
+  degrades into a task sitting at <code>[!]</code> forever with the reason
+  living in somebody's head. A blocked task is a pending task with a note under
+  it, and notes are preserved verbatim.
+</p>
+<span class="src">tools/tasks/src/doc.rs — <code>Status</code>, <code>RELATIVE_PATH</code></span>
+
+<h2 id="roundtrip">The parser that cannot lose what it did not write</h2>
+
+<p>
+  The document model is <code>Vec&lt;Line&gt;</code>, not
+  <code>Vec&lt;Task&gt;</code>. Headings, blank lines, prose, a table, a task the
+  writer would never have produced: all of it is held as the exact bytes it
+  arrived as, and a line the parser did not recognise becomes
+  <code>Line::Raw</code>, which has no rendering other than its original string.
+</p>
+
+<pre><code><span class="c">//! The safety here is structural rather than careful. Nothing in the parser has</span>
+<span class="c">//! to *decide* to preserve a line it does not understand; a line it did not</span>
+<span class="c">//! recognise as a checkbox becomes a `Line::Raw` holding the original string,</span>
+<span class="c">//! and `Raw` has no other rendering. A tolerant parser eventually is not</span>
+<span class="c">//! tolerant; one that never re-renders what it did not touch always is.</span></code></pre>
+<span class="src">tools/tasks/src/doc.rs — module doc</span>
+
+<figure>
+  <div class="figwrap">
+    <svg viewBox="0 0 700 260" role="img" aria-label="A parsed task line keeps its original bytes plus three offsets: the status glyph, the end of the last word, and the handle's range. A status change overwrites one byte in place; stamping a handle inserts it at the text end; only a change to the words forfeits the original and re-emits the line canonically.">
+      <defs>
+        <marker id="tk-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+        </marker>
+        <marker id="tk-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+        </marker>
+      </defs>
+
+      <rect class="box" x="14" y="18" width="660" height="40" rx="4" />
+      <text class="lbl" x="30" y="43">-   [ ]  port the auth middleware  `#a3f1`</text>
+
+      <path class="edge-hl" d="M78 58 L78 92" marker-end="url(#tk-arrow-hl)" />
+      <text class="tiny" x="34" y="108">glyph_at</text>
+      <text class="tiny" x="34" y="123">one byte, replaced in place</text>
+
+      <path class="edge-hl" d="M300 58 L300 92" marker-end="url(#tk-arrow-hl)" />
+      <text class="tiny" x="250" y="108">text_end</text>
+      <text class="tiny" x="250" y="123">a handle is inserted here</text>
+
+      <path class="edge-hl" d="M470 58 L470 92" marker-end="url(#tk-arrow-hl)" />
+      <text class="tiny" x="425" y="108">handle_at</text>
+      <text class="tiny" x="425" y="123">a range, replaced whole</text>
+
+      <rect class="box" x="14" y="150" width="200" height="40" rx="4" />
+      <text class="lbl" x="30" y="168">edit.status</text>
+      <text class="tiny" x="30" y="183">splice one byte</text>
+
+      <rect class="box" x="236" y="150" width="200" height="40" rx="4" />
+      <text class="lbl" x="252" y="168">edit.handle</text>
+      <text class="tiny" x="252" y="183">insert or replace a range</text>
+
+      <rect class="hl" x="458" y="150" width="216" height="40" rx="4" />
+      <text class="lbl" x="474" y="168">edit.text</text>
+      <text class="tiny" x="474" y="183">the one canonical re-emit</text>
+
+      <text class="sm" x="14" y="225">Splices run from the far end inwards, so no offset has to be adjusted for an earlier edit.</text>
+      <text class="tiny" x="14" y="243">It happens not to matter today, and a rule that depends on that is a rule waiting for the first splice that changes a length.</text>
+    </svg>
+  </div>
+  <figcaption>
+    <code>TaskLine::render</code>. An untouched line takes the early return and
+    is its original bytes; a touched line changes only the bytes the call was
+    about. Drawn from <code>tools/tasks/src/doc.rs</code>.
+  </figcaption>
+</figure>
+
+<p>
+  New text is the one exception and it is the whole of it. When the words change
+  there is no original spacing left to preserve, so the line comes back
+  canonical: one space between bullet, box, text and handle. A line
+  <code>create</code> synthesised takes the same branch, having never been
+  anything else.
+</p>
+
+<p>
+  <code>assign_ids</code> is the one other line a caller did not name that can
+  change. Two stamped lines carrying the same handle, which happens when a human
+  copies a line, has the later one re-derived rather than tolerated, because
+  <code>TaskGet</code> would otherwise answer confidently about the first. That
+  is the one input for which parse then render is not the identity.
+</p>
+<span class="src">tools/tasks/src/doc.rs — <code>TaskLine::render</code>, <code>assign_ids</code></span>
+
+<h3>What counts as a task, and what counts as a note</h3>
+
+<p>
+  <code>split_checkbox</code> accepts <code>-</code>, <code>*</code>,
+  <code>+</code> or a number followed by <code>.</code> or <code>)</code>, then
+  requires a space, then exactly one character between brackets. That last check
+  is done on bytes, and the comment explains why it is safe: a UTF-8
+  continuation byte is 0x80..=0xBF and a lead byte is at least 0xC2, so neither
+  can be <code>]</code> at 0x5D. Byte 2 being <code>]</code> therefore proves
+  byte 1 is a single ASCII character.
+</p>
+
+<p>
+  <code>split_id</code> only recognises a handle at the very end of the line,
+  which is what makes anything following it impossible to lose. It requires
+  backticks, a <code>#</code>, and one to eight hex digits; anything else is
+  part of the text.
+</p>
+
+<p>
+  A note is an indented, non-blank, non-task line following a task. Blank lines
+  end the block, so a paragraph separated by whitespace reads as belonging to
+  the document rather than to the task above it. Notes come back from
+  <code>TaskGet</code> and are left out of <code>TaskList</code>,
+  which lands in the model's context on every turn.
+</p>
+<span class="src">tools/tasks/src/doc.rs — <code>split_checkbox</code>, <code>split_id</code>, <code>is_note_of</code>, <code>view</code></span>
+
+<h2 id="ids">Handles, and the one hard limit</h2>
+
+<p>
+  An id is an annotation, not a requirement. A checkbox line with no handle is a
+  real task: its id is derived from a hash of its text, so it is addressable by
+  <code>TaskGet</code> and <code>TaskUpdate</code> immediately, without a write.
+  That is what lets <code>TaskList</code> stay genuinely read-only.
+</p>
+
+<p>
+  The handle is visible, at the end of the line, in backticks. An HTML comment
+  parses more cleanly and is invisible in a rendered preview, which is the
+  problem: what a person cannot see, they rewrite over without knowing it was
+  there.
+</p>
+
+<pre><code><span class="c">/// **The space is 16 bits — 65,536 handles — and a file can exhaust it.** That</span>
+<span class="c">/// takes 65,536 tasks in one `tasks.md`, which is not a file anybody is</span>
+<span class="c">/// reading, but "nobody would" is not the same as "cannot" and this used to</span>
+<span class="c">/// claim the latter. Exhaustion panics, because the alternative is a duplicate</span>
+<span class="c">/// handle and `TaskGet` cannot see a duplicate: it would answer confidently</span>
+<span class="c">/// about the wrong task.</span>
+<span class="k">fn</span> first_free_id(text: &amp;<span class="k">str</span>, taken: &amp;[String]) -&gt; String {
+    <span class="k">const</span> SPACE: <span class="k">usize</span> = 1 &lt;&lt; 16;
+    <span class="c">// The distinct count is only paid for on the one branch where the space</span>
+    <span class="c">// could conceivably be full; `taken.len()` alone is the cheap gate.</span>
+    <span class="k">if</span> taken.len() &gt;= SPACE &amp;&amp; taken.iter().collect::&lt;BTreeSet&lt;_&gt;&gt;().len() &gt;= SPACE {
+        panic!(<span class="s">"all 65536 task handles in this file are in use; it cannot hold another task"</span>);
+    }</code></pre>
+
+<p>
+  The second panic in that function is the one worth reading. After
+  <code>2^32</code> salts with a free handle known to exist, it says so rather
+  than writing <code>unreachable!</code>, because nothing proves FNV-1a reaches
+  every handle within that many salts and an <code>unreachable!</code> would be
+  a claim about a hash function.
+</p>
+
+<p>
+  Salting rather than counting keeps the id opaque. A handle that read as
+  <code>#0001</code>, <code>#0002</code> would invite somebody to renumber them.
+</p>
+<span class="src">tools/tasks/src/doc.rs — <code>derive_id</code>, <code>first_free_id</code></span>
+
+<p>
+  <strong>Nothing is truncated anywhere in this crate.</strong> No cap, no
+  constant, no <code>truncated</code> flag ever set. The exhaustion above is the
+  only hard numeric limit, and it is not a cut.
+</p>
+
+<h2 id="writers">Two writers, no lock</h2>
+
+<p>
+  You cannot lock a file a person is editing in VS Code. An advisory lock the
+  editor does not take part in protects nothing, and a mandatory one turns their
+  save into an error dialog. So the only honest strategy is to hold the file as
+  briefly as possible and to notice when it moved.
+</p>
+
+<pre><code><span class="k">pub fn</span> edit&lt;T&gt;(
+    file: &amp;Path,
+    <span class="k">mut</span> change: <span class="k">impl</span> FnMut(&amp;<span class="k">mut</span> Doc) -&gt; Result&lt;T, ToolError&gt;,
+) -&gt; Result&lt;T, ToolError&gt; {
+    <span class="c">// Three, not one: two agents or an agent and a formatter can collide once</span>
+    <span class="c">// by chance. Three collisions in a row is a file being rewritten in a loop,</span>
+    <span class="c">// and retrying forever would hang the turn rather than report anything.</span>
+    <span class="k">for</span> _ <span class="k">in</span> 0..3 {
+        <span class="k">let</span> (<span class="k">mut</span> doc, stamp) = load(file)?;
+        <span class="k">let</span> value = change(&amp;<span class="k">mut</span> doc)?;
+        doc.stamp_ids();
+        <span class="k">match</span> replace_if_unchanged(file, stamp, &amp;doc.render()) {
+            Ok(()) =&gt; <span class="k">return</span> Ok(value),
+            Err(Collision) =&gt; <span class="k">continue</span>,
+        }
+    }
+    Err(ToolError::Failed(format!(
+        <span class="s">"{RELATIVE_PATH} kept changing while it was being updated; \
+         something else is writing it. Try again."</span>
+    )))
+}</code></pre>
+<span class="src">tools/tasks/src/store.rs — <code>edit</code></span>
+
+<p>
+  The change closure is re-run against a freshly read document on a collision
+  rather than forced on top of one, which is what makes a human's edit to a
+  <em>different</em> task survive an agent's edit to this one. An error the
+  closure returns, such as an unknown id, is returned as-is rather than retried.
+</p>
+
+<p>
+  The guard is a hash of the bytes, not the mtime. mtime has second granularity
+  on some filesystems, which is an eternity next to this window, and a stamp
+  that can silently fail to change is a stale-read guard that fails open. The
+  hash is FNV-1a over the whole file and does not need to be cryptographic,
+  because the other writer is a person saving in an editor.
+</p>
+
+<p>
+  The write goes to a sibling <code>tasks.md.tmp</code> and is renamed over the
+  target, so a reader who opens the file mid-write sees the old version or the
+  new one and never half of each. Beside the file rather than in the system temp
+  directory, because a rename across filesystems is a copy and a copy is not
+  atomic. On failure the temp file is removed, because a <code>tasks.md.tmp</code>
+  left in somebody's repository is a bug report.
+</p>
+<span class="src">tools/tasks/src/store.rs — <code>replace_if_unchanged</code>, <code>write_atomically</code>, <code>hash</code></span>
+
+<div class="note warn">
+  <span class="h">What the guard cannot catch, in its own words</span>
+  <p>
+    An editor holds the whole file in memory. If a person opened
+    <code>tasks.md</code> at 10:00, Emma writes at 10:01, and the person hits
+    Ctrl-S at 10:02, their editor writes its entire buffer and Emma's line is
+    gone: no error, no conflict, because from the filesystem's point of view
+    that is simply a newer complete file. Only the editor's own "file changed on
+    disk" prompt prevents it, and that is the editor's to offer.
+  </p>
+  <p>
+    The guard's own window is not zero either. A write landing between the
+    confirming read and the rename is lost. It is microseconds wide, and it is
+    not closed, only made small and admitted.
+  </p>
+</div>
+
+<h2 id="readonly"><code>read_only: true</code> on <code>TaskList</code> is a fact</h2>
+
+<p>
+  <code>TaskList::run</code> calls <code>store::load</code> and never
+  <code>store::edit</code>, so nothing on that path can stamp a handle or create
+  the file. Listing a project that has no <code>tasks.md</code> leaves it with
+  no <code>tasks.md</code>. That is only possible because an unstamped task's id
+  is derived from its text rather than assigned, so the tool can hand the model
+  an id for a task the file has never been written to name.
+</p>
+
+<p>
+  The default filter is <code>open</code> rather than <code>all</code>.
+  Completed tasks stay in the file forever, so by the end of a long run they
+  outnumber the live ones several to one, and reprinting them every turn spends
+  context re-establishing what is already settled. The file grows; the context
+  does not. The counts in the result describe the whole file rather than the
+  filtered slice, because a model that asked for <code>pending</code> still
+  needs to know whether anything is in progress before concluding the work is
+  stalled.
+</p>
+<span class="src">tools/tasks/src/list.rs — module doc, <code>TaskList::run</code></span>
+
+<h3>The two writers are exempted by name, not by a false declaration</h3>
+
+<pre><code>            <span class="c">// Declared honestly. This writes a file, and saying otherwise to</span>
+            <span class="c">// skip the approval prompt would break the invariant `read_only`</span>
+            <span class="c">// carries for every tool, not just this one. The prompt is dodged</span>
+            <span class="c">// where dodging it belongs instead: `crates/emma/src/approval.rs`</span>
+            <span class="c">// names TaskCreate and TaskUpdate in an `EXEMPT` list, with the</span>
+            <span class="c">// whole argument written above it.</span>
+            read_only: <span class="k">false</span>,</code></pre>
+
+<p>
+  The gate's own comment says the list is owed a fix: an axis on
+  <code>ToolMeta</code> for the <em>scope</em> of a write. See
+  <a href="consent.html">Consent &amp; permissions</a>.
+</p>
+<span class="src">tools/tasks/src/create.rs — <code>TaskCreate::meta</code>; crates/emma/src/approval.rs — <code>EXEMPT</code></span>
+
+<h2 id="opencount">The cheap question the loop asks</h2>
+
+<pre><code><span class="c">/// Here so the loop can ask "is anything still open?" without a model call and</span>
+<span class="c">/// without paying for a rendered list. **It is evidence about the goal, not the</span>
+<span class="c">/// goal.** An empty list means the agent believes it is finished, which is a</span>
+<span class="c">/// strictly better signal than the same agent asserting it in prose — it had to</span>
+<span class="c">/// write the claims down first, in a file a human can read afterwards — but it</span>
+<span class="c">/// is still the agent's own bookkeeping.</span>
+<span class="k">pub fn</span> open_count(root: &amp;Path) -&gt; Result&lt;<span class="k">usize</span>, ToolError&gt; {</code></pre>
+
+<p>
+  It builds a <code>ToolCtx</code> so the same containment check applies. A
+  caller passing a root is not a reason to skip it.
+</p>
+<span class="src">tools/tasks/src/lib.rs — <code>open_count</code></span>
+
+<h2 id="tests">What holds it</h2>
+
+<p>
+  <span class="chip test">tested</span> <code>tests/round_trip.rs</code> holds
+  hand-written fixtures (untidy bullets, trailing prose, notes, hand-ticked
+  boxes, a CRLF file) and asserts each survives an update.
+  <code>tests/tools.rs</code> asserts an exact file rather than a
+  <code>contains</code>, because every rejected alternative design passes a
+  <code>contains</code> check and fails an equality one.
+  <code>tests/concurrency.rs</code> covers the collision retry and asserts no
+  <code>tasks.md.tmp</code> is left behind.
+</p>
+
+<p>
+  <span class="chip cert">certified</span>
+  <code>cargo test -p emma-tools-tasks</code> at commit <code>a3eba74</code> on
+  this box: 16 unit, 4 concurrency, 3 containment, 8 round-trip and 20 tool
+  tests, 51 in all, none failing.
+</p>
+
+<p>
+  <span class="chip test">tested</span> <code>only_the_readers_claim_read_only</code>
+  pins the declaration to exactly <code>["TaskGet", "TaskList"]</code>, so a
+  writer that quietly flipped to <code>true</code> and stopped prompting goes
+  red. <code>tests/tools.rs</code> proves the other direction by fingerprinting
+  the tree around a list call.
+</p>
+
+<h2 id="unverified">What is not verified here</h2>
+
+<p>
+  <span class="chip unv">unverified</span> The claim that a person's Ctrl-S
+  silently wins is reasoning about how editors write files, not an observation
+  of VS Code doing it to this file. Settled by opening
+  <code>.emma/tasks/tasks.md</code> in VS Code, running a
+  <code>TaskUpdate</code>, saving from the editor, and reading the file.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> The handle-exhaustion panic has no
+  test, because reaching it needs 65,536 tasks in one file. The cheap gate on
+  <code>taken.len()</code> means the expensive distinct count is skipped below
+  that, so the branch is unexercised in both directions. Settled by a test that
+  hands <code>first_free_id</code> a synthetic <code>taken</code> of 65,536
+  distinct handles.
+</p>
+</div>
+</main>
+</div>
+</body>
+</html>

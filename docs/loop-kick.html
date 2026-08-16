@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The kick · The agent loop · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav here" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">The agent loop</p>
+  <h1>The kick</h1>
+
+  <nav class="chapter">
+    <a class="up" href="loop.html">The agent loop</a>
+    <a href="loop-one-turn.html">One turn</a>
+    <a href="loop-failure.html">Failure</a>
+    <a href="loop-memo.html">The memo</a>
+    <a href="loop-endings.html">Endings</a>
+    <span class="now">The kick</span>
+    <a href="loop-budgets.html">Budgets</a>
+    <a href="loop-done.html">Done</a>
+    <a href="loop-seam.html">Seams</a>
+  </nav>
+
+  <p class="lede">
+    The kick is what makes this a loop rather than a chat client. The model
+    stopped, the check said the goal is not met, so the loop pushes a user
+    message and goes round again. It carries three things: why the goal is not
+    recorded as done, the goal restated verbatim, and up to five of the calls
+    that have already failed.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — <code>kick</code>; crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
+
+  <h2 id="text">What it says</h2>
+
+  <pre><code><span class="c">// crates/emma/src/goal.rs</span>
+<span class="c">/// Compose the kick: why it is not done, the goal restated, and what has
+/// already broken.
+///
+/// The last part matters. Without it the honest reading of "continue" is "try
+/// again", and the first thing a model retries is the thing that just failed.</span>
+pub fn kick(goal: &amp;Goal, why: &amp;str, failed: &amp;[String]) -&gt; String {
+    let mut s = format!(
+        "The goal is not recorded as done: {why}. Nothing has been lost — you still have every \
+         tool, and the goal is unchanged:\n\n{}\n\nContinue working on it.",
+        goal.text.trim()
+    );
+    if !failed.is_empty() {
+        s.push_str(&amp;format!(
+            "\n\nThese calls failed earlier in this goal — change the approach rather than the \
+             spelling:\n- {}",
+            failed.join("\n- ")
+        ));
+    }
+    s
+}</code></pre>
+
+  <p>
+    Composed, with one failure to quote, it reads:
+  </p>
+
+  <pre><code>The goal is not recorded as done: <span class="k">your last message did not end with the
+completion line</span>. Nothing has been lost — you still have every tool,
+and the goal is unchanged:
+
+<span class="k">port the middleware</span>
+
+Continue working on it.
+
+These calls failed earlier in this goal — change the approach rather
+than the spelling:
+- <span class="w">Bash(cargo build --release)</span></code></pre>
+  <span class="src">crates/emma/src/goal.rs — <code>kick</code>, <code>MarkerClaim::verdict</code></span>
+
+  <p>
+    <code>goal.text.trim()</code> rather than <code>goal.opening_turn()</code>,
+    so a kick restates what the person typed and does not repeat whatever a
+    <code>UserPromptSubmit</code> hook injected in front of it. The
+    <em>why</em> comes from the <code>DoneCheck</code>, so a different check
+    produces a different first sentence with no change here.
+    <span class="chip test">tested</span>
+    <code>a_kick_states_the_reason_the_goal_and_what_already_failed</code>
+    asserts all three parts are present.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — <code>kick</code> and its unit test</span>
+
+  <h2 id="failures">The failure list, and why it is not optional</h2>
+
+  <p>
+    Without it the plain reading of "continue" is "try again", and the first
+    thing a model retries is the thing that just failed. The labels come from
+    <code>label_of</code>, the same rendering the memo key is built from, so what
+    a kick shows and what the memo refuses describe the same call. See
+    <a href="loop-failure.html">Failure</a> for how a label is shortened.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+fn tail(v: &amp;[String], n: usize) -&gt; Vec&lt;String&gt; {
+    v.iter().rev().take(n).rev().cloned().collect()
+}
+
+<span class="c">/// How many distinct failed calls a goal remembers. Four times what a kick
+/// shows, so the cap is a bound on the collection rather than a second, quieter
+/// version of the kick's own limit.</span>
+const FAILED_EVER_MAX: usize = 20;
+
+<span class="c">/// Drop the oldest entries past the cap. See where the list is seeded for why
+/// oldest-first is the right end to lose.</span>
+fn trim_oldest(v: &amp;mut Vec&lt;String&gt;) {
+    if v.len() &gt; FAILED_EVER_MAX {
+        v.drain(..v.len() - FAILED_EVER_MAX);
+    }
+}</code></pre>
+
+  <p>
+    Two different numbers doing two jobs. <code>tail(&amp;failed_ever, 5)</code>
+    bounds what one kick shows, keeping the five most recent in their original
+    order. <code>FAILED_EVER_MAX</code> bounds the collection, at four times the
+    kick's five so the cap is not a second quieter version of the same limit.
+    The list is written into a session record and read back by
+    <code>--resume</code>, so an unbounded collection would be a growing payload
+    rather than a transient one.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>tail</code>, <code>trim_oldest</code>, <code>FAILED_EVER_MAX</code></span>
+
+  <p>
+    The oldest go first. A kick's job is to stop the model repeating what it just
+    tried, and a failure twenty calls ago that has not recurred is the least
+    likely to be the one it is about to repeat. <code>trim_oldest</code> runs in
+    two places: once when the resumed list is seeded, so a file written by a
+    build with a larger cap is trimmed on arrival, and once after each new label
+    is pushed.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
+
+  <p>
+    Labels are deduplicated by <code>if !failed_ever.contains(&amp;label)</code>,
+    so a call that fails in the same way three times occupies one slot. Two calls
+    that differ only past the 60-character cut share a label and therefore one
+    slot, while remaining distinct to the memo, whose key uses the full
+    arguments.
+    <span class="chip cert">certified</span> by reading
+    <code>label_of</code> and <code>memo_key_of</code> side by side: the first
+    passes its arguments through <code>compact</code>, the second interpolates
+    the whole <code>Value</code>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>label_of</code>, <code>memo_key_of</code>, <code>Agent::run_goal</code></span>
+
+  <h2 id="send">Sending one</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::run_goal</span>
+kicks += 1;
+kicked = true;
+tool_calls_since_kick = 0;
+let kick_text = goal::kick(goal, &amp;why, &amp;tail(&amp;failed_ever, 5));
+self.s.log.append(
+    "kick",
+    json!({ "turn_id": turn_id, "n": kicks, "why": why, "text": kick_text }),
+);
+self.s.term.kick(kicks, self.s.budgets.max_kicks);
+place(&amp;mut query, &amp;mut pending_turn, Vec::new());
+query.push(Message::user(kick_text));
+continue;</code></pre>
+
+  <p>
+    The held assistant turn is placed with no results, because a turn that called
+    nothing is answered by nothing, and only then is the kick pushed as a user
+    message. Doing it the other way round would put a user turn before the
+    assistant turn it is answering. The record carries both <code>why</code> and
+    <code>text</code>: <code>why</code> is the reason a human reads in the file,
+    <code>text</code> is the bytes the model was sent, and the fold has to put
+    the second back rather than recomposing it.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, <code>place</code></span>
+
+  <p>
+    <code>term.kick(kicks, max_kicks)</code> is what the user sees, so a nudge is
+    never silent, and it carries both numbers so a run that is about to stop
+    looks different from one that has two nudges left.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>; crates/emma/src/term/</span>
+
+  <h2 id="bounds">Two independent bounds</h2>
+
+  <p>
+    A kick that fires forever is worse than no kick. Two limits stop it, and the
+    goal ends the moment either is reached: <code>max_kicks</code>, default 3, a
+    hard count for the whole goal, and the stall rule, which needs no cooperation
+    from the model at all. Both sit under the iteration, token and wall-clock
+    budgets, so the worst case is bounded by arithmetic rather than by good
+    behaviour.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — module doc; crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
+
+  <p>
+    The cost is that a goal genuinely needing a fourth nudge stops one step
+    early. It says which limit stopped it, so the user can raise it with
+    <code>--max-kicks</code>.
+    <span class="chip test">tested</span>
+    <code>the_kick_is_bounded_by_its_budget</code> sets
+    <code>max_kicks = 2</code> and asserts the seventh scripted turn was never
+    requested, so the bound is real rather than merely reported.
+    <code>the_kick_fires_when_the_model_stops_without_claiming_completion</code>
+    covers the other direction. Both pass at this commit:
+    <code>cargo test -p emma --test loop</code> printed
+    <code>test result: ok. 22 passed; 0 failed</code> in 0.04s.
+    <span class="chip cert">certified</span> for that run.
+  </p>
+  <span class="src">crates/emma/tests/loop.rs</span>
+
+  <div class="note">
+    <span class="h">A kick is a full model call</span>
+    <p>
+      Each nudge sends the whole request again: instructions, tool definitions,
+      history and the goal in flight with the kick on the end. So three kicks are
+      three iterations off <code>max_iterations</code> and three calls' worth of
+      spend against <code>max_tokens</code>. The kick budget bounds how many
+      times the loop will argue; it does not bound what arguing costs. See
+      <a href="loop-budgets.html">Budgets</a>.
+      <span class="chip cert">certified</span> by reading
+      <code>run_goal</code>: the kick branch ends in <code>continue</code>,
+      which re-enters the loop at the guards and rebuilds a full
+      <code>Request</code>.
+    </p>
+  </div>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
+
+  <h2 id="coverage">Functions this page covers</h2>
+
+  <p>
+    <code>goal::kick</code>, <code>tail</code>, <code>trim_oldest</code>,
+    <code>FAILED_EVER_MAX</code>, and the kick-sending half of
+    <code>run_goal</code>. The <code>failed_ever</code> bookkeeping is shared
+    with <a href="loop-memo.html">The memo</a>; <code>label_of</code> is on
+    <a href="loop-failure.html">Failure</a>.
+  </p>
+
+  <h2 id="unverified">What is not verified here</h2>
+
+  <p>
+    <span class="chip unv">unverified</span> <strong>Whether a kick carrying
+    five failed labels changes a real model's approach rather than its
+    spelling.</strong> The sentence asks for it and nothing measures the answer.
+    This is the claim the whole list exists to make good on, and it is about the
+    model rather than the loop. What would settle it: a live session driven into
+    repeated failures with <code>--max-kicks</code> raised, and the session JSONL
+    read to compare the calls before and after each kick.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> <strong>Whether five is a better
+    number than three or ten.</strong> Nothing in the tree records a measurement
+    behind it, and no test would fail if it changed. What would settle it: a
+    comparison across live runs, which nobody has run.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
+
+  <footer class="pg">
+    <p>
+      Written against commit <code>a3eba74</code>. Next:
+      <a href="loop-budgets.html">Budgets, and three token numbers</a>, the
+      limits every rule on this page sits underneath.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

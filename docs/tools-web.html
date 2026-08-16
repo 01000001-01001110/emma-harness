@@ -1,0 +1,714 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The web and the browser · Tools · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav here" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<p class="eyebrow">Doing work</p>
+<h1>The web: two tools, five more, and a browser</h1>
+
+<nav class="chapter">
+  <a class="up" href="tools.html">Tools</a>
+  <a href="tools-trait.html">the trait</a>
+  <a href="tools-outcome.html">outcomes</a>
+  <a href="tools-truncation.html">truncation</a>
+  <a href="tools-ctx.html">ToolCtx</a>
+  <a href="tools-containment.html">containment</a>
+  <a href="tools-files.html">files</a>
+  <a href="tools-edit.html">Edit</a>
+  <a href="tools-bash.html">Bash</a>
+  <a href="tools-tasks.html">tasks</a>
+  <span class="now">web</span>
+  <a href="tools-lsp.html">LSP</a>
+</nav>
+
+<p class="lede">
+  <code>WebSearch</code> returns places to look. <code>WebFetch</code> renders
+  one page in real Chrome and throws the browser away. The five
+  <code>Browser*</code> tools keep it, which is a different capability: inside a
+  session the model acts as the user, on a page that may hold their login.
+</p>
+
+<h2 id="registration">Neither is registered unless it can work</h2>
+
+<pre><code><span class="k">pub fn</span> web_tools() -&gt; WebSurface {
+    <span class="k">let mut</span> tools: Vec&lt;Arc&lt;<span class="k">dyn</span> Tool&gt;&gt; = Vec::new();
+    <span class="k">let mut</span> skipped = Vec::new();
+
+    <span class="k">match</span> fetch::WebFetch::detect() {
+        Ok(t) =&gt; tools.push(Arc::new(t)),
+        Err(why) =&gt; skipped.push(format!(<span class="s">"WebFetch is not available: {why}"</span>)),
+    }
+    <span class="k">match</span> search::WebSearch::detect() {
+        Ok(t) =&gt; tools.push(Arc::new(t)),
+        Err(why) =&gt; skipped.push(format!(<span class="s">"WebSearch is not available: {why}"</span>)),
+    }</code></pre>
+
+<p>
+  The predecessor shipped a <code>web_search</code> that registered with no key
+  and failed on every call. A turn that touched it died, and the model had no
+  way to learn the tool was decoration, because a failed call looks exactly like
+  a hard problem. Each omission comes back as one line for a human, which
+  <code>main.rs</code> prints, so the absence is reported rather than silent.
+</p>
+
+<p>
+  <code>WebFetch::detect</code> builds a <code>BrowserConfig</code> and throws
+  the result away, which looks pointless and is not: building the config is
+  where chromiumoxide resolves the Chrome executable, so the failure surfaces at
+  startup with a message a human can act on rather than on a first fetch several
+  turns into a task. Its verdict is reused for the browser tools rather than
+  asked again, because two detections that could disagree is a surface where
+  <code>WebFetch</code> is present and <code>BrowserOpen</code> is not for no
+  visible reason.
+</p>
+<span class="src">tools/web/src/lib.rs — <code>web_tools</code>; tools/web/src/fetch.rs — <code>detect</code></span>
+
+<div class="note warn">
+  <span class="h">The pool must be held for the length of the run</span>
+  <p>
+    <code>WebSurface::browser</code> hands the caller an
+    <code>Arc&lt;BrowserPool&gt;</code>. Dropping it kills every open Chrome,
+    which is right at exit and wrong in the middle of a goal. It is handed back
+    rather than kept inside the tools because there is no other way for a binary
+    to end the sessions itself.
+  </p>
+</div>
+
+<h2 id="websearch"><code>WebSearch</code></h2>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Argument</th><th>Default</th><th>Ceiling</th></tr></thead>
+    <tbody>
+      <tr><td><code>query</code> <em>required</em></td><td>none</td><td>whitespace-only is <code>WebSearch.query is empty</code></td></tr>
+      <tr><td><code>count</code></td><td class="num">10</td><td class="num">20, Brave's own per-request ceiling</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  Twenty is Brave's limit rather than a preference. Asking for more is silently
+  clamped by the API, which would make the count in the result disagree with the
+  request. <code>read_only: true</code>, <code>reaches_network: true</code>,
+  <code>idempotent: true</code>.
+</p>
+
+<p>
+  The key travels in an <code>X-Subscription-Token</code> header and never in
+  the query string, because a key in a URL ends up in every proxy log between
+  here and Brave. It is resolved once at construction from the environment then
+  <code>~/.emma/credentials.json</code>, never the project directory, and on
+  unix a credentials file whose mode allows group or other access is refused
+  rather than warned about.
+</p>
+<span class="src">tools/web/src/credentials.rs — <code>resolve</code>, <code>permissions_ok</code></span>
+
+<h3>Status into the taxonomy the model routes on</h3>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Status</th><th>Class</th><th>What the caller does next</th></tr></thead>
+    <tbody>
+      <tr><td>401, 403</td><td><code>Unavailable</code></td><td>Stop and tell a human. The message names <code>BRAVE_SEARCH_API_KEY</code> and the credentials file, never the key.</td></tr>
+      <tr><td>422</td><td><code>BadArguments</code></td><td>Rewrite the query. Brave answers a malformed query with 422 rather than an empty result set, so this really is the arguments.</td></tr>
+      <tr><td>429</td><td><code>Failed</code></td><td>Try again; the message says the condition is temporary.</td></tr>
+      <tr><td>anything else</td><td><code>Failed</code></td><td>The body is flattened and clipped to 300 characters.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  <span class="chip test">tested</span>
+  <code>status_codes_land_in_the_right_class</code> walks all five, and
+  <code>a_rejected_key_never_appears_in_the_message</code> asserts the env var
+  name is present. Collapsing any two classes sends the model to retry the one
+  thing that cannot work.
+</p>
+<span class="src">tools/web/src/search.rs — <code>classify_status</code></span>
+
+<h3>Places to look, not an answer</h3>
+
+<p>
+  Zero results is <code>Ok</code>, and the content says so in words: <code>No
+  results. The query found nothing — this is an answer, not a failure.</code>
+  Brave sometimes omits the <code>web</code> block entirely rather than sending
+  an empty array, and both shapes take that branch. Every non-empty result opens
+  with a standing sentence: <code>These are places to look, not an answer. The
+  snippets are the search engine's summaries; use WebFetch on a URL before
+  relying on what it says.</code>
+</p>
+
+<p>
+  Snippets arrive as HTML, because Brave wraps matched terms in
+  <code>&lt;strong&gt;</code>. <code>strip_markup</code> removes tags first and
+  decodes entities second, so an entity-encoded bracket in the page's own text
+  survives as a character instead of being re-read as the start of a tag. The
+  tag stripper is a two-state scan rather than a regex, so an unbalanced
+  <code>&lt;</code> swallows the rest of the string; the alternative is a parser
+  for a field that exists to bold three words.
+</p>
+<span class="src">tools/web/src/search.rs — <code>render</code>, <code>strip_markup</code></span>
+
+<p>
+  <code>network_target</code> takes the host from <code>base_url</code> rather
+  than a constant, so a run pointed at a loopback stub gates on the stub. Its
+  <code>detail</code> is <code>search for: {query}</code>, verbatim, because the
+  query <em>is</em> the thing leaving the machine and a prompt that names a host
+  without saying what is being sent there cannot distinguish a search for a
+  crate name from a search for the contents of a file.
+</p>
+
+<h2 id="webfetch"><code>WebFetch</code></h2>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Argument</th><th>Default</th><th>Ceiling</th></tr></thead>
+    <tbody>
+      <tr><td><code>url</code> <em>required</em></td><td>none</td><td>http/https only; loopback, <code>file:</code> and <code>chrome:</code> refused</td></tr>
+      <tr><td><code>max_chars</code></td><td class="num">8000</td><td class="num">200,000; bounds the prose only</td></tr>
+      <tr><td><code>max_links</code></td><td class="num">50</td><td class="num">120, which is also the most this browser collects from one page</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  Zero in either budget is refused rather than read as unlimited.
+  <code>read_only: true</code>, because the throwaway Chrome profile lives in
+  the system temp directory and is removed on teardown, and the tool cannot
+  modify the working directory, submit a form, or run anything the model chose.
+  <code>reaches_network: true</code> carries the whole of the risk.
+  <code>idempotent: true</code> claims that two reads have the same effect as
+  one, which is none, and is explicitly not a claim that the page will say the
+  same thing twice.
+</p>
+
+<h3>Why a browser rather than an HTTP client</h3>
+
+<p>
+  Three reasons, in the order they bite. A large share of the pages worth
+  reading are JavaScript shells that serve an empty <code>&lt;div&gt;</code> to
+  <code>curl</code>. A further share refuse plain fetches outright;
+  WorkAtAStartup answers a bare request with 406 and renders fine in Chrome. And
+  what comes back is not a DOM dump, because chromehand strips boilerplate and
+  pre-extracts the interactive inventory.
+</p>
+
+<p>
+  The cost is stated: this spawns Chrome, and a stateless read is two to three
+  seconds of launch before any bytes are read.
+</p>
+<span class="src">tools/web/src/fetch.rs — module doc</span>
+
+<h3>What comes back</h3>
+
+<p>
+  Markdown: title, URL, status, an anti-bot warning placed <em>above</em> the
+  prose, content, tables, JSON-LD, links main-content-first, interactive
+  elements as counts, and a "Not read" section for cross-origin iframes. The
+  status line is <code>HTTP 404, …</code> or <code>HTTP status not observed,
+  …</code> and is never invented. A blocked page, a rendered 404 and an empty
+  page are all <code>Ok</code>.
+</p>
+
+<p>
+  Selectors are off for this tool. It cannot click what it finds, and addresses
+  for a thing nothing can address are a thousand tokens of noise;
+  <code>BrowserRead</code> is where they come back.
+</p>
+<span class="src">tools/web/src/digest_md.rs — module doc, <code>Limits::reading</code></span>
+
+<h3>The cuts this tool taught the workspace</h3>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Cut</th><th>Says</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>page text</td>
+        <td><code>page text cut to {shown} of {total} characters by max_chars={n}; re-read with max_chars={total} for the whole page</code></td>
+      </tr>
+      <tr>
+        <td>links</td>
+        <td><code>{n} of {total} links shown (main-content links first), {dropped} dropped by max_links={n}; re-read with max_links={total} for the rest</code>. At 120: <code>— 120 is the most this browser collects from one page, so links beyond that were never captured</code></td>
+      </tr>
+      <tr>
+        <td>JSON-LD, 2000 chars</td>
+        <td>cut by a fixed cap no argument raises; the page's text and links are the whole of what this tool can return</td>
+      </tr>
+      <tr>
+        <td>selectors, 40 per category</td>
+        <td><code>{40} of {n} {category} listed by a fixed per-category cap; narrow the list with the `selectors` filter rather than re-reading for more</code></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  <code>max_links</code> exists because the two budgets cut different things and
+  a page can hit one while nowhere near the other. A news hub is four thousand
+  characters of prose and a hundred links, so <code>max_chars</code> was never
+  the cap that bound and raising it returned the same fifty links. Before the
+  argument existed there was no way to ask for the rest at all, which made the
+  notice's advice unfollowable: the honesty defect and the missing knob were the
+  same defect.
+</p>
+
+<p>
+  <span class="chip test">tested</span>
+  <code>the_renderers_reason_reaches_the_outcome_intact</code> guards the join
+  where the reason can be dropped on the floor.
+  <code>every_cap_that_bound_is_reported_not_only_the_first</code> drives two
+  caps at once and asserts both appear. Its comment is the argument: reporting
+  only the first is how a reader raises <code>max_chars</code>, sees the prose
+  return, and never learns the link list is still short.
+</p>
+<span class="src">tools/web/src/fetch.rs — <code>into_outcome</code>; tools/web/src/digest_md.rs — <code>mod tests</code></span>
+
+<h3>chromehand's failures into Emma's</h3>
+
+<pre><code><span class="k">pub</span>(<span class="k">crate</span>) <span class="k">fn</span> map_error(e: MinerError) -&gt; ToolError {
+    <span class="k">match</span> e {
+        MinerError::Refused(m) =&gt; ToolError::BadArguments(m),
+        MinerError::Browser(m) =&gt; ToolError::Failed(m),
+        MinerError::Unavailable(m) =&gt; ToolError::Unavailable(m),
+    }
+}</code></pre>
+
+<p>
+  One function with one arm per variant rather than a chain of string checks at
+  the call site. A refused URL is something the model can fix, a browser that
+  broke can be retried, and a machine with no browser is neither. Upstream
+  signalled all three with process exit codes and spent one code on two of them;
+  splitting <code>Unavailable</code> out is the one change.
+</p>
+<span class="src">tools/web/src/fetch.rs — <code>map_error</code>; tools/web/src/chromehand/mod.rs — <code>MinerError</code></span>
+
+<h2 id="browser">The five browser tools</h2>
+
+<p>
+  The surface is split where the <em>approval question</em> changes rather than
+  where it would be convenient.
+</p>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Tool</th><th>Arguments</th><th><code>read_only</code></th><th>The question a human is answering</th></tr></thead>
+    <tbody>
+      <tr><td><code>BrowserOpen</code></td><td><code>url</code>, <code>headful</code> (default false)</td><td>false</td><td>may a browser start, and reach this host</td></tr>
+      <tr><td><code>BrowserRead</code></td><td><code>session</code>, <code>delta</code> (default <strong>true</strong>), <code>max_chars</code>, <code>max_links</code>, <code>selectors</code></td><td>true</td><td>may bytes keep flowing from the host this session is on now</td></tr>
+      <tr><td><code>BrowserAct</code></td><td><code>session</code>, <code>action</code>, plus <code>selector</code> / <code>text</code> / <code>value</code> / <code>url</code> / <code>timeout_ms</code></td><td>false</td><td>may the model change state on somebody else's server</td></tr>
+      <tr><td><code>BrowserFill</code></td><td><code>session</code>, <code>fields</code>: each a <code>selector</code> with <code>value</code> or <code>checked</code></td><td>false</td><td>may the model put data into somebody else's form</td></tr>
+      <tr><td><code>BrowserClose</code></td><td><code>session</code>, optional</td><td>true</td><td>none; it only ends what this surface started</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  One <code>Browse</code> tool with an <code>action</code> argument was
+  considered and refused. It would be one schema describing eight mutually
+  exclusive argument shapes, which JSON Schema expresses badly and models follow
+  badly, and one <code>read_only</code> bit covering both "read this page again"
+  and "type into this form". It would also be one name for permission rules to
+  match, so <code>BrowserRead(domain:example.com)</code>, meaning read there and
+  do not act there, would be inexpressible.
+</p>
+<span class="src">tools/web/src/browser/tools.rs — module doc</span>
+
+<h3><code>BrowserAct</code>'s seven verbs</h3>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Verb</th><th>Needs</th><th>Refusal when it is missing</th></tr></thead>
+    <tbody>
+      <tr><td><code>click</code></td><td><code>selector</code></td><td><code>BrowserAct.click needs selector</code></td></tr>
+      <tr><td><code>type</code></td><td><code>selector</code>, <code>text</code></td><td><code>BrowserAct.type needs text</code></td></tr>
+      <tr><td><code>select</code></td><td><code>selector</code>, <code>value</code></td><td><code>BrowserAct.select needs value</code></td></tr>
+      <tr><td><code>navigate</code></td><td><code>url</code></td><td><code>BrowserAct.navigate needs url</code></td></tr>
+      <tr><td><code>back</code>, <code>forward</code></td><td>nothing</td><td>none</td></tr>
+      <tr><td><code>wait_for</code></td><td>nothing; a <code>selector</code> or <code>text</code>, or neither, which waits for the network to go quiet</td><td>none</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  The enum lists seven strings against six named verbs, because <code>back</code>
+  and <code>forward</code> share one implementation. <code>timeout_ms</code>
+  defaults to 10,000 and is capped at 60,000, because a wait is a turn the user
+  is watching nothing happen in. An unknown action lists the ones that exist.
+</p>
+
+<p>
+  <code>BrowserAct</code> never returns page content. Its result is a snapshot
+  line and an instruction to call <code>BrowserRead</code>, and a test asserts
+  the content is under 400 characters. A negative answer is <code>Ok</code>:
+  <code>Condition NOT met within {n} ms — the page never reached that state;
+  this is the answer, not a failure to look</code>. The same holds for a click
+  that matched nothing and a <code>select</code> with no matching option, which
+  additionally lists the options that exist.
+</p>
+<span class="src">tools/web/src/browser/render.rs — <code>act</code>, <code>outcome_lines</code></span>
+
+<div class="note warn">
+  <span class="h">The hole <code>navigate</code> would otherwise be</span>
+  <p>
+    <code>chromehand::actions::navigate</code> runs no URL policy of its own,
+    because upstream's CLI checked before calling it. Without an explicit check
+    in <code>BrowserAct::run</code>, <code>navigate</code> is the one verb that
+    reaches <code>file:///</code> and localhost, from a session the user opened
+    for something else.
+    <span class="chip test">tested</span>
+    <code>navigating_a_session_is_held_to_the_same_url_policy_as_opening_one</code>
+    drives four refused URLs through the real <code>run</code> and asserts
+    <code>bad_arguments</code> each time, then the same two through
+    <code>pool.open</code>.
+  </p>
+</div>
+
+<h3>The cross-origin re-ask</h3>
+
+<p>
+  The gate reads a destination from <code>network_target</code> before the call,
+  out of its arguments, and a session call's arguments say
+  <code>session=abc</code> rather than where <code>abc</code> now points. So
+  these tools answer from the pool, with the host the session is on
+  <em>now</em>, and the pool records the <code>final_url</code> after every verb.
+</p>
+
+<figure>
+  <div class="figwrap">
+    <svg viewBox="0 0 700 270" role="img" aria-label="Every browser verb runs inside a Live guard whose finish method reads the page's URL, disconnects, and records the landing host in the pool. Because network_target reads the host from the pool rather than from the call's arguments, a grant for example.com stops covering the session once a click lands on evil.example, and the next call asks again.">
+      <defs>
+        <marker id="tw-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+        </marker>
+        <marker id="tw-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+        </marker>
+      </defs>
+
+      <rect class="box" x="12" y="20" width="150" height="34" rx="4" />
+      <text class="lbl" x="28" y="42">Live::connect</text>
+      <path class="edge" d="M87 54 L87 88" marker-end="url(#tw-arrow)" />
+      <rect class="box" x="12" y="88" width="150" height="34" rx="4" />
+      <text class="lbl" x="28" y="110">one verb</text>
+      <path class="edge-hl" d="M87 122 L87 156" marker-end="url(#tw-arrow-hl)" />
+      <rect class="hl" x="12" y="156" width="150" height="46" rx="4" />
+      <text class="lbl" x="28" y="176">Live::finish</text>
+      <text class="tiny" x="28" y="192">reads page.url(), even on failure</text>
+
+      <path class="edge-hl" d="M162 179 L246 179" marker-end="url(#tw-arrow-hl)" />
+      <rect class="hl" x="246" y="156" width="180" height="46" rx="4" />
+      <text class="lbl" x="262" y="176">pool.arrived_at(id, url)</text>
+      <text class="tiny" x="262" y="192">session.host moves</text>
+
+      <path class="edge" d="M336 156 L336 110 L432 110" marker-end="url(#tw-arrow)" />
+      <rect class="box" x="432" y="92" width="240" height="36" rx="4" />
+      <text class="lbl" x="448" y="108">next call: network_target</text>
+      <text class="tiny" x="448" y="122">reads the pool, not the arguments</text>
+
+      <path class="edge-hl" d="M552 92 L552 56" marker-end="url(#tw-arrow-hl)" />
+      <rect class="hl" x="432" y="20" width="240" height="36" rx="4" />
+      <text class="lbl" x="448" y="42">a fresh question, per host</text>
+
+      <text class="sm" x="12" y="238">The re-ask is one call late: the bytes for the redirect have already gone.</text>
+      <text class="tiny" x="12" y="256">What it protects is everything after — the payload needs BrowserRead, and BrowserRead asks.</text>
+    </svg>
+  </div>
+  <figcaption>
+    <code>Live</code> is a guard rather than a helper taking a closure, so the
+    verb's result can only be got out by going through <code>finish</code>.
+    Forgetting the recording is a compile error rather than a review item. Drawn
+    from <code>tools/web/src/browser/tools.rs</code> and
+    <code>pool.rs</code>.
+  </figcaption>
+</figure>
+
+<p>
+  <span class="chip test">tested</span>
+  <code>a_session_read_names_the_host_the_session_is_on_now</code> moves a
+  session to <code>evil.example</code> and asserts the gate is told the new
+  host. Its failure message names the defect it guards against: "the gate was
+  told the original host after the session navigated away from it".
+  <code>acting_asks_about_the_session_host_and_navigating_asks_about_the_destination</code>
+  covers the one verb whose destination is knowable before the bytes.
+</p>
+
+<div class="note warn">
+  <span class="h">What the gate does not cover, stated by the source</span>
+  <p>
+    The re-ask is <strong>one call late</strong>. The bytes for a redirect or a
+    click-through have gone by the time the pool learns the host changed. A
+    remembered rule means what it says, too:
+    <code>BrowserRead(domain:example.com)</code> allows reading a session while
+    it is on <code>example.com</code> and does not travel with the session.
+  </p>
+  <p>
+    And prompt injection is not solved. A page can contain text that persuades
+    the model to click a button on that page, and nothing here prevents that.
+    The gates bound the blast radius; they do not read what comes back.
+  </p>
+</div>
+<span class="src">tools/web/src/browser/tools.rs and mod.rs — module docs</span>
+
+<h3>Sessions, and the three teardowns</h3>
+
+<p>
+  <code>MAX_SESSIONS</code> is 2. A persistent Chrome is 200 to 400 MB resident
+  for as long as the session lives; two on a laptop already running
+  rust-analyzer is noticeable, and three is where the user discovers the limit
+  as swap. The third open is refused with the cap named, so the model learns the
+  rule instead of discovering a slow machine.
+</p>
+
+<p>
+  A leaked Chrome is not untidiness. chromehand's own note is that a session's
+  CDP websocket is unauthenticated on localhost, so while it lives any local
+  process can puppet that browser, with a profile that may hold a login. This
+  crate has leaked one before, and <code>tools/lsp</code> wrote it down: "<code>tools/web</code>
+  leaked a Chrome per session because its teardown ran in <code>main</code> —
+  correct for a binary, wrong for a library." So the teardown is three
+  mechanisms, each covering a way the previous one does not run.
+</p>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Mechanism</th><th>Covers</th></tr></thead>
+    <tbody>
+      <tr><td><code>BrowserPool::close</code></td><td>the ordinary path: a polite CDP <code>Browser.close</code>, then a hard kill by pid, then the profile directory</td></tr>
+      <tr><td><code>Drop</code></td><td>normal exit and panic-unwind. It cannot <code>await</code>, so it kills by pid, which is why the pid is recorded at open time</td></tr>
+      <tr><td><code>sweep_stale_profiles</code> at construction</td><td><code>abort()</code>, SIGKILL and a power cut, none of which run <code>Drop</code>. A profile untouched for two hours belonged to a run that is gone</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  <code>kill_all_now</code> is the second mechanism exposed as a public
+  synchronous call, for an interrupt handler that must not <code>await</code>,
+  and it is idempotent. chromehand's own 30-minute idle TTL is kept as a second
+  line of defence rather than the primary one, because a TTL doing the real work
+  means a Chrome lives up to half an hour past the process that wanted it.
+</p>
+
+<p>
+  The session registry is in memory rather than on disk. chromehand records
+  sessions in <code>.browser-miner/session-&lt;id&gt;.json</code> relative to
+  the working directory, which inside Emma is the user's repository.
+  <code>BrowserPool::open</code> therefore calls chromehand's
+  <code>session::open</code>, which does the hard part of a detached spawn with
+  no inherited handles, and then deletes the session file it wrote.
+</p>
+<span class="src">tools/web/src/browser/pool.rs — module doc, <code>MAX_SESSIONS</code></span>
+
+<h3><code>BrowserClose</code> declares <code>read_only: true</code></h3>
+
+<p>
+  That departs from the letter of the field, which says no process spawned; this
+  ends one. The only processes it can touch are the ones this surface started,
+  an id not in the pool is refused, and the effect is to undo the change
+  <code>BrowserOpen</code> made, including closing an unauthenticated CDP port.
+  The alternative is a prompt on cleanup, whose failure mode is that somebody
+  answers <code>n</code> and a browser survives with a live remote-control port.
+</p>
+
+<p>
+  An unknown id there is a result rather than an error, because the session
+  being gone is what the caller wanted: <code>There is no open browser session
+  '{id}' — nothing to close.</code> Omitting <code>session</code> closes every
+  session this run opened.
+</p>
+<span class="src">tools/web/src/browser/tools.rs — <code>BrowserClose</code></span>
+
+<h3>Nothing here submits a form</h3>
+
+<p>
+  Two reasons, and neither is a matter of effort. chromehand's second key,
+  <code>allow_auto_submit</code>, lives in
+  <code>data/browser-miner-config.json</code> resolved against the process's
+  working directory, which inside Emma is the user's repository, and
+  <code>Bash</code> can write it. A second key both parties can turn is one key.
+  Separately, "the payload was shown" cannot be guaranteed from inside a tool:
+  the prompt is rendered by the approval gate, and an <code>allow</code> rule or
+  an <code>a</code> answer skips it. A tool cannot force its own gate.
+</p>
+
+<p>
+  <span class="chip test">tested</span>
+  <code>no_tool_in_this_surface_offers_a_way_to_submit_a_form</code> walks every
+  property name in every schema, however deeply nested, because the hazard is a
+  <code>submit</code> flag appearing inside <code>fields[]</code> where a
+  shallow check would miss it. It also asserts <code>BrowserFill</code>'s
+  description says so, since a capability the model believes exists is a wasted
+  turn per attempt. <code>BrowserFill</code> passes <code>file: None</code>
+  always; attaching a local file to a form is a different capability, because it
+  sends a file off this machine.
+</p>
+
+<p>
+  <code>BrowserFill</code> re-reads each field from the live page afterwards, so
+  what it reports is what is actually there rather than what was sent, and its
+  approval prompt carries the field values rather than a count of them, clipped
+  at 60 characters each. "Fill 4 fields?" is not a question anybody can
+  evaluate, and an unevaluatable prompt manufactures consent.
+</p>
+<span class="src">tools/web/src/browser/tools.rs — <code>BrowserFill</code>, <code>PROMPT_VALUE_CHARS</code></span>
+
+<div class="note warn">
+  <span class="h">Suspected defect: the allowlist refusal names a file Emma never reads</span>
+  <p>
+    Click, type and select require a user-owned domain allowlist, and with none
+    they are refused outright. The refusal is produced by the vendored policy
+    module:
+  </p>
+  <pre><code>            <span class="k">return</span> Err(format!(
+                <span class="s">"refused: interaction verbs require a user-owned domain allowlist — create {} ({{\"domains\": [\"example.com\"]}}) or pass --allowlist &lt;path&gt;"</span>,
+                DEFAULT_ALLOWLIST_PATH
+            ));</code></pre>
+  <p>
+    <code>DEFAULT_ALLOWLIST_PATH</code> is <code>data/browser-allowlist.json</code>
+    and there is no <code>--allowlist</code> flag anywhere in Emma. Emma reads
+    <code>~/.emma/browser-allowlist.json</code>, and only that, via
+    <code>fetch::home_allowlist</code>. So a user following the message writes a
+    file that will never be consulted, in their repository rather than their
+    home directory. The tool descriptions the model sees name the correct path;
+    the runtime refusal does not.
+  </p>
+</div>
+<span class="src">tools/web/src/chromehand/policy.rs — <code>check_interaction</code>, <code>DEFAULT_ALLOWLIST_PATH</code>; tools/web/src/fetch.rs — <code>home_allowlist</code></span>
+
+<p>
+  <span class="chip cert">certified</span> Neither the flag nor the path
+  reaches Emma. <code>grep -rn -- '--allowlist' crates/ tools/</code> at commit
+  <code>a3eba74</code> returns nineteen lines and every one of them is the
+  vendored <code>browser-miner</code> CLI, its own docs, that CLI's integration
+  tests, or the policy module's message. Emma's binary has no such argument.
+  <code>grep -rn 'browser-allowlist' crates/ tools/</code> returns ten, of which
+  the only path Emma computes is the <code>~/.emma</code> one in
+  <code>fetch.rs</code>.
+</p>
+
+<p>
+  The fallback is closed on Emma's side, and the divergence is written down.
+  <code>load_policy</code> passes the home path or no allowlist at all, and its
+  doc calls this "the single sharpest divergence from upstream": a file in the
+  repository silently changing which domains are reachable is the same class of
+  surprise as a credentials file in the repository being read. So the message is
+  wrong about the remedy rather than about the restriction.
+</p>
+
+<h2 id="unverified">What is not verified here</h2>
+
+<p>
+  <span class="chip unv">unverified</span> The upstream project's 4.6–5.9×
+  token-economy figure for the digest format is not reproducible here, and the
+  source says so: the live-network bench that produced it stayed upstream. What
+  this fork keeps is the raw material, since every digest carries
+  <code>economy.raw_html_chars</code> alongside <code>economy.digest_chars</code>.
+  Settled by re-running a digest-size comparison against a fixed set of live
+  pages from this fork.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> The delta renderer prints
+  <code>chromehand caps each delta category at 60 items</code> as a hardcoded
+  English string, and no matching constant was found in the enforcing code.
+  Settled by finding the budget inside <code>compute_delta</code> and quoting
+  it, or by reading a delta with 61 additions.
+</p>
+
+<p>
+  <span class="chip obs">observed</span> The profile-cleanup notes record that
+  after six live sessions the processes were all gone and three profile
+  directories were still on disk, with a related count of a leaked profile on 8
+  of 66 closes. Both are from runs whose output was not kept. Repeatable in
+  principle with
+  <code>cargo test -p emma-tools-web --test browser_live -- --ignored</code>
+  followed by a count of the directories left behind.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> This page reads
+  <code>lib.rs</code>, <code>fetch.rs</code>, <code>search.rs</code>,
+  <code>credentials.rs</code>, <code>browser/mod.rs</code>,
+  <code>browser/tools.rs</code>, <code>browser/render.rs</code> and
+  <code>chromehand/policy.rs</code> in full, and <code>browser/pool.rs</code>,
+  <code>digest_md.rs</code> and <code>chromehand/mod.rs</code> in part. The
+  vendored <code>chromehand/actions.rs</code>, <code>digest.rs</code>,
+  <code>forms.rs</code> and <code>session.rs</code>, roughly 3,700 lines, were
+  not read for this page, so anything stated about what a verb does inside the
+  page is upstream behaviour taken on the surrounding code's word.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> Neither <code>cargo test -p
+  emma-tools-web</code> nor any live browser run was performed while writing
+  this page, so no chip here rests on a run of that crate's suite. Its
+  live-network and browser tests skip by default rather than failing when their
+  dependency is absent, which means a green run would not settle much on its
+  own.
+</p>
+</div>
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The truncation rule · Tools · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav here" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<p class="eyebrow">Doing work</p>
+<h1>The truncation rule</h1>
+
+<nav class="chapter">
+  <a class="up" href="tools.html">Tools</a>
+  <a href="tools-trait.html">the trait</a>
+  <a href="tools-outcome.html">outcomes</a>
+  <span class="now">truncation</span>
+  <a href="tools-ctx.html">ToolCtx</a>
+  <a href="tools-containment.html">containment</a>
+  <a href="tools-files.html">files</a>
+  <a href="tools-edit.html">Edit</a>
+  <a href="tools-bash.html">Bash</a>
+  <a href="tools-tasks.html">tasks</a>
+  <a href="tools-web.html">web</a>
+  <a href="tools-lsp.html">LSP</a>
+</nav>
+
+<p class="lede">
+  Name the limit, name the loss, name the remedy, or say plainly that no
+  argument raises it. Every cap in the four tool crates is tabulated below
+  against that rule. The defect that produced it was a tool advising the model
+  to narrow a request when what had been dropped was an inventory it had no way
+  to narrow.
+</p>
+
+<h2 id="why">Half an admission</h2>
+
+<p>
+  <code>truncated: true</code> on its own is true and useless. It does not say
+  whether the prose or an inventory was lost, does not say how much, and does
+  not name the argument that would get the rest. A tool knows all three at the
+  moment it cuts and nothing downstream can reconstruct them.
+</p>
+
+<pre><code>    <span class="c">/// *Which* cap cut, how much it cut, and what would raise it — one line,</span>
+    <span class="c">/// written by the tool that did the cutting.</span>
+    <span class="c">///</span>
+    <span class="c">/// `truncated` alone is only half an admission. "Output was truncated" is</span>
+    <span class="c">/// true and useless: it does not say whether the prose or an inventory was</span>
+    <span class="c">/// lost, does not say how much, and does not name the argument that would</span>
+    <span class="c">/// get the rest. A tool knows all three at the moment it cuts and nothing</span>
+    <span class="c">/// downstream can reconstruct them, so it says them here and the runtime</span>
+    <span class="c">/// passes them on verbatim — to the model in the result, and to the human</span>
+    <span class="c">/// on the terminal line.</span>
+    <span class="k">pub</span> truncation: Option&lt;String&gt;,</code></pre>
+<span class="src">crates/tool-api/src/lib.rs — <code>ToolOutcome::truncation</code></span>
+
+<figure>
+  <div class="figwrap">
+    <svg viewBox="0 0 700 250" role="img" aria-label="A tool that cuts writes one sentence and uses it twice: appended to content, which the model reads, and stored in truncation, which the runtime quotes verbatim into the model's result note and onto the terminal line. Building both from one string is what stops the two from disagreeing about which cap bound.">
+      <defs>
+        <marker id="tc-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+        </marker>
+        <marker id="tc-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+        </marker>
+      </defs>
+
+      <rect class="hl" x="10" y="96" width="180" height="52" rx="4" />
+      <text class="lbl" x="26" y="120">one `reason` string</text>
+      <text class="tiny" x="26" y="137">built once, in the tool</text>
+
+      <path class="edge-hl" d="M190 112 L268 66" marker-end="url(#tc-arrow-hl)" />
+      <path class="edge-hl" d="M190 132 L268 178" marker-end="url(#tc-arrow-hl)" />
+
+      <rect class="box" x="268" y="42" width="180" height="48" rx="4" />
+      <text class="lbl" x="284" y="64">content += [truncated: …]</text>
+      <text class="tiny" x="284" y="80">the bytes the model reads</text>
+
+      <rect class="box" x="268" y="154" width="180" height="48" rx="4" />
+      <text class="lbl" x="284" y="176">truncation = Some(reason)</text>
+      <text class="tiny" x="284" y="192">the struct the runtime reads</text>
+
+      <path class="edge" d="M448 66 L520 66" marker-end="url(#tc-arrow)" />
+      <rect class="box" x="520" y="48" width="160" height="36" rx="4" />
+      <text class="lbl" x="536" y="70">the model</text>
+
+      <path class="edge" d="M448 178 L490 178 L490 130 L520 130" marker-end="url(#tc-arrow)" />
+      <rect class="box" x="520" y="112" width="160" height="36" rx="4" />
+      <text class="lbl" x="536" y="134">result note</text>
+
+      <path class="edge" d="M448 190 L520 190" marker-end="url(#tc-arrow)" />
+      <rect class="box" x="520" y="172" width="160" height="36" rx="4" />
+      <text class="lbl" x="536" y="194">terminal line</text>
+    </svg>
+  </div>
+  <figcaption>
+    The reason is built once and used twice. <code>Read</code>'s
+    <code>render</code> says so in a comment: "One sentence, said twice on
+    purpose… Building both from the same string is what stops the two from
+    drifting into two different stories about which cap bound." Drawn from
+    <code>tools/fs/src/read.rs</code> and
+    <code>crates/tool-api/src/lib.rs</code>.
+  </figcaption>
+</figure>
+
+<h2 id="shape">The shape, from a real call</h2>
+
+<p>
+  <code>Glob</code> over this repository with a broad pattern, which is the call
+  that produced the rule:
+</p>
+
+<pre><code>[truncated: 1000 of 64097 matching paths shown — the 1000 most recently
+modified — and 63097 dropped by a fixed 1000-result cap no argument raises.
+A pattern matching 64097 paths is usually reaching into build output; narrow
+`pattern` or set `path` to a subdirectory, which is the only thing that
+returns the rest]</code></pre>
+<span class="src">tools/fs/src/glob.rs — <code>cuts</code></span>
+
+<p>
+  Four things in one sentence: how many are here, how many matched, how many
+  were dropped, and a remedy. And one thing it must not contain.
+</p>
+
+<pre><code>        <span class="c">// The remedy must be one that exists. `WebFetch` once advised narrowing</span>
+        <span class="c">// a request when what was dropped was an inventory, and this is the</span>
+        <span class="c">// mirror image: advertising a size knob here would send the model to</span>
+        <span class="c">// ask for sixty times more build output.</span>
+        assert!(!s.contains(<span class="s">"max_results"</span>), <span class="s">"invented a knob: {s}"</span>);</code></pre>
+<span class="src">tools/fs/src/glob.rs — <code>the_result_cap_names_itself_the_loss_and_a_remedy_that_works</code></span>
+
+<p>
+  <span class="chip test">tested</span> That assertion is the half of the
+  test that does the work, and it goes red the moment somebody adds a <code>max_results</code>
+  argument and mentions it in the notice. The same file's
+  <code>the_two_cuts_stay_two_sentences</code> covers all four combinations of
+  the result cap and the walk ceiling, including the both-fired case, and
+  asserts a walk ceiling is not described as a result cap.
+</p>
+
+<h2 id="joining">Several cuts stay several sentences</h2>
+
+<p>
+  When more than one cap fires they join with <code>; also </code> and stay
+  separate clauses. Merging them is how a reader concludes the pattern was too
+  broad when it was the traversal that gave up, or raises
+  <code>max_chars</code>, sees the prose come back, and never learns the link
+  list is still short.
+</p>
+
+<p>
+  <span class="chip cert">certified</span> The connective is the same literal in
+  three places. <code>grep -rn '; also ' tools/ --include=*.rs</code> at commit
+  <code>a3eba74</code> returns exactly three lines: <code>glob.rs:235</code>,
+  <code>grep.rs:373</code> and <code>digest_md.rs:445</code>, each a
+  <code>join</code>. It is copied rather than shared, so a fourth crate can
+  spell it differently and nothing would notice.
+</p>
+
+<h2 id="inventory">Every cap in the workspace</h2>
+
+<p>
+  Fifteen, plus one that is not a cap and one that is prose. "Raised by"
+  is what a caller can actually do about it.
+</p>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Where</th><th>Cap</th><th>Value</th><th>Raised by</th></tr></thead>
+    <tbody>
+      <tr><td><code>Read</code></td><td><code>MAX_LINES</code></td><td class="num">2000</td><td>nothing; <code>limit</code> only lowers</td></tr>
+      <tr><td><code>Read</code></td><td><code>MAX_LINE_CHARS</code></td><td class="num">2000</td><td>nothing</td></tr>
+      <tr><td><code>Read</code></td><td><code>MAX_BYTES</code></td><td class="num">262144</td><td>nothing</td></tr>
+      <tr><td><code>Glob</code></td><td><code>MAX_RESULTS</code></td><td class="num">1000</td><td>nothing; narrow <code>pattern</code> or <code>path</code></td></tr>
+      <tr><td><code>Glob</code>, <code>Grep</code></td><td><code>MAX_VISITED</code>, entries <em>visited</em></td><td class="num">200000</td><td>nothing; narrow <code>path</code></td></tr>
+      <tr><td><code>Grep</code></td><td><code>MAX_OUTPUT_LINES</code></td><td class="num">500</td><td>nothing; <code>head_limit</code> only lowers</td></tr>
+      <tr><td><code>Grep</code></td><td><code>MAX_MATCH_CHARS</code></td><td class="num">400</td><td>nothing; <code>Read</code> the line</td></tr>
+      <tr><td><code>Grep</code></td><td><code>MAX_FILE_BYTES</code>, files not opened</td><td class="num">8 MiB</td><td>nothing; <code>Read</code> or <code>Bash</code> by name</td></tr>
+      <tr><td><code>Bash</code></td><td><code>MAX_STREAM_BYTES</code>, per stream</td><td class="num">64 KiB</td><td>nothing; redirect to a file</td></tr>
+      <tr><td><code>Bash</code></td><td>the lost drain race, 5 s</td><td>none</td><td>nothing; redirect to a file</td></tr>
+      <tr><td><code>WebFetch</code>, <code>BrowserRead</code></td><td>page text</td><td class="num">8000 default</td><td><code>max_chars</code>, to 200000</td></tr>
+      <tr><td><code>WebFetch</code>, <code>BrowserRead</code></td><td>links listed</td><td class="num">50 default</td><td><code>max_links</code>, to <code>COLLECTOR_LINK_BUDGET</code> = 120, past which the browser collected none</td></tr>
+      <tr><td><code>WebFetch</code>, <code>BrowserRead</code></td><td><code>MAX_JSON_LD_CHARS</code></td><td class="num">2000</td><td>nothing</td></tr>
+      <tr><td><code>BrowserRead</code></td><td><code>SELECTOR_BUDGET</code>, per category</td><td class="num">40</td><td>nothing; narrow with <code>selectors</code></td></tr>
+      <tr><td><code>BrowserRead</code>, delta</td><td>per delta category</td><td class="num">60</td><td>nothing; <code>delta: false</code></td></tr>
+      <tr><td>LSP</td><td><code>MAX_LOCATIONS</code></td><td class="num">100</td><td>nothing; ask a narrower question</td></tr>
+      <tr><td>LSP</td><td><code>MAX_SYMBOLS</code></td><td class="num">300</td><td>nothing</td></tr>
+      <tr><td>LSP</td><td>source line clip</td><td class="num">300 chars</td><td>nothing; does not set the flag</td></tr>
+      <tr><td><code>Edit</code></td><td><code>ECHO_LIMIT</code></td><td class="num">20</td><td>not a truncation: the edit landed whole, only the echoed labels are summarised</td></tr>
+      <tr><td><code>tools/tasks</code></td><td>none</td><td>none</td><td>nothing is ever cut in this crate</td></tr>
+    </tbody>
+  </table>
+</div>
+<span class="src">tools/fs/src/{read,glob,grep,bash,walk,edit}.rs; tools/web/src/digest_md.rs and browser/render.rs; tools/lsp/src/render.rs</span>
+
+<p>
+  Two rows are worth reading against each other. Exactly two of these caps can
+  be raised by an argument, <code>max_chars</code> and <code>max_links</code>,
+  and both belong to the web tools. That is not a policy, it is what the
+  <code>WebFetch</code> defect taught: the cap that needs
+  a knob is the one where the dropped thing <em>was</em> the answer, and on a
+  hub page the links are the content. On a glob matching sixty-four thousand
+  paths, a bigger number produces a sixty-times larger useless answer.
+</p>
+<span class="src">tools/web/src/fetch.rs — <code>DEFAULT_MAX_LINKS</code>; tools/fs/src/glob.rs — <code>MAX_RESULTS</code></span>
+
+<h2 id="tests">What holds it</h2>
+
+<p>
+  <span class="chip test">tested</span>
+  <code>no_tool_here_cuts_without_naming_the_cap</code> drives
+  <code>Glob</code>, <code>Grep</code>, <code>Read</code> and <code>Bash</code>
+  past their caps in one sandbox and demands of each: the flag set, a
+  <code>truncation</code> reason over 40 characters containing a digit, and
+  <code>[truncated:</code> present in <code>content</code> as well, because the
+  model reads the content and not the struct.
+  <code>a_whole_answer_claims_nothing</code> is the other half. An uncut result
+  must carry neither, or the file would be satisfiable by marking everything
+  truncated.
+</p>
+<span class="src">tools/fs/tests/truncation.rs</span>
+
+<p>
+  <span class="chip cert">certified</span>
+  <code>cargo test -p emma-tools-fs</code> at commit <code>a3eba74</code> on
+  this box: 7 tests in <code>tests/truncation.rs</code>, all passing, alongside
+  23 + 17 + 10 + 38 + 3 + 1 elsewhere in that crate.
+</p>
+
+<p>
+  On the web side the closing test is
+  <code>the_schema_offers_the_argument_the_truncation_notice_advertises</code>,
+  which asserts the notice may only name a knob the schema actually offers, and
+  that the stated ceiling appears in that knob's description. That is the
+  original defect written as a property.
+</p>
+<span class="src">tools/web/src/fetch.rs — <code>mod tests</code>; tools/web/src/digest_md.rs — <code>every_cap_that_bound_is_reported_not_only_the_first</code></span>
+
+<h2 id="unverified">What is not verified here</h2>
+
+<p>
+  <span class="chip unv">unverified</span> Two rows of the table rest on prose
+  rather than on a constant. The 60-item delta cap is a hardcoded English
+  string in <code>browser/render.rs</code> with no matching constant found in
+  the enforcing code, and the <code>Bash</code> lost-drain row has no test that
+  can reach it. Settled respectively by finding the budget inside chromehand's
+  <code>compute_delta</code> and quoting it, and by spawning something like
+  <code>(sleep 30 &amp;) ; echo done</code> under a short timeout on both
+  platforms and checking which of the two sentences comes back.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> The table claims to be every cap, and
+  it was built by reading the four crates rather than by a tool, so a cap
+  written without a <code>MAX_</code> constant could have been missed. Settled
+  by enumerating <code>truncated_because</code> call sites across the workspace
+  and reconciling them against these rows.
+</p>
+</div>
+</main>
+</div>
+</body>
+</html>

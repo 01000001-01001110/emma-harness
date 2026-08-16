@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Matching a host · Consent &amp; permissions · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav here" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <h1>Matching a host, label by label</h1>
+
+  <nav class="chapter">
+    <a class="up" href="consent.html">Consent &amp; permissions</a>
+    <a href="consent-axes.html">The two axes</a>
+    <a href="consent-ladder.html">The ladder</a>
+    <a href="consent-egress.html">The egress question</a>
+    <a href="consent-answers.html">The five answers</a>
+    <a href="consent-exempt.html">EXEMPT and the floor</a>
+    <a href="consent-rules.html">Permission rules</a>
+    <span class="now">Matching a host</span>
+    <a href="consent-hooks.html">Hooks</a>
+  </nav>
+
+  <p class="lede">
+    A rule that accidentally matches everything is the worst defect available in
+    this file, so matching is label-wise and length-checked rather than
+    substring-based. Every host in the "does not match" column below is one
+    somebody can register today.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — DomainPattern, label_matches</span>
+
+  <h2 id="shape">What a pattern is</h2>
+
+  <p>
+    <code>DomainPattern</code> holds three fields. <code>raw</code> is the text
+    the operator wrote, kept so the rule renders back exactly.
+    <code>any_subdomain</code> is set when the pattern began <code>*.</code>, and
+    is split out at parse time because it is the one form whose label count is not
+    fixed; mixing it into the general path is how "any depth" becomes "any host".
+    <code>labels</code> is the rest, split on dots.
+  </p>
+
+  <p>
+    <code>DomainPattern::parse</code> normalises first, refuses an empty pattern,
+    strips a leading <code>*.</code>, and then refuses an empty remainder or any
+    empty label. That is what makes <code>domain:..</code> and
+    <code>domain:a..b</code> parse errors.
+    <code>DomainPattern::literal</code> is the other constructor, used by
+    <code>Rule::domain</code> when the gate builds a rule from a
+    <code>NetworkTarget::host</code> that is already lowercased and stripped, so
+    it round-trips through <code>parse</code> unchanged.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — DomainPattern::parse, DomainPattern::literal</span>
+
+  <h2 id="matches">The matcher</h2>
+
+  <pre><code>pub fn matches(&amp;self, host: &amp;str) -&gt; bool {
+    let host = normalise(host);
+    let labels: Vec&lt;&amp;str&gt; = host.split('.').collect();
+    if labels.iter().any(|l| l.is_empty()) {
+        return false;
+    }
+    if self.any_subdomain {
+        <span class="c">// Strict: `*.example.com` covers `api.example.com` and</span>
+        <span class="c">// `a.b.example.com` and **not** `example.com`. There has to be at</span>
+        <span class="c">// least one label in front of the suffix, or the pattern quietly</span>
+        <span class="c">// becomes a longer spelling of the bare host.</span>
+        if labels.len() &lt;= self.labels.len() {
+            return false;
+        }
+        let tail = &amp;labels[labels.len() - self.labels.len()..];
+        return self.label_wise(tail);
+    }
+    <span class="c">// The length check. Without it, `example.com` would have to be matched</span>
+    <span class="c">// by suffix or by substring, and both of those match</span>
+    <span class="c">// `example.com.attacker.net`.</span>
+    labels.len() == self.labels.len() &amp;&amp; self.label_wise(&amp;labels)
+}
+
+fn label_wise(&amp;self, host: &amp;[&amp;str]) -&gt; bool {
+    self.labels
+        .iter()
+        .zip(host)
+        .all(|(pattern, label)| label_matches(pattern, label))
+}</code></pre>
+  <span class="src">crates/emma/src/permissions.rs — DomainPattern::matches, DomainPattern::label_wise</span>
+
+  <p>
+    Two guards carry the whole property. The equality on label counts is what
+    stops <code>example.com</code> from matching
+    <code>example.com.attacker.net</code>. The strict inequality on the
+    <code>*.</code> path is what stops <code>*.example.com</code> from covering
+    <code>example.com</code> itself. Relaxing the first from <code>==</code> to
+    <code>&gt;=</code> turned three tests red at commit <code>20ac400</code>:
+    <code>a_domain_rule_does_not_match_a_lookalike_host</code>,
+    <code>a_star_inside_a_label_cannot_cross_a_dot</code> and
+    <code>what_is_written_is_what_is_read_back_next_boot</code>.
+    <span class="chip test">tested</span>
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — DomainPattern::matches; tests as named</span>
+
+  <h2 id="label">One label at a time</h2>
+
+  <pre><code>fn label_matches(pattern: &amp;str, label: &amp;str) -&gt; bool {
+    if !pattern.contains('*') {
+        return pattern == label;
+    }
+    <span class="c">// A tiny glob rather than a regex: the parts between the stars must appear</span>
+    <span class="c">// in order, the first anchored at the start and the last at the end.</span>
+    let parts: Vec&lt;&amp;str&gt; = pattern.split('*').collect();
+    let mut rest = label;
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        if i == 0 {
+            let Some(stripped) = rest.strip_prefix(part) else {
+                return false;
+            };
+            rest = stripped;
+            continue;
+        }
+        if i == parts.len() - 1 {
+            return rest.len() &gt;= part.len() &amp;&amp; rest.ends_with(part);
+        }
+        let Some(at) = rest.find(part) else {
+            return false;
+        };
+        rest = &amp;rest[at + part.len()..];
+    }
+    true
+}</code></pre>
+  <span class="src">crates/emma/src/permissions.rs — label_matches, quoted entire</span>
+
+  <p>
+    The host is split on dots before any pattern label reaches this function, so
+    no <code>*</code> can cross one. That is the mechanism behind
+    <code>example.*</code> matching <code>example.org</code> and not
+    <code>example.evil.com</code>. A pattern that is a bare <code>*</code> falls
+    through the loop with every part empty and returns <code>true</code>, which is
+    how one label of a pattern can be a wildcard on its own.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Pattern</th><th>Matches</th><th>Does not match</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>example.com</code></td>
+        <td><code>example.com</code>, <code>EXAMPLE.COM.</code></td>
+        <td><code>evil-example.com</code>, <code>example.com.attacker.net</code>, <code>sub.example.com</code>, <code>exampleXcom</code>, <code>notexample.com</code>, <code>example.como</code>, <code>example.co</code>, <code>wwwexample.com</code></td>
+      </tr>
+      <tr>
+        <td><code>*.example.com</code></td>
+        <td><code>api.example.com</code>, <code>a.b.example.com</code></td>
+        <td><code>example.com</code> itself, <code>attacker-example.com</code>, <code>api.example.com.attacker.net</code>, <code>example.com.evil.net</code></td>
+      </tr>
+      <tr>
+        <td><code>example.*</code></td>
+        <td><code>example.org</code>, <code>example.com</code></td>
+        <td><code>example.evil.com</code>, <code>example</code></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    <span class="chip test">tested</span> Every cell above is an assertion in one
+    of three tests, listed below. The near misses are the point: if one of them
+    started matching, a user who approved <code>example.com</code> would have
+    approved an attacker.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — tests::a_domain_rule_does_not_match_a_lookalike_host, tests::a_leading_star_is_a_strict_subdomain_and_not_the_host_itself, tests::a_star_inside_a_label_cannot_cross_a_dot</span>
+
+  <h2 id="normalise">Case and a trailing dot</h2>
+
+  <pre><code>fn normalise(host: &amp;str) -&gt; String {
+    host.trim().trim_end_matches('.').to_ascii_lowercase()
+}</code></pre>
+  <span class="src">crates/emma/src/permissions.rs — normalise, quoted entire</span>
+
+  <p>
+    The same three steps <code>NetworkTarget::new</code> applies, so a rule and a
+    target agree on what one host is. A matcher that disagreed would re-prompt for
+    a host approved a second earlier. It is applied inside
+    <code>matches</code> as well as by the caller, because a matcher that is only
+    correct for one caller has a hole waiting for the second one.
+  </p>
+
+  <h2 id="inert">Two spellings that block nothing</h2>
+
+  <p>
+    <code>WebFetch(domain:bücher.example)</code> and
+    <code>WebFetch(domain:::1)</code> both parse, both are kept, and neither can
+    meet a host any fetch presents. Hosts arrive from <code>Url::host_str</code>,
+    which has already applied IDNA and already bracketed an IPv6 literal, so the
+    matcher only ever sees <code>xn--bcher-kva.example</code> and
+    <code>[::1]</code>. In an <code>allow</code> list that costs a prompt. In a
+    <code>deny</code> list it is a protection that protects nothing, which is the
+    same shape as <code>Bash(rm *)</code>, and it gets the same answer: a warning
+    at boot.
+  </p>
+
+  <p>
+    Detection is two lines. <code>Inert::of</code> answers
+    <code>Unicode</code> when the pattern is not ASCII, and
+    <code>UnbracketedColon</code> when it contains a <code>:</code> and does not
+    begin with <code>[</code>. <code>Inert::because</code> supplies the clause
+    explaining what this build will do with the rule.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — Inert::of, Inert::because</span>
+
+  <p>
+    <code>inert_note</code> assembles the sentence: the file, the rule quoted, the
+    consequence for the list it is in, and the spelling that would work.
+    <em>blocks NOTHING</em> for deny and ask, <em>approves nothing and those calls
+    will still ask</em> for allow. The two wordings exist for the same reason the
+    unsupported branch has two: an allow that evaluates to nothing costs a prompt,
+    a deny that evaluates to nothing costs a protection.
+    <span class="chip test">tested</span>
+    <code>a_unicode_domain_rule_is_announced_and_the_deny_wording_is_the_loud_one</code>
+    and <code>an_unbracketed_ipv6_rule_is_announced_with_the_brackets_it_needs</code>
+    assert both wordings and both suggested spellings.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — inert_note; tests as named</span>
+
+  <h3>The suggestion is computed, and sometimes withheld</h3>
+
+  <p>
+    <code>Inert::rewrite</code> for an unbracketed colon is
+    <code>format!("[{pattern}]")</code>. For Unicode it is built label by label:
+    an ASCII label is already its own answer, a label containing <code>*</code>
+    returns <code>None</code> for the whole rewrite because <code>*</code> is not
+    valid IDNA input, and anything else goes through
+    <code>idna::domain_to_ascii</code>, whose failure or empty or non-ASCII result
+    also ends the attempt. Where the rewrite cannot be computed the suggestion is
+    omitted rather than guessed at, because hand-punycoding is how
+    <code>xn--bcher-kva</code> becomes <code>xn--bucher-kva</code>.
+    <span class="chip test">tested</span>
+    <code>a_rewrite_that_cannot_be_computed_is_omitted_rather_than_invented</code>
+    asserts the note for two such rules contains "blocks NOTHING" and does not
+    contain "Write `".
+    <code>a_suggested_rewrite_keeps_the_wildcard_it_was_written_with</code>
+    asserts <code>*.bücher.example</code> is suggested back as
+    <code>*.xn--bcher-kva.example</code>, wildcard intact.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — Inert::rewrite; tests as named</span>
+
+  <div class="note warn">
+    <span class="h">The matcher was not changed, and a premise of the plan was false</span>
+    <p>
+      Converting the pattern instead of warning about it was the obvious fix and
+      was rejected on three grounds. It moves the security surface: matching goes
+      from comparing ASCII labels to running UTS-46 over attacker-influencable
+      strings on both sides of every match, and a conversion bug can
+      <em>widen</em> a match where a warning cannot. Wildcards are not valid IDNA
+      input, so <code>*.example.com</code> would need a label-skipping policy
+      nobody has asked for. And the rule stays live for a caller that hands the
+      matcher a Unicode host directly, which the test matrix pins.
+      <code>idna</code> is used at boot, in the warning path only.
+      <strong>The matcher itself is unchanged.</strong>
+      <span class="chip test">tested</span> The last clause is an assertion:
+      <code>a_unicode_domain_rule_is_announced_and_the_deny_wording_is_the_loud_one</code>
+      ends by asserting <code>for_egress("WebFetch", "bücher.example")</code> is
+      still <code>Some(Decision::Deny)</code>.
+    </p>
+    <p>
+      One premise of the plan that built this turned out false.
+      <code>idna</code> returns <code>Ok</code> for a wrong answer:
+      <code>b*cherü.example</code> converts to
+      <code>xn--b*cher-8ya.example</code>, the wildcard swallowed into punycode
+      with no error. "If <code>idna</code> refuses a label, omit the suggestion"
+      caught nothing on its own, and the shipped code checks each label for a
+      <code>*</code> itself before calling <code>idna</code> at all.
+    </p>
+    <span class="src">notes/plan-silent-wrong-answers.md · crates/emma/src/permissions.rs — Inert::rewrite</span>
+  </div>
+
+  <h2 id="quiet">Three near-misses that get no warning</h2>
+
+  <p>
+    Each was considered and left alone, on the argument that a warning firing on
+    working configuration is its own defect.
+  </p>
+
+  <ul class="body">
+    <li>
+      <code>domain:*.0.0.1</code> matching <code>127.0.0.1</code> label-wise. The
+      pattern is legal, does what the mechanism says, and matches real things.
+      The test matrix rows are its documentation.
+    </li>
+    <li>
+      <code>example.com..</code> and <code>example.com</code> being the same host.
+      Both sides strip identically, and the matrix row's own comment says
+      tightening one side alone is the hazard.
+    </li>
+    <li>
+      ASCII-only case folding. The only rules it can bite are non-ASCII rules,
+      and every one of those already warns.
+    </li>
+  </ul>
+  <span class="src">notes/plan-silent-wrong-answers.md · notes/improvements.md item 5b</span>
+
+  <p>
+    The floor for "the warning does not fire on ordinary configuration" is a unit
+    test. <span class="chip test">tested</span>
+    <code>an_ordinary_ascii_rule_says_nothing_at_boot</code> parses six rules
+    including <code>domain:*.example.com</code>,
+    <code>domain:xn--bcher-kva.example</code>, <code>domain:127.0.0.*</code> and
+    <code>domain:[::1]</code>, and asserts the note list is empty.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — tests::an_ordinary_ascii_rule_says_nothing_at_boot</span>
+
+  <h2 id="unsettled">What is not settled here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> The claim that hosts always arrive
+      already punycoded and already bracketed rests on
+      <code>Url::host_str</code>'s documented behaviour and on the web tools
+      building their <code>NetworkTarget</code> from a parsed <code>Url</code>.
+      It was not traced through every one of the six network-declaring tools for
+      this page. <em>What would settle it:</em> reading each tool's
+      <code>network_target</code> and confirming none of them constructs a host
+      from raw argument text.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> The <code>idna</code> behaviour
+      quoted above, that <code>b*cherü.example</code> converts without error, is
+      recorded in <code>notes/plan-silent-wrong-answers.md</code> and was not
+      re-run here. <em>What would settle it:</em> a three-line program calling
+      <code>idna::domain_to_ascii</code> on that string and printing the result.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · read at commit <code>a3eba74</code> ·
+    <code>crates/emma/src/permissions.rs</code> ·
+    <a href="consent.html">back to the chapter</a>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

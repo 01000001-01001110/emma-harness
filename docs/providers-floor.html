@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The cache floor &amp; the two tables · Providers &amp; models · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav here" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/llm/src/anthropic.rs</p>
+  <h1>The cache floor, and why there are two tables</h1>
+
+  <nav class="chapter">
+    <a class="up" href="providers.html">Providers &amp; models</a>
+    <a href="providers-boundary.html">The boundary</a>
+    <a href="providers-content.html">Content blocks</a>
+    <a href="providers-turn.html">The turn back</a>
+    <a href="providers-models.html">Model limits</a>
+    <a href="providers-caching.html">Caching</a>
+    <span class="now">The cache floor</span>
+    <a href="providers-retry.html">Retry</a>
+    <a href="providers-credentials.html">Credentials</a>
+  </nav>
+
+  <p class="lede">
+    Below a model's minimum cacheable prefix, a <code>cache_control</code>
+    marker is accepted and silently does nothing. Not rejected, not warned
+    about. HTTP 200, a normal response body, and
+    <code>cache_creation_input_tokens: 0</code>. The marked span is billed at
+    the uncached rate, and there is no symptom anywhere except the invoice.
+  </p>
+
+  <h2 id="inert">A feature that is accepted and inert</h2>
+
+  <p>
+    Every reflex in this codebase for catching a wrong request is tuned for a
+    400. <a href="providers-models.html"><code>models.rs</code></a> exists
+    because too high a <code>max_tokens</code> is a 400;
+    <a href="providers-retry.html"><code>retry.rs</code></a> classifies by
+    status; the wire tests assert the bytes that avoid a 400. None of that
+    machinery can see this one, because there is nothing to see: the same
+    status, the same body shape, and a field that is <code>0</code> instead of
+    a number. A single <code>MIN_CACHEABLE_TOKENS = 512</code> had been wrong
+    for every non-Opus-5 model since it was written, and no test, no log line
+    and no status row had a way to say so.
+  </p>
+
+  <div class="note warn">
+    <span class="h">observed, not argued</span>
+    <p>
+      A 3,001-token prefix on <code>claude-haiku-4-5</code> with the marker
+      present returned <strong>200 OK and
+      <code>cache_creation_input_tokens: 0</code>, twice</strong>. Each floor
+      was then bracketed by a pair of prefill calls about 30 tokens either side
+      of the documented value, sized with <code>count_tokens</code> so that
+      "3,000 tokens" meant real tokens rather than characters over four:
+    </p>
+    <pre><code>claude-haiku-4-5: 4069 tokens, marker present -&gt; cache_creation = <span class="w">0</span>
+claude-haiku-4-5: 4129 tokens, marker present -&gt; cache_creation = <span class="s">4122</span></code></pre>
+    <p>
+      Haiku 4.5's gate opens between <strong>4,069 and 4,129</strong> real
+      tokens; Opus 5's between <strong>483 and 543</strong>. Both are
+      consistent with the documented 4,096 and 512. Under a cent for both
+      models. <span class="chip obs">observed</span>: bisected live against the
+      API on 2026-08-14 by the agent that wrote the fix; no raw request or
+      response body was kept, only the printed pass and fail lines above. That
+      is why this is amber and not green. The record is the status line and the
+      two-line table, which is the whole of it.
+    </p>
+  </div>
+  <span class="src">notes/lessons/a-provider-feature-can-be-accepted-and-inert.md; commit <code>bb78857</code></span>
+
+  <p>
+    The generalisable part, and the reason the lesson exists: <strong>when a
+    provider feature is advisory rather than mandatory, its failure mode is
+    silence, and the only detector is the usage counter it was supposed to
+    move.</strong> A test asserting that the marker was sent passes forever. A
+    test asserting that the marker moved the counter runs only against the real
+    API.
+  </p>
+
+  <h2 id="table">The floors, and which of them anybody has seen</h2>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>MIN_CACHEABLE</code></p>
+  <pre><code>/// Smallest prefix each model will cache at all, longest-prefix keyed so a
+/// dated snapshot (`claude-haiku-4-5-20251001`) resolves to the same row as its
+/// alias. Below its model's floor a `cache_control` marker is **accepted and
+/// silently does nothing** — no error, no entry, and the marked span still
+/// billed at the uncached rate. That is why every breakpoint below is gated,
+/// and why the gate cannot be one number: the floor is not monotonic with
+/// release date, and the newest models have the *lowest* floors. A single
+/// `512` was right for `claude-opus-5` and eight times too low for
+/// `claude-haiku-4-5`, which a user reaches with one `/model` or one
+/// Haiku-typed delegation.
+///
+/// Transcribed 2026-08-11 from Anthropic's published prompt-caching docs.
+/// **A snapshot of facts that change without asking us** — floors have moved
+/// with every model generation, so re-check this table when adding a model
+/// rather than pattern-matching from the rows above it.
+const MIN_CACHEABLE: &amp;[(&amp;str, usize)] = &amp;[
+    ("claude-opus-5", 512),
+    ("claude-fable-5", 512),
+    ("claude-mythos-5", 512),
+    ("claude-opus-4-8", 1_024),
+    ("claude-sonnet-5", 1_024),
+    ("claude-sonnet-4-6", 1_024),
+    ("claude-sonnet-4-5", 1_024),
+    ("claude-opus-4-7", 2_048),
+    ("claude-opus-4-6", 4_096),
+    ("claude-haiku-4-5", 4_096),
+];</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>MIN_CACHEABLE</code></span>
+
+  <div class="tw">
+    <table>
+      <thead>
+        <tr>
+          <th>Model prefix</th>
+          <th class="num">Floor (tokens)</th>
+          <th>Evidence</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>claude-opus-5</code></td>
+          <td class="num">512</td>
+          <td>
+            <span class="chip obs">observed</span>: gate opens between 483 and
+            543, bisected live 2026-08-14, no raw body kept
+          </td>
+        </tr>
+        <tr><td><code>claude-fable-5</code></td><td class="num">512</td><td><span class="chip unv">unverified</span></td></tr>
+        <tr><td><code>claude-mythos-5</code></td><td class="num">512</td><td><span class="chip unv">unverified</span></td></tr>
+        <tr><td><code>claude-opus-4-8</code></td><td class="num">1,024</td><td><span class="chip unv">unverified</span></td></tr>
+        <tr><td><code>claude-sonnet-5</code></td><td class="num">1,024</td><td><span class="chip unv">unverified</span></td></tr>
+        <tr><td><code>claude-sonnet-4-6</code></td><td class="num">1,024</td><td><span class="chip unv">unverified</span></td></tr>
+        <tr><td><code>claude-sonnet-4-5</code></td><td class="num">1,024</td><td><span class="chip unv">unverified</span></td></tr>
+        <tr><td><code>claude-opus-4-7</code></td><td class="num">2,048</td><td><span class="chip unv">unverified</span></td></tr>
+        <tr><td><code>claude-opus-4-6</code></td><td class="num">4,096</td><td><span class="chip unv">unverified</span></td></tr>
+        <tr>
+          <td><code>claude-haiku-4-5</code></td>
+          <td class="num">4,096</td>
+          <td>
+            <span class="chip obs">observed</span>: gate opens between 4,069
+            and 4,129, bisected live 2026-08-14, no raw body kept
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    The floors are <strong>not monotonic with release date</strong>: the newest
+    models have the lowest floors and an older, smaller model the highest. That
+    is what makes a single constant wrong rather than merely stale, and
+    <code>no_cache_floor_row_shadows_another</code> asserts it directly with
+    <code>min_cacheable_tokens("claude-opus-5") &lt; min_cacheable_tokens("claude-haiku-4-5")</code>
+    alongside the no-shadowing property. <span class="chip test">tested</span>
+  </p>
+
+  <div class="note warn">
+    <span class="h">two rows out of ten</span>
+    <p>
+      <strong>Only 2 of the 10 rows have been measured.</strong> The other
+      eight are transcription from Anthropic's published prompt-caching
+      documentation dated <strong>2026-08-11</strong>, and nobody has pointed a
+      request at any of those models to check.
+      <span class="chip unv">unverified</span> The measurement that settles one
+      is cheap and already written down: send a prefix 30 tokens under the
+      claimed floor and one 30 tokens over, with <code>count_tokens</code> for
+      the sizing and <code>max_tokens: 1</code> so no output is generated, then
+      read <code>cache_creation_input_tokens</code>. Under a cent per model.
+      Because the floors move with model generations, a new row measured is
+      worth more than a new row pattern-matched from the row above it.
+    </p>
+  </div>
+
+  <p>
+    The table is also shorter than the documentation it came from.
+    <code>notes/research-caching-mechanics.md</code>'s floor table names four
+    ids the shipped rows dropped: <strong>Opus 4.1</strong> at 1,024,
+    <strong>Mythos Preview</strong> and <strong>Haiku 3.5</strong> at 2,048,
+    and <strong>Opus 4.5</strong> at 4,096. A user who names one of those today
+    falls to <code>MIN_CACHEABLE_UNKNOWN</code> and is gated at 4,096, so three
+    of the four cache less than they could.
+    <span class="chip unv">unverified</span> Whether the omission was a
+    decision or an oversight is not recorded anywhere. Those ids have no rows
+    in <code>models::TABLE</code> either, so adding them means two measured
+    values per model rather than one.
+  </p>
+  <span class="src">crates/llm/src/anthropic.rs — <code>MIN_CACHEABLE</code>; notes/research-caching-mechanics.md §1</span>
+
+  <h2 id="lookup">The lookup, and the fallback that guesses high</h2>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>MIN_CACHEABLE_UNKNOWN</code>, <code>min_cacheable_tokens</code></p>
+  <pre><code>/// What we assume for a model this table has never heard of: **the highest
+/// floor anyone ships**, which is the opposite direction from
+/// [`models::UNKNOWN`]'s conservative *low* ceiling, and deliberately so.
+///
+/// - *Guess too low* and we reproduce the defect this table exists to fix:
+///   markers on prefixes under the real floor, the marked span billed
+///   uncached, no symptom anywhere except the invoice, unbounded in time.
+/// - *Guess too high* (chosen) and an unknown model whose real floor is lower
+///   goes unmarked while its estimated prefix sits under 4,096 tokens
+///   (~16 KB rendered). The cost is the forgone 0.9× read discount on that
+///   span — cents per call — and it ends by itself, because history grows past
+///   the threshold within a few turns.
+///
+/// Silent-and-forever versus visible-and-self-healing is the whole argument.
+const MIN_CACHEABLE_UNKNOWN: usize = 4_096;
+
+/// The smallest prefix `model` will cache, or [`MIN_CACHEABLE_UNKNOWN`] if this
+/// table has never heard of it.
+fn min_cacheable_tokens(model: &amp;str) -&gt; usize {
+    MIN_CACHEABLE
+        .iter()
+        .filter(|(id, _)| model.starts_with(id))
+        // Longest match wins, so a shorter row added later cannot swallow a
+        // model whose id it happens to prefix.
+        .max_by_key(|(id, _)| id.len())
+        .map(|(_, floor)| *floor)
+        .unwrap_or(MIN_CACHEABLE_UNKNOWN)
+}</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>MIN_CACHEABLE_UNKNOWN</code>, <code>min_cacheable_tokens</code></span>
+
+  <p>
+    <code>an_unknown_model_is_gated_at_the_highest_known_floor</code> pins both
+    halves. It asserts the fallback equals the maximum floor in the table
+    rather than the literal 4,096, so adding a higher row cannot leave the
+    constant behind; then it asserts an unknown model gets no markers on a
+    roughly 700-token prefix, and gets them back once the prefix clears 4,096.
+    That is a gate, not a refusal. <span class="chip test">tested</span>
+  </p>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 760 250" role="img"
+           aria-label="One prefix of about 700 estimated tokens sits above Opus 5's floor of 512 and far below Haiku 4.5's floor of 4,096, so the identical request is marked on Opus 5 and unmarked on Haiku. An unknown model is gated at 4,096, the highest floor in the table.">
+        <defs>
+          <marker id="flr-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          </marker>
+          <marker id="flr-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          </marker>
+        </defs>
+
+        <text class="tiny" x="14" y="18">estimated prefix tokens, chars / 4</text>
+        <line class="edge" x1="40" y1="40" x2="720" y2="40" marker-end="url(#flr-arrow)" />
+        <text class="tiny" x="42" y="58">0</text>
+        <text class="tiny" x="120" y="58">512</text>
+        <text class="tiny" x="204" y="58">1,024</text>
+        <text class="tiny" x="330" y="58">2,048</text>
+        <text class="tiny" x="580" y="58">4,096</text>
+
+        <line class="edge-dash" x1="128" y1="30" x2="128" y2="200" />
+        <line class="edge-dash" x1="212" y1="30" x2="212" y2="200" />
+        <line class="edge-dash" x1="338" y1="30" x2="338" y2="200" />
+        <line class="edge-dash" x1="588" y1="30" x2="588" y2="200" />
+
+        <rect class="hl" x="150" y="76" width="26" height="26" rx="4" />
+        <text class="tiny" x="184" y="94">one prefix, about 700 estimated tokens</text>
+
+        <text class="sm" x="14" y="132">opus-5</text>
+        <line class="edge-hl" x1="128" y1="126" x2="700" y2="126" marker-end="url(#flr-arrow-hl)" />
+        <text class="tiny" x="600" y="120">marked</text>
+
+        <text class="sm" x="14" y="162">sonnet-5</text>
+        <line class="edge-hl" x1="212" y1="156" x2="700" y2="156" marker-end="url(#flr-arrow-hl)" />
+        <text class="tiny" x="600" y="150">marked above 1,024</text>
+
+        <text class="sm" x="14" y="192">haiku-4-5</text>
+        <line class="edge-hl" x1="588" y1="186" x2="700" y2="186" marker-end="url(#flr-arrow-hl)" />
+        <text class="tiny" x="230" y="180">a marker here is accepted and does nothing</text>
+
+        <text class="sm" x="14" y="222">unknown</text>
+        <line class="edge-hl" x1="588" y1="216" x2="700" y2="216" marker-end="url(#flr-arrow-hl)" />
+        <text class="tiny" x="230" y="210">gated at the highest floor in the table</text>
+      </svg>
+    </div>
+    <figcaption>
+      The same request on four models. Pink is the region where a
+      <code>cache_control</code> marker does something. The 700-token prefix
+      drawn at the top is <code>big_instructions()</code> from the test module,
+      chosen to sit above Opus 5's floor and well below Haiku's, which is what
+      makes
+      <code>a_prefix_over_one_models_floor_and_under_anothers_is_marked_only_for_the_first</code>
+      a regression guard rather than a tautology. Drawn from
+      <code>MIN_CACHEABLE</code> and <code>clears_minimum</code>; the axis is
+      not to scale.
+    </figcaption>
+  </figure>
+
+  <p>
+    Four more tests hold the gate.
+    <code>a_prefix_over_one_models_floor_and_under_anothers_is_marked_only_for_the_first</code>
+    sends the identical request to Haiku and to Opus 5 and asserts zero markers
+    against two. <code>a_high_floor_model_still_gets_every_breakpoint_once_it_clears_it</code>
+    sends a much larger request to Haiku and asserts all three land where the
+    Opus placement tests put them, so the gate moved and the placement did not.
+    <code>a_dated_snapshot_resolves_to_its_alias_on_the_wire</code> asserts
+    <code>claude-opus-5-20260101</code> resolves to 512 rather than falling
+    through to the unknown fallback. <span class="chip test">tested</span>
+  </p>
+
+  <h2 id="two-tables">Why there are two tables and not one</h2>
+
+  <p>
+    <code>models::TABLE</code> and <code>anthropic::MIN_CACHEABLE</code> name
+    the same ten models, and a model release adds a row to each. Merging them
+    is the obvious tidy-up. Three things break if they are merged:
+  </p>
+
+  <ul class="body">
+    <li>
+      <code>Limits</code> is the struct <code>GET /v1/models</code> parses
+      into. A discovery stage swaps the lookup for that call and leaves the
+      clamping alone; a merged struct could not be swapped, because the
+      endpoint cannot fill it.
+    </li>
+    <li>
+      That endpoint reports no cache minimum. The floor cannot follow the other
+      values into discovery, so it would remain hand-maintained inside a struct
+      that had otherwise stopped being.
+    </li>
+    <li>
+      The two fallbacks argue in opposite directions.
+      <code>models::UNKNOWN</code> guesses low because too high a ceiling is a
+      400; <code>MIN_CACHEABLE_UNKNOWN</code> guesses high because too low a
+      floor silently overpays. One shared <code>UNKNOWN</code> would carry a
+      doc comment arguing both ways at once.
+    </li>
+  </ul>
+  <span class="src">crates/llm/src/models.rs and crates/llm/src/anthropic.rs — module docs; notes/lessons/a-provider-feature-can-be-accepted-and-inert.md §"Fallback direction"</span>
+
+  <h3>What the split costs, and the guard that pays for it</h3>
+
+  <p>
+    A model release means a row in both tables, and for a while nothing in the
+    compiler noticed when only one was added. Each table had an
+    internal-consistency test and neither could see the other, so adding a
+    model to one and forgetting the other compiled, passed, and went wrong
+    quietly. The architecture map found that gap the same day the second table
+    shipped, in the same work that argued for the split.
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead>
+        <tr>
+          <th>Missing from</th>
+          <th>What happens</th>
+          <th>Who notices</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>MIN_CACHEABLE</code></td>
+          <td>Gated at 4,096; caches less than it could have.</td>
+          <td>Visible on an invoice, self-heals as history grows.</td>
+        </tr>
+        <tr>
+          <td><code>models::TABLE</code></td>
+          <td>Clamped to the 8,192 ceiling; a legitimate long answer is silently truncated.</td>
+          <td>Nobody. This is the one that costs a user something they cannot see.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>both_per_model_tables_name_the_same_models</code></p>
+  <pre><code>let floors: std::collections::BTreeSet&lt;_&gt; =
+    MIN_CACHEABLE.iter().map(|(id, _)| *id).collect();
+let limits: std::collections::BTreeSet&lt;_&gt; =
+    crate::models::TABLE.iter().map(|(id, _)| *id).collect();
+
+let no_floor: Vec&lt;_&gt; = limits.difference(&amp;floors).collect();
+assert!(
+    no_floor.is_empty(),
+    "models::TABLE knows {no_floor:?} and MIN_CACHEABLE does not — \
+     they will be gated at MIN_CACHEABLE_UNKNOWN and cache less than \
+     they could. Add a row here, re-checking the real floor rather \
+     than copying the row above."
+);
+
+let no_limits: Vec&lt;_&gt; = floors.difference(&amp;limits).collect();
+assert!(
+    no_limits.is_empty(),
+    "MIN_CACHEABLE knows {no_limits:?} and models::TABLE does not — \
+     their max_tokens will be clamped to models::UNKNOWN's ceiling and \
+     a long answer silently truncated. Add a row to models::TABLE."
+);</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>both_per_model_tables_name_the_same_models</code>; commit <code>8922850</code></span>
+
+  <p>
+    Both directions were mutation-proven when the guard landed: dropping the
+    Haiku row names it and says the floors table is short; adding a model to
+    the floors table alone names it and says the limits table is. Both restored
+    green. <span class="chip test">tested</span>, on that author's recorded
+    mutations rather than on a red run reproduced here. The row sets agreed at
+    the time the guard landed, so this is the missing guard rather than a live
+    mismatch.
+  </p>
+
+  <h2 id="contradiction">One thing the project's own notes disagree about</h2>
+
+  <p>
+    Whether an ignored marker <em>costs</em> anything directly.
+    <code>notes/plan-caching-defects.md</code> describes it as "+25% on the
+    marked span, forever". <code>notes/research-caching-mechanics.md</code>
+    says a below-minimum prefix is "cost-<em>neutral</em> (marker ignored), not
+    negative", adding that what it really costs is the false belief that
+    caching is on. <span class="chip unv">unverified</span> The reconciliation
+    that fits both is that the marker is ignored, so no write premium is
+    charged, and the loss is the read discount that never arrives on a span the
+    user believed was cached. Which of the two is literally true is settled by
+    one usage row from a below-floor call: if
+    <code>cache_creation_input_tokens</code> is 0 and the span appears in
+    <code>input_tokens</code> at base rate, the research doc is right.
+  </p>
+
+  <p>
+    The pages on this site do not pick a side, because picking one would put a
+    number in front of a reader that nobody has seen. The observed bisection
+    above is consistent with both readings: it recorded
+    <code>cache_creation = 0</code>, and did not record what
+    <code>input_tokens</code> did.
+  </p>
+  <span class="src">notes/improvements.md §"+25% on the marked span, forever" vs "cost-neutral, marker ignored"</span>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    Three items from <code>anthropic.rs</code>: <code>MIN_CACHEABLE</code>,
+    <code>MIN_CACHEABLE_UNKNOWN</code> and <code>min_cacheable_tokens</code>,
+    with all ten rows reproduced above. That is 23 of the file's 28 functions
+    covered across this chapter so far; the remaining five are
+    <code>classify</code>, <code>execute</code>, <code>api_message</code>,
+    <code>notify</code> and <code>scrub</code>, which
+    <a href="providers-retry.html">retry</a> and
+    <a href="providers-credentials.html">credentials</a> take between them.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="providers-retry.html">retry</a>, four attempts and the
+      rule that nothing after a success is ever sent again. Back to
+      <a href="providers.html">Providers &amp; models</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

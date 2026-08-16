@@ -585,3 +585,77 @@ footer.pg a {
     padding-top: 30px;
   }
 }
+
+/* ---------- chapter strip --------------------------------------------------
+   A sub-page's local map: its chapter, then its siblings. The sidebar stops at
+   chapter level on purpose, because a sixty-entry sidebar duplicated into sixty
+   files means every nav change is a sixty-file edit and there is no build step
+   to do it for us. Added 2026-08-16 when the chapters began splitting.
+   --------------------------------------------------------------------------- */
+nav.chapter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 14px;
+  margin: 0 0 26px;
+}
+nav.chapter .up {
+  color: var(--accent);
+  text-decoration: none;
+  letter-spacing: 0.04em;
+}
+nav.chapter .up::after {
+  content: " /";
+  color: var(--dimmer);
+}
+nav.chapter a {
+  color: var(--dim);
+  text-decoration: none;
+}
+nav.chapter a:hover {
+  color: var(--text);
+}
+nav.chapter .now {
+  color: var(--text);
+  border-bottom: 1px solid var(--accent-dk);
+}
+
+/* A chapter page's contents list: sub-pages with a sentence each. */
+ol.contents {
+  list-style: none;
+  counter-reset: ch;
+  padding: 0;
+  margin: 26px 0;
+}
+ol.contents li {
+  counter-increment: ch;
+  border-top: 1px solid var(--line-soft);
+  padding: 14px 0 14px 34px;
+  position: relative;
+}
+ol.contents li::before {
+  content: counter(ch, decimal-leading-zero);
+  position: absolute;
+  left: 0;
+  top: 15px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--dimmer);
+}
+ol.contents a {
+  font-family: var(--mono);
+  font-size: 15px;
+  text-decoration: none;
+  display: block;
+  margin-bottom: 3px;
+}
+ol.contents span {
+  color: var(--dim);
+  font-size: 14px;
+  display: block;
+  line-height: 1.5;
+}

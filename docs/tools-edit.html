@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Edit · Tools · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav here" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<p class="eyebrow">Doing work</p>
+<h1><code>Edit</code>, and its two ways of saying where</h1>
+
+<nav class="chapter">
+  <a class="up" href="tools.html">Tools</a>
+  <a href="tools-trait.html">the trait</a>
+  <a href="tools-outcome.html">outcomes</a>
+  <a href="tools-truncation.html">truncation</a>
+  <a href="tools-ctx.html">ToolCtx</a>
+  <a href="tools-containment.html">containment</a>
+  <a href="tools-files.html">files</a>
+  <span class="now">Edit</span>
+  <a href="tools-bash.html">Bash</a>
+  <a href="tools-tasks.html">tasks</a>
+  <a href="tools-web.html">web</a>
+  <a href="tools-lsp.html">LSP</a>
+</nav>
+
+<p class="lede">
+  One tool, two mutually exclusive addressing modes: quote the text, or name
+  the line and the four characters <code>Read</code> printed beside it. A call
+  supplying both, or neither, is refused rather than resolved by precedence.
+</p>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Argument</th><th>Type</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>file_path</code> <em>required</em></td><td>string</td><td>Relative to the working directory, or absolute inside it.</td></tr>
+      <tr><td><code>new_string</code> <em>required</em></td><td>string</td><td>The replacement. With <code>lines</code>, empty deletes.</td></tr>
+      <tr><td><code>old_string</code></td><td>string</td><td>Exact text, must occur once. This or <code>lines</code>.</td></tr>
+      <tr><td><code>lines</code></td><td>string</td><td><code>12#a3f9</code>, or <code>12#a3f9-15#b7c1</code> for an inclusive range. This or <code>old_string</code>.</td></tr>
+      <tr><td><code>replace_all</code></td><td>boolean</td><td>Default false. Only valid with <code>old_string</code>.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  <code>read_only: false</code>, <code>reaches_network: false</code>,
+  <code>idempotent: false</code>. The last is correct rather than pessimistic:
+  running the same edit twice fails the second time, because after the first the
+  anchor is gone. A tool that reported success for a no-op would be lying about
+  what it did. Its one reader is
+  <a href="tools-trait.html#meta"><code>Registry::register</code></a>, and
+  <code>read_only: false</code> is what makes <code>idempotent: false</code> a
+  legal thing to say here rather than a contradiction.
+</p>
+
+<h2 id="modes">Why one tool and not two</h2>
+
+<pre><code><span class="c">//! **Why not a second tool.** A `EditLines` alongside `Edit` would cost its</span>
+<span class="c">//! whole description in every request, on every turn, forever, and would hand</span>
+<span class="c">//! the model a choice it has no good basis for making — the two are not for</span>
+<span class="c">//! different jobs, they are two spellings of the same job. It would also break</span>
+<span class="c">//! the one compatibility promise this crate makes: the six tool names are</span>
+<span class="c">//! Claude Code's exactly, so a hook matcher or an allow-list written for one</span>
+<span class="c">//! works for the other, and a seventh name is outside that set. **Why not</span>
+<span class="c">//! replace `old_string`.** Every model that has ever been trained on a</span>
+<span class="c">//! Claude-Code-shaped tool surface already knows how to drive `old_string`, and</span>
+<span class="c">//! the addressing scheme here can only be driven by a model that has seen a</span>
+<span class="c">//! `Read` from *this* harness in *this* conversation.</span></code></pre>
+<span class="src">tools/fs/src/edit.rs — module doc</span>
+
+<h3>The refusals decidable without a file</h3>
+
+<p>
+  All of these live in <code>validate_args</code>, and a test proves it by
+  pointing them at a path that does not exist.
+</p>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Call</th><th>Refusal</th></tr></thead>
+    <tbody>
+      <tr><td>both <code>old_string</code> and <code>lines</code></td><td><code>Edit takes old_string or lines, not both; they are two ways of saying where, and supplying both does not say where twice</code></td></tr>
+      <tr><td>neither</td><td><code>Edit needs somewhere to change: old_string with the exact text to replace, or lines with an address from Read such as 12#a3f9</code></td></tr>
+      <tr><td>empty <code>old_string</code></td><td><code>Edit.old_string is empty; use Write to create a file</code></td></tr>
+      <tr><td><code>old_string</code> equal to <code>new_string</code></td><td><code>Edit.old_string and Edit.new_string are identical; the edit would do nothing</code></td></tr>
+      <tr><td><code>replace_all</code> with <code>lines</code></td><td><code>Edit.replace_all applies to old_string only; a lines address already names exactly one place</code></td></tr>
+      <tr><td>malformed <code>lines</code></td><td><code>Edit.lines </code> + one of the parser's five messages, below</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  <code>replace_all</code> is refused rather than ignored against an address.
+  Accepting and ignoring it would teach the model the flag does nothing, which
+  is the lesson it must never learn about the <code>old_string</code> form.
+</p>
+<span class="src">tools/fs/src/edit.rs — <code>validate_args</code></span>
+
+<h2 id="anchor">The literal anchor</h2>
+
+<p>
+  <code>old_string</code> occurring three times and the model meaning one of
+  them is the case every design gets wrong. Taking the first edits code the
+  model was not looking at; taking the last is the same bug with different luck;
+  editing all three is a refactor nobody asked for. All three return
+  <code>Ok</code>, and the damage surfaces later as a test failure in a file the
+  transcript never mentions.
+</p>
+
+<pre><code>        <span class="c">// `str::matches` counts non-overlapping occurrences left to right, which</span>
+        <span class="c">// is the same walk `replacen`/`replace` below will make — so the count</span>
+        <span class="c">// reported in the error is the count that would have been changed, not</span>
+        <span class="c">// an estimate of it.</span>
+        <span class="k">let</span> hits = before.matches(old).count();
+        <span class="k">match</span> (hits, replace_all) {
+            <span class="c">// Zero is refused whatever `replace_all` says: "change all of them"</span>
+            <span class="c">// is not satisfied by changing none, and silently succeeding here</span>
+            <span class="c">// would let the model believe an edit landed that never did.</span>
+            (0, _) =&gt; {
+                <span class="k">return</span> Err(ToolError::BadArguments(format!(
+                    <span class="s">"old_string was not found in {raw}; it must match byte for byte, \
+                     and Read's line labels are not part of the file"</span>
+                )))
+            }
+            <span class="c">// The named edge. Reporting the count is what makes the failure</span>
+            <span class="c">// actionable: the model knows whether to extend the anchor or to</span>
+            <span class="c">// say it meant all of them.</span>
+            (n, <span class="k">false</span>) <span class="k">if</span> n &gt; 1 =&gt; {
+                <span class="k">return</span> Err(ToolError::BadArguments(format!(
+                    <span class="s">"old_string occurs {n} times in {raw}; Edit will not choose \
+                     between them. Extend old_string with surrounding lines until \
+                     it is unique, pass replace_all: true to change all {n}, or \
+                     address the one you mean with Edit.lines"</span>
+                )))
+            }
+            _ =&gt; {}
+        }</code></pre>
+<span class="src">tools/fs/src/edit.rs — <code>by_anchor</code></span>
+
+<p>
+  The zero-match message names the two things a model gets wrong at this point:
+  the match is byte for byte, and <code>Read</code>'s line labels are not part
+  of the file. A model that copies a labelled line straight into
+  <code>old_string</code> would otherwise be told only that its text is absent.
+</p>
+
+<p>
+  This form accepts <code>Partial</code> and refuses <code>Stale</code>. A
+  partial read licenses an anchored edit because the anchor came from what was
+  shown; a literal anchor on a drifted file can match text that moved somewhere
+  it does not belong, and nothing about the match would reveal it. The
+  <code>Stale</code> refusal names the cheaper way out:
+  <code>address the lines you want with Edit.lines, which checks each one
+  against what it said when you read it</code>.
+</p>
+
+<h2 id="address">The address, and what it is made of</h2>
+
+<p>
+  A line number on its own is a promise the filesystem never made. The model
+  reads line 12, thinks for four turns, and edits line 12, but the user saved a
+  file in between and an import got added at the top. A line-numbered edit
+  applies cleanly to the wrong line and returns <code>Ok</code>.
+</p>
+
+<pre><code><span class="c">/// FNV-1a over the line's bytes, with the line terminator excluded.</span>
+<span class="c">///</span>
+<span class="c">/// The terminator is excluded so that the same text hashes the same whether it</span>
+<span class="c">/// is the last line of the file or not, and whether the file is CRLF or LF.</span>
+<span class="c">/// Callers strip it; this function does not look for it. What *is* included is</span>
+<span class="c">/// leading and trailing whitespace, deliberately: trailing whitespace is real</span>
+<span class="c">/// content, a formatter stripping it is a real change to the line, and a hash</span>
+<span class="c">/// that ignored it would let exactly that change slip past unnoticed.</span>
+<span class="k">pub fn</span> hash_line(line: &amp;<span class="k">str</span>) -&gt; <span class="k">u64</span> {
+    <span class="k">let mut</span> h: <span class="k">u64</span> = 0xcbf2_9ce4_8422_2325;
+    <span class="k">for</span> b <span class="k">in</span> line.as_bytes() {
+        h ^= *b <span class="k">as u64</span>;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}</code></pre>
+
+<p>
+  Four hex characters rendered, 64 bits stored, and they defend different
+  things. The rendered hash is copied by the model on every addressed edit and
+  printed on every line of every <code>Read</code>, so its width is a token cost
+  paid thousands of times. The stored hash costs eight bytes in a map nobody
+  pays tokens for. Because the tracker checks the stored hash over the whole
+  edited range while the model supplies only the two endpoints, the endpoints
+  end up checked twice: at 16 bits by the model's claim and at 64 bits by the
+  tracker's record.
+</p>
+
+<p>
+  FNV-1a is trivially collidable by anyone who wants to, and that does not
+  matter. What is defended against is <em>accident</em>. An attacker who can
+  rewrite the file being edited already has everything a collision would buy.
+</p>
+<span class="src">tools/fs/src/hashline.rs — module doc, <code>hash_line</code>, <code>short</code></span>
+
+<div class="note">
+  <span class="h">A measurement that refuted its own justification</span>
+  <p>
+    <code>short</code> folds the hash before truncating it, and the obvious
+    reason for that turns out to be wrong. FNV-1a's lowest bit is a parity of
+    the input bytes and its low bits are conventionally called weak, which
+    suggests truncating directly would collide badly on near-identical source
+    lines. Over every <code>.rs</code> and <code>.md</code> line in this
+    repository (50,621 distinct lines), folded and unfolded truncation both
+    land within 1% of what a uniform 16-bit hash would produce. The fold buys
+    nothing measurable here and is kept because it costs two instructions.
+  </p>
+  <p>
+    One number that framing makes easy to misread: 19,531 colliding
+    <em>pairs</em> in that corpus sounds alarming and is irrelevant. Nothing
+    here asks whether two lines in a file share a hash. It asks whether the line
+    now at position 12 hashes to what the model expected at position 12, which
+    is one comparison against one value, and 1 in 65,536 is the whole exposure.
+  </p>
+</div>
+<span class="src">tools/fs/src/hashline.rs — module doc</span>
+
+<h3>The parser, and its five refusals</h3>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Input</th><th>Message, prefixed <code>Edit.lines</code></th></tr></thead>
+    <tbody>
+      <tr><td>empty</td><td><code>is empty; it should look like 12#a3f9, or 12#a3f9-15#b7c1 for a range</code></td></tr>
+      <tr><td><code>12</code></td><td><code>is 12, which has no #hash; copy the whole `line#hash` label from the left-hand column of Read's output — a line number on its own does not say which text you meant</code></td></tr>
+      <tr><td><code>12#----</code></td><td><code>is 12#----, and ---- is what Read prints when it had to clip a line that was too long to show. You have not seen the end of that line…</code></td></tr>
+      <tr><td><code>12#zzz</code></td><td><code>whose hash "zzz" is not the four hex characters Read prints</code></td></tr>
+      <tr><td><code>15#b7c1-12#a3f9</code></td><td><code>which ends before it starts; a range runs from the lower line number to the higher one</code></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  The bare-line-number case gets its own message because it is the
+  overwhelmingly likely mistake. Telling the model "syntax error" would send it
+  to re-read the description; telling it the hash is in the <code>Read</code>
+  output it already has sends it straight to the fix.
+</p>
+
+<p>
+  Splitting a range is more delicate than it looks, because the clipped marker
+  is four hyphens:
+</p>
+
+<pre><code>    <span class="c">// The range separator is a hyphen *followed by a digit*, and it has to be</span>
+    <span class="c">// identified that precisely because [`CLIPPED`] is four hyphens: splitting</span>
+    <span class="c">// on the first hyphen anywhere turns `12#----` into the range `12#` to</span>
+    <span class="c">// `---`, and the model gets told its hash is malformed instead of being</span>
+    <span class="c">// told the line was clipped. Neither a line number nor a hex hash can</span>
+    <span class="c">// contain a hyphen, so "hyphen, then digit" is unambiguous.</span>
+    <span class="k">let</span> split = text
+        .char_indices()
+        .find(|(idx, c)| *c == <span class="s">'-'</span> &amp;&amp; text[idx + 1..].starts_with(|n: <span class="k">char</span>| n.is_ascii_digit()));</code></pre>
+<span class="src">tools/fs/src/hashline.rs — <code>parse</code>, <code>anchor</code></span>
+
+<p>
+  Case is normalised on the way in, so <code>12#A3F9</code> and
+  <code>12#a3f9</code> compare equal, but the claimed hash is kept as text
+  rather than parsed to a number so a refusal can quote back the model's own
+  typo.
+</p>
+
+<h2 id="checks">Three checks stand between an address and the disk</h2>
+
+<figure>
+  <div class="figwrap">
+    <svg viewBox="0 0 700 300" role="img" aria-label="An addressed edit passes four gates before the write: the read state must not be Never, the endpoints must still hash to what the model claimed, the whole run of lines must appear intact somewhere in the harness's record, and no line in the range may be longer than Read will show. Stale is allowed through.">
+      <defs>
+        <marker id="te-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+        </marker>
+        <marker id="te-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+        </marker>
+      </defs>
+
+      <rect class="box" x="10" y="16" width="190" height="34" rx="4" />
+      <text class="lbl" x="26" y="38">read state ≠ Never</text>
+      <text class="sm" x="212" y="38">Stale is allowed through</text>
+
+      <path class="edge" d="M105 50 L105 78" marker-end="url(#te-arrow)" />
+      <rect class="box" x="10" y="78" width="190" height="34" rx="4" />
+      <text class="lbl" x="26" y="100">1 · endpoints match</text>
+      <text class="sm" x="212" y="100">the model's own claim, 16 bits</text>
+
+      <path class="edge" d="M105 112 L105 140" marker-end="url(#te-arrow)" />
+      <rect class="box" x="10" y="140" width="190" height="34" rx="4" />
+      <text class="lbl" x="26" y="162">2 · run seen intact</text>
+      <text class="sm" x="212" y="162">the tracker's record, 64 bits, anywhere</text>
+
+      <path class="edge" d="M105 174 L105 202" marker-end="url(#te-arrow)" />
+      <rect class="box" x="10" y="202" width="190" height="34" rx="4" />
+      <text class="lbl" x="26" y="224">3 · no line over 2000</text>
+      <text class="sm" x="212" y="224">measured against the file, not the sighting</text>
+
+      <path class="edge-hl" d="M105 236 L105 264" marker-end="url(#te-arrow-hl)" />
+      <rect class="hl" x="10" y="264" width="190" height="30" rx="4" />
+      <text class="lbl" x="26" y="284">splice, then write</text>
+      <text class="sm" x="212" y="284">refused again if the result equals the original</text>
+    </svg>
+  </div>
+  <figcaption>
+    The addressed path, from <code>by_address</code>. Each check catches a
+    different lie, and each refusal names the line, what was expected, and what
+    is there instead. Drawn from <code>tools/fs/src/edit.rs</code> and
+    <code>tools/fs/src/session.rs</code>.
+  </figcaption>
+</figure>
+
+<ol class="body">
+  <li>
+    <strong>The endpoints still say what the model says they say.</strong>
+    Catches a model aiming with a line number it worked out four turns ago. This
+    is the only check the model's own quoted hash can make. The tracker knows
+    what the world last looked like and has no idea what the model thinks it
+    looks like.
+  </li>
+  <li>
+    <strong>Every line in the range is text this harness has shown.</strong> The
+    model sends two hashes; this is the other ninety-eight, matched against the
+    tracker's record. It closes the known failure of per-line hashing, which is
+    that a range can drift in the middle while both its ends look untouched.
+  </li>
+  <li>
+    <strong>No line in the range is longer than <code>Read</code> will
+    show.</strong> Replacing a line whose end nobody has seen discards text
+    nobody read. Measured against the file rather than remembered from the read,
+    because it is a property of the line and not of the sighting.
+  </li>
+</ol>
+
+<h3>Check 2 asks whether the text changed, not whether it moved</h3>
+
+<pre><code><span class="c">/// **Anywhere, not at the same line numbers, and that is the whole point.**</span>
+<span class="c">/// The obvious version of this check compares the recorded hash for line N</span>
+<span class="c">/// against the file's line N, and it is wrong in a way that only shows up</span>
+<span class="c">/// once something inserts a line: every line below the insertion shifts, so</span>
+<span class="c">/// every comparison fails, and a range whose contents nobody touched is</span>
+<span class="c">/// refused for having moved. Worse, it contradicts the refusal in `edit.rs`</span>
+<span class="c">/// that says "your line is now line 7, retry there" — the retry would hit</span>
+<span class="c">/// this check and be refused too. That contradiction was found by watching a</span>
+<span class="c">/// real model take the advice and get refused for following it.</span>
+<span class="k">pub fn</span> contains_run(&amp;<span class="k">self</span>, session: &amp;<span class="k">str</span>, path: &amp;Path, run: &amp;[<span class="k">u64</span>]) -&gt; <span class="k">bool</span> {</code></pre>
+<span class="src">tools/fs/src/session.rs — <code>ReadTracker::contains_run</code></span>
+
+<p>
+  When check 2 fails, the record is consulted a second time so the refusal can
+  tell two problems apart. A <em>gap</em> means the line was never shown:
+  <code>Edit.lines covers line {n} of {raw}, which is outside the part of the
+  file you have read</code>. A mismatch with no gap means it was shown and has
+  changed: <code>line {n} of {raw} changed on disk after you read it, and it is
+  inside the range {first}-{last} you asked to replace. It now reads {…}</code>.
+  The second lookup is only reached on the failure path.
+</p>
+
+<p>
+  Because the checks are per-line, <code>lines</code> accepts a
+  <code>Stale</code> file where <code>old_string</code> still refuses one. That
+  is a sharper rule rather than a weaker one.
+</p>
+
+<h2 id="moved">The refusal that was rewritten after watching a model read it</h2>
+
+<pre><code><span class="c">/// **It reports; it does not relocate.** Applying the edit at the line the</span>
+<span class="c">/// search found would be the "plausible and wrong" move this crate refuses</span>
+<span class="c">/// everywhere else: a line that moved may have moved because the code around it</span>
+<span class="c">/// changed, and whether the edit still belongs there is the model's call, not a</span>
+<span class="c">/// hash comparison's. Sixteen bits is ample evidence for a hint and nowhere near</span>
+<span class="c">/// enough to write a file on.</span>
+<span class="k">fn</span> moved(raw: &amp;<span class="k">str</span>, anchor: &amp;hashline::Anchor, content: &amp;<span class="k">str</span>, lines: &amp;[&amp;<span class="k">str</span>]) -&gt; String {</code></pre>
+
+<p>
+  The message has three shapes, chosen by how many other lines in the file still
+  hash to what the model was aiming at. Zero: the text is genuinely gone, read
+  the file again. Exactly one: <code>The line you meant is intact and is now
+  line {only}: retry with lines "{only}#{hash}". You only need to Read {raw}
+  again if you also need to see what else changed around it</code>. Several:
+  which one you meant is not decidable here.
+</p>
+
+<div class="note">
+  <span class="h">What the reword fixed, and what it did not</span>
+  <p>
+    The first draft opened with "Edit.lines addressed 5#73b2, but line 5 now
+    reads …" and closed by offering a re-read as a coequal option. Sonnet 4.5
+    replied <em>"I see — I made an error. Let me re-read the file"</em> and
+    spent the whole <code>Read</code> the hint existed to save. Two faults, both
+    in the prose. It did not say the file changed, which reads as
+    <em>you counted wrong</em>, and the fix for counting wrong is to look again.
+    And it offered the re-read as an equal option, which a model under
+    uncertainty takes every time.
+  </p>
+  <p>
+    <span class="chip obs">observed</span> The reword stopped the model calling
+    it its own error and started it acting on the corrected address.
+    <strong>It did not stop the re-read.</strong> In both runs the author
+    watched, Sonnet 4.5 read the file again anyway before retrying. The claim
+    made here is therefore the smaller one: the corrected address the refusal
+    offers is one this tool accepts. No token saving is claimed from it, and the
+    source says so in as many words.
+  </p>
+</div>
+<span class="src">tools/fs/src/edit.rs — <code>moved</code></span>
+
+<h2 id="splice">The write itself</h2>
+
+<p>
+  Lines are split with <code>split_inclusive('\n')</code>, so each keeps its own
+  terminator. Rebuilding from <code>str::lines</code> would convert every CRLF
+  file to LF on the first one-line edit and add a newline to a file that never
+  had one, both whole-file rewrites disguised as one-line changes. Replacement
+  lines take the terminator of the last line being replaced.
+</p>
+
+<p>
+  An empty <code>new_string</code> deletes the lines rather than leaving a blank
+  one behind. Both readings are defensible; the result says "deleted" in so many
+  words, so a model that meant the other thing finds out immediately rather than
+  from a diff three turns later.
+</p>
+
+<p>
+  A splice that produces the file it started with is refused:
+  <code>the replacement for lines {first}-{last} of {raw} is byte for byte what
+  is already there; nothing would change</code>. That check sits after the file
+  is read because it cannot be known before, where the <code>old_string</code>
+  form catches the same thing in <code>validate_args</code>.
+</p>
+<span class="src">tools/fs/src/edit.rs — <code>by_address</code>, <code>body</code>, <code>terminator</code></span>
+
+<h3>What a successful addressed edit hands back</h3>
+
+<p>
+  The summary, then up to <code>ECHO_LIMIT</code> = 20 replacement lines with
+  their <em>new</em> numbers and <em>new</em> hashes, then a sentence saying how
+  far everything below moved. Past twenty it says <code>more than 20 lines, so
+  Read {first}-{last} for their labels</code>. If the file ends without a
+  newline it says so, because a model that assumes one is there will build its
+  next edit wrong and nothing else in the output would reveal it.
+</p>
+
+<p>
+  Every edit shifts the numbering underneath it, and a model working from
+  pre-edit numbers aims its next one wrong. That cascade was reported against
+  the project this scheme came from and closed there as not planned.
+</p>
+<span class="src">tools/fs/src/edit.rs — <code>report</code>, <code>ECHO_LIMIT</code></span>
+
+<h2 id="cost">What the addressing actually costs, measured</h2>
+
+<p>
+  The labels are a real cost paid on every <code>Read</code> to make some edits
+  cheaper, and the measurement is closer than the idea's reputation suggests.
+  Counted with Anthropic's <code>count_tokens</code> endpoint on 2026-08-11.
+</p>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Measured</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Addressed edit against <code>old_string</code>, 14 real single-line edits from this repository</td>
+        <td><strong>26% fewer output tokens</strong>: 842 against 1140, because the anchor stops having to be long enough to be unique</td>
+      </tr>
+      <tr>
+        <td>Labelling, over 2000 lines of this repository's Rust</td>
+        <td><strong>+3.6 tokens a line, +23%</strong> on every read. Irreducible: base36 at the same width is worse at 3.97, dropping the <code>#</code> saves 0.5, and three hex characters saves 0.7 at four times the collision exposure</td>
+      </tr>
+      <tr>
+        <td>Break-even, at list prices</td>
+        <td>≈14 edits per read uncached; ≈1.5 once the read is cached, which it normally is within a turn</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  <span class="chip obs">observed</span> Those numbers were produced by the
+  author of <code>read.rs</code> against the live <code>count_tokens</code>
+  endpoint on 2026-08-11, and the run was not kept. They are repeatable in
+  principle and not from anything in this repository, because neither the
+  fourteen edits nor the 2000-line sample is recorded.
+</p>
+
+<p>
+  So on tokens alone it is close to a wash, and the case does not rest on it. It
+  rests on the call that no longer happens: an <code>old_string</code> edit
+  against a drifted file was refused outright and cost a full re-read plus a
+  re-emitted edit every time, which is the common case on a machine where
+  somebody has the file open in an editor.
+</p>
+
+<div class="note warn">
+  <span class="h">The 61% figure is not this change's number</span>
+  <p>
+    The widely-quoted −61% is the format author's own benchmark of their own
+    scheme, 180 tasks × 3 runs over roughly 16 models, and −61% is
+    <strong>Grok 4 Fast, the best case, not a median</strong>. The README does
+    not say which of two baselines it is against. It also does not describe
+    Emma's implementation, which is a different scheme: the source project tags
+    each <em>file</em> with one hash and addresses lines by bare number, and
+    normalises trailing whitespace away before hashing, so a formatter
+    stripping trailing spaces is invisible to its staleness check. Emma hashes
+    per line, including trailing whitespace, and catches that.
+  </p>
+</div>
+<span class="src">notes/improvements.md item 2; tools/fs/src/read.rs and hashline.rs — module docs</span>
+
+<h2 id="tests">What holds it</h2>
+
+<p>
+  <span class="chip test">tested</span> <code>tools/fs/tests/addressed.rs</code>
+  is 17 tests and carries the positive controls that stop the file being
+  satisfied by refusing every addressed edit:
+  <code>an_addressed_edit_changes_exactly_the_line_named</code>,
+  <code>drift_elsewhere_in_the_file_does_not_block_an_addressed_edit</code> and
+  <code>a_line_that_only_moved_can_be_edited_at_its_new_number</code>, which is
+  the one that proves the corrected address the <code>moved</code> refusal
+  offers is accepted.
+  <code>the_result_labels_its_new_lines_so_the_next_edit_needs_no_read</code>
+  makes a second edit from the first's output with no <code>Read</code> between
+  them, and <code>crlf_and_a_missing_final_newline_both_survive</code> covers
+  the terminator handling.
+  <span class="chip cert">certified</span> 17 tests in that file passed at
+  commit <code>a3eba74</code> on this box, from
+  <code>cargo test -p emma-tools-fs</code>.
+</p>
+
+<p>
+  <span class="chip test">tested</span> The hash module's own tests guard what
+  can actually be demonstrated rather than the fold:
+  <code>a_hash_covers_whitespace_because_whitespace_is_content</code> and
+  <code>near_identical_lines_get_distinct_labels</code>, whose floor of 1940
+  distinct labels over 2000 near-identical lines allows for the roughly 30
+  birthday collisions a 65,536-space produces and no more.
+</p>
+
+<h2 id="unverified">What is not verified here</h2>
+
+<p>
+  <span class="chip unv">unverified</span> The <span class="chip test">tested</span>
+  chips on this page rest on each test's own recorded reasoning, not on a
+  mutation run while writing it: this task changed no source, so nothing was
+  broken to watch a test go red. The <code>ECHO_LIMIT</code> boundary in
+  particular has no test named for it, so whether a 21-line replacement really
+  takes the summarise branch is inferred from the code. Settled by replacing 21
+  lines in a sandbox and reading the result.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> The three token measurements are the
+  most quoted numbers on this page and the least reproducible. Settled by
+  re-running <code>count_tokens</code> against a recorded sample of edits and
+  a named file, and committing both.
+</p>
+</div>
+</main>
+</div>
+</body>
+</html>

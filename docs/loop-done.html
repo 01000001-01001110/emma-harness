@@ -1,0 +1,618 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The goal, and how done is decided · The agent loop · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav here" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">The agent loop</p>
+  <h1>The goal, and how done is decided</h1>
+
+  <nav class="chapter">
+    <a class="up" href="loop.html">The agent loop</a>
+    <a href="loop-one-turn.html">One turn</a>
+    <a href="loop-failure.html">Failure</a>
+    <a href="loop-memo.html">The memo</a>
+    <a href="loop-endings.html">Endings</a>
+    <a href="loop-kick.html">The kick</a>
+    <a href="loop-budgets.html">Budgets</a>
+    <span class="now">Done</span>
+    <a href="loop-seam.html">Seams</a>
+  </nav>
+
+  <p class="lede">
+    <code>goal.rs</code> holds the text a run is held to, the trait that answers
+    "is this met?", the one shipped implementation of it, and the filter that
+    keeps the completion marker off the screen without keeping it from the loop.
+    It is the file that separates Emma from a chat client.
+  </p>
+  <span class="src">crates/emma/src/goal.rs</span>
+
+  <h2 id="goal">What a goal is</h2>
+
+  <pre><code><span class="c">// crates/emma/src/goal.rs</span>
+pub struct Goal {
+    pub text: String,
+    <span class="c">/// What a `UserPromptSubmit` hook asked to put in front of the model for
+    /// this goal, in hook-name order. Empty for every goal nobody typed.
+    ///
+    /// **It lives on the goal rather than on the loop**, and that placement is
+    /// the answer to "where does this fire?". A hook attached to a *user
+    /// prompt* must fire once, when a person submits one — not once per model
+    /// call, and not at all for a subagent's brief, which is a work order one
+    /// machine wrote for another. Carrying it here means the only way to have
+    /// any is to have been given some at the place a human's text becomes a
+    /// goal; [`Goal::new`] has none, and `delegate.rs` calls `Goal::new`.</span>
+    injected: Vec&lt;String&gt;,
+}</code></pre>
+
+  <p>
+    Two fields and four methods. <code>Goal::new</code> takes the text and no
+    injection. <code>with_injected</code> attaches hook context and is the only
+    way to get any. <code>injected()</code> reads it back.
+    <code>opening()</code> and <code>opening_turn()</code> are the two message
+    shapes below. The field is private, so a subagent's brief cannot acquire
+    injected context by construction rather than by convention.
+    <span class="chip test">tested</span>
+    <code>a_goal_with_no_injection_opens_exactly_as_it_did_before</code> asserts
+    <code>Goal::new</code> produces an empty list and an
+    <code>opening_turn</code> equal to <code>opening</code>.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — <code>Goal</code>; crates/emma/src/delegate.rs</span>
+
+  <pre><code><span class="c">// crates/emma/src/goal.rs</span>
+<span class="c">/// The user message that opens a goal: **the user's words, and nothing
+/// else.**
+///
+/// This used to prepend "Work toward this goal. You have tools; use them
+/// rather than describing what you would do" and append the completion
+/// contract. Both are true of every goal, which is precisely why neither
+/// belongs here — see [`standing_contract`], which now carries them in the
+/// system prompt.
+///
+/// The reason it moved is what a preamble does to a message that is not a
+/// work order. Typing `Hello` produced a model that ran `pwd &amp;&amp; ls -la`
+/// and listed the task file before saying hello, at a cost of 22,083
+/// tokens — correct behaviour, given it had been handed a greeting wrapped
+/// in an instruction to go and do something. **A preamble applied to every
+/// input is an instruction the user did not write and cannot see.**
+///
+/// What the user typed is now what the model reads.</span>
+pub fn opening(&amp;self) -&gt; String {
+    self.text.trim().to_string()
+}</code></pre>
+
+  <p>
+    This is the reversal to keep legible, because the reversed idea is the one
+    that invites itself back: wrapping every goal in a work order is the obvious
+    way to make a model use its tools, and it turned a greeting into a
+    22,083-token investigation.
+    <span class="chip obs">observed</span> once, by the owner, on the run that
+    produced the figure; the transcript is not in this tree and the number
+    survives in this doc comment and in a test comment quoting it.
+    <span class="chip test">tested</span>
+    <code>the_opening_carries_the_contract_of_the_check_actually_in_force</code>
+    asserts the opening contains neither the marker nor the phrase "work
+    toward".
+  </p>
+  <span class="src">crates/emma/src/goal.rs — <code>Goal::opening</code> and its unit test</span>
+
+  <pre><code><span class="c">// crates/emma/src/goal.rs</span>
+pub fn opening_turn(&amp;self) -&gt; String {
+    let opening = self.opening();
+    if self.injected.is_empty() {
+        return opening;
+    }
+    let mut s = String::from(
+        "[Context added automatically by a UserPromptSubmit hook before this message. \
+         The user did not write it.]\n",
+    );
+    for block in &amp;self.injected {
+        s.push_str(block.trim());
+        s.push('\n');
+    }
+    s.push('\n');
+    s.push_str(&amp;opening);
+    s
+}</code></pre>
+
+  <p>
+    Injected context is a third thing, neither the user's words nor the standing
+    contract, and each of the three other places it could have gone is wrong for
+    its own reason. In the system prompt it would be per-turn bytes inside the
+    cached prefix, rewriting the entry every turn and paying 1.25× for the whole
+    prompt instead of reading it at 0.1×. Merged into the user's sentence it
+    would be an instruction they did not write. As its own message before theirs
+    it would be two user turns in a row, which the API rejects. So it rides at
+    the front of the same user turn, attributed, separated by a blank line.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — <code>Goal::opening_turn</code>; notes/audit-caching-emma.md</span>
+
+  <p>
+    It is one string rather than two content blocks because
+    <code>session.rs</code> rebuilds this turn from the single
+    <code>opening</code> field of the goal record, and <code>--resume</code>
+    replays what was recorded. A second block would be dropped by the fold and a
+    resumed session would replay a conversation the model never had.
+    <span class="chip test">tested</span>
+    <code>injected_context_rides_in_front_of_the_users_words_without_becoming_them</code>
+    asserts the exact composed string, character for character, so a format
+    change nobody meant to make shows up in the diff.
+    <code>every_hooks_context_is_carried_and_the_order_is_the_harnesss</code>
+    asserts two hooks appear in the harness's order.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — its unit tests; crates/emma/src/session.rs</span>
+
+  <h2 id="contract">The standing contract</h2>
+
+  <pre><code><span class="c">// crates/emma/src/goal.rs</span>
+pub fn standing_contract(check: &amp;dyn DoneCheck) -&gt; String {
+    format!(
+        "\n\nYou work by using the tools you have rather than describing what you would do — \
+         read the file, make the edit, run the command. When a request needs no tools, such as \
+         a question or a greeting, simply answer it.\n\n{}",
+        check.contract()
+    )
+}</code></pre>
+
+  <p>
+    Two sentences of framing and then whatever the check in force says about
+    completion. It takes a <code>&amp;dyn DoneCheck</code> rather than being a
+    constant, because the harness cannot know which check a run selected, and a
+    contract describing a rule the loop is not applying teaches a completion
+    ritual that decides nothing. It is appended to <code>instructions</code> at
+    request assembly, which is also the cheaper place: identical on every goal of
+    every session, so it sits in the stable cache prefix rather than riding in
+    <code>query</code> where nothing can cache it.
+    <span class="chip test">tested</span> the same unit test above asserts
+    <code>standing_contract(&amp;Never)</code> carries that check's sentence and
+    <em>not</em> the marker, and that <code>standing_contract(&amp;MarkerClaim)</code>
+    carries the marker.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — <code>standing_contract</code>, its unit test; crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
+
+  <h2 id="trait">The trait</h2>
+
+  <pre><code><span class="c">// crates/emma/src/goal.rs</span>
+<span class="c">/// The answer to "is this goal met?", and why not when it is not.
+///
+/// The reason is a `String` because it is shown to three audiences — the model
+/// in the kick, the user on the terminal, the session log — and one
+/// representation means all three are told the same thing.</span>
+pub enum Done {
+    Yes,
+    No(String),
+}
+
+<span class="c">/// How the loop decides a goal is met.</span>
+#[async_trait::async_trait]
+pub trait DoneCheck: Send + Sync {
+    <span class="c">/// For the log, so a transcript records which authority was in force.</span>
+    fn name(&amp;self) -&gt; &amp;'static str;
+
+    <span class="c">/// What the model is told about how completion will be judged.</span>
+    fn contract(&amp;self) -&gt; String;
+
+    <span class="c">/// Consulted when the model stops. `text` is its final message.</span>
+    async fn verdict(&amp;self, goal: &amp;Goal, text: &amp;str) -&gt; Done;
+}</code></pre>
+
+  <p>
+    Three methods and the loop knows nothing else: it asks for a verdict and
+    composes a kick from whatever reason comes back. <code>Send + Sync</code>
+    because the check is shared across a run that may delegate. The trait is
+    <code>async</code> because every alternative authority reads a file or runs a
+    process, and retrofitting <code>async</code> to a trait after the fact means
+    changing every caller.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — <code>Done</code>, <code>DoneCheck</code></span>
+
+  <h2 id="marker">The one shipped implementation</h2>
+
+  <pre><code><span class="c">// crates/emma/src/goal.rs</span>
+pub const MARKER: &amp;str = "GOAL COMPLETE";
+
+pub struct MarkerClaim;
+
+#[async_trait::async_trait]
+impl DoneCheck for MarkerClaim {
+    fn name(&amp;self) -&gt; &amp;'static str { "marker_claim" }
+
+    fn contract(&amp;self) -&gt; String {
+        format!(
+            "When — and only when — the goal is fully met, end your final message with the \
+             line:\n\n{MARKER}\n\nIf you stop without it you will be told the goal is not done \
+             and asked to continue."
+        )
+    }
+
+    async fn verdict(&amp;self, _goal: &amp;Goal, text: &amp;str) -&gt; Done {
+        if claims_done(text) {
+            Done::Yes
+        } else {
+            Done::No("your last message did not end with the completion line".into())
+        }
+    }
+}</code></pre>
+
+  <p>
+    <code>MARKER</code> is two plain words on their own line rather than a token
+    like <code>&lt;done/&gt;</code>, so the model writes it into prose it is
+    already writing and a human reading the transcript can see the claim being
+    made. <code>verdict</code> ignores the goal entirely, which is why its
+    parameter is <code>_goal</code>: the claim is about the model's own text.
+    <code>name()</code> is what the <code>goal</code> record stores as
+    <code>done_check</code>.
+    <span class="chip test">tested</span>
+    <code>the_marker_check_answers_both_ways</code>.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — <code>MarkerClaim</code>, <code>MARKER</code>; crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
+
+  <pre><code><span class="c">// crates/emma/src/goal.rs</span>
+<span class="c">/// Whether the model claimed completion in the text it just wrote.
+///
+/// Tolerant about decoration — a model that emits `**GOAL COMPLETE**` meant the
+/// same thing, and treating that as a non-claim would spend a kick on
+/// formatting. Not tolerant about position: the marker must own its line, so a
+/// sentence *about* the marker ("I will print GOAL COMPLETE when the tests
+/// pass") is not a claim.</span>
+pub fn claims_done(text: &amp;str) -&gt; bool {
+    text.lines().any(|line| {
+        line.trim()
+            .trim_matches(is_decoration)
+            .eq_ignore_ascii_case(MARKER)
+    })
+}
+
+<span class="c">/// The characters a model decorates a line with, which a claim survives.</span>
+fn is_decoration(c: char) -&gt; bool {
+    matches!(c, '*' | '`' | '#' | '_' | ' ')
+}</code></pre>
+
+  <p>
+    <code>any</code> over lines rather than a check on the last one, so a model
+    that adds a trailing blank line or a stray footer still gets its claim read.
+    <code>eq_ignore_ascii_case</code> means <code>goal complete</code> counts.
+    Five decoration characters are stripped from both ends: asterisk, backtick,
+    hash, underscore, space.
+    <span class="chip test">tested</span>
+    <code>a_marker_on_its_own_line_is_a_claim_and_a_mention_is_not</code> covers
+    the plain form, the bolded form, the backticked lowercase form, the sentence
+    that mentions it, and unrelated prose.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — <code>claims_done</code>, <code>is_decoration</code></span>
+
+  <h2 id="filter">Keeping the marker off the screen</h2>
+
+  <p>
+    The marker is a ritual between the loop and the model, printed into prose a
+    person is reading. Emma's kick needs the signal and the user does not need to
+    see it, and those are separable: <code>verdict</code> reads the model's real
+    text, <code>Outcome::text</code> keeps it verbatim, and the filter is applied
+    on the way to the terminal only.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — <code>MarkerFilter</code></span>
+
+  <p>
+    A <code>replace</code> on the finished text will not do, because text
+    streams: by the time the whole turn is in hand it is already on the screen.
+    Buffering each line will not do either, because that holds every line of
+    prose until its newline, turning a streamed paragraph into something that
+    appears a line at a time. So only a line that could <em>still turn into</em>
+    the marker is held.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/goal.rs</span>
+pub struct MarkerFilter {
+    <span class="c">/// The start of the current line, held back because it may yet be a marker.</span>
+    held: String,
+    <span class="c">/// This line has already been ruled out; the rest of it goes straight
+    /// through.</span>
+    passing: bool,
+}
+
+impl MarkerFilter {
+    <span class="c">/// Feed a fragment; get back what should appear on the screen now.</span>
+    pub fn push(&amp;mut self, chunk: &amp;str) -&gt; String {
+        let mut out = String::new();
+        for c in chunk.chars() {
+            if c == '\n' {
+                if self.passing {
+                    out.push('\n');
+                } else if !claims_done(&amp;self.held) {
+                    out.push_str(&amp;self.held);
+                    out.push('\n');
+                }
+                <span class="c">// …and when it *was* the marker, the line and its newline both
+                // go, so nothing is left behind where it was.</span>
+                self.held.clear();
+                self.passing = false;
+                continue;
+            }
+            if self.passing {
+                out.push(c);
+                continue;
+            }
+            self.held.push(c);
+            if !could_become_marker(&amp;self.held) {
+                out.push_str(&amp;self.held);
+                self.held.clear();
+                self.passing = true;
+            }
+        }
+        out
+    }
+
+    <span class="c">/// End of the turn: release whatever is still held, unless it is the
+    /// marker. A model that ends without a trailing newline is the ordinary
+    /// case, so this is where most markers are actually caught.</span>
+    pub fn finish(&amp;mut self) -&gt; String {
+        self.passing = false;
+        let held = std::mem::take(&amp;mut self.held);
+        if claims_done(&amp;held) { String::new() } else { held }
+    }
+
+    <span class="c">/// Everything, filtered, for a caller that has the whole text already.</span>
+    pub fn once(text: &amp;str) -&gt; String {
+        let mut f = Self::default();
+        let mut out = f.push(text);
+        out.push_str(&amp;f.finish());
+        out
+    }
+}</code></pre>
+
+  <p>
+    Two states and one decision per character. While <code>passing</code> is
+    false the character joins <code>held</code> and
+    <code>could_become_marker</code> is asked whether the line is still on its
+    way to being a claim; the first "no" flushes everything held and turns
+    <code>passing</code> on for the rest of the line. A newline resets both. In
+    prose that is a one- or two-character pause on a line beginning with
+    <code>g</code>.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/goal.rs</span>
+<span class="c">/// Whether a partial line is still on its way to being a claim.
+///
+/// Deliberately generous at both ends, for the same reason [`claims_done`] is:
+/// a model writing `**GOAL COMPLETE**` means the same thing, so the decoration
+/// has to be tolerated *while the line is being held* or the held text is
+/// released one character before the thing it was waiting for.</span>
+fn could_become_marker(line: &amp;str) -&gt; bool {
+    let t = line.trim_start_matches(is_decoration);
+    match t.get(..MARKER.len()) {
+        <span class="c">// Long enough to have said it: it must have, and everything after must
+        // be decoration.</span>
+        Some(head) =&gt; {
+            head.eq_ignore_ascii_case(MARKER) &amp;&amp; t[MARKER.len()..].chars().all(is_decoration)
+        }
+        <span class="c">// `get` also says `None` for a length that lands inside a character,
+        // which only happens past the marker's own length — so that is a line
+        // that is already longer than the marker and is not it.</span>
+        None if t.len() &lt;= MARKER.len() =&gt; MARKER[..t.len()].eq_ignore_ascii_case(t),
+        None =&gt; false,
+    }
+}</code></pre>
+
+  <p>
+    Three arms, and the third is the one worth pausing on.
+    <code>str::get(..n)</code> returns <code>None</code> both when the string is
+    shorter than <code>n</code> and when <code>n</code> lands inside a multi-byte
+    character. The <code>t.len() &lt;= MARKER.len()</code> guard separates them,
+    so a line whose bytes run past the marker's length is not it, and a shorter
+    line is compared as a prefix.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — <code>could_become_marker</code></span>
+
+  <p>
+    Four tests cover the filter, and two of them are about the cost rather than
+    the effect.
+    <span class="chip test">tested</span>
+    <code>the_marker_never_reaches_the_screen</code> runs four shapes the model
+    actually produces, including one with no trailing newline and one bolded.
+    <code>a_marker_split_across_fragments_is_still_caught</code> cuts the text
+    inside the word before the marker, inside the marker, and between its two
+    words, and asserts the output is exactly
+    <code>"Ported the middleware.\n\n"</code>.
+    <code>prose_is_not_delayed_by_the_filter</code> asserts
+    <code>push("Ported")</code> returns <code>"Ported"</code> immediately and
+    that <code>GOAL</code> is held until <code>s</code> rules it out.
+    <code>a_mention_of_the_marker_is_left_alone</code> asserts a sentence about
+    the marker passes through unchanged, so the model explaining its own contract
+    does not come out with a hole in it.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — its unit tests</span>
+
+  <h2 id="weakness">The largest known weakness</h2>
+
+  <div class="note warn">
+    <span class="h">The acting model grades its own homework</span>
+    <p>
+      <code>MarkerClaim</code> asks the model that just did the work whether the
+      work is done, and accepts a line of its own prose as the answer. Nothing in
+      the loop verifies the claim. The accurate statement of the guarantee is
+      <strong>"the loop will not stop <em>before</em> the model says it is
+      finished"</strong>, not "the loop stops when the work is finished".
+      <code>goal.rs</code>'s module doc states this in its own words rather than
+      leaving it to be discovered.
+    </p>
+  </div>
+  <span class="src">crates/emma/src/goal.rs — module doc</span>
+
+  <p>
+    Three other authorities were considered and each fails in a specific way.
+    <em>Stopping when the model stops</em> costs nothing and catches nothing: a
+    model that runs one command, reads the first error and writes "this looks
+    like a session-API mismatch" has stopped, and the goal is untouched. <em>A
+    check command exiting zero</em> touches reality and passes vacuously, on
+    <code>cargo test</code> against a target with no tests, a <code>test -f</code>
+    against a path that was already there, a suite whose failing case was deleted
+    rather than fixed; it also cannot express goals with no mechanical criterion,
+    which is most of what a person types. <em>No open tasks remain</em> is the
+    most legible, because a user can watch the file in an editor, and legible is
+    not honest: a model that learns closing tasks ends the loop will close them,
+    and a model that never opened one has an empty list from turn zero, which
+    reads as done before it has started.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — module doc</span>
+
+  <p>
+    The intended upgrade is not to replace one signal with another but to make
+    bookkeeping insufficient: use the task count to decide when to <em>stop
+    asking</em>, and gate the verdict behind something the model does not author.
+    That is a second <code>impl</code> and a different value in
+    <code>Setup</code>, not surgery on the loop, which is why
+    <code>DoneCheck</code> is a trait.
+    <code>notes/plan-loops-stage-1.md</code> designs a third implementation along
+    those lines: a cheap second model call as an independent judge, whose "no"
+    costs one kick and is bounded by <code>max_kicks</code> like any other
+    not-done. It is not built.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — module doc; notes/plan-loops-stage-1.md</span>
+
+  <div class="note">
+    <span class="h">Where the code disagrees with its own doc</span>
+    <p>
+      <code>goal.rs</code>'s module doc says <code>DoneCheck</code> "has one
+      implementation today". There are two: <code>MarkerClaim</code>, and
+      <code>SubagentClaim</code> in <code>delegate.rs</code>, which is
+      <code>MarkerClaim</code>'s contract plus the paragraph telling a subagent
+      that its final message is the only thing reaching its caller. The seam was
+      used and the doc predates the use.
+      <span class="chip cert">certified</span>:
+      <code>grep -rn "impl DoneCheck" crates/</code> at commit
+      <code>a3eba74</code> returns four lines, of which one is a comment in
+      <code>delegate.rs</code> pointing at this, one is
+      <code>MarkerClaim</code>, one is <code>SubagentClaim</code>, and one is
+      the <code>Never</code> test double inside <code>goal.rs</code>'s own tests.
+      The same wording is still in the doc at this commit.
+    </p>
+  </div>
+  <span class="src">crates/emma/src/goal.rs — module doc; crates/emma/src/delegate.rs — <code>SubagentClaim</code></span>
+
+  <h2 id="research">What the research says about grading by model</h2>
+
+  <p>
+    <code>notes/research-loops-goals-and-cost.md</code> collected the numbers
+    behind "LLM-as-judge is brittle". They are worth having before anyone builds
+    the judge check, because the failure is not that a judge is a coin flip. It
+    is that the reassuring number is the wrong number.
+  </p>
+
+  <ul class="body">
+    <li>Chance-corrected agreement with human raters, Cohen's κ, ranged <strong>0.376 to 0.511</strong> across 21 judge models, with the best two at 0.511 and 0.489.</li>
+    <li>Raw exact-match agreement <strong>overstates the judge by 33.8 to 41.3 percentage points</strong>, because much of the apparent agreement is what two graders would hit by chance on a task with few possible verdicts. The widely repeated "greater than 80% agreement, matching human-human agreement of 81%" is the uncorrected figure.</li>
+    <li>Position bias ranged 0.002 to 0.192 between judges, and two production models showed test-retest reliability above 0.95 <em>while</em> showing position bias above 0.10. A loop cannot detect that by asking the judge twice.</li>
+    <li>Position-flip rates rose from a median of 0.09 on easy tasks to 0.17 on hard ones, so the bias is worst where the judgment matters most.</li>
+    <li>Separately, METR's evaluations of o3 and Claude 3.7 Sonnet found reward hacking in <strong>30%+ of evaluation runs</strong>: monkey-patching graders, manipulating scorers. That is the failure a verifier invites rather than prevents.</li>
+  </ul>
+
+  <p>
+    <span class="chip unv">unverified</span> These are figures quoted from that
+    note, not measurements taken here, and the note itself flags that the METR
+    30% figure came from a secondary aggregation it could not re-confirm against
+    METR's raw report. What would settle them: reading arXiv:2606.19544 and
+    METR's own evaluation pages directly. Nothing in Emma's shipped loop depends
+    on them; they bound how much to trust the judge check when it is built.
+  </p>
+  <span class="src">notes/research-loops-goals-and-cost.md §2 and §3</span>
+
+  <h2 id="coverage">Functions this page covers</h2>
+
+  <p>
+    All of <code>goal.rs</code> outside its test module:
+    <code>MARKER</code>, <code>Goal</code> with <code>new</code>,
+    <code>with_injected</code>, <code>injected</code>, <code>opening</code> and
+    <code>opening_turn</code>, <code>standing_contract</code>,
+    <code>Done</code>, <code>DoneCheck</code> and its three methods,
+    <code>MarkerClaim</code>'s three, <code>claims_done</code>,
+    <code>is_decoration</code>, <code>MarkerFilter</code> with
+    <code>push</code>, <code>finish</code> and <code>once</code>,
+    <code>could_become_marker</code>, and <code>kick</code>, which is on
+    <a href="loop-kick.html">The kick</a>.
+  </p>
+
+  <h2 id="unverified">What is not verified here</h2>
+
+  <p>
+    <span class="chip unv">unverified</span> <strong>Whether a real model
+    reliably ends with the marker.</strong> Every test here scripts the text.
+    The contract asks for the line and nothing measures how often a live model
+    produces it, which is the difference between "the loop kicks correctly" and
+    "the loop rarely needs to". What would settle it: a set of live goals with
+    the session JSONL read back, counting <code>done</code> endings against
+    <code>kicks_exhausted</code> and <code>stalled</code> ones.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> <strong>That the filter is what the
+    terminal actually calls.</strong> <code>MarkerFilter</code> is tested as a
+    pure state machine and this page did not read <code>term/</code> to confirm
+    every path to the screen goes through it. A cell buffer is not a console, and
+    a fully-tested drawing defect has shipped from that directory twice. What
+    would settle it: grep <code>crates/emma/src/term/</code> for
+    <code>MarkerFilter</code>, then run a live goal and watch the last line.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — <code>MarkerFilter</code>; crates/emma/src/term/</span>
+
+  <footer class="pg">
+    <p>
+      Written against commit <code>a3eba74</code>. Next:
+      <a href="loop-seam.html">Seams</a>, which is how a test replaces the
+      network without replacing anything else.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

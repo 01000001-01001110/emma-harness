@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>What a model will take · Providers &amp; models · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav here" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/llm/src/models.rs</p>
+  <h1>What a model will take</h1>
+
+  <nav class="chapter">
+    <a class="up" href="providers.html">Providers &amp; models</a>
+    <a href="providers-boundary.html">The boundary</a>
+    <a href="providers-content.html">Content blocks</a>
+    <a href="providers-turn.html">The turn back</a>
+    <span class="now">Model limits</span>
+    <a href="providers-caching.html">Caching</a>
+    <a href="providers-floor.html">The cache floor</a>
+    <a href="providers-retry.html">Retry</a>
+    <a href="providers-credentials.html">Credentials</a>
+  </nav>
+
+  <p class="lede">
+    Two of the values in a request are properties of the model rather than of
+    the request, and getting either wrong is an HTTP 400 before a token is
+    generated. Both were single constants until a user could choose a model, at
+    which point the first call on the wrong choice failed for a reason nobody
+    had asked about. A hundred lines of table and eleven lines of clamping is
+    the whole answer.
+  </p>
+
+  <h2 id="limits">One struct, one lookup, two clamps</h2>
+
+  <p class="faint">crates/llm/src/models.rs · <code>struct Limits</code></p>
+  <pre><code>/// What one model accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// The largest `max_tokens` this model accepts. Above it, HTTP 400.
+    pub max_tokens: u32,
+    /// Effort levels this model implements, ascending. **Not a ceiling** — a
+    /// slice, because the set has holes: Opus 4.6 supports `max` but not
+    /// `xhigh`, which arrived one model later. A ceiling would send `xhigh`
+    /// there and earn the 400 this module exists to prevent.
+    pub efforts: &amp;'static [Effort],
+}</code></pre>
+  <span class="src">crates/llm/src/models.rs — <code>Limits</code></span>
+
+  <p>
+    The shape is not arbitrary. <code>GET /v1/models</code> reports both of
+    these per model, <code>max_tokens</code> as a field and the levels under
+    <code>capabilities.effort.&lt;level&gt;.supported</code>, so
+    <code>Limits</code> is what that response parses into and a later discovery
+    stage can replace the <em>lookup</em> without touching the clamping. That
+    stage is not built.
+  </p>
+
+  <h3>The set is a slice because the ladder has holes</h3>
+
+  <p>
+    There are two effort sets in the file and each is used by several rows:
+  </p>
+
+  <p class="faint">crates/llm/src/models.rs · <code>ALL_FIVE</code>, <code>NO_XHIGH</code></p>
+  <pre><code>const ALL_FIVE: &amp;[Effort] = &amp;[
+    Effort::Low,
+    Effort::Medium,
+    Effort::High,
+    Effort::XHigh,
+    Effort::Max,
+];
+
+/// `xhigh` arrived with Opus 4.7; the 4.6 generation has `max` without it.
+const NO_XHIGH: &amp;[Effort] = &amp;[Effort::Low, Effort::Medium, Effort::High, Effort::Max];</code></pre>
+  <span class="src">crates/llm/src/models.rs — <code>ALL_FIVE</code>, <code>NO_XHIGH</code></span>
+
+  <p>
+    A third set appears inline on two rows and is written <code>&amp;[]</code>:
+    Sonnet 4.5 and Haiku 4.5 predate the effort parameter and reject it
+    outright, so the empty slice is what stops Emma sending the field at all. A
+    ceiling comparison would look at "Opus 4.6 supports max" and conclude
+    <code>xhigh</code> is fine, which is a 400.
+  </p>
+
+  <h3>The table, in full</h3>
+
+  <div class="tw">
+    <table>
+      <thead>
+        <tr>
+          <th>Model prefix</th>
+          <th class="num">max_tokens</th>
+          <th>Effort levels</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><code>claude-fable-5</code></td><td class="num">128,000</td><td>all five</td></tr>
+        <tr><td><code>claude-mythos-5</code></td><td class="num">128,000</td><td>all five</td></tr>
+        <tr><td><code>claude-opus-5</code></td><td class="num">128,000</td><td>all five</td></tr>
+        <tr><td><code>claude-opus-4-8</code></td><td class="num">128,000</td><td>all five</td></tr>
+        <tr><td><code>claude-opus-4-7</code></td><td class="num">128,000</td><td>all five</td></tr>
+        <tr><td><code>claude-opus-4-6</code></td><td class="num">128,000</td><td>no <code>xhigh</code></td></tr>
+        <tr><td><code>claude-sonnet-5</code></td><td class="num">128,000</td><td>all five</td></tr>
+        <tr><td><code>claude-sonnet-4-6</code></td><td class="num">128,000</td><td>no <code>xhigh</code></td></tr>
+        <tr><td><code>claude-sonnet-4-5</code></td><td class="num">64,000</td><td>none: the field is the error</td></tr>
+        <tr><td><code>claude-haiku-4-5</code></td><td class="num">64,000</td><td>none: the field is the error</td></tr>
+        <tr><td><code>UNKNOWN</code></td><td class="num">8,192</td><td>none</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note warn">
+    <span class="h">the table is a snapshot, and none of it has been measured</span>
+    <p>
+      Every row's <code>max_tokens</code> and effort set was transcribed on
+      <strong>2026-08-11</strong> from Anthropic's published model list. They
+      are correct on that date and only that date.
+      <span class="chip unv">unverified</span> No request has ever been sent to
+      confirm one. Settling the whole table is one call:
+      <code>GET /v1/models</code> reports both values, with the key the user
+      already gave us, compared against these rows.
+    </p>
+  </div>
+  <span class="src">crates/llm/src/models.rs — module doc; notes/design-provider-and-model.md §4.1</span>
+
+  <h2 id="lookup">Longest prefix wins</h2>
+
+  <p class="faint">crates/llm/src/models.rs · <code>limits</code></p>
+  <pre><code>/// What `model` accepts, or [`UNKNOWN`] if this table has never heard of it.
+pub fn limits(model: &amp;str) -&gt; Limits {
+    TABLE
+        .iter()
+        .filter(|(id, _)| model.starts_with(id))
+        // Longest match wins, so `claude-opus-4-8` never resolves through a
+        // shorter row that happens to prefix it.
+        .max_by_key(|(id, _)| id.len())
+        .map(|(_, l)| *l)
+        .unwrap_or(UNKNOWN)
+}</code></pre>
+  <span class="src">crates/llm/src/models.rs — <code>limits</code>, <code>TABLE</code></span>
+
+  <p>
+    Prefix rather than equality, because the API accepts both the alias and the
+    dated spelling and a user pasting from the console gets the dated one.
+    <code>claude-haiku-4-5-20251001</code> resolves to the same row as
+    <code>claude-haiku-4-5</code>, which
+    <code>a_dated_snapshot_resolves_to_its_alias</code> asserts, alongside the
+    other half: <code>claude-opus-4-5-20251101</code> resolves to
+    <code>UNKNOWN</code>, because no row for 4.5 exists.
+    <span class="chip test">tested</span>
+  </p>
+
+  <p>
+    <code>max_by_key</code> is the tie-break, and
+    <code>no_row_shadows_another</code> asserts the property that makes it
+    unnecessary today: no id in the table prefixes another. Its comment says
+    why the property is asserted rather than the tie-break: a row like
+    <code>claude-opus</code> added later would silently swallow every Opus, and
+    no other test in the file would notice. <span class="chip test">tested</span>
+  </p>
+
+  <h2 id="unknown">An unknown model guesses low</h2>
+
+  <p class="faint">crates/llm/src/models.rs · <code>UNKNOWN</code></p>
+  <pre><code>/// What we send to a model this table has never heard of.
+///
+/// **A user can name any model string, including one released after this file
+/// was written, and that case is the whole design.** Three answers were
+/// available and the asymmetry between their failures picks the winner:
+///
+/// - *Assume the model is as capable as the newest one we know.* Wrong in the
+///   one direction that cannot degrade gracefully: too high a `max_tokens`, or
+///   an effort level the model does not implement, is an HTTP 400 on the first
+///   call — no answer, and an error naming a value the user never set.
+/// - *Refuse to run against an unknown model.* Turns every new model release
+///   into a bug in Emma, and makes the table a gate rather than a hint. The
+///   user who typed the id is likelier to be right about it than we are.
+/// - **A conservative floor.** Too *low* a `max_tokens` truncates a long
+///   answer, and omitting `effort` gets the provider's own default. Both are
+///   degraded, both still produce a turn, and both are fixed by adding one row
+///   below. That asymmetry — a low value works everywhere, a high value fails
+///   everywhere it is wrong — is the whole argument.
+pub const UNKNOWN: Limits = Limits {
+    max_tokens: 8_192,
+    efforts: &amp;[],
+};</code></pre>
+  <span class="src">crates/llm/src/models.rs — <code>UNKNOWN</code></span>
+
+  <p>
+    8,192 is the smallest output ceiling any Anthropic model has shipped with,
+    so no known model rejects it, and the empty effort set means no
+    <code>output_config</code> is sent, which every model accepts including the
+    two that reject the field. The cost is stated where the constant lives: a
+    user on a brand-new Opus gets 8,192 tokens and default effort until
+    somebody edits the file.
+  </p>
+
+  <p>
+    This fallback guesses <em>low</em>. The
+    <a href="providers-floor.html">cache floor table</a> guesses <em>high</em>,
+    from the same reasoning about which failure is recoverable, and the two
+    directions are why those tables are not one table.
+  </p>
+
+  <h2 id="clamping">The two clamps</h2>
+
+  <p class="faint">crates/llm/src/models.rs · <code>Limits::clamp_max_tokens</code></p>
+  <pre><code>/// The caller's ceiling, lowered to the model's if the model's is lower.
+///
+/// Only ever downward. A request asking for 32,000 on a model that caps at
+/// 128,000 still sends 32,000 — the ask is a budget as well as a limit, and
+/// raising it would spend the user's money on their behalf.
+pub fn clamp_max_tokens(&amp;self, requested: u32) -&gt; u32 {
+    requested.min(self.max_tokens)
+}</code></pre>
+  <span class="src">crates/llm/src/models.rs — <code>clamp_max_tokens</code></span>
+
+  <p>
+    Two tests hold it from both sides.
+    <code>a_lower_ceiling_is_never_handed_the_full_ask</code> loops every row
+    and asserts nothing comes back above what that model accepts, then pins
+    three cases by hand: 32,000 stays on Haiku, 200,000 becomes 64,000 on
+    Haiku, and an invented id gets 8,192.
+    <code>the_ask_is_never_raised_to_the_ceiling</code> pins the other
+    direction on Opus 5. <span class="chip test">tested</span>
+  </p>
+
+  <p class="faint">crates/llm/src/models.rs · <code>Limits::clamp_effort</code></p>
+  <pre><code>/// The best level this model supports that is no higher than `requested`,
+/// or `None` when there is none.
+///
+/// `None` means *send no `output_config` at all* rather than "send low",
+/// and it covers two different situations on purpose: a model with no
+/// effort parameter, and a request whose asked-for level sits below
+/// everything the model implements. Both want the same thing — the
+/// provider's own default — and neither wants a level the caller did not
+/// ask for. Clamping upward to "the nearest supported" would send a model
+/// harder than the caller requested, which on a `Low` request for a cheap
+/// subagent is exactly the bill they were avoiding.
+pub fn clamp_effort(&amp;self, requested: Effort) -&gt; Option&lt;Effort&gt; {
+    self.efforts
+        .iter()
+        .copied()
+        .filter(|e| e.rank() &lt;= requested.rank())
+        .max_by_key(|e| e.rank())
+}
+</code></pre>
+  <span class="src">crates/llm/src/models.rs — <code>clamp_effort</code></span>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 760 236" role="img"
+           aria-label="An xhigh ask against three models. On Opus 5, which supports all five levels, xhigh is sent. On Opus 4.6, which has max but not xhigh, the best level at or below the ask is high, so high is sent and max is never reached upward. On Haiku 4.5, whose effort set is empty, there is no level at or below the ask and no output_config is sent at all.">
+        <defs>
+          <marker id="mdl-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          </marker>
+          <marker id="mdl-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          </marker>
+        </defs>
+
+        <text class="tiny" x="14" y="18">the ask, from Request::new</text>
+        <rect class="hl" x="14" y="26" width="120" height="30" rx="4" />
+        <text class="lbl" x="28" y="46">xhigh</text>
+
+        <line class="edge-hl" x1="136" y1="41" x2="176" y2="41" marker-end="url(#mdl-arrow-hl)" />
+        <line class="edge-hl" x1="136" y1="41" x2="176" y2="118" marker-end="url(#mdl-arrow-hl)" />
+        <line class="edge-hl" x1="136" y1="41" x2="176" y2="196" marker-end="url(#mdl-arrow-hl)" />
+
+        <text class="tiny" x="180" y="20">supported set, ascending</text>
+        <rect class="box" x="180" y="26" width="330" height="32" rx="4" />
+        <text class="sm" x="192" y="47">low  medium  high  xhigh  max</text>
+        <text class="tiny" x="520" y="46">claude-opus-5</text>
+
+        <rect class="box" x="180" y="102" width="330" height="32" rx="4" />
+        <text class="sm" x="192" y="123">low  medium  high  ·····  max</text>
+        <text class="tiny" x="520" y="122">claude-opus-4-6</text>
+
+        <rect class="box" x="180" y="180" width="330" height="32" rx="4" />
+        <text class="sm" x="192" y="201">(empty)</text>
+        <text class="tiny" x="520" y="200">claude-haiku-4-5</text>
+
+        <line class="edge" x1="512" y1="42" x2="600" y2="42" marker-end="url(#mdl-arrow)" />
+        <line class="edge" x1="512" y1="118" x2="600" y2="118" marker-end="url(#mdl-arrow)" />
+        <line class="edge" x1="512" y1="196" x2="600" y2="196" marker-end="url(#mdl-arrow)" />
+
+        <rect class="hl" x="602" y="26" width="144" height="32" rx="4" />
+        <text class="sm" x="614" y="47">effort: "xhigh"</text>
+        <rect class="hl" x="602" y="102" width="144" height="32" rx="4" />
+        <text class="sm" x="614" y="123">effort: "high"</text>
+        <rect class="box" x="602" y="180" width="144" height="32" rx="4" />
+        <text class="sm" x="614" y="201">no output_config</text>
+
+        <text class="tiny" x="180" y="76">the ask is met exactly</text>
+        <text class="tiny" x="180" y="152">best level at or below the ask: high, never max</text>
+        <text class="tiny" x="180" y="230">the field itself is the 400, so no value is safe</text>
+      </svg>
+    </div>
+    <figcaption>
+      One request, three models, three different bytes. The 4.6 row is the case
+      a ceiling comparison gets wrong: it supports <code>max</code>, so
+      "supports something above <code>xhigh</code>" is true and
+      <code>xhigh</code> is still a 400. Drawn from <code>clamp_effort</code>,
+      <code>TABLE</code> and <code>render</code>.
+    </figcaption>
+  </figure>
+
+  <p>
+    Four tests cover the clamp.
+    <code>a_model_without_xhigh_is_never_sent_xhigh</code> loops the table
+    asserting the chosen level is both supported and no higher than the ask,
+    then pins 4.6 landing on <code>high</code> and Opus 5 on
+    <code>xhigh</code>. <code>a_model_with_no_effort_parameter_gets_none_of_it</code>
+    pins <code>None</code> on Haiku for two different asks and on Sonnet 4.5
+    for <code>Max</code>. <code>a_request_below_every_supported_level_sends_no_effort</code>
+    builds a contrived <code>Limits</code> whose lowest level is
+    <code>High</code> and asserts a <code>Low</code> ask gets
+    <code>None</code>, which no shipped model exercises.
+    <code>an_unknown_model_gets_the_conservative_floor_not_the_newest_row</code>
+    pins both halves of <code>UNKNOWN</code>. <span class="chip test">tested</span>
+  </p>
+
+  <p>
+    Three more live in <code>anthropic.rs</code> and assert the same table
+    reaches the socket:
+    <code>a_model_with_a_lower_ceiling_is_never_sent_the_full_ask</code>,
+    <code>a_model_without_xhigh_is_never_sent_xhigh</code> and
+    <code>a_model_with_no_effort_parameter_is_sent_no_output_config</code>,
+    each reading the recorded request body from a loopback stub. The unit tests
+    pin the table; those pin that the table is what the socket sees, which is
+    the part a wrong wiring would break while every table test still passed.
+    <span class="chip test">tested</span>
+  </p>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    <code>models.rs</code> has three functions and all three are quoted above:
+    <code>limits</code>, <code>clamp_max_tokens</code> and
+    <code>clamp_effort</code>. Its four constants are <code>UNKNOWN</code>,
+    <code>ALL_FIVE</code>, <code>NO_XHIGH</code> and <code>TABLE</code>, and
+    every row of <code>TABLE</code> is in the table above. <code>TABLE</code>
+    is <code>pub(crate)</code> for one reason, stated in a comment beside it:
+    so <code>anthropic.rs</code> can check its floor table names the same
+    models. <span class="chip cert">certified</span> as complete by count:
+    <code>grep -c 'fn ' crates/llm/src/models.rs</code> against the test
+    module's own boundary, or read the 349-line file.
+  </p>
+
+  <p>
+    <code>Effort::rank</code> and <code>Effort::as_str</code> live in
+    <code>lib.rs</code> and are covered on
+    <a href="providers-boundary.html">the boundary</a>. Eight tests guard this
+    module and all eight ran green on 2026-08-16 in the 72
+    <code>cargo test -p emma-llm</code> reports.
+    <span class="chip cert">certified</span>
+  </p>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="providers-caching.html">prompt caching and the three
+      breakpoints</a>, the other thing <code>render</code> decides. Back to
+      <a href="providers.html">Providers &amp; models</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

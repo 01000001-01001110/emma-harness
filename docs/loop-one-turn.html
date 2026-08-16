@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>One turn, end to end · The agent loop · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav here" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">The agent loop</p>
+  <h1>One turn, end to end</h1>
+
+  <nav class="chapter">
+    <a class="up" href="loop.html">The agent loop</a>
+    <span class="now">One turn</span>
+    <a href="loop-failure.html">Failure</a>
+    <a href="loop-memo.html">The memo</a>
+    <a href="loop-endings.html">Endings</a>
+    <a href="loop-kick.html">The kick</a>
+    <a href="loop-budgets.html">Budgets</a>
+    <a href="loop-done.html">Done</a>
+    <a href="loop-seam.html">Seams</a>
+  </nav>
+
+  <p class="lede">
+    Three guards, a request built from four parts, one model call, and then a
+    fork: either the turn asked for tools, or it did not. This page follows a
+    single iteration of <code>Agent::run_goal</code> from the guard at the top
+    to the message list at the bottom.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, <code>Agent::call_model</code></span>
+
+  <h2 id="guards">The three guards, in this order</h2>
+
+  <p>
+    Every iteration opens with the same three tests. They come before anything
+    that costs money, and the order among them decides which ending a run gets
+    when two are true at once.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::run_goal, top of the loop</span>
+let ending = loop {
+    if self.s.interrupt.tripped() {
+        break Ending::Interrupted;
+    }
+    if started.elapsed() &gt; self.s.budgets.wall_clock {
+        break Ending::Deadline;
+    }
+    if iterations &gt;= self.s.budgets.max_iterations {
+        break Ending::Iterations;
+    }
+    <span class="c">// Between the budget tests and the request, so the request that
+    // goes out is the compacted one. `last_input` is what the provider
+    // said the previous request weighed; on the first call of a goal it
+    // is whatever the previous goal ended at, which is the right number
+    // — the conversation has not shrunk since.</span>
+    self.compact_if_needed(self.last_input, "the request passed the context limit");</code></pre>
+
+  <p>
+    Ctrl-C is read first, so a user who interrupts a run that was also out of
+    time is told <code>interrupted</code> rather than <code>deadline</code>.
+    <code>iterations &gt;= max_iterations</code> is tested <em>before</em> the
+    call, which is what makes the iteration count a ceiling rather than a
+    tripwire; the token budget below is tested after, and the two are worded
+    differently to the user for that reason. See
+    <a href="loop-budgets.html">Budgets</a>.
+    <span class="chip cert">certified</span> by reading the function: these
+    four lines are the whole of what runs before <code>Request</code> is built.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
+
+  <h2 id="request">What a request carries</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::run_goal</span>
+let request = Request {
+    <span class="c">// The harness prompt, then the framing that is true of every
+    // goal. It goes here rather than into the opening message
+    // because a preamble on the user's words is an instruction
+    // they did not write — and because identical bytes on every
+    // call belong in the cached prefix, not in `query`.</span>
+    instructions: format!(
+        "{}{}",
+        self.s.instructions,
+        goal::standing_contract(self.s.done)
+    ),
+    tools: tool_defs.clone(),
+    history: self.conversation(),
+    query: query.clone(),
+    max_tokens: 32_000,
+    effort: emma_llm::Effort::XHigh,
+    caching: self.s.caching,
+};</code></pre>
+
+  <p>
+    Four moving parts. <code>instructions</code> is the harness prompt with
+    <code>goal::standing_contract(done)</code> appended, so the completion rule
+    the model is told about comes from the <code>DoneCheck</code> actually in
+    force rather than from a fixed string. <code>tools</code> is
+    <code>Registry::wire_definitions()</code>, hoisted out of the loop and
+    cloned per iteration. <code>history</code> is
+    <code>self.conversation()</code>, every finished goal flattened in order.
+    <code>query</code> is the goal in flight: its opening, the assistant turns
+    so far, and the tool results that answered them.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, <code>Agent::conversation</code>; crates/emma/src/goal.rs — <code>standing_contract</code></span>
+
+  <p>
+    The split between <code>history</code> and <code>query</code> is not
+    recorded in the session file. The fold returns one flat list, and the loop
+    reconstructs the boundary from what it knows: chapters are goals that have
+    finished, <code>query</code> is the goal that has not. A resumed
+    conversation therefore arrives whole inside <code>query</code>, which costs
+    a cache breakpoint that would otherwise have been byte-stable for the rest
+    of the session.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, the comment above <code>open_query</code>'s call site</span>
+
+  <p>
+    <code>max_tokens: 32_000</code> and <code>Effort::XHigh</code> are fixed
+    here and are not configurable through <code>Setup</code> or
+    <code>Budgets</code>.
+    <span class="chip cert">certified</span>: <code>grep -n "max_tokens: 32_000\|Effort::" crates/emma/src/agent.rs</code>
+    returns the two lines in this block and nothing else.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 700 560" role="img" aria-label="One iteration: three guards, then compaction, then a request built from instructions, tools, history and query. The turn comes back, is metered and logged, and is held rather than pushed. If it has no tool calls the ending ladder runs; if it has tool calls they are dispatched one at a time and the held turn is placed beside their results.">
+        <rect class="box" x="16" y="14" width="200" height="72" rx="4" />
+        <text class="sm" x="26" y="34">interrupt.tripped()?</text>
+        <text class="sm" x="26" y="52">elapsed &gt; wall_clock?</text>
+        <text class="sm" x="26" y="70">iterations &gt;= max?</text>
+        <text class="tiny" x="26" y="82">in this order</text>
+
+        <path class="edge" d="M216 50 H258" marker-end="url(#ot-arrow)" />
+        <rect class="box" x="258" y="26" width="164" height="48" rx="4" />
+        <text class="sm" x="268" y="46">compact_if_needed</text>
+        <text class="tiny" x="268" y="63">(last_input)</text>
+
+        <path class="edge" d="M422 50 H466" marker-end="url(#ot-arrow)" />
+        <rect class="box" x="466" y="14" width="218" height="80" rx="4" />
+        <text class="lbl" x="476" y="34">Request</text>
+        <text class="sm" x="476" y="52">instructions + contract</text>
+        <text class="sm" x="476" y="68">tools · history · query</text>
+        <text class="tiny" x="476" y="86">max_tokens 32_000 · XHigh</text>
+
+        <path class="edge" d="M575 94 V126" marker-end="url(#ot-arrow)" />
+        <rect class="hl" x="466" y="126" width="218" height="72" rx="4" />
+        <text class="lbl" x="476" y="146">call_model</text>
+        <text class="sm" x="476" y="164">select!: interrupt · events</text>
+        <text class="sm" x="476" y="180">· the send future</text>
+        <text class="tiny" x="476" y="194">Ok(None) = interrupted</text>
+
+        <path class="edge" d="M575 198 V228" marker-end="url(#ot-arrow)" />
+        <rect class="box" x="466" y="228" width="218" height="76" rx="4" />
+        <text class="sm" x="476" y="248">spend.add(cost_tokens)</text>
+        <text class="tiny" x="476" y="265">log model_call · assistant</text>
+        <text class="tiny" x="476" y="281">last_input = billable_input</text>
+        <text class="tiny" x="476" y="297">pending_turn = turn.content</text>
+
+        <path class="edge" d="M575 304 V334" marker-end="url(#ot-arrow)" />
+        <rect class="box" x="466" y="334" width="218" height="36" rx="4" />
+        <text class="sm" x="476" y="357">tool_calls().is_empty()?</text>
+
+        <path class="edge" d="M466 352 H360 V392" marker-end="url(#ot-arrow)" />
+        <text class="tiny" x="366" y="347">yes</text>
+        <rect class="box" x="240" y="392" width="196" height="52" rx="4" />
+        <text class="lbl" x="250" y="414">the ending ladder</text>
+        <text class="tiny" x="250" y="432">verdict · stall · answered · kicks</text>
+
+        <path class="edge-hl" d="M575 370 V398" marker-end="url(#ot-arrow-hl)" />
+        <text class="tiny" x="581" y="390">no</text>
+        <rect class="hl" x="466" y="398" width="218" height="76" rx="4" />
+        <text class="lbl" x="476" y="418">for call in tool_calls()</text>
+        <text class="sm" x="476" y="436">worked = true</text>
+        <text class="sm" x="476" y="452">run_tool_call(...)</text>
+        <text class="tiny" x="476" y="468">memo written here, not there</text>
+
+        <path class="edge-hl" d="M575 474 V500" marker-end="url(#ot-arrow-hl)" />
+        <path class="edge" d="M338 444 V500" marker-end="url(#ot-arrow)" />
+        <rect class="box" x="150" y="500" width="534" height="44" rx="4" />
+        <text class="lbl" x="160" y="521">place(query, pending_turn, results)</text>
+        <text class="tiny" x="160" y="537">session::place_turn — both go in, or neither does</text>
+
+        <path class="edge-hl" d="M150 522 H100 V50 H216" marker-end="url(#ot-arrow-hl)" />
+        <text class="tiny" x="26" y="300">next</text>
+        <text class="tiny" x="26" y="314">iteration</text>
+
+        <defs>
+          <marker id="ot-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          </marker>
+          <marker id="ot-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          </marker>
+        </defs>
+      </svg>
+    </div>
+    <figcaption>
+      One iteration, drawn from the body of <code>run_goal</code>. The pink
+      path is the working case. The assistant turn is held in
+      <code>pending_turn</code> from the moment it arrives until something
+      knows where it goes, which is why <code>place</code> appears once at the
+      bottom rather than at each of the four places a turn could be pushed.
+    </figcaption>
+  </figure>
+
+  <h2 id="call">The model call, and the two things racing it</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// One model call, with streaming and Ctrl-C. `Ok(None)` is an interrupt.</span>
+async fn call_model(&amp;self, request: Request) -&gt; Result&lt;Option&lt;AssistantTurn&gt;, LlmError&gt; {
+    let (tx, mut rx) = mpsc::channel::&lt;Event&gt;(64);
+    let mut send = Box::pin(self.s.provider.send(request, self.s.mode, Some(tx)));
+    let mut streamed = false;
+    let mut closed = false;
+
+    let turn = loop {
+        tokio::select! {
+            biased;
+            _ = self.s.interrupt.wait() =&gt; return Ok(None),
+            <span class="c">// Disabled once the channel closes, which happens when `send`
+            // drops its sender. Without the guard this branch is
+            // permanently ready and starves the one below it.</span>
+            ev = rx.recv(), if !closed =&gt; match ev {
+                Some(ev) =&gt; { streamed |= self.on_event(ev); }
+                None =&gt; closed = true,
+            },
+            turn = &amp;mut send =&gt; break turn?,
+        }
+    };
+    while let Ok(ev) = rx.try_recv() {
+        streamed |= self.on_event(ev);
+    }
+    if streamed {
+        self.s.term.end_of_text();
+    } else {
+        self.s.term.text(&amp;turn.text());
+    }
+    Ok(Some(turn))
+}</code></pre>
+
+  <p>
+    <code>biased;</code> makes the interrupt branch win a tie rather than
+    tokio picking at random, so a Ctrl-C that lands in the same wakeup as a
+    text delta ends the call. The <code>if !closed</code> guard on the receive
+    branch is the fix for a starvation bug: a closed channel returns
+    <code>None</code> immediately and forever, so an unguarded branch is always
+    ready and the future that actually finishes the call never gets polled.
+    After the loop breaks, <code>try_recv</code> drains whatever the sender
+    queued before it dropped, because those deltas are already paid for.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::call_model</code></span>
+
+  <p>
+    The <code>streamed</code> flag decides who draws the text. If any
+    <code>TextDelta</code> reached the terminal the loop only closes the line;
+    if none did, the whole turn is printed at once. That covers a provider or a
+    mode that returns a complete turn with no stream, and it is why the same
+    text is never drawn twice.
+    <span class="chip unv">unverified</span> for the non-streaming path: no
+    provider in this tree was exercised here with streaming off during this
+    write-up. What would settle it: run a goal under a provider constructed
+    without an event channel and check the answer appears exactly once.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::call_model</code>, <code>Agent::on_event</code></span>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// Returns whether anything was written to the assistant's line.</span>
+fn on_event(&amp;self, ev: Event) -&gt; bool {
+    match ev {
+        Event::TextDelta(text) =&gt; {
+            self.s.term.delta(&amp;text);
+            true
+        }
+        Event::ToolUseStarted { .. } =&gt; false,
+        Event::Retrying { attempt, max_attempts, delay, reason } =&gt; {
+            <span class="c">// A retry the user cannot see is indistinguishable from a hang.</span>
+            self.s.term.warn(&amp;format!(
+                "retrying ({attempt}/{max_attempts}) in {}ms: {reason}",
+                delay.as_millis()
+            ));
+            false
+        }
+    }
+}</code></pre>
+
+  <p>
+    Only <code>TextDelta</code> returns true, because only it writes to the
+    assistant's line. A retry warning goes to its own line and a
+    <code>ToolUseStarted</code> event draws nothing here at all; the tool
+    banner is drawn later, by <code>run_tool_call</code>, once the arguments
+    are known.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::on_event</code>, <code>Agent::run_tool_call</code></span>
+
+  <h2 id="received">What happens to a turn that arrives</h2>
+
+  <p>
+    Three matches on the call's result, and only one of them continues. An
+    <code>Ok(None)</code> is the interrupt and ends the goal. An error goes to
+    <code>Ending::Provider</code> unless
+    <code>recover_from_a_model_change</code> claims it, which is the loop's one
+    retry and is covered under <a href="loop-seam.html">Seams</a>.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::run_goal</span>
+let turn = match self.call_model(request).await {
+    Ok(Some(turn)) =&gt; turn,
+    Ok(None) =&gt; break Ending::Interrupted,
+    <span class="c">// The one retry in this loop, and it is not a retry of a
+    // transport failure — `emma-llm` owns those. It is the
+    // conversation being made acceptable to a model the user
+    // changed to mid-session. Nothing was spent: the request was
+    // rejected before generation, so `iterations` does not move.</span>
+    Err(e) if self.recover_from_a_model_change(&amp;e) =&gt; continue,
+    Err(e) =&gt; break Ending::Provider(e.to_string()),
+};
+<span class="c">// The new model has accepted the conversation, so there is nothing
+// left to recover from.</span>
+self.changed_from = None;
+iterations += 1;</code></pre>
+
+  <p>
+    Then the accounting, in a fixed order: charge the meter, write the
+    <code>model_call</code> record, store <code>last_input</code>, update the
+    status line, write the <code>assistant</code> record, hold the turn, and
+    only then test the token budget. Recording before testing is what makes an
+    aborted run cost what it spent rather than nothing.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::run_goal</span>
+let tokens = self.s.spend.add(cost_tokens(&amp;turn.usage));
+self.s.log.append("model_call", json!({ <span class="c">/* four provider fields,
+    billable_total_tokens, cost_tokens, goal_total_so_far */</span> }));
+self.last_input = Some(turn.usage.billable_input_tokens());
+self.s.term.spent(turn.usage.billable_input_tokens(), tokens);
+
+let text = turn.text();
+if !text.trim().is_empty() {
+    last_text = text.clone();
+}
+self.s.log.append("assistant", json!({ "turn_id": turn_id, "text": text,
+    "raw_content": turn.content }));
+pending_turn = Some(turn.content.clone());
+if self.s.spend.get() &gt; self.s.budgets.max_tokens {
+    break Ending::Tokens;
+}</code></pre>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
+
+  <p>
+    <code>last_text</code> only moves when the turn had non-blank text, so a
+    turn that was nothing but tool calls does not wipe the last thing the model
+    actually said. That string is what <code>Outcome::text</code> carries and
+    what a compacted chapter keeps as its answer.
+  </p>
+
+  <p>
+    <strong>The assistant turn is echoed back exactly as it arrived.</strong>
+    <code>pending_turn</code> holds <code>turn.content</code>, the provider's
+    own blocks, thinking blocks and signatures included. Nothing rebuilds a
+    turn from its text plus its tool calls, because a re-derived signature is
+    rejected on the <em>next</em> call, which puts the symptom one step away
+    from the change that caused it.
+    <span class="chip test">tested</span>
+    <code>the_assistant_turn_is_echoed_back_exactly_as_it_arrived</code>
+    asserts the intact <code>tool_use</code> block is in the message that was
+    sent back, not merely somewhere in the transcript. The test file's header
+    records that every test in it was mutation-checked by its author; that is
+    not a mutation watched during this write-up.
+  </p>
+  <span class="src">crates/emma/src/agent.rs; crates/emma/tests/loop.rs</span>
+
+  <h2 id="place">Placing the turn</h2>
+
+  <p>
+    A turn is held rather than pushed because where it goes depends on what
+    happens after it: beside its tool results, beside a kick, or on the end of
+    the conversation once the loop breaks. A turn whose tools were never run
+    goes nowhere at all.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// [`session::place_turn`] against a held turn, taking it only if it was placed.
+///
+/// A turn that could not be placed is dropped, and dropping it here rather than
+/// leaving it held is what stops it being offered again at the end of the loop.</span>
+fn place(
+    query: &amp;mut Vec&lt;Message&gt;,
+    pending: &amp;mut Option&lt;Vec&lt;ContentBlock&gt;&gt;,
+    results: Vec&lt;ToolResult&gt;,
+) -&gt; bool {
+    match pending.take() {
+        Some(content) =&gt; crate::session::place_turn(query, content, results),
+        None =&gt; false,
+    }
+}</code></pre>
+
+  <p>
+    <code>pending.take()</code> is the whole of the drop. The rule about
+    <em>whether</em> a turn may be placed lives one level down, in
+    <code>session::place_turn</code>, which refuses a pair the API would reject:
+    an assistant turn carrying a <code>tool_use</code> that no
+    <code>tool_result</code> answers, or results answering nothing. It is one
+    function rather than one per caller because the session fold needs the same
+    ruling, and two copies of it would be a resumed conversation that differs
+    from the one that was sent in exactly the cases neither is tested on.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>place</code>; crates/emma/src/session.rs — <code>place_turn</code></span>
+
+  <p>
+    <code>place</code> is called from three sites: after a kick with no results,
+    after a round of tool calls with their results, and once more after the loop
+    breaks. That last call is what puts a final answer into the conversation, so
+    a follow-up question can be asked about it. It is also the
+    <code>Ending::Tokens</code> case, where the budget fired between receiving a
+    turn and dispatching its tools, and the held turn is discarded rather than
+    left unanswered.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
+
+  <h2 id="opening">Opening the query, and closing the goal before it</h2>
+
+  <p>
+    Two functions exist to stop two user turns from adjoining, which the API
+    rejects. <code>open_query</code> handles the resume case and
+    <code>close_previous_goal</code> handles the goal-after-an-abandoned-goal
+    case.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+fn open_query(mut restored: Vec&lt;Message&gt;, opening: String) -&gt; Vec&lt;Message&gt; {
+    match restored.last_mut() {
+        Some(last) if last.role == Role::User =&gt; match &amp;mut last.content {
+            Content::Text(text) =&gt; {
+                text.push_str("\n\n");
+                text.push_str(&amp;opening);
+            }
+            Content::Blocks(blocks) =&gt; blocks.push(ContentBlock::text(opening)),
+        },
+        _ =&gt; restored.push(Message::user(opening)),
+    }
+    restored
+}</code></pre>
+
+  <p>
+    A fold ends wherever the interrupted run stopped, and that is usually a user
+    turn: the tool results of the last complete round, or a kick that answered a
+    turn calling nothing. So the new goal's opening joins the last message
+    instead of following it, as a text block after the result blocks when the
+    content is an array and as concatenated text when it is not. Nothing is
+    dropped to make room, because dropping the trailing results would leave the
+    <code>tool_use</code> above them unanswered, which is the other rejection.
+    With nothing restored, which is every ordinary run, the match falls to the
+    last arm and this is <code>vec![Message::user(opening)]</code>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>open_query</code></span>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+fn close_previous_goal(&amp;mut self) {
+    let Some(ending) = self.last_ending.take() else {
+        return;
+    };
+    let Some(chapter) = self.chapters.last_mut() else {
+        return;
+    };
+    if chapter.messages.last().map(|m| m.role) == Some(Role::User) {
+        chapter
+            .messages
+            .push(Message::assistant_text(ended_note(ending)));
+    }
+}
+
+pub(crate) fn ended_note(ending: &amp;str) -&gt; String {
+    format!("[The previous goal stopped before it was finished: {ending}.]")
+}</code></pre>
+
+  <p>
+    Three conditions, all of which must hold: there was a previous goal, it left
+    a chapter, and that chapter ends on a user turn. <code>take()</code> on
+    <code>last_ending</code> means the note is inserted at most once. The
+    sentence is composed by <code>ended_note</code> rather than written inline
+    because <code>session::Fold::close_goal</code> composes the same sentence
+    from the recorded ending, and two spellings would make a resumed
+    conversation differ from the one that was sent by one message.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::close_previous_goal</code>, <code>ended_note</code>; crates/emma/src/session.rs</span>
+
+  <p>
+    A model reading an abandoned goal as a completed one is the more expensive
+    of the two failures this prevents, and it is the reason the note states the
+    ending rather than being an empty spacer.
+  </p>
+
+  <h2 id="chapter">What a finished goal becomes</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — the end of Agent::run_goal</span>
+self.last_ending = Some(outcome.ending.as_str());
+self.chapters.push(Chapter {
+    goal: goal.text.clone(),
+    answer: outcome.text.clone(),
+    messages: query,
+    summarised: false,
+});
+outcome</code></pre>
+
+  <p>
+    The goal joins the conversation whatever the ending. A run that hit its
+    token budget still happened, and the next goal in the session must not be
+    told a story in which it did not. What joins is the goal's own message list
+    rather than a summary of it; the summary is what compaction makes later, out
+    of the <code>goal</code> and <code>answer</code> fields, and only if it has
+    to.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, <code>Chapter</code></span>
+
+  <p>
+    A <code>Chapter</code> is a whole goal rather than a slice of messages
+    because compaction works in whole goals: cutting anywhere else risks
+    separating a <code>tool_use</code> from the result that answers it.
+    <code>Agent::conversation</code> is the flattening, and
+    <code>Agent::estimated_context</code> is that flattening measured by
+    <code>estimate</code>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Chapter</code>, <code>Agent::conversation</code>, <code>Agent::estimated_context</code></span>
+
+  <h2 id="construction">Construction, and the thing the constructor refuses to touch</h2>
+
+  <p>
+    <code>Agent::new</code> takes a <code>Setup</code> and initialises six
+    fields to empty. It used to call <code>term.set_budgets(...)</code> as well,
+    on the argument that this is where the budgets already were. That broke as
+    soon as a second <code>Agent</code> existed: the status meters belong to the
+    process, and constructing a nested agent re-pointed the parent's context and
+    token meters at a sub-run's caps for the rest of the run.
+    <code>main</code> sets them once now, and <code>Term::subordinate</code> is
+    what keeps a nested run from moving them.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::new</code></span>
+
+  <p>
+    <code>Agent::resuming</code> is a builder method rather than a
+    <code>Setup</code> field, because every other caller would have written
+    <code>resumed: None</code>, and because a <code>Resumed</code> is produced by
+    a fallible read the caller has to have done before it can construct
+    <code>Setup</code> at all. What a resume carries is on
+    <a href="loop-memo.html">The memo</a> and
+    <a href="loop-budgets.html">Budgets</a>; it is consumed by the first
+    <code>run_goal</code> and never again, because it describes one interrupted
+    goal and a second goal typed at the prompt is a new goal with its own budget.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::resuming</code>, <code>Resumed</code></span>
+
+  <h2 id="coverage">Functions this page covers</h2>
+
+  <p>
+    From <code>agent.rs</code>: <code>run_goal</code> (its request assembly,
+    guards, turn handling and epilogue; its ladder is on
+    <a href="loop-endings.html">Endings</a> and its memo writes are on
+    <a href="loop-memo.html">The memo</a>), <code>call_model</code>,
+    <code>on_event</code>, <code>place</code>, <code>open_query</code>,
+    <code>close_previous_goal</code>, <code>ended_note</code>,
+    <code>Agent::new</code>, <code>Agent::resuming</code>,
+    <code>Agent::conversation</code>, <code>Agent::estimated_context</code>,
+    and the <code>Chapter</code> and <code>Setup</code> types.
+  </p>
+
+  <h2 id="unverified">What is not verified here</h2>
+
+  <p>
+    <span class="chip unv">unverified</span> <strong>Ctrl-C during a tool
+    call.</strong> The interrupt is tested at the top of each iteration and
+    raced inside <code>call_model</code>. It is not passed to
+    <code>ToolCtx</code>, whose three fields are <code>cwd</code>,
+    <code>session_id</code> and <code>turn_id</code>, so a Ctrl-C pressed
+    during a long <code>Bash</code> run looks like it can only be observed when
+    that call returns. Read from the source, not reproduced. What would settle
+    it: run a goal whose tool sleeps 60 seconds, press Ctrl-C at 5, and time how
+    long the process takes to report <code>interrupted</code>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code>; crates/tool-api/src/lib.rs — <code>ToolCtx</code></span>
+
+  <p>
+    <span class="chip unv">unverified</span> <strong>The starvation the
+    <code>if !closed</code> guard prevents.</strong> The comment states it and
+    the reasoning about a closed channel is sound, but no test in this tree
+    drives <code>call_model</code> with a sender that drops early. What would
+    settle it: remove the guard and run a goal against a provider that closes
+    its event channel before the send future resolves.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::call_model</code></span>
+
+  <footer class="pg">
+    <p>
+      Written against commit <code>a3eba74</code>. Next:
+      <a href="loop-failure.html">Failure as an observation</a>, which is what
+      the tool-call branch of this page's diagram does with a call that goes
+      wrong.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

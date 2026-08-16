@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Retry · Providers &amp; models · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav here" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/llm/src/retry.rs</p>
+  <h1>Retry</h1>
+
+  <nav class="chapter">
+    <a class="up" href="providers.html">Providers &amp; models</a>
+    <a href="providers-boundary.html">The boundary</a>
+    <a href="providers-content.html">Content blocks</a>
+    <a href="providers-turn.html">The turn back</a>
+    <a href="providers-models.html">Model limits</a>
+    <a href="providers-caching.html">Caching</a>
+    <a href="providers-floor.html">The cache floor</a>
+    <span class="now">Retry</span>
+    <a href="providers-credentials.html">Credentials</a>
+  </nav>
+
+  <p class="lede">
+    Four attempts, 500 ms doubling, a 20-second ceiling on any single wait
+    including one the provider asked for. Three rules govern it, and the third
+    is the one that matters for a program somebody is watching: a retry the
+    user cannot see is indistinguishable from a hang, and a user who cannot
+    tell hits Ctrl-C and loses the work.
+  </p>
+
+  <h2 id="policy">The policy</h2>
+
+  <p class="faint">crates/llm/src/retry.rs · <code>struct Retry</code>, <code>impl Default</code></p>
+  <pre><code>#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Retry {
+    /// Total tries, not extra tries: `3` means the original plus two retries.
+    pub max_attempts: u32,
+    /// First backoff; doubles per attempt.
+    pub base: Duration,
+    /// Ceiling on any single wait, including one the provider asked for. A
+    /// `retry-after: 3600` is the provider saying "come back in an hour", which
+    /// for an interactive tool means "tell the user now", not "sleep".
+    pub cap: Duration,
+}
+
+impl Default for Retry {
+    fn default() -&gt; Self {
+        Self {
+            max_attempts: 4,
+            base: Duration::from_millis(500),
+            cap: Duration::from_secs(20),
+        }
+    }
+}</code></pre>
+  <span class="src">crates/llm/src/retry.rs — <code>Retry</code></span>
+
+  <p>
+    <code>max_attempts: 4</code> counts the original, so the default is one try
+    plus three retries. Every field is <code>pub</code>, which is what lets the
+    provider tests build a policy with millisecond delays and exercise the
+    retry path without making the suite slow.
+  </p>
+
+  <p class="faint">crates/llm/src/retry.rs · the comment where a constructor used to be</p>
+  <pre><code>// There was a `none()` constructor here — one attempt, no retry — for a
+// caller that schedules its own or a test that wants a failure surfaced
+// rather than absorbed. Neither ever appeared: the provider tests build a
+// `Retry` with millisecond delays instead, because they want the retry path
+// exercised and not skipped. Removed rather than kept for a hypothetical
+// caller, because `Retry { max_attempts: 1, ..Default::default() }` is one
+// line and the struct is `pub` in every field. A convenience for nobody is
+// still surface that has to stay true.</code></pre>
+  <span class="src">crates/llm/src/retry.rs — <code>impl Retry</code></span>
+
+  <h2 id="delay">Computing one delay</h2>
+
+  <p class="faint">crates/llm/src/retry.rs · <code>Retry::delay_for</code></p>
+  <pre><code>/// How long to wait before attempt `attempt + 1`, or `None` to give up.
+///
+/// `attempt` is 1-based and counts the try that just failed.
+pub fn delay_for(&amp;self, err: &amp;LlmError, attempt: u32) -&gt; Option&lt;Duration&gt; {
+    if !err.retryable() || attempt &gt;= self.max_attempts {
+        return None;
+    }
+    // A provider-supplied delay overrides the curve entirely: it is the
+    // only party that knows when the bucket refills.
+    if let Some(after) = err.retry_after() {
+        return Some(after.min(self.cap));
+    }
+    let factor = 2u32.saturating_pow(attempt.saturating_sub(1));
+    Some(self.base.saturating_mul(factor).min(self.cap))
+}</code></pre>
+  <span class="src">crates/llm/src/retry.rs — <code>delay_for</code></span>
+
+  <p>
+    Four branches, in order. A non-retryable error gives up immediately. The
+    attempt cap gives up. A provider-supplied <code>retry-after</code>
+    overrides the curve and is then clamped to the cap. Otherwise the curve:
+    <code>base × 2^(attempt−1)</code>, clamped. Both arithmetic operations
+    saturate, so a large <code>attempt</code> cannot overflow into a small
+    delay.
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead>
+        <tr>
+          <th class="num">Attempt that just failed</th>
+          <th class="num">Curve delay at defaults</th>
+          <th>Outcome</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="num">1</td><td class="num">500 ms</td><td>retry</td></tr>
+        <tr><td class="num">2</td><td class="num">1 s</td><td>retry</td></tr>
+        <tr><td class="num">3</td><td class="num">2 s</td><td>retry</td></tr>
+        <tr><td class="num">4</td><td class="num">none</td><td><code>None</code>: <code>attempt &gt;= max_attempts</code>, the error is surfaced</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    The 20-second cap is never reached on the curve at the default settings.
+    It exists for the <code>retry-after</code> path, where the provider can ask
+    for an hour. <code>a_retry_after_longer_than_the_cap_is_clamped</code>
+    sends 3,600 seconds and asserts 20 comes back.
+    <code>backoff_doubles_and_stops_at_the_attempt_cap</code> pins the doubling
+    and the <code>None</code> at the ceiling.
+    <code>retry_after_wins_over_the_curve</code> pins the override with a
+    comment saying why: waiting 100 ms just spends another attempt on a bucket
+    that is still empty. <code>nothing_retryable_is_never_retried</code> pins a
+    400. <span class="chip test">tested</span>, on the assertions as written;
+    no mutation was run here.
+  </p>
+
+  <h3>Which failures are retryable</h3>
+
+  <p class="faint">crates/llm/src/lib.rs · <code>LlmError::retryable</code>, <code>LlmError::retry_after</code></p>
+  <pre><code>/// Failures where the same request may succeed unchanged. A 400 is not one
+/// of them — retrying a malformed request just spends the user's time.
+pub fn retryable(&amp;self) -&gt; bool {
+    matches!(
+        self,
+        Self::RateLimited { .. } | Self::Unavailable { .. } | Self::Transport(_)
+    )
+}
+
+fn retry_after(&amp;self) -&gt; Option&lt;Duration&gt; {
+    match self {
+        Self::RateLimited { retry_after, .. } =&gt; *retry_after,
+        _ =&gt; None,
+    }
+}</code></pre>
+  <span class="src">crates/llm/src/lib.rs — <code>LlmError::retryable</code></span>
+
+  <p>
+    Three variants of nine are retryable. The header is parsed on every
+    response but carried on <code>RateLimited</code> alone, so a 5xx that
+    happens to send one backs off on the curve instead. The module doc gives
+    the reason: 429 is the case the API documents sending it for, and widening
+    it would be guessing.
+  </p>
+
+  <h3>Parsing the header</h3>
+
+  <p class="faint">crates/llm/src/retry.rs · <code>retry_after_seconds</code></p>
+  <pre><code>/// Parse a `retry-after` header value. Seconds only — the HTTP-date form is
+/// legal but the Messages API sends seconds, and mis-parsing a date into a
+/// duration is worse than ignoring it and backing off on the curve.
+pub(crate) fn retry_after_seconds(raw: Option&lt;&amp;str&gt;) -&gt; Option&lt;Duration&gt; {
+    raw?.trim().parse::&lt;u64&gt;().ok().map(Duration::from_secs)
+}</code></pre>
+  <span class="src">crates/llm/src/retry.rs — <code>retry_after_seconds</code></span>
+
+  <p>
+    <code>header_parsing_ignores_what_it_cannot_read</code> covers all four
+    cases in eight lines: <code>"3"</code>, <code>" 12 "</code> with
+    surrounding whitespace, an HTTP-date which yields <code>None</code>, and no
+    header at all. <span class="chip test">tested</span> An unparseable value
+    is indistinguishable from an absent one downstream, which is the intended
+    degradation: the curve takes over.
+  </p>
+
+  <h2 id="classify">Turning a status into an error</h2>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>AnthropicProvider::classify</code></p>
+  <pre><code>async fn classify(&amp;self, resp: reqwest::Response) -&gt; LlmError {
+    let status = resp.status();
+    let retry_after = retry_after_seconds(
+        resp.headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok()),
+    );
+    let body = resp.text().await.unwrap_or_default();
+    let message = self.scrub(trim_body(&amp;api_message(&amp;body)));
+
+    match status.as_u16() {
+        401 =&gt; LlmError::Unauthorized { message },
+        403 =&gt; LlmError::Forbidden { message },
+        400 | 404 | 413 | 422 =&gt; LlmError::BadRequest { message },
+        429 =&gt; LlmError::RateLimited {
+            retry_after,
+            retry_hint: match retry_after {
+                Some(d) =&gt; format!("; the API asked for {}s", d.as_secs()),
+                None =&gt; "; no retry-after was given".to_string(),
+            },
+            message,
+        },
+        code if code &gt;= 500 =&gt; LlmError::Unavailable {
+            status: code,
+            message,
+        },
+        code =&gt; LlmError::Api {
+            status: code,
+            message,
+        },
+    }
+}</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>classify</code>, <code>api_message</code>, <code>trim_body</code></span>
+
+  <div class="tw">
+    <table>
+      <thead>
+        <tr>
+          <th class="num">Status</th>
+          <th>Variant</th>
+          <th>Retried</th>
+          <th>What the user is told to do</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="num">401</td><td><code>Unauthorized</code></td><td>no</td><td>check <code>ANTHROPIC_API_KEY</code>, or run <code>emma api</code></td></tr>
+        <tr><td class="num">403</td><td><code>Forbidden</code></td><td>no</td><td>check the key's workspace and model permissions</td></tr>
+        <tr><td class="num">400, 404, 413, 422</td><td><code>BadRequest</code></td><td>no</td><td>the provider's own objection, verbatim</td></tr>
+        <tr><td class="num">429</td><td><code>RateLimited</code></td><td>yes</td><td>the hint says how many seconds the API asked for, or that it gave none</td></tr>
+        <tr><td class="num">≥ 500</td><td><code>Unavailable</code></td><td>yes</td><td>the API is unavailable, with the status</td></tr>
+        <tr><td class="num">anything else</td><td><code>Api</code></td><td>no</td><td>the status and the body</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    404 and 413 sit under <code>BadRequest</code> rather than under
+    <code>Api</code>, which is a judgement about what they mean here: a 404
+    from the Messages API is a wrong model id or a wrong path, and a 413 is a
+    request too large. Both are the request being wrong, and neither is fixed
+    by sending it again. A transport failure never reaches
+    <code>classify</code> at all; <code>execute</code> turns it into
+    <code>Transport</code> directly.
+  </p>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>api_message</code></p>
+  <pre><code>/// The provider's own error prose, or the whole body when it is not shaped the
+/// way the API documents. "request failed" is never enough to act on; the
+/// message the API wrote is.
+fn api_message(body: &amp;str) -&gt; String {
+    serde_json::from_str::&lt;Value&gt;(body)
+        .ok()
+        .and_then(|v| {
+            v.pointer("/error/message")
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| body.trim().to_string())
+}</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>api_message</code></span>
+
+  <p>
+    A body that is not JSON, or is JSON without <code>/error/message</code>,
+    falls through to the trimmed body itself, so a proxy's HTML error page
+    arrives as its own text rather than as a parse failure.
+    <code>trim_body</code> in <code>lib.rs</code> then cuts it to 600 bytes on
+    a character boundary and appends an ellipsis, so a multi-kilobyte body
+    still fits a terminal line. <code>a_400_is_surfaced_with_what_the_api_objected_to</code>
+    asserts the phrase <em>roles must alternate</em> survives into the message
+    and that the stub saw exactly one request.
+    <span class="chip test">tested</span>
+  </p>
+
+  <h2 id="execute">The loop, and where retrying stops</h2>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>AnthropicProvider::execute</code></p>
+  <pre><code>async fn execute(
+    &amp;self,
+    body: Value,
+    mode: Mode,
+    events: Option&lt;&amp;mpsc::Sender&lt;Event&gt;&gt;,
+) -&gt; Result&lt;AssistantTurn, LlmError&gt; {
+    let mut attempt: u32 = 1;
+    loop {
+        let sent = self
+            .http
+            .post(&amp;self.base_url)
+            .header("x-api-key", self.key.expose())
+            .header("anthropic-version", API_VERSION)
+            .header("content-type", "application/json")
+            .json(&amp;body)
+            .send()
+            .await;
+
+        let failure = match sent {
+            Ok(resp) if resp.status().is_success() =&gt; {
+                // Past this point bytes may already have reached the user,
+                // so a mid-stream failure is surfaced rather than retried:
+                // a retry would replay text the terminal has printed.
+                return match mode {
+                    Mode::Batch =&gt; self.read_batch(resp).await,
+                    Mode::Stream =&gt; self.read_stream(resp, events).await,
+                };
+            }
+            Ok(resp) =&gt; self.classify(resp).await,
+            Err(e) =&gt; LlmError::Transport(self.scrub(e.to_string())),
+        };
+
+        let Some(delay) = self.retry.delay_for(&amp;failure, attempt) else {
+            return Err(failure);
+        };
+        notify(
+            events,
+            Event::Retrying {
+                attempt,
+                max_attempts: self.retry.max_attempts,
+                delay,
+                reason: failure.to_string(),
+            },
+        )
+        .await;
+        tokio::time::sleep(delay).await;
+        attempt += 1;
+    }
+}</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>execute</code></span>
+
+  <p>
+    The boundary that is drawn here rather than in the policy: <strong>once the
+    response is a success, nothing is retried.</strong> A mid-stream error
+    frame, a truncated tool argument, a body that will not parse, all of them
+    return out of that <code>return match mode</code> and never see
+    <code>delay_for</code>. Past that point bytes may already have reached the
+    terminal, and a retry would replay text the user has read.
+    <code>a_mid_stream_error_frame_ends_the_turn</code> asserts the stub saw
+    exactly one request. <span class="chip test">tested</span>
+  </p>
+
+  <p>
+    The same body is re-sent, byte for byte, on every attempt. That matters for
+    caching: the second attempt has the same prefix as the first and may read
+    an entry the first wrote, so a retried call is not a cache miss.
+    <span class="chip unv">unverified</span> Nothing has measured that on a
+    real 429; settling it means one retried live call with both usage rows
+    kept.
+  </p>
+
+  <p class="faint">crates/llm/src/anthropic.rs · <code>notify</code></p>
+  <pre><code>async fn notify(events: Option&lt;&amp;mpsc::Sender&lt;Event&gt;&gt;, event: Event) {
+    if let Some(tx) = events {
+        // Best effort: a closed receiver means the turn is being cancelled,
+        // which the caller already knows about.
+        let _ = tx.send(event).await;
+    }
+}</code></pre>
+  <span class="src">crates/llm/src/anthropic.rs — <code>notify</code></span>
+
+  <p>
+    Every event Emma emits goes through it, so a caller that passed
+    <code>None</code> costs one branch and a caller whose receiver has hung up
+    costs one ignored error rather than a failed turn. The channel in the
+    provider tests holds 256 events, which is more than any fixture produces.
+  </p>
+
+  <h2 id="visible">Making every attempt visible</h2>
+
+  <p>
+    <code>a_429_is_retried_after_the_delay_the_api_asked_for_and_is_visible</code>
+    is the test that carries the third rule. It queues three replies, a 429
+    with <code>retry-after: 0</code>, a 529, then a success, and asserts four
+    things: the turn succeeded, the stub saw three requests, exactly two
+    <code>Retrying</code> events arrived with the message
+    <em>a silent retry is a hang</em>, and the first of those had a delay of
+    exactly zero, so the provider's header was used rather than the curve. The
+    second is asserted only as greater than zero, which is the curve.
+    <span class="chip test">tested</span>
+  </p>
+
+  <p>
+    <code>a_429_that_never_clears_reports_how_long_to_wait</code> is its
+    complement: three 429s, the last asking for 9 seconds, and the surfaced
+    error mentions both <em>rate limited</em> and <em>9s</em>. The attempt cap
+    holds at three, which is what the test provider's
+    <code>max_attempts: 3</code> sets. <span class="chip test">tested</span>
+  </p>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    <code>retry.rs</code> is fully covered: <code>Default::default</code>,
+    <code>delay_for</code> and <code>retry_after_seconds</code> are the file's
+    three functions and all three are quoted above, along with both constants
+    that matter and the comment marking the constructor that was removed. Its
+    five tests all ran green here on 2026-08-16.
+    <span class="chip cert">certified</span> by
+    <code>cargo test -p emma-llm</code>, which reported 72 passed.
+  </p>
+
+  <p>
+    From <code>anthropic.rs</code>: <code>classify</code>,
+    <code>execute</code>, <code>api_message</code> and <code>notify</code>,
+    bringing this chapter's total for that file to 27 of 28. The last one is
+    <code>scrub</code>, on <a href="providers-credentials.html">credentials</a>.
+    From <code>lib.rs</code>: <code>retryable</code>, <code>retry_after</code>
+    and <code>trim_body</code>.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="providers-credentials.html">where the key comes from</a>,
+      and the two places it must never appear. Back to
+      <a href="providers.html">Providers &amp; models</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

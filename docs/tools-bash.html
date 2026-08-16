@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bash · Tools · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav here" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<p class="eyebrow">Doing work</p>
+<h1><code>Bash</code>: a shell, and what that costs</h1>
+
+<nav class="chapter">
+  <a class="up" href="tools.html">Tools</a>
+  <a href="tools-trait.html">the trait</a>
+  <a href="tools-outcome.html">outcomes</a>
+  <a href="tools-truncation.html">truncation</a>
+  <a href="tools-ctx.html">ToolCtx</a>
+  <a href="tools-containment.html">containment</a>
+  <a href="tools-files.html">files</a>
+  <a href="tools-edit.html">Edit</a>
+  <span class="now">Bash</span>
+  <a href="tools-tasks.html">tasks</a>
+  <a href="tools-web.html">web</a>
+  <a href="tools-lsp.html">LSP</a>
+</nav>
+
+<p class="lede">
+  Three arguments, one shell, and the widest hole in the containment story,
+  documented as one rather than papered over. This is also the tool that forced
+  the workspace's error rule to be restated.
+</p>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Argument</th><th>Type</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>command</code> <em>required</em></td><td>string</td><td>A shell command line. Whitespace-only is <code>Bash.command is empty</code>.</td></tr>
+      <tr><td><code>timeout_ms</code></td><td>integer ≥ 1</td><td>Default 120,000, clamped at 600,000. Zero is refused; an over-large value is clamped, because "wait an hour" is a real intention the engine will not honour past its ceiling.</td></tr>
+      <tr><td><code>cwd</code></td><td>string</td><td>Must resolve inside the working directory and be a directory. Defaults to the root.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  <code>read_only: false</code>, <code>reaches_network: false</code>,
+  <code>idempotent: false</code>. The network declaration is the one in the
+  workspace that most obviously wants an argument attached, and the source
+  attaches it in a comment on the field itself.
+</p>
+
+<pre><code>            <span class="c">// False, and this is the one declaration in the workspace that</span>
+            <span class="c">// wants its argument attached: `Bash` can obviously `curl`. It</span>
+            <span class="c">// says false because the axis is about tools whose purpose is</span>
+            <span class="c">// egress, and because `read_only: false` already gates every call</span>
+            <span class="c">// here behind a prompt that shows the command itself — which is</span>
+            <span class="c">// strictly more information than a host name. Declaring true would</span>
+            <span class="c">// oblige `network_target` to name a destination, and naming one</span>
+            <span class="c">// means parsing shell to find it: an arms race with every quoting</span>
+            <span class="c">// trick there is, losing quietly. See `ToolMeta::reaches_network`.</span>
+            reaches_network: <span class="k">false</span>,</code></pre>
+<span class="src">tools/fs/src/bash.rs — <code>Bash::meta</code></span>
+
+<h2 id="shellorargv">Shell or argv</h2>
+
+<p>
+  The argv alternative is genuinely safer: no quoting, no word splitting, no
+  injection surface, no dependence on what <code>sh</code> happens to be. It is
+  also unusable for what this tool is for, because almost every command a
+  coding agent needs is a shell construct:
+  <code>cargo test 2&gt;&amp;1 | tail -40</code>,
+  <code>grep -c . file || true</code>, <code>mkdir -p a &amp;&amp; cd a</code>.
+</p>
+
+<p>
+  The failure mode of argv exec is that the model emits <code>sh -c "…"</code>
+  as the argv anyway, which is a shell with the safety story removed and
+  nobody's caps applied. The injection argument also does not survive the threat
+  model: there is no untrusted string being interpolated, the model composes the
+  whole command, and a model that wants to delete something can do it through
+  argv just as easily.
+</p>
+<span class="src">tools/fs/src/bash.rs — module doc</span>
+
+<h2 id="env">The child's environment is rebuilt, not filtered</h2>
+
+<pre><code><span class="c">/// Everything the child is allowed to inherit. Cleared and rebuilt rather than</span>
+<span class="c">/// filtered, so a variable added to the parent's environment later — an API key</span>
+<span class="c">/// exported by whatever launched Emma — cannot appear here by default.</span>
+<span class="k">const</span> ENV_ALLOWLIST: &amp;[&amp;<span class="k">str</span>] = &amp;[
+    <span class="s">"PATH"</span>, <span class="s">"HOME"</span>, <span class="s">"USERPROFILE"</span>, <span class="s">"HOMEDRIVE"</span>, <span class="s">"HOMEPATH"</span>,
+    <span class="s">"SYSTEMROOT"</span>, <span class="s">"WINDIR"</span>, <span class="s">"COMSPEC"</span>, <span class="s">"PATHEXT"</span>,
+    <span class="s">"TEMP"</span>, <span class="s">"TMP"</span>, <span class="s">"TMPDIR"</span>,
+    <span class="s">"LANG"</span>, <span class="s">"LC_ALL"</span>, <span class="s">"TZ"</span>, <span class="s">"TERM"</span>,
+];</code></pre>
+<span class="src">tools/fs/src/bash.rs — <code>ENV_ALLOWLIST</code></span>
+
+<p>
+  Sixteen names, and the notable absence is <code>EMMA_SHELL</code>. It selects
+  Emma's shell and has no business being visible to the commands that shell
+  runs. The child also gets <code>stdin</code> from <code>Stdio::null()</code>
+  and <code>kill_on_drop(true)</code>, without which a timed-out command keeps
+  running after Emma has given up on it and the next call sees a machine still
+  busy with work nobody is waiting for.
+</p>
+
+<p>
+  The rebuild has a cost worth stating: a command that depends on an environment
+  variable the user set will not see it, and nothing in the result says so.
+  Sixteen names is the whole of what a POSIX command line can rely on here.
+</p>
+
+<h2 id="shell">Which shell, and why WSL is refused</h2>
+
+<p>
+  The search used to be "the first <code>bash</code> on <code>PATH</code>". On a
+  stock Windows box that is <code>C:\Windows\System32\bash.exe</code>, the WSL
+  launcher.
+</p>
+
+<div class="note warn">
+  <span class="h">What that produced, measured</span>
+  <p>
+    <span class="chip obs">observed</span> A real run showed <code>pwd</code>
+    coming back <code>/mnt/e/Projects/emma</code> for a directory Emma had
+    resolved and contained as <code>C:\src\emma</code>, with
+    <code>.wslconfig</code> warnings mixed into the tool output. The two agreed
+    only because WSL happened to translate the directory. Measured on the same
+    box, when it <em>cannot</em> translate, on a <code>subst</code> drive or a
+    UNC path, WSL starts in the user's home directory instead, prints nothing,
+    and exits 0. That is a command running outside the approved root, reported as
+    success, and it is a hole rather than something the model can route around,
+    because nothing in the result says it happened. Seen by the author of
+    <code>bash.rs</code>; no transcript was kept.
+  </p>
+</div>
+
+<ol class="body">
+  <li>
+    <code>EMMA_SHELL</code>, if set to anything but whitespace: an absolute
+    path, or one of <code>sh</code>, <code>bash</code>, <code>pwsh</code>,
+    <code>powershell</code>. If what it names is not there the call is
+    <code>Unavailable</code> and says where it looked. <strong>It never falls
+    back.</strong> A tool that runs a different shell than the one you asked for
+    is worse than one that stops, because the command still produces output and
+    the output is wrong in a way that reads as the command's own answer.
+  </li>
+  <li><code>/bin/sh</code>, on unix.</li>
+  <li>
+    A native POSIX <code>bash</code> then <code>sh</code>: the Git for Windows
+    locations first, then <code>PATH</code>, skipping the WSL launcher wherever
+    it appears.
+  </li>
+  <li>
+    Nothing. <strong>PowerShell, WSL and <code>cmd.exe</code> are never chosen
+    automatically.</strong> The model writes POSIX on the strength of being told
+    it has a shell, and Windows PowerShell 5.1 has no <code>&amp;&amp;</code> at
+    all. Auto-selecting it would turn every such command into a wrong answer
+    shaped like the command's own output.
+  </li>
+</ol>
+
+<p>
+  Git for Windows is searched <em>before</em> <code>PATH</code>, and the WSL
+  launcher is skipped rather than merely ranked below it, because on a box
+  without Git the ranking alone still ends at WSL. Five directories are tried,
+  built from <code>ProgramFiles</code>, <code>ProgramW6432</code>,
+  <code>ProgramFiles(x86)</code>, <code>LOCALAPPDATA</code> and
+  <code>ProgramFiles</code> again for <code>Git\usr\bin</code>.
+</p>
+<span class="src">tools/fs/src/bash.rs — <code>WINDOWS_POSIX_DIRS</code>, <code>resolve_with</code></span>
+
+<p>
+  The whole decision is a pure function of a directory list and an "does this
+  exist" predicate, passed in rather than read, so every branch is testable on
+  any box without a shell installed.
+</p>
+
+<pre><code><span class="k">struct</span> ShellEnv&lt;<span class="k">'a</span>&gt; {
+    windows: <span class="k">bool</span>,
+    <span class="c">/// Searched before `PATH`. See [`WINDOWS_POSIX_DIRS`].</span>
+    preferred_dirs: Vec&lt;PathBuf&gt;,
+    path_dirs: Vec&lt;PathBuf&gt;,
+    exists: &amp;<span class="k">'a dyn</span> Fn(&amp;Path) -&gt; <span class="k">bool</span>,
+}</code></pre>
+
+<p>
+  <span class="chip test">tested</span> Seven tests in
+  <code>mod shell_tests</code> cover the order and both refusals against a fake
+  filesystem: Git bash preferred over WSL,
+  <code>/bin/sh</code> before anything on <code>PATH</code>, an absolute
+  override winning, a missing override refusing rather than substituting,
+  PowerShell reachable only by name, WSL refused even when asked for by name,
+  and a blank override meaning unset. The WSL test additionally asserts the
+  refusal explains itself, requiring the words "containment" or "namespace" in
+  the message.
+</p>
+
+<h3>PowerShell, when asked for by name</h3>
+
+<pre><code>    <span class="k">fn</span> args(&amp;<span class="k">self</span>) -&gt; &amp;<span class="k">'static</span> [&amp;<span class="k">'static str</span>] {
+        <span class="k">match self</span>.kind {
+            ShellKind::Posix =&gt; &amp;[<span class="s">"-c"</span>],
+            ShellKind::PowerShell =&gt; &amp;[<span class="s">"-NoLogo"</span>, <span class="s">"-NoProfile"</span>, <span class="s">"-NonInteractive"</span>, <span class="s">"-Command"</span>],
+            <span class="c">// Never reached: `resolve_with` refuses before constructing one.</span>
+            ShellKind::Wsl =&gt; &amp;[<span class="s">"-c"</span>],
+        }
+    }</code></pre>
+
+<p>
+  <code>-Command</code> is spelled out rather than <code>-c</code>. Both work,
+  and that was checked on Windows PowerShell 5.1 rather than assumed, after an
+  earlier comment in this file confidently claimed 5.1 rejects the short form.
+  <code>-NoProfile</code> keeps a user's arbitrary profile code from running
+  before every tool call, and <code>-NonInteractive</code> makes a cmdlet that
+  wants to prompt fail rather than wait on a null stdin until the timeout.
+</p>
+<span class="src">tools/fs/src/bash.rs — <code>Shell::args</code></span>
+
+<h3>The model is told which shell it got, in the result</h3>
+
+<p>
+  The description is hashed into <code>tool_schema_hash</code>, which is how
+  anyone tells which tool surface produced a given answer. A description naming
+  the local shell would make that hash a property of the machine. So every
+  result opens with <code>shell: posix — /bin/sh</code>, on every call rather
+  than once per session, because there is no session state here to hang "once"
+  on and a compacted conversation would lose the one mention.
+</p>
+
+<p>
+  <span class="chip test">tested</span>
+  <code>nothing_machine_specific_reaches_the_hashed_surface</code> asserts the
+  hashed surface contains none of <code>/bin/sh</code>,
+  <code>bash.exe</code>, <code>Program Files</code>, <code>System32</code>,
+  <code>WSL</code>, <code>wsl</code>, <code>sh -c</code> or
+  <code>EMMA_SHELL</code>, and the positive half: that it does say the answer is
+  on the first line of the result.
+</p>
+<span class="src">tools/fs/src/bash.rs — <code>Shell::banner</code>, <code>mod shell_tests</code></span>
+
+<div class="note warn">
+  <span class="h">Suspected defect: <code>classify</code> is not platform-gated</span>
+  <p>
+    <code>classify</code> calls any shell whose parent directory's last
+    component is <code>system32</code>, <code>syswow64</code>,
+    <code>sysnative</code> or <code>windowsapps</code> the WSL launcher,
+    <strong>on every platform</strong>. Unlike every other decision in that
+    module it does not take the injected <code>windows</code> flag. On unix, a
+    checkout containing a directory of any of those names yields a refusal that
+    talks about WSL.
+  </p>
+  <p>
+    <strong>Its unit test asserts the behaviour unconditionally, so it can never
+    go red.</strong>
+    <code>the_wsl_launcher_is_recognised_wherever_windows_keeps_it</code> passes
+    on Linux and on Windows alike, for the same reason the defect exists:
+    <code>classify</code> gives the same answer on both. Flagged here rather
+    than fixed.
+  </p>
+</div>
+
+<pre><code><span class="k">fn</span> classify(path: &amp;Path) -&gt; ShellKind {
+    <span class="k">let</span> stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    <span class="k">if</span> stem == <span class="s">"pwsh"</span> || stem == <span class="s">"powershell"</span> {
+        <span class="k">return</span> ShellKind::PowerShell;
+    }
+    <span class="k">if</span> stem == <span class="s">"wsl"</span> {
+        <span class="k">return</span> ShellKind::Wsl;
+    }
+    <span class="k">let</span> parent = path
+        .parent()
+        .map(|p| p.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    <span class="k">let</span> in_system_dir = parent
+        .rsplit([<span class="s">'\\'</span>, <span class="s">'/'</span>])
+        .next()
+        .is_some_and(|leaf| WSL_DIRS.contains(&amp;leaf));
+    <span class="k">if</span> in_system_dir {
+        <span class="k">return</span> ShellKind::Wsl;
+    }
+    ShellKind::Posix
+}</code></pre>
+<span class="src">tools/fs/src/bash.rs — <code>classify</code>; notes/lessons/a-fake-machine-still-parses-paths-with-the-hosts-separator.md §3</span>
+
+<p>
+  The classification is by name rather than by probing, because this runs before
+  anything is spawned and a decision that required executing the candidate to
+  find out what it was would already have run it.
+  <a href="tools-lsp.html">The LSP crate diverges here</a> and probes with
+  <code>--version</code>, for a reason it states.
+</p>
+
+<h2 id="exit">Exit status is not failure</h2>
+
+<pre><code>        <span class="c">// A command that ran and exited non-zero is **not** a tool failure.</span>
+        <span class="c">//</span>
+        <span class="c">// The contract's rule — an error is a fact about the call, never about</span>
+        <span class="c">// what the world contains — was written about the filesystem, and it</span>
+        <span class="c">// did not survive first contact with exit-status-as-answer. `grep -q`</span>
+        <span class="c">// answering "no" exits 1. `test -f` answering "it is not there" exits</span>
+        <span class="c">// 1. `cargo test` answering "three of these fail" exits 101. Every one</span>
+        <span class="c">// of those is the world answering the question that was asked, and</span>
+        <span class="c">// reporting them as `Failed` tells the model its shell is broken and</span>
+        <span class="c">// invites it to route around a problem it does not have.</span></code></pre>
+
+<p>
+  Could-not-spawn, timed-out and killed are <code>Failed</code>. Anything that
+  started and finished is <code>Ok</code>, with <code>exit status &lt;n&gt;</code>
+  stated first, above the output, because a model that skims sees the outcome
+  before the output and a non-zero exit changes how the output should be read.
+  A command killed by a signal reports <code>exit status a signal</code>, since
+  <code>ExitStatus::code</code> is <code>None</code> there.
+</p>
+
+<div class="note">
+  <span class="h">The copy that was wrong is the one the model reads</span>
+  <p>
+    This contract was stated three ways for a while: in the module doc, in
+    <code>run</code>, and in <code>descriptions/bash.md</code>. The description
+    went on calling a non-zero exit a failure long after the code stopped
+    treating it as one, because changing it moves the registry's schema hash,
+    which kept the edit looking too consequential to make in passing. That
+    deferral cost more than the edit: it taught the model to avoid
+    <code>Bash</code> for the commands it should use it for, and to append
+    <code>|| true</code>, which discards the status the tool now reports
+    correctly. All three have agreed since 2026-08-10.
+  </p>
+  <p>
+    The description moved once more the same day, for the same class of reason.
+    It promised <code>sh -c</code>, which is false under PowerShell and false
+    about <code>&amp;&amp;</code> in particular.
+  </p>
+</div>
+<span class="src">tools/fs/src/bash.rs — module doc, <code>Bash::run</code></span>
+
+<h2 id="drain">Two streams, drained past the cap</h2>
+
+<pre><code><span class="c">/// The `continue` past the cap is the point of the whole function: it keeps</span>
+<span class="c">/// consuming and discarding rather than returning. Stopping would leave the</span>
+<span class="c">/// pipe buffer full and the child blocked forever on a write nobody is reading,</span>
+<span class="c">/// so every noisy command would run to its full timeout instead of finishing.</span>
+<span class="c">/// Keeping the *head* rather than the tail is the deliberate half of that — the</span>
+<span class="c">/// first error is usually the real one, and the rest is cascade.</span>
+<span class="k">async fn</span> drain&lt;R: tokio::io::AsyncRead + Unpin&gt;(<span class="k">mut</span> reader: R, cap: <span class="k">usize</span>) -&gt; (Vec&lt;<span class="k">u8</span>&gt;, <span class="k">bool</span>) {</code></pre>
+
+<p>
+  stderr is labelled rather than interleaved, under a
+  <code>--- stderr ---</code> divider. Interleaving is what a terminal shows and
+  it is not reconstructible here, because the two pipes arrive independently, so
+  a merged view would invent an ordering that did not happen. Both streams empty
+  renders as <code>(no output)</code> rather than an empty string, so a command
+  that printed nothing and a call that lost its output do not read the same.
+</p>
+<span class="src">tools/fs/src/bash.rs — <code>drain</code>, <code>render</code></span>
+
+<div class="note warn">
+  <span class="h">The grandchild-holds-the-pipe race</span>
+  <p>
+    After the wait, the drains are given <strong>5 seconds</strong> and no
+    more, because a background grandchild holding the pipe open outlives the
+    kill and waiting on it would turn a timeout into a hang. Losing that race
+    discards whatever had already been drained and reports both streams as cut.
+    That loses output, which is the lesser harm against a <code>Bash</code> call
+    that never returns.
+  </p>
+  <p>
+    The two cuts call for opposite moves and get different sentences. The cap
+    means the body is a prefix of what was said. A lost race means the whole
+    output is missing and the body is assembled from nothing, so the notice says
+    <code>Nothing here is the command's output and no argument changes that —
+    re-run it redirecting output to a file, then Read or Grep the file.</code>
+    Telling the model "cut at 65536 bytes" there would name a limit that never
+    fired and invite it to trust an empty body as short output.
+  </p>
+  <p>
+    <span class="chip unv">unverified</span> Only the cap is tested. The
+    lost-race branch needs a grandchild holding the pipe open, which the
+    truncation suite says in its own comment no fixture can arrange reliably.
+    Settled by spawning something like
+    <code>(sleep 30 &amp;) ; echo done</code> under a short timeout on both
+    platforms and checking which of the two sentences comes back.
+  </p>
+</div>
+<span class="src">tools/fs/src/bash.rs — <code>Bash::run</code>; tools/fs/tests/truncation.rs</span>
+
+<h2 id="containment">The containment story, stated rather than implied</h2>
+
+<p>
+  <code>cwd</code> is where the command starts, not a wall it is held behind.
+  <code>cd ..</code> leaves. The <code>cwd</code> <em>argument</em> is contained
+  and must resolve inside the root, which is a guard on the argument only. That
+  is in the tool's description rather than papered over, because a boundary the
+  operator believes in and that does not hold is worse than no boundary.
+</p>
+
+<p>
+  What actually protects anything here is the approval gate reading
+  <code>read_only: false</code> and showing the command itself. See
+  <a href="consent.html">Consent &amp; permissions</a>.
+</p>
+
+<h2 id="unverified">What is not verified here</h2>
+
+<p>
+  <span class="chip unv">unverified</span> The WSL measurement above, including
+  the <code>subst</code>-drive and UNC-path behaviour, is one author's run on
+  one Windows box with no transcript kept. Settled by repeating it with a
+  <code>subst</code> drive and pasting the tool output.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> The claim that a rebuilt environment
+  never surprises a real command is not made here, and nothing measures how
+  often a command needs a seventeenth variable. Settled by logging, across a
+  week of real sessions, every <code>Bash</code> failure whose message mentions
+  an environment variable.
+</p>
+
+<p>
+  <span class="chip cert">certified</span> <code>tools/fs/tests/edges.rs</code>
+  (38 tests) and <code>tests/shell_override.rs</code> (1) passed at commit
+  <code>a3eba74</code> on this box, and the edges suite takes 30 seconds because
+  several of its cases spawn real shells.
+</p>
+</div>
+</main>
+</div>
+</body>
+</html>

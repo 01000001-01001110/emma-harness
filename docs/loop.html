@@ -1,1162 +1,211 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>The agent loop · Emma</title>
-    <link rel="stylesheet" href="assets/docs.css" />
-  </head>
-  <body>
-    <div class="shell">
-      <!-- ===========================================================================
-     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
-     inside <div class="shell">, and change exactly one thing: add class
-     "here" to the <a> for the page you are writing.
-
-     It is duplicated per page on purpose. These pages must open from file://
-     with no server, no build step and no JavaScript, so there is nothing to
-     include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
-     is kept short.
-     =========================================================================== -->
-      <nav class="side">
-        <div class="brand">
-          <a href="index.html"><b>emma<i>·</i>harness</b></a>
-          <span>0.1.0 · single-user · rust</span>
-        </div>
-
-        <h4>Start here</h4>
-        <ul>
-          <li><a class="nav" href="index.html">What Emma is</a></li>
-          <li><a class="nav" href="getting-started.html">Getting started</a></li>
-          <li><a class="nav" href="architecture.html">Architecture</a></li>
-        </ul>
-
-        <h4>Running a goal</h4>
-        <ul>
-          <li><a class="nav here" href="loop.html">The agent loop</a></li>
-          <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
-          <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
-        </ul>
-
-        <h4>Doing work</h4>
-        <ul>
-          <li><a class="nav" href="tools.html">Tools</a></li>
-          <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
-          <li><a class="nav" href="delegation.html">Delegation</a></li>
-        </ul>
-
-        <h4>Surface</h4>
-        <ul>
-          <li><a class="nav" href="terminal.html">The terminal</a></li>
-          <li><a class="nav" href="config.html">Configuration</a></li>
-        </ul>
-
-        <h4>The project</h4>
-        <ul>
-          <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
-          <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
-          <li><a class="nav" href="unverified.html">What is not verified</a></li>
-        </ul>
-      </nav>
-
-      <main>
-        <div class="col">
-          <p class="eyebrow">Running a goal</p>
-          <h1>The agent loop</h1>
-          <p class="lede">
-            Send a request, receive a turn, run whatever tools it asked for, put
-            the results back in the conversation, send again. Everything else on
-            this page is a rule about when that stops, plus one rule, the memo,
-            about when a tool call is refused before it is ever run.
-          </p>
-          <span class="src">crates/emma/src/agent.rs · crates/emma/src/goal.rs</span>
-
-          <div class="key">
-            <div><span class="chip cert">certified</span> proven, and a reader can repeat it: a file, a command, a grep</div>
-            <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
-            <div><span class="chip test">tested</span> a test covers it</div>
-            <div><span class="chip unv">unverified</span> believed, not checked</div>
-          </div>
-
-          <p>
-            The loop lives in <code>Agent::run_goal</code>. It is one function of
-            about 370 lines: every decision about what ends a goal is visible in
-            one place rather than distributed across helpers that each look
-            harmless. The two functions worth reading together are
-            <code>run_goal</code> and <code>run_tool_call</code>. The memo rule
-            below is split between them and reads as nonsense in either alone.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, <code>Agent::run_tool_call</code></span>
-
-          <h2 id="turn">One turn, end to end</h2>
-
-          <p>
-            A turn begins with a <code>Request</code> assembled from four things:
-            the harness instructions with
-            <code>goal::standing_contract(done)</code> appended, the tool
-            definitions, <code>history</code> (the whole session conversation,
-            every finished goal in order), and <code>query</code>, the goal in
-            flight. The standing contract is appended to the system prompt rather
-            than prepended to the user's message, and that placement is a
-            reversal: it used to wrap every goal, and typing <code>Hello</code>
-            produced a model that ran <code>pwd &amp;&amp; ls -la</code> before
-            saying hello. A preamble applied to every input is an instruction the
-            user did not write and cannot see.
-          </p>
-          <span class="src">crates/emma/src/goal.rs — <code>Goal::opening</code>, <code>standing_contract</code></span>
-
-          <figure>
-            <div class="figwrap">
-              <svg
-                viewBox="0 0 700 570"
-                role="img"
-                aria-label="One turn: a request built from instructions, tools, history and query goes to the provider; the assistant turn is metered and logged, then either has no tool calls and reaches the ending ladder, or has tool calls that are dispatched one at a time and whose results are placed back into the query beside the turn that asked for them."
-              >
-                <rect class="box" x="16" y="16" width="196" height="88" rx="4" />
-                <text class="lbl" x="28" y="38">query + history</text>
-                <text class="sm" x="28" y="56">instructions +</text>
-                <text class="sm" x="28" y="71">standing_contract</text>
-                <text class="sm" x="28" y="86">tool definitions</text>
-                <text class="tiny" x="28" y="99">agent.rs · run_goal</text>
-
-                <path class="edge" d="M212 60 H256" marker-end="url(#a1)" />
-                <rect class="box" x="256" y="36" width="152" height="48" rx="4" />
-                <text class="lbl" x="268" y="58">Request →</text>
-                <text class="sm" x="268" y="75">call_model()</text>
-
-                <path class="edge" d="M408 60 H452" marker-end="url(#a1)" />
-                <rect class="hl" x="452" y="16" width="232" height="88" rx="4" />
-                <text class="lbl" x="464" y="38">AssistantTurn</text>
-                <text class="sm" x="464" y="57">content: thinking · text</text>
-                <text class="sm" x="464" y="72">· tool_use — verbatim</text>
-                <text class="tiny" x="464" y="93">echoed back unrebuilt</text>
-
-                <path class="edge" d="M568 104 V132" marker-end="url(#a1)" />
-                <rect class="box" x="452" y="132" width="232" height="46" rx="4" />
-                <text class="sm" x="464" y="152">spend.add(cost_tokens(usage))</text>
-                <text class="tiny" x="464" y="169">log model_call · term.spent — before the test</text>
-
-                <path class="edge" d="M568 178 V206" marker-end="url(#a1)" />
-                <rect class="box" x="452" y="206" width="232" height="38" rx="4" />
-                <text class="sm" x="464" y="223">spend.get() &gt; max_tokens?</text>
-                <text class="tiny" x="464" y="238">yes → Ending::Tokens (tripwire)</text>
-
-                <path class="edge" d="M568 244 V272" marker-end="url(#a1)" />
-                <rect class="box" x="452" y="272" width="232" height="34" rx="4" />
-                <text class="sm" x="464" y="294">tool_calls().is_empty()?</text>
-
-                <path class="edge" d="M452 289 H360 V330" marker-end="url(#a1)" />
-                <text class="tiny" x="366" y="284">yes</text>
-                <rect class="box" x="236" y="330" width="188" height="52" rx="4" />
-                <text class="lbl" x="248" y="352">the ending ladder</text>
-                <text class="tiny" x="248" y="370">verdict · stall · answered · kicks</text>
-
-                <path class="edge-hl" d="M568 306 V336" marker-end="url(#a2)" />
-                <text class="tiny" x="574" y="326">no</text>
-                <rect class="hl" x="452" y="336" width="232" height="96" rx="4" />
-                <text class="lbl" x="464" y="357">for each tool_use:</text>
-                <text class="sm" x="464" y="376">run_tool_call(call, …)</text>
-                <text class="tiny" x="464" y="394">lookup · args · memo · hook · gate</text>
-                <text class="tiny" x="464" y="409">· invoke · post-hooks</text>
-                <text class="tiny" x="464" y="425">→ ToolResult (ok or is_error)</text>
-
-                <path class="edge-hl" d="M568 432 V466" marker-end="url(#a2)" />
-                <path class="edge" d="M330 382 V466" marker-end="url(#a1)" />
-                <rect class="box" x="180" y="466" width="504" height="44" rx="4" />
-                <text class="lbl" x="192" y="487">place(query, pending_turn, results)</text>
-                <text class="tiny" x="192" y="503">session::place_turn — the turn and its results enter together, or neither does</text>
-
-                <path class="edge-hl" d="M180 488 H114 V60 H212" marker-end="url(#a2)" />
-                <text class="tiny" x="30" y="300">next iteration</text>
-
-                <defs>
-                  <marker id="a1" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
-                    <path d="M0 0 L7 3.5 L0 7 z" fill="currentColor" />
-                  </marker>
-                  <marker id="a2" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
-                    <path d="M0 0 L7 3.5 L0 7 z" fill="#ff6ec7" />
-                  </marker>
-                </defs>
-              </svg>
-            </div>
-            <figcaption>
-              One iteration of <code>run_goal</code>, drawn from the function
-              body. The pink path is the working case: tool calls are dispatched
-              one at a time, and the assistant turn is held, not pushed, until
-              its results exist, so a <code>tool_use</code> and the block that
-              answers it enter the conversation in the same step.
-            </figcaption>
-          </figure>
-
-          <p>
-            <strong>The assistant turn is echoed back exactly as it arrived.</strong>
-            What goes into <code>query</code> is <code>AssistantTurn::content</code>,
-            the provider's own blocks, thinking blocks and signatures included.
-            Nothing rebuilds a turn from its text plus its tool calls, because a
-            re-derived signature is rejected on the <em>next</em> call, which puts
-            the symptom one step away from the change that caused it.
-            <span class="chip test">tested</span>
-            <code>the_assistant_turn_is_echoed_back_exactly_as_it_arrived</code>
-            asserts the intact <code>tool_use</code> block is present in the
-            message that was actually sent back, not merely somewhere in the
-            transcript.
-          </p>
-          <span class="src">crates/emma/src/agent.rs · crates/emma/tests/loop.rs</span>
-
-          <p>
-            <strong>Holding the turn is what makes the placement rule single.</strong>
-            <code>pending_turn</code> carries the received turn until the loop
-            knows where it goes: beside its tool results, beside a kick, or on the
-            end of the conversation once the loop breaks. A turn whose tools were
-            never run cannot go anywhere. This is the <code>Ending::Tokens</code>
-            case, where the budget fires between receiving the turn and
-            dispatching it, and <code>session::place_turn</code> drops it rather than
-            leaving an unanswered <code>tool_use</code> in the history. Four
-            branches each deciding that separately is the version of this that
-            produced a 400.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — <code>place</code>; crates/emma/src/session.rs — <code>place_turn</code></span>
-
-          <h2 id="failure">Failure as an observation</h2>
-
-          <p>
-            A tool failure is a <code>tool_result</code> with <code>is_error</code>
-            set, and the loop continues. This is the property the crate is
-            arranged around, and it is here because it was paid for elsewhere: in
-            the predecessor project, five of eight failure classes ended turns
-            silently, the user saw <em>"Something went wrong on my side"</em>, and
-            the model never learned anything had failed.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — module doc</span>
-
-          <p>
-            The reason the guarantee is checkable rather than merely asserted is
-            that every failure path converges on one closure. <code>fail()</code>
-            is defined at the top of <code>run_tool_call</code> and is the only
-            way out of that function that is not a success: it builds the block,
-            logs it under the same record kind a successful result gets, and
-            returns the label the kick will quote. Seven distinct things can
-            reach it.
-          </p>
-
-          <figure>
-            <div class="figwrap">
-              <svg
-                viewBox="0 0 700 400"
-                role="img"
-                aria-label="Seven failure classes — unknown tool, invalid arguments, the memo refusal, a hook denial, a refused approval, a typed ToolError and an outer tool fault — all converge on one fail() closure, which produces a tool_result with is_error set, logs it, and returns it to the loop, which continues."
-              >
-                <rect class="box" x="16" y="14" width="234" height="26" rx="3" />
-                <text class="sm" x="26" y="31">no_such_tool — registry.get miss</text>
-                <rect class="box" x="16" y="48" width="234" height="26" rx="3" />
-                <text class="sm" x="26" y="65">validate_args — bad arguments</text>
-                <rect class="box" x="16" y="82" width="234" height="26" rx="3" />
-                <text class="sm" x="26" y="99">already_failed — the memo</text>
-                <rect class="box" x="16" y="116" width="234" height="26" rx="3" />
-                <text class="sm" x="26" y="133">blocked_by_policy — PreToolUse</text>
-                <rect class="box" x="16" y="150" width="234" height="26" rx="3" />
-                <text class="sm" x="26" y="167">not_approved — the gate</text>
-                <rect class="box" x="16" y="184" width="234" height="26" rx="3" />
-                <text class="sm" x="26" y="201">tool_failed — ToolError</text>
-                <rect class="box" x="16" y="218" width="234" height="26" rx="3" />
-                <text class="sm" x="26" y="235">tool_fault — the outer Err</text>
-
-                <path class="edge" d="M250 27 H286 V116" />
-                <path class="edge" d="M250 61 H286" />
-                <path class="edge" d="M250 95 H286" />
-                <path class="edge" d="M250 129 H286" />
-                <path class="edge" d="M250 163 H286" />
-                <path class="edge" d="M250 197 H286" />
-                <path class="edge" d="M250 231 H286 V129" />
-                <path class="edge-hl" d="M286 129 H330" marker-end="url(#b2)" />
-
-                <rect class="hl" x="330" y="104" width="140" height="52" rx="4" />
-                <text class="lbl" x="342" y="126">fail(kind,</text>
-                <text class="lbl" x="342" y="144">detail)</text>
-
-                <path class="edge-hl" d="M470 130 H514" marker-end="url(#b2)" />
-                <rect class="box" x="514" y="92" width="170" height="76" rx="4" />
-                <text class="sm" x="524" y="112">ToolResult::failed</text>
-                <text class="tiny" x="524" y="130">is_error = true</text>
-                <text class="tiny" x="524" y="146">body: kind · tool · detail</text>
-                <text class="tiny" x="524" y="161">log_result_block(…)</text>
-
-                <path class="edge-hl" d="M599 168 V300" marker-end="url(#b2)" />
-                <rect class="box" x="330" y="300" width="354" height="46" rx="4" />
-                <text class="lbl" x="342" y="321">results.push(block) — the goal continues</text>
-                <text class="tiny" x="342" y="338">no failure class returns early from run_goal</text>
-
-                <path class="edge-dash" d="M400 300 H150 V270" marker-end="url(#b1)" />
-                <rect class="box" x="16" y="270" width="268" height="46" rx="4" />
-                <text class="sm" x="26" y="290">failed_now.insert(memo_key(call))</text>
-                <text class="tiny" x="26" y="307">failed_ever.push(label) — capped at 20, oldest first</text>
-
-                <defs>
-                  <marker id="b1" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
-                    <path d="M0 0 L7 3.5 L0 7 z" fill="currentColor" />
-                  </marker>
-                  <marker id="b2" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
-                    <path d="M0 0 L7 3.5 L0 7 z" fill="#ff6ec7" />
-                  </marker>
-                </defs>
-              </svg>
-            </div>
-            <figcaption>
-              Every failure class in <code>run_tool_call</code> reaching the same
-              closure. The convergence is the point: a reviewer checks one
-              function for the <code>is_error</code> flag and one call site for
-              the log record, rather than seven independent claims that a
-              regression could break one at a time.
-            </figcaption>
-          </figure>
-
-          <p>
-            <strong>Even the outer error is not an abort.</strong> A tool's
-            <code>invoke</code> returns <code>Result&lt;Result&lt;Outcome,
-            ToolError&gt;&gt;</code>: the inner error is an ordinary failed call,
-            and the outer one is the tool saying the session cannot continue.
-            That second one also becomes a <code>tool_result</code> the model can
-            read. The loop's own budgets stay the only things that end a goal.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — <code>run_tool_call</code></span>
-
-          <p>
-            <strong>Exit status is not a failure signal anywhere in this file.</strong>
-            <code>ToolError</code> is the only one. A non-zero <code>Bash</code>
-            exit comes back as <code>Ok</code> with <code>exit status &lt;n&gt;</code>
-            in the content, so <code>grep -q</code> answering "no" is not a broken
-            shell: it does not enter the memo and is not painted as an error on
-            the terminal. Nothing in the loop branches on a tool's identity, on
-            <code>ToolError::kind</code>, or on exit status, which is what let the
-            <code>Bash</code> contract change land here without an edit, and it is
-            also what makes <code>Delegate</code> an ordinary tool.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — module doc; tools/fs/src/bash.rs</span>
-
-          <div class="note">
-            <span class="h">What each half carries</span>
-            <p>
-              <code>is_error</code> is what the API and the model's own training
-              key on. The JSON body, <code>{ kind, tool, detail }</code>, says
-              which failure it was and what to do instead. A failure
-              rendered without the flag reads to the model as a successful call
-              that returned odd text.
-              <span class="chip test">tested</span>
-              <code>a_failure_block_is_flagged_and_typed</code> asserts the flag
-              on the wire and asserts that a <em>success</em> carries no
-              <code>is_error</code> key at all.
-            </p>
-          </div>
-          <span class="src">crates/emma/src/agent.rs — <code>failure_result</code> and its unit test</span>
-
-          <h2 id="memo">The memo rule, whole</h2>
-
-          <p>
-            A call that failed is not repeated identically until something else
-            has succeeded. Not "never again this turn": that is affordable only
-            when the whole tool surface is one read-only search. Emma's working
-            rhythm is <em>run the tests, see them fail, fix a file, run the tests
-            again</em>, and a memo keyed on the call alone would forbid the second
-            run, which is the one that proves the fix.
-          </p>
-
-          <p>
-            The rule is split across two functions and neither half states it.
-            <code>run_tool_call</code> only reads: if this call's
-            <code>memo_key</code> is in the set it was handed, refuse it with
-            <code>already_failed</code> and never reach the tool.
-            <code>run_goal</code> only writes: clear the entire set the moment
-            <em>any</em> tool succeeds, insert into it when one fails. The rule
-            emerges from the pair: "this exact call failed and nothing has
-            changed since", not "this call failed once".
-          </p>
-
-          <figure>
-            <div class="figwrap">
-              <svg
-                viewBox="0 0 700 230"
-                role="img"
-                aria-label="The memo set sits between two functions: run_goal writes it, clearing the whole set on any tool success and inserting a key on a failure, while run_tool_call only reads it and refuses a call whose key is present. Neither function states the rule on its own."
-              >
-                <rect class="box" x="16" y="20" width="228" height="150" rx="4" />
-                <text class="lbl" x="28" y="44">run_goal</text>
-                <text class="tiny" x="28" y="60">the writer</text>
-                <text class="sm" x="28" y="88">succeeded →</text>
-                <text class="sm" x="40" y="106">failed_now.clear()</text>
-                <text class="sm" x="28" y="132">failed →</text>
-                <text class="sm" x="40" y="150">insert(memo_key(call))</text>
-
-                <path class="edge-hl" d="M244 95 H286" marker-end="url(#c2)" />
-                <rect class="hl" x="286" y="66" width="128" height="58" rx="4" />
-                <text class="lbl" x="298" y="90">failed_now</text>
-                <text class="tiny" x="298" y="108">HashSet&lt;String&gt;</text>
-
-                <path class="edge" d="M414 95 H456" marker-end="url(#c1)" />
-                <rect class="box" x="456" y="20" width="228" height="150" rx="4" />
-                <text class="lbl" x="468" y="44">run_tool_call</text>
-                <text class="tiny" x="468" y="60">the reader</text>
-                <text class="sm" x="468" y="88">contains(key) →</text>
-                <text class="sm" x="480" y="106">already_failed,</text>
-                <text class="sm" x="480" y="124">the tool never runs</text>
-                <text class="tiny" x="468" y="150">checked after args, before hooks</text>
-
-                <text class="tiny" x="16" y="200">memo_key = tool name + a separator byte + arguments — Bash(ls) collides, Bash(ls -a) does not</text>
-                <text class="tiny" x="16" y="218">the same key function is used by --resume, so a restored memo matches the live one</text>
-
-                <defs>
-                  <marker id="c1" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
-                    <path d="M0 0 L7 3.5 L0 7 z" fill="currentColor" />
-                  </marker>
-                  <marker id="c2" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
-                    <path d="M0 0 L7 3.5 L0 7 z" fill="#ff6ec7" />
-                  </marker>
-                </defs>
-              </svg>
-            </div>
-            <figcaption>
-              The memo, drawn as the two halves that make it. The architecture
-              map calls this the only tricky control flow in the file, and the
-              reason is visible here: the clearing rule lives in the caller, so a
-              reader of <code>run_tool_call</code> alone sees a permanent
-              blacklist rather than a one-step one.
-            </figcaption>
-          </figure>
-
-          <p>
-            Both halves are covered, and the second test is the one that matters,
-            because a stricter memo passes the first.
-            <span class="chip test">tested</span>
-            <code>a_failed_call_is_not_repeated_with_the_same_arguments</code>
-            scripts the identical call twice and asserts the tool was reached
-            once;
-            <code>a_failed_call_may_be_repeated_once_something_else_has_succeeded</code>
-            scripts fail–succeed–fail and asserts the tool was reached twice.
-          </p>
-          <span class="src">crates/emma/tests/loop.rs</span>
-
-          <p>
-            Two details that are easy to get wrong. The memo is checked
-            <em>after</em> argument validation and <em>before</em> the hooks and
-            the gate, so a refused call costs nothing at all: no hook process, no
-            prompt. And the memo survives <code>--resume</code>: dropping it would
-            not overspend anything, but it would hand the resumed model back the
-            identical failing call as its most obvious next move, which is exactly
-            the loop the memo exists to break.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — <code>run_tool_call</code>, <code>Resumed::failed_now</code></span>
-
-          <h2 id="endings">How a goal ends</h2>
-
-          <p>
-            When a turn contains no tool calls, the model has stopped, and four
-            rules decide what that means. <strong>They are order-dependent and
-            the order is the whole rule.</strong> Each one is written to be true
-            only given that the ones above it already answered no.
-          </p>
-
-          <figure>
-            <div class="figwrap">
-              <svg
-                viewBox="0 0 700 310"
-                role="img"
-                aria-label="After a turn with no tool calls, four rules run in a fixed order: the done verdict, then the stall rule, then the answered rule, then the kick budget. Falling through all four sends a kick and continues the loop."
-              >
-                <rect class="hl" x="16" y="16" width="330" height="44" rx="4" />
-                <text class="lbl" x="28" y="38">1 · done.verdict(goal, text)</text>
-                <text class="tiny" x="28" y="54">the completion claim, whatever the check in force is</text>
-                <path class="edge" d="M346 38 H444" marker-end="url(#d1)" />
-                <rect class="box" x="444" y="22" width="240" height="32" rx="3" />
-                <text class="sm" x="456" y="43">Done::Yes → Ending::Done</text>
-
-                <path class="edge" d="M181 60 V86" marker-end="url(#d1)" />
-                <rect class="box" x="16" y="86" width="330" height="44" rx="4" />
-                <text class="lbl" x="28" y="108">2 · tool_calls_since_kick == 0 &amp;&amp; kicked</text>
-                <text class="tiny" x="28" y="124">nudged, and did nothing about it</text>
-                <path class="edge" d="M346 108 H444" marker-end="url(#d1)" />
-                <rect class="box" x="444" y="92" width="240" height="32" rx="3" />
-                <text class="sm" x="456" y="113">→ Ending::Stalled</text>
-
-                <path class="edge" d="M181 130 V156" marker-end="url(#d1)" />
-                <rect class="box" x="16" y="156" width="330" height="44" rx="4" />
-                <text class="lbl" x="28" y="178">3 · !worked</text>
-                <text class="tiny" x="28" y="194">no tool has been called anywhere in this goal</text>
-                <path class="edge" d="M346 178 H444" marker-end="url(#d1)" />
-                <rect class="box" x="444" y="162" width="240" height="32" rx="3" />
-                <text class="sm" x="456" y="183">→ Ending::Answered</text>
-
-                <path class="edge" d="M181 200 V226" marker-end="url(#d1)" />
-                <rect class="box" x="16" y="226" width="330" height="44" rx="4" />
-                <text class="lbl" x="28" y="248">4 · kicks &gt;= max_kicks</text>
-                <text class="tiny" x="28" y="264">the nudge budget is spent</text>
-                <path class="edge" d="M346 248 H444" marker-end="url(#d1)" />
-                <rect class="box" x="444" y="232" width="240" height="32" rx="3" />
-                <text class="sm" x="456" y="253">→ Ending::KicksExhausted</text>
-
-                <path class="edge-hl" d="M181 270 V294 H444" marker-end="url(#d2)" />
-                <text class="sm" x="456" y="298">otherwise: kick, and continue</text>
-
-                <defs>
-                  <marker id="d1" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
-                    <path d="M0 0 L7 3.5 L0 7 z" fill="currentColor" />
-                  </marker>
-                  <marker id="d2" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
-                    <path d="M0 0 L7 3.5 L0 7 z" fill="#ff6ec7" />
-                  </marker>
-                </defs>
-              </svg>
-            </div>
-            <figcaption>
-              The ladder in <code>run_goal</code>, in source order. Moving any
-              rung changes what the endings mean rather than merely reordering
-              equivalent checks.
-            </figcaption>
-          </figure>
-
-          <p>
-            <strong>Verdict first</strong>, so a model that claims completion on
-            its first breath is <code>Done</code> and not something else. Put the
-            answered rule above it and every one-shot goal, the ones where
-            nothing needed changing, collapses into an ending nothing downstream
-            treats as success.
-            <span class="chip test">tested</span>
-            <code>a_first_turn_that_claims_completion_is_still_done</code>.
-          </p>
-
-          <p>
-            <strong>Stall second</strong>, so a model that has already been nudged
-            is judged by the rule written about being nudged. The stall condition
-            is <em>no tool call since the last kick, and a kick has been sent in
-            this run</em>. Note <code>kicked</code> rather than
-            <code>kicks &gt; 0</code>: the kick count comes back across a resume,
-            but a resumed run's last nudge was answered by a human typing a new
-            goal, so reading the budget here would end every resumed run on its
-            first stop and report it as a stall.
-            <span class="chip test">tested</span>
-            <code>a_model_that_abandons_started_work_twice_is_believed</code>
-            asserts <code>kicks == 1</code>, proving the stall rule fired rather
-            than the count running out.
-          </p>
-
-          <p>
-            <strong>Answered third</strong>, which leaves it meaning exactly what
-            it says: no tool has been called in this goal, and nothing has been
-            asked of the model that it has not already answered. This ending
-            exists because the owner typed <code>hello</code> and was told his
-            exchange had stalled. It is not a failure.
-            <code>Ending::Answered</code>'s message is not phrased as
-            a stop, because nothing went wrong and the answer is already on the
-            screen above the line. The distinguishing signal is tool use, not
-            wording: <code>worked</code> is per <em>goal</em>, not per turn, so one
-            tool call anywhere earlier makes every later stop a stall again,
-            however conversational the sentence it stopped on.
-            <span class="chip test">tested</span>, and the narrowness has its own
-            test,
-            <code>one_tool_call_earlier_in_the_goal_is_enough_to_make_a_stop_a_stall</code>,
-            because the obvious simplification ("did <em>this turn</em> use a
-            tool") passes every other test in the file while quietly deleting the
-            stall rule.
-          </p>
-
-          <p>
-            <strong>Kick budget last.</strong> Reaching it means the goal was
-            genuinely being worked and the nudges ran out;
-            <code>Ending::KicksExhausted</code> says so and adds the sentence that
-            matters after an unfinished run: <em>what was changed is on disk;
-            nothing was rolled back.</em>
-          </p>
-          <span class="src">crates/emma/src/agent.rs — <code>run_goal</code>, <code>Ending</code>; crates/emma/tests/loop.rs</span>
-
-          <p>
-            <code>worked</code> is set on the tool-call <em>attempt</em>, before
-            the gate runs. A model whose only call was denied at the approval
-            prompt is still mid-task, and the stop that follows is a stall to be
-            nudged rather than a greeting.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — <code>run_goal</code></span>
-
-          <h3>Every ending names the limit that fired</h3>
-
-          <p>
-            The remaining endings are the budgets, the user, and the provider:
-            <code>Iterations</code>, <code>Tokens</code>, <code>Deadline</code>,
-            <code>Interrupted</code>, <code>Provider(String)</code>. None is
-            silent. <code>Ending::message</code> renders each with its number in
-            it, because "I stopped" without a reason is indistinguishable from a
-            crash.
-            <span class="chip test">tested</span>
-            <code>every_ending_says_which_limit_fired</code> asserts that the four
-            budget messages each contain a digit, a weak assertion that catches
-            the real regression, which is a tidy-up replacing the number with
-            prose.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — <code>Ending::message</code></span>
-
-          <p>
-            A goal joins the conversation whatever the ending. A run that hit its
-            token budget still happened, and the next goal in the session must not
-            be told a story in which it did not. If the abandoned goal's last
-            message was a user turn, trailing tool results or an unanswered kick,
-            the next goal's opening would make two user turns adjoin, which is a
-            400 rather than a conversation, so <code>close_previous_goal</code>
-            inserts a note: <em>[The previous goal stopped before it was
-            finished: &lt;ending&gt;.]</em>. The same sentence is composed by the
-            session fold from the recorded ending, so a resumed conversation is
-            not one message different from the one that was sent.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — <code>close_previous_goal</code>, <code>ended_note</code>; crates/emma/src/session.rs</span>
-
-          <h2 id="kick">The kick</h2>
-
-          <p>
-            The kick is what makes this a loop rather than a chat client. When the
-            model stops and the check says the goal is not met, the loop pushes a
-            user message and goes round again. It carries three things: why it is
-            not recorded as done, the goal restated verbatim, and up to five of
-            the calls that have already failed in this goal.
-          </p>
-
-          <pre><code><span class="c">// goal::kick, composed</span>
-The goal is not recorded as done: <span class="k">{why}</span>. Nothing has been lost — you
-still have every tool, and the goal is unchanged:
-
-<span class="k">{goal text}</span>
-
-Continue working on it.
-
-These calls failed earlier in this goal — change the approach rather
-than the spelling:
-- <span class="w">Bash(cargo build --release)</span></code></pre>
-          <span class="src">crates/emma/src/goal.rs — <code>kick</code></span>
-
-          <p>
-            The failure list is the part that is easy to leave out and expensive
-            to leave out: without it, the plain reading of "continue" is "try
-            again", and the first thing a model retries is the thing that just
-            failed. The labels come from <code>label_of</code>, the same
-            rendering the memo key is built from, and the goal remembers up to 20
-            distinct ones, oldest dropped first, of which a kick quotes the last
-            five.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — <code>label_of</code>, <code>trim_oldest</code>, <code>FAILED_EVER_MAX</code></span>
-
-          <p>
-            Two independent bounds stop it firing forever, and the goal ends the
-            moment either is reached: <code>max_kicks</code> (default 3), a hard
-            count for the whole goal; and the stall rule, which needs no
-            cooperation from the model at all. Both sit under the iteration, token
-            and wall-clock budgets, so the worst case is bounded by arithmetic
-            rather than by good behaviour. The cost is that a goal genuinely
-            needing a fourth nudge stops one step early. It says which limit
-            stopped it, so the user can raise it.
-            <span class="chip test">tested</span>
-            <code>the_kick_is_bounded_by_its_budget</code> sets
-            <code>max_kicks = 2</code> and asserts the seventh scripted turn was
-            never requested, so the bound is real rather than merely reported.
-          </p>
-          <span class="src">crates/emma/src/goal.rs — module doc; crates/emma/tests/loop.rs</span>
-
-          <h2 id="budgets">Budgets, and three different token numbers</h2>
-
-          <p>
-            Five bounds, and they exist separately because they fail differently:
-            a model calling one cheap tool forever is caught by iterations and not
-            by tokens; a model reading enormous files is caught by tokens and not
-            by iterations.
-          </p>
-
-          <div class="tw">
-            <table>
-              <thead>
-                <tr>
-                  <th>Bound</th>
-                  <th>Default</th>
-                  <th>Shape</th>
-                  <th>What it bounds</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>max_iterations</code></td>
-                  <td class="num">60</td>
-                  <td>ceiling, tested before the call</td>
-                  <td>Model calls in one goal. A run never makes more than this many.</td>
-                </tr>
-                <tr>
-                  <td><code>max_tokens</code></td>
-                  <td class="num">500,000</td>
-                  <td>tripwire, tested after the call</td>
-                  <td>What one goal may spend, weighted by price.</td>
-                </tr>
-                <tr>
-                  <td><code>wall_clock</code></td>
-                  <td class="num">30 min</td>
-                  <td>tripwire, tested at the top of an iteration</td>
-                  <td>When the loop will decline to start another iteration.</td>
-                </tr>
-                <tr>
-                  <td><code>max_kicks</code></td>
-                  <td class="num">3</td>
-                  <td>ceiling</td>
-                  <td>Nudges after the model stops without claiming completion.</td>
-                </tr>
-                <tr>
-                  <td><code>max_context</code></td>
-                  <td class="num">120,000</td>
-                  <td>threshold, triggers compaction</td>
-                  <td>
-                    How large one request's input may get. The only bound here
-                    that is about the <em>session</em> rather than the goal.
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <span class="src">crates/emma/src/agent.rs — <code>Budgets</code>, <code>Budgets::default</code></span>
-
-          <h3>Three token numbers, three jobs</h3>
-
-          <p>
-            Every model call produces three different token figures, and assuming
-            any two are the same is how this project got a budget that fired on
-            the length of the conversation instead of on the bill.
-          </p>
-
-          <div class="tw">
-            <table>
-              <thead>
-                <tr>
-                  <th>Number</th>
-                  <th>Arithmetic</th>
-                  <th>Job</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>cost_tokens(usage)</code></td>
-                  <td>
-                    <code>input + 1.25×cache_write + 0.1×cache_read + output</code>
-                  </td>
-                  <td>
-                    The only number <code>max_tokens</code> is tested against.
-                    Weighted because a cache read is billed at a tenth of what it
-                    weighs.
-                  </td>
-                </tr>
-                <tr>
-                  <td><code>billable_total_tokens()</code></td>
-                  <td>the provider's own unweighted total</td>
-                  <td>
-                    Logged raw beside the four provider fields. Answers "how much
-                    context did this call carry", which is a different question.
-                  </td>
-                </tr>
-                <tr>
-                  <td><code>billable_input_tokens()</code></td>
-                  <td>the provider's reported input for the call</td>
-                  <td>
-                    Stored as <code>last_input</code> and tested against
-                    <code>max_context</code> to decide compaction. Measured, so it
-                    includes the system prompt and the tool schemas.
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <span class="src">crates/emma/src/agent.rs — <code>cost_tokens</code>, <code>run_goal</code>'s <code>model_call</code> record, <code>compact_if_needed</code></span>
-
-          <p>
-            A fourth number exists and enforces nothing: <code>estimate()</code>,
-            <code>chars / 4</code>, the same conservative ratio the packer in
-            <code>emma-llm</code> uses and documented there as under-counting what
-            the provider bills. It decides <em>how much</em> to drop once a
-            measured number has already said dropping is necessary, and it stands
-            in for the measurement on the one call of a process that has none: a
-            resume into a large session. It never fires a budget.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — <code>estimate</code></span>
-
-          <div class="note warn">
-            <span class="h">The token budget is a tripwire, not a ceiling</span>
-            <p>
-              <code>spend.get() &gt; max_tokens</code> is tested <em>after</em>
-              the call returns, so the call that crosses the line is paid for in
-              full and the overshoot is bounded only by how large one request can
-              be. A 500,000 budget stopped a real run at 579,565.
-              <span class="chip cert">certified</span>. The session file is
-              <code>~/.emma/sessions/sess-1786385316950-34808.jsonl</code>, and
-              its <code>goal_finished</code> record reads
-              <code>"tokens":579565</code>. Grep it and see. The figure is also
-              quoted in <code>Budgets::max_tokens</code>'s doc and in the test
-              comment that prompted the rewording; both are attributions to this
-              run rather than independent evidence.
-            </p>
-            <p>
-              The mechanism itself is not in doubt.
-              <span class="chip test">tested</span>
-              <code>the_token_budget_stops_the_loop_and_the_run_is_charged_for_what_it_spent</code>
-              sets a budget of 15, scripts two calls costing 10 each, and asserts
-              the outcome is <code>Ending::Tokens</code> with 20 spent, an
-              overshoot of one call, and that the session log records the 20
-              rather than recording an aborted run as free.
-            </p>
-            <p>
-              Making it a true ceiling would mean gating on an estimate of the
-              request before sending it, and the only estimator available is the
-              one that under-counts. A gate built on it is wrong in both
-              directions while <em>sounding</em> exact, so the wording says
-              plainly what the check does: <code>Ending::Tokens</code> says the
-              check runs after each call, and there is a test asserting the
-              message admits it. Promoting this to a measured pre-call headroom
-              check is item 0
-              of <code>notes/plan-loops-stage-1.md</code> and item 20 of
-              <code>notes/improvements.md</code>; it matters most for the
-              unattended runs that plan is about, because the person who set the
-              budget is no longer watching the meter.
-            </p>
-          </div>
-          <span class="src">crates/emma/src/agent.rs — <code>Budgets::max_tokens</code>, <code>Ending::Tokens</code>, <code>the_token_budget_is_described_as_the_tripwire_it_is</code></span>
-
-          <p>
-            <strong>Usage is recorded before the budget is tested</strong>, so a
-            run that dies on the cap is recorded having spent what it spent. In
-            the predecessor project the counter only reached the log on a
-            completed turn, which made aborting the cheapest way to spend money.
-            The meter is <code>Spend</code>, an <code>Arc</code> rather than a
-            local, because a delegation is a second loop spending the same budget
-            and cannot reach a local. A nested run gets its own meter whose every
-            <code>add</code> also lands on the parent's, so a subagent's spend
-            charges the parent as it happens. <code>set</code>, the per-goal
-            reset, does not follow the parent link, or a nested goal
-            would zero the meter of the goal paying for it.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — <code>Spend</code></span>
-
-          <p>
-            <code>max_context</code> is also what keeps <code>max_tokens</code>
-            reachable in a long session: input per call is bounded by compaction,
-            so the number of calls a goal gets is bounded below by roughly
-            <code>max_tokens / max_context</code>, four at the defaults, and in
-            practice far more, because most calls sit nowhere near the cap.
-            Raising the context cap without raising the token budget buys context
-            by spending calls. When a goal opens with enough conversation behind it
-            that the budget is worth about four calls, the loop says so before the
-            first request rather than stopping later with a number the user cannot
-            connect to anything.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — <code>Budgets::max_context</code>, <code>warn_if_the_budget_is_nearly_spent_on_arrival</code></span>
-
-          <h2 id="done">DoneCheck, MarkerClaim, and the model grading itself</h2>
-
-          <p>
-            <code>DoneCheck</code> is the authority the loop consults when the
-            model stops. It is a trait with three methods:
-            <code>name()</code> for the log, <code>contract()</code> for what the
-            model is told about how completion will be judged, and an
-            <code>async verdict()</code> returning <code>Done::Yes</code> or
-            <code>Done::No(why)</code>. The loop knows nothing else: it asks for a
-            verdict and composes a kick from whatever reason comes back. The trait
-            is <code>async</code> because every alternative authority reads a file
-            or runs a process.
-          </p>
-          <span class="src">crates/emma/src/goal.rs — <code>DoneCheck</code></span>
-
-          <p>
-            The shipped implementation is <code>MarkerClaim</code>: the model must
-            end its final message with the line <code>GOAL COMPLETE</code>.
-            Stopping without it is treated as stopping mid-work. The check is
-            tolerant about decoration (<code>**GOAL COMPLETE**</code> means the
-            same thing and spending a kick on formatting would be silly) and
-            intolerant about position: the marker must own its line, so
-            <em>"I will print GOAL COMPLETE when the tests pass"</em> is not a
-            claim.
-            <span class="chip test">tested</span>
-            <code>a_marker_on_its_own_line_is_a_claim_and_a_mention_is_not</code>.
-          </p>
-          <span class="src">crates/emma/src/goal.rs — <code>MarkerClaim</code>, <code>claims_done</code></span>
-
-          <p>
-            The marker never reaches the screen. <code>MarkerFilter</code> is a
-            streaming state machine that holds only a line which could
-            <em>still</em> become the marker and releases it the instant a
-            character rules that out: in prose, a one- or two-character pause on
-            a line beginning with <code>g</code>. It is applied on the way to the
-            terminal only; <code>verdict</code> still reads the model's real text,
-            and <code>Outcome::text</code> keeps it verbatim, marker and all.
-            <span class="chip test">tested</span>, including a marker cut across
-            four streamed fragments, and the inverse case where a sentence
-            <em>about</em> the marker must not be censored.
-          </p>
-          <span class="src">crates/emma/src/goal.rs — <code>MarkerFilter</code></span>
-
-          <div class="note warn">
-            <span class="h">The largest known weakness: the acting model grades its own homework</span>
-            <p>
-              <code>MarkerClaim</code> asks the model that just did the work
-              whether the work is done, and accepts a line of its own prose as the
-              answer. Nothing in the loop verifies the claim. The accurate
-              statement of the guarantee is <strong>"the loop will not stop
-              <em>before</em> the model says it is finished"</strong>, not "the
-              loop stops when the work is finished". <code>goal.rs</code>'s module
-              doc says this
-              in its own words rather than leaving it to be discovered.
-            </p>
-          </div>
-          <span class="src">crates/emma/src/goal.rs — module doc</span>
-
-          <p>
-            Three other authorities were considered and each fails in a specific
-            way. <em>Stopping when the model stops</em> costs nothing and catches
-            nothing. A model that runs one command, reads the first error and
-            writes "this looks like a session-API mismatch" has stopped, and the
-            goal is untouched; that is the behaviour Emma exists to not have.
-            <em>A check command exiting zero</em> touches reality and passes
-            vacuously: <code>cargo test</code> on a target with no tests, a
-            <code>test -f</code> against a path that was already there, a suite
-            whose failing case was deleted rather than fixed. <em>No open tasks
-            remain</em> is the most legible, because a user can watch the file in
-            an editor, and legible is not honest: a model that learns closing
-            tasks ends the loop will close them, and a model that never opened one
-            has an empty list from turn zero, which reads as <em>done</em> before
-            it has started.
-          </p>
-
-          <p>
-            The intended upgrade path is not to replace one signal with another
-            but to make bookkeeping insufficient: use the task count to decide
-            when to <em>stop asking</em>, and gate the verdict behind something the
-            model does not author. That is a second <code>impl</code> and a
-            different value in <code>Setup</code>, not surgery on the loop, which
-            is the entire reason <code>DoneCheck</code> is a trait.
-            <code>notes/plan-loops-stage-1.md</code> designs a third
-            implementation along those lines: a cheap second model call as an
-            independent judge, whose "no" costs one kick and is bounded by
-            <code>max_kicks</code> exactly like any other not-done. It is not
-            built.
-          </p>
-          <span class="src">crates/emma/src/goal.rs — module doc; notes/plan-loops-stage-1.md</span>
-
-          <div class="note">
-            <span class="h">Where the code disagrees with its own doc</span>
-            <p>
-              <code>goal.rs</code>'s module doc says <code>DoneCheck</code> "has
-              one implementation today". There are two:
-              <code>MarkerClaim</code>, and <code>SubagentClaim</code> in
-              <code>delegate.rs</code>, which is <code>MarkerClaim</code>'s
-              contract plus the paragraph telling a subagent that its final
-              message is the only thing reaching its caller. The seam was used,
-              and the doc predates the use.
-              <span class="chip cert">certified</span>. Grepped for
-              <code>impl DoneCheck</code> across <code>crates/</code> at commit
-              <code>20ac400</code>: three hits, of which one is a test double
-              inside <code>goal.rs</code>'s own tests. Read
-              <code>delegate.rs</code> for the second real one.
-            </p>
-          </div>
-          <span class="src">crates/emma/src/goal.rs — module doc; crates/emma/src/delegate.rs — <code>SubagentClaim</code></span>
-
-          <h3>What the research says about grading by model</h3>
-
-          <p>
-            <code>notes/research-loops-goals-and-cost.md</code> collected the
-            numbers behind "LLM-as-judge is brittle", and they are worth having
-            before anyone builds the judge check, because the failure is not that
-            a judge is a coin flip. It is that the reassuring number is the wrong
-            number.
-          </p>
-
-          <ul class="body">
-            <li>
-              Chance-corrected agreement with human raters (Cohen's κ) ranged
-              <strong>0.376–0.511</strong> across 21 judge models, with the best
-              two at 0.511 and 0.489.
-            </li>
-            <li>
-              Raw exact-match agreement <strong>overstates the judge by 33.8–41.3
-              percentage points</strong>, because much of the apparent agreement
-              is what two graders would hit by chance on a task with few possible
-              verdicts. The widely repeated "greater than 80% agreement, matching
-              human-human agreement of 81%" is the uncorrected figure.
-            </li>
-            <li>
-              Position bias ranged 0.002 to 0.192 between judges, and two
-              production models showed test-retest reliability above 0.95
-              <em>while</em> showing position bias above 0.10, the
-              "consistency-bias paradox". A loop cannot detect this by asking the
-              judge twice.
-            </li>
-            <li>
-              Position-flip rates rose from a median of 0.09 on easy tasks to 0.17
-              on hard ones: the bias is worst exactly where the judgment matters.
-            </li>
-            <li>
-              Separately, METR's evaluations of o3 and Claude 3.7 Sonnet found
-              reward hacking in <strong>30%+ of evaluation runs</strong>:
-              monkey-patching graders, manipulating scorers. That is the failure
-              a verifier invites rather than prevents.
-            </li>
-          </ul>
-          <p>
-            <span class="chip unv">unverified</span>. These are figures quoted
-            from that note, not measurements taken here, and the note itself flags
-            that the METR 30% figure came from a secondary aggregation it could
-            not re-confirm against METR's raw report. What would settle them:
-            reading arXiv:2606.19544 and METR's own evaluation pages directly.
-            Nothing in Emma's shipped loop depends on them; they bound how much to
-            trust the judge check when it is built.
-          </p>
-          <span class="src">notes/research-loops-goals-and-cost.md §2 and §3</span>
-
-          <h2 id="seam">The scripted-provider seam</h2>
-
-          <p>
-            Everything with a decision in it lives in the library, not in
-            <code>main.rs</code>. <code>Agent::run_goal</code> takes a
-            <code>Setup</code> whose <code>provider</code> is an
-            <code>Arc&lt;dyn Provider&gt;</code>, whose <code>done</code> is a
-            <code>&amp;dyn DoneCheck</code>, and whose <code>term</code> can be
-            <code>Term::silent()</code>. So a test constructs the real
-            <code>Agent</code>, the real <code>Registry</code>, the real
-            <code>Harness</code> and the real approval gate, and swaps out exactly
-            one thing: the network.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — <code>Setup</code>; crates/emma/tests/support/mod.rs</span>
-
-          <p>
-            The fake provider answers from a script of turns: text, tool calls, a
-            token cost, or a <code>BadRequest</code> rejection, and it records every
-            request it was sent. That last half is what makes the tests assertions
-            about behaviour rather than about return values: a test can check what
-            the <em>model was told</em>, which is where most of this file's
-            guarantees actually live. <code>the transcript contains
-            "already_failed"</code>, <code>the kick restated the goal</code>,
-            <code>the model was told the denial cannot be approved away</code>:
-            none of those is observable from an <code>Outcome</code>.
-          </p>
-          <span class="src">crates/emma/tests/support/mod.rs — <code>Fake</code>, <code>Say</code></span>
-
-          <p>
-            What it buys, concretely: 22 tests covering the failure-is-an-
-            observation property, both halves of the memo, both budget shapes,
-            every ending on the ladder, the approval ordering, and the byte-for-byte
-            round trip through the session file, all running without a network,
-            an API key, or a terminal.
-            <span class="chip cert">certified</span>.
-            <code>cargo test -p emma --test loop</code> at commit
-            <code>20ac400</code> printed
-            <code>test result: ok. 22 passed; 0 failed</code> in 0.04s.
-          </p>
-          <span class="src">crates/emma/tests/loop.rs</span>
-
-          <p>
-            The limit of the seam is worth stating in the same breath. A scripted
-            provider agrees with its author about what the wire looks like, and
-            this project has already shipped a strict decoder that passed every
-            test and then decoded no real tool call, because the live API adds a
-            key the model did not know about. Tests built on the fake prove the
-            loop's <em>decisions</em>; they prove nothing about the wire.
-          </p>
-          <span class="src">crates/emma/tests/support/mod.rs; CLAUDE.md — "a green suite is not evidence"</span>
-
-          <h2 id="unverified">What is not verified</h2>
-
-          <p>
-            Everything below is a gap in this page's evidence, not a rhetorical
-            flourish.
-          </p>
-
-          <h3>The suite passes; I did not re-run the mutations</h3>
-          <p>
-            <span class="chip unv">unverified</span>
-            <code>tests/loop.rs</code>'s header states that every test in it was
-            validated by mutation: the guarantee removed from
-            <code>agent.rs</code>, the test confirmed to fail, the guarantee
-            restored. I ran the suite (22 passed at <code>20ac400</code>) but ran
-            no mutations, because this task was not permitted to change source.
-            Every <span class="chip test">tested</span> chip on this page
-            therefore means "a test covers this and its author reports it was
-            mutation-checked", not "I watched it go red". What would settle it:
-            for each guarantee, delete it, run the named test, confirm the
-            failure, restore.
-          </p>
-
-          <h3>Nothing here was run against a live model</h3>
-          <p>
-            <span class="chip unv">unverified</span> No claim on this page was
-            certified against a real provider call. The behaviours most exposed to
-            that gap are the ones about what the model <em>does</em> with what the
-            loop sends it: whether a real model reliably ends with the marker,
-            whether a kick carrying five failed labels changes its approach rather
-            than its spelling, and whether the <code>already_failed</code>
-            observation reads to a real model as an instruction to change route.
-            What would settle it: a live session with
-            <code>--max-kicks</code> forced low, and the session JSONL read back.
-          </p>
-
-          <h3>The wall clock is a tripwire and is not worded like one</h3>
-          <p>
-            <span class="chip cert">certified</span> by reading the function:
-            <code>started.elapsed() &gt; wall_clock</code> is tested only at the
-            top of an iteration, and neither <code>tool.invoke</code> nor
-            <code>call_model</code> is wrapped in a deadline:
-            <code>call_model</code>'s <code>select!</code> races the stream
-            against the interrupt only. So <code>wall_clock</code> bounds when the
-            loop will decline to <em>start</em> another iteration, not how long a
-            goal can take, and <code>Ending::Deadline</code>'s "hit the 1800s time
-            limit" reads as a ceiling in exactly the way
-            <code>Ending::Tokens</code> was reworded to stop doing. A long tool
-            call is bounded by that tool's own timeout: <code>Bash</code> has one,
-            and a tool that has none is bounded by nothing in this file. This is
-            flagged, not fixed; see the defects note below.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — <code>run_goal</code>, <code>call_model</code>; tools/fs/src/bash.rs</span>
-
-          <h3>Ctrl-C during a tool call</h3>
-          <p>
-            <span class="chip unv">unverified</span> The interrupt is checked at
-            the top of each iteration and raced against the model call. It is not
-            passed to <code>ToolCtx</code>, so a Ctrl-C pressed during a long
-            <code>Bash</code> run appears to be observed only when that call
-            returns. I read this from the source and did not reproduce it. What
-            would settle it: run a goal whose tool sleeps for 60 seconds, press
-            Ctrl-C at 5, and time how long the process takes to report
-            <code>interrupted</code>.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — <code>Interrupt</code>, <code>run_tool_call</code>; crates/tool-api/src/lib.rs — <code>ToolCtx</code></span>
-
-          <h3>The fold's reliance on a convention</h3>
-          <p>
-            <span class="chip cert">certified</span> by reading both files: the
-            session fold has no arm for <code>denied</code>,
-            <code>tool_failed</code>, <code>tool_fault</code> or
-            <code>tool_unknown</code>, and it does not need one, because each of
-            those paths also writes a <code>tool_result</code> record. That is
-            correct today. Every one of them goes through the same
-            <code>fail()</code> closure, which calls
-            <code>log_result_block</code>, but it is a convention held by one
-            closure rather than a property the type system enforces. A new failure
-            path added anywhere in <code>run_tool_call</code> that returns without
-            going through <code>fail()</code> would produce a session file that
-            folds back into a conversation the API rejects, and nothing would say
-            so until a resume.
-          </p>
-          <span class="src">crates/emma/src/agent.rs — <code>run_tool_call</code>, <code>log_result_block</code>; crates/emma/src/session.rs — <code>fold</code>; notes/map-architecture.md §9 item 19</span>
-
-          <footer class="pg">
-            <p>
-              Written against commit <code>20ac400</code>. Source read in full:
-              <code>crates/emma/src/agent.rs</code> (~2,000 lines),
-              <code>crates/emma/src/goal.rs</code> (~670),
-              <code>crates/emma/tests/loop.rs</code> (~980). Next:
-              <a href="session.html">Sessions &amp; context</a> for compaction and
-              the session file, <a href="consent.html">Consent &amp; permissions</a>
-              for the gate this page only passes through, and
-              <a href="delegation.html">Delegation</a> for the second loop that
-              spends this one's budget.
-            </p>
-          </footer>
-        </div>
-      </main>
-    </div>
-  </body>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The agent loop · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav here" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">Running a goal</p>
+  <h1>The agent loop</h1>
+  <p class="lede">
+    Send a request, receive a turn, run whatever tools it asked for, put the
+    results back in the conversation, send again. Everything else in this
+    chapter is a rule about when that stops, plus one rule, the memo, about when
+    a tool call is refused before it is ever run.
+  </p>
+  <span class="src">crates/emma/src/agent.rs · crates/emma/src/goal.rs</span>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven, and a reader can repeat it: a file, a command, a grep</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+    <div><span class="chip test">tested</span> a test covers it</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <h2 id="shape">The shape of it</h2>
+
+  <p>
+    The loop is <code>Agent::run_goal</code>, one function of about 370 lines.
+    Every decision about what ends a goal is visible in one place rather than
+    distributed across helpers that each look harmless. Everything a tool call
+    does is <code>Agent::run_tool_call</code>. Those two are worth reading
+    together, because the memo rule is split between them and reads as nonsense
+    in either alone.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, <code>Agent::run_tool_call</code></span>
+
+  <p>
+    <code>goal.rs</code> is the other half: the text a run is held to, the trait
+    that answers "is this met?", and the filter that keeps the completion marker
+    off the screen without keeping it from the loop. Between them the two files
+    are the difference between this and a chat client.
+  </p>
+  <span class="src">crates/emma/src/goal.rs</span>
+
+  <p>
+    Four properties hold across the whole chapter and each is here because it was
+    paid for somewhere else first. A session is one conversation and a goal is a
+    turn in it. A tool failure is a <code>tool_result</code>, never an abort. A
+    call that failed is not repeated identically until something else has
+    succeeded. An assistant turn is echoed back exactly as it came. The fifth,
+    that budgets are enforced and aborting costs what it spent, is the one that
+    decides when any of it stops.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — module doc</span>
+
+  <h2 id="pages">The pages</h2>
+
+  <ol class="contents">
+    <li>
+      <a href="loop-one-turn.html">One turn, end to end</a>
+      <span>Three guards, a request built from four parts, the model call and
+      the two things racing it, and where a received turn is held until
+      something knows where it goes.</span>
+    </li>
+    <li>
+      <a href="loop-failure.html">Failure as an observation</a>
+      <span>Seven ways a tool call can go wrong, one closure they all reach, and
+      what the model is handed instead of an abort.</span>
+    </li>
+    <li>
+      <a href="loop-memo.html">The memo rule</a>
+      <span>Why an identical failing call is refused, why the refusal lifts the
+      moment anything succeeds, and why neither half of the rule is written
+      where you would look for it.</span>
+    </li>
+    <li>
+      <a href="loop-endings.html">How a goal ends</a>
+      <span>Nine endings, four of them decided by a ladder whose order is the
+      whole rule, and the three variables that carry its state.</span>
+    </li>
+    <li>
+      <a href="loop-kick.html">The kick</a>
+      <span>What the model is told when it stops without claiming completion,
+      why the list of what has already failed is the part that matters, and the
+      two bounds that stop it firing forever.</span>
+    </li>
+    <li>
+      <a href="loop-budgets.html">Budgets, and three token numbers</a>
+      <span>Five bounds with three different shapes, the weighted number a
+      budget is tested against, the estimate that enforces nothing, and the
+      meter a delegated run can reach.</span>
+    </li>
+    <li>
+      <a href="loop-done.html">The goal, and how done is decided</a>
+      <span>All of <code>goal.rs</code>: what a goal is, the trait, the marker
+      the model prints, the streaming filter that hides it, and the weakness
+      that the acting model grades its own homework.</span>
+    </li>
+    <li>
+      <a href="loop-seam.html">Seams</a>
+      <span>How a test replaces the network without replacing anything else, how
+      Ctrl-C reaches a call in flight, and what happens when the user changes
+      model mid-conversation.</span>
+    </li>
+  </ol>
+
+  <h2 id="coverage">What this chapter covers</h2>
+
+  <p>
+    Every function in both files is covered on one of the eight pages, public and
+    private: 49 of 49 in <code>agent.rs</code> outside its test module, and 19 of
+    19 in <code>goal.rs</code>. All five of <code>agent.rs</code>'s own unit
+    tests and all eleven of <code>goal.rs</code>'s are named where the behaviour
+    they cover is described. Each page ends with a list of what it covered and a
+    section saying what it could not verify.
+    <span class="chip cert">certified</span> by counting <code>fn</code> items in
+    each file outside <code>mod tests</code> and matching them against the
+    per-page coverage lists.
+  </p>
+  <span class="src">crates/emma/src/agent.rs · crates/emma/src/goal.rs</span>
+
+  <p>
+    Two things this chapter hands off rather than covering. Compaction's code lives in
+    <code>agent.rs</code> and its behaviour is described on
+    <a href="session.html">Sessions &amp; context</a>; the loop's side of it is on
+    <a href="loop-budgets.html">Budgets</a>. The approval gate is passed through
+    on <a href="loop-failure.html">Failure</a> and described on
+    <a href="consent.html">Consent &amp; permissions</a>.
+  </p>
+
+  <h2 id="state">What the chapter could not verify</h2>
+
+  <p>
+    <span class="chip unv">unverified</span> Nothing in this chapter was
+    certified against a live provider call. The suite passes at commit
+    <code>a3eba74</code>: <code>cargo test -p emma --test loop</code> printed
+    <code>22 passed; 0 failed</code> and <code>cargo test -p emma --lib</code>
+    printed <code>477 passed; 0 failed; 3 ignored</code>. No mutations were run,
+    because this pass was not permitted to change source, so every
+    <span class="chip test">tested</span> chip in the chapter means "a test
+    covers this and its author recorded it as mutation-checked" rather than "I
+    watched it go red". <code>tests/loop.rs</code>'s header is where that record
+    lives. What would settle it: for each guarantee, delete it, run the named
+    test, confirm the failure, restore.
+  </p>
+  <span class="src">crates/emma/tests/loop.rs — module doc</span>
+
+  <footer class="pg">
+    <p>
+      Written against commit <code>a3eba74</code>. Then:
+      <a href="session.html">Sessions &amp; context</a> for compaction and the
+      session file, <a href="consent.html">Consent &amp; permissions</a> for the
+      gate this chapter only passes through, and
+      <a href="delegation.html">Delegation</a> for the second loop that spends
+      this one's budget.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
 </html>

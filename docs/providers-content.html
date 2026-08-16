@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Typed content blocks · Providers &amp; models · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav here" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/llm/src/content.rs</p>
+  <h1>Typed content blocks, and the 712 tests that proved nothing</h1>
+
+  <nav class="chapter">
+    <a class="up" href="providers.html">Providers &amp; models</a>
+    <a href="providers-boundary.html">The boundary</a>
+    <span class="now">Content blocks</span>
+    <a href="providers-turn.html">The turn back</a>
+    <a href="providers-models.html">Model limits</a>
+    <a href="providers-caching.html">Caching</a>
+    <a href="providers-floor.html">The cache floor</a>
+    <a href="providers-retry.html">Retry</a>
+    <a href="providers-credentials.html">Credentials</a>
+  </nav>
+
+  <p class="lede">
+    This module exists to delete one field. What replaced it decoded strictly,
+    passed 712 tests with byte-identical output, and then decoded no real tool
+    call at all, because the API puts a key on every <code>tool_use</code>
+    block that nothing here had read about. The fix is two escape hatches
+    pointing in opposite directions, and the split between them was decided by
+    a live call rather than by taste.
+  </p>
+
+  <h2 id="blob">The field it deletes</h2>
+
+  <p>
+    <code>AssistantTurn</code> used to carry
+    <code>raw_content: serde_json::Value</code>, Anthropic's content array,
+    echoed back on the next call without ever being read, and the loop built
+    its own <code>{"type":"tool_result",…}</code> objects to answer it. Between
+    them those two facts meant a second provider was a refactor of the loop
+    rather than a second file beside <code>anthropic.rs</code>, because the
+    loop knew the wire shape.
+  </p>
+
+  <p>
+    The blob was not laziness. This model family rejects a thinking block whose
+    signature has been re-derived, so a turn rebuilt from text plus tool calls
+    makes the <em>next</em> call fail, and the cheapest way to guarantee
+    byte-fidelity is to never look inside. The shape that replaces it comes
+    from <code>goose</code> (Block, Apache-2.0): opaque provider state becomes a
+    narrow named field on an otherwise fully typed block. Its
+    <code>ThinkingContentBlock { thinking, signature }</code> is
+    <code>ThinkingBlock</code> here and its
+    <code>RedactedThinkingContentBlock { data }</code> is
+    <code>RedactedThinkingBlock</code>.
+  </p>
+  <span class="src">crates/llm/src/content.rs — module doc §"Why a blob existed at all"</span>
+
+  <h2 id="strict">712 tests, clean clippy, identical bytes, dead agent</h2>
+
+  <p>
+    The first version of this module decoded strictly:
+    <code>deny_unknown_fields</code> everywhere, and any block carrying a key
+    the client did not model was demoted to <code>Passthrough</code>, kept
+    whole and kept verbatim but no longer a typed thing the loop could act on.
+    It passed everything. All 712 tests, clippy clean, and the rendered request
+    bytes identical to the version it replaced.
+  </p>
+
+  <p>
+    Then it was called for real. Every <code>tool_use</code> block the Messages
+    API returns carries a <code>caller</code> key, documented nowhere this
+    client had read:
+  </p>
+
+  <pre><code>{<span class="k">"caller"</span>:{<span class="k">"type"</span>:<span class="s">"direct"</span>},<span class="k">"id"</span>:<span class="s">"toolu_01FJxk…"</span>,<span class="k">"input"</span>:{…},<span class="k">"name"</span>:<span class="s">"Read"</span>,<span class="k">"type"</span>:<span class="s">"tool_use"</span>}</code></pre>
+
+  <p>
+    Under strict decoding that block was not a tool call. It was an
+    unrecognised blob. The bytes round-tripped perfectly, the loop saw zero
+    tool calls in a turn that contained one, took the success path, and a real
+    goal ended on turn one reported as <em>"answered, no tools were
+    needed"</em>. <span class="chip cert">certified</span>: observed live on
+    <code>claude-sonnet-5</code>, 2026-08-11, and the exact block is frozen as
+    a fixture a reader can grep, in
+    <code>a_real_tool_use_block_is_a_tool_call_and_still_round_trips</code>.
+  </p>
+  <span class="src">crates/llm/src/content.rs — module doc §"The rule that makes this safe to type"; commit <code>482a2cc</code></span>
+
+  <p class="faint">crates/llm/src/content.rs · <code>a_real_tool_use_block_is_a_tool_call_and_still_round_trips</code></p>
+  <pre><code>/// A `tool_use` block exactly as `claude-opus-5` sends one, `caller` and all.
+///
+/// **This is a regression test with a receipt.** The first version of this
+/// module decoded strictly and demoted any block carrying an unmodelled
+/// key. Every wire test passed, the whole suite was green, and the first
+/// live goal ended on turn one reported as "answered — no tools were
+/// needed": `caller` is on every real `tool_use`, so no real tool call ever
+/// decoded as one. The bytes were perfect and the agent did not work.
+///
+/// So the two claims here are not the same claim, and both are load-bearing:
+/// the block is still a **tool call** (the loop can act on it) and it still
+/// round-trips **byte for byte** (the provider gets back what it sent).
+#[test]
+fn a_real_tool_use_block_is_a_tool_call_and_still_round_trips() {
+    let v = json!({
+        "caller": { "type": "direct" },
+        "id": "toolu_01FJxkRrmirASsf79TJLvggU",
+        "input": { "file_path": "absent.txt" },
+        "name": "Read",
+        "type": "tool_use"
+    });
+    let block = round_trips(v);
+    let ContentBlock::ToolUse(call) = &amp;block else {
+        panic!("a real tool_use block did not decode as a tool call: {block:?}");
+    };
+    assert_eq!(call.name, "Read");
+    assert_eq!(call.id, "toolu_01FJxkRrmirASsf79TJLvggU");
+    assert_eq!(call.input, json!({ "file_path": "absent.txt" }));
+    assert_eq!(call.extra["caller"], json!({ "type": "direct" }));
+}</code></pre>
+  <span class="src">crates/llm/src/content.rs — <code>tests</code></span>
+
+  <div class="note warn">
+    <p>
+      Nothing was malformed, nothing errored, no status code was wrong, and the
+      harness reported success. <strong>A green suite is not evidence that a
+      wire format still talks to the provider.</strong> The suite agreed with
+      its author about what a <code>tool_use</code> block contains, and its
+      author was out of date by one undocumented key. The detector was a live
+      call.
+    </p>
+  </div>
+
+  <h2 id="hatches">Two escape hatches, pointing opposite ways</h2>
+
+  <p>
+    An unknown block <em>type</em> becomes
+    <code>ContentBlock::Passthrough</code>, kept exactly as it arrived. There
+    is nothing to interpret, so nothing is lost by not interpreting it.
+    <code>server_tool_use</code> and <code>web_search_tool_result</code> are
+    the next real instances arriving.
+  </p>
+
+  <p>
+    An unmodelled <em>key</em> on a known type keeps its variant, and the key
+    goes into that block's <code>extra</code> map, echoed back untouched. That
+    is the case the live call above failed on: the bytes were kept and "this is
+    a tool call" was lost.
+  </p>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 760 300" role="img"
+           aria-label="ContentBlock::from_value first checks for a string type tag, then that the value is an object, then removes the tag and tries the struct for that type. A missing or non-string tag, a non-object value, an unknown type name, and a struct that fails to deserialize all land on Passthrough. A known type whose struct deserializes, including unmodelled keys captured by serde flatten into extra, lands on the typed variant.">
+        <defs>
+          <marker id="cnt-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          </marker>
+          <marker id="cnt-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          </marker>
+        </defs>
+
+        <rect class="box" x="14" y="20" width="150" height="30" rx="4" />
+        <text class="sm" x="26" y="39">one wire block</text>
+
+        <line class="edge" x1="90" y1="52" x2="90" y2="76" marker-end="url(#cnt-arrow)" />
+        <rect class="box" x="14" y="78" width="150" height="42" rx="4" />
+        <text class="sm" x="26" y="96">has a string</text>
+        <text class="sm" x="26" y="112">"type" tag?</text>
+
+        <line class="edge" x1="90" y1="122" x2="90" y2="146" marker-end="url(#cnt-arrow)" />
+        <rect class="box" x="14" y="148" width="150" height="42" rx="4" />
+        <text class="sm" x="26" y="166">is a JSON</text>
+        <text class="sm" x="26" y="182">object?</text>
+
+        <line class="edge" x1="90" y1="192" x2="90" y2="216" marker-end="url(#cnt-arrow)" />
+        <rect class="box" x="14" y="218" width="150" height="56" rx="4" />
+        <text class="sm" x="26" y="238">remove the tag,</text>
+        <text class="sm" x="26" y="254">deserialize the</text>
+        <text class="sm" x="26" y="268">struct for that type</text>
+
+        <line class="edge" x1="166" y1="99" x2="352" y2="99" marker-end="url(#cnt-arrow)" />
+        <text class="tiny" x="180" y="93">no</text>
+        <line class="edge" x1="166" y1="169" x2="352" y2="169" marker-end="url(#cnt-arrow)" />
+        <text class="tiny" x="180" y="163">no</text>
+        <line class="edge" x1="166" y1="246" x2="352" y2="200" marker-end="url(#cnt-arrow)" />
+        <text class="tiny" x="180" y="240">unknown type, or Err</text>
+
+        <rect class="box" x="354" y="120" width="180" height="70" rx="4" />
+        <text class="lbl" x="368" y="146">Passthrough(v)</text>
+        <text class="tiny" x="368" y="166">the whole block, verbatim</text>
+        <text class="tiny" x="368" y="180">is_model_bound() =&gt; true</text>
+
+        <line class="edge-hl" x1="166" y1="252" x2="352" y2="252" marker-end="url(#cnt-arrow-hl)" />
+        <text class="tiny" x="180" y="246">Ok</text>
+        <rect class="hl" x="354" y="212" width="180" height="70" rx="4" />
+        <text class="lbl" x="368" y="238">Text / Thinking /</text>
+        <text class="lbl" x="368" y="256">RedactedThinking /</text>
+        <text class="lbl" x="368" y="274">ToolUse / ToolResult</text>
+
+        <line class="edge-hl" x1="536" y1="247" x2="588" y2="247" marker-end="url(#cnt-arrow-hl)" />
+        <rect class="box" x="590" y="212" width="156" height="70" rx="4" />
+        <text class="sm" x="602" y="234">unmodelled keys</text>
+        <text class="sm" x="602" y="250">land in .extra</text>
+        <text class="tiny" x="602" y="270">serde(flatten)</text>
+
+        <text class="tiny" x="354" y="40">The two hatches fail in opposite directions:</text>
+        <text class="tiny" x="354" y="58">drop the extra map and real tool calls stop being tool calls.</text>
+        <text class="tiny" x="354" y="76">drop the Passthrough arm and an unknown block is silently corrupted on replay.</text>
+      </svg>
+    </div>
+    <figcaption>
+      Every path through <code>ContentBlock::from_value</code>. Four of the
+      five ways in reach <code>Passthrough</code>; the fifth is the typed
+      variant, and the <code>serde(flatten)</code> field on each struct is what
+      keeps a known type from falling out of that path when the provider adds a
+      key. Drawn from <code>from_value</code> and the struct definitions.
+    </figcaption>
+  </figure>
+
+  <p class="faint">crates/llm/src/content.rs · <code>ContentBlock::from_value</code></p>
+  <pre><code>/// Parse one wire block, keeping everything it carried.
+///
+/// Two guarantees, and they fail in opposite directions if either is
+/// removed. The `extra` field on each struct catches keys this client does
+/// not model, so a `tool_use` that grew a `caller` is still a tool call —
+/// take it away and the loop stops seeing real tool calls, which is what a
+/// live run caught. The `.ok()` fallback catches a block this client cannot
+/// build at all, so an unknown `type` still travels — take that away and
+/// the turn is silently corrupted on replay.
+pub fn from_value(v: Value) -&gt; Self {
+    let Some(kind) = v.get("type").and_then(Value::as_str) else {
+        return Self::Passthrough(v);
+    };
+    // The tag is removed rather than tolerated, because tolerating it would
+    // mean loosening `deny_unknown_fields` — the one thing holding the
+    // guarantee above up.
+    let mut rest = match v.as_object() {
+        Some(obj) =&gt; obj.clone(),
+        None =&gt; return Self::Passthrough(v),
+    };
+    rest.remove("type");
+    let rest = Value::Object(rest);
+    let typed = match kind {
+        "text" =&gt; serde_json::from_value(rest).map(Self::Text).ok(),
+        "thinking" =&gt; serde_json::from_value(rest).map(Self::Thinking).ok(),
+        "redacted_thinking" =&gt; serde_json::from_value(rest)
+            .map(Self::RedactedThinking)
+            .ok(),
+        "tool_use" =&gt; serde_json::from_value(rest).map(Self::ToolUse).ok(),
+        "tool_result" =&gt; serde_json::from_value(rest).map(Self::ToolResult).ok(),
+        _ =&gt; None,
+    };
+    typed.unwrap_or(Self::Passthrough(v))
+}</code></pre>
+  <span class="src">crates/llm/src/content.rs — <code>from_value</code></span>
+
+  <p>
+    <code>extra</code> is written only by <code>from_value</code>, read only by
+    <code>to_value</code>, and nothing branches on its contents. A key Emma
+    needs to <em>act</em> on becomes a field promoted out of it rather than a
+    lookup into it. That rule is what keeps the map from being
+    <code>raw_content</code> at a smaller scale, and the module doc states it
+    exhaustively: keys the provider put on a block whose type this client
+    models, which this client does not read. Nothing else.
+  </p>
+
+  <p>
+    Why per-block <code>Passthrough</code> rather than goose's
+    <code>ProviderMetadata</code> for the unknown-type case: that hangs a map
+    off every block for any key a provider wants back, so every typed block has
+    an untyped half and a reader cannot tell from the type which fields are
+    real. A block here is either fully typed or fully opaque. The cost is that
+    one unmodelled field demotes a whole block; the benefit is that
+    <code>ContentBlock::Text</code> means what it says.
+  </p>
+  <span class="src">crates/llm/src/content.rs — <code>ContentBlock::Passthrough</code> doc</span>
+
+  <h2 id="blocks">The five typed blocks</h2>
+
+  <p>
+    Each is a plain <code>serde</code> struct with a flattened <code>extra</code>
+    map skipped when empty. Only two carry more than that.
+  </p>
+
+  <p class="faint">crates/llm/src/content.rs · <code>ThinkingBlock</code></p>
+  <pre><code>#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ThinkingBlock {
+    pub thinking: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option&lt;String&gt;,
+    /// Keys the provider put on this block that Emma does not model, echoed
+    /// back untouched. See the module doc for what may live here and for the
+    /// live call that made it necessary.
+    #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map&lt;String, Value&gt;,
+}</code></pre>
+  <span class="src">crates/llm/src/content.rs — <code>ThinkingBlock</code></span>
+
+  <p>
+    <code>signature</code> is the narrow named field the whole module is built
+    around. Emma never reads it, never composes one, never re-derives one. It
+    is an <code>Option</code> rather than goose's bare <code>String</code>
+    because a streamed block that carried no <code>signature_delta</code> has
+    no signature, and sending <code>"signature": ""</code> is not the same
+    request as sending no key at all. The round-trip test asserts both shapes,
+    signed and unsigned. <span class="chip test">tested</span>
+  </p>
+
+  <p class="faint">crates/llm/src/content.rs · <code>ToolResult</code></p>
+  <pre><code>/// The answer to one [`ToolCall`], including the answer "it failed".
+///
+/// **`is_error` is load-bearing and is not an error type.** A failed tool is an
+/// observation the loop continues from — `agent.rs` says so at the top of the
+/// file and five failure classes in tustle-agent were measured ending turns
+/// silently before it did. So this is one struct with a flag rather than a
+/// `Result`: a `Result` would make "the tool failed" unrepresentable as a
+/// message, which is precisely what has to be representable.
+///
+/// The flag is skipped when false so a successful result renders the two keys
+/// it always rendered, and no third.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ToolResult {
+    pub tool_use_id: String,
+    pub content: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_error: bool,
+    #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map&lt;String, Value&gt;,
+}</code></pre>
+  <span class="src">crates/llm/src/content.rs — <code>ToolResult</code>, <code>is_false</code></span>
+
+  <p>
+    <code>is_false</code> is a two-character helper serde needs a path to;
+    <code>ToolResult::ok</code> and <code>ToolResult::failed</code> are the two
+    constructors and differ only in that flag. <code>TextBlock</code>,
+    <code>RedactedThinkingBlock</code> and <code>ToolCall</code> add nothing
+    beyond their fields and the same <code>extra</code>. Only
+    <code>ToolCall</code>'s doc explains why its map is not optional: the API
+    puts <code>caller</code> on every <code>tool_use</code> it emits, so a
+    <code>ToolCall</code> that could not hold an unmodelled key would never
+    match a real one.
+  </p>
+
+  <h2 id="render">Rendering back out</h2>
+
+  <p class="faint">crates/llm/src/content.rs · <code>ContentBlock::to_value</code></p>
+  <pre><code>/// The wire object. Byte-for-byte what the Messages API documents, and what
+/// the previous `serde_json::Value` blocks rendered.
+pub fn to_value(&amp;self) -&gt; Value {
+    match self {
+        Self::Text(b) =&gt; with_extra(json!({ "type": "text", "text": b.text }), &amp;b.extra),
+        Self::Thinking(b) =&gt; {
+            let mut v = json!({ "type": "thinking", "thinking": b.thinking });
+            if let Some(sig) = &amp;b.signature {
+                v["signature"] = json!(sig);
+            }
+            with_extra(v, &amp;b.extra)
+        }
+        Self::RedactedThinking(b) =&gt; with_extra(
+            json!({ "type": "redacted_thinking", "data": b.data }),
+            &amp;b.extra,
+        ),
+        Self::ToolUse(c) =&gt; with_extra(
+            json!({ "type": "tool_use", "id": c.id, "name": c.name, "input": c.input }),
+            &amp;c.extra,
+        ),
+        Self::ToolResult(r) =&gt; {
+            let mut v = json!({
+                "type": "tool_result",
+                "tool_use_id": r.tool_use_id,
+                "content": r.content,
+            });
+            if r.is_error {
+                v["is_error"] = json!(true);
+            }
+            with_extra(v, &amp;r.extra)
+        }
+        Self::Passthrough(v) =&gt; v.clone(),
+    }
+}</code></pre>
+  <span class="src">crates/llm/src/content.rs — <code>to_value</code></span>
+
+  <p>
+    Two conditional keys, and both matter to the bytes: a
+    <code>signature</code> that is <code>None</code> renders no key at all, and
+    <code>is_error</code> appears only when true. Both are pinned in the golden
+    request body, which contains <code>{"thinking":"unsigned","type":"thinking"}</code>
+    with no signature and one <code>tool_result</code> with
+    <code>"is_error":true</code> beside one without the key.
+    <span class="chip cert">certified</span>: read the literal in
+    <code>the_whole_request_body_is_pinned_byte_for_byte</code>.
+  </p>
+
+  <p class="faint">crates/llm/src/content.rs · <code>with_extra</code></p>
+  <pre><code>/// Put the unmodelled keys back on a rendered block.
+///
+/// Insertion rather than a raw copy so a provider key can never overwrite one
+/// this client models: `extra` is only ever populated from keys the struct did
+/// not claim, and this asserts that invariant instead of trusting it.
+fn with_extra(mut v: Value, extra: &amp;serde_json::Map&lt;String, Value&gt;) -&gt; Value {
+    if let Some(obj) = v.as_object_mut() {
+        for (k, val) in extra {
+            debug_assert!(
+                !obj.contains_key(k),
+                "`extra` carried {k}, which the typed block also renders"
+            );
+            obj.insert(k.clone(), val.clone());
+        }
+    }
+    v
+}</code></pre>
+  <span class="src">crates/llm/src/content.rs — <code>with_extra</code></span>
+
+  <p>
+    The assertion is a <code>debug_assert!</code>, so it fires in a test or a
+    debug build and is compiled out of a release binary. In release, a
+    colliding key would overwrite the typed field silently. Whether that can
+    happen at all depends on <code>serde(flatten)</code> never handing back a
+    key the struct claimed, which is serde's documented behaviour and is not
+    checked here. <span class="chip unv">unverified</span> Settling it means a
+    test that constructs a <code>ToolCall</code> with <code>"name"</code>
+    forced into <code>extra</code> and asserts the panic, which no test
+    currently does.
+  </p>
+
+  <h2 id="bound">Locating the state a model change would break</h2>
+
+  <p class="faint">crates/llm/src/content.rs · <code>ContentBlock::is_model_bound</code></p>
+  <pre><code>/// `Passthrough` counts, and that is the conservative direction on purpose:
+/// this client does not know what is in a block it could not model, so it
+/// must not claim the block is portable.
+///
+/// A plain text block is not model-bound, which is why the existing
+/// compaction path is already a working escape hatch: a summarised chapter
+/// is [`Content::Text`] and carries no signatures at all.
+pub fn is_model_bound(&amp;self) -&gt; bool {
+    match self {
+        Self::Thinking(t) =&gt; t.signature.is_some(),
+        Self::RedactedThinking(_) | Self::Passthrough(_) =&gt; true,
+        Self::Text(_) | Self::ToolUse(_) | Self::ToolResult(_) =&gt; false,
+    }
+}</code></pre>
+  <span class="src">crates/llm/src/content.rs — <code>is_model_bound</code></span>
+
+  <p>
+    Nothing calls it yet. It exists so a question stays answerable: whether a
+    thinking signature minted by one model is accepted when the conversation
+    continues on another is untested here, and an in-session
+    <code>/model</code> command is the first thing that would need to know.
+    <span class="chip unv">unverified</span> Nothing records which model
+    produced a signed block, so the granularity that does exist is per goal,
+    from the session log's <code>goal</code> record. Settling it means one
+    conversation continued across two models, watching whether the second
+    accepts the first's signature. Under the blob this replaced, finding those
+    blocks meant re-parsing Anthropic's format at the call site.
+  </p>
+
+  <p>
+    <code>tool_use_id</code> is its neighbour and answers a narrower question:
+    the id a block <em>is</em>, for a <code>ToolUse</code>, and
+    <code>None</code> for everything else. The doc comment says "is, or
+    answers", but the match returns <code>None</code> for
+    <code>ToolResult</code>, so a caller wanting the pairing from the answering
+    side reads <code>ToolResult::tool_use_id</code> directly. The comment
+    and the match arms disagree, and the match arms are what runs.
+  </p>
+
+  <h2 id="content-enum">A message's content is two shapes, not one</h2>
+
+  <p class="faint">crates/llm/src/content.rs · <code>enum Content</code></p>
+  <pre><code>/// Two variants because the API takes two forms and Emma sends both: a user's
+/// typed words go as a plain string, and anything with tool traffic in it goes
+/// as blocks. Collapsing them to `Blocks` alone would be tidier and would
+/// change the bytes of every ordinary user turn, which is a cache prefix nobody
+/// asked to invalidate.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Content {
+    Text(String),
+    Blocks(Vec&lt;ContentBlock&gt;),
+}</code></pre>
+  <span class="src">crates/llm/src/content.rs — <code>Content</code></span>
+
+  <p>
+    <code>Content::blocks()</code> returns an empty slice for the text variant
+    rather than an <code>Option</code>, which is what lets a caller ask "is
+    anything in here model-bound" without matching first.
+    <code>wire_len()</code> is the rendered byte count and feeds the cache size
+    gate, so it counts the quotes and the escapes rather than the length of the
+    text inside. <code>wire_len_counts_the_rendered_bytes_not_the_text</code>
+    pins <code>Content::Text("hi")</code> at 4 bytes, which is the string plus
+    its two quotes. <span class="chip test">tested</span>
+  </p>
+
+  <p>
+    Four impls do the serde work. <code>ContentBlock</code>'s
+    <code>Serialize</code> and <code>Deserialize</code> delegate to
+    <code>to_value</code> and <code>from_value</code>, which is what puts the
+    two escape hatches on every path in and out, including session files.
+    <code>Content</code>'s <code>Serialize</code> renders whichever variant it
+    holds; its <code>Deserialize</code> maps a JSON string to
+    <code>Text</code>, an array to <code>Blocks</code>, and rejects anything
+    else with a message naming what it got. <code>Display</code> renders the
+    JSON, which is what <code>Value</code>'s own <code>Display</code> gave
+    before this was a type, and half a dozen assertions elsewhere ask "did the
+    model see this string anywhere in the message".
+  </p>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    All 16 functions in <code>content.rs</code> are named on this page:
+    <code>with_extra</code>, <code>is_false</code>,
+    <code>ContentBlock::text</code>, <code>to_value</code>,
+    <code>from_value</code>, <code>is_model_bound</code>,
+    <code>tool_use_id</code>, <code>ToolResult::ok</code>,
+    <code>ToolResult::failed</code>, <code>Content::blocks</code>,
+    <code>Content::wire_len</code>, <code>Display::fmt</code>, and the four
+    <code>Serialize</code> and <code>Deserialize</code> impls.
+    <code>ContentBlock::text</code> is the one-line constructor for a text
+    block with an empty <code>extra</code>, and has nothing else in it.
+  </p>
+
+  <p>
+    Eight tests guard the module and every one of them is a round-trip in some
+    shape. The interesting ones are where the typed model is <em>wrong</em>
+    about a block: an unknown type, and a known type with an extra field.
+    Those are what a silently-lossy design passes and this one has to fail.
+    All eight ran green here on 2026-08-16, as part of the 72 tests
+    <code>cargo test -p emma-llm</code> reports.
+    <span class="chip cert">certified</span>
+  </p>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="providers-turn.html">the turn that comes back</a>, where
+      these blocks are assembled from one JSON body or from a stream of
+      fragments. Back to <a href="providers.html">Providers &amp; models</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

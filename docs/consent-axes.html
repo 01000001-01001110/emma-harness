@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The two axes · Consent &amp; permissions · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav here" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <h1>The two axes a tool declares</h1>
+
+  <nav class="chapter">
+    <a class="up" href="consent.html">Consent &amp; permissions</a>
+    <span class="now">The two axes</span>
+    <a href="consent-ladder.html">The ladder</a>
+    <a href="consent-egress.html">The egress question</a>
+    <a href="consent-answers.html">The five answers</a>
+    <a href="consent-exempt.html">EXEMPT and the floor</a>
+    <a href="consent-rules.html">Permission rules</a>
+    <a href="consent-matching.html">Matching a host</a>
+    <a href="consent-hooks.html">Hooks</a>
+  </nav>
+
+  <p class="lede">
+    Before a call runs, the gate reads two booleans off the tool and asks the
+    tool where the call is going. It believes all three answers. Nothing in this
+    chapter stops a tool from opening a socket after declaring it would not.
+  </p>
+  <span class="src">crates/tool-api/src/lib.rs — ToolMeta, Tool::network_target</span>
+
+  <div class="note warn">
+    <span class="h">What a declaration is worth</span>
+    <p>
+      <code>read_only</code> and <code>reaches_network</code> are fields on a
+      struct the tool fills in itself. The gate has no way to check either one.
+      <code>Bash</code> declares <code>read_only: false</code> and
+      <code>reaches_network: false</code>, and a <code>Bash</code> call can run
+      <code>curl</code>. What the gate produces in that case is that a human read
+      the command first, not that the command could not reach the network.
+    </p>
+    <span class="src">crates/tool-api/src/lib.rs — ToolMeta::reaches_network, final bullet</span>
+  </div>
+
+  <h2 id="meta">ToolMeta, and why one bit was split into two</h2>
+
+  <p>
+    <code>read_only</code> asks a single question: can this call change local
+    state, meaning a file written or a process spawned. It was once documented as
+    also meaning "cannot reach the network", and that reading was never true of
+    the tools as they were written. <code>WebFetch</code> and
+    <code>WebSearch</code> declare <code>read_only: true</code>, because neither
+    can damage this machine, and both are how bytes leave it.
+  </p>
+  <span class="src">crates/tool-api/src/lib.rs — ToolMeta::read_only</span>
+
+  <pre><code><span class="c">/// Cannot change local state: no file written, no process spawned.</span>
+pub read_only: bool,
+<span class="c">/// Sends bytes off this machine, by construction.</span>
+pub reaches_network: bool,</code></pre>
+  <span class="src">crates/tool-api/src/lib.rs — ToolMeta (field declarations, doc abridged)</span>
+
+  <p>
+    The two axes are separate because they are separate risks. A write is
+    something the model chooses to do. Egress is how a prompt-injected page turns
+    a read tool into an exfiltration channel: a model that reads an attacker's
+    page and then "searches" for the contents of a <code>.env</code> has written
+    nothing, damaged nothing, and passes every local-damage check on the way out.
+  </p>
+  <span class="src">crates/tool-api/src/lib.rs — ToolMeta::reaches_network</span>
+
+  <p>
+    Flipping the web tools to <code>read_only: false</code> was the obvious
+    alternative and was refused. A gate that fires on every page read teaches the
+    operator to answer without reading, and that habit carries into the
+    <code>Write</code> prompt, which is the one that matters. The second axis
+    costs one prompt per host instead of one per page.
+  </p>
+  <span class="src">crates/tool-api/src/lib.rs — ToolMeta::read_only</span>
+
+  <p>
+    Six tools in the workspace declare <code>reaches_network: true</code>:
+    <code>WebFetch</code>, <code>WebSearch</code>, and four of the five browser
+    tools. <code>BrowserClose</code> declares <code>false</code>, since closing a
+    session sends nothing outward.
+    <span class="chip cert">certified</span> Counted from disk at commit
+    <code>a3eba74</code>:
+    <code>grep -rn "reaches_network: true" tools/</code> returns six lines, four
+    of them in <code>tools/web/src/browser/tools.rs</code> at the
+    <code>BrowserOpen</code>, <code>BrowserRead</code>, <code>BrowserAct</code>
+    and <code>BrowserFill</code> impls.
+  </p>
+  <span class="src">tools/web/src/fetch.rs, tools/web/src/search.rs, tools/web/src/browser/tools.rs</span>
+
+  <h3><code>ToolMeta</code> has no <code>Default</code></h3>
+
+  <p>
+    Adding a field to <code>ToolMeta</code> breaks every construction site in the
+    workspace, and each tool has to state the new bit. The predecessor project
+    added a defaulted field, which granted a safety property to every tool
+    written afterwards without anybody choosing it for that tool.
+  </p>
+  <span class="src">crates/tool-api/src/lib.rs — ToolMeta</span>
+
+  <h2 id="target">The gate does not parse a tool's arguments</h2>
+
+  <p>
+    To learn where a call is going, the gate calls
+    <code>Tool::network_target(args)</code> and the tool answers. The default
+    implementation on the trait returns <code>None</code>, so a tool that reaches
+    nothing implements nothing.
+  </p>
+
+  <pre><code>fn network_target(&amp;self, _args: &amp;serde_json::Value) -&gt; Option&lt;NetworkTarget&gt; {
+    None
+}</code></pre>
+  <span class="src">crates/tool-api/src/lib.rs — Tool::network_target, default body</span>
+
+  <p>
+    A <code>NetworkTarget</code> is a host plus one line naming the errand. The
+    host is what a grant is keyed on. The detail is what makes the prompt
+    readable: a host name alone cannot distinguish a search for a crate name from
+    a search for the contents of a file.
+  </p>
+
+  <pre><code>pub struct NetworkTarget {
+    <span class="c">/// The host bytes leave for, lowercased and without a trailing dot.</span>
+    pub host: String,
+    <span class="c">/// One line naming the errand, for the human reading the prompt — the URL,</span>
+    <span class="c">/// the query.</span>
+    pub detail: String,
+}</code></pre>
+  <span class="src">crates/tool-api/src/lib.rs — NetworkTarget (docs abridged)</span>
+
+  <p>
+    <code>NetworkTarget::new</code> normalises the host as
+    <code>trim</code>, then strip trailing dots, then
+    <code>to_ascii_lowercase</code>. <code>Docs.RS.</code> and
+    <code>docs.rs</code> are therefore one grant.
+    <code>docs.rs</code> and <code>www.docs.rs</code> are two, because deciding
+    they are the same is a policy nobody asked for. The rule matcher in
+    <code>permissions.rs</code> applies the same three steps to a host handed to
+    it, so a second caller cannot inherit a hole from the first. See
+    <a href="consent-matching.html">Matching a host</a>.
+  </p>
+  <span class="src">crates/tool-api/src/lib.rs — NetworkTarget::new; crates/emma/src/permissions.rs — normalise</span>
+
+  <p>
+    The asymmetry is the reason this method exists on the tool rather than in the
+    gate: <code>approval.rs</code> knows that some tools reach some host, and
+    knows nothing about how any of them spell it. Twice before, this loop
+    acquired knowledge of one tool's argument shape, and both times "adding a
+    tool is a crate plus one registry line" stopped being true.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — Approvals::request</span>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 760 250" role="img"
+           aria-label="What the gate reads off a tool before deciding: the tool's name, its read_only bit, its reaches_network bit, and the NetworkTarget it answers with. The gate checks none of them.">
+        <defs>
+          <marker id="axes-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
+          </marker>
+          <marker id="axes-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
+          </marker>
+        </defs>
+
+        <rect class="box" x="16" y="60" width="196" height="128" rx="3"/>
+        <text class="lbl" x="30" y="84">the tool</text>
+        <text class="tiny" x="30" y="106">name()</text>
+        <text class="tiny" x="30" y="124">meta().read_only</text>
+        <text class="tiny" x="30" y="142">meta().reaches_network</text>
+        <text class="tiny" x="30" y="160">network_target(args)</text>
+        <text class="tiny" x="30" y="178">invoke(ctx, args)</text>
+
+        <path class="edge-hl" d="M216 100 L318 100" marker-end="url(#axes-arrow-hl)"/>
+        <text class="tiny" x="228" y="92">four answers,</text>
+        <text class="tiny" x="228" y="122">all believed</text>
+
+        <rect class="hl" x="324" y="60" width="212" height="128" rx="3"/>
+        <text class="lbl" x="338" y="84">Approvals::request</text>
+        <text class="tiny" x="338" y="106">decide(name, meta,</text>
+        <text class="tiny" x="338" y="124">target, args, term)</text>
+        <text class="tiny" x="338" y="148">records (name, verdict)</text>
+        <text class="tiny" x="338" y="166">into `seen`</text>
+
+        <path class="edge" d="M540 100 L620 100" marker-end="url(#axes-arrow)"/>
+        <text class="sm" x="630" y="96">Allow</text>
+        <text class="sm" x="630" y="118">Deny(why)</text>
+
+        <text class="tiny" x="16" y="222">Nothing on this diagram verifies a declaration. A tool that answers `read_only: true` and writes a file</text>
+        <text class="tiny" x="16" y="238">is not stopped anywhere; the tool crates' own tests are what keep the declarations true.</text>
+      </svg>
+    </div>
+    <figcaption>
+      Drawn from <code>Approvals::request</code>. The four values on the left are
+      everything the gate learns about the call. <code>args</code> is passed
+      through to the preview renderer and is never parsed for a host.
+    </figcaption>
+  </figure>
+
+  <h2 id="request">Where the two axes are read</h2>
+
+  <p>
+    <code>request</code> is the only public entry point, and the only place
+    <code>network_target</code> is called. It takes the <code>&amp;dyn Tool</code>
+    rather than a name and a boolean, so both axes and the destination are read
+    off the tool that is about to run. A caller passing its own idea of whether
+    something writes would be the gate protecting a claim instead of a fact.
+  </p>
+
+  <pre><code>pub async fn request(&amp;self, tool: &amp;dyn Tool, args: &amp;Value, term: &amp;Term) -&gt; Verdict {
+    let target = tool.network_target(args);
+    let verdict = self
+        .decide(tool.name(), tool.meta(), target, args, term)
+        .await;
+    self.seen
+        .lock()
+        .await
+        .push((tool.name().to_string(), verdict.clone()));
+    verdict
+}</code></pre>
+  <span class="src">crates/emma/src/approval.rs — Approvals::request</span>
+
+  <p>
+    Every verdict is pushed onto <code>seen</code>, readable through
+    <code>Approvals::decisions</code>. No caller in the workspace calls
+    <code>decisions</code>, so the field is write-only today; the record a run
+    depends on is the session log, which the loop writes on every denial and
+    every call it lets through. The comment on the field says so.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — Approvals::seen, Approvals::decisions</span>
+
+  <h2 id="not">What the egress axis does not cover</h2>
+
+  <ul class="body">
+    <li>
+      <strong>What comes back.</strong> An approved host is a destination the
+      user chose, not a source they trust. The page that arrives is
+      attacker-controlled text entering the model's context, and nothing in the
+      gate reads it.
+    </li>
+    <li>
+      <strong>Incidental network access.</strong> <code>Bash</code> declares
+      <code>false</code> and can <code>curl</code>. It is gated by the local
+      question instead, which shows a human the command, and a command carries
+      more information than a host name. Declaring <code>true</code> would demand
+      a destination <code>Bash</code> cannot name without parsing shell.
+    </li>
+    <li>
+      <strong>Enforcement of any kind.</strong> Both bits are declarations. What
+      keeps them true is the tool crates' own tests, not this file.
+    </li>
+  </ul>
+  <span class="src">crates/emma/src/approval.rs — module doc; crates/tool-api/src/lib.rs — ToolMeta::reaches_network</span>
+
+  <h2 id="unsettled">What is not settled here</h2>
+
+  <p>
+    <span class="chip unv">unverified</span> That the tool crates' tests actually
+    pin every declaration was read out of the doc comment on
+    <code>ToolMeta::reaches_network</code> and not checked against the tool
+    crates. <em>What would settle it:</em> for each of the six tools declaring
+    <code>reaches_network: true</code> and each tool declaring
+    <code>read_only: true</code>, name the test in its own crate that fails when
+    the bit is flipped, and run it.
+  </p>
+  <span class="src">crates/tool-api/src/lib.rs — ToolMeta::reaches_network, final bullet</span>
+
+  <footer class="pg">
+    Emma 0.1.0 · read at commit <code>a3eba74</code> ·
+    <code>crates/tool-api/src/lib.rs</code> ·
+    <code>crates/emma/src/approval.rs</code> ·
+    <a href="consent.html">back to the chapter</a>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

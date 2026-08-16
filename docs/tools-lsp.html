@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Code intelligence · Tools · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav here" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<p class="eyebrow">Doing work</p>
+<h1>Code intelligence: asking rust-analyzer</h1>
+
+<nav class="chapter">
+  <a class="up" href="tools.html">Tools</a>
+  <a href="tools-trait.html">the trait</a>
+  <a href="tools-outcome.html">outcomes</a>
+  <a href="tools-truncation.html">truncation</a>
+  <a href="tools-ctx.html">ToolCtx</a>
+  <a href="tools-containment.html">containment</a>
+  <a href="tools-files.html">files</a>
+  <a href="tools-edit.html">Edit</a>
+  <a href="tools-bash.html">Bash</a>
+  <a href="tools-tasks.html">tasks</a>
+  <a href="tools-web.html">web</a>
+  <span class="now">LSP</span>
+</nav>
+
+<p class="lede">
+  <code>Grep</code> finds a name. It cannot tell a call from a comment, does not
+  know that <code>Config</code> here is the type declared over there, and cannot
+  answer what breaks if a signature changes. These four tools ask the compiler's
+  own understanding instead, and the whole crate is arranged around one rule:
+  an empty answer is only an answer when the index was complete.
+</p>
+
+<h2 id="tools">The four tools</h2>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Tool</th><th>Arguments</th></tr></thead>
+    <tbody>
+      <tr><td><code>FindReferences</code></td><td>the position schema, plus <code>include_declaration</code> (default true)</td></tr>
+      <tr><td><code>GoToDefinition</code></td><td>the position schema</td></tr>
+      <tr><td><code>Hover</code></td><td>the position schema</td></tr>
+      <tr><td><code>DocumentSymbols</code></td><td><code>file_path</code> only</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  All four declare the same <code>const READ_ONLY: ToolMeta</code>:
+  <code>read_only: true</code>, <code>reaches_network: false</code>,
+  <code>idempotent: true</code>. None of them prompts.
+</p>
+
+<pre><code><span class="k">fn</span> position_schema(extra: Option&lt;(&amp;<span class="k">str</span>, Value)&gt;) -&gt; Value {
+    <span class="k">let mut</span> properties = json!({
+        <span class="s">"file_path"</span>: { <span class="s">"type"</span>: <span class="s">"string"</span>, <span class="s">"description"</span>: <span class="s">"A Rust file inside the working directory."</span> },
+        <span class="s">"line"</span>: { <span class="s">"type"</span>: <span class="s">"integer"</span>, <span class="s">"minimum"</span>: 1, <span class="s">"description"</span>: <span class="s">"1-based line number the symbol appears on."</span> },
+        <span class="s">"symbol"</span>: { <span class="s">"type"</span>: <span class="s">"string"</span>, <span class="s">"description"</span>: <span class="s">"The symbol's name as it is written on that line. Emma finds the column; it refuses rather than guessing if the name appears more than once."</span> },
+        <span class="s">"occurrence"</span>: { <span class="s">"type"</span>: <span class="s">"integer"</span>, <span class="s">"minimum"</span>: 1, <span class="s">"description"</span>: <span class="s">"Which occurrence on the line, 1-based. Only needed when the name appears more than once."</span> }
+    });</code></pre>
+
+<p>
+  A name rather than a column, because asking a model for a column offset gets a
+  plausible number and a plausible number is a wrong answer about the symbol
+  next door. The shape also means <code>Grep</code> output feeds straight in,
+  which is the workflow: grep to find candidate lines, then ask the compiler
+  which of them is real.
+</p>
+<span class="src">tools/lsp/src/tools.rs — <code>position_schema</code>, <code>READ_ONLY</code></span>
+
+<h3>What every call does before asking</h3>
+
+<p>
+  <code>prepare</code> is five steps in a fixed order: contain the path, refuse
+  anything that is not <code>.rs</code>, read the file, get a client for the
+  root, and push the current bytes to the server. Containment comes first,
+  before the file is read and before a process is started, because a path
+  outside the root must not so much as cause a spawn.
+</p>
+
+<p>
+  The push is not optional. An agent's rhythm is <code>Edit</code> then ask, and
+  a server answering from the version it opened before the edit returns
+  positions into a file that no longer exists. <code>sync_document</code>
+  compares a hash of what the server was last told and sends
+  <code>didChange</code> when the bytes have moved.
+</p>
+<span class="src">tools/lsp/src/tools.rs — <code>prepare</code>; tools/lsp/src/client.rs — <code>Document</code></span>
+
+<h3>The refusals from <code>locate</code></h3>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Case</th><th>Refusal, all <code>BadArguments</code></th></tr></thead>
+    <tbody>
+      <tr><td><code>line</code> is 0</td><td><code>line is 1-based; there is no line 0</code>, caught in <code>validate_args</code></td></tr>
+      <tr><td><code>line</code> past the end</td><td><code>line {n} is past the end of the file, which has {m} lines</code></td></tr>
+      <tr><td>symbol not on that line</td><td><code>"{symbol}" does not appear on line {n}, which reads: {the line}</code></td></tr>
+      <tr><td>symbol appears more than once, no <code>occurrence</code></td><td><code>"{symbol}" appears {k} times on line {n}; pass occurrence (1-{k}) to say which. The line reads: {…}</code></td></tr>
+      <tr><td><code>occurrence</code> is 0</td><td><code>occurrence is 1-based; there is no occurrence 0</code></td></tr>
+      <tr><td><code>occurrence</code> past the count</td><td><code>occurrence {n} was asked for, but "{symbol}" appears {k} times on line {m}</code></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  Quoting the line is what turns a retry into a correction, and the ambiguity
+  case is a refusal rather than a guess for a reason its doc gives: in
+  <code>foo(foo)</code> the two are a call and an argument, and answering about
+  the wrong one produces a confident, wrong, unfalsifiable result.
+</p>
+
+<p>
+  The column sent on the wire is a UTF-16 offset, because that is what LSP
+  counts in. <code>byte_offset</code> is the inverse and exists for the same
+  reason.
+</p>
+<span class="src">tools/lsp/src/doc.rs — <code>locate</code>, <code>utf16_column</code>, <code>byte_offset</code></span>
+
+<h2 id="rustonly">Rust only, and it says so</h2>
+
+<pre><code><span class="k">pub fn</span> unsupported_language(shown: &amp;<span class="k">str</span>) -&gt; ToolError {
+    ToolError::Unavailable(format!(
+        <span class="s">"{shown} is not a Rust file, and rust-analyzer is the only language server Emma has \
+         wired. Use Grep for a text search, knowing that it is a text search: it cannot tell a \
+         definition from a mention, and it will match the same name in an unrelated crate."</span>
+    ))
+}</code></pre>
+
+<p>
+  And when no server can be found at all, the refusal declines to substitute in
+  the same terms: <code>Emma will not answer these questions with text search
+  instead: a reference list produced by grep is a different answer to a
+  different question, and nothing in the result would say so.</code> It also
+  names what it looked for, where, and any candidate it found and rejected.
+</p>
+<span class="src">tools/lsp/src/server.rs — <code>unsupported_language</code>, <code>nothing_found</code></span>
+
+<h3>Which binary, and the probe that <code>Bash</code> does not do</h3>
+
+<ol class="body">
+  <li>
+    <code>EMMA_LSP_SERVER</code>, if set to anything but whitespace. If what it
+    names is not there, or is there and does not identify itself, the call is
+    <code>Unavailable</code> and says which. It never falls back.
+  </li>
+  <li><code>rust-analyzer</code> on <code>PATH</code>.</li>
+  <li>
+    The server inside the VS Code extension:
+    <code>~/.vscode/extensions/rust-lang.rust-analyzer-*/server/</code>, and the
+    <code>.vscode-server</code> spelling used by remote and WSL installs.
+    Highest version wins.
+  </li>
+  <li>Nothing, with a refusal naming both opt-ins.</li>
+</ol>
+
+<p>
+  Every candidate is probed with <code>--version</code> before it is chosen, and
+  that is where this diverges from <a href="tools-bash.html"><code>Bash</code></a>,
+  which classifies by filename precisely so it never executes a candidate to
+  find out what it is. A shell's selection argument is <code>-c</code>, so
+  probing a shell means running something; <code>--version</code> runs nothing.
+</p>
+
+<pre><code><span class="c">//! ```text</span>
+<span class="c">//! $ rust-analyzer --version</span>
+<span class="c">//! error: Unknown binary 'rust-analyzer.exe' in official toolchain '…'</span>
+<span class="c">//! ```</span>
+<span class="c">//!</span>
+<span class="c">//! `~/.cargo/bin/rust-analyzer` exists as a rustup proxy whether or not the</span>
+<span class="c">//! component behind it is installed. It is first on `PATH`, it is a real file,</span>
+<span class="c">//! and it exits **0** while printing that to stderr — so a chosen-by-existence</span>
+<span class="c">//! search picks a binary that will never speak LSP, and the failure surfaces</span>
+<span class="c">//! much later as a handshake that times out. Measured on this machine on</span>
+<span class="c">//! 2026-08-11, which is why the search costs one process spawn.</span></code></pre>
+
+<p>
+  The probe requires <em>stdout</em> to start with <code>rust-analyzer</code>,
+  because the rustup proxy prints its complaint to stderr and exits 0, so
+  neither the exit status nor the presence of output settles it. The probe has a
+  10-second ceiling: a version flag is a spawn and an immediate print, and
+  anything slower is a binary doing something a version flag should not do. The
+  resolved version is carried rather than discarded, so it can go on the first
+  line of every result and a wrong answer is attributable to a particular build.
+</p>
+<span class="src">tools/lsp/src/server.rs — module doc, <code>probe</code>, <code>PROBE_TIMEOUT</code></span>
+
+<h2 id="readiness">Readiness, and the 0.36-second lie</h2>
+
+<p>
+  rust-analyzer answers <code>references</code> the moment it starts and returns
+  <code>[]</code> for the first ten to sixty seconds. "No references" and "not
+  indexed yet" are the same shape, and a model told the first will delete the
+  function.
+</p>
+
+<p>
+  The obvious mechanism is to count open work-done progress tokens and call the
+  server ready when the count returns to zero. Traced against rust-analyzer
+  0.3.3008 on a two-file crate, that count reaches zero three times before the
+  index exists:
+</p>
+
+<pre><code>0.01  Fetching begin        0.68  Fetching end / Fetching begin
+0.34  Fetching end          0.68  cachePriming begin, end     ← zero again
+0.36  …end        ← zero    1.01  Building CrateGraph begin, end ← zero
+0.36  Roots Scanned begin   1.01  cachePriming begin
+0.54  Roots Scanned end     1.83  cachePriming end
+                            1.84  serverStatus quiescent: true</code></pre>
+
+<p>
+  The phases are sequential handoffs with gaps of milliseconds between them, and
+  the counter is momentarily zero inside each gap. The first version of this
+  crate declared <code>Ready</code> at 0.36s, asked, and got <code>[]</code>.
+  That is the confidently-wrong empty result the crate exists to prevent,
+  produced by the machinery built to prevent it. It was caught by
+  <code>tests/real_server.rs</code> and by nothing else: every fake passes,
+  because a fake emits the tokens its author expected.
+</p>
+<span class="src">tools/lsp/src/client.rs — module doc</span>
+
+<figure>
+  <div class="figwrap">
+    <svg viewBox="0 0 700 240" role="img" aria-label="Readiness has four states. Handshaking means nothing has been heard; Indexing means work is in progress or has not settled; Ready means the server sent quiescent true, or progress settled for 1.5 seconds on a server with no status support; Unknown means nothing arrived within the first-progress grace and is never upgraded to Ready.">
+      <defs>
+        <marker id="tl-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+        </marker>
+        <marker id="tl-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+        </marker>
+      </defs>
+
+      <rect class="box" x="14" y="90" width="140" height="36" rx="4" />
+      <text class="lbl" x="30" y="113">Handshaking</text>
+
+      <path class="edge" d="M154 108 L214 108" marker-end="url(#tl-arrow)" />
+      <rect class="box" x="214" y="90" width="140" height="36" rx="4" />
+      <text class="lbl" x="230" y="113">Indexing</text>
+
+      <path class="edge-hl" d="M354 100 L440 60" marker-end="url(#tl-arrow-hl)" />
+      <rect class="hl" x="440" y="34" width="220" height="46" rx="4" />
+      <text class="lbl" x="456" y="54">Ready</text>
+      <text class="tiny" x="456" y="70">quiescent: true, or 1.5 s settled</text>
+
+      <path class="edge-dash" d="M84 90 L84 40 L440 40" marker-end="url(#tl-arrow)" />
+      <text class="tiny" x="96" y="32">nothing at all within the grace</text>
+
+      <path class="edge" d="M354 116 L440 160" marker-end="url(#tl-arrow)" />
+      <rect class="box" x="440" y="140" width="220" height="46" rx="4" />
+      <text class="lbl" x="456" y="160">Unknown</text>
+      <text class="tiny" x="456" y="176">never upgraded to Ready</text>
+
+      <text class="sm" x="14" y="214">A request runs in every state and comes back Ok, with the readiness attached.</text>
+      <text class="tiny" x="14" y="232">An error would forbid the one correct response, which is to wait and ask again.</text>
+    </svg>
+  </div>
+  <figcaption>
+    The four readiness states. <code>Unknown</code> exists because "no work is
+    currently in progress" is true both of a finished index and of one that has
+    not been announced yet. Drawn from <code>tools/lsp/src/client.rs</code>.
+  </figcaption>
+</figure>
+
+<p>
+  What replaced the heuristic is <code>experimental/serverStatus</code> with
+  <code>quiescent: true</code>, requested by declaring
+  <code>experimental.serverStatusNotification</code> in <code>initialize</code>.
+  It also carries <code>health</code>, which is how a broken project model, meaning a
+  <code>cargo metadata</code> that failed or a <code>Cargo.toml</code> that does
+  not parse, becomes something the model is told about rather than something it
+  infers from thin answers. Health is printed above readiness in the header,
+  because a server that has finished and cannot load the project is
+  <code>Ready</code> and answers nothing, which is the one case readiness alone
+  gets backwards.
+</p>
+
+<p>
+  The token-counting heuristic survives as a fallback with a settle window,
+  <code>SETTLE</code> = 1.5 seconds, roughly five times the largest gap in the
+  trace above. It is switched off entirely once the authoritative signal has
+  been seen once, because a heuristic running alongside an authoritative signal
+  can only contradict it.
+</p>
+<span class="src">tools/lsp/src/client.rs — <code>SETTLE</code>, <code>Readiness</code></span>
+
+<h3>An unready request still runs</h3>
+
+<p>
+  It returns <code>Ok</code> with the readiness attached, because the loop will
+  not repeat a call that already failed with nothing changed since, and "wait a
+  moment and ask again" is exactly what should happen next. An error would
+  forbid the one correct response. The distinction lands in the sentence a
+  result carries when it is empty:
+</p>
+
+<pre><code><span class="s">ready:</span>     No references found. The index was complete when this was
+           asked, so this is an answer: there are none.
+
+<span class="w">not ready:</span> No references came back, and the index was not complete — so
+           this is not an answer, it is a question that could not be
+           answered yet. Do not conclude that none exist; ask again once
+           indexing has finished.</code></pre>
+<span class="src">tools/lsp/src/render.rs — <code>no_results_line</code></span>
+
+<p>
+  <code>Readiness::caveat</code> returns <code>None</code> for
+  <code>Ready</code>, because a caveat on every correct answer is noise that
+  teaches the model to skip caveats.
+</p>
+
+<p>
+  <span class="chip test">tested</span> <code>tests/readiness.rs</code> covers
+  both directions and the settle window itself, asserting the
+  gaps-then-settles case takes at least 1.4 seconds, so a future edit that skips
+  the window fails rather than merely getting lucky.
+</p>
+
+<h2 id="containment">Containment applies to what comes back</h2>
+
+<p>
+  A language server answers about <code>~/.cargo/registry</code> and the
+  standard library as a matter of course. Emma has decided it does not read
+  outside the root, and that decision has to hold for a path arriving over a
+  pipe exactly as it does for one the model typed.
+</p>
+
+<pre><code>            <span class="c">// Canonicalised before the comparison, and this is not belt and</span>
+            <span class="c">// braces — it is the check working at all. `root` comes from</span>
+            <span class="c">// `path::root`, which canonicalises, and on Windows that is the</span>
+            <span class="c">// `\\?\E:\…` verbatim form; a URI round trip produces the ordinary</span>
+            <span class="c">// `E:\…` spelling. Comparing the two silently never matches, so</span>
+            <span class="c">// every hit in the project reads as a hit outside it and the tool</span>
+            <span class="c">// reports "no references, and 14 in dependencies". Caught by</span>
+            <span class="c">// `tests/tools.rs`, which is the only reason it is not still here.</span></code></pre>
+
+<p>
+  Hits outside the root are counted and named rather than dropped:
+  <code>{n} further {what} are outside the working directory — in dependencies
+  or the standard library — and are not shown.</code> A list that silently omits
+  six hits in the standard library reads as a complete list with six fewer
+  entries. A non-file URI, an item inside a dependency Emma has only metadata
+  for, is dropped without a count, and the source says why: those are
+  indistinguishable from the out-of-root hits already counted.
+</p>
+<span class="src">tools/lsp/src/render.rs — <code>locations</code></span>
+
+<h3>Three answer shapes, because the choice is the server's</h3>
+
+<p>
+  <code>parse_locations</code> handles a single <code>Location</code>, an array
+  of them, and an array of <code>LocationLink</code>, preferring
+  <code>targetSelectionRange</code> over <code>targetRange</code> because it is
+  the identifier rather than the whole item. Handling one shape and returning
+  nothing for the others would look exactly like "there is no definition".
+  <code>hover_text</code> does the same for the three legal
+  <code>contents</code> shapes, and <code>symbols</code> for both the
+  hierarchical tree and the flat <code>SymbolInformation</code> list, the second
+  of which is handled because a server ignoring Emma's declared capability would
+  otherwise render as an empty file.
+</p>
+<span class="src">tools/lsp/src/render.rs — <code>parse_locations</code>, <code>hover_text</code>, <code>symbols</code></span>
+
+<h3>Every location carries its source line</h3>
+
+<p>
+  <code>src/config.rs:412:9</code> makes the model open the file.
+  <code>src/config.rs:412  let c = Config::new();</code> is usually the whole
+  answer. That is what the location cap exists for: reading each hit file costs,
+  so files are read once each rather than once per hit, and results are grouped
+  by file and sorted, because the server's order is its own and is not stable
+  across runs. A line the file no longer has is reported as
+  <code>(this line is no longer in the file)</code> rather than shown blank,
+  because a blank line reads as an empty source line.
+</p>
+
+<h2 id="caps">Caps</h2>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Cap</th><th>Value</th><th>Raised by</th></tr></thead>
+    <tbody>
+      <tr><td><code>MAX_LOCATIONS</code></td><td class="num">100</td><td>nothing: no schema offers a limit argument</td></tr>
+      <tr><td><code>MAX_SYMBOLS</code></td><td class="num">300</td><td>nothing</td></tr>
+      <tr><td>source line clip</td><td class="num">300 chars</td><td>nothing; does not set the flag</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  The location notice tells the model to ask a narrower question rather than
+  advertising a knob: <code>[truncated: 100 of {n} shown. Ask a narrower
+  question rather than assuming the rest are like these.]</code> A hundred is
+  chosen against what the output is for: twenty references with their source
+  lines is a thing a model reads and acts on, and two hundred is a thing it
+  summarises badly.
+</p>
+
+<div class="note warn">
+  <span class="h">Gap: this crate uses the weaker truncation form</span>
+  <p>
+    <code>render.rs</code> calls the bare <code>ToolOutcome::truncated()</code>
+    in both <code>locations</code> and <code>symbols</code>, and puts its
+    explanation in <code>content</code> only, so <code>truncation</code> is
+    <code>None</code>. The model still reads a specific sentence. The terminal
+    line gets the runtime's vague fallback, and the model gets that fallback
+    appended <em>as well as</em> the specific note. The API's own doc calls this
+    form "never the preferred one for a new tool", and both of these caps
+    explain themselves, so there is nothing stopping the stronger form being
+    used. Flagged, not fixed.
+  </p>
+</div>
+<span class="src">tools/lsp/src/render.rs; crates/tool-api/src/lib.rs — <code>ToolOutcome::truncation</code></span>
+
+<h2 id="readonly">What makes <code>read_only</code> and <code>reaches_network</code> true</h2>
+
+<pre><code><span class="k">pub const</span> INIT_OPTIONS: &amp;<span class="k">str</span> = <span class="s">r#"{
+  "check": { "enable": false },
+  "checkOnSave": false,
+  "cargo": { "buildScripts": { "enable": false }, "extraArgs": ["--offline"] },
+  "procMacro": { "enable": false }
+}"#</span>;</code></pre>
+
+<p>
+  Checking, build scripts and proc macros are the three ways rust-analyzer
+  writes to a project or runs its code. <code>--offline</code> is what makes
+  <code>reaches_network: false</code> true, because
+  <code>cargo metadata</code> on a project with unfetched dependencies otherwise
+  reaches crates.io, which is real egress from a tool the gate lets through
+  silently.
+</p>
+
+<p>
+  The stated cost: items generated by <code>derive</code> and by attribute
+  macros are not in the index, so references <em>into</em> macro-generated code
+  will be missed. That is a hole in the direction this crate is most dangerous,
+  a confidently short answer, which is why it is in the tool descriptions and
+  not only in the source.
+</p>
+<span class="src">tools/lsp/src/client.rs — <code>INIT_OPTIONS</code></span>
+
+<h2 id="cut">What was cut</h2>
+
+<p>
+  <strong><code>Diagnostics</code>.</strong> It was the third most valuable tool
+  on the list and it is not here, because it is not the same mechanism.
+  Diagnostics are pushed, not requested, so "get the diagnostics for this file"
+  means waiting an unknowable time for a notification that may never come:
+  the readiness problem again, without the progress notifications that make
+  readiness solvable. Worse, the diagnostics worth having are
+  <code>cargo check</code>'s, which this crate disables. With it off the tool
+  would return syntax and name-resolution errors only and silently omit every
+  type error. <code>Bash</code> running <code>cargo check</code> is the honest
+  tool for this and already exists.
+</p>
+
+<p>
+  <strong><code>WorkspaceSymbols</code>.</strong> Cheap to add and left out for
+  one reason: it is the query most sensitive to a partial index and has no
+  per-file anchor that would let a caller sanity-check the answer. The source
+  calls it the obvious next thing to add.
+</p>
+<span class="src">tools/lsp/src/lib.rs — module doc</span>
+
+<h2 id="lifecycle">One server per root, and what happens when it dies</h2>
+
+<p>
+  Started lazily, one per canonical root. The pool uses a
+  <code>tokio::sync::Mutex</code> held across the spawn <code>await</code> on
+  purpose, because two tools asking at once during the first call of a session
+  is the normal case and the alternative to serialising them is two
+  rust-analyzers indexing the same workspace.
+</p>
+
+<p>
+  A crash is noticed, the corpse dropped, and a fresh server started, up to
+  <code>MAX_CRASHES</code> = 3. Without a ceiling, a server that panics on this
+  particular workspace becomes an invisible respawn on every call, each costing
+  a spawn and an index, and the model sees a slow tool rather than a broken one.
+  At the ceiling the pool refuses with the last death message, which contains
+  the server's own stderr tail, 4 KiB from the end because a panic message is
+  the last thing printed. The request in flight when it dies is not retried
+  here, because an automatic retry would hide a crash loop behind a tool that
+  merely feels slow, and would re-run a request whose crash it may have caused.
+</p>
+
+<p>
+  <strong>Nothing reaps an idle server.</strong> A rust-analyzer holding a
+  workspace index is hundreds of megabytes, and it stays until the pool is
+  dropped. An idle timer was considered and refused for this pass: it is a
+  background task with its own lifecycle, and a background task that outlives
+  its owner is the bug this module is organised around not having.
+</p>
+
+<p>
+  Cleanup lives in <code>Drop</code>, and <code>processId</code> is sent in
+  <code>initialize</code> so the server exits if Emma is killed without
+  unwinding, which is the one piece of cleanup that survives
+  <code>kill -9</code>.
+</p>
+<span class="src">tools/lsp/src/pool.rs — module doc, <code>MAX_CRASHES</code>; tools/lsp/src/client.rs — <code>handshake</code></span>
+
+<h2 id="tests">What holds it</h2>
+
+<p>
+  <span class="chip test">tested</span> Four suites.
+  <code>tests/real_server.rs</code> is the one that caught the readiness defect
+  and is the only one a fake could not have caught.
+  <code>tests/readiness.rs</code> covers the state machine and the settle
+  window. <code>tests/lifecycle.rs</code> checks the process is gone against a
+  real pid rather than trusting <code>kill_on_drop</code>.
+  <code>tests/tools.rs</code> is where the verbatim-path containment defect was
+  caught, and its comment says so.
+</p>
+
+<p>
+  <span class="chip test">tested</span>
+  <code>nothing_machine_specific_reaches_the_hashed_surface</code> asserts no
+  description names <code>rust-analyzer</code>, <code>.cargo</code>,
+  <code>.vscode</code>, <code>Program Files</code> or
+  <code>EMMA_LSP_SERVER</code>, and the positive half: that every description
+  points at the first two lines of the result and warns about a partial index.
+  <code>the_declarations_cohere_enough_to_register</code> runs all four through
+  a real <code>Registry</code>.
+</p>
+
+<h2 id="unverified">What is not verified here</h2>
+
+<p>
+  <span class="chip unv">unverified</span> No test in this crate's suite was run
+  while writing this page. <code>tests/real_server.rs</code> needs a real
+  rust-analyzer and skips by default rather than failing when one is absent, so
+  a green run would not settle the readiness claims on its own. Settled by
+  running <code>cargo test -p emma-tools-lsp</code> on a box with the component
+  installed and pasting the counts.
+</p>
+
+<p>
+  <span class="chip cert">certified</span> Two doc comments in this crate cite
+  files that do not exist. <code>tools.rs:176</code> names a
+  <code>tests/read_only.rs</code> and <code>client.rs:1065</code> names a
+  <code>tests/fake_server.rs</code>, while <code>ls tools/lsp/tests/</code> at
+  commit <code>a3eba74</code> lists only <code>lifecycle.rs</code>,
+  <code>readiness.rs</code>, <code>real_server.rs</code>, <code>support/</code>
+  and <code>tools.rs</code>. The guarantees they point at are covered elsewhere,
+  by <code>tests/tools.rs</code> and <code>tests/support/mod.rs</code>, so this
+  is a stale citation rather than a missing test. A citation nobody can follow
+  is still the thing this site exists to prevent.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> This page reads
+  <code>lib.rs</code>, <code>tools.rs</code>, <code>server.rs</code>,
+  <code>pool.rs</code> and most of <code>render.rs</code> in full, and
+  <code>client.rs</code> (1,484 lines) and <code>doc.rs</code> only in the
+  regions named above. <code>proto.rs</code> and <code>args.rs</code> were not
+  read, so nothing on this page describes the transport framing or this crate's
+  own argument extraction beyond what its callers show.
+</p>
+
+<p>
+  <span class="chip obs">observed</span> The rustup-proxy behaviour, the
+  0.3.3008 progress trace and the 0.36-second declaration are all from runs on
+  the author's machine on 2026-08-11. The trace is pasted in the source and is
+  the most durable of the three; none is reproducible from anything committed
+  here.
+</p>
+</div>
+</main>
+</div>
+</body>
+</html>

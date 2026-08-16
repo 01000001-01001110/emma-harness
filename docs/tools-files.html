@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Read, Write, Glob, Grep · Tools · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav here" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<p class="eyebrow">Doing work</p>
+<h1><code>Read</code>, <code>Write</code>, <code>Glob</code>, <code>Grep</code></h1>
+
+<nav class="chapter">
+  <a class="up" href="tools.html">Tools</a>
+  <a href="tools-trait.html">the trait</a>
+  <a href="tools-outcome.html">outcomes</a>
+  <a href="tools-truncation.html">truncation</a>
+  <a href="tools-ctx.html">ToolCtx</a>
+  <a href="tools-containment.html">containment</a>
+  <span class="now">files</span>
+  <a href="tools-edit.html">Edit</a>
+  <a href="tools-bash.html">Bash</a>
+  <a href="tools-tasks.html">tasks</a>
+  <a href="tools-web.html">web</a>
+  <a href="tools-lsp.html">LSP</a>
+</nav>
+
+<p class="lede">
+  Four of the six tools in <code>tools/fs</code>. Three of them declare
+  <code>read_only: true</code> and run without a prompt, and the fourth is the
+  one that refuses to work blind. <code>Edit</code> and <code>Bash</code> have
+  pages of their own.
+</p>
+
+<h2 id="args">One spelling for every malformed call</h2>
+
+<p>
+  Every argument in the crate goes through a private <code>args</code> module,
+  so the model learns the shape of one error message and can then read all of
+  them. Six extractors, all pure, all callable from
+  <code>validate_args</code> before any filesystem is touched.
+</p>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Helper</th><th>Refusal</th></tr></thead>
+    <tbody>
+      <tr><td><code>object</code></td><td><code>{tool} takes a JSON object, got {a string}</code></td></tr>
+      <tr><td><code>deny_unknown</code></td><td><code>{tool} does not take {keys}; accepted parameters are {known}</code></td></tr>
+      <tr><td><code>req_str</code></td><td><code>{tool} requires {key}</code>, or <code>{tool}.{key} must be a string, got {a number}</code></td></tr>
+      <tr><td><code>opt_str</code></td><td>same type message; an explicit <code>null</code> reads as absent</td></tr>
+      <tr><td><code>opt_bool</code></td><td><code>{tool}.{key} must be true or false, got {a string}</code></td></tr>
+      <tr><td><code>opt_u64</code></td><td><code>{tool}.{key} must be a non-negative whole number, got {n}</code> for a float, <code>must be a number</code> for anything else</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  Two conventions run through the file. An explicit JSON <code>null</code> is
+  treated as absent rather than as a wrong type, because that is what a model
+  emits when it means "not this time". And a float in an integer slot is
+  refused with its own sentence, because a float there means the model computed
+  the value rather than stating it.
+</p>
+
+<pre><code><span class="c">/// Unknown keys are refused rather than ignored. A silently dropped</span>
+<span class="c">/// `replace_all` or `timeout_ms` looks to the model exactly like a flag that</span>
+<span class="c">/// had no effect, and it will conclude the behaviour is impossible rather than</span>
+<span class="c">/// that it misspelled the key.</span>
+<span class="k">pub fn</span> deny_unknown(args: &amp;Value, tool: &amp;<span class="k">str</span>, known: &amp;[&amp;<span class="k">str</span>]) -&gt; Result&lt;(), ToolError&gt; {</code></pre>
+<span class="src">tools/fs/src/args.rs</span>
+
+<p>
+  <span class="chip test">tested</span>
+  <code>every_tool_ships_a_real_description_and_schema</code> walks all six
+  tools and asserts a description over 120 bytes, an object schema, at least one
+  property, a description on every property, and a <code>required</code> array.
+  None of that is caught by a functional test, because every functional test
+  passes correct arguments.
+</p>
+<span class="src">tools/fs/src/lib.rs — <code>mod tests</code></span>
+
+<h2 id="read"><code>Read</code></h2>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Argument</th><th>Type</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>file_path</code> <em>required</em></td><td>string</td><td>Relative to the working directory, or absolute inside it.</td></tr>
+      <tr><td><code>offset</code></td><td>integer ≥ 1</td><td>1-based line to start at. Default 1. Zero is <code>Read.offset must be at least 1</code>.</td></tr>
+      <tr><td><code>limit</code></td><td>integer ≥ 1</td><td>Lowers the 2000-line cap and cannot raise it. The schema says which direction it moves, because "capped at 2000" reads as an invitation to pass 5000.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  <code>read_only: true</code>, <code>reaches_network: false</code>,
+  <code>idempotent: true</code>. Every line comes back labelled
+  <code>&lt;number&gt;#&lt;hash&gt;</code>, right-aligned in six columns and
+  separated from the text by a tab. The hash is the subject of
+  <a href="tools-edit.html">the <code>Edit</code> page</a>.
+</p>
+
+<h3>Every way it can end</h3>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Case</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>path outside the root</td><td><code>BadArguments</code> from <code>resolve</code></td></tr>
+      <tr><td>path is a directory</td><td><code>BadArguments</code>: <code>{raw} is a directory; use Glob to list it</code></td></tr>
+      <tr><td>unreadable</td><td><code>Failed</code>: <code>{raw} could not be read: {e}</code></td></tr>
+      <tr><td>not UTF-8</td><td><code>Failed</code>: <code>{raw} is not valid UTF-8; Read returns text and cannot show it</code>. Not <code>BadArguments</code>, because the path was a perfectly good path and the caller could not have known</td></tr>
+      <tr><td>empty file</td><td><code>Ok</code>, content genuinely empty, display <code>{path}: empty file</code></td></tr>
+      <tr><td><code>offset</code> past the end</td><td><code>Ok</code>, empty content, display <code>{path}: offset {n} is past the last line ({total})</code></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  Reading past the end is not an error because the model paging through a file
+  will eventually ask for a window that is not there, and the useful answer is
+  the line count rather than a refusal.
+</p>
+<span class="src">tools/fs/src/read.rs — <code>Read::run</code>, <code>render</code></span>
+
+<h3>Three caps, and the sentence each one writes</h3>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Cap</th><th>Value</th><th>Fires when</th></tr></thead>
+    <tbody>
+      <tr><td><code>MAX_LINES</code></td><td class="num">2000</td><td>there are lines after the window</td></tr>
+      <tr><td><code>MAX_BYTES</code></td><td class="num">262144</td><td>the rendered output would exceed it, so fewer lines came back than <code>limit</code> asked for</td></tr>
+      <tr><td><code>MAX_LINE_CHARS</code></td><td class="num">2000</td><td>any single line was clipped</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  Any of the three sets the flag, and <code>render</code> states each one that
+  fired rather than merging them, because "truncated" alone does not tell the
+  model whether to page forward, narrow the range, or stop expecting the rest of
+  a line. The line cap's sentence names the number that actually bound, which
+  differs by caller:
+</p>
+
+<pre><code>            <span class="k">let</span> bound = <span class="k">if</span> limit &lt; MAX_LINES {
+                format!(<span class="s">"limit={limit}"</span>)
+            } <span class="k">else</span> {
+                format!(<span class="s">"the fixed {MAX_LINES}-line ceiling, which `limit` cannot raise"</span>)
+            };
+            why.push(format!(
+                <span class="s">"showing lines {offset}-{last} of {total}, cut by {bound}; continue with offset {}"</span>,
+                last + 1
+            ));</code></pre>
+<span class="src">tools/fs/src/read.rs — <code>render</code></span>
+
+<p>
+  A caller that passed <code>limit</code> can raise its own number; a caller
+  that passed none has met the fixed ceiling and would learn nothing from
+  raising anything. Both are told to page, which is the remedy that works either
+  way. <code>last</code> advances only for a line that was actually emitted, so
+  a line counted but dropped by the byte cap cannot make the continuation offset
+  skip a line the model never saw.
+</p>
+
+<h3>A clipped line gets a marker, not a hash</h3>
+
+<pre><code><span class="k">fn</span> clip(line: &amp;<span class="k">str</span>, max_chars: <span class="k">usize</span>) -&gt; (String, <span class="k">bool</span>) {
+    <span class="k">let mut</span> chars = line.chars();
+    <span class="k">let</span> head: String = chars.by_ref().take(max_chars).collect();
+    <span class="k">if</span> chars.next().is_none() {
+        (head, <span class="k">false</span>)
+    } <span class="k">else</span> {
+        (format!(<span class="s">"{head} … [line clipped]"</span>), <span class="k">true</span>)
+    }
+}</code></pre>
+
+<p>
+  Taken in <code>char</code>s so a multi-byte character is never cut in half.
+  The peek at the next character is what distinguishes a line of exactly 2000
+  from one that was clipped: taking and comparing lengths would call the first
+  one truncated and set the flag that stops <code>Write</code> from working.
+  The clipped line's label slot gets <code>#----</code> rather than a hash, and
+  <code>Edit</code> refuses that marker by name, because the model has seen the
+  front of that line and not its end.
+</p>
+<span class="src">tools/fs/src/read.rs — <code>clip</code>; tools/fs/src/hashline.rs — <code>CLIPPED</code></span>
+
+<h3>What the read leaves behind</h3>
+
+<pre><code>        <span class="c">// A truncated read is recorded as a *partial* sighting. Treating "I saw</span>
+        <span class="c">// the first 2000 lines" as "I have read this file" is precisely how a</span>
+        <span class="c">// subsequent `Write` throws away the other ten thousand.</span>
+        <span class="c">// `offset &gt; 1` is a deliberate slice and is partial for the same reason.</span>
+        <span class="k">self</span>.tracker.record(
+            &amp;ctx.session_id,
+            &amp;file,
+            !shown.outcome.truncated &amp;&amp; offset == 1,
+            shown.lines,
+        );</code></pre>
+<span class="src">tools/fs/src/read.rs — <code>Read::run</code></span>
+
+<p>
+  The recorded line hashes are the window that was rendered and nothing more,
+  so an addressed <code>Edit</code> reaching into lines 101-onwards after a read
+  of 1-100 is refused for want of a record. That is the same "you have not seen
+  this" rule as the completeness flag, at line resolution instead of file
+  resolution.
+</p>
+
+<h2 id="tracker">The read tracker, which is what makes the next refusal mean something</h2>
+
+<p>
+  <code>ReadTracker</code> is a <code>Mutex&lt;HashMap&lt;(String, PathBuf),
+  Sighting&gt;&gt;</code>, keyed by session so a resumed process cannot inherit
+  an earlier session's claim. A sighting holds a stamp, a completeness flag, and
+  the hashes of the lines that were shown.
+</p>
+
+<pre><code><span class="c">/// Whether a path may be written without the write being blind.</span>
+<span class="k">#[derive(Debug, Clone, Copy, PartialEq, Eq)]</span>
+<span class="k">pub enum</span> ReadState {
+    <span class="c">/// Never read in this session.</span>
+    Never,
+    <span class="c">/// Read, but the file has changed since — the agent's picture is stale.</span>
+    Stale,
+    <span class="c">/// Read, but the read was truncated, so most of the file is still unseen.</span>
+    Partial,
+    <span class="c">/// Read in full, and unchanged since.</span>
+    Fresh,
+}</code></pre>
+
+<p>
+  The arm order in <code>state</code> is a priority order and it is commented as
+  one: a file read only in part <em>and</em> changed since reports
+  <code>Stale</code>, because re-reading fixes both, whereas being told "you only
+  saw part of it" would send the model to <code>Edit</code> against text that
+  may no longer be there.
+</p>
+<span class="src">tools/fs/src/session.rs — <code>ReadState</code>, <code>ReadTracker::state</code></span>
+
+<p>
+  The stamp is length and mtime. A missing file stamps as zero-length with no
+  mtime, which is deliberate: two consecutive stats of a file that does not
+  exist agree, so "read a file that is not there, then create it" is not
+  reported as a stale clobber. <code>forget</code> exists and nothing calls it,
+  which its own doc says plainly rather than describing it as though it were
+  wired up; there is no delete or move tool yet.
+</p>
+<span class="src">tools/fs/src/session.rs — <code>stamp_of</code>, <code>ReadTracker::forget</code></span>
+
+<h2 id="write"><code>Write</code></h2>
+
+<p>
+  <code>file_path</code> and <code>content</code>, both required, and nothing
+  else. There is no <code>force</code> and no <code>create_only</code>. The
+  refusal below is the tool's reason to exist, and a flag that turns it off is a
+  flag a model under pressure will find.
+</p>
+
+<p>
+  The destructive move that looks like progress is a whole-file write from an
+  assumption. An agent asked to "add a function to utils.rs" can satisfy that by
+  writing a file containing exactly that function: the tool returns
+  <code>Ok</code>, the file exists, the function is in it, and everything that
+  used to be there is gone with nothing in the transcript saying so.
+</p>
+
+<pre><code>        <span class="c">// The whole point of the tool. A refusal here is a `BadArguments`</span>
+        <span class="c">// because it is entirely actionable: read the file, then write it.</span>
+        <span class="k">if</span> existed {
+            <span class="k">match self</span>.tracker.state(&amp;ctx.session_id, &amp;target) {
+                ReadState::Fresh =&gt; {}
+                ReadState::Never =&gt; {
+                    <span class="k">return</span> Err(ToolError::BadArguments(format!(
+                        <span class="s">"{raw} exists and has not been read in this session; \
+                         Read it first so the overwrite is not blind"</span>
+                    )))
+                }
+                ReadState::Partial =&gt; {
+                    <span class="k">return</span> Err(ToolError::BadArguments(format!(
+                        <span class="s">"{raw} was only read in part; Read it in full before \
+                         replacing it, or use Edit to change the part you saw"</span>
+                    )))
+                }
+                ReadState::Stale =&gt; {
+                    <span class="k">return</span> Err(ToolError::BadArguments(format!(
+                        <span class="s">"{raw} changed on disk after you read it; Read it again \
+                         before overwriting so the change is not discarded"</span>
+                    )))
+                }
+            }
+        }</code></pre>
+<span class="src">tools/fs/src/write.rs — <code>Write::run</code></span>
+
+<p>
+  Creating a file that does not exist needs no prior read; there is nothing to
+  lose, and requiring a read of a missing file would be a rule that only ever
+  produces confusion. Existence is checked with
+  <code>symlink_metadata</code>, so a dangling symlink counts as something that
+  exists and the read requirement applies to it. A path naming a directory is
+  <code>BadArguments</code>: <code>{raw} is a directory</code>.
+</p>
+
+<p>
+  Nothing before the refusal touches the filesystem, not even
+  <code>create_dir_all</code>, which is what makes a refusal actually a refusal.
+  The parents are created after the check and unconditionally, which is safe
+  because <code>target</code> is already contained, so every directory made is
+  inside the root by construction.
+</p>
+
+<p>
+  After a successful write the tracker records the file as complete with the
+  hashes of what was just authored, because the agent produced every byte. That
+  is what lets <code>Write</code> then <code>Edit</code> proceed without a
+  <code>Read</code> in between. <code>Write</code> declares
+  <code>idempotent: true</code>: the same bytes twice leave the same file, and
+  the mtime moves, which nothing here consults.
+</p>
+
+<h2 id="glob"><code>Glob</code></h2>
+
+<p>
+  <code>pattern</code> (required), matched against paths relative to the search
+  root, and an optional <code>path</code> directory that must be a directory or
+  the call is <code>{p} is not a directory</code>. A malformed pattern is
+  refused in <code>validate_args</code>, before anything is walked:
+  <code>{pattern} is not a valid glob: {e}</code>. The compiler is shared with
+  <code>Grep</code>'s <code>glob</code> filter, so the two cannot come to
+  disagree about what <code>**</code> means.
+</p>
+
+<p>
+  Matching nothing succeeds with an empty list. "There are no
+  <code>.proto</code> files here" is a fact about the repository and often the
+  exact fact being checked.
+</p>
+
+<p>
+  Results come back modification-time descending with the path as the tiebreak,
+  so two calls over an unchanged tree return identical bytes. The determinism
+  is not cosmetic: the output rides in the conversation, the conversation rides
+  in the cached prefix, and a set that reordered between calls would move prefix
+  bytes for no reason. The tiebreak is what supplies it, because mtime alone
+  leaves files written in the same instant free to swap places.
+</p>
+<span class="src">tools/fs/src/glob.rs — module doc; tools/fs/src/walk.rs — <code>sort_newest_first</code></span>
+
+<h3>The cap that is a sentence rather than a knob</h3>
+
+<pre><code><span class="c">/// **Deliberately not reachable from an argument, and that is the decision</span>
+<span class="c">/// rather than an omission.** `WebFetch` grew a `max_links` because its cap bit</span>
+<span class="c">/// on a real page where the links *were* the answer and nothing could raise it;</span>
+<span class="c">/// the shape here is different. The call that surfaced this returned 1000 of</span>
+<span class="c">/// 64,097 paths in this repository, and 63,097 of those are build output under</span>
+<span class="c">/// `target/`. A `max_results` argument would have turned a useless answer into a</span>
+<span class="c">/// sixty-times larger useless answer, spent the session's context on it, and</span>
+<span class="c">/// still not told the model the thing it actually needed to know — which is</span>
+<span class="c">/// that the pattern was too broad.</span>
+<span class="k">pub const</span> MAX_RESULTS: <span class="k">usize</span> = 1000;</code></pre>
+<span class="src">tools/fs/src/glob.rs — <code>MAX_RESULTS</code></span>
+
+<p>
+  The reason string is assembled before the empty check rather than after, so
+  there is exactly one place that decides whether the answer is whole. The empty
+  branch used to be a second such place, and it returned "no matches" unflagged
+  even when the walk had stopped early. An unqualified emptiness is the most
+  confidently misread answer a search can give, because it reads as a fact about
+  the tree when it is a fact about the part that was reached.
+</p>
+<span class="src">tools/fs/src/glob.rs — <code>Glob::run</code></span>
+
+<h3>The walk, shared with <code>Grep</code></h3>
+
+<p>
+  One traversal so that "what does Emma consider part of the tree" has a single
+  answer. Two walkers drift, and the day they disagree is the day
+  <code>Grep</code> finds a file <code>Glob</code> swears does not exist.
+</p>
+
+<pre><code><span class="c">/// Never descended into. Not a general ignore mechanism — the object store is</span>
+<span class="c">/// large, opaque and never what anyone meant, and anything more clever belongs</span>
+<span class="c">/// in a config file rather than compiled in.</span>
+<span class="c">///</span>
+<span class="c">/// Notably absent: `target`, `node_modules`, and anything else `.gitignore`</span>
+<span class="c">/// would list. Reading a build artefact is a legitimate thing for a coding</span>
+<span class="c">/// agent to want, and a hidden ignore list is a search that lies about what it</span>
+<span class="c">/// searched. The visit ceiling below is what keeps a large tree affordable,</span>
+<span class="c">/// and it says so when it fires.</span>
+<span class="k">const</span> SKIP_DIRS: &amp;[&amp;<span class="k">str</span>] = &amp;[<span class="s">".git"</span>];</code></pre>
+
+<p>
+  <code>MAX_VISITED</code> is 200,000 and counts entries the walker
+  <em>yielded</em>, directories and unreadable entries included, because the
+  traversal is what costs. Counting only returned files would let a tree of a
+  million empty directories run unbounded while the counter stayed at zero. An
+  unreadable subdirectory is skipped rather than failing the call, so a single
+  permission bit cannot hide a whole tree of results.
+</p>
+<span class="src">tools/fs/src/walk.rs — <code>SKIP_DIRS</code>, <code>files_within</code></span>
+
+<p>
+  <span class="chip test">tested</span> The ceiling is testable because
+  <code>files_within</code> takes it as an argument;
+  <code>the_visit_ceiling_stops_the_walk_and_admits_it</code> proves both halves
+  against a ten-file directory with a ceiling of 3, and asserts the untruncated
+  run does <em>not</em> claim a cut. A guarantee that costs a
+  two-hundred-thousand-entry tree to check is one nobody checks.
+</p>
+
+<h2 id="grep"><code>Grep</code></h2>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Argument</th><th>Type</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>pattern</code> <em>required</em></td><td>string</td><td>Regular expression, matched per line. Refused at validation if it will not compile.</td></tr>
+      <tr><td><code>path</code></td><td>string</td><td>File or directory. Defaults to the working directory.</td></tr>
+      <tr><td><code>glob</code></td><td>string</td><td>Only search files whose path relative to the base matches.</td></tr>
+      <tr><td><code>case_insensitive</code></td><td>boolean</td><td>Default false.</td></tr>
+      <tr><td><code>output_mode</code></td><td>enum</td><td><code>content</code> (default), <code>files_with_matches</code>, <code>count</code>. Anything else is <code>Grep.output_mode must be content, files_with_matches or count, got {other}</code>.</td></tr>
+      <tr><td><code>head_limit</code></td><td>integer ≥ 1</td><td>Lowers the 500-line ceiling and cannot raise it.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  No hits is a successful search, and that is why this tool exists alongside
+  <code>Bash</code>. <code>rg pattern .</code> through a shell answers "no
+  matches" with exit code 1, and telling "no matches" from "ripgrep is not
+  installed" then becomes a matter of parsing stderr. Here they are structurally
+  different outcomes.
+</p>
+
+<p>
+  Candidates are sorted by path rather than by mtime as <code>Glob</code>'s are,
+  because a grep result is read as a list of places and neighbouring files
+  sitting together is worth more than recency. Either way it has to be
+  deterministic, for the same cached-prefix reason.
+</p>
+
+<h3>Four independent cuts</h3>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Cut</th><th>Limit</th><th>What the sentence says</th></tr></thead>
+    <tbody>
+      <tr><td>output lines</td><td><code>MAX_OUTPUT_LINES</code> 500</td><td>names <code>head_limit</code> only when the caller passed one; otherwise names the fixed ceiling <code>head_limit</code> can lower but not raise, and offers <code>output_mode=count</code> or <code>files_with_matches</code></td></tr>
+      <tr><td>walk ceiling</td><td><code>MAX_VISITED</code> 200,000 visited</td><td>the shared <code>walk::ceiling_notice</code>: counts here are a floor rather than a total</td></tr>
+      <tr><td>match line length</td><td><code>MAX_MATCH_CHARS</code> 400</td><td>how many lines were clipped; <code>Read</code> the file at the line number shown</td></tr>
+      <tr><td>files not opened</td><td><code>MAX_FILE_BYTES</code> 8 MiB</td><td>how many text files were skipped; <code>Read</code> or <code>Bash</code> can reach one by name</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  <code>total_hits</code> and <code>files_with_hits</code> count every match in
+  the tree whatever the mode and whatever <code>head_limit</code> allowed
+  through, so the summary says how much was found rather than how much was
+  shown. Counting only what was returned is how a capped search comes to look
+  like a complete one.
+</p>
+
+<h3>Two skips, and only one is an admission</h3>
+
+<pre><code><span class="c">/// The two skips were one `None` until it became clear they are not the same</span>
+<span class="c">/// admission. **A file that is not text is a file with no lines** — a JPEG</span>
+<span class="c">/// genuinely contains no match, the module doc and `grep.md` both say so, and</span>
+<span class="c">/// reporting one would put a truncation warning on every search of a tree that</span>
+<span class="c">/// contains an icon. **A large text file is a file nobody looked in**, and it</span>
+<span class="c">/// may well be the 20 MB log that holds the answer. Only the second is a gap in</span>
+<span class="c">/// the search, so only the second is counted and reported.</span>
+<span class="k">enum</span> Readable {
+    Text(String),
+    TooLarge,
+    NotText,
+}</code></pre>
+<span class="src">tools/fs/src/grep.rs — <code>Readable</code>, <code>readable_text</code></span>
+
+<p>
+  The first live run of the naïve version reported <em>499 files not
+  opened</em>, every one an <code>.rlib</code> or a <code>.pdb</code> under
+  <code>target/</code>: true, worthless, and how a warning stops being read. So
+  a file over the size cap is sniffed rather than assumed. <code>looks_like_text</code>
+  reads an 8 KiB prefix, rejects it on a NUL byte, and accepts an incomplete
+  UTF-8 sequence at the very end, because the final character of a prefix is
+  almost certainly cut in half and one straddling character would reclassify a
+  whole log as binary.
+</p>
+<span class="src">tools/fs/src/grep.rs — <code>looks_like_text</code></span>
+
+<div class="note warn">
+  <span class="h">Known rough edge, flagged in the source</span>
+  <p>
+    The <code>glob</code> filter matches against the path relative to the
+    search base. When <code>path</code> names a single file that relative path
+    is empty, so passing <code>path</code> and <code>glob</code> together for
+    one file matches nothing. Naming one file and then filtering the set of one
+    is a redundant call, which is why it has not bitten. It is still an
+    asymmetry rather than a rule.
+  </p>
+</div>
+<span class="src">tools/fs/src/grep.rs — <code>Grep::run</code></span>
+
+<h2 id="readonly">The declarations, checked rather than trusted</h2>
+
+<p>
+  <span class="chip test">tested</span>
+  <code>tools/fs/tests/read_only.rs</code> runs the tools claiming
+  <code>read_only</code> against a populated sandbox and fingerprints the tree
+  before and after, <em>and</em> pins which tools claim the bit in
+  <code>the_read_only_declarations_are_the_expected_ones</code>, whose assertion
+  is the exact list <code>["Glob", "Grep", "Read"]</code>. The pin is what
+  notices a new claim rather than merely leaving it unexercised: a fingerprint
+  test alone stays green for a tool nobody thought to run. The file's third
+  test, <code>the_mutating_tools_actually_mutate</code>, is the positive
+  control.
+  <span class="chip cert">certified</span> 3 tests in that file, passing at
+  commit <code>a3eba74</code> on this box.
+</p>
+
+<p>
+  <span class="chip cert">certified</span> The six names are pinned too.
+  <code>the_surface_is_the_six_claude_code_names</code> asserts the exact vector
+  <code>["Read", "Write", "Edit", "Glob", "Grep", "Bash"]</code>, because
+  spelling is the compatibility contract: a rename silently breaks every hook
+  matcher written against Claude Code, silently because a matcher that matches
+  nothing looks identical to a tool nobody called.
+</p>
+
+<h2 id="unverified">What is not verified here</h2>
+
+<p>
+  <span class="chip unv">unverified</span> The 499-files-not-opened figure and
+  the 64,097-path <code>Glob</code> call are both quoted from source comments
+  describing runs nobody kept a transcript of. They are plausible for this
+  repository and neither is reproducible from what is written down. Settled by
+  re-running a repo-wide <code>Grep</code> and a <code>**/*</code>
+  <code>Glob</code> with <code>target/</code> populated and pasting the
+  truncation notices.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> Every refusal message on this page
+  is quoted from the source rather than from a transcript, so the interpolated
+  values shown are the format strings and not observed output. Settled by
+  driving each refusal once through <code>emma -p</code> and pasting what came
+  back.
+</p>
+</div>
+</main>
+</div>
+</body>
+</html>

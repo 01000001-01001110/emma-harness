@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Seams · The agent loop · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav here" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">The agent loop</p>
+  <h1>Seams</h1>
+
+  <nav class="chapter">
+    <a class="up" href="loop.html">The agent loop</a>
+    <a href="loop-one-turn.html">One turn</a>
+    <a href="loop-failure.html">Failure</a>
+    <a href="loop-memo.html">The memo</a>
+    <a href="loop-endings.html">Endings</a>
+    <a href="loop-kick.html">The kick</a>
+    <a href="loop-budgets.html">Budgets</a>
+    <a href="loop-done.html">Done</a>
+    <span class="now">Seams</span>
+  </nav>
+
+  <p class="lede">
+    Three things reach into the loop from outside it: a test replacing the
+    network, a signal handler ending a call, and a user changing model
+    mid-session. All three are handled by the same arrangement, which is that
+    <code>Setup</code> holds interfaces rather than concrete types.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Setup</code>, <code>Interrupt</code>, <code>Running</code>; crates/emma/tests/support/mod.rs</span>
+
+  <h2 id="setup">What a run is configured with</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+pub struct Setup&lt;'a&gt; {
+    <span class="c">/// The client for the model in force.
+    ///
+    /// **An `Arc` rather than a `&amp;'a dyn Provider`, and the change was the one
+    /// invasive part of `/model`.** A borrow ties the agent to a provider for
+    /// its whole life, which is right up until the user is allowed to change
+    /// model without leaving the session. Owning a counted handle keeps the
+    /// field honest — the agent has exactly one provider at a time and swapping
+    /// it is an explicit event, [`Agent::set_provider`] — where an interior
+    /// `RefCell` would have made "which model is running" a question with no
+    /// single answer.</span>
+    pub provider: Arc&lt;dyn Provider&gt;,
+    pub harness: &amp;'a Harness,
+    <span class="c">/// The system prompt, before the standing contract is appended.
+    ///
+    /// Taken here rather than read from `harness.instructions` because a
+    /// delegated run has the same harness — the same hooks, the same working
+    /// directory, the same skills — and a *different* prompt: the body of its
+    /// agent file. One field is the difference between that and a second
+    /// `Harness`, which would mean two objects claiming to be this project's
+    /// configuration.</span>
+    pub instructions: &amp;'a str,
+    pub tools: &amp;'a Registry,
+    pub approvals: &amp;'a Approvals,
+    pub log: &amp;'a SessionLog,
+    pub term: &amp;'a Term,
+    pub interrupt: Arc&lt;Interrupt&gt;,
+    <span class="c">/// The token meter this run charges. See [`Spend`].</span>
+    pub spend: Arc&lt;Spend&gt;,
+    <span class="c">/// How this run decides a goal is met. One implementation today; the loop
+    /// knows only the trait, so swapping in a task-list or check-command
+    /// authority is a different value here rather than an edit below.</span>
+    pub done: &amp;'a dyn DoneCheck,
+    pub cwd: PathBuf,
+    pub session_id: String,
+    pub budgets: Budgets,
+    pub caching: Caching,
+    pub mode: Mode,
+}</code></pre>
+
+  <p>
+    Fifteen fields, and two of them are the seam: <code>provider</code> is an
+    <code>Arc&lt;dyn Provider&gt;</code> and <code>done</code> is a
+    <code>&amp;dyn DoneCheck</code>. <code>term</code> can be
+    <code>Term::silent()</code>. So a test constructs the real
+    <code>Agent</code>, the real <code>Registry</code>, the real
+    <code>Harness</code> and the real approval gate, and swaps exactly one
+    thing: the network.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Setup</code>; crates/emma/tests/support/mod.rs</span>
+
+  <p>
+    The <code>done</code> field's doc says "one implementation today" and there
+    are two. See <a href="loop-done.html">Done</a>, where the same wording in
+    <code>goal.rs</code>'s module doc is flagged.
+  </p>
+
+  <h2 id="fake">The scripted provider</h2>
+
+  <pre><code><span class="c">// crates/emma/tests/support/mod.rs</span>
+<span class="c">/// One scripted assistant turn.</span>
+pub struct Say {
+    pub text: String,
+    pub calls: Vec&lt;(String, Value)&gt;,
+    pub tokens: i64,
+    <span class="c">/// Answer this call with `LlmError::BadRequest` carrying this message,
+    /// rather than with a turn.
+    ///
+    /// The provider rejecting a *request* — as opposed to failing to reach one
+    /// — is a case the loop now has a recovery for: a model change can leave
+    /// signed thinking blocks in the history that the new model will not take.
+    /// A fake that could only succeed could not exercise it.</span>
+    pub fail: Option&lt;String&gt;,
+}
+
+pub struct Fake {
+    script: Mutex&lt;std::collections::VecDeque&lt;Say&gt;&gt;,
+    seen: Mutex&lt;Vec&lt;Request&gt;&gt;,
+    <span class="c">/// What this client answers `model_id()` with. A session may now change
+    /// model mid-conversation, and a test of that needs two clients that are
+    /// distinguishable.</span>
+    id: String,
+}</code></pre>
+
+  <p>
+    Four builders produce a <code>Say</code>: <code>text</code>,
+    <code>call</code>, <code>rejected</code>, and the
+    <code>costing(n)</code> modifier which is what the token-budget test uses to
+    price a turn. The default cost is 10 tokens per turn, and a
+    <code>rejected</code> turn costs 0.
+  </p>
+  <span class="src">crates/emma/tests/support/mod.rs — <code>Say</code>, <code>text</code>, <code>call</code>, <code>rejected</code>, <code>Say::costing</code></span>
+
+  <p>
+    <code>seen</code> is the half that matters. Recording every request makes the
+    tests assertions about behaviour rather than about return values: a test can
+    check what the <em>model was told</em>, which is where most of this file's
+    guarantees live. <em>The transcript contains "already_failed"</em>, <em>the
+    kick restated the goal</em>, <em>the model was told the denial cannot be
+    approved away</em>: none of those is observable from an
+    <code>Outcome</code>.
+  </p>
+  <span class="src">crates/emma/tests/support/mod.rs — <code>Fake::transcript</code>, <code>Fake::calls</code></span>
+
+  <p>
+    What it buys, concretely: 22 tests covering the failure-is-an-observation
+    property, both halves of the memo, both budget shapes, every ending on the
+    ladder, the approval ordering, and the round trip through the session file,
+    all running with no network, no API key and no terminal.
+    <span class="chip cert">certified</span>.
+    <code>cargo test -p emma --test loop</code> at commit <code>a3eba74</code>
+    printed <code>test result: ok. 22 passed; 0 failed; 0 ignored</code> in
+    0.04s. <code>cargo test -p emma --lib</code> printed
+    <code>477 passed; 0 failed; 3 ignored</code> in 0.11s.
+  </p>
+  <span class="src">crates/emma/tests/loop.rs</span>
+
+  <div class="note warn">
+    <span class="h">The limit of the seam</span>
+    <p>
+      A scripted provider agrees with its author about what the wire looks like.
+      This project has already shipped a strict decoder that passed every test
+      and then decoded no real tool call, because the live API adds a key the
+      model did not know about. Tests built on the fake prove the loop's
+      <em>decisions</em>. They prove nothing about the wire.
+    </p>
+  </div>
+  <span class="src">crates/emma/tests/support/mod.rs; CLAUDE.md — "a green suite is not evidence"</span>
+
+  <h2 id="interrupt">Ctrl-C</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// Ctrl-C, shared between the signal handler and everything that can be waiting.
+///
+/// A flag as well as a notification: the flag is what an iteration boundary
+/// tests, and the notification is what cuts a model call that is thirty seconds
+/// into a sixty-second answer. `notify_one` rather than `notify_waiters` so a
+/// signal that arrives in the gap between two waits still lands — the permit is
+/// held until somebody collects it.</span>
+pub struct Interrupt {
+    flag: AtomicBool,
+    notify: tokio::sync::Notify,
+}
+
+impl Interrupt {
+    pub fn new() -&gt; Arc&lt;Self&gt; { Arc::new(Self::default()) }
+
+    pub fn trip(&amp;self) {
+        self.flag.store(true, Ordering::SeqCst);
+        self.notify.notify_one();
+    }
+
+    pub fn tripped(&amp;self) -&gt; bool { self.flag.load(Ordering::SeqCst) }
+
+    pub async fn wait(&amp;self) {
+        loop {
+            if self.tripped() {
+                return;
+            }
+            self.notify.notified().await;
+        }
+    }
+
+    <span class="c">/// Wire the real signal. Not done in `new` so a test never installs a
+    /// process-wide handler.</span>
+    pub fn install(self: &amp;Arc&lt;Self&gt;) {
+        let me = self.clone();
+        tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                me.trip();
+            }
+        });
+    }
+}</code></pre>
+
+  <p>
+    Two mechanisms because there are two kinds of waiting.
+    <code>tripped()</code> is what the top of an iteration polls.
+    <code>wait()</code> is what <code>call_model</code>'s <code>select!</code>
+    races against a streaming response, and it re-checks the flag on every wakeup
+    rather than trusting the notification alone, so a signal that arrived before
+    the wait started is not missed. <code>notify_one</code> holds the permit
+    until somebody collects it, which is the same property from the other side.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Interrupt</code>, <code>Agent::call_model</code></span>
+
+  <p>
+    <code>install</code> is separate from <code>new</code> so a test never
+    installs a process-wide handler. It spawns a task that trips the flag once,
+    and the flag is never reset, so a goal cannot be un-interrupted. A second
+    Ctrl-C is what the process's own handling deals with, not this type.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Interrupt::install</code></span>
+
+  <h2 id="model">Changing model mid-session</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// The provider in force, shared with everything that must not disagree about
+/// which model this process is using.
+///
+/// **This exists because `/model` made "the model" a thing that changes.** The
+/// `Agent` owns its provider outright and swaps it explicitly — see
+/// [`Agent::set_provider`], and the argument on [`Setup::provider`] for why that
+/// is not an interior-mutable cell. But `Delegate` resolves a subagent's client
+/// when the delegation runs, long after it was constructed, and a subagent whose
+/// file names no model is specified to use *the parent's*. Reading a clone
+/// captured at boot would mean a subagent quietly running on the model the user
+/// changed away from, with the parent's status row saying otherwise.
+///
+/// So there is exactly one cell, written in exactly one place — the `/model`
+/// command, beside the `set_provider` call — and read by the one caller that
+/// resolves late.</span>
+pub struct Running(Arc&lt;std::sync::Mutex&lt;Arc&lt;dyn Provider&gt;&gt;&gt;);</code></pre>
+
+  <p>
+    <code>Running::new</code>, <code>get</code> and <code>set</code> are three
+    lines each and all three use
+    <code>lock().unwrap_or_else(|e| e.into_inner())</code>, so a poisoned mutex
+    yields the value rather than panicking. A thread that panicked while holding
+    this lock leaves a provider handle behind, and refusing to read it would turn
+    one panic into a dead session.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Running</code></span>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// Swap the model for the rest of the session, and answer what was running.
+///
+/// **The conversation is untouched.** Every chapter, every tool result and
+/// every summary stays exactly where it is and the whole list is re-sent to
+/// the new model on the next goal — which is the behaviour a person asking
+/// "is Sonnet enough for this?" wants, and the reason the one hazard below
+/// exists.</span>
+pub fn set_provider(&amp;mut self, provider: Arc&lt;dyn Provider&gt;) -&gt; String {
+    let was = self.s.provider.model_id().to_string();
+    self.s.log.append(
+        "model_changed",
+        json!({ "from": was, "to": provider.model_id() }),
+    );
+    self.s.provider = provider;
+    self.changed_from = Some(was.clone());
+    was
+}</code></pre>
+
+  <p>
+    <code>changed_from</code> is set here and is the only input to the recovery
+    below. It is cleared by the first call that survives, so the recovery is
+    armed for exactly one call after a change.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::set_provider</code>, <code>Agent::run_goal</code></span>
+
+  <h2 id="recover">The loop's one retry</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// **Whether one model's signed thinking blocks are accepted by another is
+/// not established in this tree**, and it is the one thing that can turn
+/// `/model` from "works" into a 400 on the very next call. So the failure is
+/// handled rather than predicted: a `BadRequest` naming a signature or a
+/// thinking block, on the first call after a change, compacts the whole
+/// conversation to summaries — which are two plain `Message`s carrying no
+/// provider state at all — and the caller retries once.</span>
+fn recover_from_a_model_change(&amp;mut self, e: &amp;LlmError) -&gt; bool {
+    let Some(was) = self.changed_from.take() else {
+        return false;
+    };
+    let LlmError::BadRequest { message } = e else {
+        return false;
+    };
+    let lower = message.to_ascii_lowercase();
+    if !lower.contains("signature") &amp;&amp; !lower.contains("thinking") {
+        return false;
+    }
+    if !self
+        .conversation()
+        .iter()
+        .any(|m| m.content.blocks().iter().any(ContentBlock::is_model_bound))
+    {
+        return false;
+    }
+    let size = self.estimated_context();
+    let take = self.chapters.len();
+    self.s.term.warn(&amp;format!(
+        "the provider rejected this conversation after the model changed from {was}: \
+         {message}"
+    ));
+    match self.compact(take, size, "a model change invalidated signed content") {
+        Compacted::Done { messages, .. } =&gt; {
+            self.s.term.note(&amp;format!(
+                "summarised {messages} messages — a summary carries no signed thinking \
+                 blocks — and retrying once. Their tool results are no longer in context."
+            ));
+            true
+        }
+        Compacted::Nothing(_) =&gt; false,
+    }
+}</code></pre>
+
+  <p>
+    Four guards, and the file says which are doing work. Only after a change,
+    otherwise an ordinary malformed request costs somebody their tool traffic.
+    Only on a message naming a signature or a thinking block. Both were confirmed
+    by mutation, per the function's own doc: remove either and a test goes red.
+    The third guard, the <code>is_model_bound</code> scan, is documented as
+    redundant and kept: what actually bounds this to a single attempt is
+    <code>compact</code> answering <code>Compacted::Nothing</code> once the
+    conversation is already summaries, and a conversation with no model-bound
+    block is one compaction has nothing left to take out of. Every mutation of
+    that check is invisible for that reason.
+    <span class="chip test">tested</span> per the doc's own record of the
+    mutations; not a mutation watched during this write-up, since this task did
+    not change source.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::recover_from_a_model_change</code></span>
+
+  <p>
+    The retry itself is <code>continue</code> in <code>run_goal</code>'s match
+    arm, so <code>iterations</code> does not move: the request was rejected
+    before generation and nothing was spent. It is the only retry in this file;
+    transport failures belong to <code>emma-llm</code>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
+
+  <h2 id="coverage">Functions this page covers</h2>
+
+  <p>
+    <code>Setup</code> and its fifteen fields, <code>Running</code> with
+    <code>new</code>, <code>get</code> and <code>set</code>,
+    <code>Interrupt</code> with <code>new</code>, <code>trip</code>,
+    <code>tripped</code>, <code>wait</code> and <code>install</code>,
+    <code>Agent::set_provider</code>,
+    <code>Agent::recover_from_a_model_change</code>, and the fake provider in
+    <code>tests/support/mod.rs</code>.
+  </p>
+
+  <h2 id="unverified">What is not verified here</h2>
+
+  <p>
+    <span class="chip unv">unverified</span> <strong>Whether one model's signed
+    thinking blocks are ever accepted by another.</strong> The function's own doc
+    says this is not established in this tree, and nothing on this page settles
+    it. The recovery exists because the answer is unknown rather than because the
+    answer is known to be no. What would settle it: start a session on one model,
+    produce a turn with thinking blocks, run <code>/model</code>, and read what
+    the next call returns.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> <strong>That the two substring
+    guards match what a real provider says.</strong> <code>"signature"</code> and
+    <code>"thinking"</code> are matched case-insensitively against the
+    <code>BadRequest</code> message. Whether a live rejection uses either word is
+    a claim about the provider's error text, and the tests supply that text
+    themselves through <code>rejected(...)</code>. What would settle it: the
+    experiment above, with the error message pasted here.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::recover_from_a_model_change</code>; crates/emma/tests/support/mod.rs — <code>rejected</code></span>
+
+  <p>
+    <span class="chip unv">unverified</span> <strong>No claim in this chapter was
+    certified against a live model call.</strong> The behaviours most exposed to
+    that gap are the ones about what the model <em>does</em> with what the loop
+    sends it. What would settle it: a live session with <code>--max-kicks</code>
+    forced low, and the session JSONL read back.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Written against commit <code>a3eba74</code>. Back to
+      <a href="loop.html">The agent loop</a>, or on to
+      <a href="delegation.html">Delegation</a> for the second loop that spends
+      this one's budget.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

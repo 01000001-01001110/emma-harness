@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The ladder · Consent &amp; permissions · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav here" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <h1>The precedence ladder, in full</h1>
+
+  <nav class="chapter">
+    <a class="up" href="consent.html">Consent &amp; permissions</a>
+    <a href="consent-axes.html">The two axes</a>
+    <span class="now">The ladder</span>
+    <a href="consent-egress.html">The egress question</a>
+    <a href="consent-answers.html">The five answers</a>
+    <a href="consent-exempt.html">EXEMPT and the floor</a>
+    <a href="consent-rules.html">Permission rules</a>
+    <a href="consent-matching.html">Matching a host</a>
+    <a href="consent-hooks.html">Hooks</a>
+  </nav>
+
+  <p class="lede">
+    One function decides every local call, and the order of its statements is the
+    whole of the policy. It is quoted here entire, because a summary of it loses
+    the property: which line runs first is the only thing that says whether a
+    <code>deny</code> rule survives a bypass flag.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — Approvals::decide</span>
+
+  <h2 id="code">The function</h2>
+
+  <pre><code>async fn decide(
+    &amp;self,
+    name: &amp;str,
+    meta: ToolMeta,
+    target: Option&lt;NetworkTarget&gt;,
+    args: &amp;Value,
+    term: &amp;Term,
+) -&gt; Verdict {
+    <span class="c">// Only bare `Tool` rules answer this question; a `Tool(domain:…)` grant</span>
+    <span class="c">// is about a destination, and reading it as permission to run the tool</span>
+    <span class="c">// would let a narrow grant answer a question nobody asked it.</span>
+    let rule = self.rules.lock().await.for_tool(name);
+
+    <span class="c">// A `deny` rule first, above the bypass. See the precedence block at the</span>
+    <span class="c">// top of the file: written policy outranks a flag somebody typed.</span>
+    if rule == Some(Decision::Deny) {
+        return Verdict::Deny(format!(
+            "A `deny` permission rule forbids {name}. It was not run, and no answer at a \
+             prompt can change that — it is written down in a settings file. Do not retry \
+             it; tell the user which rule is in the way if they need to know."
+        ));
+    }
+    <span class="c">// Egress before the local question, and independent of it: a tool can</span>
+    <span class="c">// be read-only — genuinely, honestly read-only — and still be the way</span>
+    <span class="c">// something leaves this machine. Every arm below this line assumes the</span>
+    <span class="c">// network question has already been answered.</span>
+    if let deny @ Verdict::Deny(_) = self.egress(name, meta, target, term).await {
+        return deny;
+    }
+    if self.gate == Gate::SkipAll {
+        return Verdict::Allow;
+    }
+    <span class="c">// An `ask` rule puts the question back, over an `allow` rule, over</span>
+    <span class="c">// `read_only`, over the exemption and over a session grant. That is the</span>
+    <span class="c">// whole value of having a third list: "allowed in general, ask me today"</span>
+    <span class="c">// has to be expressible, and it cannot be undone by a `y` typed an hour</span>
+    <span class="c">// ago or it is not a rule, it is a preference.</span>
+    let forced = rule == Some(Decision::Ask);
+    if !forced {
+        if rule == Some(Decision::Allow) {
+            return Verdict::Allow;
+        }
+        if meta.read_only {
+            return Verdict::Allow;
+        }
+        <span class="c">// The named hole. See `EXEMPT`.</span>
+        if EXEMPT.contains(&amp;name) {
+            return Verdict::Allow;
+        }
+        if self.session_allowed.lock().await.contains(name) {
+            return Verdict::Allow;
+        }
+    }
+    if self.gate == Gate::Unattended {
+        return Verdict::Deny(format!(
+            "{name} needs approval and this is a non-interactive run (-p), so there is \
+             nobody to ask. It was not run. Use a read-only tool, or tell the user what \
+             needs approving and stop."
+        ));
+    }
+
+    <span class="c">// On this question the narrow rule and the tool-wide one are the same</span>
+    <span class="c">// grant, so there is one remember key rather than two that do the same</span>
+    <span class="c">// thing. And nothing is offered when an `ask` rule forced the prompt: the</span>
+    <span class="c">// `allow` it would write is outranked by that very rule, so the keystroke</span>
+    <span class="c">// would write a grant that does nothing.</span>
+    let offers = match (forced, &amp;self.file) {
+        (false, Some(_)) =&gt; Offers {
+            narrow: Some(Rule::every_call(name)),
+            wide: None,
+        },
+        _ =&gt; Offers::default(),
+    };
+
+    term.prompt_header(name, &amp;preview(name, args));
+    <span class="c">// `ask` loops on unreadable input; by the time it answers, the answer is</span>
+    <span class="c">// one of the offered ones.</span>
+    match self.ask(name, term, Question::Tool, &amp;offers).await {
+        Some(Answer::Yes) =&gt; Verdict::Allow,
+        Some(Answer::AlwaysThisTool) =&gt; {
+            self.session_allowed.lock().await.insert(name.to_string());
+            term.note(&amp;format!(
+                "{name} is approved for the rest of this session (this process only)"
+            ));
+            Verdict::Allow
+        }
+        Some(Answer::RememberNarrow | Answer::RememberWide) =&gt; {
+            <span class="c">// Both keys mean the same rule here, and the fallback covers the</span>
+            <span class="c">// scripted asker, which can hand back an answer the terminal</span>
+            <span class="c">// would not have offered.</span>
+            let rule = offers
+                .narrow
+                .clone()
+                .unwrap_or_else(|| Rule::every_call(name));
+            self.keep(rule, term).await;
+            Verdict::Allow
+        }
+        Some(Answer::No) =&gt; Verdict::Deny(format!(
+            "The user declined this {name} call. It was not run. Do not retry it \
+             unchanged — take a different approach, or ask what they would prefer."
+        )),
+        <span class="c">// End of input, or a scripted run that ran out of answers. Silence</span>
+        <span class="c">// is not consent.</span>
+        None =&gt; Verdict::Deny(format!(
+            "No approval was given for this {name} call, so it was not run."
+        )),
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/approval.rs — Approvals::decide, quoted entire</span>
+
+  <h2 id="ladder">The order it produces</h2>
+
+  <p>
+    Read top to bottom. The first line that answers is the answer, and nothing
+    below it is consulted. Rung 1 is not in this file; the loop resolves it and
+    returns before <code>request</code> is reached.
+  </p>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 780 606" role="img"
+           aria-label="The approval ladder: a PreToolUse hook denial, then a deny rule, then the egress question for tools that reach the network, then the bypass flag, then an ask rule, an allow rule, read-only or EXEMPT, a session grant, the unattended denial, and finally the human. The first line that answers wins.">
+        <defs>
+          <marker id="ladder-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
+          </marker>
+          <marker id="ladder-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
+          </marker>
+        </defs>
+
+        <text class="sm" x="60" y="20">one tool call, chosen by the model</text>
+
+        <path class="edge" d="M46 30 L46 536" marker-end="url(#ladder-arrow)"/>
+        <text class="tiny" transform="translate(40,300) rotate(-90)" text-anchor="middle">no answer here — fall through</text>
+
+        <rect class="hl" x="60" y="36" width="400" height="34" rx="3"/>
+        <text class="lbl" x="74" y="58">1 · a PreToolUse hook denied it</text>
+        <path class="edge-hl" d="M460 53 L482 53" marker-end="url(#ladder-arrow-hl)"/>
+        <text class="sm" x="494" y="50">DENY</text>
+        <text class="tiny" x="494" y="64">resolved in the loop, before this file runs</text>
+
+        <rect class="hl" x="60" y="84" width="400" height="34" rx="3"/>
+        <text class="lbl" x="74" y="106">2 · a `deny` rule matches</text>
+        <path class="edge-hl" d="M460 101 L482 101" marker-end="url(#ladder-arrow-hl)"/>
+        <text class="sm" x="494" y="98">DENY</text>
+        <text class="tiny" x="494" y="112">no prompt answer and no flag reaches it</text>
+
+        <rect class="box" x="60" y="132" width="400" height="100" rx="3"/>
+        <text class="lbl" x="74" y="152">· · the egress question, if reaches_network</text>
+        <text class="tiny" x="86" y="170">no network_target named → DENY (fail closed)</text>
+        <text class="tiny" x="86" y="186">deny rule for this tool+host → DENY · bypass → ALLOW</text>
+        <text class="tiny" x="86" y="202">ask rule → the prompt · allow rule → ALLOW</text>
+        <text class="tiny" x="86" y="218">session host grant → ALLOW · unattended → DENY · else ask</text>
+        <path class="edge" d="M460 182 L482 182" marker-end="url(#ladder-arrow)"/>
+        <text class="tiny" x="494" y="178">its own grant, its own scope,</text>
+        <text class="tiny" x="494" y="192">its own prompt. Passing it is</text>
+        <text class="tiny" x="494" y="206">not passing the rungs below.</text>
+
+        <rect class="box" x="60" y="252" width="400" height="34" rx="3"/>
+        <text class="lbl" x="74" y="274">3 · --dangerously-skip-permissions</text>
+        <path class="edge" d="M460 269 L482 269" marker-end="url(#ladder-arrow)"/>
+        <text class="sm" x="494" y="273">ALLOW</text>
+
+        <rect class="box" x="60" y="300" width="400" height="34" rx="3"/>
+        <text class="lbl" x="74" y="322">4 · an `ask` rule matches</text>
+        <path class="edge-dash" d="M460 317 L482 317" marker-end="url(#ladder-arrow)"/>
+        <text class="tiny" x="494" y="314">forces the prompt: rungs 5, 6</text>
+        <text class="tiny" x="494" y="328">and 7 are skipped</text>
+
+        <path class="edge-dash" d="M60 317 L24 317 L24 557 L54 557" marker-end="url(#ladder-arrow)"/>
+
+        <rect class="box" x="60" y="348" width="400" height="34" rx="3"/>
+        <text class="lbl" x="74" y="370">5 · an `allow` rule matches</text>
+        <path class="edge" d="M460 365 L482 365" marker-end="url(#ladder-arrow)"/>
+        <text class="sm" x="494" y="369">ALLOW</text>
+
+        <rect class="box" x="60" y="396" width="400" height="34" rx="3"/>
+        <text class="lbl" x="74" y="418">6 · read_only, or a name in EXEMPT</text>
+        <path class="edge" d="M460 413 L482 413" marker-end="url(#ladder-arrow)"/>
+        <text class="sm" x="494" y="417">ALLOW</text>
+
+        <rect class="box" x="60" y="444" width="400" height="34" rx="3"/>
+        <text class="lbl" x="74" y="466">7 · a session grant from a `y` or an `a`</text>
+        <path class="edge" d="M460 461 L482 461" marker-end="url(#ladder-arrow)"/>
+        <text class="sm" x="494" y="465">ALLOW</text>
+
+        <rect class="box" x="60" y="492" width="400" height="34" rx="3"/>
+        <text class="lbl" x="74" y="514">8 · Gate::Unattended — a `-p` run</text>
+        <path class="edge" d="M460 509 L482 509" marker-end="url(#ladder-arrow)"/>
+        <text class="sm" x="494" y="506">DENY</text>
+        <text class="tiny" x="494" y="520">nobody is there to ask</text>
+
+        <rect class="hl" x="60" y="540" width="400" height="34" rx="3"/>
+        <text class="lbl" x="74" y="562">9 · ask the human</text>
+        <path class="edge-hl" d="M460 557 L482 557" marker-end="url(#ladder-arrow-hl)"/>
+        <text class="sm" x="494" y="561">y / n / a / r / t</text>
+
+        <text class="tiny" x="60" y="594">Rungs 1 and 2 refuse outright. Rung 9 is where everything unanswered lands.</text>
+      </svg>
+    </div>
+    <figcaption>
+      Drawn from the function above and from
+      <code>Approvals::egress</code>. Two things differ from the eight-line
+      summary in the module doc: the egress question runs between the
+      <code>deny</code> rule and the bypass rather than beside them, and the
+      <code>Gate::Unattended</code> denial is a rung of its own, which the summary
+      does not list.
+    </figcaption>
+  </figure>
+
+  <h2 id="gates">Three gates, and no fourth</h2>
+
+  <p>
+    <code>Gate</code> is a closed enum with three members, chosen in
+    <code>main.rs</code> and never afterwards.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Gate</th><th>Set by</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>Ask</code></td>
+        <td>the default, reachable with no flag</td>
+        <td>rungs 1 to 7 answer, or the human does</td>
+      </tr>
+      <tr>
+        <td><code>SkipAll</code></td>
+        <td><code>--dangerously-skip-permissions</code>, or <code>--yes</code> alongside <code>-p</code></td>
+        <td>rung 3 allows everything rungs 1 and 2 did not refuse</td>
+      </tr>
+      <tr>
+        <td><code>Unattended</code></td>
+        <td><code>-p</code> with no bypass</td>
+        <td>rung 8 denies anything rungs 1 to 7 did not settle, with a sentence the model reads</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/emma/src/approval.rs — Gate; crates/emma/src/cli.rs — Opts::skip_permissions</span>
+
+  <p>
+    The doc on <code>Gate::Unattended</code> states the two alternatives it was
+    chosen over. Proceeding silently would make <code>-p</code> the way to get
+    unattended writes without saying so. Prompting anyway would hang on a
+    question nobody can see, which in a CI job is a timeout an hour later with no
+    output explaining it.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — Gate::Unattended</span>
+
+  <p>
+    The bypass cannot be set from configuration or the environment. The short
+    <code>--yes</code> spelling is accepted only alongside <code>-p</code>, so the
+    interactive path cannot reach the bypass without typing the whole word.
+    <span class="chip test">tested</span> Rejecting bare <code>--yes</code> is
+    asserted in <code>cli.rs</code>, which checks the error names
+    <code>--dangerously-skip-permissions</code>.
+  </p>
+  <span class="src">crates/emma/src/cli.rs — parse, tests around line 637</span>
+
+  <h2 id="deny-beats-bypass">A <code>deny</code> rule outranks the bypass</h2>
+
+  <p>
+    The <code>deny</code> check is the first statement in the body and returns
+    before <code>if self.gate == Gate::SkipAll</code> is evaluated.
+    <code>egress</code> has the same two statements in the same order for the
+    network question. <code>--dangerously-skip-permissions</code> used to be the
+    first thing <code>decide</code> read and is now the third.
+  </p>
+
+  <p>
+    The argument for moving it: a deny rule is something the operator wrote down
+    and can go and read, and the bypass is a flag typed to get a script through.
+    Claude Code makes the same ruling, that if a tool is denied at any level no
+    other level can allow it. <span class="chip test">tested</span>
+    <code>a_deny_rule_beats_the_bypass_flag</code> builds a
+    <code>Gate::SkipAll</code> gate with an empty answer queue, asserts
+    <code>Bash</code> is denied on the local axis and
+    <code>WebFetch(domain:evil.example)</code> on the network one, and then
+    asserts that <code>docs.rs</code> is still allowed. Without that third
+    assertion the guarantee would be indistinguishable from the flag having
+    stopped working.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — tests::a_deny_rule_beats_the_bypass_flag</span>
+
+  <p>
+    Neutering the deny check in <code>decide</code> and in <code>egress</code>
+    turned that test and
+    <code>a_deny_rule_beats_an_allow_rule_on_both_axes</code> red. That mutation
+    was run at commit <code>20ac400</code> and reverted; this page did not repeat
+    it, because the page's author does not change source.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — tests; notes/plan records at 20ac400</span>
+
+  <h2 id="unattended">An <code>allow</code> rule answers before the unattended denial</h2>
+
+  <p>
+    The block that consults the <code>allow</code> rule, <code>read_only</code>,
+    <code>EXEMPT</code> and the session grant sits above
+    <code>if self.gate == Gate::Unattended</code>. So a <code>-p</code> run
+    carrying <code>"allow": ["Bash"]</code> runs <code>Bash</code> unprompted with
+    no bypass flag, while every tool the file does not name still comes back with
+    the "there is nobody to ask" denial.
+  </p>
+
+  <p>
+    That is a narrower-than-bypass unattended mode, and nothing announces it. It
+    is tool-wide only: the narrowing somebody would reach for,
+    <code>Bash(git log:*)</code>, parses into <code>Spec::Unsupported</code>,
+    matches nothing in any list, and is announced at boot as a rule that does
+    nothing. The choice available to a script today is the whole tool unprompted,
+    or nothing.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — Approvals::decide; crates/emma/src/permissions.rs — Spec::Unsupported</span>
+
+  <p>
+    <span class="chip unv">unverified</span> The block's position above the
+    denial is mutation-proven: moving the <code>Gate::Unattended</code> return
+    above it turned three tests red at <code>20ac400</code>. All three exercise
+    <code>read_only</code> or <code>EXEMPT</code>, and the
+    <code>allow</code>-rule arm has no test at any gate but
+    <code>Gate::Ask</code>. <em>What would settle it:</em> a test building
+    <code>Approvals</code> with <code>Gate::Unattended</code>, an empty answer
+    queue and an <code>allow</code> rule for a writing tool, asserting
+    <code>Allow</code>.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — tests::a_read_only_tool_is_never_asked_about_even_unattended, tests::the_exemption_covers_the_task_writers_and_nothing_that_touches_the_tree, tests::unattended_denies_a_writer_and_says_why</span>
+
+  <h2 id="omissions">Where the rung is missing from the prose</h2>
+
+  <p>
+    The module doc at the top of <code>approval.rs</code> prints an eight-line
+    ladder. It lists the hook denial, the <code>deny</code> rule, the bypass, the
+    <code>ask</code> rule, the <code>allow</code> rule, read-only or
+    <code>EXEMPT</code>, a session grant, and the human. The
+    <code>Gate::Unattended</code> denial is not one of the eight, and the egress
+    question is not either, although both are in the code the doc sits above.
+  </p>
+
+  <p>
+    <code>emma --help</code> prints its own ladder, and it has the same shape and
+    the same gap. Two lines of the shipped 0.1.0 binary, read on this machine:
+  </p>
+
+  <pre><code>  The order, and the first line that answers wins: a PreToolUse hook denial, a
+  deny rule, --dangerously-skip-permissions, an ask rule, an allow rule,
+  read-only, a session grant, then you. A hook denial and a deny rule cannot be
+  approved away, and neither is waved through by the bypass flag.</code></pre>
+
+  <p>
+    <span class="chip cert">certified</span> Read out of the built binary rather
+    than the source, on 2026-08-16:
+    <code>./target/release/emma.exe --help | grep -A3 "The order, and the first
+    line"</code> prints exactly the four lines above, and
+    <code>./target/release/emma.exe --version</code> answers
+    <code>emma 0.1.0</code>. The ladder there omits both the unattended denial
+    and the egress question, and it does not name <code>EXEMPT</code> in the
+    sequence, although a later paragraph of the same help text names the two
+    exempt tools outright.
+  </p>
+  <span class="src">crates/emma/src/cli.rs — session_help! macro; target/release/emma.exe --help</span>
+
+  <p>
+    The one place <code>-p</code>'s denial is stated in <code>--help</code> is the
+    flag's own line in <code>OPTIONS</code>, which reads "non-interactive.
+    Anything needing approval is denied and the model is told why." That is true
+    of a run with no rules and wrong for a run with an <code>allow</code> rule,
+    which is the mode described above.
+    <span class="chip cert">certified</span> Same command, lines 26 and 27 of the
+    output.
+  </p>
+  <span class="src">crates/emma/src/cli.rs — usage_and_options! macro</span>
+
+  <h2 id="rung1">Where rung 1 lives</h2>
+
+  <p>
+    The hook denial is not enforced in <code>approval.rs</code>. The loop runs
+    <code>PreToolUse</code>, and on a denial it draws the blocked line, writes the
+    record and <code>return</code>s a failed tool result before
+    <code>Approvals::request</code> is reached. No code in the gate can undo it,
+    and no test in the gate can exercise it either.
+  </p>
+
+  <pre><code>let pre = self
+    .s
+    .harness
+    .run_hooks(HookEvent::PreToolUse, &amp;hook_call)
+    .await;
+self.log_hooks(turn_id, &amp;pre.runs);
+if let Some(reason) = pre.denied {
+    <span class="c">// Its own treatment on screen, and not a warning: no answer at the</span>
+    <span class="c">// prompt could have allowed this, and a user who reads it as "I</span>
+    <span class="c">// could have said yes" goes looking for a prompt that never comes.</span>
+    self.s.term.tool_blocked(&amp;call.name, &amp;reason);
+    self.s.log.append(
+        "denied",
+        json!({ "turn_id": turn_id, "id": call.id, "by": "hook", "reason": reason }),
+    );
+    return fail(
+        "blocked_by_policy",
+        format!("{reason} This is configured policy and cannot be approved away."),
+    );
+}
+
+match self
+    .s
+    .approvals
+    .request(tool.as_ref(), &amp;call.input, self.s.term)
+    .await
+{</code></pre>
+  <span class="src">crates/emma/src/agent.rs — the PreToolUse block, immediately above the approval call</span>
+
+  <p>
+    A source-order assertion was written inside <code>approval.rs</code> first and
+    then removed: it passed against a mutation that disabled the denial outright,
+    which makes it worse than nothing. The guarantee is held behaviourally
+    instead, in the integration tests. <span class="chip test">tested</span>
+  </p>
+  <span class="src">crates/emma/src/approval.rs — the comment where that test used to be; crates/emma/tests/permissions.rs::a_hook_denial_outranks_an_allow_rule_that_covers_the_call; crates/emma/tests/loop.rs</span>
+
+  <h2 id="unsettled">What is not settled here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> Which gate a run is in is decided
+      in <code>main.rs</code>, above the seam the scripted-provider tests reach.
+      A wrong <code>Gate</code> chosen there would be invisible to every test on
+      this page. <em>What would settle it:</em> an integration test that runs
+      <code>emma -p</code> and <code>emma -p --yes</code> as processes and
+      compares the two verdicts on the same writing tool.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> The <code>allow</code>-under-<code>-p</code>
+      mode has no test, as above. It also has no documentation outside this page.
+    </li>
+    <li>
+      <span class="chip cert">certified</span> <code>cargo test -p emma --lib</code>
+      at commit <code>a3eba74</code> reports 477 passed, 0 failed, 3 ignored;
+      <code>cargo test -p emma --lib approval::</code> reports 31 passed. Both
+      re-runnable.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · read at commit <code>a3eba74</code> ·
+    <code>crates/emma/src/approval.rs</code> ·
+    <code>crates/emma/src/agent.rs</code> ·
+    <code>crates/emma/src/cli.rs</code> ·
+    <a href="consent.html">back to the chapter</a>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

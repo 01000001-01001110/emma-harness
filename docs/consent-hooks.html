@@ -1,0 +1,784 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hooks · Consent &amp; permissions · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav here" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <h1>Hooks: three events, three failure rulings</h1>
+
+  <nav class="chapter">
+    <a class="up" href="consent.html">Consent &amp; permissions</a>
+    <a href="consent-axes.html">The two axes</a>
+    <a href="consent-ladder.html">The ladder</a>
+    <a href="consent-egress.html">The egress question</a>
+    <a href="consent-answers.html">The five answers</a>
+    <a href="consent-exempt.html">EXEMPT and the floor</a>
+    <a href="consent-rules.html">Permission rules</a>
+    <a href="consent-matching.html">Matching a host</a>
+    <span class="now">Hooks</span>
+  </nav>
+
+  <p class="lede">
+    A hook is an operator-authored program the runtime runs at one of three
+    dispatch sites. A <code>PreToolUse</code> hook is the only thing in Emma that
+    refuses a call and cannot be answered away at a prompt. It is also a program
+    the operator wrote, running at the highest-privilege point of the turn, which
+    is why this file is a subprocess supervisor rather than configuration.
+  </p>
+  <span class="src">crates/harness/src/hooks.rs — module doc</span>
+
+  <h2 id="load">Everything checkable is checked at load</h2>
+
+  <p>
+    A hook that cannot be run safely stops the boot rather than failing at the
+    moment it is needed. That is the same ruling every other refusal in the
+    harness crate makes: the honest answer to an ambiguous configuration is not
+    to start.
+  </p>
+
+  <pre><code>pub(crate) fn contain(root: &amp;Path, what: &amp;str, command: &amp;str) -&gt; Result&lt;PathBuf, String&gt; {
+    let dir = root
+        .join("hooks")
+        .canonicalize()
+        .map_err(|_| format!("{what} is defined but hooks/ is missing"))?;
+    let path = root
+        .join(command)
+        .canonicalize()
+        .map_err(|_| format!("{what}: no such command `{command}`"))?;
+    if !path.starts_with(&amp;dir) {
+        return Err(format!(
+            "{what} resolves to {}, outside {}",
+            path.display(),
+            dir.display()
+        ));
+    }
+    <span class="c">// Unix only, because there is no executable bit on Windows to consult — a</span>
+    <span class="c">// `.cmd` or `.exe` is runnable by extension.</span>
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = std::fs::metadata(&amp;path).map_err(|e| format!("{what}: {e}"))?;
+        if meta.permissions().mode() &amp; 0o111 == 0 {
+            return Err(format!("{what} is not executable"));
+        }
+    }
+    Ok(path)
+}</code></pre>
+  <span class="src">crates/harness/src/hooks.rs — contain, quoted entire</span>
+
+  <p>
+    The containment check is why <code>command</code> is relative. An absolute
+    path or a <code>..</code> escape would let a config file run any executable on
+    the box with Emma's permissions, and Emma's permissions include writing the
+    user's source tree. Canonicalisation happens before the
+    <code>starts_with</code>, so a symlink out of <code>hooks/</code> is caught
+    too. The executable-bit check is not the boundary; it catches the operator who
+    forgot to <code>chmod +x</code>, which would otherwise surface much later as a
+    spawn failure that reads like something else. <code>what</code> names the
+    caller in the sentence, because "no such command" with no subject is a
+    sentence an operator cannot act on. The same function is what the status line
+    goes through, so anything config can point Emma at is contained here.
+  </p>
+
+  <h3>What <code>resolve</code> does with each declaration</h3>
+
+  <p>
+    <code>resolve</code> takes the root, the spine path, the declared map and the
+    persona's optional enable list, and returns the hooks that survived. Its steps,
+    in order:
+  </p>
+
+  <ul class="body">
+    <li>Every name in the persona's enable list must exist in the declared map, or
+      the boot fails naming it. A persona enabling a hook nobody declared is a
+      policy that silently does not exist.</li>
+    <li>A declared hook the persona excludes is skipped before anything else is
+      checked, so it costs nothing. <code>"hooks": []</code> turns all of them
+      off.</li>
+    <li><code>HookEvent::parse</code> maps the event string. Claude Code
+      implements a larger set including <code>SessionStart</code>,
+      <code>Stop</code> and <code>PreCompact</code>. Emma implements three, and a
+      config naming any of the rest is a startup error listing the three that
+      work, never a silent skip.</li>
+    <li><code>contain</code> resolves the command.</li>
+    <li>A <code>UserPromptSubmit</code> hook carrying a non-empty matcher fails the
+      boot, because there is no tool name to match on that event. Claude Code
+      ignores the field there; Emma names it, on the rule that a hook the operator
+      believes is conditional and which never fires is worse than one that always
+      does. A matcher that is present but empty or whitespace is treated as
+      absent, since <code>"matcher": ""</code> is what a group written for a tool
+      event looks like when it was copied for this one.</li>
+    <li>A matcher is compiled as <code>^(?:{m})$</code>. Anchoring is what stops
+      <code>Read</code> from silently guarding <code>ReadFile</code>, the near miss
+      that looks like a working policy. A regex that does not compile fails the
+      boot with the file and the hook named.</li>
+    <li>The executable is read and hashed with <code>hash::short</code>. The hash
+      goes into every <code>HookRun</code> and into <code>Harness::snapshot</code>
+      through <code>ResolvedHook::identity</code>, which reports name, event and
+      hash and never the hook's text.</li>
+    <li>The timeout is <code>def.timeout_ms</code> or 5,000 ms, capped at 10,000
+      ms. Config asking for more is reduced silently rather than refused: the
+      operator asked for a longer gate, not for a different program.</li>
+  </ul>
+  <span class="src">crates/harness/src/hooks.rs — resolve, HookEvent::parse, ResolvedHook::identity, DEFAULT_HOOK_TIMEOUT_MS, MAX_HOOK_TIMEOUT_MS</span>
+
+  <p>
+    <code>HookDef</code> is <code>deny_unknown_fields</code>, so a misspelled
+    <code>mathcer</code> that would have matched every tool is a parse error. Its
+    <code>event</code> field is a <code>String</code> rather than the enum
+    specifically so that an unimplemented event name produces the sentence above
+    rather than serde's.
+  </p>
+  <span class="src">crates/harness/src/hooks.rs — HookDef, HookEvent</span>
+
+  <h2 id="env">The environment a hook is given</h2>
+
+  <pre><code>pub(crate) const HOOK_ENV_ALLOWLIST: &amp;[&amp;str] =
+    &amp;["PATH", "HOME", "LANG", "TMPDIR", "SYSTEMROOT", "COMSPEC"];</code></pre>
+  <span class="src">crates/harness/src/hooks.rs — HOOK_ENV_ALLOWLIST</span>
+
+  <p>
+    Six names and no others. <code>SYSTEMROOT</code> and <code>COMSPEC</code> are
+    Windows process-creation requirements rather than policy; the other four are
+    what a small program needs to find its interpreter and behave. This process
+    holds <code>ANTHROPIC_API_KEY</code>, and a hook gets what it needs to execute
+    and nothing that would let it call a paid API as Emma. A hook that needs a
+    value reads it from a file next to itself.
+    <span class="chip cert">certified</span> Six entries at commit
+    <code>a3eba74</code>:
+    <code>grep -n "HOOK_ENV_ALLOWLIST" -A2 crates/harness/src/hooks.rs</code>
+    prints the two lines above.
+  </p>
+
+  <p>
+    <code>contained_command</code> is the only place this crate configures a child
+    process: an argv exec of an already-contained path, with no shell, no
+    <code>PATH</code> lookup and no argument string for anything to be
+    interpolated into. All three pipes are piped, <code>kill_on_drop</code> is set,
+    and the environment is cleared and then repopulated from the allowlist. It is
+    shared with the status line rather than copied, so there is no second spawn
+    site that could omit the <code>env_clear</code>.
+  </p>
+  <span class="src">crates/harness/src/hooks.rs — contained_command</span>
+
+  <h2 id="events">The three events</h2>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Event</th><th>Fires</th><th>Can do</th><th>When it crashes, times out or writes garbage</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>PreToolUse</code></td>
+        <td>before every matching tool call</td>
+        <td>deny the call, with a reason; append context</td>
+        <td><strong>fail-closed</strong>: the call is stopped, so a broken policy check does not become no policy check</td>
+      </tr>
+      <tr>
+        <td><code>PostToolUse</code></td>
+        <td>after the call, on success and on a tool error</td>
+        <td>append text to the model-visible result; it can annotate, never rewrite</td>
+        <td><strong>fail-open</strong>: the tool ran and the side effect happened, so refusing now would make the log disagree with what the model saw</td>
+      </tr>
+      <tr>
+        <td><code>UserPromptSubmit</code></td>
+        <td>once, on the words a person typed, before the goal opens</td>
+        <td>block the prompt; add context in front of the model, the only event that can add rather than only refuse</td>
+        <td><strong>fail-open, with a notice</strong>: the prompt proceeds without the context and one sentence per silent hook reaches the terminal</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/harness/src/hooks.rs — run, run_prompt, PromptVerdict::notices</span>
+
+  <p>
+    The first two rulings are one condition at the end of <code>run</code>:
+  </p>
+
+  <pre><code><span class="c">// Asymmetric on purpose, and this is the whole hook design in four lines.</span>
+<span class="c">// A `PreToolUse` hook that denies — or that times out, crashes, or</span>
+<span class="c">// answers with garbage — stops the call: ambiguity resolves to deny,</span>
+<span class="c">// because a broken policy check must not degrade into no policy check. A</span>
+<span class="c">// `PostToolUse` failure changes nothing: the tool ran, the side effect</span>
+<span class="c">// happened, the result is already recorded, and pretending otherwise</span>
+<span class="c">// would make the log lie about what the model saw.</span>
+if denied &amp;&amp; event == HookEvent::PreToolUse {
+    verdict.denied =
+        Some(reason.unwrap_or_else(|| "This call was blocked by policy.".into()));
+    return verdict;
+}</code></pre>
+  <span class="src">crates/harness/src/hooks.rs — run</span>
+
+  <p>
+    <code>denied</code> is <code>run.outcome != HookOutcome::Allow</code>, so a
+    failure and a refusal reach the same branch. A denial short-circuits: hooks
+    after it in the loop do not run. Hooks run in hook-name order, which is the
+    key in the <code>hooks</code> map, sorted, and not declaration order, which
+    JSON does not preserve anyway. <code>run</code> also filters out
+    <code>UserPromptSubmit</code> explicitly as well as by event, so a caller
+    passing it by mistake dispatches nothing rather than handing a prompt hook a
+    payload with a tool name in it and no prompt.
+  </p>
+  <span class="src">crates/harness/src/hooks.rs — run, ResolvedHook::matches</span>
+
+  <h3>The third ruling</h3>
+
+  <p>
+    Resolving an enrichment failure to deny would mean a hook script with a syntax
+    error locks the user out of their own agent: every prompt refused, by the
+    program that was supposed to add the branch name to it. Losing the enrichment
+    silently is what <code>PromptVerdict::notices</code> prevents; losing it
+    visibly is a bad turn the user can see and fix. This is also Claude Code's
+    documented behaviour on the event, so an existing configuration behaves the
+    same under both runtimes.
+  </p>
+
+  <p>
+    Blocking is still available there, because a hook that says
+    <code>block</code> is answering rather than failing. Both Claude Code
+    spellings are honoured: a JSON decision, and exit code 2 with the reason on
+    stderr. <code>run_prompt</code> converts an exit code of exactly 2 into
+    <code>HookOutcome::Deny</code> and, when the hook printed no reason, lifts the
+    first non-empty line of stderr into one. Every other non-zero exit stays a
+    crash and takes the fail-open path.
+  </p>
+  <span class="src">crates/harness/src/hooks.rs — run_prompt</span>
+
+  <p>
+    <code>notices</code> emits one sentence per failed run, in three shapes
+    depending on whether stderr had a first line and whether an exit code was
+    captured, and it emits any <code>systemMessage</code> whether or not the hook
+    also failed. <code>systemMessage</code> is the hook talking to the person and
+    is kept in its own field, away from <code>context</code>, because one of those
+    two is paid for in tokens and read by a model.
+  </p>
+  <span class="src">crates/harness/src/hooks.rs — PromptVerdict::notices, HookRun::message</span>
+
+  <h2 id="reply">What a hook may say back</h2>
+
+  <p>
+    Stdout is read in both vocabularies. Emma's are <code>decision</code> and
+    <code>context</code>; Claude Code's are
+    <code>hookSpecificOutput.permissionDecision</code> and
+    <code>additionalContext</code>. Both levels are
+    <code>deny_unknown_fields</code>, which is what stops a misspelled
+    <code>raeson</code> from silently allowing.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Field</th><th>Read as</th></tr></thead>
+    <tbody>
+      <tr><td><code>decision</code></td><td><code>"deny"</code> or <code>"block"</code> refuse; anything else does not</td></tr>
+      <tr><td><code>reason</code></td><td>first choice for the sentence, capped at <code>HOOK_REASON_CAP</code> (400)</td></tr>
+      <tr><td><code>context</code></td><td>Emma's additive text; takes precedence over <code>additionalContext</code></td></tr>
+      <tr><td><code>continue</code></td><td><code>false</code> refuses, and is checked first because Claude Code documents it as outranking the decision</td></tr>
+      <tr><td><code>stopReason</code></td><td>third choice for the sentence</td></tr>
+      <tr><td><code>systemMessage</code></td><td>shown to the user, never to the model</td></tr>
+      <tr><td><code>hookSpecificOutput.permissionDecision</code></td><td><code>"deny"</code> and <code>"ask"</code> both refuse</td></tr>
+      <tr><td><code>hookSpecificOutput.permissionDecisionReason</code></td><td>second choice for the sentence</td></tr>
+      <tr><td><code>hookSpecificOutput.additionalContext</code></td><td>additive text</td></tr>
+      <tr><td><code>hookSpecificOutput.hookEventName</code></td><td>accepted, read by nothing: the runtime knows which event it dispatched, and trusting a child process's claim about that would let a hook answer for an event it was not attached to</td></tr>
+      <tr><td><code>suppressOutput</code></td><td>accepted and inert; Emma never prints hook stdout</td></tr>
+      <tr><td><code>sessionTitle</code>, at either level</td><td>accepted and inert; Emma's sessions are named by id</td></tr>
+      <tr><td><code>suppressOriginalPrompt</code></td><td>accepted and inert; Emma always shows the user their own blocked prompt</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/harness/src/hooks.rs — HookReply, HookSpecificOutput, ResolvedHook::invoke</span>
+
+  <p>
+    <code>permissionDecision: "ask"</code> maps to deny, because Emma's approval
+    gate is asked separately and a hook that wanted a human is not asking for the
+    call to proceed unattended.
+  </p>
+
+  <p>
+    The inert fields are declared rather than rejected so that a hook printing
+    them is not turned into a wall, and each one's comment says whether Emma acts
+    on it. The reason that mattered: before this struct grew Claude Code's
+    spelling, a real <code>UserPromptSubmit</code> hook printing
+    <code>hookSpecificOutput</code> hit an unknown field, which is unparseable
+    stdout, which on <code>PreToolUse</code> means deny. A compatibility feature
+    that turns a working upstream hook into a wall is not a compatibility feature.
+  </p>
+  <span class="src">crates/harness/src/hooks.rs — HookReply doc</span>
+
+  <h3>Unparseable stdout</h3>
+
+  <p>
+    On <code>UserPromptSubmit</code>, stdout that is not JSON <em>is</em> the
+    context. That is the documented primary form, and requiring JSON there made a
+    hook doing the ordinary thing, <code>echo</code> a line and exit 0, record
+    "unparseable stdout" and discard the line. <span class="chip obs">observed</span>:
+    found by running one, recorded in the comment at that branch; the transcript
+    of that run is not kept. On the other two events unreadable stdout is a hook
+    that meant something it failed to say, and <code>PreToolUse</code> denies on
+    it.
+  </p>
+  <span class="src">crates/harness/src/hooks.rs — ResolvedHook::invoke, the from_str else-branch</span>
+
+  <p>
+    Empty stdout with exit 0 is the normal answer for an observer and resolves to
+    <code>Allow</code>. <code>HookRun</code> is initialised with
+    <code>outcome: HookOutcome::Failed</code>, so every early return in
+    <code>invoke</code> is a failure by construction and the default is the one
+    that denies. A non-zero exit returns before stdout is looked at.
+  </p>
+  <span class="src">crates/harness/src/hooks.rs — ResolvedHook::invoke</span>
+
+  <p>
+    Two verdict types come back to the caller. <code>HookVerdict</code> carries
+    <code>denied</code>, the additive <code>context</code> list and the
+    <code>runs</code> for the log; <code>PromptVerdict</code> carries
+    <code>blocked</code>, <code>context</code> and <code>runs</code>.
+    <code>is_denied</code> and <code>is_blocked</code> are one-line
+    <code>Option::is_some</code> helpers over the first field of each and hold no
+    argument. In <code>PromptVerdict</code>, <code>blocked</code> and
+    <code>context</code> are independent: a hook that blocks contributes no
+    context, since there is no turn to enrich, and a hook that enriches never
+    blocks.
+  </p>
+  <span class="src">crates/harness/src/hooks.rs — HookVerdict, PromptVerdict</span>
+
+  <h2 id="caps">The caps</h2>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Constant</th><th>Value</th><th>Bounds</th></tr></thead>
+    <tbody>
+      <tr><td><code>DEFAULT_HOOK_TIMEOUT_MS</code></td><td>5,000</td><td>wall clock for one hook when config says nothing</td></tr>
+      <tr><td><code>MAX_HOOK_TIMEOUT_MS</code></td><td>10,000</td><td>the ceiling config may ask for; more is reduced silently</td></tr>
+      <tr><td><code>HOOK_OUTPUT_CAP</code></td><td>64 KiB</td><td>each pipe, per invocation. A hook writing past it blocks and hits the timeout</td></tr>
+      <tr><td><code>HOOK_REASON_CAP</code></td><td>400 characters</td><td>a denial sentence</td></tr>
+      <tr><td><code>HOOK_CONTEXT_CAP</code></td><td>10,000 characters</td><td>injected context per hook, and the cut is named in the text the model reads</td></tr>
+      <tr><td><code>EXEC_DRAIN_GRACE_MS</code></td><td>200</td><td>how long the pipes drain after the hook has already exited</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/harness/src/hooks.rs — the constants at the head of the file</span>
+
+  <p>
+    <code>HOOK_CONTEXT_CAP</code> is Claude Code's own limit, kept to the
+    character so a script sized against that documentation behaves the same here.
+    It is not the pipe cap doing this job: <code>HOOK_OUTPUT_CAP</code> stops a
+    program filling memory, this stops a program filling the prompt, which is a
+    different resource with a different owner. The user pays for it by the token,
+    on this turn and on every later turn that replays it. Claude Code spills the
+    overflow to a file and passes the path; Emma truncates and says so in the
+    text, because a path is only useful to a model that can read the file.
+  </p>
+
+  <p>
+    <code>truncate_on_a_char_boundary</code> is why the two character caps are
+    safe. <code>String::truncate</code> panics on a byte index inside a character,
+    and a hook's reason is arbitrary text from an arbitrary program: a 400-byte
+    cut through a multi-byte character would take the process down at the exact
+    moment a policy was being explained. It walks the index down to the last
+    boundary at or below the cap.
+  </p>
+  <span class="src">crates/harness/src/hooks.rs — truncate_on_a_char_boundary, HOOK_CONTEXT_CAP</span>
+
+  <h2 id="payload">What a hook is told</h2>
+
+  <p>
+    A tool hook receives <code>event</code>, <code>tool_name</code>,
+    <code>tool_call_id</code>, <code>args</code>, <code>session_id</code>,
+    <code>turn_id</code> and the operator's own <code>config_text</code>. On
+    <code>PostToolUse</code> it also receives <code>result_content</code>,
+    <code>truncated</code> and <code>error</code>, the last being null on success.
+    An audit hook that cannot tell a success from a failure is an audit log that
+    cannot answer the question it exists for.
+  </p>
+
+  <p>
+    <code>HookCall</code> is built by the caller field by field rather than from a
+    <code>&amp;ToolOutcome</code>, because <code>display</code> is for the terminal
+    and is not what the model saw. A hook shown more than the model is shown would
+    be a side channel the operator did not know they were operating, and plumbing
+    another internal field through needs a signature change a reviewer will see.
+  </p>
+  <span class="src">crates/harness/src/hooks.rs — HookCall, HookResult, ResolvedHook::payload</span>
+
+  <p>
+    A prompt hook receives <code>event</code> and
+    <code>hook_event_name</code> both, then <code>prompt</code>,
+    <code>session_id</code>, <code>transcript_path</code>, <code>cwd</code> and
+    <code>config_text</code>. Two names for the event because
+    <code>event</code> is Emma's, consistent across all three sites, and
+    <code>hook_event_name</code> is what a script copied out of somebody's
+    <code>.claude/hooks/</code> reads.
+    <code>permission_mode</code> is not sent: Emma's approval gate is not Claude
+    Code's mode enum, and a plausible-looking <code>"default"</code> would be a
+    fact a hook could branch on and be wrong about.
+    <code>PromptCall</code> is a separate type from <code>HookCall</code> rather
+    than a variant, because the two payloads have no field in common beyond the
+    session, and a tool hook that could read the prompt would be another side
+    channel nobody configured.
+  </p>
+  <span class="src">crates/harness/src/hooks.rs — PromptCall, ResolvedHook::prompt_payload</span>
+
+  <h2 id="daemonize">Hooks may daemonize</h2>
+
+  <p>
+    Ruled by the owner on 2026-08-14, reversing the first draft of the plan that
+    was written to stop it: <strong>a hook that starts something meant to outlive
+    it is a supported use, not a leak.</strong> That removed the draft's central
+    mechanism, a Windows job object with
+    <code>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</code> plus a Unix process group and
+    a <code>kill(-pgid)</code> drop-guard. The plan records it as dead so it is not
+    rebuilt.
+  </p>
+  <span class="src">notes/plan-process-lifetime.md §1, §7</span>
+
+  <p>
+    The defect was never that a grandchild lives. It was that <code>exec</code>
+    read stdout to end-of-file and <em>then</em> waited, so a hook that started a
+    background process and exited 0 in milliseconds was reported as
+    <code>timed out after 5000ms</code> with its output discarded, not because
+    anything was slow, but because the process it started inherited the write end
+    of the pipe and EOF never came.
+  </p>
+
+  <p>
+    Reproduced as a rate: <strong>20 of 20 invocations misreported before the fix,
+    0 of 20 after, with the daemon surviving 20 of 20 in both.</strong>
+    <span class="chip obs">observed</span>: the before/after comparison ran once,
+    on 2026-08-14, logged in <code>notes/plan-process-lifetime.md</code> §6. The
+    "before" half needs the reverted code to reproduce, so nobody can run it
+    again as it stands. The "after" half is on demand:
+    <span class="chip test">tested</span>
+    <code>cargo test -p emma-harness --test exec_lifetime
+    certify_the_misreport_rate_over_twenty_trials -- --ignored</code> loops twenty
+    times and asserts <code>misreported == 0</code> and
+    <code>daemon_survived == 20</code>.
+    <span class="chip cert">certified</span> That the test exists with those two
+    assertions, and that <code>#[ignore]</code> is why an ordinary run does not
+    reach it: <code>cargo test -p emma-harness --test exec_lifetime</code> at
+    commit <code>a3eba74</code> reports 6 passed, 0 failed, 2 ignored in 14.21s on
+    this Windows box. The twenty-trial certification is one of the two skipped. It
+    was not executed for this page.
+  </p>
+  <span class="src">notes/plan-process-lifetime.md header, §6; crates/harness/tests/exec_lifetime.rs::certify_the_misreport_rate_over_twenty_trials</span>
+
+  <h2 id="exec">The order in <code>exec</code></h2>
+
+  <pre><code>pub(crate) async fn exec(
+    cmd: &amp;mut tokio::process::Command,
+    body: String,
+) -&gt; std::io::Result&lt;(Option&lt;i32&gt;, Vec&lt;u8&gt;, Vec&lt;u8&gt;)&gt; {
+    let mut child = cmd.spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        <span class="c">// A hook that ignores stdin and exits gives us EPIPE. That is its</span>
+        <span class="c">// choice, not a failure.</span>
+        let _ = stdin.write_all(body.as_bytes()).await;
+    }
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let (mut so, mut se) = (child.stdout.take(), child.stderr.take());
+
+    let status;
+    {
+        <span class="c">// Both pipes, concurrently with the wait. The buffers are borrowed</span>
+        <span class="c">// rather than owned by the futures precisely so that abandoning a read</span>
+        <span class="c">// keeps the bytes it already collected.</span>
+        let both = async {
+            tokio::join!(
+                async {
+                    if let Some(r) = so.as_mut() {
+                        let _ = drain(r, &amp;mut out).await;
+                    }
+                },
+                async {
+                    if let Some(r) = se.as_mut() {
+                        let _ = drain(r, &amp;mut err).await;
+                    }
+                }
+            );
+        };
+        tokio::pin!(both);
+        let mut exited = None;
+        tokio::select! {
+            <span class="c">// Both pipes reached EOF (or the cap) first: the ordinary case with</span>
+            <span class="c">// no grandchild anywhere, and `wait` below returns immediately.</span>
+            _ = &amp;mut both =&gt; {}
+            s = child.wait() =&gt; exited = Some(s?),
+        }
+        status = match exited {
+            Some(s) =&gt; {
+                <span class="c">// The hook is done. Give whatever is still in the pipes a</span>
+                <span class="c">// moment to arrive, then stop: a write end we do not own may</span>
+                <span class="c">// stay open indefinitely and is not ours to wait for.</span>
+                let _ = tokio::time::timeout(Duration::from_millis(EXEC_DRAIN_GRACE_MS), &amp;mut both)
+                    .await;
+                s
+            }
+            None =&gt; child.wait().await?,
+        };
+    }
+
+    <span class="c">// Emma's read ends, closed. The write ends belong to whatever still holds</span>
+    <span class="c">// them and die with it; nothing is retained here.</span>
+    drop(so);
+    drop(se);
+    Ok((status.code(), out, err))
+}</code></pre>
+  <span class="src">crates/harness/src/hooks.rs — exec, quoted entire</span>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 780 268" role="img"
+           aria-label="Timeline of hooks::exec. Emma spawns the hook and writes stdin; the hook starts a daemon that inherits the same stdout, then writes and exits. Emma's wait resolves on the hook's exit, gives the pipes a 200 millisecond grace, then drops its read ends and returns. The daemon keeps the write end, so end-of-file never arrives.">
+        <defs>
+          <marker id="hook-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
+          </marker>
+          <marker id="hook-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
+          </marker>
+        </defs>
+
+        <rect class="hl" x="16" y="44" width="176" height="30" rx="3"/>
+        <text class="lbl" x="28" y="64">emma · hooks::exec</text>
+        <rect class="box" x="16" y="128" width="176" height="30" rx="3"/>
+        <text class="lbl" x="28" y="148">the hook it spawned</text>
+        <rect class="box" x="16" y="212" width="176" height="30" rx="3"/>
+        <text class="lbl" x="28" y="232">what the hook started</text>
+
+        <path class="edge" d="M200 59 L764 59"/>
+        <path class="edge" d="M200 143 L520 143"/>
+        <path class="edge-dash" d="M392 227 L752 227" marker-end="url(#hook-arrow)"/>
+
+        <path class="edge" d="M232 66 L232 132" marker-end="url(#hook-arrow)"/>
+        <text class="tiny" x="210" y="30">spawn,</text>
+        <text class="tiny" x="210" y="42">then stdin</text>
+
+        <path class="edge" d="M392 150 L392 216" marker-end="url(#hook-arrow)"/>
+        <text class="tiny" x="300" y="186">inherits the</text>
+        <text class="tiny" x="300" y="198">same stdout</text>
+
+        <path class="edge" d="M462 136 L462 70" marker-end="url(#hook-arrow)"/>
+        <text class="tiny" x="372" y="106">writes stdout</text>
+
+        <path class="edge-hl" d="M520 136 L520 70" marker-end="url(#hook-arrow-hl)"/>
+        <text class="tiny" x="500" y="164">exit 0</text>
+
+        <rect class="box" x="520" y="46" width="112" height="26" rx="3"/>
+        <text class="tiny" x="530" y="63">200ms grace</text>
+        <text class="tiny" x="536" y="96">wait resolved — drain</text>
+        <text class="tiny" x="536" y="108">whatever is buffered</text>
+
+        <path class="edge-hl" d="M660 46 L660 28" marker-end="url(#hook-arrow-hl)"/>
+        <text class="tiny" x="600" y="18">drop the read ends, return</text>
+
+        <text class="tiny" x="200" y="252">the write end is still held down here, so end-of-file never arrives: that was the defect</text>
+      </svg>
+    </div>
+    <figcaption>
+      Read from the function above. Both capped pipe reads run
+      <em>concurrently</em> with <code>child.wait()</code> in a
+      <code>select!</code> rather than in front of it, so completion is the
+      child's own exit and the pipes are drained around it.
+    </figcaption>
+  </figure>
+
+  <p>
+    <code>drain</code> is hand-rolled instead of
+    <code>take(cap).read_to_end(buf)</code> because the future is abandoned when
+    the grace expires, and <code>read_to_end</code> is documented as not
+    cancellation-safe: what it has read so far is not guaranteed to be in the
+    buffer. Here the cancellation boundary is one <code>read</code> call, and every
+    byte that returned from one is already appended. It stops at
+    <code>HOOK_OUTPUT_CAP</code>, and the <code>n.min(room)</code> is what keeps
+    the last chunk from overshooting.
+  </p>
+
+  <pre><code>async fn drain&lt;R&gt;(r: &amp;mut R, buf: &amp;mut Vec&lt;u8&gt;) -&gt; std::io::Result&lt;()&gt;
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut chunk = [0u8; 8 * 1024];
+    while (buf.len() as u64) &lt; HOOK_OUTPUT_CAP {
+        let n = r.read(&amp;mut chunk).await?;
+        if n == 0 {
+            return Ok(());
+        }
+        let room = HOOK_OUTPUT_CAP as usize - buf.len();
+        buf.extend_from_slice(&amp;chunk[..n.min(room)]);
+    }
+    Ok(())
+}</code></pre>
+  <span class="src">crates/harness/src/hooks.rs — drain, quoted entire</span>
+
+  <h3>A budget rather than an event</h3>
+
+  <p>
+    Once a write end may outlive the child there is no observable event meaning
+    "the hook's own output is complete". End-of-file arrives when the
+    <em>last</em> writer closes, which may be days later, and a pipe cannot say
+    which writer a byte came from. What is knowable is that everything the hook
+    itself wrote completed into the pipe buffer before <code>exit</code> could
+    run, so a grace long enough to drain a local buffer captures all of it. A
+    daemon's bytes that land inside the grace ride along, bounded by the 64 KiB
+    cap and not separable without attribution the pipe does not offer.
+  </p>
+  <span class="src">crates/harness/src/hooks.rs — EXEC_DRAIN_GRACE_MS</span>
+
+  <p>
+    <strong>Windows is what makes abandoning the pipe safe: there is no
+    SIGPIPE.</strong> A write into a broken pipe returns
+    <code>ERROR_BROKEN_PIPE</code>, an error code the writer may ignore, so a
+    staged grandchild that keeps writing to the inherited stdout after Emma walks
+    away is still alive seconds later. tokio also gives a child's stdio
+    <em>overlapped</em> I/O on Windows, so an unfinished read is a cancelled
+    future rather than a thread stuck in a blocking <code>ReadFile</code>.
+    <span class="chip test">tested</span> by six Windows fixtures in
+    <code>crates/harness/tests/exec_lifetime.rs</code>, among them
+    <code>a_hook_that_exited_zero_is_not_reported_as_timed_out_because_a_grandchild_holds_the_pipe</code>,
+    <code>a_daemonizing_hooks_child_is_still_running_after_emma_walks_away</code>
+    and
+    <code>a_timed_out_hooks_descendants_survive_by_ruling_not_by_accident</code>.
+    <span class="chip cert">certified</span> All six pass:
+    <code>cargo test -p emma-harness --test exec_lifetime</code>, run on
+    2026-08-16.
+  </p>
+  <span class="src">crates/harness/tests/exec_lifetime.rs; notes/plan-process-lifetime.md §2, §6</span>
+
+  <div class="note warn">
+    <span class="h">The unix edge</span>
+    <p>
+      On unix, closing the read end means a daemon that later <em>writes</em> to
+      that stdout gets <code>SIGPIPE</code> and, by default, dies. Two things
+      bound it: this is not new, since the timeout path already dropped the pipe,
+      and a long-lived reader was never on offer; and the daemon idiom exists
+      because inherited stdio is borrowed. <strong>A hook that starts a daemon
+      should redirect its stdio to <code>/dev/null</code> (or <code>NUL</code>)
+      first.</strong> The alternative, Emma keeping a reader alive for as long as
+      somebody else's daemon lives, is an unbounded obligation and is refused.
+    </p>
+    <p>
+      <span class="chip unv">unverified</span> The unix arm is compile-checked
+      only. The daemonizing fixtures are <code>#[cfg(windows)]</code>, and the
+      file carries a <code>#[cfg(not(windows))]</code> test whose whole job is to
+      say so. On Windows nothing pins the 200 ms grace either, because nothing
+      makes its removal observable: deleting it leaves every fixture green,
+      including a 100-trial probe of a hook whose last write and exit are the same
+      instant, at 0 of 100 lost either way. <em>What would settle both:</em> a
+      Linux or WSL run of the same fixtures, where the readiness-based path means
+      the bytes wait in the kernel for a poll the randomised <code>select!</code>
+      may not reach before the wait wins, and where a write-looping daemon is
+      expected to die on its first post-abandonment write unless it ignores
+      <code>SIGPIPE</code>.
+    </p>
+    <span class="src">crates/harness/src/hooks.rs — EXEC_DRAIN_GRACE_MS; crates/harness/tests/exec_lifetime.rs::the_process_lifetime_fixtures_are_windows_only_and_this_says_so</span>
+  </div>
+
+  <h2 id="lifetime">The lifetime rule</h2>
+
+  <p>
+    <strong>Emma supervises the direct child it spawned, meaning its budget, its
+    pipes and its exit code, and claims nothing about that child's
+    descendants.</strong> On the timeout path <code>kill_on_drop</code> kills the
+    hook and only the hook. Whatever the hook started is left, because Emma cannot
+    tell a broken hook's orphans from the daemon the operator meant to start.
+  </p>
+
+  <p>
+    The cost is stated as a cost: a hung hook's descendants are unreclaimable,
+    nothing short of reaping bounds that, and the only available mitigation is a
+    clause in the transcript telling the operator to look. That is a report, not a
+    bound.
+  </p>
+  <span class="src">crates/harness/src/hooks.rs — exec; notes/plan-process-lifetime.md §3, §5</span>
+
+  <p>
+    <span class="chip unv">unverified</span> One question is open rather than
+    answered. <code>StatusLine::run</code> calls the same <code>exec</code>, so it
+    inherits both the fix and the ruling, and a status script runs on a debounced
+    trigger many times per session, so one that daemonizes accumulates a process
+    per burst. One behaviour for both shipped. <em>What would settle it:</em> the
+    owner's ruling on whether the daemonize permission covers the status line.
+  </p>
+  <span class="src">notes/plan-process-lifetime.md §4, header</span>
+
+  <h2 id="unsettled">What else is not settled here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> The claim that Claude Code
+      discards a timed-out <code>UserPromptSubmit</code> hook's output and lets
+      the prompt through is quoted from the doc comment on
+      <code>run_prompt</code> and was not checked against Claude Code's
+      documentation for this page. <em>What would settle it:</em> the paragraph of
+      that documentation, quoted with its URL, in
+      <code>notes/claude-code-compatibility.md</code>.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> Nothing on this page was observed
+      from a running Emma with a real hook attached. The event payloads, the
+      notices and the boot errors are read from source and from the harness
+      crate's tests. <em>What would settle it:</em> a session with one hook per
+      event in <code>.emma/hooks/</code>, one of them written to crash, and the
+      console output pasted.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · read at commit <code>a3eba74</code> ·
+    <code>crates/harness/src/hooks.rs</code> ·
+    <code>crates/harness/tests/exec_lifetime.rs</code> ·
+    <a href="consent.html">back to the chapter</a>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

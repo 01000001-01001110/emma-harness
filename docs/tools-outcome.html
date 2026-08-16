@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ToolOutcome · Tools · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav here" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<p class="eyebrow">Doing work</p>
+<h1><code>ToolOutcome</code>: one type, two audiences</h1>
+
+<nav class="chapter">
+  <a class="up" href="tools.html">Tools</a>
+  <a href="tools-trait.html">the trait</a>
+  <span class="now">outcomes</span>
+  <a href="tools-truncation.html">truncation</a>
+  <a href="tools-ctx.html">ToolCtx</a>
+  <a href="tools-containment.html">containment</a>
+  <a href="tools-files.html">files</a>
+  <a href="tools-edit.html">Edit</a>
+  <a href="tools-bash.html">Bash</a>
+  <a href="tools-tasks.html">tasks</a>
+  <a href="tools-web.html">web</a>
+  <a href="tools-lsp.html">LSP</a>
+</nav>
+
+<p class="lede">
+  A successful call produces four fields. Two of them are the same answer
+  written for two different readers, and the other two are the admission that
+  the answer is not whole.
+</p>
+
+<pre><code><span class="c">/// What a successful call produced.</span>
+<span class="c">///</span>
+<span class="c">/// `content` is what the model sees. `display` is what a human watching the</span>
+<span class="c">/// terminal sees, when a full dump would be noise — the diff rather than the</span>
+<span class="c">/// whole file, the first lines of output rather than ten thousand. When it is</span>
+<span class="c">/// `None` the terminal shows nothing beyond the fact that the tool ran.</span>
+<span class="k">#[derive(Debug, Clone, PartialEq, Eq)]</span>
+<span class="k">pub struct</span> ToolOutcome {
+    <span class="k">pub</span> content: String,
+    <span class="k">pub</span> display: Option&lt;String&gt;,
+    <span class="k">pub</span> truncated: <span class="k">bool</span>,
+    <span class="k">pub</span> truncation: Option&lt;String&gt;,
+}</code></pre>
+<span class="src">crates/tool-api/src/lib.rs — <code>ToolOutcome</code></span>
+
+<h2 id="split">Why the answer is written twice</h2>
+
+<p>
+  A full dump is often noise on a terminal and never noise to a model. The
+  model is going to reason about the bytes; the human is going to glance at the
+  line while it scrolls past. Collapsing the two means choosing which of them
+  to serve badly, and the choice that tends to get made is the one that keeps
+  the terminal readable, which is the one that starves the model.
+</p>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Call</th><th><code>content</code></th><th><code>display</code></th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>Read</code>, whole file</td>
+        <td>every line, labelled <code>&lt;number&gt;#&lt;hash&gt;</code></td>
+        <td><code>src/lib.rs: 151 lines</code></td>
+      </tr>
+      <tr>
+        <td><code>Read</code>, empty file</td>
+        <td>the empty string</td>
+        <td><code>src/lib.rs: empty file</code></td>
+      </tr>
+      <tr>
+        <td><code>Write</code></td>
+        <td><code>replaced src/lib.rs (151 lines, 4021 bytes)</code></td>
+        <td><code>replaced src/lib.rs</code></td>
+      </tr>
+      <tr>
+        <td><code>Edit</code>, addressed</td>
+        <td>the summary, then the replacement lines with their new numbers and hashes, then how far everything below moved</td>
+        <td>the summary alone</td>
+      </tr>
+      <tr>
+        <td><code>Glob</code></td>
+        <td>one path per line</td>
+        <td><code>**/*.rs: 87 of 87 paths</code></td>
+      </tr>
+      <tr>
+        <td><code>Grep</code>, no hits</td>
+        <td>the empty string</td>
+        <td><code>Config: no matches in 412 files</code></td>
+      </tr>
+      <tr>
+        <td><code>Bash</code></td>
+        <td>shell banner, exit status if non-zero, then the two streams</td>
+        <td><code>None</code></td>
+      </tr>
+      <tr>
+        <td><code>TaskList</code></td>
+        <td>the counts, then one line per task</td>
+        <td>the counts alone</td>
+      </tr>
+      <tr>
+        <td><code>BrowserAct</code></td>
+        <td>a snapshot under 400 characters and an instruction to call <code>BrowserRead</code></td>
+        <td><code>click — Example Domain</code></td>
+      </tr>
+      <tr>
+        <td>the four LSP tools</td>
+        <td>server banner, readiness caveat, then the answer</td>
+        <td><code>14 references</code>, or nothing for <code>Hover</code></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<span class="src">tools/fs/src/{read,write,edit,glob,grep,bash}.rs; tools/tasks/src/list.rs; tools/web/src/browser/render.rs; tools/lsp/src/render.rs</span>
+
+<p>
+  <span class="chip cert">certified</span> <code>Bash</code> is the one tool in
+  the workspace that never sets <code>display</code>, so a shell command shows
+  only that it ran; the terminal renders the command itself instead. Checkable
+  with <code>grep -c with_display tools/fs/src/bash.rs</code>, which is 0, against
+  <code>read.rs</code>'s 4.
+</p>
+
+<p>
+  Two rows above are worth pausing on. <code>Read</code> of an empty file
+  returns a genuinely empty <code>content</code>, not a sentence saying the file
+  is empty, because anything written there would be indistinguishable from file
+  content the next time the model quotes it back. The empty-<code>Grep</code>
+  row is the same decision one level up: the fact goes in <code>display</code>,
+  where nothing will mistake it for a match.
+</p>
+<span class="src">tools/fs/src/read.rs — <code>render</code>; tools/fs/src/grep.rs — <code>Grep::run</code></span>
+
+<h2 id="builders">Four constructors, and the one pairing they forbid</h2>
+
+<pre><code><span class="k">impl</span> ToolOutcome {
+    <span class="k">pub fn</span> new(content: <span class="k">impl</span> Into&lt;String&gt;) -&gt; Self { <span class="c">/* … */</span> }
+
+    <span class="k">pub fn</span> with_display(<span class="k">mut self</span>, display: <span class="k">impl</span> Into&lt;String&gt;) -&gt; Self { <span class="c">/* … */</span> }
+
+    <span class="c">/// Cut, with no stated reason. See [`ToolOutcome::truncated_because`].</span>
+    <span class="k">pub fn</span> truncated(<span class="k">mut self</span>) -&gt; Self {
+        <span class="k">self</span>.truncated = <span class="k">true</span>;
+        <span class="k">self</span>
+    }
+
+    <span class="c">/// Cut, and here is what was lost and how to get it.</span>
+    <span class="c">///</span>
+    <span class="c">/// The two fields cannot disagree: there is no way to supply a reason</span>
+    <span class="c">/// without also setting the flag, and `truncation.is_some()` therefore</span>
+    <span class="c">/// always implies `truncated`.</span>
+    <span class="k">pub fn</span> truncated_because(<span class="k">mut self</span>, reason: <span class="k">impl</span> Into&lt;String&gt;) -&gt; Self {
+        <span class="k">self</span>.truncated = <span class="k">true</span>;
+        <span class="k">self</span>.truncation = Some(reason.into());
+        <span class="k">self</span>
+    }
+}</code></pre>
+<span class="src">crates/tool-api/src/lib.rs — <code>impl ToolOutcome</code></span>
+
+<p>
+  There is no constructor that sets <code>truncation</code> without
+  <code>truncated</code>. If those two could disagree, a result could carry a
+  full explanation of its own truncation and still be presented as whole, which
+  is the failure the flag exists to prevent.
+</p>
+
+<p>
+  <span class="chip test">tested</span>
+  <code>a_reason_for_truncation_implies_truncation</code> asserts all three
+  states: a reason implies the flag, the bare flag leaves
+  <code>truncation</code> at <code>None</code>, and a plain outcome claims
+  nothing. Making the fields public and settable independently would not break
+  it, which is worth knowing: the test guards the constructors, not the struct.
+</p>
+
+<h2 id="weak">The weaker form, and who still uses it</h2>
+
+<p>
+  <code>truncated()</code> without a reason is described in its own doc as
+  never the preferred choice for a new tool. It survives because several tools
+  explain their cut inside <code>content</code> instead, and the model reads the
+  content. What it costs is the terminal line and the runtime's own note, which
+  then have nothing specific to say.
+</p>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Caller of the bare <code>truncated()</code></th><th>What it says instead</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>tools/lsp/src/render.rs</code>, <code>locations</code></td>
+        <td><code>[truncated: 100 of {n} shown. Ask a narrower question rather than assuming the rest are like these.]</code>, in <code>content</code> only</td>
+      </tr>
+      <tr>
+        <td><code>tools/lsp/src/render.rs</code>, <code>symbols</code></td>
+        <td><code>[truncated: 300 of {n} symbols shown]</code>, in <code>content</code> only</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  <span class="chip cert">certified</span> Those are the only two production
+  callers in the workspace. <code>grep -rn '\.truncated()' tools/ crates/
+  --include=*.rs</code> at commit <code>a3eba74</code> returns eight lines:
+  these two, one <code>tool-api</code> test, one prose mention in a doc comment
+  in <code>tools/web/src/fetch.rs</code>, and four calls to a different method
+  of the same name on <code>digest_md::Rendered</code>. Both of the LSP crate's
+  caps explain themselves in prose, so the model is
+  not left guessing; the human watching the terminal is. Flagged on
+  <a href="tools-lsp.html">the LSP page</a> rather than fixed here.
+</p>
+
+<p>
+  When a tool uses the weak form the runtime prints a fallback that says so
+  rather than guessing which cap bound:
+</p>
+
+<pre><code>[truncated: this is not the whole output, and this tool did not say which
+limit cut it. Narrow the request if you need the rest.]</code></pre>
+<span class="src">crates/emma/src/agent.rs — <code>truncation_note</code></span>
+
+<h2 id="unverified">What is not verified here</h2>
+
+<p>
+  <span class="chip unv">unverified</span> The table of <code>display</code>
+  strings above is read out of each tool's <code>with_display</code> call and
+  its format string. Nobody has watched all ten render on a real terminal in
+  one session, and this project has shipped a fully-tested defect in drawn
+  output twice. Settled by running a session that exercises each tool once and
+  pasting the transcript lines.
+</p>
+</div>
+</main>
+</div>
+</body>
+</html>

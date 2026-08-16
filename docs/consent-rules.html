@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Permission rules · Consent &amp; permissions · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav here" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <h1>Permission rules, scopes and merging</h1>
+
+  <nav class="chapter">
+    <a class="up" href="consent.html">Consent &amp; permissions</a>
+    <a href="consent-axes.html">The two axes</a>
+    <a href="consent-ladder.html">The ladder</a>
+    <a href="consent-egress.html">The egress question</a>
+    <a href="consent-answers.html">The five answers</a>
+    <a href="consent-exempt.html">EXEMPT and the floor</a>
+    <span class="now">Permission rules</span>
+    <a href="consent-matching.html">Matching a host</a>
+    <a href="consent-hooks.html">Hooks</a>
+  </nav>
+
+  <p class="lede">
+    A rule is <code>Tool</code> or <code>Tool(specifier)</code>, in Claude Code's
+    JSON shape, read from up to three files and merged into one set of three
+    lists. Which list a match lands in is the whole of the answer; how specific
+    the rule was does not enter into it.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — Rule, Rules; crates/harness/src/lib.rs — PermissionBlock</span>
+
+  <h2 id="format">The format, and why it is somebody else's</h2>
+
+  <p>
+    The block is <code>permissions: { allow: [], deny: [], ask: [] }</code>. An
+    existing <code>.claude/settings.json</code> works here, and a rule Emma writes
+    is a rule the other program understands. Emma's own
+    <code>.emma/config.json</code> spine accepts the same block under the same
+    names; a block that had to be re-typed to move between the two directories
+    would defeat the reason it is read at all.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — module doc; crates/harness/src/lib.rs — PermissionBlock</span>
+
+  <p>
+    Persistent rules were once refused outright. <code>approval.rs</code> carried
+    a section arguing there must be no persistent always-allow, because "a
+    permission the user cannot see is a permission they have forgotten they
+    granted, and the place they would not see it is a config file written six
+    weeks ago". That was reversed against one goal, <em>search the web for AI
+    news</em>, which asked for <code>api.search.brave.com</code>, then
+    <code>www.reuters.com</code>, then <code>tech.yahoo.com</code>, then
+    <code>openai.com</code>, then <code>apnews.com</code>: five prompts, and all
+    five asked again on the next run.
+  </p>
+
+  <p>
+    What replaced it keeps the visibility the argument was about. A rule is
+    written only when the user picks the answer that says so, it is shown before
+    it is written, it lands in a JSON file that can be read, diffed and deleted,
+    and <code>emma config check</code> lists every rule with the file it came
+    from.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — module doc; crates/emma/src/commands.rs — config check</span>
+
+  <h2 id="shapes">The shapes a rule can have</h2>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Rule</th><th>Parses to</th><th>Answers</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>WebSearch</code></td><td><code>Spec::All</code></td><td>both questions</td><td>every call to that tool, to any host</td></tr>
+      <tr><td><code>WebSearch(*)</code></td><td><code>Spec::All</code></td><td>both questions</td><td>the same thing; Claude Code documents them as equivalent</td></tr>
+      <tr><td><code>WebSearch()</code></td><td><code>Spec::All</code></td><td>both questions</td><td>an empty specifier is read the same way</td></tr>
+      <tr><td><code>WebFetch(domain:*)</code></td><td><code>Spec::All</code></td><td>both questions</td><td>normalised back to the bare shape at parse time, so one shape in the code means "everything"</td></tr>
+      <tr><td><code>WebFetch(domain:apnews.com)</code></td><td><code>Spec::Domain</code></td><td>egress only</td><td>that host, for that tool</td></tr>
+      <tr><td><code>WebFetch(domain:*.example.com)</code></td><td><code>Spec::Domain</code></td><td>egress only</td><td>a strict subdomain at any depth, <strong>not</strong> <code>example.com</code> itself</td></tr>
+      <tr><td><code>WebFetch(domain:example.*)</code></td><td><code>Spec::Domain</code></td><td>egress only</td><td><code>example.org</code>; the <code>*</code> is one label and cannot cross a dot</td></tr>
+      <tr><td><code>Bash(git log:*)</code></td><td><code>Spec::Unsupported</code></td><td>nothing</td><td>parses, <strong>never matches</strong>, and is said out loud at boot</td></tr>
+      <tr><td><code>*</code>, <code>Web*</code>, <code>mcp__*</code></td><td>a parse error</td><td>nothing</td><td>Claude Code permits globbing the tool name for deny rules; Emma refuses it in all three lists</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/emma/src/permissions.rs — Rule::parse, Spec, check_tool; tests::the_three_shapes_a_rule_can_have</span>
+
+  <h2 id="parse">Parsing one rule</h2>
+
+  <pre><code>pub fn parse(raw: &amp;str) -&gt; Result&lt;Self&gt; {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        bail!("a permission rule cannot be empty");
+    }
+    let Some(open) = raw.find('(') else {
+        return Ok(Self {
+            tool: check_tool(raw)?,
+            spec: Spec::All,
+        });
+    };
+    let (tool, rest) = raw.split_at(open);
+    let tool = check_tool(tool)?;
+    let inner = rest
+        .strip_prefix('(')
+        .and_then(|r| r.strip_suffix(')'))
+        .with_context(|| format!("`{raw}` is missing its closing `)`"))?;
+    let inner = inner.trim();
+    <span class="c">// Claude Code documents `Bash(*)` as equivalent to `Bash`. Reading them</span>
+    <span class="c">// as two things would make the shorter spelling the safe one by</span>
+    <span class="c">// accident.</span>
+    if inner.is_empty() || inner == "*" {
+        return Ok(Self {
+            tool,
+            spec: Spec::All,
+        });
+    }
+    if let Some(pattern) = inner.strip_prefix("domain:") {
+        let pattern = pattern.trim();
+        if pattern.is_empty() {
+            bail!("`{raw}` names no domain — a `domain:` rule with nothing after the colon");
+        }
+        <span class="c">// `domain:*` is documented as equivalent to the bare tool name. It</span>
+        <span class="c">// is written back as `Spec::All` rather than kept as a pattern that</span>
+        <span class="c">// happens to match everything, so there is one shape in the code</span>
+        <span class="c">// that means "everything" and it is easy to grep for.</span>
+        let spec = match pattern {
+            "*" =&gt; Spec::All,
+            _ =&gt; Spec::Domain(DomainPattern::parse(pattern)?),
+        };
+        return Ok(Self { tool, spec });
+    }
+    Ok(Self {
+        tool,
+        spec: Spec::Unsupported(inner.to_string()),
+    })
+}</code></pre>
+  <span class="src">crates/emma/src/permissions.rs — Rule::parse, quoted entire</span>
+
+  <p>
+    <code>check_tool</code> refuses three things in the tool position: an empty
+    name, a name containing <code>*</code>, and a name containing whitespace. The
+    error for the star says why, and it is the sharpest sentence in the file: a
+    <code>*</code> there is the rule that matches everything, which in the
+    <code>allow</code> list is one typo away from approving the whole tool surface.
+    <span class="chip test">tested</span>
+    <code>a_glob_in_the_tool_position_is_refused</code> runs <code>*</code>,
+    <code>*(domain:x)</code>, <code>Web*</code> and <code>mcp__*</code> and
+    asserts each error mentions "exactly" or "tool name".
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — check_tool; tests::a_glob_in_the_tool_position_is_refused</span>
+
+  <p>
+    Anything that is not a clean parse is an error rather than a rule that matches
+    nothing. The distinction is about the <code>deny</code> list: a rule the
+    operator wrote and Emma dropped without a word is a protection they believe
+    they have. <span class="chip test">tested</span>
+    <code>a_malformed_rule_is_refused_rather_than_silently_inert</code> asserts an
+    error for ten spellings, including <code>""</code>, <code>"   "</code>,
+    <code>WebFetch(</code>, <code>WebFetch(domain:apnews.com</code>,
+    <code>(domain:apnews.com)</code>, <code>WebFetch(domain:)</code>,
+    <code>WebFetch(domain: )</code>, <code>WebFetch(domain:..)</code>,
+    <code>WebFetch(domain:a..b)</code> and <code>Web Fetch</code>.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — tests::a_malformed_rule_is_refused_rather_than_silently_inert</span>
+
+  <h3><code>Spec::Unsupported</code>, the third variant</h3>
+
+  <p>
+    A specifier that is well-formed but outside this build's vocabulary is kept as
+    a value rather than dropped, so the boot can announce it.
+    <code>Bash(git log:*)</code> and <code>Read(./src/**)</code> are the two the
+    code names. <code>Rules::parse</code> writes a note about each and then
+    <code>continue</code>s, so an unsupported rule never reaches a list at all.
+  </p>
+
+  <p>
+    Its matcher arm is <code>Spec::Unsupported(_) =&gt; false</code>, reachable
+    only through <code>adopt</code>, and that is the way in the test uses. An arm
+    nothing can reach is an arm nothing checks: a mutation flipping it to
+    <code>true</code> went undetected until the test existed, and that is how
+    <code>Bash(rm *)</code> would one day start matching every call to
+    <code>Bash</code>. <span class="chip test">tested</span>
+    <code>an_unsupported_rule_that_reaches_a_list_anyway_still_matches_nothing</code>
+    adopts <code>Bash(git log:*)</code> and asserts <code>for_tool</code> and two
+    <code>for_egress</code> calls all answer <code>None</code>. Flipping the arm
+    to <code>true</code> turned that test red at <code>20ac400</code>.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — Rules::for_egress, Rules::adopt; tests::an_unsupported_rule_that_reaches_a_list_anyway_still_matches_nothing</span>
+
+  <p>
+    Rendering round-trips: <code>Display</code> for <code>Rule</code> prints
+    <code>Tool</code>, <code>Tool(domain:raw)</code> or <code>Tool(spec)</code>,
+    and the pattern keeps the text it was written as so the rule renders back
+    exactly as the file will show it. <span class="chip test">tested</span>
+    <code>a_rule_round_trips_through_its_own_text</code> parses four spellings,
+    asserts each renders to itself, and re-parses the rendering to the same value.
+    The written file is the user interface; a rule that renders back as something
+    that parses differently is a grant that means one thing on screen and another
+    on the next boot.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — impl Display for Rule; tests::a_rule_round_trips_through_its_own_text</span>
+
+  <h2 id="precedence">Precedence inside the rule set</h2>
+
+  <pre><code><span class="c">/// **deny, then ask, then allow — the first list with a match wins, and rule</span>
+<span class="c">/// specificity never changes that.** Same order Claude Code documents, and</span>
+<span class="c">/// the reason is the same: a `deny` that could be narrowed away by a more</span>
+<span class="c">/// specific `allow` is not a deny, it is a default.</span>
+fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Decision&gt; {
+    if self.deny.iter().any(&amp;matches) {
+        return Some(Decision::Deny);
+    }
+    if self.ask.iter().any(&amp;matches) {
+        return Some(Decision::Ask);
+    }
+    if self.allow.iter().any(&amp;matches) {
+        return Some(Decision::Allow);
+    }
+    None
+}</code></pre>
+  <span class="src">crates/emma/src/permissions.rs — Rules::decide, quoted entire</span>
+
+  <p>
+    A narrow <code>allow</code> does not carve an exception out of a broad
+    <code>deny</code>. A broad <code>allow</code> still covers every host a narrow
+    <code>deny</code> does not name. This is the clause people get wrong, and if
+    it inverted, every <code>deny</code> list in every settings file would become
+    a default rather than a refusal. <span class="chip test">tested</span>
+    <code>deny_beats_allow_however_specific_the_allow_is</code> checks both
+    arrangements and then asserts the broad allow still answers for a host the
+    narrow deny does not name. <code>ask_sits_between_them_and_beats_allow</code>
+    holds the middle rung from both sides.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — tests::deny_beats_allow_however_specific_the_allow_is, tests::ask_sits_between_them_and_beats_allow</span>
+
+  <p>
+    The predicate is supplied by the caller, which is how one function answers two
+    questions. <code>for_tool</code> passes <code>r.tool == tool &amp;&amp; r.spec
+    == Spec::All</code>. <code>for_egress</code> passes a closure that also
+    accepts a <code>Spec::Domain</code> matching the host, and rejects
+    <code>Spec::Unsupported</code>. A <code>domain:</code> rule therefore never
+    answers the local question.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — Rules::for_tool, Rules::for_egress</span>
+
+  <p>
+    <code>None</code> is what sends a call on down the ladder. A rule set that
+    answered <code>Allow</code> for a tool nobody wrote a rule about would be the
+    whole gate switched off by an empty file.
+    <span class="chip test">tested</span>
+    <code>silence_is_not_a_decision</code> asserts <code>None</code> from both
+    lookups on an empty set, and that <code>is_empty</code> agrees.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — Rules::decide, Rules::is_empty; tests::silence_is_not_a_decision</span>
+
+  <p>
+    <code>adopt</code> pushes a rule into the <code>allow</code> list of the live
+    set. It is called by <code>Approvals::keep</code> on every path, including
+    both write-failure paths, so a run that cannot write still stops asking.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — Rules::adopt; crates/emma/src/approval.rs — Approvals::keep</span>
+
+  <h2 id="parse-set">Parsing a whole set never fails the boot</h2>
+
+  <p>
+    <code>Rules::parse</code> returns the rules and one sentence per entry that
+    will not do anything. It cannot fail. <code>.claude/settings.json</code> is
+    written for a program with a larger vocabulary, and refusing to start because
+    one of forty rules is <code>Read(./secrets/**)</code> would be an outage of
+    the kind this workspace rules against elsewhere. The notes are what
+    compensates, and <code>main</code> prints every one through the
+    <em>warning</em> channel at startup rather than the note channel, since each
+    is a line somebody wrote that is not doing what they think.
+    <span class="chip test">tested</span>
+    <code>a_bad_rule_costs_that_rule_and_not_the_boot</code> parses
+    <code>WebFetch(</code> beside <code>WebSearch</code> and asserts the good rule
+    still answers and the note names the source file.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — Rules::parse; crates/emma/src/main.rs; tests::a_bad_rule_costs_that_rule_and_not_the_boot</span>
+
+  <p>
+    The unsupported branch writes two different sentences, and the split is the
+    point. An <code>allow</code> Emma cannot evaluate costs a prompt the user did
+    not want. A <code>deny</code> or <code>ask</code> it cannot evaluate costs
+    them a protection they think they have, and that one says <em>blocks
+    NOTHING</em> in capitals and suggests the bare tool name as the spelling that
+    would cover every call. <span class="chip test">tested</span>
+    <code>an_unsupported_specifier_is_announced_and_the_deny_wording_is_the_loud_one</code>
+    asserts both wordings and that neither rule reached a list.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — Rules::parse; tests as named</span>
+
+  <h2 id="scopes">Where rules are stored, and how the scopes merge</h2>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Scope</th><th>File</th><th>Lists honoured</th><th>Malformed file</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>project spine</td>
+        <td><code>.emma/config.json</code> or <code>.claude/settings.json</code></td>
+        <td>deny, ask, allow</td>
+        <td>fails the boot</td>
+      </tr>
+      <tr>
+        <td>project local</td>
+        <td><code>&lt;harness&gt;/settings.local.json</code></td>
+        <td>deny, ask, allow</td>
+        <td>fails the boot</td>
+      </tr>
+      <tr>
+        <td>user</td>
+        <td><code>~/.claude/settings.json</code></td>
+        <td><strong>deny only</strong></td>
+        <td>skipped in silence</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/harness/src/lib.rs — read_permissions, user_permissions, LOCAL_SETTINGS_FILE; crates/emma/src/main.rs</span>
+
+  <p>
+    The scopes merge; they do not layer. Every <code>PermissionEntry</code> carries
+    the file it was written in, because by the time a rule misfires there is no
+    other route back to the document holding it. The merged set composes because
+    <code>deny</code> beats <code>allow</code> at match time whichever file each
+    came from. <span class="chip test">tested</span>
+    <code>a_deny_rule_in_the_project_file_beats_an_allow_in_the_local_one</code>,
+    in the integration tests.
+  </p>
+  <span class="src">crates/harness/src/lib.rs — PermissionEntry::source; crates/emma/tests/permissions.rs</span>
+
+  <p>
+    <code>PermissionBlock::into_entries</code> pushes deny, then ask, then allow,
+    which is the order they are consulted in. Nothing depends on that ordering; it
+    means a debug print of the vector reads in precedence order.
+  </p>
+  <span class="src">crates/harness/src/lib.rs — PermissionBlock::into_entries</span>
+
+  <h3>Why the user scope gives up two of its three lists</h3>
+
+  <p>
+    Taking only <code>deny</code> from <code>~/.claude/settings.json</code>
+    diverges from Claude Code, where user settings carry all three lists and all
+    three apply in every project. The file is another program's global
+    configuration, and a grant in it was made for that program, in a session Emma
+    was not part of, possibly years ago.
+  </p>
+
+  <p>
+    The doc names a live example rather than a hypothetical: the owner's own file
+    carries <code>Bash(rm:*)</code>, <code>Bash(bash:*)</code> and
+    <code>Bash(powershell.exe:*)</code> in its <code>allow</code> list, plus
+    <code>"defaultMode": "dontAsk"</code>. Honouring user-scope <code>allow</code>
+    would have given Emma an unprompted shell in every repository on that machine
+    on the first run after the feature shipped.
+  </p>
+
+  <p>
+    <code>ask</code> is left out with <code>allow</code> rather than with
+    <code>deny</code>: it is not restrictive enough to be worth importing and not
+    permissive enough to be dangerous. A file that cannot be read is skipped
+    rather than fatal, since the only thing taken from it is restrictions, so
+    failing to read it can only make Emma ask more often.
+    <code>home</code> is threaded as a parameter rather than read from the
+    environment, because a test that reads the real <code>HOME</code> either
+    mutates shared state in a threaded test binary or answers differently on
+    different machines, and both have happened here.
+    <span class="chip test">tested</span> in
+    <code>crates/harness/tests/permissions.rs</code>.
+  </p>
+  <span class="src">crates/harness/src/lib.rs — user_permissions; crates/harness/tests/permissions.rs</span>
+
+  <h2 id="write">Writing a rule down</h2>
+
+  <p>
+    <code>file_for(root)</code> is <code>root.join("settings.local.json")</code>,
+    and the root is whichever harness the project loaded, not always
+    <code>.claude/</code>, and never <code>~</code>. Three arguments decided it.
+    Claude Code documents <code>settings.local.json</code> as git-ignored and as
+    where it saves permanent approvals, so writing into <code>settings.json</code>
+    would commit one developer's convenience as everybody's policy on the next
+    <code>git add</code>. A project that has <code>.emma/</code> should not acquire
+    a <code>.claude/</code> directory because somebody answered a prompt, which
+    would be Emma creating configuration for a different program without being
+    asked. And a grant made in one repository is not a grant everywhere.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — file_for</span>
+
+  <p>
+    <code>remember</code> merges rather than replaces. The file is read, parsed as
+    a whole document, and written back with every key it had:
+    <code>hooks</code>, <code>statusLine</code>, <code>env</code>, anything else.
+    It returns <code>true</code> when a line was added and <code>false</code> when
+    the rule was already there, which is what makes the prompt able to say "saved"
+    or "already had". This project has been bitten once by a write path that
+    replaced a shared configuration document and deleted another program's key.
+  </p>
+
+  <p>
+    Four shapes are refused outright, and in each case nothing is written: a file
+    that is not valid JSON, a document that is not an object, a
+    <code>permissions</code> key that is not an object, and a
+    <code>permissions.allow</code> that is not an array. The message names the
+    file and what is wrong with it, and the grant lasts the session instead.
+    <code>kind_of</code> exists to name the shape found before the mutable borrow
+    starts, so the refusal can say "holds a JSON number" rather than only "is not
+    an object". <span class="chip test">tested</span>
+    <code>a_file_that_cannot_be_parsed_is_left_exactly_as_it_was</code> writes all
+    four shapes, asserts each error names its file, and asserts the bytes on disk
+    are unchanged.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — remember, kind_of; tests::a_file_that_cannot_be_parsed_is_left_exactly_as_it_was</span>
+
+  <p>
+    The write goes to a sibling temporary file, <code>*.json.emma-tmp</code>, and
+    is renamed over the target, so an interrupted run cannot leave half a settings
+    file behind. <span class="chip test">tested</span>
+    <code>a_missing_file_is_created_with_only_what_was_granted_in_it</code>
+    asserts the created file byte for byte and then asserts the directory holds
+    exactly one entry, which is what catches a temporary file surviving the
+    rename.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — remember; tests::a_missing_file_is_created_with_only_what_was_granted_in_it</span>
+
+  <p>
+    <code>already_written(file)</code> returns the rule texts in the file's
+    <code>permissions.allow</code>, for a caller that wants to say whether a grant
+    would be new. Any problem reading it answers with an empty set, because it is
+    cosmetic and <code>remember</code> is where the refusals live.
+    <span class="chip test">tested</span>
+    <code>what_is_written_is_what_is_read_back_next_boot</code> writes a rule,
+    reads it back through <code>already_written</code>, re-parses it into a
+    <code>Rules</code>, and asserts it allows <code>apnews.com</code> and not
+    <code>apnews.com.attacker.net</code>. Relaxing the host label-count check
+    turned that test red at <code>20ac400</code>.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs — already_written; tests::what_is_written_is_what_is_read_back_next_boot</span>
+
+  <h2 id="unsettled">What is not settled here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip cert">certified</span>
+      <code>cargo test -p emma --lib permissions::</code> reports 25 passed, 0
+      failed at commit <code>a3eba74</code>. Re-runnable.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> The mutation results quoted above
+      were recorded at commit <code>20ac400</code> by an earlier author and were
+      not re-run for this page, which does not change source.
+      <em>What would settle it:</em> repeating each named mutation on a branch and
+      pasting the failing test names.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> That a <code>.emma/</code> project
+      never acquires a <code>.claude/</code> directory is read from
+      <code>file_for</code> and the harness discovery order, not observed.
+      <em>What would settle it:</em> a run in a directory holding both, answering
+      <code>r</code> once, and listing both directories afterwards.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · read at commit <code>a3eba74</code> ·
+    <code>crates/emma/src/permissions.rs</code> ·
+    <code>crates/harness/src/lib.rs</code> ·
+    <a href="consent.html">back to the chapter</a>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Tool trait · Tools · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav here" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<p class="eyebrow">Doing work</p>
+<h1>The <code>Tool</code> trait, and what a tool declares</h1>
+
+<nav class="chapter">
+  <a class="up" href="tools.html">Tools</a>
+  <span class="now">the trait</span>
+  <a href="tools-outcome.html">outcomes</a>
+  <a href="tools-truncation.html">truncation</a>
+  <a href="tools-ctx.html">ToolCtx</a>
+  <a href="tools-containment.html">containment</a>
+  <a href="tools-files.html">files</a>
+  <a href="tools-edit.html">Edit</a>
+  <a href="tools-bash.html">Bash</a>
+  <a href="tools-tasks.html">tasks</a>
+  <a href="tools-web.html">web</a>
+  <a href="tools-lsp.html">LSP</a>
+</nav>
+
+<p class="lede">
+  <code>crates/tool-api/src/lib.rs</code> is 632 lines and one file. It holds
+  the error taxonomy, the success type, the two structs the runtime reads
+  before it runs anything, the trait, and a registry. Nothing else lives there,
+  which is what keeps adding a tool down to a crate plus one registry line.
+</p>
+
+<p>
+  That promise has been broken twice, both times by the approval gate learning
+  something about a particular tool's arguments: once a hard-coded check on a
+  <code>query</code> argument, once inferring retrieval from an empty
+  <code>chunks</code> array. Both are recorded on <code>NetworkTarget</code> as
+  the reason the gate asks and the tool answers rather than the gate parsing.
+</p>
+<span class="src">crates/tool-api/src/lib.rs — module doc, <code>NetworkTarget</code></span>
+
+<h2 id="methods">Seven methods, five of them mandatory</h2>
+
+<pre><code><span class="k">#[async_trait::async_trait]</span>
+<span class="k">pub trait</span> Tool: Send + Sync {
+    <span class="c">/// Matches Claude Code's names — `Read`, `Write`, `Edit`, `Glob`, `Grep`,</span>
+    <span class="c">/// `Bash` — so a hook matcher or allow-list written for one works for the</span>
+    <span class="c">/// other. Better names would cost compatibility and buy nothing.</span>
+    <span class="k">fn</span> name(&amp;<span class="k">self</span>) -&gt; &amp;<span class="k">'static str</span>;
+
+    <span class="c">/// Shown to the model verbatim. The built-in tools hold theirs in a</span>
+    <span class="c">/// markdown file next to the source and `include_str!` it, so a prose</span>
+    <span class="c">/// change is reviewable as a diff and lands in [`Registry::schema_hash`].</span>
+    <span class="c">/// Returning `&amp;str` rather than `&amp;'static str` is what lets `Skill` be a</span>
+    <span class="c">/// tool too — its description is composed at load time from the skill file</span>
+    <span class="c">/// on disk.</span>
+    <span class="k">fn</span> description(&amp;<span class="k">self</span>) -&gt; &amp;<span class="k">str</span>;
+
+    <span class="k">fn</span> input_schema(&amp;<span class="k">self</span>) -&gt; serde_json::Value;
+
+    <span class="k">fn</span> meta(&amp;<span class="k">self</span>) -&gt; ToolMeta;</code></pre>
+
+<p>
+  The remaining three carry the arguments. <code>network_target</code> and
+  <code>validate_args</code> both default, so a tool that touches no network
+  and needs no cheap checks implements four methods and
+  <code>invoke</code>.
+</p>
+
+<pre><code>    <span class="c">/// Where this particular call would send bytes, if anywhere.</span>
+    <span class="c">///</span>
+    <span class="c">/// Answered by the tool because the approval gate must not learn what any</span>
+    <span class="c">/// tool's arguments look like — see [`NetworkTarget`] for the two times</span>
+    <span class="c">/// that went wrong here. `None` is the default and is right for every tool</span>
+    <span class="c">/// that declares `reaches_network: false`.</span>
+    <span class="c">///</span>
+    <span class="c">/// **`None` from a tool that declares `reaches_network: true` is a</span>
+    <span class="c">/// refusal, not a pass.** The gate cannot grant a destination nobody</span>
+    <span class="c">/// named, so it denies the call and says so. Fail-closed, because the</span>
+    <span class="c">/// alternative is that a tool which forgets to answer gets silent egress.</span>
+    <span class="k">fn</span> network_target(&amp;<span class="k">self</span>, _args: &amp;serde_json::Value) -&gt; Option&lt;NetworkTarget&gt; {
+        None
+    }
+
+    <span class="c">/// Cheap, synchronous, no I/O. Anything requiring the filesystem belongs</span>
+    <span class="c">/// in `invoke` and comes back as `BadArguments`.</span>
+    <span class="k">fn</span> validate_args(&amp;<span class="k">self</span>, _args: &amp;serde_json::Value) -&gt; Result&lt;(), ToolError&gt; {
+        Ok(())
+    }
+
+    <span class="c">/// The outer `Result` is for faults that should end the turn. The inner is</span>
+    <span class="c">/// for failures the model should see and route around. Almost everything</span>
+    <span class="c">/// is the inner one — a tool that ends the turn is claiming the session</span>
+    <span class="c">/// cannot continue, which is rare and should feel rare to write.</span>
+    <span class="k">async fn</span> invoke(
+        &amp;<span class="k">self</span>,
+        ctx: &amp;ToolCtx,
+        args: serde_json::Value,
+    ) -&gt; anyhow::Result&lt;Result&lt;ToolOutcome, ToolError&gt;&gt;;
+}</code></pre>
+<span class="src">crates/tool-api/src/lib.rs — <code>trait Tool</code></span>
+
+<p>
+  <span class="chip cert">certified</span> Every tool in the workspace
+  implements <code>validate_args</code>; only the five that reach the network
+  implement <code>network_target</code>. Countable with
+  <code>grep -rc 'fn network_target' tools/</code>, which returns one each for
+  <code>tools/web/src/fetch.rs</code> and <code>search.rs</code> and three for
+  <code>tools/web/src/browser/tools.rs</code>.
+</p>
+
+<h2 id="dispatch">How a call reaches a tool</h2>
+
+<figure>
+  <div class="figwrap">
+    <svg viewBox="0 0 720 430" role="img" aria-label="A tool_use block passes through registry lookup, validate_args, the already-failed memo, the PreToolUse hook and the approval gate before invoke runs; the resulting ToolOutcome splits into a content block for the model and a display line for the terminal, while a ToolError becomes a tool_result the loop continues from.">
+      <defs>
+        <marker id="tt-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+        </marker>
+        <marker id="tt-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+        </marker>
+      </defs>
+
+      <rect class="box" x="8" y="12" width="150" height="34" rx="4" />
+      <text class="lbl" x="24" y="34">tool_use block</text>
+
+      <path class="edge" d="M83 46 L83 74" marker-end="url(#tt-arrow)" />
+      <rect class="box" x="8" y="74" width="150" height="34" rx="4" />
+      <text class="lbl" x="24" y="96">Registry::get</text>
+      <text class="sm" x="172" y="96">miss → no_such_tool, names the rest</text>
+
+      <path class="edge" d="M83 108 L83 136" marker-end="url(#tt-arrow)" />
+      <rect class="box" x="8" y="136" width="150" height="34" rx="4" />
+      <text class="lbl" x="24" y="158">validate_args</text>
+      <text class="sm" x="172" y="158">pure; no filesystem; no approval spent</text>
+
+      <path class="edge" d="M83 170 L83 198" marker-end="url(#tt-arrow)" />
+      <rect class="box" x="8" y="198" width="150" height="34" rx="4" />
+      <text class="lbl" x="24" y="220">failed-now memo</text>
+      <text class="sm" x="172" y="220">same call, same turn, nothing changed</text>
+
+      <path class="edge" d="M83 232 L83 260" marker-end="url(#tt-arrow)" />
+      <rect class="box" x="8" y="260" width="150" height="34" rx="4" />
+      <text class="lbl" x="24" y="282">PreToolUse hook</text>
+      <text class="sm" x="172" y="282">policy, resolved before any human is asked</text>
+
+      <path class="edge-hl" d="M83 294 L83 322" marker-end="url(#tt-arrow-hl)" />
+      <rect class="hl" x="8" y="322" width="150" height="46" rx="4" />
+      <text class="lbl" x="24" y="342">approval gate</text>
+      <text class="tiny" x="24" y="358">meta() · network_target()</text>
+      <text class="sm" x="172" y="342">the only caller of network_target</text>
+      <text class="tiny" x="172" y="358">see consent.html</text>
+
+      <path class="edge-hl" d="M83 368 L83 396" marker-end="url(#tt-arrow-hl)" />
+      <rect class="hl" x="8" y="396" width="150" height="30" rx="4" />
+      <text class="lbl" x="24" y="416">invoke(ToolCtx)</text>
+
+      <path class="edge-dash" d="M158 411 L470 411 L470 138" marker-end="url(#tt-arrow)" />
+      <rect class="box" x="404" y="96" width="132" height="40" rx="4" />
+      <text class="lbl" x="418" y="114">ToolOutcome</text>
+      <text class="tiny" x="418" y="129">or ToolError</text>
+
+      <path class="edge" d="M470 96 L470 68 L560 68" marker-end="url(#tt-arrow)" />
+      <rect class="box" x="560" y="50" width="150" height="36" rx="4" />
+      <text class="lbl" x="574" y="66">content →</text>
+      <text class="tiny" x="574" y="80">model, + [truncated: …]</text>
+
+      <path class="edge" d="M536 116 L620 116 L620 146" marker-end="url(#tt-arrow)" />
+      <rect class="box" x="560" y="146" width="150" height="36" rx="4" />
+      <text class="lbl" x="574" y="162">display →</text>
+      <text class="tiny" x="574" y="176">terminal line</text>
+    </svg>
+  </div>
+  <figcaption>
+    One <code>tool_use</code> block, from <code>Agent::run_tool_call</code>.
+    Five things can end the call before the tool runs, and each produces a
+    <code>tool_result</code> the model reads rather than an aborted turn. The
+    approval gate is the only caller of <code>network_target</code>. Drawn from
+    <code>crates/emma/src/agent.rs</code>.
+  </figcaption>
+</figure>
+
+<p>
+  The order matters in two places. <code>validate_args</code> runs before the
+  approval prompt, so a malformed call never spends a human's attention. The
+  <code>PreToolUse</code> hook runs before it too, because a policy denial is
+  not something the person at the keyboard gets a vote on, and a gate a human
+  can wave through is advice.
+</p>
+<span class="src">crates/emma/src/agent.rs — <code>run_tool_call</code></span>
+
+<h2 id="meta"><code>ToolMeta</code>: three bits, and one that was deleted</h2>
+
+<p>
+  The predecessor's equivalent struct had a <code>needs_approval</code> field
+  that nothing ever read. It was not ported. A declaration pretending to be a
+  mechanism is worse than no declaration, because reviewers stop asking the
+  question the field appears to answer.
+</p>
+
+<pre><code><span class="c">/// **There is deliberately no `Default`.** Adding a field here breaks every</span>
+<span class="c">/// construction site in the workspace, and that is the feature: a tool must</span>
+<span class="c">/// *state* each of these rather than inherit it. The predecessor added a</span>
+<span class="c">/// defaulted field and thereby granted a safety property to every tool written</span>
+<span class="c">/// afterwards, chosen by nobody, noticed by no review.</span>
+<span class="k">#[derive(Debug, Clone, Copy, PartialEq, Eq)]</span>
+<span class="k">pub struct</span> ToolMeta {
+    <span class="k">pub</span> read_only: <span class="k">bool</span>,
+    <span class="k">pub</span> reaches_network: <span class="k">bool</span>,
+    <span class="k">pub</span> idempotent: <span class="k">bool</span>,
+}</code></pre>
+<span class="src">crates/tool-api/src/lib.rs — <code>ToolMeta</code></span>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Field</th><th>Asks</th><th>Read by</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>read_only</code></td>
+        <td>
+          Can this damage this machine: no file written, no process spawned.
+          Not "cannot reach the network". <code>WebFetch</code> and
+          <code>WebSearch</code> both declare <code>true</code> and both talk to
+          the outside, one of them by driving a browser.
+        </td>
+        <td>the approval gate</td>
+      </tr>
+      <tr>
+        <td><code>reaches_network</code></td>
+        <td>
+          Sends bytes off this machine by construction. A separate axis because
+          writing is a risk the model states in the call, while egress is how a
+          prompt-injected page turns a read tool into an exfiltration channel,
+          and that channel passes every local-damage check on the way out.
+        </td>
+        <td>the approval gate, per host</td>
+      </tr>
+      <tr>
+        <td><code>idempotent</code></td>
+        <td>
+          Running it twice has the same effect as once. <code>Edit</code>
+          declares <code>false</code> and means it.
+        </td>
+        <td><code>Registry::register</code>, and nothing else</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  The last row is the one with a history. <code>idempotent</code> was for a
+  while declared by every tool and consulted by nothing, which is the exact
+  shape the <code>needs_approval</code> deletion rejects. It was not deleted,
+  because the answer is a genuine per-tool fact. It was given a reader instead.
+</p>
+
+<p>
+  What the field is still not, said plainly in its own doc: a replay mechanism.
+  Emma has no crash-recovery fold and nothing consults this to decide whether
+  to re-run a call.
+</p>
+
+<h3>The coherence check</h3>
+
+<pre><code>    <span class="k">pub fn</span> register(&amp;<span class="k">mut self</span>, tool: Arc&lt;<span class="k">dyn</span> Tool&gt;) {
+        <span class="k">let</span> meta = tool.meta();
+        assert!(
+            <span class="c">// Reads as the entailment it is: read_only ⟹ idempotent.</span>
+            !meta.read_only || meta.idempotent,
+            <span class="s">"{} declares read_only: true with idempotent: false — a call that \
+             changes no local state cannot have a different effect the second \
+             time, so one of the two is wrong"</span>,
+            tool.name()
+        );
+        <span class="k">self</span>.tools.push(tool);
+    }</code></pre>
+<span class="src">crates/tool-api/src/lib.rs — <code>Registry::register</code></span>
+
+<p>
+  A panic rather than an error, because this is a wiring mistake in a
+  <code>const</code> a human wrote: it is the same on every boot, it is reached
+  by every test that builds a registry, and there is no sensible way to
+  continue with a tool surface whose safety declarations do not cohere.
+  <code>read_only</code> is the one the gate is about to trust to skip a human,
+  so the pair is refused rather than half-believed.
+</p>
+
+<p>
+  <span class="chip test">tested</span>
+  <code>a_read_only_tool_cannot_also_declare_itself_unsafe_to_repeat</code> is a
+  <code>#[should_panic(expected = "declares read_only: true with idempotent:
+  false")]</code>, and <code>the_two_honest_shapes_both_register</code> is the
+  positive control that stops the check being satisfied by refusing everything.
+  <code>tools/lsp</code> runs its four declarations through a real
+  <code>Registry</code> for the same reason.
+</p>
+<span class="src">crates/tool-api/src/lib.rs — <code>mod tests</code>; tools/lsp/src/lib.rs — <code>the_declarations_cohere_enough_to_register</code></span>
+
+<h2 id="errors">An error is a fact about the call</h2>
+
+<p>
+  Three variants, a stable <code>kind</code> string the model routes on, and
+  prose kept separate from it so rewording a message never changes the taxonomy.
+  The enum is <code>#[non_exhaustive]</code>, so a new variant cannot silently
+  fall into an existing arm at a call site written before it existed.
+</p>
+
+<div class="tw">
+  <table>
+    <thead><tr><th><code>kind()</code></th><th>Variant</th><th>Means</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>tool_unavailable</code></td>
+        <td><code>Unavailable</code></td>
+        <td>The machinery is absent or unconfigured: no key, no binary, no permission. Phrased "I cannot do this", never "this cannot be done".</td>
+      </tr>
+      <tr>
+        <td><code>tool_failed</code></td>
+        <td><code>Failed</code></td>
+        <td>It ran and did not succeed. A command that started and exited non-zero is <em>not</em> here.</td>
+      </tr>
+      <tr>
+        <td><code>bad_arguments</code></td>
+        <td><code>BadArguments</code></td>
+        <td>Wrong arguments, including the kind only discoverable at run time, because <code>validate_args</code> cannot stat a path or know whether a string occurs once in a file.</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<p>
+  <strong>Emptiness is a result.</strong> A read of an empty file succeeds and
+  returns nothing. A glob matching zero paths succeeds with an empty list. A
+  grep with no hits succeeds. Blurring that turns "I could not look" and "I
+  looked and there was nothing" into one message, and the model cannot route
+  around a failure it has been told is an answer.
+</p>
+
+<p>
+  That rule was written about the filesystem and did not survive contact with
+  <code>Bash</code>. A non-zero exit had been documented as <code>Failed</code>,
+  which makes <code>grep -q</code> answering "no" a tool failure. The loop
+  refuses to repeat a call that already failed with nothing changed since, so
+  one legitimate miss would have blocked that command for the rest of the turn.
+  The line is now whether the command <em>ran</em>. It was not resolved as
+  "<code>Bash</code> is the documented exception", because "except X" is how a
+  rule starts becoming folklore. The full argument is on
+  <a href="tools-bash.html">the <code>Bash</code> page</a>.
+</p>
+<span class="src">crates/tool-api/src/lib.rs — module doc, <code>ToolError</code></span>
+
+<p>
+  <span class="chip test">tested</span> <code>a_kind_is_stable_prose_is_not</code>
+  pins that <code>kind()</code> does not depend on the message, including for
+  an empty one, and <code>every_variant_carries_its_detail</code> walks all
+  three. Both go red if <code>kind</code> is rewritten to interpolate the
+  detail.
+</p>
+
+<h2 id="registry">The registry, and the surface it renders</h2>
+
+<p>
+  <code>Registry</code> is a <code>Vec&lt;Arc&lt;dyn Tool&gt;&gt;</code> and six
+  methods. <code>get</code> is a linear scan by name over twenty-one entries,
+  which is not worth a map. <code>names</code>, <code>iter</code> and
+  <code>new</code> are uninteresting and are listed here so the file is
+  covered rather than sampled. The two that carry decisions are
+  <code>register</code>, above, and:
+</p>
+
+<pre><code>    <span class="c">/// A digest of every byte of the tool surface the model is shown — names,</span>
+    <span class="c">/// descriptions and schemas — so a change to a description is attributable</span>
+    <span class="c">/// rather than invisible. The loop records it on the `goal` event at the</span>
+    <span class="c">/// start of a run, and `emma config check` prints it.</span>
+    <span class="c">///</span>
+    <span class="c">/// Truncated to 16 hex characters: this is a change detector for a human</span>
+    <span class="c">/// reading a log, not a collision-resistant identifier.</span>
+    <span class="k">pub fn</span> schema_hash(&amp;<span class="k">self</span>) -&gt; String {
+        <span class="k">use</span> sha2::{Digest, Sha256};
+        <span class="k">let mut</span> hasher = Sha256::new();
+        <span class="k">for</span> def <span class="k">in</span> <span class="k">self</span>.wire_definitions() {
+            hasher.update(def.to_string().as_bytes());
+        }
+        format!(<span class="s">"{:x}"</span>, hasher.finalize())[..16].to_string()
+    }</code></pre>
+<span class="src">crates/tool-api/src/lib.rs — <code>Registry::schema_hash</code>, <code>wire_definitions</code></span>
+
+<p>
+  Because the hash covers descriptions, two tool crates carry a test asserting
+  nothing machine-specific reaches it: no shell path, no server binary, no
+  <code>Program Files</code>. A description that named the local shell would
+  make the hash a property of the box, and attribution would stop meaning
+  anything. Both tests also assert the positive half, that the description
+  still tells the model where the machine-specific answer is.
+</p>
+<span class="src">tools/fs/src/bash.rs and tools/lsp/src/lib.rs — <code>nothing_machine_specific_reaches_the_hashed_surface</code></span>
+
+<h3><code>NetworkTarget</code>, and one grant per host</h3>
+
+<pre><code>    <span class="c">/// Normalises the host so the gate's `HashSet` and the tool agree on what</span>
+    <span class="c">/// "the same host" means. `Docs.RS.` and `docs.rs` are one grant; `docs.rs`</span>
+    <span class="c">/// and `www.docs.rs` are deliberately two, because deciding they are the</span>
+    <span class="c">/// same is a policy nobody asked for.</span>
+    <span class="k">pub fn</span> new(host: <span class="k">impl</span> AsRef&lt;<span class="k">str</span>&gt;, detail: <span class="k">impl</span> Into&lt;String&gt;) -&gt; Self {
+        Self {
+            host: host
+                .as_ref()
+                .trim()
+                .trim_end_matches(<span class="s">'.'</span>)
+                .to_ascii_lowercase(),
+            detail: detail.into(),
+        }
+    }</code></pre>
+
+<p>
+  <code>detail</code> is one line naming the errand, and it is what the human
+  reads under the host. <code>WebSearch</code> puts the query there verbatim,
+  <code>BrowserFill</code> puts every field and value. A prompt that names a
+  host and not what is being sent there is a prompt nobody can evaluate.
+</p>
+<span class="src">crates/tool-api/src/lib.rs — <code>NetworkTarget</code></span>
+
+<p>
+  <span class="chip test">tested</span>
+  <code>a_host_is_normalised_so_one_grant_covers_one_host</code> pins both
+  directions: two spellings of one host collapse, and a subdomain stays a
+  separate grant. The second assertion is the one that would go red if somebody
+  added suffix matching to be helpful.
+</p>
+
+<h2 id="unverified">What is not verified here</h2>
+
+<p>
+  <span class="chip unv">unverified</span> The claim that
+  <code>Registry::get</code>'s linear scan costs nothing at twenty-one tools is
+  reasoning about a twenty-one-element loop, not a measurement, and nothing in
+  this repository profiles dispatch. Settled by timing
+  <code>run_tool_call</code> against a registry of twenty-one and one of two
+  hundred and comparing.
+</p>
+
+<p>
+  <span class="chip cert">certified</span> The rest of this page is
+  <code>crates/tool-api/src/lib.rs</code> read end to end at commit
+  <code>a3eba74</code>, and <code>cargo test -p emma-tool-api</code> passed its
+  6 tests on this box. Nothing here was mutated to check a test goes red,
+  because this task did not change source; where a chip says
+  <span class="chip test">tested</span> above, the guarantee rests on the test's
+  own recorded reasoning rather than on a mutation run today.
+</p>
+</div>
+</main>
+</div>
+</body>
+</html>
