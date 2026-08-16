@@ -1,0 +1,575 @@
+/* ---------------------------------------------------------------------------
+   Emma documentation — the shared shell.
+
+   Deliberately single-theme dark. Emma is a terminal program and these pages
+   are dressed as one; the accent is the pink the shipped TUI actually draws
+   with, not a colour somebody liked. Every value is painted explicitly so a
+   page opened from file:// on any machine looks the same.
+
+   THIS FILE IS THE CONTRACT. Pages do not define their own colours, type
+   scale, or components — if a page needs something that is not here, add it
+   here and say why in a comment, so the next page can use it too. A page that
+   ships its own <style> block with a private palette is the failure this file
+   exists to prevent.
+   --------------------------------------------------------------------------- */
+
+:root {
+  --ground: #0e0b11;
+  --raise: #16121c;
+  --raise-2: #1d1825;
+  --line: #2c2436;
+  --line-soft: #221c2a;
+  --text: #ece6f2;
+  --dim: #a396b0;
+  --dimmer: #6f6479;
+  --accent: #ff6ec7;
+  --accent-dk: #b53d8b;
+  --certified: #67e0a3;
+  --unverified: #f2b45e;
+  --mono:
+    ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas,
+    monospace;
+  --sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --sidebar: 280px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 15.5px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--accent);
+  text-decoration-color: var(--accent-dk);
+  text-underline-offset: 3px;
+}
+a:hover {
+  text-decoration-thickness: 2px;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+/* ---------- shell ---------- */
+.shell {
+  display: grid;
+  grid-template-columns: var(--sidebar) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+nav.side {
+  border-right: 1px solid var(--line);
+  background: var(--raise);
+  padding: 26px 0 60px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+nav.side .brand {
+  padding: 0 22px 20px;
+  border-bottom: 1px solid var(--line-soft);
+  margin-bottom: 10px;
+}
+nav.side .brand a {
+  text-decoration: none;
+}
+nav.side .brand b {
+  font-family: var(--mono);
+  font-size: 17px;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  display: block;
+}
+nav.side .brand b i {
+  color: var(--accent);
+  font-style: normal;
+}
+nav.side .brand span {
+  font-size: 12.5px;
+  color: var(--dimmer);
+  font-family: var(--mono);
+}
+
+nav.side h4 {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--dimmer);
+  margin: 22px 22px 7px;
+}
+nav.side ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+nav.side a.nav {
+  display: block;
+  padding: 4.5px 22px;
+  font-size: 14px;
+  color: var(--dim);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+}
+nav.side a.nav:hover {
+  color: var(--text);
+  background: var(--raise-2);
+  border-left-color: var(--accent-dk);
+}
+nav.side a.nav.here {
+  color: var(--text);
+  border-left-color: var(--accent);
+  background: var(--raise-2);
+}
+nav.side a.nav.sub {
+  padding-left: 34px;
+  font-size: 13px;
+}
+
+main {
+  padding: 54px 0 120px;
+  min-width: 0;
+}
+.col {
+  max-width: 78ch;
+  margin: 0 auto;
+  padding: 0 40px;
+}
+
+/* ---------- type ---------- */
+h1,
+h2,
+h3,
+h4.body {
+  font-family: var(--mono);
+  font-weight: 600;
+  text-wrap: balance;
+  letter-spacing: -0.01em;
+}
+h1 {
+  font-size: 34px;
+  line-height: 1.2;
+  margin: 0 0 6px;
+}
+h2 {
+  font-size: 22px;
+  margin: 68px 0 4px;
+  padding-top: 26px;
+  border-top: 1px solid var(--line);
+}
+h3 {
+  font-size: 16.5px;
+  margin: 36px 0 2px;
+  color: var(--text);
+}
+h4.body {
+  font-size: 14px;
+  margin: 26px 0 2px;
+  color: var(--dim);
+}
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 14px;
+}
+.lede {
+  font-size: 17.5px;
+  color: var(--dim);
+  line-height: 1.62;
+}
+p {
+  margin: 14px 0;
+}
+strong {
+  color: #fff;
+  font-weight: 600;
+}
+code {
+  font-family: var(--mono);
+  font-size: 0.875em;
+  background: var(--raise-2);
+  border: 1px solid var(--line-soft);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #f4d9ec;
+}
+pre {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.6;
+  background: var(--raise);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 15px 17px;
+  overflow-x: auto;
+  margin: 18px 0;
+}
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+pre .c {
+  color: var(--dimmer);
+} /* comment */
+pre .k {
+  color: var(--accent);
+} /* keyword / emphasis */
+pre .s {
+  color: var(--certified);
+} /* string / good value */
+pre .w {
+  color: var(--unverified);
+} /* warning value */
+ul.body,
+ol.body {
+  padding-left: 20px;
+}
+ul.body li,
+ol.body li {
+  margin: 8px 0;
+}
+
+/* ---------- evidence chips -------------------------------------------------
+   The one structural device, and it encodes the distinction this project is
+   organised around. NOT decoration: an amber chip is a standing invitation to
+   go and settle something. Every non-obvious claim on every page carries one.
+   --------------------------------------------------------------------------- */
+.chip {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 3px;
+  vertical-align: 2px;
+  white-space: nowrap;
+}
+.chip.cert {
+  color: var(--certified);
+  border: 1px solid #2b5c44;
+  background: #12271d;
+}
+.chip.test {
+  color: var(--dim);
+  border: 1px solid var(--line);
+  background: var(--raise-2);
+}
+.chip.unv {
+  color: var(--unverified);
+  border: 1px solid #5e4622;
+  background: #2a1f10;
+}
+
+.key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  align-items: center;
+  background: var(--raise);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 13px 16px;
+  margin: 22px 0;
+  font-size: 13.5px;
+  color: var(--dim);
+}
+.key div {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+/* ---------- callouts ---------- */
+.note {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent-dk);
+  background: var(--raise);
+  border-radius: 0 6px 6px 0;
+  padding: 14px 18px;
+  margin: 24px 0;
+}
+.note.warn {
+  border-left-color: var(--unverified);
+}
+.note.good {
+  border-left-color: var(--certified);
+}
+.note p {
+  margin: 8px 0;
+  font-size: 14.5px;
+}
+.note p:first-of-type {
+  margin-top: 0;
+}
+.note p:last-child {
+  margin-bottom: 0;
+}
+.note .h {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--dim);
+  display: block;
+  margin-bottom: 6px;
+}
+
+/* ---------- source citation -------------------------------------------------
+   Every claim about behaviour names the file it came from. An assertion with
+   no <span class="src"> beside it is one nobody can check.
+   --------------------------------------------------------------------------- */
+.src {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--dimmer);
+  display: block;
+  margin-top: -8px;
+  margin-bottom: 16px;
+}
+.src::before {
+  content: "source: ";
+  color: var(--line);
+}
+
+/* ---------- figures ---------- */
+figure {
+  margin: 30px 0;
+}
+figure svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  color: var(--dim);
+}
+.figwrap {
+  background: var(--raise);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 20px 18px;
+  overflow-x: auto;
+}
+figcaption {
+  font-size: 13.5px;
+  color: var(--dimmer);
+  margin-top: 12px;
+  line-height: 1.55;
+  max-width: 66ch;
+}
+svg text {
+  font-family: var(--mono);
+  fill: var(--text);
+}
+svg text.lbl {
+  font-size: 12px;
+}
+svg text.sm {
+  font-size: 10.5px;
+  fill: var(--dim);
+}
+svg text.tiny {
+  font-size: 10px;
+  fill: var(--dimmer);
+}
+svg rect.box {
+  fill: var(--raise-2);
+  stroke: var(--line);
+  stroke-width: 1;
+}
+svg rect.hl {
+  fill: #2a1424;
+  stroke: var(--accent-dk);
+  stroke-width: 1.5;
+}
+svg .edge {
+  stroke: var(--dimmer);
+  stroke-width: 1.3;
+  fill: none;
+}
+svg .edge-hl {
+  stroke: var(--accent);
+  stroke-width: 1.7;
+  fill: none;
+}
+svg .edge-dash {
+  stroke: var(--dimmer);
+  stroke-width: 1.3;
+  fill: none;
+  stroke-dasharray: 4 4;
+}
+
+/* A boundary that is not a component — a window edge, a gap column, a region a
+   diagram refers to without drawing as a box. Added 2026-08-16, after the
+   terminal layout diagram needed one and fell back to an inline attribute. */
+svg rect.ghost {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+/* ---------- prose utilities -------------------------------------------------
+   `.sm` and `.tiny` are scoped to `svg text` above, so they do nothing on an
+   inline span. These are the prose equivalents, named differently so the two
+   sets cannot collide in the cascade. Added 2026-08-16 after two pages worked
+   around their absence.
+   --------------------------------------------------------------------------- */
+.aside {
+  font-size: 13.5px;
+  color: var(--dim);
+}
+.faint {
+  color: var(--dimmer);
+}
+
+/* An accent label sitting on a `rect.hl`, which cannot take its colour from
+   `svg text` without an inline fill. */
+svg text.on-hl {
+  fill: var(--accent);
+}
+
+/* Display arithmetic — a formula reads badly as a code block because it is not
+   code, and badly inline because it needs the room. */
+.formula {
+  font-family: var(--mono);
+  font-size: 14px;
+  text-align: center;
+  background: var(--raise);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 16px 18px;
+  margin: 22px 0;
+  overflow-x: auto;
+  color: var(--text);
+}
+.formula em {
+  color: var(--dim);
+  font-style: normal;
+  display: block;
+  font-size: 12.5px;
+  margin-top: 8px;
+}
+
+/* ---------- tables ---------- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 22px 0;
+  font-size: 14px;
+}
+th,
+td {
+  text-align: left;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: top;
+}
+th {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dimmer);
+  border-bottom: 1px solid var(--line);
+}
+td code {
+  font-size: 12.5px;
+}
+.tw {
+  overflow-x: auto;
+}
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- page cards (index) ---------- */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 14px;
+  margin: 26px 0;
+}
+.card {
+  background: var(--raise);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 16px 18px;
+  text-decoration: none;
+  display: block;
+}
+.card:hover {
+  border-color: var(--accent-dk);
+  background: var(--raise-2);
+}
+.card b {
+  font-family: var(--mono);
+  font-size: 14.5px;
+  color: var(--text);
+  display: block;
+  margin-bottom: 4px;
+}
+.card span {
+  font-size: 13.5px;
+  color: var(--dim);
+  line-height: 1.5;
+  display: block;
+}
+
+footer.pg {
+  border-top: 1px solid var(--line);
+  margin-top: 80px;
+  padding-top: 22px;
+  font-size: 13px;
+  color: var(--dimmer);
+}
+footer.pg a {
+  color: var(--dim);
+}
+
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+  nav.side {
+    position: static;
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .col {
+    padding: 0 22px;
+  }
+  main {
+    padding-top: 30px;
+  }
+}

@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Roadmap &amp; defects · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav here" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">The project</p>
+  <h1>Roadmap &amp; defects</h1>
+
+  <p class="lede">
+    What is known to be wrong, what is planned, and what was investigated and
+    refused. The backlog itself lives in <code>notes/improvements.md</code>;
+    this page is the shape of it.
+  </p>
+
+  <h2 id="defects">Known defects</h2>
+
+  <p>
+    Every entry here is reproducible or citable. Nothing is listed on suspicion
+    alone.
+  </p>
+
+  <h3>Emma says things that are not true</h3>
+
+  <p>
+    Three messages instruct a user to do something impossible, which is the
+    sharpest class of defect this project has, given what the harness claims
+    about itself.
+  </p>
+
+  <ul class="body">
+    <li>
+      The browser interaction refusal tells you to create
+      <code>data/browser-allowlist.json</code> or pass <code>--allowlist</code>.
+      Emma reads <code>~/.emma/browser-allowlist.json</code> and has no such
+      flag. The text is vendored from upstream and sits over an Emma-side input.
+    </li>
+    <li>
+      <code>emma --help</code>'s approval ladder omits both <code>EXEMPT</code>
+      and the unattended rung, so the shipped help disagrees with the code that
+      decides.
+    </li>
+    <li>
+      <code>approval.rs</code>'s own module doc has the same two omissions,
+      which is how an undocumented unattended mode stayed undocumented.
+    </li>
+  </ul>
+
+  <h3>Bounds that are looser than they read</h3>
+
+  <p>
+    Two fields of the same struct describe ceilings and enforce tripwires. The
+    token budget is checked after a call returns, so a real run overshot 500,000
+    to 579,565. <code>wall_clock</code> is checked only at the top of an
+    iteration, so it bounds when the loop declines to start another one rather
+    than how long a goal takes. Neither <code>tool.invoke</code> nor the model
+    call carries a deadline.
+  </p>
+
+  <p>
+    A review pass corrected the token field's wording and left the wall-clock
+    field alone, which is why both are on the list.
+  </p>
+
+  <h3>Places where a record and the code disagree</h3>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>What</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td>Four rows missing from the cache floor table</td>
+          <td>Present in the document it was transcribed from. Three of the four now cache less than they could.</td></tr>
+      <tr><td>Two notes contradicting each other</td>
+          <td>On whether an ignored cache marker costs money. One usage row settles it.</td></tr>
+      <tr><td>A module doc denying it is used</td>
+          <td><code>transcript.rs</code> says nothing constructs one outside tests. <code>App::new</code> does.</td></tr>
+      <tr><td>Comments citing files that do not exist</td>
+          <td>Two <code>tools/lsp</code> doc comments name test files absent from the crate.</td></tr>
+      <tr><td>A comment describing the opposite of the code</td>
+          <td><code>input.rs</code> credits "a poll rather than a blocking read" directly above <code>event::read()</code>.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Correctness</h3>
+
+  <ul class="body">
+    <li>
+      <code>Fold</code>'s compacted arm turns an unreadable record into deletion.
+      Every neighbouring arm drops a turn whole on bad data. Nothing writes such
+      a record today, which is why no test catches it.
+    </li>
+    <li>
+      <code>ToolCtx</code> has no session slot, so constructing tools
+      individually compiles and then silently misbehaves. Three crates document
+      the consequence separately, which is what a missing shared abstraction
+      looks like from below.
+    </li>
+    <li>
+      <code>with_extra</code>'s collision check is <code>debug_assert!</code>
+      only, on the seam that produced this project's most expensive bug and in
+      the build shape where that bug happened.
+    </li>
+    <li>
+      Chrome is never reaped on unix. The child is dropped without waiting.
+    </li>
+    <li>
+      <code>transcript.rs</code> clones the whole buffer on every paint, which
+      at the default cap is 50,000 line clones to draw about 40 rows.
+    </li>
+  </ul>
+
+  <h2 id="planned">Planned, with the reasoning written down</h2>
+
+  <p>
+    Each of these has a design document that argues it, and none is started.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Work</th><th>State</th></tr></thead>
+    <tbody>
+      <tr><td><strong>An independent done check</strong></td>
+          <td>A second model judges completion rather than the acting model grading itself. Designed in <code>notes/plan-loops-stage-1.md</code>, named there as a fallible witness rather than a verifier, because published judge agreement is about 0.38 to 0.51.</td></tr>
+      <tr><td><strong>A git receipt on every finished goal</strong></td>
+          <td>Commit, diffstat and test-count delta appended to the ending record. Costs milliseconds and is what makes "the test count went down" visible at all.</td></tr>
+      <tr><td><strong>A floor under the approval gate</strong></td>
+          <td>Some things no rule, flag or remembered grant can permit. Three other projects keep one, and the third is MIT and copyable, corpus and predicates included.</td></tr>
+      <tr><td><strong>A pre-call headroom check</strong></td>
+          <td>Turns the token tripwire into a bound, using the provider's reported input rather than the character estimate. Sequenced first in the loops plan.</td></tr>
+      <tr><td><strong><code>emma stats</code></strong></td>
+          <td>Emma has never measured itself. The session log already records the right fields; what is missing is a rollup a person can read.</td></tr>
+      <tr><td><strong>Scheduled runs</strong></td>
+          <td>A scheduler line calling <code>emma -p</code>, not a daemon. Most of the survival story already exists.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="gates">What has to be true first</h2>
+
+  <p>
+    Two plans, written independently, arrived at the same gate: no longer or
+    unattended run ships before there is measurement to read afterwards. Thirty
+    judged goals before the first stage extends, roughly a hundred receipts
+    before anything runs unattended.
+  </p>
+
+  <p>
+    The reason is on <a href="loop.html">the loop page</a>. An ending that
+    reports success looks identical whether the goal was met or the measurement
+    was gamed, and measured reward-hacking rates on agentic benchmarks exceed
+    30%.
+  </p>
+
+  <h2 id="refused">Investigated and refused</h2>
+
+  <p>
+    These are kept because repeating a refuted idea is the most expensive
+    mistake available here. Each was looked at properly and turned down for a
+    reason that still holds.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Idea</th><th>Why not</th></tr></thead>
+    <tbody>
+      <tr><td>Git checkpointing of the working tree</td>
+          <td><code>git stash create</code> captures no untracked files, verified directly. Another project shipped ghost commits for this and removed them again.</td></tr>
+      <tr><td>Worktree isolation for subagents</td>
+          <td>A worktree misses uncommitted work, which is the state agents most often operate on.</td></tr>
+      <tr><td>Turning caching off on the compaction call</td>
+          <td>There is no such call. Compaction is deterministic and never reaches a model.</td></tr>
+      <tr><td>Feature-building in an autonomous loop</td>
+          <td>The direction the model takes is unpredictable, and the source advocating loops says so itself.</td></tr>
+      <tr><td>Preventing a loop from editing its own success check</td>
+          <td>Prevention would be a sandbox claim, and <code>Bash</code> defeats any tool-level gate in one line. Detection at verdict time is the honest version.</td></tr>
+      <tr><td>An always-on sandbox crate</td>
+          <td>The obvious candidate turned out to be GPL-3.0-or-later once its actual licence file was opened.</td></tr>
+      <tr><td>A strict wire decoder</td>
+          <td>Passed 712 tests, then decoded no real tool call. See <a href="providers.html">Providers</a>.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="unverified">What is not verified on this page</h2>
+
+  <p>
+    Every defect above was found by reading source or by counting records, and
+    most have not been reproduced by running the code. The ones with measured
+    rates behind them say so on their own pages. The rest are arguments, and
+    <a href="unverified.html">the unverified list</a> says what would settle
+    each.
+  </p>
+
+  <footer class="pg">
+    Emma 0.1.0 · <a href="index.html">back to the start</a> ·
+    backlog: <code>notes/improvements.md</code>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

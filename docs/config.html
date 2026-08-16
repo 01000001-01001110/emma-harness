@@ -1,0 +1,1313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Configuration · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav here" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">Surface</p>
+  <h1>Configuration</h1>
+
+  <p class="lede">
+    Emma reads seven kinds of file across three scopes, and they do not all fail
+    the same way. A mistake in the project's harness refuses the boot and names
+    the file; a mistake in a personal preference costs the preference and says
+    so; a key belonging to another program is ignored on purpose. This page is
+    the one to read when something you configured did not happen, so it goes
+    through every file, every key, and the order they are consulted in.
+  </p>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven against the real thing</div>
+    <div><span class="chip test">tested</span> a test that was shown to fail</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <p>
+    The first command to run is <code>emma config check</code>. It loads
+    everything below, prints what resolved, and calls no model. Every certified
+    claim on this page is its output or a shell command beside it, run on
+    2026-08-16 against the release binary at commit <code>20ac400</code>.
+  </p>
+  <span class="src">crates/emma/src/commands.rs — <code>config check</code>; crates/emma/src/cli.rs</span>
+
+<pre><code><span class="c">$ emma config check          # in C:\src\emma</span>
+cwd            C:\src\emma
+harness        C:\src\emma\.emma
+flavor         emma
+persona        emma
+instructions   b6dd1dabd7468355 (800 bytes)
+config         edd1817c1861d002
+tools          Read, Write, Edit, Glob, Grep, Bash, TaskCreate, …
+tool schema    ce26c5f39467e4f0
+skills         (none)
+agents         (none)
+commands       (none)
+hooks          (none)
+permissions    <span class="w">(none — every write, command and host is asked about)</span>
+               a remembered grant is written to C:\src\emma\.emma\settings.local.json
+provider       anthropic  (settings.json)
+model          claude-sonnet-5  (settings.json)
+api key        found (stored file)
+
+no model was called.</code></pre>
+  <span class="chip cert">certified</span> — the real binary, in the real repository, output pasted unedited apart from truncating the tool list.
+
+  <h2 id="files">What is read, from where</h2>
+
+  <p>
+    There is no single configuration file and no merged view of one. Two
+    different crates read from three scopes, and the reason a reader gets lost
+    is that the <em>project's</em> configuration and the <em>person's</em> are
+    different files with different names in different places. The table is the
+    whole map.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>file</th><th>scope</th><th>read by</th><th>what it decides</th><th>if it is malformed</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>.emma/config.json</code></td>
+        <td>project</td>
+        <td><code>emma-harness</code></td>
+        <td><code>default_persona</code>, <code>personas</code>,
+            <code>hooks</code>, <code>statusLine</code>,
+            <code>permissions</code></td>
+        <td><strong>refuses to start</strong>, naming the file and the key</td>
+      </tr>
+      <tr>
+        <td><code>.claude/settings.json</code></td>
+        <td>project</td>
+        <td><code>emma-harness</code></td>
+        <td><code>hooks</code>, <code>statusLine</code>,
+            <code>permissions</code>. Every other key is ignored</td>
+        <td><strong>refuses to start</strong> if it is not JSON, or if the
+            <code>hooks</code> block is wrong</td>
+      </tr>
+      <tr>
+        <td><code>&lt;harness&gt;/settings.local.json</code></td>
+        <td>project, local</td>
+        <td><code>emma-harness</code></td>
+        <td><code>permissions</code> only. Where a remembered grant is written</td>
+        <td><strong>refuses to start</strong></td>
+      </tr>
+      <tr>
+        <td><code>~/.claude/settings.json</code></td>
+        <td>user</td>
+        <td><code>emma-harness</code></td>
+        <td><code>permissions.deny</code> <em>only</em> — never
+            <code>allow</code>, never <code>ask</code></td>
+        <td>skipped in silence; the run continues with no user-scope rules</td>
+      </tr>
+      <tr>
+        <td><code>~/.emma/settings.json</code></td>
+        <td>user</td>
+        <td><code>emma</code> (the binary)</td>
+        <td><code>provider</code>, <code>models</code>, <code>validated</code>,
+            <code>tools</code>, <code>theme</code></td>
+        <td>read as if empty; every value falls back to its default</td>
+      </tr>
+      <tr>
+        <td><code>~/.emma/credentials.json</code></td>
+        <td>user</td>
+        <td><code>emma-llm</code></td>
+        <td>the API key per provider</td>
+        <td>an error naming the file when a key is needed; a write
+            <strong>refuses</strong> rather than replacing it</td>
+      </tr>
+      <tr>
+        <td><code>~/.emma/themes/&lt;n&gt;.json</code><br><code>&lt;harness&gt;/themes/&lt;n&gt;.json</code></td>
+        <td>user, then project</td>
+        <td><code>emma</code></td>
+        <td>colours, per role</td>
+        <td>a notice above the prompt; the built-in theme is drawn</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/harness/src/lib.rs (<code>load_selecting</code>, <code>read_permissions</code>, <code>user_permissions</code>); crates/emma/src/settings.rs; crates/llm/src/auth.rs; crates/emma/src/term/theme.rs</span>
+
+  <p>
+    The split between rows 1–3 and rows 5–7 is stated in
+    <code>settings.rs</code>'s own module doc and is worth carrying: the
+    project's configuration is shared by everyone who clones the repository, so
+    a personal default written there would be two files answering one question
+    with no rule for disagreeing — and the answer that won would be the
+    repository's, on somebody else's screen. Nothing personal is settable from
+    the project, and nothing about the project is settable from the home
+    directory.
+  </p>
+
+  <h2 id="discovery">Discovery, and where it stops</h2>
+
+  <p>
+    The harness is found the way git finds <code>.git</code>: walk up from the
+    working directory until a directory named <code>.emma/</code> or
+    <code>.claude/</code> turns up. <strong>Nearest ancestor wins, and within
+    one directory <code>.emma/</code> beats <code>.claude/</code> outright</strong>
+    — the loser is ignored entirely, never merged. Merging would mean "which
+    file did this instruction come from" stops having an answer.
+  </p>
+  <span class="src">crates/harness/src/lib.rs — <code>discover_in</code></span>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 940 366" role="img" aria-label="Harness discovery: EMMA_ROOT overrides everything; otherwise the walk climbs from the working directory trying .emma then .claude in each ancestor, first hit wins, the home directory offers only .emma and only when it holds config.json or personas, ~/.claude is never considered, and nothing found is a refusal to start.">
+        <defs>
+          <marker id="cfg-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
+          </marker>
+          <marker id="cfg-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
+          </marker>
+        </defs>
+
+        <rect class="hl" x="16" y="14" width="216" height="44" rx="3"/>
+        <text class="sm on-hl" x="30" y="34">EMMA_ROOT set?</text>
+        <text class="tiny" x="30" y="50">read, not searched for</text>
+
+        <path class="edge" marker-end="url(#cfg-arrow)" d="M232,36 L296,36"/>
+        <text class="tiny" x="248" y="28">yes</text>
+        <rect class="box" x="300" y="14" width="330" height="44" rx="3"/>
+        <text class="sm" x="314" y="34">that directory, whatever it is named</text>
+        <text class="tiny" x="314" y="50">not a directory → startup error, and no search happens</text>
+
+        <path class="edge-hl" marker-end="url(#cfg-arrow-hl)" d="M124,58 L124,84"/>
+        <text class="tiny" x="134" y="76">no</text>
+
+        <text class="tiny" x="16" y="100">then each ancestor of the working directory, nearest first — first hit wins:</text>
+
+        <path class="edge-hl" marker-end="url(#cfg-arrow-hl)" d="M124,112 L124,284"/>
+        <text class="tiny" x="16" y="200">up the tree</text>
+
+        <rect class="box" x="146" y="112" width="200" height="34" rx="3"/>
+        <text class="sm" x="160" y="134">cwd/.emma</text>
+        <path class="edge" marker-end="url(#cfg-arrow)" d="M346,129 L368,129"/>
+        <rect class="box" x="372" y="112" width="200" height="34" rx="3"/>
+        <text class="sm" x="386" y="134">cwd/.claude</text>
+        <text class="tiny" x="592" y="133">tried only when there is no .emma/ beside it</text>
+
+        <rect class="box" x="146" y="158" width="200" height="34" rx="3"/>
+        <text class="sm" x="160" y="180">../.emma</text>
+        <path class="edge" marker-end="url(#cfg-arrow)" d="M346,175 L368,175"/>
+        <rect class="box" x="372" y="158" width="200" height="34" rx="3"/>
+        <text class="sm" x="386" y="180">../.claude</text>
+        <text class="tiny" x="592" y="179">the loser is ignored, never merged</text>
+
+        <text class="sm" x="240" y="214">…</text>
+        <text class="sm" x="466" y="214">…</text>
+
+        <rect class="box" x="146" y="234" width="200" height="50" rx="3"/>
+        <text class="sm" x="160" y="254">$HOME/.emma</text>
+        <text class="tiny" x="160" y="270">only with config.json or personas/</text>
+        <rect class="ghost" x="372" y="234" width="200" height="50" rx="3"/>
+        <text class="tiny" x="386" y="256">$HOME/.claude</text>
+        <text class="tiny" x="386" y="272">never considered, never listed</text>
+        <text class="tiny" x="592" y="255">the walk stops here: above it are</text>
+        <text class="tiny" x="592" y="271">C:\Users and /home, which belong to nobody</text>
+
+        <path class="edge-hl" marker-end="url(#cfg-arrow-hl)" d="M246,284 L246,308"/>
+        <rect class="box" x="146" y="312" width="426" height="44" rx="3"/>
+        <text class="sm" x="160" y="332">nothing found → refuse to start</text>
+        <text class="tiny" x="160" y="348">every path searched is printed. there is no compiled-in fallback prompt.</text>
+      </svg>
+    </div>
+    <figcaption>
+      Read off <code>discover_in</code>. The two things worth noticing are on
+      the bottom row: the home directory offers only <code>.emma/</code>, and it
+      offers it only when somebody put a <code>config.json</code> or a
+      <code>personas/</code> there by hand.
+    </figcaption>
+  </figure>
+
+  <h3>Why the home directory has its own rules</h3>
+
+  <p>
+    <strong><code>~/.claude/</code> is never adopted as a harness</strong>, and
+    it is skipped so completely that it does not even appear in the
+    not-found error — a refusal listing a path Emma declined to consider reads
+    as a bug in the search. It is another program's user-scope configuration:
+    global permissions, global agents, global skills, chosen in sessions Emma
+    was not part of. Booting on it would be standing instructions from a
+    directory nobody associated with this project.
+    <span class="chip cert">certified</span> — <code>~/.claude/</code> exists on
+    this machine (<code>ls -d ~/.claude</code> → <code>/c/Users/owner/.claude/</code>)
+    and the search list below ends without it.
+  </p>
+
+<pre><code><span class="c">$ cd /tmp/scratch/t3/sub &amp;&amp; emma config check   # no harness anywhere above</span>
+Error: no `.emma/` or `.claude/` found. Searched, nearest first:
+  …\t3\sub\.emma
+  …\t3\sub\.claude
+  …\t3\.emma
+  …\t3\.claude
+  <span class="c">… one pair per ancestor …</span>
+  C:\Users\owner\AppData\.emma
+  C:\Users\owner\AppData\.claude
+  C:\Users\owner\<span class="s">.emma (present, but holds no config.json or personas/, so it is not a harness)</span>
+<span class="c">// and that is the last line. No C:\Users\owner\.claude, and nothing above home.</span></code></pre>
+  <span class="chip cert">certified</span> — run in a scratch tree today; paths middle-elided, the last line is verbatim.
+
+  <p>
+    <code>~/.emma/</code> gets the second rule, and it was paid for. It used to
+    be eligible for existing — and <code>emma api</code> creates it to store a
+    key. From the moment somebody saved a credential, every project without a
+    harness of its own adopted the home directory and booted with no
+    instructions, no persona and the full write-capable tool surface. Nobody
+    chose that; it was the side effect of saving a key. What makes a directory a
+    harness now has to be something a person put there on purpose:
+    <code>config.json</code> or <code>personas/</code>. <code>credentials.json</code>,
+    <code>sessions/</code> and <code>settings.json</code> are Emma's own
+    bookkeeping and say nothing about how Emma is configured.
+    <span class="chip cert">certified</span> — the line above is that rule
+    firing on the owner's real <code>~/.emma/</code>, which holds
+    <code>settings.json</code> and nothing else that counts.
+  </p>
+  <span class="src">crates/harness/src/lib.rs — <code>configured_by_hand</code>, and the comment in <code>discover_in</code></span>
+
+  <div class="note">
+    <span class="h">The comparison that decides "is this the home directory"</span>
+    <p>
+      Both sides are canonicalised rather than compared as strings. Case is only
+      one of the ways two spellings of one directory differ — a trailing
+      separator, a <code>..</code> in the middle, a Windows 8.3 short name and a
+      home reached through a symlink are the others. The case bug is the one
+      that actually bit: <code>C:\Users\Owner</code> against
+      <code>C:\Users\owner</code> left the skip inert, and Emma adopted the
+      user's global <code>.claude/</code>.
+    </p>
+  </div>
+
+  <h3>Overriding it</h3>
+
+  <p>
+    <code>EMMA_ROOT=&lt;dir&gt;</code> replaces the whole walk, and a value that
+    is not a directory is an error rather than a fall-back to searching — an
+    override that quietly searched would boot the agent on configuration nobody
+    asked for. Which flavour the directory is read as comes from its
+    <em>name</em>: a directory called <code>.claude</code> is read as Claude
+    Code's layout, anything else as Emma's.
+  </p>
+  <span class="src">crates/harness/src/lib.rs — <code>ROOT_ENV</code>, <code>Flavor::of</code></span>
+
+  <p>
+    <code>EMMA_PERSONA=&lt;name&gt;</code> selects a persona for one run, beating
+    the spine's <code>default_persona</code>. Selection is never the model's:
+    a model choosing its own persona is a self-modifying prompt, so there is no
+    tool and no command that does it.
+  </p>
+
+  <h2 id="spine">The project's spine</h2>
+
+  <p>
+    Whichever directory was found, exactly one file in it is configuration
+    rather than prompt text. In <code>.emma/</code> that file is
+    <code>config.json</code>; in <code>.claude/</code> it is
+    <code>settings.json</code>. They are not the same format and Emma reads
+    different amounts of each.
+  </p>
+
+  <h3><code>.emma/config.json</code> — every key</h3>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>key</th><th>type</th><th>what it does</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>default_persona</code></td>
+        <td>string</td>
+        <td>Which <code>personas/&lt;name&gt;/</code> supplies the prompt.
+            <code>EMMA_PERSONA</code> beats it.</td>
+      </tr>
+      <tr>
+        <td><code>personas</code></td>
+        <td>object</td>
+        <td>Per persona: <code>description</code> (prose, nothing branches on
+            it), <code>tools</code> (a real allowlist), <code>skills</code>
+            (absent = every skill; present = exactly these),
+            <code>hooks</code>.</td>
+      </tr>
+      <tr>
+        <td><code>hooks</code></td>
+        <td>object</td>
+        <td>name → <code>{event, command, matcher, timeout_ms, text}</code>.
+            <code>event</code> is one of <code>PreToolUse</code>,
+            <code>PostToolUse</code>, <code>UserPromptSubmit</code>;
+            <code>command</code> must canonicalise to inside
+            <code>&lt;root&gt;/hooks/</code>.</td>
+      </tr>
+      <tr>
+        <td><code>statusLine</code></td>
+        <td>object</td>
+        <td><code>{type, command, padding}</code>. Spelled in Claude Code's
+            camelCase, and inner keys are Claude Code's, so the block can be
+            moved between the two directories without being re-typed.</td>
+      </tr>
+      <tr>
+        <td><code>permissions</code></td>
+        <td>object</td>
+        <td><code>{allow, deny, ask}</code>, rule strings unparsed here. See
+            <a href="consent.html">Consent &amp; permissions</a>.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/harness/src/lib.rs — <code>Spine</code>, <code>PersonaBlock</code>; crates/harness/src/hooks.rs — <code>HookDef</code>; crates/harness/src/statusline.rs — <code>StatusLineBlock</code></span>
+
+  <p>
+    <strong>Every one of those structs carries <code>deny_unknown_fields</code>,
+    and a sixth key is a load error.</strong> This is Emma's own format, so a key
+    Emma does not recognise can only be a typo — and the typo this costs one
+    attribute to prevent is a misspelled <code>mathcer</code> in a hook, which
+    would produce a guard matching every tool while looking like it worked.
+  </p>
+
+<pre><code><span class="c">$ cat .emma/config.json</span>
+{"default_persona":"x","mathcer":"oops"}
+<span class="c">$ emma config check</span>
+Error: …\t2\.emma\config.json is malformed
+
+Caused by:
+    <span class="w">unknown field `mathcer`, expected one of `default_persona`, `personas`,
+    `hooks`, `statusLine`, `permissions` at line 1 column 32</span></code></pre>
+  <span class="chip cert">certified</span> — real binary, scratch directory, output verbatim. The error lists the whole key vocabulary, which is also the shortest correct answer to "what can go in this file".
+
+  <p>
+    A persona's <code>tools</code> list is a real filter and not an assertion.
+    An operator writing <code>"tools": ["Read", "Grep"]</code> and getting
+    <code>Bash</code> anyway would have a permission boundary that is a
+    comment, at the one place where the failure costs them their working tree. A
+    name the binary does not register is still a load error — filtering without
+    asserting turns <code>"Bahs"</code> into "no shell for you" with no
+    explanation.
+  </p>
+  <span class="src">crates/harness/src/lib.rs — <code>Harness::select_tools</code></span>
+
+  <h3><code>.claude/settings.json</code> — three keys of many</h3>
+
+  <p>
+    Emma reads <code>hooks</code>, <code>statusLine</code> and
+    <code>permissions</code> from this file and ignores everything else. The
+    three are taken separately, so one unreadable key cannot cost another: a
+    status line that will not resolve must not stop a hook from resolving.
+  </p>
+  <span class="src">crates/harness/src/claude.rs — <code>Settings</code>; crates/harness/src/lib.rs — <code>load_selecting</code>, the <code>Flavor::Claude</code> arm</span>
+
+  <div class="note warn">
+    <span class="h"><code>deny_unknown_fields</code> cannot go on this file</span>
+    <p>
+      It carries keys Emma has no opinion about, written by a program Emma does
+      not run, and denying them would mean refusing to boot in essentially every
+      real Claude Code repository. <strong>A rule that fires on correct
+      configuration is an outage, not a safety property.</strong> So the outer
+      object is permissive, and the <code>hooks</code> block inside it is strict
+      — which is where a silently-ignored key would cost something.
+    </p>
+    <p>
+      This matters if you are adding a key Emma should read: adding it to the
+      struct changes nothing about the other keys, and a misspelling of
+      <em>your</em> key will be swallowed exactly like the rest. There is no
+      spelling check available here at all, which is the price of the format
+      being somebody else's. The compensations that exist are the strict inner
+      blocks and <code>emma config check</code>, which prints what was actually
+      taken.
+    </p>
+    <p>
+      The same relaxation is made in two further places for the same reason:
+      skill frontmatter under <code>.claude/skills/</code>, and agent
+      frontmatter under <code>.claude/agents/</code>. The agent struct's doc
+      states it outright — measured against a real library of 90 agent files,
+      <code>category</code> and <code>version</code> appear throughout and every
+      one of them would have been a boot failure.
+    </p>
+  </div>
+  <span class="src">crates/harness/src/claude.rs (module doc, <code>AgentFront</code>); crates/harness/src/lib.rs — <code>ClaudeFront</code></span>
+
+  <p>
+    The owner's own user-scope file is the demonstration. It carries ten
+    top-level keys, of which Emma models exactly one.
+  </p>
+
+<pre><code><span class="c">$ python -c "import json;print(sorted(json.load(open(r'C:\Users\owner\.claude\settings.json')).keys()))"</span>
+['$schema', 'agentPushNotifEnabled', 'effortLevel', 'enabledPlugins',
+ 'extraKnownMarketplaces', 'feedbackSurveyState', 'hooks', <span class="s">'permissions'</span>,
+ 'remoteControlAtStartup', 'skipDangerousModePermissionPrompt']</code></pre>
+  <span class="chip cert">certified</span> — the real file on this machine, 2026-08-16.
+
+  <h3>What a hook command may be</h3>
+
+  <p>
+    Claude Code's <code>command</code> is a shell string: it may pipe, expand
+    variables, or name any executable on the box. Emma canonicalises a path,
+    containment-checks it inside <code>&lt;root&gt;/hooks/</code>, and execs an
+    argv with a cleared environment. So
+    <code>$CLAUDE_PROJECT_DIR/.claude/hooks/x.sh</code>,
+    <code>.claude/hooks/x.sh</code> and <code>hooks/x.sh</code> all resolve, and
+    anything carrying whitespace, a shell metacharacter or an absolute path is a
+    <em>startup error</em> that says what to do about it. Quietly dropping a
+    guard the operator believes they have is the one outcome ruled out.
+  </p>
+  <span class="src">crates/harness/src/claude.rs — <code>translate_command</code>, <code>SHELL_METACHARACTERS</code></span>
+
+  <p>
+    An event name Emma does not implement is the same class of error rather than
+    a skip. Emma has three events; Claude Code has more, and a
+    <code>Stop</code> guard copied across would never fire while looking
+    configured. One conversion is silent and worth knowing: Claude Code's
+    <code>timeout</code> is <strong>seconds</strong> and Emma's
+    <code>timeout_ms</code> is milliseconds, so the reader multiplies by a
+    thousand when it flattens the block.
+  </p>
+  <span class="src">crates/harness/src/claude.rs — <code>Settings::into_hook_defs</code>; crates/harness/src/hooks.rs — <code>HookEvent::parse</code></span>
+
+  <h3><code>settings.local.json</code></h3>
+
+  <p>
+    One filename in both flavours, sitting beside whichever spine loaded. It
+    carries a <code>permissions</code> block and nothing else Emma reads, and it
+    is where a grant you ask Emma to remember is written — beside the harness
+    that actually loaded, so answering a prompt in a <code>.emma/</code> project
+    cannot conjure a <code>.claude/</code> directory for a program that is not
+    running.
+  </p>
+  <span class="src">crates/harness/src/lib.rs — <code>LOCAL_SETTINGS_FILE</code>, <code>read_permissions</code>, <code>permissions_file</code></span>
+
+  <p>
+    <strong>A malformed one fails the boot</strong>, which is a different ruling
+    from a rule Emma cannot evaluate — that is only a note. An unevaluatable
+    rule is a file written correctly for a program with a larger vocabulary;
+    unparseable JSON is a file that says nothing at all, and booting past it
+    would mean running with a <code>deny</code> list the operator believes is in
+    force.
+  </p>
+
+<pre><code><span class="c">$ printf '{ not json' > .claude/settings.local.json &amp;&amp; emma config check</span>
+Error: …\t1\.claude\settings.local.json is malformed
+
+Caused by:
+    key must be a string at line 1 column 3</code></pre>
+  <span class="chip cert">certified</span> — scratch harness, real binary, today.
+
+  <h3>Permission rules live here and are explained elsewhere</h3>
+
+  <p>
+    The harness reads the rule strings and does not understand them. Each one
+    comes out tagged with the list it was in and the file it was written in,
+    because the two sentences an operator needs when a rule does not fire are
+    "which file" and "which list". What the strings <em>mean</em>, which
+    specifiers this build can evaluate, and how <code>deny</code> beats
+    <code>allow</code> at match time are all
+    <a href="consent.html">Consent &amp; permissions</a>.
+  </p>
+  <span class="src">crates/harness/src/lib.rs — the Permission rules region; crates/emma/src/permissions.rs</span>
+
+  <p>
+    Two facts about <em>reading</em> them belong here, though. Permission lists
+    <strong>merge across scopes</strong> rather than override — nearest-wins is
+    not how these compose — and the merge is safe because <code>deny</code> beats
+    <code>allow</code> at match time, so a restrictive rule in any file survives
+    a permissive rule in any other. And from the user scope,
+    <strong>only <code>deny</code> crosses</strong>.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Why user-scope <code>allow</code> is dropped</span>
+    <p>
+      It is the one judgement call in the feature and it diverges from Claude
+      Code, where all three lists apply in every project. A grant made in
+      <code>~/.claude/settings.json</code> was made for another program, in a
+      session Emma was not part of, possibly years ago. The source comment names
+      the live consequence: the owner's file carried <code>Bash(rm:*)</code>,
+      <code>Bash(bash:*)</code> and <code>Bash(powershell.exe:*)</code> in
+      <code>allow</code>. Honouring those would have handed Emma an unprompted
+      shell in every repository on the machine, granted by nobody, on the first
+      run after the feature shipped.
+    </p>
+    <p>
+      <code>deny</code> only ever removes a capability, cannot be the mechanism
+      of a surprise, and a host somebody blocked globally is a host they meant.
+      <code>ask</code> is left out with <code>allow</code>: not restrictive
+      enough to be worth importing, not permissive enough to be dangerous.
+    </p>
+    <p>
+      <span class="chip cert">certified</span> — that file today holds
+      <strong>64</strong> <code>allow</code> rules, <code>"defaultMode":
+      "auto"</code>, and no <code>deny</code> list at all. Emma's
+      <code>config check</code> in this repository accordingly prints
+      <code>permissions (none)</code>. Sixty-four standing grants for another
+      program, contributing nothing.
+    </p>
+  </div>
+  <span class="src">crates/harness/src/lib.rs — <code>user_permissions</code>; crates/emma/src/main.rs, the two-scope merge</span>
+
+  <h2 id="skills">Skills, commands and agents</h2>
+
+  <p>
+    All three are directories under the harness root, and all three use the same
+    layout in <code>.emma/</code> and <code>.claude/</code> — which is the whole
+    point of reading the second directory name at all. A skill or command
+    already written for Claude Code works unchanged.
+  </p>
+
+  <h3>Skills — <code>skills/&lt;name&gt;/SKILL.md</code></h3>
+
+  <p>
+    Markdown with YAML frontmatter. Emma reads two fields, <code>name</code> and
+    <code>description</code>, and the body after the frontmatter is the skill.
+    The catalogue is keyed and sorted by the frontmatter name, never by
+    directory iteration order, because the catalogue rides in the prompt prefix
+    that the provider caches as an exact byte match. A persona's
+    <code>skills</code> array is therefore a <em>set</em>, not an ordering.
+  </p>
+  <span class="src">crates/harness/src/lib.rs — <code>load_skills</code>, <code>split_skill</code>, <code>Harness::skills</code></span>
+
+  <p>
+    <strong>What a skill can do is add text to one turn.</strong> It is loaded
+    by a tool call, so its body reaches the model only when the model asks for
+    it by name from a closed enum — a tool that took a model-supplied
+    <em>path</em> would be an arbitrary-file-read tool with a friendly
+    description. Nothing the runtime branches on may live in a skill; that
+    belongs in the spine.
+  </p>
+
+  <p>
+    Strictness splits by flavour, and this is the same ruling as
+    <code>settings.json</code> one level down. Under <code>.emma/</code> the
+    frontmatter is strict and both fields are required, so a bad file fails the
+    boot. Under <code>.claude/</code> unknown keys are ignored and a file that
+    cannot be read at all is <em>skipped with a warning on stderr</em> — real
+    skills carry <code>model-role</code>, <code>version</code> and
+    <code>allowed-tools</code>, and under the strict struct every one of them
+    took the whole boot down. Two further tolerances exist for
+    <code>.claude/</code> only: an HTML comment (a licence header) above the
+    frontmatter is stepped over, and comments and blank lines are the only
+    things that may precede it. Not covered: a <code>---\r\n</code> opener or a
+    byte-order mark on a skill file — both are skipped-with-a-warning rather
+    than fatal, which is the property that mattered.
+  </p>
+  <span class="src">crates/harness/src/lib.rs — <code>Front</code>, <code>ClaudeFront</code>, <code>after_licence_header</code></span>
+
+  <p>
+    A harness with no skills does not register the <code>Skill</code> tool at
+    all. Offering a capability that cannot work is a trap with a description
+    attached.
+    <span class="chip cert">certified</span> — the <code>tools</code> line from
+    <code>config check</code> in this repository (no skills) has no
+    <code>Skill</code>; the same line in a scratch harness carrying one
+    <code>SKILL.md</code> reads
+    <code>… DocumentSymbols, <strong>Skill</strong>, WebFetch, …</code>.
+  </p>
+  <span class="src">crates/harness/src/lib.rs — <code>Harness::skill_catalog</code>, and its <code>None</code> case</span>
+
+  <h3>Commands — <code>commands/&lt;name&gt;.md</code></h3>
+
+  <p>
+    Top-level <code>*.md</code> only; the file stem is the name. Typing
+    <code>/name rest of the line</code> substitutes the file's body, with the
+    tail appended after a blank line when there is one. The body is trimmed at
+    both ends, which is the second of the two places the "nothing is trimmed"
+    prompt rule is bent, and it is bent because a command body is not
+    always-on prompt text — it is text a person typed a <code>/name</code> to
+    summon.
+  </p>
+  <span class="src">crates/harness/src/lib.rs — <code>load_commands</code>, <code>expand_command</code></span>
+
+  <p>
+    <strong>Expansion happens at intake and the model never learns commands
+    exist.</strong> An unknown <code>/word</code> is not an error: it passes
+    through as ordinary text.
+  </p>
+
+  <h3>Agents — <code>agents/&lt;name&gt;.md</code></h3>
+
+  <p>
+    One file format doing two jobs with opposite selection rules. As a
+    <em>persona</em> it is chosen by a human at startup through
+    <code>EMMA_PERSONA</code>; as a <em>delegation target</em> it is chosen by
+    the model at call time from a closed list. They have separate accessors and
+    no function takes a boolean saying which it is. The delegation half is
+    <a href="delegation.html">Delegation</a>; what belongs here is how the files
+    are found.
+  </p>
+
+  <ul class="body">
+    <li>
+      <strong>Top-level <code>*.md</code> only</strong>, and the file stem is
+      the name. A <code>name:</code> in frontmatter that disagrees loses and
+      produces a note — the stem is what <code>EMMA_PERSONA</code> names and the
+      only one of the two guaranteed unique. Subdirectories are not walked: a
+      real library had 23 of them holding 205 files, and flattening two
+      namespaces would resolve a collision by directory iteration order.
+    </li>
+    <li>
+      <strong>Nothing here fails the boot.</strong> An agent library is a
+      directory somebody accumulated over months; refusing to start because one
+      file in ninety has no <code>description</code> is the outage this crate
+      keeps ruling against. Dropped files are named instead, in
+      <code>config check</code> and at startup.
+    </li>
+    <li>
+      <strong>A persona directory nobody selected is fatal in
+      <code>.emma/</code> and fine in <code>.claude/</code>.</strong> There
+      personas <em>are</em> the prompt, so unselected persona content means Emma
+      would have started without a prompt somebody wrote. In
+      <code>.claude/</code> the prompt is <code>CLAUDE.md</code> and
+      <code>agents/</code> is optional — a normal repository has a dozen and
+      selects none.
+    </li>
+    <li>
+      <strong><code>tools: []</code> means inherit, not nothing.</strong> That
+      is the trap in the format: under Emma's rules an empty allowlist would
+      mean no tools at all, and nobody writes <code>tools: []</code> meaning
+      "this agent may do nothing". A YAML list and a comma-separated string are
+      both accepted, because both are common and silently ignoring one would
+      produce exactly that empty list.
+    </li>
+  </ul>
+  <span class="src">crates/harness/src/claude.rs — <code>agents</code>, <code>load_agents</code>, <code>Tools::allowlist</code>, <code>split_agent</code>; crates/harness/src/lib.rs — <code>select_persona</code></span>
+
+  <p>
+    Line endings on an agent file are tolerated, and that is a scar rather than
+    tidiness. The parser required <code>---\n</code> exactly, so every CRLF
+    agent file — every one of them on a Windows machine, and 90 out of 90 in the
+    library it was measured against — fell through to "no frontmatter": its
+    <code>tools</code> was ignored, its <code>description</code> was invisible,
+    and its <code>name:</code>, <code>model:</code> and <code>category:</code>
+    lines were handed to the model as standing instructions. Nothing failed; the
+    file simply did not mean what it said. A byte-order mark is stepped over for
+    the same reason, and unreadable YAML now produces a note where it used to
+    produce the same empty value as a file with no frontmatter at all.
+  </p>
+
+  <p>Here is the whole of that behaviour, in one scratch harness:</p>
+
+<pre><code><span class="c">$ emma config check       # .claude/ with one skill, two agents, one command</span>
+flavor         claude
+persona        (none)
+instructions   cc2498f7b5e23c55 (20 bytes)   <span class="c">// CLAUDE.md, nothing else</span>
+skills         demo                          <span class="c">// version:/allowed-tools: ignored</span>
+agents         helper
+               offered to the model as the `Delegate` tool, which is registered at run
+               time and so is not in the tools line above
+               <span class="w">agent `helper` declares name `notmatching`; the file name wins</span>
+               <span class="w">agent `nodesc` has no description, so nothing could tell a model when to
+               use it — not offered for delegation</span>
+commands       /go
+permissions    2 rule(s)
+               deny  WebFetch(domain:evil.test)   …\.claude\settings.json
+               allow Bash(ls:*)                   …\.claude\settings.json
+               <span class="w">! `Bash(ls:*)` is an allow rule Emma cannot evaluate — `ls:*` is not a
+               specifier this build understands, so it approves nothing and those
+               calls will still ask.</span></code></pre>
+  <span class="chip cert">certified</span> — a scratch <code>.claude/</code> built today and read by the release binary; the settings file also carried <code>$schema</code>, <code>model</code> and <code>enabledPlugins</code>, none of which caused a murmur.
+
+  <h2 id="personal">The personal file — <code>~/.emma/settings.json</code></h2>
+
+  <p>
+    Never in the working tree, for the same reason the key is not: Emma runs
+    inside repositories, and anything it writes beside the code is something the
+    next <code>git add .</code> publishes. A model id is not a secret, but a
+    file Emma creates in someone's repository without being asked is a surprise
+    either way.
+  </p>
+  <span class="src">crates/emma/src/settings.rs (module doc)</span>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>key</th><th>type</th><th>what it does</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>provider</code></td>
+        <td>string</td>
+        <td>Which provider this build should use. <strong>An unknown one is an
+            error, never a fallback</strong> — falling back to Anthropic would
+            make a mis-set provider indistinguishable from a correct one.</td>
+      </tr>
+      <tr>
+        <td><code>models</code></td>
+        <td>object</td>
+        <td>provider → the model last chosen for it. Per provider so that
+            switching away and back costs nothing, which is the entire annoyance
+            of switching.</td>
+      </tr>
+      <tr>
+        <td><code>validated</code></td>
+        <td>object</td>
+        <td>provider → <code>{at, how}</code> where <code>how</code> is
+            <code>checked</code> or <code>forced</code>. Nothing writes it yet;
+            it is read and written back so a build that does validate does not
+            have its record stripped by one that does not.</td>
+      </tr>
+      <tr>
+        <td><code>tools</code></td>
+        <td>object</td>
+        <td>The sidebar's user tools. Four optional keys, below.</td>
+      </tr>
+      <tr>
+        <td><code>theme</code></td>
+        <td>string</td>
+        <td>The theme file's name. Absent means the built-in.</td>
+      </tr>
+      <tr>
+        <td><code>model</code></td>
+        <td>string</td>
+        <td><em>Legacy.</em> The pre-provider spelling. Read as Anthropic's,
+            never written back, so it survives being read and disappears on the
+            first save.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/emma/src/settings.rs — <code>Settings</code>, <code>load</code>, <code>resolve_kind</code></span>
+
+  <p>
+    <strong>This struct has no <code>deny_unknown_fields</code>, and a file that
+    will not parse is read as an empty one.</strong> A preference store that
+    refused to start would be the tail wagging the dog — but the consequence is
+    that a typo here is <em>silence</em>, not a message. A file with
+    <code>"provdier": "anthropic"</code> boots happily on the built-in default.
+    The check available is the <code>config check</code> line, which names the
+    source of each answer:
+    <code>provider anthropic (settings.json)</code> versus
+    <code>(built-in default)</code>.
+    <span class="chip test">tested</span> —
+    <code>a_corrupt_settings_file_is_not_a_startup_failure</code> writes
+    <code>{ not json</code> and asserts both sources come back as
+    <code>built-in default</code>.
+  </p>
+
+  <p>
+    The legacy migration is live rather than historical. The owner's real file
+    today is <code>{"model": …}</code> and nothing else, and the resolved model
+    in the <code>config check</code> at the top of this page is
+    <code>claude-sonnet-5 (settings.json)</code> — that migration firing.
+    Migration happens at <em>read</em>, so <code>emma</code> and
+    <code>emma config check</code> can never disagree about the model while
+    waiting for something to write.
+    <span class="chip cert">certified</span> — the file's only key is
+    <code>model</code>, read on this machine today.
+    <span class="chip test">tested</span> —
+    <code>a_model_set_before_providers_existed_still_runs</code> pins the owner's
+    file byte for byte, and its comment says why: if it goes red, an upgrade
+    silently moved somebody off the model they chose.
+  </p>
+
+  <h3>The <code>tools</code> block</h3>
+
+  <p>
+    Four optional strings, all read by <code>usertools</code> — the sidebar keys
+    a <em>person</em> presses, not anything the model can reach.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>key</th><th>what it points at</th><th>absent means</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>shell</code></td>
+        <td>The shell the Shell tool opens. Windows honours it directly.</td>
+        <td>Probe the machine. On mac/linux the terminal <em>application</em> is
+            opened and lets the user's shell be picked, because Emma holds this
+            terminal and has nowhere to put a child that wants one.</td>
+      </tr>
+      <tr>
+        <td><code>editor</code></td>
+        <td>The editor the Code and Settings tools open.</td>
+        <td><code>$VISUAL</code>, then <code>$EDITOR</code>, then a probe of
+            <code>code, cursor, subl, zed</code> (and <code>nvim</code> on
+            Windows only, where a new console can hold it).</td>
+      </tr>
+      <tr>
+        <td><code>file_browser</code></td>
+        <td>The file manager.</td>
+        <td>The OS default — <code>explorer</code>, <code>open</code>,
+            <code>xdg-open</code>.</td>
+      </tr>
+      <tr>
+        <td><code>data_dir</code></td>
+        <td>Where the Data Explorer points. Absolute path.</td>
+        <td><code>~/.emma</code>.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/emma/src/settings.rs — <code>ToolSettings</code>; crates/emma/src/usertools.rs — <code>resolve_value</code>, <code>resolve_editor</code></span>
+
+  <p>
+    <strong>Every value is one program name or one absolute path, and never a
+    command line.</strong> A bare name is looked up on <code>PATH</code>; an
+    absolute path is checked for existence. Splitting a string on spaces is the
+    first half of running text through a shell, and a path with a space in it is
+    not an argument boundary — so a value carrying arguments is not split, it
+    fails, and the failure names the rule:
+  </p>
+
+<pre><code>tools.editor is set to code --wait, which is not on PATH
+  (a configured value is one program name or absolute path, never a command line)</code></pre>
+  <span class="src">crates/emma/src/usertools.rs — <code>resolve_value</code>, the whitespace arm</span>
+
+  <p>
+    That message exists because the generic one — "which is not on PATH" — sends
+    somebody to check their PATH for a program that was never the problem. A
+    value that does not resolve is an error naming it and is <strong>never</strong>
+    quietly swapped for a probed default: a silent substitution looks identical
+    to success right up until the wrong program opens.
+    <span class="chip unv">unverified</span> — the two messages are read off the
+    source and the resolution layer is pure and testable, but nothing on this
+    page ran the sidebar. Settle it by setting <code>tools.editor</code> to
+    <code>code --wait</code> and pressing <code>c</code> in the frame.
+  </p>
+
+  <p>
+    <code>$VISUAL</code> and <code>$EDITOR</code> get the one concession, and it
+    is a concession to the world rather than to the rule: those variables really
+    do hold command lines, so a value there that does not resolve <em>as a
+    whole</em> is skipped and the chain continues to the probe.
+    Skipped, not split.
+  </p>
+
+  <p>
+    Two smaller behaviours worth knowing. A <code>.cmd</code> or
+    <code>.bat</code> target is refused with a sentence saying to point the
+    setting at the underlying <code>.exe</code> — a script cannot own a console
+    window. And <code>settings.json</code> is re-read on <em>every</em> call
+    rather than cached, so the Settings tool's own writes appear on the next
+    frame; <code>PATH</code> lookups are cached for the life of the process, so
+    a program installed mid-session appears after a restart.
+  </p>
+  <span class="src">crates/emma/src/usertools.rs (module doc, "Probing must not lie")</span>
+
+  <h2 id="credentials">Credentials</h2>
+
+  <p>
+    Two sources, in order: the provider's environment variable, then
+    <code>~/.emma/credentials.json</code>. <strong>Never the project
+    directory.</strong> Nothing in <code>auth.rs</code> resolves a path relative
+    to the working directory — the home path is computed, not searched upward.
+    A key written next to the code is a key that gets committed, and the first
+    person to notice is usually the scanner that finds it in a public push.
+    <span class="chip test">tested</span> —
+    <code>a_credentials_file_in_the_project_directory_is_ignored</code> plants a
+    real <code>credentials.json</code> in a scratch cwd, runs both providers,
+    and asserts the error names a path under the fake home.
+  </p>
+  <span class="src">crates/llm/src/auth.rs — <code>resolve</code>, <code>credentials_path</code></span>
+
+  <p>
+    The environment wins because that is how CI and one-off overrides work. The
+    variable it wins with is the <em>provider's</em> — that is why resolution
+    takes a <code>ProviderKind</code> rather than a name, so there is no way to
+    check the wrong variable. An exported-but-empty variable is not a key: a
+    forgotten <code>ANTHROPIC_API_KEY=</code> falls through to the stored file
+    rather than authenticating with <code>""</code> and earning a 401 nobody can
+    explain.
+  </p>
+
+  <h3>The shape on disk, and the older one</h3>
+
+  <p>
+    <code>{"providers": {"anthropic": {"api_key": …}}}</code>. It used to hold
+    exactly one key under a top-level <code>api_key</code>, and that spelling is
+    <strong>still read</strong>, for as long as anybody has a file written by
+    the old <code>emma api</code> — one machine, no expiry date. Reading
+    migrates; nothing rewrites the file for having been read. The keyed shape
+    wins over the legacy field for the same provider, and the first
+    <em>write</em> carries the legacy value into <code>providers</code> and drops
+    the flat key, so there is never a file with two answers for Anthropic.
+  </p>
+  <span class="src">crates/llm/src/auth.rs — <code>read_keys</code>, <code>store</code></span>
+
+  <div class="note warn">
+    <span class="h">The scar: a write that deleted a key it never knew about</span>
+    <p>
+      This file holds more than one program's secrets. The web tools keep
+      <code>brave_search_api_key</code> at its top level, beside the provider
+      entries. A write that serialised a fresh document — the obvious
+      implementation — deleted whichever keys the caller did not happen to know
+      about, silently, and the symptom arrived hours later as a tool that had
+      stopped being registered.
+    </p>
+    <p>
+      <strong>What it does now:</strong> <code>store</code> reads the file,
+      replaces one provider's entry, and writes back everything else it found.
+      And a file that <em>cannot be parsed</em> is an error rather than
+      something to overwrite — for exactly the same reason, since overwriting is
+      how the other keys are lost.
+    </p>
+    <p>
+      <span class="chip test">tested</span> —
+      <code>a_key_written_by_the_old_emma_api_still_reads</code> plants the
+      owner's live file (a flat <code>api_key</code> and a Brave key beside it),
+      stores a key for a <em>different</em> provider, and asserts
+      <code>brave_search_api_key</code> survived, with the failure message "a
+      key this module does not own was destroyed by a write".
+      <code>malformed_credentials_name_the_file_rather_than_being_overwritten</code>
+      writes <code>not json</code>, asserts the store call fails, and asserts
+      the file's bytes are unchanged afterwards.
+    </p>
+  </div>
+
+  <p>
+    Two more properties. Every key in the file is built through
+    <code>ApiKey::new</code> at load — <em>including the ones nobody asked
+    for</em> — because that constructor is what registers a secret for
+    scrubbing, so a key belonging to a provider this run is not using still
+    cannot appear in an error message. And an <code>ApiKey</code> has no
+    <code>Display</code> and a <code>Debug</code> that prints
+    <code>ApiKey([redacted])</code>, so it cannot reach a log through a
+    <code>{:?}</code> on some struct three layers up.
+    <span class="chip test">tested</span> — <code>a_key_never_prints_itself</code>
+    and <code>a_key_belonging_to_another_provider_is_still_scrubbed</code>.
+  </p>
+
+  <p>
+    <strong>On Windows the file is not owner-only, and the code says so rather
+    than implying otherwise.</strong> On unix it is created <code>0600</code> in
+    the <code>open</code> call rather than chmodded afterwards (between those two
+    calls the key is world-readable on disk), and a file whose mode has loosened
+    is <em>refused</em> at read rather than warned about. Windows has no mode
+    bits: the file lands in the user's profile, whose default ACL already
+    excludes other users, and tightening it further would mean an ACL API this
+    crate has no other reason to link. The Windows test asserts what can be
+    asserted — that the round trip works and that the absent check does not fail
+    closed — and its doc explains that the thinness is the point.
+  </p>
+  <span class="src">crates/llm/src/auth.rs — <code>write_private</code>, <code>check_permissions</code>, and their <code>cfg(not(unix))</code> arms</span>
+
+  <p>
+    <code>emma config check</code> prints <code>api key found (stored file)</code>
+    or the environment, by name and never by value — it answers "did I store
+    that key?" without being a way to read one back.
+  </p>
+
+  <h2 id="themes">Themes</h2>
+
+  <p>
+    A theme is a JSON file of colours. Two directories are searched, in this
+    order: <code>~/.emma/themes/&lt;name&gt;.json</code>, then
+    <code>&lt;harness root&gt;/themes/&lt;name&gt;.json</code>. Themes ride the
+    discovery that already happened, so in a <code>.claude/</code> project the
+    project's themes live in <code>.claude/themes/</code>.
+  </p>
+  <span class="src">crates/emma/src/term/theme.rs — <code>load</code>; crates/emma/src/session_command.rs — <code>theme_dirs</code></span>
+
+  <p>
+    <strong>Yours beats the project's on a name collision</strong>, which follows
+    the same argument as skipping <code>~/.claude/</code>: a project cannot
+    <em>select</em> a theme, so shadowing a name you already chose is the only
+    way a repository could repaint your screen. The reverse is not a risk, it is
+    the preference working. The name <code>emma</code> is reserved so a cloned
+    repository cannot silently change what stock Emma looks like by shipping a
+    <code>themes/emma.json</code>; a file of that name gets a notice saying to
+    copy it to another name.
+  </p>
+
+  <p>
+    <strong>Selection lives only in <code>~/.emma/settings.json</code></strong>
+    under <code>theme</code>, and the project's <code>config.json</code> has no
+    counterpart — the same ruling as the model, applied a second time. Theme
+    <em>files</em> may live in either place; the choice is personal.
+  </p>
+
+  <p>
+    <code>/theme</code> lists what is available and which is selected;
+    <code>/theme &lt;name&gt;</code> selects one. <strong>It takes effect at the
+    next start.</strong> There is no <code>--save</code>, and that is not an
+    omission: a theme is read once at startup, so selecting one <em>is</em>
+    writing it down. A live swap would have to reach every drawn surface at once
+    while the retained transcript still holds rows already styled under the old
+    colours, so the realistic outcome of repainting is a half-recoloured screen.
+    The name is checked before the write, so a selection known to be broken is
+    never written; the write itself is a load-mutate-save round trip through the
+    same shared settings document, for the reason the credentials scar above
+    gives.
+  </p>
+  <span class="src">crates/emma/src/session_command.rs — the <code>/theme</code> region, <code>theme</code>, <code>write_theme</code></span>
+
+  <div class="note good">
+    <span class="h">A broken theme costs colour and never the boot</span>
+    <p>
+      <code>load</code> returns notices and no error, and the granularity is
+      per-field. A hex that is not a hex loses <em>that role</em> and leaves the
+      other seven applied — a theme thrown away over one character is a theme
+      its author cannot debug. A file that is not JSON loses the theme and keeps
+      the boot, quoting serde's own line and column. A key that is not a theme
+      key is noted and ignored, because a build that adds a key should not make
+      the file unreadable to the build beside it. At most five notices are
+      printed; past that the count and the path are what you need, because the
+      file is where you are going to go and look.
+    </p>
+    <p>
+      Two things a theme may not do, and both concern a screen nobody here can
+      see. It may not set <code>roles.text</code>: a foreground chosen against
+      one background is invisible on the opposite one, and the person it breaks
+      for reads it as Emma being broken. And it may not set a bare background —
+      backgrounds are declared as <em>pairs</em> (<code>chip</code>,
+      <code>selection</code>), fg and bg together, because a pair is legible
+      whatever is behind it and a lone background is a colour against an unknown
+      one.
+    </p>
+  </div>
+  <span class="src">crates/emma/src/term/theme.rs — <code>apply</code>, <code>apply_roles</code>, <code>role_entry</code>, <code>MAX_NOTICES</code></span>
+
+  <p>
+    The colour model itself — the roles, the three fidelities, what
+    <code>NO_COLOR</code> does, and why the 16-colour name is inherited rather
+    than derived — is <a href="terminal.html">The terminal</a>. One consequence
+    belongs here: under <code>NO_COLOR</code>, <code>/theme</code> writes the
+    preference and says plainly that the screen will not change, rather than
+    refusing. The person may well be setting up for a terminal they will use
+    later.
+  </p>
+
+  <h2 id="notapplied">Why did my setting not apply</h2>
+
+  <p>
+    In the order worth checking, because each step rules out the ones below it.
+  </p>
+
+  <h3>1 · A different directory was loaded than the one you edited</h3>
+
+  <p>
+    This is the common one, and it has three causes: <code>.emma/</code> beat a
+    <code>.claude/</code> sitting beside it, a <em>nearer</em> ancestor had a
+    harness you forgot about, or <code>EMMA_ROOT</code> is exported in that
+    shell. Run <code>emma config check</code> and read the first three lines —
+    <code>cwd</code>, <code>harness</code>, <code>flavor</code>. If
+    <code>harness</code> is not the directory you edited, nothing below matters.
+  </p>
+
+  <h3>2 · The key is real, but it belongs in a different file</h3>
+
+  <p>
+    The four confusions, all of which look like a setting being ignored:
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>if you wrote…</th><th>in…</th><th>it belongs in…</th></tr></thead>
+    <tbody>
+      <tr><td><code>theme</code>, <code>provider</code>, <code>model</code>, <code>tools</code></td>
+          <td><code>.emma/config.json</code></td>
+          <td><code>~/.emma/settings.json</code> — and the spine would have
+              <em>refused to start</em> over it, so if Emma booted, that is not
+              what happened</td></tr>
+      <tr><td><code>permissions.allow</code></td>
+          <td><code>~/.claude/settings.json</code></td>
+          <td>the project's spine or <code>settings.local.json</code>. User
+              scope contributes <code>deny</code> only, silently</td></tr>
+      <tr><td>a hook for <code>SessionStart</code>, <code>Stop</code>, <code>PreCompact</code></td>
+          <td>either spine</td>
+          <td>nowhere — Emma has three events, and this is a startup error
+              rather than a skip, so again: if Emma booted, this is not it</td></tr>
+      <tr><td>a skill or agent in a subdirectory</td>
+          <td><code>agents/&lt;sub&gt;/x.md</code></td>
+          <td>top level. <code>agents/</code> reads <code>*.md</code> at the top
+              only; <code>skills/</code> wants
+              <code>&lt;name&gt;/SKILL.md</code> exactly</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>3 · The key was swallowed rather than refused</h3>
+
+  <p>
+    Two files ignore keys they do not know: <code>.claude/settings.json</code>
+    at its outer level, and <code>~/.emma/settings.json</code> entirely. In both,
+    a misspelling is silence. <code>.emma/config.json</code> is the opposite and
+    would have named the key and the whole valid vocabulary. So: if you edited a
+    permissive file, compare your key against the tables above by eye —
+    there is no spelling check available, and that is the price of one format
+    belonging to another program and the other being a preference store that
+    must not refuse to start.
+  </p>
+
+  <p>
+    The lower-level version of the same thing: a value can be swallowed by
+    <em>shape</em>. <code>tools: []</code> in an agent file means inherit, not
+    nothing. A theme role spelled wrongly is a notice, not a failure. A skill
+    under <code>.claude/</code> whose frontmatter will not parse is skipped with
+    a line on stderr that scrolls past on a busy start —
+    <code>emma config check</code> is where to see the surviving list.
+  </p>
+
+  <h3>4 · It applied, and it does not take effect until the next start</h3>
+
+  <p>
+    <code>/theme</code> is the one that surprises people, and the command says so
+    itself. Everything the harness reads is resolved once at startup into a
+    value the loop consumes; nothing re-reads a configuration file mid-run. The
+    exception runs the other way: <code>~/.emma/settings.json</code> is re-read
+    on every <code>usertools</code> call, so an editor changed through the
+    Settings tool is live on the next frame.
+  </p>
+
+  <h3>5 · It loaded, and was rejected at use</h3>
+
+  <p>
+    A rule Emma cannot evaluate is the clearest case: it is in the file, it is
+    listed by <code>config check</code>, and it approves nothing. That is a
+    <em>note</em> rather than a refusal, because a file written correctly for a
+    program with a larger vocabulary is not a broken file — see the
+    <code>Bash(ls:*)</code> line in the certified output above. A configured
+    editor that is not on <code>PATH</code>, an agent with no
+    <code>description</code>, and a status-line program outside
+    <code>hooks/</code> are the same shape: loaded, named, and doing nothing.
+    <code>config check</code> prints all of them.
+  </p>
+
+  <div class="note">
+    <span class="h">Two failures that are not configuration at all</span>
+    <p>
+      <strong>Approval.</strong> If Emma keeps asking about something you
+      granted, the rule may be right and simply not matching — that is
+      <a href="consent.html">Consent &amp; permissions</a>, not this page. And
+      the gate is a consent interface, not a sandbox: it enforces nothing a tool
+      does not honestly declare.
+    </p>
+    <p>
+      <strong>An unknown <code>/word</code>.</strong> It is not an error and not
+      a missing command. Anything that is not a known command file passes
+      through to the model as ordinary text, which is indistinguishable from a
+      command that "did nothing" if you were expecting an expansion.
+    </p>
+  </div>
+
+  <h2 id="unverified">What is not verified</h2>
+
+  <ul class="body">
+    <li>
+      <strong>The user-tool launch path.</strong> Everything on this page about
+      <code>tools.shell</code>, <code>tools.editor</code>,
+      <code>tools.file_browser</code> and <code>tools.data_dir</code> comes from
+      reading <code>usertools.rs</code>, whose decision layer is pure and
+      testable — but no program was launched from a running frame in the session
+      that wrote this.
+      <span class="chip unv">unverified</span> — settle it by setting
+      <code>tools.editor</code> to a value with an argument in it, pressing
+      <code>c</code>, and pasting the sentence the frame prints.
+    </li>
+    <li>
+      <strong>A theme end to end.</strong> The failure rules are read off
+      <code>theme.rs</code> and the notice strings are quoted from it; no theme
+      file was written, selected and looked at on a screen here.
+      <span class="chip unv">unverified</span> — settle it by writing
+      <code>~/.emma/themes/x.json</code> with one bad hex and one good one,
+      running <code>/theme x</code>, restarting, and reading which notices
+      appear above the first prompt and which role changed.
+    </li>
+    <li>
+      <strong>Hook execution.</strong> This page covers how a hook block is
+      <em>read</em> and what a command string may be. Whether a hook actually
+      runs, what its payload contains and how a timeout behaves is
+      <code>hooks.rs</code>, and nothing here exercised it.
+      <span class="chip unv">unverified</span> — settle it by putting a script
+      in <code>.emma/hooks/</code>, attaching it to <code>PreToolUse</code>, and
+      reading the <code>hook</code> records in the session JSONL.
+    </li>
+    <li>
+      <strong>The Windows credential ACL.</strong> The claim is that a file in
+      the user's profile is already protected by the profile's default ACL.
+      Nothing in this tree reads an ACL, and the source says the same — the
+      Windows test asserts a round trip, not a permission.
+      <span class="chip unv">unverified</span> — settle it with
+      <code>icacls %USERPROFILE%\.emma\credentials.json</code> on a machine with
+      a second local account.
+    </li>
+    <li>
+      <strong>The 90-file and 205-file agent-library figures.</strong> They are
+      quoted from source comments in <code>claude.rs</code>, which record a
+      measurement made against a real library at some earlier date. They were not
+      re-counted for this page and the library has certainly moved.
+      <span class="chip unv">unverified</span> — settle it by counting
+      <code>~/.claude/agents/</code> again, or by treating the numbers as what
+      they are: evidence that the permissive ruling was measured, not a current
+      inventory.
+    </li>
+    <li>
+      <strong>How this page looks in a browser.</strong> The SVG was
+      hand-authored against <code>discover_in</code> and its geometry checked by
+      arithmetic; the sidebar matches <code>assets/NAV.html</code> and every
+      class used is one <code>docs.css</code> already defines. No renderer has
+      drawn it.
+      <span class="chip unv">unverified</span> — settle it by opening
+      <code>docs/config.html</code> from <code>file://</code> and checking that
+      no label overflows its box and no table forces the page to scroll
+      sideways.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · this page covers <code>crates/harness/</code>,
+    <code>crates/emma/src/settings.rs</code>,
+    <code>crates/llm/src/auth.rs</code> and
+    <code>crates/emma/src/term/theme.rs</code> ·
+    rules are <a href="consent.html">Consent &amp; permissions</a> ·
+    colours are <a href="terminal.html">The terminal</a> ·
+    contract: <code>docs/CONTRACT.md</code>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

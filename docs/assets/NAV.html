@@ -1,0 +1,50 @@
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>

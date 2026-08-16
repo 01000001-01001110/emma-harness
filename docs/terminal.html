@@ -1,0 +1,2112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>The terminal · Emma</title>
+    <link rel="stylesheet" href="assets/docs.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+      <nav class="side">
+        <div class="brand">
+          <a href="index.html"><b>emma<i>·</i>harness</b></a>
+          <span>0.1.0 · single-user · rust</span>
+        </div>
+
+        <h4>Start here</h4>
+        <ul>
+          <li><a class="nav" href="index.html">What Emma is</a></li>
+          <li><a class="nav" href="architecture.html">Architecture</a></li>
+        </ul>
+
+        <h4>Running a goal</h4>
+        <ul>
+          <li><a class="nav" href="loop.html">The agent loop</a></li>
+          <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+          <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+        </ul>
+
+        <h4>Doing work</h4>
+        <ul>
+          <li><a class="nav" href="tools.html">Tools</a></li>
+          <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+          <li><a class="nav" href="delegation.html">Delegation</a></li>
+        </ul>
+
+        <h4>Surface</h4>
+        <ul>
+          <li><a class="nav here" href="terminal.html">The terminal</a></li>
+          <li><a class="nav" href="config.html">Configuration</a></li>
+        </ul>
+
+        <h4>The project</h4>
+        <ul>
+          <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+          <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+          <li><a class="nav" href="unverified.html">What is not verified</a></li>
+        </ul>
+      </nav>
+
+      <main>
+        <div class="col">
+          <p class="eyebrow">Surface</p>
+          <h1>The terminal</h1>
+          <p class="lede">
+            Emma draws two different things. One is a full-screen application on
+            the alternate screen, with a sidebar, a retained conversation buffer,
+            a pinned input dock and a status bar. The other is a stream of lines
+            with no escape byte in it. The second one runs whenever the first
+            cannot, and most of the rules in this subsystem are about the seam
+            between them &mdash; and about giving the terminal back exactly as it
+            was found.
+          </p>
+
+          <div class="key">
+            <div>
+              <span class="chip cert">certified</span
+              ><span>proven against the real thing</span>
+            </div>
+            <div>
+              <span class="chip test">tested</span
+              ><span>covered by a test in the tree</span>
+            </div>
+            <div>
+              <span class="chip unv">unverified</span
+              ><span>believed, not checked</span>
+            </div>
+          </div>
+
+          <div class="note">
+            <span class="h">What this page covers</span>
+            <p>
+              <code>crates/emma/src/term/</code> is seventeen files and 16,542
+              lines, plus the <code>term.rs</code> facade above them and
+              <code>usertools.rs</code> beside them. It is the region
+              <code>notes/map-architecture.md</code> says it read
+              &ldquo;almost nothing&rdquo; of, calling it the largest gap in that
+              map; it also puts the size at &ldquo;16 files, ~13,000 lines,&rdquo;
+              which is low on both counts. How much of it was read for this page,
+              and by whom, is <a href="#coverage">at the bottom</a>.
+            </p>
+            <span class="src">notes/map-architecture.md, &ldquo;Percentages, since the brief asked for them&rdquo;</span>
+          </div>
+
+          <h2 id="two">Two surfaces, one vocabulary</h2>
+
+          <p>
+            Every write to the screen goes through one <code>Term</code>, and one
+            field decides which surface it lands on:
+            <code>frame: Option&lt;Arc&lt;Frame&gt;&gt;</code>. <code>Some</code>
+            is the drawn frame; <code>None</code> is the whole fallback. Both
+            paths render the same <code>Line</code> values from the same
+            <code>Skin</code>, so a change to the vocabulary reaches both or
+            neither. <code>render.rs</code> gives the reason for the single
+            renderer: <em>&ldquo;Two renderers would mean the frame and the
+            fallback drifting apart, and the fallback is the product.&rdquo;</em>
+          </p>
+          <span class="src">crates/emma/src/term.rs — <code>struct Term</code>; crates/emma/src/term/render.rs module doc</span>
+
+          <p>
+            Whether to draw at all is a pure function of five inputs, kept
+            separate from the drawing. Getting it wrong in one direction is
+            invisible; getting it wrong in the other produces
+            <em>&ldquo;a garbled terminal on somebody else&rsquo;s machine, or a
+            file full of escape sequences.&rdquo;</em>
+          </p>
+          <span class="src">crates/emma/src/term.rs — <code>fallback_reason</code></span>
+
+          <div class="tw">
+            <table>
+              <thead>
+                <tr>
+                  <th>Condition</th>
+                  <th>Reason returned</th>
+                  <th>What it prevents</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>EMMA_NO_FRAME</code> set</td>
+                  <td><code>"EMMA_NO_FRAME is set"</code></td>
+                  <td>Checked first, so nothing else can overrule it.</td>
+                </tr>
+                <tr>
+                  <td>stdout not a tty</td>
+                  <td><code>"stdout is not a terminal"</code></td>
+                  <td>Escape sequences ending up in somebody&rsquo;s file.</td>
+                </tr>
+                <tr>
+                  <td>stdin not a tty</td>
+                  <td><code>"stdin is not a terminal"</code></td>
+                  <td>Raw mode on a pipe, with nobody typing.</td>
+                </tr>
+                <tr>
+                  <td><code>TERM=dumb</code></td>
+                  <td><code>"TERM=dumb"</code></td>
+                  <td>Drawing on the one terminal that says it cannot.</td>
+                </tr>
+                <tr>
+                  <td>size unreadable</td>
+                  <td><code>"the window size could not be read"</code></td>
+                  <td>Sizing a viewport from a guess. An unknown platform answers <code>None</code> here.</td>
+                </tr>
+                <tr>
+                  <td>&lt; 8 rows or &lt; 24 columns</td>
+                  <td><code>"the window is too small"</code></td>
+                  <td>A viewport occupying most of the screen.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <span class="src">crates/emma/src/term.rs — <code>fallback_reason</code>, <code>MIN_ROWS</code>, <code>MIN_COLS</code></span>
+
+          <p>
+            Windows adds a sixth gate that is not a question but a change.
+            <code>Frame::install</code> reads the console mode, sets the
+            virtual-terminal bit, reads it back, and falls back unless it stuck.
+            The read-back matters because the bit also selects which of
+            crossterm&rsquo;s two code paths runs: with VT on it writes escape
+            sequences, and without it makes WinAPI calls in
+            <em>screen-buffer</em> coordinates &mdash; and on Windows the buffer
+            is usually far taller than the window, so a repaint aimed at
+            &ldquo;row 40&rdquo; of a nine-thousand-row buffer goes somewhere
+            invisible. The UTF-8 output code page follows the same shape: set it,
+            read it back, believe only the read-back. Detection alone was tried
+            and was useless &mdash; a normal PowerShell window reports code page
+            437, so the answer was always no and the box was always
+            <code>+---+</code>. The code page is changed only for a run that will
+            draw; <em>&ldquo;changing a code page on a console nobody is looking
+            at is a change to somebody&rsquo;s shell for no benefit at
+            all.&rdquo;</em> <span class="chip test">tested</span>
+          </p>
+          <span class="src">crates/emma/src/term.rs — <code>enable_vt</code>, <code>adopt_utf8_output</code>, <code>console_is_utf8</code>, <code>terminal_size</code>, <code>Term::interactive</code></span>
+
+          <figure>
+            <div class="figwrap">
+              <svg
+                viewBox="0 0 760 400"
+                role="img"
+                aria-label="Which surface a run gets: fallback_reason refuses six ways to plain lines; a Windows VT read-back can also refuse; otherwise EMMA_UI=inline selects the inline viewport and anything else selects the full-screen alternate-screen app. Five exit paths all converge on restore_terminal, which undoes six things in a fixed order."
+              >
+                <defs>
+                  <marker
+                    id="term-arrow"
+                    viewBox="0 0 10 10"
+                    refX="9"
+                    refY="5"
+                    markerWidth="6"
+                    markerHeight="6"
+                    orient="auto-start-reverse"
+                  >
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+                  </marker>
+                  <marker
+                    id="term-arrow-hl"
+                    viewBox="0 0 10 10"
+                    refX="9"
+                    refY="5"
+                    markerWidth="6"
+                    markerHeight="6"
+                    orient="auto-start-reverse"
+                  >
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+                  </marker>
+                </defs>
+
+                <rect class="box" x="8" y="10" width="150" height="34" rx="4" />
+                <text class="lbl" x="83" y="32" text-anchor="middle">Term::interactive</text>
+
+                <path class="edge" d="M158 27 H204" marker-end="url(#term-arrow)" />
+
+                <rect class="box" x="210" y="4" width="200" height="46" rx="4" />
+                <text class="lbl" x="310" y="22" text-anchor="middle">fallback_reason</text>
+                <text class="tiny" x="310" y="38" text-anchor="middle">pure · 5 inputs · 6 refusals</text>
+
+                <path class="edge-dash" d="M310 50 V90" marker-end="url(#term-arrow)" />
+                <text class="tiny" x="318" y="76">Some(reason)</text>
+
+                <rect class="box" x="196" y="96" width="228" height="46" rx="4" />
+                <text class="lbl" x="310" y="114" text-anchor="middle">plain lines</text>
+                <text class="tiny" x="310" y="130" text-anchor="middle">
+                  -p · pipes · EMMA_NO_FRAME · no console
+                </text>
+
+                <path class="edge" d="M410 27 H464" marker-end="url(#term-arrow)" />
+                <text class="tiny" x="418" y="19">None</text>
+
+                <rect class="box" x="470" y="4" width="180" height="46" rx="4" />
+                <text class="lbl" x="560" y="22" text-anchor="middle">enable_vt (windows)</text>
+                <text class="tiny" x="560" y="38" text-anchor="middle">set · read back · believe</text>
+
+                <path class="edge-dash" d="M470 40 H436 V110 H430" marker-end="url(#term-arrow)" />
+                <text class="tiny" x="440" y="60">did not stick</text>
+
+                <path class="edge" d="M560 50 V80" marker-end="url(#term-arrow)" />
+                <text class="lbl" x="560" y="100" text-anchor="middle">EMMA_UI</text>
+
+                <path class="edge" d="M560 110 H466 V144" marker-end="url(#term-arrow)" />
+                <text class="tiny" x="472" y="128">= inline</text>
+
+                <path class="edge-hl" d="M560 110 H671 V144" marker-end="url(#term-arrow-hl)" />
+                <text class="tiny" x="600" y="128">anything else</text>
+
+                <rect class="box" x="396" y="150" width="140" height="58" rx="4" />
+                <text class="lbl" x="466" y="170" text-anchor="middle">inline viewport</text>
+                <text class="tiny" x="466" y="186" text-anchor="middle">insert_before</text>
+                <text class="tiny" x="466" y="201" text-anchor="middle">normal screen</text>
+
+                <rect class="hl" x="596" y="150" width="150" height="58" rx="4" />
+                <text class="lbl" x="671" y="170" text-anchor="middle">full-screen app</text>
+                <text class="tiny" x="671" y="186" text-anchor="middle">ESC[?1049h</text>
+                <text class="tiny" x="671" y="201" text-anchor="middle">alternate screen</text>
+
+                <text class="sm" x="8" y="252">Every way out</text>
+                <rect class="box" x="8" y="264" width="118" height="26" rx="4" />
+                <text class="tiny" x="67" y="281" text-anchor="middle">return / Drop</text>
+                <rect class="box" x="8" y="298" width="118" height="26" rx="4" />
+                <text class="tiny" x="67" y="315" text-anchor="middle">panic hook</text>
+                <rect class="box" x="8" y="332" width="118" height="26" rx="4" />
+                <text class="tiny" x="67" y="349" text-anchor="middle">Ctrl-C</text>
+                <rect class="box" x="8" y="366" width="118" height="26" rx="4" />
+                <text class="tiny" x="67" y="383" text-anchor="middle">process::exit</text>
+
+                <path class="edge-hl" d="M126 277 H190 V320 H234" marker-end="url(#term-arrow-hl)" />
+                <path class="edge-hl" d="M126 311 H190" />
+                <path class="edge-hl" d="M126 345 H190" />
+                <path class="edge-hl" d="M126 379 H190 V320" />
+
+                <rect class="hl" x="240" y="296" width="190" height="48" rx="4" />
+                <text class="lbl" x="335" y="316" text-anchor="middle">restore_terminal()</text>
+                <text class="tiny" x="335" y="332" text-anchor="middle">idempotent · global · no self</text>
+
+                <path class="edge" d="M430 320 H486" marker-end="url(#term-arrow)" />
+                <rect class="box" x="492" y="266" width="256" height="108" rx="4" />
+                <text class="tiny" x="504" y="286">1 raw mode off</text>
+                <text class="tiny" x="504" y="302">2 mouse capture off (via crossterm)</text>
+                <text class="tiny" x="504" y="318">3 ESC[?1049l — only if ?1049h went out</text>
+                <text class="tiny" x="504" y="334">4 paste off · sync end · cursor · SGR reset</text>
+                <text class="tiny" x="504" y="350">5 windows console mode restored</text>
+                <text class="tiny" x="504" y="366">6 windows output code page restored</text>
+              </svg>
+            </div>
+            <figcaption>
+              Which surface a run gets, and where every way out lands. Drawn from
+              <code>term.rs::fallback_reason</code>,
+              <code>term.rs::enable_vt</code>, <code>frame.rs::install</code>
+              (the <code>EMMA_UI</code> read at the top of it) and
+              <code>frame.rs::restore_terminal</code>. Dashed edges are refusals.
+              The numbered steps are the order they occur in
+              <code>restore_terminal</code>; the code page comes last so that the
+              escape bytes above it are decoded by the console Emma was drawing
+              under.
+            </figcaption>
+          </figure>
+
+          <h2 id="layout">The regions</h2>
+
+          <p>
+            The full-screen frame carves the window in one function:
+            <code>regions(area, sidebar_w, dock_h) -&gt; Regions</code>. The two
+            inputs that depend on state &mdash; how wide the sidebar is, how tall
+            the dock needs to be &mdash; are computed before the call, so the
+            carve itself is arithmetic over three numbers and runs without a
+            terminal.
+          </p>
+          <span class="src">crates/emma/src/term/app.rs — <code>regions</code>, <code>struct Regions</code></span>
+
+          <p>
+            The proportions come from pixel measurements of
+            <code>notes/mockup-tui.png</code> rather than from any description of
+            it. <code>app.rs</code> gives the reason for going back to the image:
+            <em>&ldquo;the prose description of that image was wrong in five
+            recorded places, and the design note&rsquo;s §1.1 sampled table,
+            though pixel-derived, still missed three facts.&rdquo;</em> One of the
+            three is the two columns of ground between the panes &mdash;
+            <em>&ldquo;sidebar right edge ≈338px, main pane left edge ≈362px, at
+            ≈11.3px per cell — two columns, not shared borders.&rdquo;</em>
+            <span class="chip test">tested</span>
+          </p>
+          <span class="src">crates/emma/src/term/app.rs — <code>PANE_GAP_COLS</code>, test <code>the_pane_gaps_measured_from_the_mockup_are_in_the_carve</code></span>
+
+          <figure>
+            <div class="figwrap">
+              <svg
+                viewBox="0 0 760 372"
+                role="img"
+                aria-label="The window carve: a one-cell float, then a sidebar of 22.4 percent clamped between 28 and 40 columns, two columns of gap, and a bordered main pane holding header, rule, chat, dock and hint stacked vertically, then a blank row and a three-row status bar."
+              >
+                <rect
+                  x="10"
+                  y="10"
+                  width="740"
+                  height="352"
+                  rx="4"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1"
+                  stroke-dasharray="3 4"
+                  opacity="0.5"
+                />
+                <text class="tiny" x="20" y="26">
+                  window · inset 1 col / 1 row while cols ≥ 60 and rows ≥ 30
+                </text>
+
+                <rect class="box" x="26" y="38" width="150" height="238" rx="3" />
+                <text class="lbl" x="101" y="60" text-anchor="middle">sidebar</text>
+                <text class="tiny" x="101" y="78" text-anchor="middle">SESSIONS  [+]</text>
+                <text class="tiny" x="101" y="96" text-anchor="middle">TOOLS</text>
+                <text class="tiny" x="101" y="114" text-anchor="middle">QUICK HELP</text>
+                <text class="tiny" x="101" y="146" text-anchor="middle">22.4% of cols</text>
+                <text class="tiny" x="101" y="162" text-anchor="middle">clamp 28..40</text>
+                <text class="tiny" x="101" y="178" text-anchor="middle">then ≤ cols/2</text>
+                <text class="tiny" x="101" y="206" text-anchor="middle">0 when collapsed</text>
+                <text class="tiny" x="101" y="222" text-anchor="middle">auto below 100 cols</text>
+                <text class="tiny" x="101" y="238" text-anchor="middle">Ctrl-B latches</text>
+
+                <rect
+                  x="176"
+                  y="38"
+                  width="22"
+                  height="238"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1"
+                  stroke-dasharray="2 3"
+                  opacity="0.55"
+                />
+                <text class="tiny" x="187" y="266" text-anchor="middle">2</text>
+
+                <rect class="box" x="198" y="38" width="536" height="238" rx="3" />
+                <text class="tiny" x="708" y="54" text-anchor="end">main</text>
+
+                <rect class="box" x="216" y="52" width="500" height="26" rx="2" />
+                <text class="tiny" x="228" y="69">header — 2 rows (1 below 12 rows)</text>
+
+                <rect class="box" x="216" y="82" width="500" height="14" rx="2" />
+                <text class="tiny" x="228" y="93">rule — 1 row, gone below 12 rows</text>
+
+                <rect class="hl" x="216" y="100" width="500" height="86" rx="2" />
+                <text class="lbl" x="228" y="120">chat — Constraint::Min(1)</text>
+                <text class="tiny" x="228" y="138">gutter 7 cols · message ≥ 61 cols</text>
+                <text class="tiny" x="228" y="154">You / Emma labelled · tool traffic is not</text>
+                <text class="tiny" x="228" y="170">↓ n rows below — drawn only behind the tail</text>
+
+                <rect class="hl" x="216" y="192" width="500" height="48" rx="2" />
+                <text class="lbl" x="228" y="212">input dock — 3 rows</text>
+                <text class="tiny" x="228" y="230">
+                  grows for the menu; the approval prompt REPLACES it
+                </text>
+
+                <rect class="box" x="216" y="244" width="500" height="16" rx="2" />
+                <text class="tiny" x="228" y="256">hint — 1 row</text>
+
+                <text class="tiny" x="380" y="290" text-anchor="middle">
+                  one blank row — measured; rides with the bar’s border
+                </text>
+
+                <rect class="box" x="26" y="298" width="708" height="52" rx="3" />
+                <text class="lbl" x="40" y="318">status bar — 3 rows, 1 below 14</text>
+                <text class="tiny" x="40" y="338">
+                  MODE ⟨mode⟩ ⟨clock⟩ │ TOKENS used/max (↑ ↓) │ CONTEXT n% ▊▊▊ │ ENV model · dir │ /help · /exit
+                </text>
+              </svg>
+            </div>
+            <figcaption>
+              The carve, from <code>app.rs::regions</code> and the constants
+              above it (<code>UNBORDERED_COLS 60</code>,
+              <code>INSET_MIN_ROWS 30</code>, <code>SLIM_HEADER_ROWS 12</code>,
+              <code>SLIM_STATUS_ROWS 14</code>, <code>PANE_GAP_COLS 2</code>),
+              with the width rule from <code>sidebar.rs::width</code>, the gutter
+              and minimum message width from <code>chat.rs</code>, and the cell
+              order from <code>statusbar.rs::compose</code>. The two highlighted
+              boxes are the regions that change size during a run: the chat pane
+              takes what is left, the dock takes what the prompt or menu needs.
+            </figcaption>
+          </figure>
+
+          <p>
+            <strong>The dock is not a widget of its own.</strong> It is a
+            rectangle that <code>View</code>&rsquo;s existing renderers paint into
+            &mdash; the same <code>render_input</code> and
+            <code>render_prompt</code> the inline viewport uses, marked
+            <code>pub(crate)</code> with the argument attached:
+            <em>&ldquo;a consent interface with two renderings is two
+            interfaces.&rdquo;</em> When a question is pending the approval panel
+            <em>replaces</em> the input box in that rectangle, so no amount of
+            output can move either. <span class="chip test">tested</span>
+          </p>
+          <span class="src">crates/emma/src/term/app.rs — <code>App::render</code>; crates/emma/src/term/view.rs — <code>render_input</code>, <code>render_prompt</code>; test <code>a_pending_question_replaces_the_input_box_and_stays_on_screen</code></span>
+
+          <p>
+            <strong>The sidebar collapses on a latch.</strong> Below 100 columns
+            it collapses automatically; <code>Ctrl-B</code> sets
+            <code>by_user</code>, which wins in both directions. An automatic
+            collapse un-collapses when the window widens again, and that follows
+            from <code>by_user</code> being false rather than from a second rule.
+            A collapsed sidebar has no cells and therefore no click target; the
+            way back is the key. The SESSIONS header row is also a click target,
+            and the whole row rather than the <code>[+]</code>&rsquo;s three cells,
+            because <em>&ldquo;the affordance&rsquo;s exact columns are the
+            sidebar&rsquo;s internal layout, which this file does not own, and a
+            three-cell target at a guessed offset is a miss magnet.&rdquo;</em>
+          </p>
+          <span class="src">crates/emma/src/term/app.rs — <code>Latch</code>, <code>hidden</code>, <code>App::click</code>; crates/emma/src/term/sidebar.rs — <code>AUTO_COLLAPSE_COLS</code>, <code>width</code></span>
+
+          <h2 id="absolutes">The three absolutes</h2>
+
+          <p>
+            Three things about this surface hold without exception. Each is
+            checked against the code below.
+          </p>
+
+          <h3>1. The plain fallback never touches the alternate screen</h3>
+
+          <p>
+            The alternate screen is entered by one constant, written at one place
+            &mdash; inside <code>Frame::install</code>, after
+            <code>fallback_reason</code> has returned <code>None</code> and, on
+            Windows, after VT has been proved. A run without a
+            <code>Frame</code> cannot emit those bytes because there is no other
+            emitter. <code>Term::printing</code> (the <code>-p</code>
+            constructor) and <code>Term::silent</code> set <code>frame: None</code>
+            in their initialisers; they do not decline to draw, they have nothing
+            to draw with. <span class="chip test">tested</span>
+          </p>
+          <span class="src">crates/emma/src/term/frame.rs — <code>ALT_ENTER</code>, <code>install</code>; crates/emma/src/term.rs — <code>Term::printing</code>, test <code>printing_never_draws_a_viewport</code></span>
+
+          <p>
+            The one-emitter half is pinned by counting occurrences of the
+            sequence in <code>frame.rs</code>&rsquo;s own source, comments
+            stripped, and asserting one enter and one leave:
+            <em>&ldquo;a second occurrence is an entry outside the latch&rsquo;s
+            knowledge.&rdquo;</em> The no-escape-bytes half rests elsewhere.
+            <code>Term::side</code> writes through
+            <code>render::for_stream</code>, which branches on the palette level:
+            at <code>Level::None</code> &mdash; which a pipe, <code>NO_COLOR</code>
+            and <code>--print</code> all produce &mdash; it emits
+            <code>plain(line)</code> and never <code>sgr(line)</code>. Four
+            modules carry a test named
+            <code>with_no_colour_not_one_escape_byte_is_emitted</code>.
+            <span class="chip test">tested</span>
+          </p>
+          <span class="src">crates/emma/src/term/render.rs — <code>for_stream</code>, <code>plain</code>; crates/emma/src/term.rs — <code>Term::side</code>; tests in term/{render,markdown,diff,statusline}.rs</span>
+
+          <div class="note warn">
+            <span class="h">One residual escape route, and it is upstream</span>
+            <p>
+              <code>Term::delta</code> passes the model&rsquo;s own characters
+              through untouched on the fallback path &mdash; which is what keeps
+              <code>emma … | tee</code> free of anything <em>Emma</em> invented,
+              and also means an escape sequence written <em>by the model</em> is
+              not filtered there. Inside the frame it is:
+              <code>markdown::sanitise</code> drops every control character
+              before a cell is written, and
+              <code>an_escape_byte_in_the_models_prose_never_reaches_a_cell</code>
+              covers it. On the pipe, the bytes are the model&rsquo;s.
+              <span class="chip unv">unverified</span> &mdash; reported from a
+              reading of <code>Term::delta</code>; a run piping a model reply
+              containing <code>\x1b</code> would settle it.
+            </p>
+            <span class="src">crates/emma/src/term.rs — <code>Term::delta</code>; crates/emma/src/term/markdown.rs — <code>sanitise</code></span>
+          </div>
+
+          <h3>2. Every exit path leaves it</h3>
+
+          <p>
+            <code>restore_terminal</code> is idempotent, global, and takes no
+            arguments. All three follow from one constraint:
+            <em>&ldquo;a panic hook has no <code>self</code>.&rdquo;</em> The
+            state it undoes lives in five process-global atomics
+            (<code>FRAME_ON</code>, <code>RAW_ON</code>, <code>ALT_ON</code>,
+            <code>MOUSE_ON</code>, <code>CURSOR_ROW</code>) rather than in a
+            struct, because only one of the callers has a <code>Frame</code> in
+            hand.
+          </p>
+          <span class="src">crates/emma/src/term/frame.rs — the <em>Restoring</em> region</span>
+
+          <div class="tw">
+            <table>
+              <thead>
+                <tr>
+                  <th>Way out</th>
+                  <th>How it reaches the restore</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>ordinary return</td>
+                  <td>
+                    <code>Term</code>&rsquo;s <code>Drop</code>, which then prints
+                    the <code>session:</code> line onto the restored screen.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>Drop</code> during unwind</td>
+                  <td>
+                    The same impl; racing the panic hook costs nothing, because
+                    the flag is cleared with a <code>swap</code>.
+                  </td>
+                </tr>
+                <tr>
+                  <td>panic</td>
+                  <td>
+                    A hook installed by <code>PANIC_HOOK.call_once</code> in
+                    <code>install</code>. It restores <em>before</em> chaining to
+                    the previous hook, so the message lands on the normal screen
+                    in a terminal that is echoing again.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Ctrl-C</td>
+                  <td>
+                    Raw mode turns off the terminal&rsquo;s signal generation on
+                    both platforms &mdash; <code>ISIG</code> on unix,
+                    <code>ENABLE_PROCESSED_INPUT</code> on Windows &mdash; so
+                    <code>tokio::signal</code> will not fire and the keystroke is
+                    the only delivery there is. <code>term/input.rs</code> owns
+                    it; the run then unwinds through the paths above.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>process::exit</code></td>
+                  <td>
+                    <code>main.rs</code> calls <code>restore_terminal()</code>
+                    first, with the comment
+                    <em>&ldquo;<code>process::exit</code> runs no destructors, so
+                    <code>Term</code>&rsquo;s would not run here.&rdquo;</em>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <span class="src">crates/emma/src/term.rs — <code>impl Drop for Term</code>; crates/emma/src/term/frame.rs — <code>install</code>, <code>restore_terminal</code>; crates/emma/src/term/input.rs — <code>Editor::key</code>; crates/emma/src/main.rs</span>
+
+          <p>Three orderings inside install and restore change the outcome:</p>
+
+          <ul class="body">
+            <li>
+              <code>ALT_ON</code> is set <em>before</em> the enter bytes are
+              written. A panic in between would otherwise strand the alternate
+              screen behind a restore that refuses to run.
+            </li>
+            <li>
+              The private modes are enabled <em>after</em> <code>FRAME_ON</code>,
+              because <code>FRAME_ON</code> is what makes the restore willing to
+              turn them off. <em>&ldquo;Being late costs nothing; being early
+              costs a shell that pastes escape markers into itself.&rdquo;</em>
+            </li>
+            <li>
+              The Windows code page is restored last, after the final byte has
+              gone out, so the escapes above it are decoded by the console they
+              were written for.
+            </li>
+          </ul>
+          <span class="src">crates/emma/src/term/frame.rs — <code>install</code>, <code>restore_terminal</code></span>
+
+          <p>
+            <code>ESC[?1049l</code> is written only when <code>ESC[?1049h</code>
+            was. An unpaired leave on the normal screen
+            <em>&ldquo;carries an implicit cursor restore that nothing saved, and
+            terminals answer that by moving the cursor somewhere
+            surprising.&rdquo;</em> A pairing test walks the enter strings,
+            extracts every mode number and demands the matching disable exists in
+            the leave strings, so adding a mode to the way in without adding it to
+            the way out fails in CI rather than on somebody else&rsquo;s terminal.
+            The reason a mode left on matters: bracketed paste surviving the
+            process means the inheriting shell receives <code>ESC[200~</code>
+            around everything anybody pastes into it, forever, from a program that
+            has exited. <span class="chip test">tested</span>
+          </p>
+          <span class="src">crates/emma/src/term/frame.rs — <code>every_terminal_mode_the_frame_sets_is_unset_on_the_way_out</code>, <code>PASTE_ON</code>/<code>PASTE_OFF</code></span>
+
+          <div class="note warn">
+            <span class="h">What the restore does not cover, per the code</span>
+            <p>
+              <code>SIGKILL</code>, a stack overflow that skips the hook, and
+              <code>std::process::abort</code>. Those strand raw mode already and
+              strand the alternate screen now, <em>&ldquo;and no in-process code
+              can do otherwise.&rdquo;</em>
+            </p>
+            <p>
+              The design note adds a class the inline design could not have: a
+              multiplexer or ssh session detached mid-frame, or a dropped
+              connection with the alternate screen still entered.
+              <em>&ldquo;§2.4&rsquo;s restore path covers the exits this process
+              can see; it cannot cover the ones where the process is still alive
+              and the terminal is not.&rdquo;</em>
+              <span class="chip unv">unverified</span> &mdash; no tmux or ssh
+              certification exists in the tree.
+            </p>
+            <span class="src">crates/emma/src/term/frame.rs module doc; notes/design-tui-fullscreen.md §2.1</span>
+          </div>
+
+          <h3>3. <code>EMMA_UI=inline</code> is an escape hatch with an expiry</h3>
+
+          <p>
+            The old inline viewport was not deleted. One environment variable
+            selects it, tested narrowly &mdash;
+            <code>eq_ignore_ascii_case("inline")</code> &mdash; so that
+            <em>&ldquo;anything else, including the variable being unset, which is
+            the ordinary case, is the full-screen app.&rdquo;</em> It is kept
+            <strong>for one release</strong>, as a soak period, so the flip&rsquo;s
+            cost can be discovered against a real terminal rather than in theory.
+          </p>
+          <span class="src">crates/emma/src/term/frame.rs — <code>install</code>, <code>enum Ui</code>; notes/design-tui-fullscreen.md §2.3</span>
+
+          <p>
+            The two are different code, not a flag inside one renderer. Inline,
+            transcript lines go out through ratatui&rsquo;s
+            <code>Terminal::insert_before</code> &mdash;
+            <em>&ldquo;cursor to the last row, newlines, the one mechanism a
+            terminal captures into scrollback&rdquo;</em> &mdash; the frame drifts
+            to the bottom rather than being walked there, a streamed fragment is
+            held back in the viewport because
+            <em>&ldquo;a fragment inserted above the viewport could never be
+            extended&rdquo;</em> (so a paragraph streamed without newlines would
+            otherwise arrive as a column of one-word lines), and
+            <code>spacing.rs</code> decides blank rows. Full-screen, the
+            transcript is an owned buffer that re-renders whole on every paint,
+            the held-back partial line is gone, and separators come from the
+            buffer&rsquo;s own structure. Mouse capture is enabled only on the
+            full-screen path: inline, the terminal owns the wheel, and taking it
+            would break scrollback that still works.
+          </p>
+          <span class="src">crates/emma/src/term/frame.rs — <code>Frame::prose</code>, <code>Frame::separate</code>, <code>install</code></span>
+
+          <h2 id="cost">What the alternate screen cost</h2>
+
+          <div class="note">
+            <span class="h">The reversal</span>
+            <p>
+              For the whole life of this module the rule was
+              <strong><code>Viewport::Inline</code> only, never the alternate
+              screen</strong>, and <code>frame.rs</code> spent that life arguing
+              for it. On <strong>2026-08-12</strong> the owner reversed it, on the
+              ground that the multi-pane layout he specified cannot be drawn
+              inline. <code>frame.rs</code> records the outcome without softening:
+              <em>&ldquo;That argument was true and it lost.&rdquo;</em> The
+              manifest test that asserted &ldquo;no alternate-screen entry
+              anywhere&rdquo; was rewritten rather than removed, and its doc
+              comment names which assertion died and why.
+            </p>
+            <span class="src">crates/emma/src/term/frame.rs module doc and <code>the_scrolling_regions_feature_is_never_enabled</code>; notes/design-tui-fullscreen.md §0, §2</span>
+          </div>
+
+          <p>
+            §2 of the design note prices every cost, including the one line where
+            the flip is a gain: the &ldquo;a fragment can never be extended&rdquo;
+            streaming constraint disappears, because an owned buffer can restyle
+            and reflow the entry being streamed on every frame. Three of the costs
+            reach a user.
+          </p>
+
+          <div class="tw">
+            <table>
+              <thead>
+                <tr>
+                  <th>Lost</th>
+                  <th>What replaces it</th>
+                  <th>Standing</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <strong>Terminal scrollback.</strong> Inline,
+                    <code>insert_before</code> handed each line to the terminal,
+                    which kept tens of thousands of them for no code and no
+                    memory here.
+                  </td>
+                  <td>
+                    <code>term/transcript.rs</code>: an owned buffer with append,
+                    cap, scroll, follow-the-tail and re-wrap at a new width. The
+                    largest piece of new code in the flip. Scrolled by
+                    <code>PgUp</code>/<code>PgDn</code>,
+                    <code>Ctrl-↑</code>/<code>Ctrl-↓</code>,
+                    <code>Home</code>/<code>End</code> (only on an empty editor)
+                    and the wheel at three rows a notch.
+                  </td>
+                  <td><span class="chip test">tested</span> at the buffer; <span class="chip unv">unverified</span> on a console</td>
+                </tr>
+                <tr>
+                  <td>
+                    <strong>Native mouse selection.</strong> Mouse capture is on
+                    for the wheel, which takes plain drag-selection away.
+                  </td>
+                  <td>
+                    <strong>Shift-drag</strong>, listed in the quick-help table
+                    because it is the one fact a user cannot guess. It selects the
+                    raw cell grid, so it is clean only with the sidebar collapsed:
+                    a drag across the pane otherwise captures sidebar columns,
+                    borders and gutter interleaved into every line.
+                    <code>/export</code> is the intended copy path and has not
+                    landed.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+                <tr>
+                  <td>
+                    <strong>Re-reading the styled run after exit.</strong> Leaving
+                    the alternate screen restores the prior shell content and the
+                    run visually vanishes.
+                  </td>
+                  <td>
+                    Nothing replaces it: <em>&ldquo;scrolling the shell up an hour
+                    later to re-read styled output. Gone.&rdquo;</em> What exists
+                    is a pointer &mdash; <code>Term</code>&rsquo;s
+                    <code>Drop</code> prints <code>session: &lt;path&gt;</code>
+                    onto the restored normal screen, after the alt screen has
+                    left, naming the session JSONL. On the inline path the pointer
+                    is <code>None</code>, because the transcript is already in the
+                    shell&rsquo;s scrollback.
+                  </td>
+                  <td><span class="chip unv">unverified</span> by eye</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <span class="src">notes/design-tui-fullscreen.md §2.1; crates/emma/src/term/transcript.rs; crates/emma/src/term/input.rs — <code>pane_key</code>, <code>WHEEL_ROWS</code>; crates/emma/src/term.rs — <code>impl Drop for Term</code></span>
+
+          <p>
+            Four further losses were added to §2.1 on 2026-08-11 from the
+            red-team evaluation, because the original table asked what
+            <code>frame.rs</code> stops doing rather than what the
+            <em>terminal</em> stops doing. The wheel was one, and mouse capture
+            answered it. The other three are open: the terminal&rsquo;s own
+            cross-run search is gone and in-app search would be one field over one
+            Emma buffer rather than a replacement; <strong>screen readers need
+            work that has not been done</strong> &mdash; a full-screen app paints
+            cells where inline output was ordinary text, and
+            <em>&ldquo;a question nobody hears is consent nobody gave&rdquo;</em>;
+            and multiplexers add the restore-failure class named above.
+          </p>
+          <span class="src">notes/design-tui-fullscreen.md §2.1, from notes/eval-tui-fullscreen-kimi.md §1.5</span>
+
+          <h3>How the cap names what it dropped</h3>
+
+          <p>
+            The retained buffer holds 2,000 entries or 50,000 rendered rows,
+            whichever binds first. Both numbers are written down as guesses:
+            <em>&ldquo;The measurement that should set them is a real
+            session&rsquo;s memory footprint, and it has not been
+            taken.&rdquo;</em> When the cap binds, the dropped entries are gone
+            entirely; what survives is two counters and a marker row rendered at
+            the top of the buffer &mdash; <code>… older output dropped (N blocks,
+            M rows) — all of it is in {path}</code>. The marker is never removed,
+            <em>&ldquo;because the fact that output is missing does not
+            expire,&rdquo;</em> and it wraps rather than truncating: an earlier
+            version cut it to one row, and what fell off the end at eighty columns
+            was the path to the complete record, which is the whole remedy the row
+            exists to carry. <span class="chip test">tested</span> &mdash;
+            <code>the_marker_keeps_its_remedy_at_every_width</code>.
+          </p>
+          <span class="src">crates/emma/src/term/transcript.rs — <code>Cap</code>, <code>enforce_cap</code>, <code>dropped_marker</code></span>
+
+          <p>
+            Scroll position is measured in rows up from the tail rather than as an
+            index into the buffer, so dropping the oldest entries cannot move what
+            the reader is looking at. That is half the problem; the other half
+            arrives from the back, and the module records that its tests found it
+            and the design note did not. A view scrolled up ten rows that receives
+            ten more rows of tool output is no longer over the same text, so a
+            scrolled view has its offset grown by whatever was appended below it.
+            Reaching the bottom re-latches follow-tail. Scrolling stays live while
+            a goal runs and while a question is pending &mdash;
+            <em>&ldquo;reading the evidence above an approval prompt is exactly
+            when scrolling matters most.&rdquo;</em> <span class="chip test">tested</span>
+          </p>
+          <span class="src">crates/emma/src/term/transcript.rs — <code>appended</code>, <code>scroll_up</code>, <code>follow_tail</code>; tests <code>scrolling_up_survives_everything_that_arrives_afterwards</code>, <code>the_cap_binding_does_not_move_the_readers_page</code></span>
+
+          <h2 id="scrolling-regions">The feature that stays off</h2>
+
+          <p>
+            ratatui&rsquo;s <code>scrolling-regions</code> feature is not enabled,
+            and the reversal above does not change that. With it on, the inline
+            path&rsquo;s <code>insert_before</code> is implemented with
+            <code>ESC[{top};{bottom}r</code>, and a DEC scrolling region whose top
+            margin is below row 1 <strong>discards</strong> the lines that leave
+            it. That shipped here once; the owner&rsquo;s first complaint was that
+            he could not scroll.
+          </p>
+          <span class="src">crates/emma/Cargo.toml (the <code>ratatui</code> dependency comment); crates/emma/src/term/frame.rs module doc</span>
+
+          <p>
+            The test has to separate <em>naming</em> the feature from
+            <em>enabling</em> it, because the manifest explains at length why the
+            feature is off and therefore contains the string several times over.
+            It strips comment lines first and fails only on a declaration:
+          </p>
+
+          <pre><code><span class="c">// Comments stripped: this file argues about the feature by name several</span>
+<span class="c">// times over, and the manifest explains why it is off. What must not</span>
+<span class="c">// appear is a *declaration* of it.</span>
+let manifest: String = include_str!(<span class="s">"../../Cargo.toml"</span>)
+    .lines()
+    .filter(|l| !l.trim_start().starts_with(<span class="s">'#'</span>))
+    .collect::&lt;Vec&lt;_&gt;&gt;()
+    .join(<span class="s">" "</span>);
+assert!(!manifest.contains(<span class="s">"scrolling-regions"</span>), <span class="w">…</span>);</code></pre>
+          <span class="src">crates/emma/src/term/frame.rs — <code>the_scrolling_regions_feature_is_never_enabled</code></span>
+
+          <p>
+            The same test carries two further assertions: exactly two viewports
+            are constructed in the file (a third construction site would be a path
+            around the install gate), and the alternate screen&rsquo;s enter and
+            leave sequences occur once each. Their needles are assembled at
+            runtime &mdash; <code>format!("View{}", "port::")</code>,
+            <code>format!("?10{}h", "49")</code> &mdash; because
+            <em>&ldquo;this file is its own haystack and a literal would match
+            itself.&rdquo;</em> A source-grep test that matched its own assertion
+            has already cost this project once.
+            <span class="chip test">tested</span>
+          </p>
+          <span class="src">crates/emma/src/term/frame.rs — <code>the_scrolling_regions_feature_is_never_enabled</code></span>
+
+          <h2 id="colour">Colour</h2>
+
+          <h3>Roles, not hues</h3>
+
+          <p>
+            Nothing names a colour at the point of use. Text is given a
+            <strong>role</strong> &mdash; <code>Text</code>, <code>Dim</code>,
+            <code>Ok</code>, <code>Err</code>, <code>Warn</code>,
+            <code>Info</code>, <code>Accent</code>, <code>Ground</code> &mdash;
+            and the role is resolved at one point,
+            <code>Palette::color</code>. A terminal that cannot render a value
+            substitutes there and nowhere else, which is what makes the
+            16-colour fallback one function rather than a change at every call
+            site.
+          </p>
+          <span class="src">crates/emma/src/term/palette.rs — <code>enum Role</code>, <code>Palette::color</code></span>
+
+          <p>Three rules sit above the roles, each with a failure behind it.</p>
+
+          <ul class="body">
+            <li>
+              <strong>Ordinary text is never given a colour.</strong> Emma cannot
+              ask the terminal what its background is. Gruvbox&rsquo;s foreground
+              is <code>#ebdbb2</code>, a cream that is invisible on white, so body
+              text is <code>Color::Reset</code> &mdash; whatever the user already
+              chose.
+            </li>
+            <li>
+              <strong>Colour is never the only signal.</strong> Every event that
+              gets a colour also gets its own glyph and weight. A terminal
+              rendering <code>#b8bb26</code> as a muddy olive still shows
+              <code>✓</code> where a success was, and this also covers the readers
+              who cannot distinguish the red from the green.
+            </li>
+            <li>
+              <strong>Nothing paints a lone background.</strong> The two places a
+              background exists &mdash; the approval prompt&rsquo;s answer keys,
+              the sidebar&rsquo;s selection band &mdash; set foreground and
+              background together, which is what makes them legible against an
+              unknown ground. Both degrade to reversed video at
+              <code>Level::None</code>.
+            </li>
+          </ul>
+          <span class="src">crates/emma/src/term/palette.rs module doc, <code>chip</code>, <code>band</code>; tests <code>ordinary_text_is_never_given_a_colour_at_any_fidelity</code>, <code>nothing_paints_a_background_except_the_named_pairs</code> <span class="chip test">tested</span></span>
+
+          <h3><code>Level::of</code>: six inputs</h3>
+
+          <p>
+            How much colour a terminal gets is one function of six arguments:
+            whether the stream is a terminal, <code>NO_COLOR</code>,
+            <code>EMMA_COLORS</code>, <code>COLORTERM</code>, <code>TERM</code>,
+            and whether this is Windows Terminal &mdash; which does 24-bit and
+            sets neither a useful <code>COLORTERM</code> nor a useful
+            <code>TERM</code>. The environment is an argument rather than a
+            global, which is what makes the whole ladder testable.
+          </p>
+          <span class="src">crates/emma/src/term/palette.rs — <code>Level::of</code>, <code>Level::detect</code></span>
+
+          <p>
+            The order is <em>&ldquo;so the honest signals beat the hopeful
+            ones&rdquo;</em>: an explicit override first, since the person setting
+            it is looking at a terminal Emma guessed wrong about; then
+            <code>NO_COLOR</code> and &ldquo;this is not a terminal at all&rdquo;;
+            then the environment&rsquo;s own claims. An unreadable override value
+            resolves to <code>Ansi16</code> rather than to truecolor &mdash;
+            <em>&ldquo;an unreadable value is not permission to guess
+            loudly.&rdquo;</em> A theme is not one of the six inputs, which is
+            what stops <code>/theme</code> from promoting a sixteen-colour console.
+          </p>
+
+          <div class="tw">
+            <table>
+              <thead>
+                <tr>
+                  <th>Fidelity</th>
+                  <th>What is sent</th>
+                  <th>Where the value comes from</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>Truecolor</code></td>
+                  <td><code>Color::Rgb</code>, the exact hex</td>
+                  <td>Declared by the theme.</td>
+                </tr>
+                <tr>
+                  <td><code>Ansi256</code></td>
+                  <td><code>Color::Indexed</code>, the xterm cube</td>
+                  <td>Declared by the theme, or derived by nearest neighbour.</td>
+                </tr>
+                <tr>
+                  <td><code>Ansi16</code></td>
+                  <td>A named ANSI colour</td>
+                  <td>Declared, or inherited from the built-in role. Never derived.</td>
+                </tr>
+                <tr>
+                  <td><code>None</code></td>
+                  <td><code>Color::Reset</code>; emphasis becomes bold, dim or reversed</td>
+                  <td>Returned before the theme is read.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <span class="src">crates/emma/src/term/palette.rs — <code>enum Level</code>, <code>Palette::color</code>; crates/emma/src/term/theme.rs module doc</span>
+
+          <h3>Why <code>NO_COLOR</code> cannot be overridden</h3>
+
+          <p>
+            <code>Palette::color</code> returns before it reads the theme:
+          </p>
+
+          <pre><code>pub fn color(&amp;self, role: Role) -&gt; Color {
+    <span class="k">if</span> self.level == Level::None || role == Role::Text {
+        <span class="k">return</span> Color::Reset;
+    }
+    <span class="c">// … only now is the theme consulted</span>
+}</code></pre>
+          <span class="src">crates/emma/src/term/palette.rs — <code>Palette::color</code></span>
+
+          <p>
+            <code>Level::None</code> is what <code>NO_COLOR</code>, a pipe and
+            <code>--print</code> all produce, so there is no path on which a theme
+            is consulted and <code>NO_COLOR</code> applies. The alternative was a
+            check inside the theme loader, and it is weaker for a specific
+            reason: the loader
+            <em>&ldquo;can only refuse data it has thought of,&rdquo;</em> and a
+            check can be omitted by whoever adds the next method here. The same
+            early return is what keeps <code>Role::Text</code> out of a
+            theme&rsquo;s reach.
+          </p>
+
+          <p>
+            The guarding test names the mutation it must survive &mdash; moving
+            the theme lookup above the short-circuit &mdash; and its assertion is
+            what fails under it: every role would then come back as a hex, an
+            index or a named colour, none of which equals
+            <code>Color::Reset</code>. It therefore holds for any theme, not for
+            the one the fixture carries. <span class="chip test">tested</span>
+          </p>
+          <span class="src">crates/emma/src/term/palette.rs — <code>with_no_colour_nothing_a_theme_could_say_reaches_the_screen</code></span>
+
+          <h3>Themes: data on disk, applied at next start</h3>
+
+          <p>
+            A theme is a JSON file of numbers, resolved once at load into
+            fixed-size <code>Copy</code> data. Strings are parsed and discarded
+            there. The constraint behind that: <code>Palette</code> and
+            <code>Skin</code> are passed by value into roughly thirty call sites,
+            and a theme holding a <code>String</code> would end <code>Copy</code>
+            and cascade through every signature in <code>term/</code>.
+            <span class="chip test">tested</span> &mdash;
+            <code>a_palette_is_still_copy</code>.
+          </p>
+          <span class="src">crates/emma/src/term/theme.rs module doc, <code>struct Theme</code>; crates/emma/src/term/palette.rs tests</span>
+
+          <p>
+            <strong><code>/theme</code> selects; it does not switch.</strong> A
+            theme is read once at startup, so the command writes a key to
+            <code>~/.emma/settings.json</code> and touches no
+            <code>Palette</code>, no <code>Skin</code> and no frame. The owner
+            ruled the scope &mdash; <em>&ldquo;we can set theme and restart the
+            console to see it&rdquo;</em> &mdash; and the alternative is priced in
+            the file: a live swap has to reach every drawn surface at once, and
+            the transcript holds rows already styled under the old colours, so
+            <em>&ldquo;the realistic outcome of repainting is a half-recoloured
+            screen.&rdquo;</em> There is also no <code>--save</code> flag, because
+            selecting is what writing it down means.
+          </p>
+          <span class="src">crates/emma/src/session_command.rs — the <em>/theme</em> region, <code>write_theme</code></span>
+
+          <p>Three rules survive that cut.</p>
+
+          <ul class="body">
+            <li>
+              <strong>A bad theme costs colour and never the program.</strong>
+              <code>load</code> returns notices, never an error: a bad hex loses
+              one role, an unreadable file loses the theme, and Emma says so in
+              words. Nothing in the loader returns a <code>Result</code>, because
+              <em>&ldquo;a <code>?</code> anywhere in it would throw away the
+              seven roles that parsed because the eighth did not.&rdquo;</em>
+              Notices stop at five &mdash; past that the count and the path are
+              what a reader needs, since the file is where they are going to go
+              and look. <span class="chip test">tested</span> &mdash;
+              <code>a_wrecked_file_cannot_fill_the_screen_with_warnings</code>.
+            </li>
+            <li>
+              <strong>The 256-colour index is derived; the 16-colour name is
+              inherited.</strong> Derivation reproduces five of the seven shipped
+              indices exactly and misses two by a shade of the same hue, which is
+              close enough to compute. At sixteen colours the same nearest-distance
+              arithmetic makes <code>Accent</code> <code>LightRed</code> &mdash;
+              and <code>Role::Err</code> owns red at that level, so every goal line
+              would read as an error. A name is therefore either declared by the
+              theme author or kept from the built-in role.
+              <span class="chip test">tested</span> &mdash;
+              <code>the_256_derivation_reproduces_the_measured_table</code> pins
+              both divergences (167 against 203, 245 against 246) instead of
+              smoothing them, and
+              <code>the_accent_is_never_the_colour_that_means_failure</code>
+              asserts the distinctness rather than a literal, so an edit moving the
+              accent to <code>LightRed</code> for being nearer the hue cannot pass.
+            </li>
+            <li>
+              <strong><code>Role::Text</code> cannot be themed.</strong> The
+              loader refuses <code>roles.text</code> by name &mdash; while still
+              listing it among the valid names, so
+              <em>&ldquo;a typo of <code>text</code> should be told about
+              <code>text</code>, not about seven names that do not include
+              it&rdquo;</em> &mdash; and <code>Palette::color</code> returns before
+              the theme is read. A theme author has one terminal; their foreground
+              is what makes Emma unreadable for the person with the opposite
+              background, who reads it as Emma being broken.
+              <span class="chip test">tested</span>
+            </li>
+          </ul>
+          <span class="src">crates/emma/src/term/theme.rs — <code>load</code>, <code>ROLE_NAMES</code>, <code>SETTABLE</code>, <code>MAX_NOTICES</code>, <code>derive_index</code></span>
+
+          <p>
+            Two smaller rules with the same shape. A project cannot
+            <em>select</em> a theme &mdash; only
+            <code>~/.emma/settings.json</code> can &mdash; so on a name collision
+            the user&rsquo;s theme wins, closing the one route by which a cloned
+            repository could repaint somebody&rsquo;s screen. And the name
+            <code>emma</code> is reserved, so shipping
+            <code>themes/emma.json</code> cannot change what stock Emma looks like.
+            <span class="chip test">tested</span> &mdash;
+            <code>a_project_theme_never_shadows_a_user_theme_of_the_same_name</code>.
+          </p>
+          <span class="src">crates/emma/src/term/theme.rs — <code>load</code>, <code>RESERVED</code>; crates/emma/src/session_command.rs — <code>theme_dirs</code></span>
+
+          <h2 id="usertools">The TOOLS section launches real programs</h2>
+
+          <p>
+            The sidebar&rsquo;s middle section lists seven entries in a fixed
+            order: Shell, Code, File Browser, Search, Memory, Data Explorer,
+            Settings. Five start a program on the machine. Search and Memory run
+            inside Emma, and <code>launch</code> refuses them with a sentence
+            saying so rather than returning success:
+            <em>&ldquo;returning <code>Ok</code> for a launch that never happened
+            is a fake receipt.&rdquo;</em>
+          </p>
+          <span class="src">crates/emma/src/usertools.rs — <code>enum Tool</code>, <code>Tool::in_app</code>, <code>catalogue</code></span>
+
+          <p>
+            An unavailable tool stays in the list with
+            <code>available: false</code> and a detail naming what was looked for,
+            because <em>&ldquo;a key that is absent teaches nothing, a key that
+            says &lsquo;none of code, cursor, subl, zed, nvim is on PATH&rsquo; is
+            a to-do list.&rdquo;</em> The sidebar draws <code>n/a</code> where the
+            chord would be and dims the label, so the row reads as switched off
+            rather than as a key that would do nothing when pressed. The catalogue
+            can run on every draw, so PATH lookups are cached for the life of the
+            process &mdash; which also makes &ldquo;a program installed
+            mid-session appears after a restart&rdquo; true by construction rather
+            than intermittently &mdash; while
+            <code>settings.json</code> is re-read each call, so the Settings
+            tool&rsquo;s own writes show up on the next frame.
+          </p>
+          <span class="src">crates/emma/src/usertools.rs — <code>struct Entry</code>, <code>catalogue</code>; crates/emma/src/term/sidebar.rs — <code>TOOL_MISSING</code>; crates/emma/src/term/app.rs — <code>tool_rows</code></span>
+
+          <h3>Why the keys are <code>Alt+&lt;key&gt;</code></h3>
+
+          <p>
+            The mockup showed bare <code>s</code> / <code>c</code> /
+            <code>f</code> bindings. The design refused them &mdash;
+            <em>&ldquo;a bare letter that acts while the input box exists is a
+            footgun&rdquo;</em> &mdash; and the softer rule, <em>only when the
+            editor is empty</em>, fails on a fact the approval-gate keys never
+            meet:
+          </p>
+
+          <div class="note warn">
+            <p>
+              <em>&ldquo;The first character of <strong>every</strong> goal lands
+              on an empty editor, so a bare <code>s</code> binding makes any goal
+              beginning with <code>s</code> start a shell instead.&rdquo;</em>
+            </p>
+            <span class="src">crates/emma/src/term/input.rs — <code>tool_key</code></span>
+          </div>
+
+          <p>
+            An Alt chord types nothing, which puts it in <code>Ctrl-B</code>&rsquo;s
+            class: safe whatever the editor holds, so the editor&rsquo;s content
+            is not consulted. Ctrl is excluded from the match because AltGr
+            arrives as Ctrl+Alt on Windows layouts and produces real characters.
+            Which letters are bound is the catalogue&rsquo;s knowledge rather than
+            the key handler&rsquo;s &mdash; <code>tool_key</code> returns the
+            character and the frame looks it up &mdash; and every chord is dead
+            while a question is pending, as is <code>Ctrl-B</code>. Scrolling is
+            the exception, and it is argued rather than assumed:
+            <em>&ldquo;a scroll offset cannot answer a question.&rdquo;</em>
+            <span class="chip test">tested</span> &mdash;
+            <code>a_bare_letter_is_never_a_tool_shortcut</code>, whose doc says
+            <em>&ldquo;if this test goes red, that refuted idea is back,&rdquo;</em>
+            and <code>alt_chords_launch_tools_and_die_under_a_prompt</code>.
+          </p>
+          <span class="src">crates/emma/src/term/input.rs — <code>tool_key</code>, <code>pane_key</code>; crates/emma/src/term/frame.rs — <code>Inner::tools</code></span>
+
+          <h3>The defect that forced raw <code>CreateProcessW</code></h3>
+
+          <p>
+            The interactive frame owns the alternate screen, so a child process
+            that writes to that console wrecks the display &mdash; and unlike a
+            dead key, the user cannot tell what happened. On Windows,
+            <strong>every spawn shape <code>std::process</code> can express fails
+            that requirement</strong>, and each was refuted by measurement.
+          </p>
+
+          <div class="tw">
+            <table>
+              <thead>
+                <tr>
+                  <th>Shape</th>
+                  <th>What was measured</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>CREATE_NEW_CONSOLE</code> + default stdio</td>
+                  <td>
+                    A new window whose handles still point at Emma&rsquo;s
+                    console: Rust sets <code>STARTF_USESTDHANDLES</code> whenever
+                    the parent has std handles at all.
+                    <strong>The first certify run&rsquo;s canary landed in this
+                    process&rsquo;s own output stream.</strong>
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>CREATE_NEW_CONSOLE</code> + null stdio</td>
+                  <td>
+                    An interactive shell reads a NUL stdout as redirection and
+                    dies &mdash; measured: a conhost-hosted client under NUL
+                    handles exits instantly without running.
+                  </td>
+                </tr>
+                <tr>
+                  <td>hosting under <code>conhost.exe</code></td>
+                  <td>
+                    Flips modes on the same axis &mdash; a real window with no
+                    handle info, a headless ConPTY renderer when handed pipes
+                    &mdash; so it inherits the same problem.
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    <strong>raw <code>CreateProcessW</code>,
+                    <code>bInheritHandles = FALSE</code>, no <code>hStd</code>
+                    fields</strong>
+                  </td>
+                  <td>
+                    The OS builds the console and binds the child&rsquo;s handles
+                    to it; nothing of Emma&rsquo;s can reach the child even in
+                    principle. This is what ships. <code>tools/web</code> spawns
+                    its detached Chrome the same way.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <span class="src">crates/emma/src/usertools.rs — the <em>Spawning</em> region, <code>spawn_detached</code>, <code>new_console::spawn</code></span>
+
+          <p>
+            <strong>Twenty-two green tests said nothing about any of this</strong>,
+            and could not have: an inherited handle bypasses the test
+            harness&rsquo;s own capture, so the write reaches the console without
+            passing through anything an assertion can see. What caught it was a
+            canary &mdash; a known string the spawned child prints &mdash; and a
+            human reading the run&rsquo;s scrollback for its absence. That method
+            is now the test.
+            <code>certify_a_new_console_child_gets_a_real_console_that_is_not_ours</code>
+            is <code>#[ignore]</code>d, spawns a real PowerShell, and its
+            instructions say to read the output rather than the pass, because
+            <em>&ldquo;the reader checking the scrollback is the
+            certification.&rdquo;</em> Its other two claims are ordinary
+            assertions: the child&rsquo;s
+            <code>[Console]::IsOutputRedirected</code> must be
+            <code>False</code>, which would be <code>True</code> if conhost had
+            passed Emma&rsquo;s null handles through; and its working directory
+            must be the launch directory, proving the cwd survives the conhost
+            hop.
+            <span class="chip cert">certified</span> by the run that found the
+            defect; <span class="chip unv">unverified</span> here &mdash; the
+            ignored tests were not re-run for this page.
+          </p>
+          <span class="src">crates/emma/src/usertools.rs — the <em>Certification against the real machine</em> region</span>
+
+          <p>
+            The non-console case takes the ordinary path:
+            <code>CREATE_NO_WINDOW</code> plus null stdio, which gives a GUI
+            program &mdash; or a <code>.cmd</code> shim like VS Code&rsquo;s, which
+            runs through <code>cmd.exe</code> and would otherwise flash or attach
+            &mdash; a console with no window. On unix every spawn gets null stdio
+            and its own process group, and anything needing a terminal is refused
+            at planning time rather than launched into a wrecked screen. That is
+            why the unix Shell tool opens the terminal <em>application</em>
+            (<code>open -a Terminal</code>, or a probed emulator) and lets it pick
+            the shell, rather than spawning <code>$SHELL</code> with nowhere to put
+            it; <code>nvim</code> is available on Windows for the same reason and
+            refused on unix.
+          </p>
+          <span class="src">crates/emma/src/usertools.rs — <code>spawn_detached</code> (both cfgs), <code>plan</code>, the module doc</span>
+
+          <p>
+            One more rule: <strong>a configured value is one program name or one
+            absolute path, never a command line.</strong> Splitting a string on
+            spaces is the first half of running text through a shell, and a path
+            with a space in it is not an argument boundary. A value that does not
+            resolve produces an error naming it &mdash; never word-split, never
+            swapped for a probed default, because
+            <em>&ldquo;a substitution looks identical to success right up until
+            the wrong program opens.&rdquo;</em>
+            <code>$VISUAL</code>/<code>$EDITOR</code> get one concession, since the
+            wider world does put command lines in them: a value there that does
+            not resolve as a whole is skipped and the chain continues &mdash;
+            skipped, not split. <span class="chip test">tested</span>
+          </p>
+          <span class="src">crates/emma/src/usertools.rs module doc, <code>plan</code>; test <code>the_editor_chain_is_setting_then_visual_then_editor_then_probe</code></span>
+
+          <h2 id="modules">The rest of the directory</h2>
+
+          <p>
+            One shape recurs across the directory: the modules that decide take no
+            terminal and hold no lock, and the modules that touch a console stay
+            small. <code>app.rs</code> gives the reason for keeping the split where
+            it is &mdash; <em>&ldquo;the terminal, the locks and the entry/leave
+            bytes stay in <code>frame.rs</code>, which has already shipped two
+            invisible-to-tests defects and does not need a third file&rsquo;s worth
+            of chances.&rdquo;</em>
+          </p>
+
+          <div class="tw">
+            <table>
+              <thead>
+                <tr>
+                  <th>Module</th>
+                  <th>Lines</th>
+                  <th>What it does</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>frame.rs</code></td>
+                  <td class="num">2,159</td>
+                  <td>
+                    The only module that owns a terminal: install, restore, raw
+                    mode, mouse capture, the alternate screen, the private modes,
+                    synchronized output (<code>ESC[?2026h</code>, so a repaint
+                    made of several writes reaches the eye as one picture), the
+                    locks, and both viewports.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>app.rs</code></td>
+                  <td class="num">1,076</td>
+                  <td>
+                    The full-screen shell: carves the window, holds what survives
+                    between paints (retained transcript, sidebar latch, wrap
+                    width), and paints into a <code>Buffer</code> without touching
+                    a terminal.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>transcript.rs</code></td>
+                  <td class="num">1,117</td>
+                  <td>
+                    The retained conversation: append, cap, scroll, follow the
+                    tail, re-wrap. Assistant entries keep their markdown source so
+                    a resize re-runs the same renderer streaming uses; tool and
+                    harness entries arrive already line-shaped and are re-split
+                    instead.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>chat.rs</code></td>
+                  <td class="num">544</td>
+                  <td>
+                    The two-column pane: a 7-column speaker gutter, a 61-column
+                    minimum message width, and the &ldquo;n rows below&rdquo;
+                    indicator. Tool traffic gets no gutter label, because
+                    <em>&ldquo;an <code>Emma</code> label beside
+                    <code>✗ Bash failed</code> would claim the failure as
+                    prose.&rdquo;</em> The label rides the first <em>visible</em>
+                    row, so a long answer scrolled halfway off the top still says
+                    who is speaking.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>sidebar.rs</code></td>
+                  <td class="num">1,250</td>
+                  <td>
+                    Sessions, tools, quick help; pure rendering. When a row does
+                    not fit, the name truncates and the trailing column survives,
+                    because a row with no date reads as a row with no date while a
+                    name cut short still reads as that name. All arithmetic is in
+                    display columns, since a CJK trailing column computed in
+                    characters ends two cells past the border.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>statusbar.rs</code></td>
+                  <td class="num">1,144</td>
+                  <td>
+                    The full-screen built-in bottom row. A field whose value was
+                    never measured is absent rather than zero, and fields drop
+                    whole rather than truncating &mdash; a
+                    <code>total 34k/50</code> that ran out of room is a number that
+                    is wrong rather than one that is missing.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>statusline.rs</code></td>
+                  <td class="num">574</td>
+                  <td>
+                    A user-configured external program&rsquo;s output, drawn in
+                    the same row instead of the built-in bar. Running it stays off
+                    the paint path (a debounced worker, one-slot channel, 300ms),
+                    because paint is called from the keyboard reader and a status
+                    script that blocks would be a terminal that has stopped
+                    echoing.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>markdown.rs</code></td>
+                  <td class="num">886</td>
+                  <td>
+                    Assistant prose, one complete source line at a time, into
+                    styled rows. Headings, fences, lists, quotes, thematic breaks,
+                    <code>`code`</code> and <code>**bold**</code>. No dependency:
+                    <code>pulldown-cmark</code> is an event parser over a whole
+                    document, and prose here arrives in fragments.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>diff.rs</code></td>
+                  <td class="num">1,335</td>
+                  <td>
+                    What a write would change, computed before it happens, as
+                    unified hunks &mdash; the approval gate&rsquo;s evidence. A
+                    hand-rolled LCS rather than <code>similar</code>, because the
+                    requirement is that it be bounded on an interactive path.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>render.rs</code></td>
+                  <td class="num">1,258</td>
+                  <td>
+                    The <code>Skin</code>: glyphs, styles and line shapes for every
+                    event, the Unicode and ASCII glyph sets, the column-measurement
+                    helpers, and the two exits to a stream
+                    (<code>plain</code>/<code>sgr</code>).
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>view.rs</code></td>
+                  <td class="num">1,074</td>
+                  <td>
+                    The inline viewport&rsquo;s contents &mdash; input box, menu,
+                    approval panel, hint, status row &mdash; two of whose renderers
+                    the full-screen dock reuses.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>input.rs</code></td>
+                  <td class="num">1,135</td>
+                  <td>
+                    The one place stdin is read, in either of the two ways it can
+                    be read. Line editor, key routing, paste, the scroll keys, the
+                    Alt chords, Ctrl-C, and the drain.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>menu.rs</code></td>
+                  <td class="num">519</td>
+                  <td>
+                    What <code>/</code> shows and when it is allowed to show it.
+                    A pure state machine, split from its rendering.
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>palette.rs</code></td>
+                  <td class="num">814</td>
+                  <td>Roles, fidelities, and the one substitution point.</td>
+                </tr>
+                <tr>
+                  <td><code>theme.rs</code></td>
+                  <td class="num">1,211</td>
+                  <td>Themes as JSON, resolved at load into fixed-size <code>Copy</code> data, failing partially.</td>
+                </tr>
+                <tr>
+                  <td><code>spacing.rs</code></td>
+                  <td class="num">235</td>
+                  <td>One rule about blank rows, in one place. See below.</td>
+                </tr>
+                <tr>
+                  <td><code>welcome.rs</code></td>
+                  <td class="num">211</td>
+                  <td>
+                    The opening block, built from what the run actually loaded:
+                    <em>&ldquo;a welcome that lists capabilities the run does not
+                    have is worse than no welcome.&rdquo;</em>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <span class="src">line counts from <code>wc -l crates/emma/src/term/*.rs</code> at <code>20ac400</code>; descriptions from each module&rsquo;s doc comment</span>
+
+          <h3>Four names that overlap</h3>
+
+          <p>
+            <code>render.rs</code>, <code>view.rs</code>,
+            <code>statusbar.rs</code> and <code>statusline.rs</code> sound
+            interchangeable and are not. <code>render.rs</code> is the vocabulary:
+            an event becomes <code>Line</code>s, with no <code>Rect</code> and no
+            <code>Buffer</code> in sight, and it also owns the <em>inline</em>
+            status row (<code>Skin::status</code>). <code>view.rs</code> is the
+            inline viewport&rsquo;s layout &mdash; it takes a rectangle and a
+            buffer and arranges the box, menu, panel, hint and status row.
+            <code>statusbar.rs</code> is the full-screen successor to
+            <code>Skin::status</code>, and names the inheritance itself:
+            <em>&ldquo;it inherits that row&rsquo;s one law: everything on it is
+            true.&rdquo;</em> <code>statusline.rs</code> is somebody else&rsquo;s
+            program &mdash; a configured script whose first line replaces whichever
+            built-in row is in play, its ANSI bytes parsed into styles rather than
+            passed through, because
+            <em>&ldquo;an escape byte written into a cell is a byte ratatui counts
+            as one column and the terminal counts as none, and from that moment the
+            diff is wrong about every row below it.&rdquo;</em>
+          </p>
+          <span class="src">crates/emma/src/term/{render,view,statusbar,statusline}.rs module docs</span>
+
+          <p>
+            The full-screen render path is
+            <code>frame.rs</code> &rarr; <code>app.rs</code> &rarr;
+            <code>sidebar</code> / <code>chat</code> / <code>statusbar</code>, plus
+            two borrowed methods from <code>view.rs</code> for the dock;
+            <code>View::render</code> itself is not on it. The inline path is
+            <code>frame.rs</code> &rarr; <code>View::render</code>. Both consume
+            <code>render.rs</code>.
+          </p>
+          <span class="src">crates/emma/src/term/frame.rs — <code>Inner::paint</code>, <code>paint_into</code>; crates/emma/src/term/app.rs — <code>App::render</code></span>
+
+          <h3>Why <code>spacing.rs</code> is a module and not a <code>join</code></h3>
+
+          <p>
+            <strong>A blank row is a boundary between two blocks, and it is
+            written only when there is a block on both sides of it.</strong> The
+            failure it fixes was distributed: two emitters each asking for the same
+            boundary pushed their own <code>Line::default()</code> and the screen
+            got two blank rows, and <em>&ldquo;there was no single place to notice
+            it because the two callers never met.&rdquo;</em> A blank row was also
+            landing first, under the shell prompt the user typed <code>emma</code>
+            at, where <em>&ldquo;a gap reads as output that went missing.&rdquo;</em>
+          </p>
+          <span class="src">crates/emma/src/term/spacing.rs module doc</span>
+
+          <p>
+            It is a state machine of three booleans rather than a filter over
+            finished output, because the terminal is irreversible:
+            <em>&ldquo;once a row is written it is the terminal&rsquo;s and cannot
+            be taken back, so the decision about a blank row has to be made
+            <em>before</em> it is emitted.&rdquo;</em> <code>separate()</code> is
+            idempotent, which is what stops two callers stacking separators; blanks
+            the content wrote are never removed, since a blank line inside a fenced
+            code block is part of what the reader copies out.
+            <span class="chip test">tested</span> &mdash; six tests, including
+            <code>blank_rows_a_block_wrote_itself_are_left_alone</code>, whose doc
+            frames it as the assertion that stops &ldquo;collapse blank runs&rdquo;
+            from looking like a reasonable simplification.
+          </p>
+          <span class="src">crates/emma/src/term/spacing.rs — <code>Spacing::separate</code>, <code>Spacing::apply</code></span>
+
+          <div class="note">
+            <span class="h">Which path it still governs</span>
+            <p>
+              With the full-screen frame as the default,
+              <code>spacing.rs</code> governs the plain path, <code>-p</code>,
+              <code>EMMA_NO_FRAME</code> and the <code>EMMA_UI=inline</code>
+              hatch. In the full-screen frame the transcript buffer separates the
+              blocks it holds and <code>Frame::separate</code> is a no-op:
+              <em>&ldquo;<code>separate()</code> on the inline path had to be a
+              declaration because the terminal owned the rows; here the buffer owns
+              them and the rule is structural.&rdquo;</em> The module&rsquo;s own
+              doc still describes the pre-2026-08-12 world.
+            </p>
+            <span class="src">crates/emma/src/term/frame.rs — <code>Frame::separate</code>; crates/emma/src/term/app.rs</span>
+          </div>
+
+          <h3>Two rules from <code>markdown.rs</code> and <code>diff.rs</code> that contradict each other</h3>
+
+          <p>
+            <code>markdown.rs</code> inserts nothing into what a reader copies:
+            no gutter down a code block, no <code>│</code> in front of a quote, no
+            added indent. The <code>&gt;</code> of a quote is kept rather than
+            swapped for <code>│</code>, because the swap
+            <em>&ldquo;would put a character into the copy that the model never
+            wrote.&rdquo;</em> A fenced block is split at the exact column and
+            never at a word &mdash; wrapping code at a word boundary changes what it
+            says &mdash; and the rows concatenate back to the source.
+          </p>
+          <span class="src">crates/emma/src/term/markdown.rs module doc, <code>code_rows</code>; test <code>a_fenced_code_block_is_never_reflowed_and_never_loses_a_character</code></span>
+
+          <p>
+            <code>diff.rs</code> writes a gutter on every row, and states the
+            distinction rather than the exception:
+            <em>&ldquo;a diff is not the file. It is a report about a change, in
+            the format every reader already knows from <code>git diff</code>, and
+            pasting it into a bug report is the use — pasting it into a compiler is
+            not.&rdquo;</em> The gutter is also the only distinction that survives
+            <code>NO_COLOR</code>, a sixteen-colour terminal and the ASCII glyph
+            set, and it is written in one function so that the approval panel and
+            the transcript line cannot disagree about which side a row is on.
+          </p>
+          <span class="src">crates/emma/src/term/diff.rs module doc, <code>text_of</code></span>
+
+          <p>
+            Four limits keep the diff off the interactive path&rsquo;s critical
+            list: 2&nbsp;MiB read, 50,000 lines a side, 250,000 LCS cells, and 40
+            drawn body rows. Exceeding the third produces a
+            <em>coarse</em> patch &mdash; one block of removals then one block of
+            additions, labelled as such rather than guessed at &mdash; and the row
+            budget is then split down the middle, because taking the first forty
+            rows of a coarse patch would take forty removals and show no additions
+            at all, drawing a thousand-line rewrite as a thousand-line deletion.
+            The summary and the notes sit <em>outside</em> the budget: a cut diff
+            that no longer said <code>-1,412 lines</code> would withhold the fact
+            the prompt exists to supply. <span class="chip test">tested</span>
+          </p>
+          <span class="src">crates/emma/src/term/diff.rs — <code>MAX_READ</code>, <code>MAX_LINES</code>, <code>MAX_CELLS</code>, <code>BUDGET</code>, <code>coarse_rows</code>; test <code>a_coarse_patch_spends_a_side_of_the_budget_it_does_not_need</code></span>
+
+          <h2 id="defects">Suspected defects, flagged and not fixed</h2>
+
+          <p>
+            Found while reading, reported rather than repaired. Each names a file
+            and a function. None is a crash on a realistic input; several are what
+            this project calls a false receipt &mdash; a test or a comment claiming
+            cover it does not have.
+          </p>
+
+          <h3>Records that contradict the code</h3>
+
+          <div class="tw">
+            <table>
+              <thead>
+                <tr>
+                  <th>Where</th>
+                  <th>What</th>
+                  <th>Standing</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>transcript.rs</code> module doc</td>
+                  <td>
+                    States <strong>&ldquo;It is not wired into the live UI.
+                    Nothing constructs one outside tests.&rdquo;</strong> It is,
+                    and something does: <code>App::new</code> constructs
+                    <code>Transcript::new(Cap::default())</code>, and it is driven
+                    from <code>app.rs</code>, painted by <code>chat.rs</code> and
+                    bound to keys in <code>frame.rs</code>. The doc describes the
+                    pre-flip world at the head of the subsystem&rsquo;s most
+                    important module.
+                  </td>
+                  <td><span class="chip cert">certified</span> — one non-test construction site</td>
+                </tr>
+                <tr>
+                  <td><code>input.rs</code> — <code>LineSource::raw</code></td>
+                  <td>
+                    A comment says <em>&ldquo;a poll rather than a blocking read,
+                    so a frame that has been torn down does not leave a thread
+                    wedged inside the console driver&rdquo;</em> &mdash; and the
+                    line below it is <code>event::read()</code>, which blocks. The
+                    stated failure is not prevented by the mechanism the comment
+                    credits.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+                <tr>
+                  <td><code>input.rs</code> — <code>pane_key</code> doc</td>
+                  <td>
+                    Says &ldquo;plain arrows stay with history and the menu.&rdquo;
+                    There is no history &mdash; the module doc says so, and
+                    <code>Editor::key</code> maps bare <code>Up</code>/<code>Down</code>
+                    to <code>Action::Ignore</code>. A reader would conclude
+                    <code>Up</code> recalls the previous goal.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+                <tr>
+                  <td><code>sidebar.rs</code> — <code>COLLAPSE_HINT</code> doc</td>
+                  <td>
+                    Says <em>&ldquo;what it does not do is accept a click … until
+                    it routes a mouse press here this is a label for
+                    Ctrl-B.&rdquo;</em> <code>App::click</code> routes exactly that
+                    press.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Tests that cannot fail</h3>
+
+          <div class="tw">
+            <table>
+              <thead>
+                <tr>
+                  <th>Where</th>
+                  <th>What</th>
+                  <th>Standing</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>diff.rs</code> — <code>an_addition_and_a_removal_differ_in_gutter_as_well_as_in_colour</code></td>
+                  <td>
+                    Loops <code>for level in [Level::None, Level::Ansi16,
+                    Level::Ansi256]</code> and never uses <code>level</code> except
+                    in the failure message &mdash; <code>to_text</code> takes no
+                    <code>Skin</code>. The identical assertion runs three times
+                    while the comment claims coverage of three fidelities. The
+                    colour half of the test is genuine.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+                <tr>
+                  <td><code>view.rs</code> — <code>a_viewport_with_almost_no_rows_still_draws_something</code> and <code>a_menu_on_a_viewport_with_no_room_above_the_box_draws_nothing_and_panics_at_nothing</code></td>
+                  <td>
+                    Both discard their results
+                    (<code>let (_rows, _cursor) = draw(…)</code>) and assert
+                    nothing. The &ldquo;panics at nothing&rdquo; half of the second
+                    name is covered; &ldquo;draws something&rdquo; and &ldquo;draws
+                    nothing&rdquo; are not.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+                <tr>
+                  <td><code>statusbar.rs</code> — <code>an_empty_value_takes_its_label_with_it</code></td>
+                  <td>
+                    Asserts the absence of the label <code>TOTAL</code>, which the
+                    module no longer emits under any input, so that element of the
+                    loop cannot fail. Left behind by the <code>TOTAL</code> &rarr;
+                    <code>TOKENS</code> rename.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+                <tr>
+                  <td><code>app.rs</code> — <code>the_sidebar_latch_honours_the_user_over_the_width</code></td>
+                  <td>
+                    A binding named <code>user_open</code> is built with
+                    <code>by_user: false</code>, so it re-tests the automatic
+                    branch asserted three lines above rather than the
+                    user-opinion branch its name claims. The guarantee is covered
+                    later in the same test.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Behaviour</h3>
+
+          <div class="tw">
+            <table>
+              <thead>
+                <tr>
+                  <th>Where</th>
+                  <th>What</th>
+                  <th>Standing</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>app.rs</code> — <code>App::render</code></td>
+                  <td>
+                    Calls <code>dock_height(view, area.height)</code>, passing the
+                    <em>window</em> height as <code>room</code>.
+                    <code>dock_height</code>&rsquo;s doc says &ldquo;capped at half
+                    the pane,&rdquo; and half the window exceeds half the pane once
+                    the header, rule, hint, status bar and floats are subtracted.
+                    <code>Layout::vertical</code> clamps rather than panicking, so
+                    the symptom is a chat area squeezed toward zero.
+                  </td>
+                  <td><span class="chip cert">certified</span> — read at the call site</td>
+                </tr>
+                <tr>
+                  <td><code>transcript.rs</code> — <code>visible_tagged</code></td>
+                  <td>
+                    Calls <code>tagged</code>, which walks every entry and clones
+                    every line for the whole buffer, then truncates to the window.
+                    <code>chat::render</code> calls it once per paint. At the
+                    default 50,000-row cap that is 50,000 line clones per frame to
+                    show about forty rows. The measured claim in this module covers
+                    resize cost, not per-frame assembly.
+                  </td>
+                  <td><span class="chip unv">unverified</span> — no measurement of the paint path exists</td>
+                </tr>
+                <tr>
+                  <td><code>transcript.rs</code> — <code>set_width</code></td>
+                  <td>
+                    Recomputes the row total but never calls
+                    <code>enforce_cap</code>. Narrowing the window multiplies rows;
+                    the buffer sits above <code>cap.rows</code> until the next
+                    append. The row half of the cap is a ceiling checked on append,
+                    not a ceiling.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+                <tr>
+                  <td><code>transcript.rs</code> — <code>enforce_cap</code></td>
+                  <td>
+                    <code>dropped_rows</code> sums row counts taken at whatever
+                    width was current when each entry was dropped, and the marker
+                    prints the sum as one figure. After a resize it corresponds to
+                    no width the user ever had &mdash; in the one row whose job is
+                    to be accurate about loss.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+                <tr>
+                  <td><code>render.rs</code> — <code>fit</code></td>
+                  <td>
+                    <code>keep = budget.saturating_sub(cols(ellipsis))</code>, so a
+                    budget below the ellipsis width returns a string wider than the
+                    budget. With ASCII glyphs the ellipsis is <code>...</code>,
+                    three columns, so any budget of 1 or 2 overruns.
+                    <code>a_cut_never_lands_inside_a_wide_character</code>
+                    hardcodes <code>…</code> and does not reach it.
+                  </td>
+                  <td><span class="chip unv">unverified</span> — reachable per a reading of <code>render_menu</code>; not reproduced</td>
+                </tr>
+                <tr>
+                  <td><code>render.rs</code> — <code>Skin::status</code> / <code>live_fields</code></td>
+                  <td>
+                    The identity half sheds four ways as the drop level rises; the
+                    live half is always appended, and the last attempt returns
+                    unconditionally. At a small width the row can exceed it and be
+                    clipped &mdash; producing the <code>total 34k/50</code> the doc
+                    says must never happen. The width tests run at 60 and 34.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+                <tr>
+                  <td><code>markdown.rs</code> — <code>rule</code>, <code>flow</code></td>
+                  <td>
+                    Both can emit a row wider than the window: a long info string
+                    (<code>```typescript</code>) at a narrow width, and a list item
+                    whose lead (indent + bullet + space) exceeds the width. This is
+                    the invariant <code>frame.rs</code> reserves inline rows
+                    against.
+                  </td>
+                  <td><span class="chip unv">unverified</span> — reasoned from the arithmetic; a two-case test at width 8 would settle it</td>
+                </tr>
+                <tr>
+                  <td><code>diff.rs</code> — <code>Change::creation</code></td>
+                  <td>
+                    Skips the NUL scan (which lives in <code>compute</code>), so a
+                    <code>Write</code> creating a new file with NUL bytes is drawn
+                    as a screen of <code>+</code> rows where the same content over
+                    an existing file is refused as binary. It also applies no byte
+                    limit to the model&rsquo;s <code>content</code>, and reports no
+                    line-ending or final-newline note.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+                <tr>
+                  <td><code>diff.rs</code> — <code>Change::out</code></td>
+                  <td>
+                    <code>Out::Hunk</code> header rows are pushed without
+                    decrementing <code>room</code>, so a patch with many small
+                    scattered hunks can draw up to <code>BUDGET</code> headers
+                    <em>plus</em> <code>BUDGET</code> body rows. The size tests use
+                    single-hunk and coarse fixtures.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+                <tr>
+                  <td><code>view.rs</code> — <code>render_input</code></td>
+                  <td>
+                    No horizontal scrolling: past the box&rsquo;s inner width the
+                    text is clipped and <code>cursor_at</code> clamps, so neither
+                    the text nor the caret moves. <code>paste</code> flattens a
+                    multi-line block into one line, which makes this easy to reach.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+                <tr>
+                  <td><code>statusline.rs</code> — <code>parse_params</code></td>
+                  <td>
+                    Splits on <code>;</code> and <code>:</code> alike, so the
+                    ITU-T subparameter form <code>38:2::250:189:47</code> parses as
+                    <code>[38, 2, 0, 250, 189, 47]</code> and yields
+                    <code>(0, 250, 189)</code> &mdash; a visibly wrong colour. No
+                    escape survives, so it is a wrong answer rather than a leak.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+                <tr>
+                  <td><code>sidebar.rs</code> — <code>fitted</code></td>
+                  <td>
+                    The overflow row is the one assembled line in the file that
+                    does not pass through <code>clipped</code>, and
+                    <code>fitted</code> is absent from the vector
+                    <code>no_row_is_ever_wider_than_the_pane</code> walks.
+                    <code>set_line</code> clips it, so the symptom is a silently
+                    cut loss-count.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+                <tr>
+                  <td><code>app.rs</code> — <code>App::click</code></td>
+                  <td>
+                    Hard-codes <code>header_row = r.y + 1</code>, assuming SESSIONS
+                    is the sidebar&rsquo;s first inner row. Nothing in
+                    <code>sidebar.rs</code> pins that ordering.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+                <tr>
+                  <td><code>chat.rs</code> — <code>indicator</code></td>
+                  <td>
+                    The &ldquo;n rows below&rdquo; overlay is truncated by
+                    <code>set_stringn</code> with no ellipsis when the pane is
+                    narrower than the text, against the standing rule that a cut
+                    says it was cut. No test covers that width.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+                <tr>
+                  <td><code>statusbar.rs</code> — <code>filled</code></td>
+                  <td>
+                    <code>f.min(segments - 1)</code> underflows at
+                    <code>segments == 0</code>. Unreachable today, since
+                    <code>context_cell</code> guards it; the same file&rsquo;s tests
+                    argue the opposite standard for a sibling helper.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+                <tr>
+                  <td><code>markdown.rs</code> — <code>heading</code>, <code>sanitise</code></td>
+                  <td>
+                    <code>trim_end_matches('#')</code> drops a trailing hash that
+                    is part of the text, so <code>&#35; C&#35;</code> renders as
+                    <code>C</code>. And a tab becomes four spaces, so the fenced
+                    block&rsquo;s &ldquo;rows concatenate back to the source&rdquo;
+                    guarantee does not hold for tab-indented code.
+                  </td>
+                  <td><span class="chip unv">unverified</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h2 id="unverified">What is not verified</h2>
+
+          <p>
+            <strong>Whether any of this <em>looks</em> right is the one thing a
+            cell buffer cannot settle.</strong> A fully-tested scrollback defect
+            has shipped from this directory twice; both times a green suite was
+            the evidence, and both times it was wrong the same way, because a
+            <code>TestBackend</code> agrees with whoever wrote the fixture.
+            <code>transcript.rs</code> cites the lesson by filename;
+            <code>app.rs</code> puts it as <code>frame.rs</code> having
+            <em>&ldquo;already shipped two invisible-to-tests defects.&rdquo;</em>
+          </p>
+          <span class="src">crates/emma/src/term/transcript.rs and app.rs module docs; notes/lessons/</span>
+
+          <div class="tw">
+            <table>
+              <thead>
+                <tr>
+                  <th>Claim</th>
+                  <th>Why it is open</th>
+                  <th>What would settle it</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>The frame is legible &mdash; sidebar, gutter, meter and bar as intended</td>
+                  <td>Every test here reads a cell buffer.</td>
+                  <td>
+                    A real run at several window sizes in Windows Terminal,
+                    conhost, iTerm2 and a Linux terminal, with screenshots, against
+                    <code>notes/mockup-tui.png</code>.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Every exit path really leaves the alternate screen</td>
+                  <td>
+                    The tests assert the strings pair up. Whether the bytes reach
+                    the terminal on each path is what no in-process test can see;
+                    <code>frame.rs</code> says as much of <code>enter_modes</code>.
+                  </td>
+                  <td>
+                    Run the binary and take each exit in turn &mdash; quit, Ctrl-C,
+                    an induced panic, the <code>process::exit</code> route &mdash;
+                    then check the shell echoes, the prior content is back, and a
+                    paste carries no <code>ESC[200~</code>.
+                  </td>
+                </tr>
+                <tr>
+                  <td>Mouse capture is disabled on the way out</td>
+                  <td>
+                    On Windows the disable is a console-mode change rather than
+                    bytes, so it cannot ride in the pairing test, which asserts it
+                    on the source instead and calls itself
+                    <em>&ldquo;weak as assertions go, and said so.&rdquo;</em>
+                  </td>
+                  <td>Exit a framed run and check the shell reports mouse events normally.</td>
+                </tr>
+                <tr>
+                  <td>Shift-drag selection works, and is clean with the sidebar collapsed</td>
+                  <td>Asserted in the design and printed in quick help; no test and no certification.</td>
+                  <td>Drag-select in each target terminal, collapsed and expanded, and paste the result.</td>
+                </tr>
+                <tr>
+                  <td>The user-tool spawn keeps its console to itself</td>
+                  <td>
+                    The certification tests exist, are <code>#[ignore]</code>d, and
+                    <strong>were not run for this page</strong>. Their central
+                    claim is an absence in scrollback, which no assertion sees.
+                  </td>
+                  <td>
+                    <code>cargo test -p emma usertools::tests::certify --
+                    --ignored --nocapture</code>, then read the output for
+                    <code>USERTOOLS-CANARY-1</code>.
+                  </td>
+                </tr>
+                <tr>
+                  <td>The named tests fail when their guarantee is removed</td>
+                  <td>
+                    <strong>No mutation was run for this page.</strong> Every
+                    <span class="chip test">tested</span> chip means the test
+                    exists and passes at <code>20ac400</code>, plus &mdash; where
+                    the test&rsquo;s own doc names the mutation it must not survive
+                    &mdash; that argument read and found sound.
+                  </td>
+                  <td>
+                    Run the mutations the test docs name: move the theme lookup
+                    above the short-circuit in <code>Palette::color</code>; declare
+                    <code>scrolling-regions</code> in the manifest; delete an
+                    <code>l</code> from <code>leave_modes</code>.
+                  </td>
+                </tr>
+                <tr>
+                  <td>The retained buffer&rsquo;s cap numbers are the right size</td>
+                  <td>
+                    2,000 entries and 50,000 rows are recorded in the module as
+                    guesses: <em>&ldquo;the measurement that should set them is a
+                    real session&rsquo;s memory footprint, and it has not been
+                    taken.&rdquo;</em> The one measurement that exists is resize
+                    cost &mdash; 3.5&nbsp;ms release / 21&nbsp;ms debug for 5,000
+                    rows re-wrapped 120&rarr;80 columns, and roughly 35&nbsp;ms at
+                    the full cap, dated 2026-08-11 on Windows 11 / Ryzen.
+                  </td>
+                  <td>Measure a long real session&rsquo;s resident memory, and time <code>visible_tagged</code> per paint at the cap.</td>
+                </tr>
+                <tr>
+                  <td>tmux / ssh detach and reattach</td>
+                  <td>A restore-failure class the inline design could not have; named in the design, covered by nothing.</td>
+                  <td>Detach mid-frame, resize the pane, reattach; drop an ssh connection mid-run and inspect the terminal.</td>
+                </tr>
+                <tr>
+                  <td>Screen readers</td>
+                  <td>Recorded as a known regression. Inline output was ordinary terminal text; a full-screen app paints cells.</td>
+                  <td>
+                    Run under NVDA, VoiceOver and Orca and check whether the
+                    approval prompt is spoken &mdash; a question nobody hears is
+                    consent nobody gave.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h2 id="coverage">How much of this was read</h2>
+
+          <p>
+            Seventeen files in <code>crates/emma/src/term/</code>, plus
+            <code>term.rs</code> and <code>usertools.rs</code>.
+          </p>
+
+          <ul class="body">
+            <li>
+              <strong>Read directly for this page, in full or close to it:</strong>
+              <code>palette.rs</code> (all 814 lines, tests included);
+              <code>frame.rs</code> (module doc, the Restoring, Terminal modes and
+              Synchronized output regions, <code>install</code>, the write methods
+              and both manifest tests &mdash; roughly half of 2,159 lines);
+              <code>term.rs</code> (module doc, constructors, the fallback and
+              platform regions, <code>Drop</code>); <code>usertools.rs</code>
+              (module doc, the contract, the Spawning region, the certification
+              tests); <code>theme.rs</code> (module doc, the resolved-theme and
+              derivation regions, the head of the loader &mdash; about a third);
+              <code>app.rs</code>&rsquo;s layout region; <code>sidebar.rs</code>&rsquo;s
+              module doc and constants; <code>input.rs</code>&rsquo;s
+              <code>tool_key</code>. Call it a third of the directory by line.
+            </li>
+            <li>
+              <strong>Read in full by three delegated readers reporting back with
+              quoted identifiers and comment fragments (14 files):</strong>
+              <code>transcript.rs</code>, <code>markdown.rs</code>,
+              <code>diff.rs</code>, <code>app.rs</code>, <code>chat.rs</code>,
+              <code>sidebar.rs</code>, <code>statusbar.rs</code>,
+              <code>spacing.rs</code>, <code>render.rs</code>,
+              <code>view.rs</code>, <code>input.rs</code>, <code>menu.rs</code>,
+              <code>statusline.rs</code>, <code>welcome.rs</code>. Three of their
+              findings were re-checked at the source before appearing here: the
+              <code>Transcript</code> construction site, the
+              <code>dock_height</code> call site, and the <code>TOTAL</code>
+              assertion. The rest carry
+              <span class="chip unv">unverified</span>.
+            </li>
+            <li>
+              <strong>Not read:</strong> <code>crates/emma/tests/</code>, and the
+              remaining two-thirds of <code>theme.rs</code>&rsquo;s loader.
+            </li>
+          </ul>
+
+          <p>
+            The <code>emma</code> library suite &mdash; 477 tests, 3 ignored
+            &mdash; was run at <code>20ac400</code> and is green. Nothing on this
+            page rests on that alone.
+          </p>
+
+          <footer class="pg">
+            <p>Written against <code>20ac400</code>.</p>
+            <p><a href="index.html">&larr; back to the index</a></p>
+          </footer>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

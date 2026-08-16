@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Records &amp; house rules · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav here" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">The project</p>
+  <h1>Records &amp; house rules</h1>
+
+  <p class="lede">
+    Six records, six jobs, and the conventions that keep them from turning into
+    each other.
+  </p>
+
+  <h2 id="six">The six records</h2>
+
+  <p>
+    Each answers one question. When two of them answer the same question, one of
+    them is wrong and nobody can tell which.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Record</th><th>Answers</th></tr></thead>
+    <tbody>
+      <tr><td>commit message</td>
+          <td>What changed, and why. Long, because the reasoning behind a change has nowhere else to go once the diff is old.</td></tr>
+      <tr><td><code>docs/</code></td>
+          <td>How Emma works and why it is shaped that way. The only one addressed to somebody trying to use or modify the system rather than track the project.</td></tr>
+      <tr><td><code>notes/lessons/</code></td>
+          <td>What was learned, one file per lesson so two authors never collide.</td></tr>
+      <tr><td><code>notes/improvements.md</code></td>
+          <td>What could be done next, with where the idea came from and under what licence.</td></tr>
+      <tr><td><code>notes/STATUS.md</code></td>
+          <td>Where things stand right now. Append-only, dated, newest on top.</td></tr>
+      <tr><td><code>CHANGELOG.md</code></td>
+          <td>What is different for somebody upgrading, and nothing else.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>
+    A status entry that restates a commit message is doing <code>git log</code>'s
+    job. A changelog entry describing a refactor is describing something no user
+    can observe. A documentation page narrating the project's week belongs in
+    <code>STATUS.md</code>.
+  </p>
+
+  <h2 id="rules">The rules that keep the code honest</h2>
+
+  <h3>Comments carry the why, not the what</h3>
+
+  <p>
+    A comment restating the code is noise. A comment carrying the argument for a
+    decision is the reason the file can be changed safely later. Read a module's
+    existing doc before adding to it and match that register.
+  </p>
+
+  <h3>A test that cannot fail is a false receipt</h3>
+
+  <p>
+    Every behaviour gets a test, and the tests that matter must go red when the
+    guarantee is removed. The way to know is to break the code, watch the test
+    fail, and put it back. Report which mutations were run and what happened.
+  </p>
+
+  <p>
+    This has been paid for. A source-grep test once passed while the thing it
+    guarded was disabled entirely. Four tests in the terminal directory were
+    found this week that cannot fail: one binds a value nothing reads, two
+    discard their results, and one asserts against a label the module stopped
+    emitting. That directory's test count is four higher than its coverage.
+  </p>
+
+  <h3>A green suite is not evidence</h3>
+
+  <p>
+    It has been wrong three times here. A language-server readiness check
+    declared ready at 0.36 seconds against a real server. A frontmatter parser
+    silently dropped 86 of 90 real files because its fixtures used LF endings. A
+    strict wire decoder passed 712 tests and then decoded no real tool call,
+    because the API adds a key the model did not know about.
+  </p>
+
+  <p>
+    Fixtures agree with their author. The rule that follows is to certify
+    against the real thing, and paste what it actually said.
+  </p>
+
+  <h3>Say what you could not verify</h3>
+
+  <p>
+    Explicitly, in a section of its own, with what would settle it. Every page
+    on this site ends with one, and they are collected on
+    <a href="unverified.html">What is not verified</a>. This matters most for
+    anything drawn on a terminal, because a cell buffer is not a console.
+  </p>
+
+  <h3>Do not fabricate</h3>
+
+  <p>
+    If a tool cannot compute something it says so rather than showing a
+    plausible substitute. If output was cut it names the cap, the loss and the
+    remedy, or says plainly that no argument raises it. The same rule covers
+    suggestions: a warning that recommends a spelling is making a claim, and
+    <code>idna</code> will return <code>Ok</code> for a wrong one, so the code
+    refuses to guess rather than guessing helpfully.
+  </p>
+
+  <h3>Licences before code</h3>
+
+  <p>
+    A README is not a licence, and <code>NOASSERTION</code> on GitHub means open
+    the actual file. This has caught five things in one week: a badge that read
+    <code>NOASSERTION</code> over a real FSL-1.1-MIT licence, a crate that turned
+    out GPL-3.0-or-later, a project silently relicensed to a source-available
+    licence after an acquisition, a repository with no licence file at all, and
+    one carrying a rider granting no rights to Anthropic specifically.
+  </p>
+
+  <h2 id="why">Why the record is this detailed</h2>
+
+  <p>
+    Emma is built mostly by agents, in sessions. Context carries inside a
+    session and the rules carry across them, but the person holding the
+    reasoning changes constantly. Anything kept only in someone's head is gone
+    by the next session.
+  </p>
+
+  <p>
+    The alternative to writing down what was measured and what was assumed is
+    re-deriving it. The four incidents above are what that costs. In each case
+    the written record was the only possible correction, and where the record
+    was silent, the mistake shipped.
+  </p>
+
+  <h2 id="drift">How the records go wrong</h2>
+
+  <p>
+    Every failure below is real and recent. They are listed because the failure
+    modes repeat, and because a record that has drifted is worse than a missing
+    one: it will be believed.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Failure</th><th>What happened</th></tr></thead>
+    <tbody>
+      <tr><td>A backlog that stopped tracking the code</td>
+          <td>Four defects were fixed and committed. Two days later all four still read <code>Status: open</code>, so the next reader would have re-planned finished work.</td></tr>
+      <tr><td>An item filed under the wrong heading</td>
+          <td>Seven live items sat under <code>## Rejected</code>, because each was appended to the end of the file and the end of the file was inside that section. Every item's own status line was correct. Only the heading it inherited was wrong.</td></tr>
+      <tr><td>An index claiming shipped features were plans</td>
+          <td>Four rows of <code>notes/README.md</code> read "plan, not built" over delegation, the browser tools, <code>/compact</code> and the full-screen interface.</td></tr>
+      <tr><td>A constraints file describing a test that would be red</td>
+          <td><code>CLAUDE.md</code> said a test fails if a feature is ever <em>named</em> in the manifest. The test strips comments and fails only on a declaration, and the manifest names the feature in a comment.</td></tr>
+      <tr><td>A caveat that did not travel with its number</td>
+          <td>An architecture map gave a file count and a line count in the same paragraph where it admitted reading almost none of those files. Both figures were quoted onward as fact, twice, and both were wrong.</td></tr>
+      <tr><td>A blocker recorded as the wrong problem</td>
+          <td>An item was recorded as blocked on a corpus being too small. Counted from disk, the corpus was large. The blocker was that the feature it needed data about is barely used.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>
+    Two habits come out of that list. Record the count the blocking query
+    returned rather than a summary of the corpus it ran against. And when
+    quoting a figure, carry its caveat with it or check the figure first.
+  </p>
+
+  <h2 id="contract">Writing a page here</h2>
+
+  <p>
+    <code>docs/CONTRACT.md</code> is the rule set: plain HTML that opens from
+    <code>file://</code> with no server and no build step, one shared
+    stylesheet, source citations under claims, evidence chips on anything
+    non-obvious, diagrams drawn from the source at the time of drawing, and a
+    voice that describes the system rather than admiring it.
+  </p>
+
+  <footer class="pg">
+    Emma 0.1.0 · <a href="index.html">back to the start</a>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

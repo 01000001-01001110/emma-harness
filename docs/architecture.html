@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Architecture · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav here" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">Architecture</p>
+  <h1>Eight crates</h1>
+
+  <p class="lede">
+    Four library crates and four tool crates, with one shared vocabulary at the
+    bottom and no path from a tool back up into the loop that runs it.
+  </p>
+
+  <h2 id="graph">The dependency graph</h2>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 780 400" role="img"
+           aria-label="crates/emma depends on every other crate. tools/tasks and tools/lsp depend on tools/fs. tools/web depends on llm. Every crate depends on emma-tool-api, and llm's dependency on it is a dev-dependency only.">
+        <defs>
+          <marker id="arch-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
+          </marker>
+          <marker id="arch-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
+          </marker>
+        </defs>
+
+        <rect class="box" x="310" y="14" width="160" height="38" rx="4"/>
+        <text class="lbl" x="390" y="38" text-anchor="middle">crates/emma</text>
+
+        <rect class="box" x="60"  y="112" width="150" height="36" rx="4"/>
+        <text class="lbl" x="135" y="135" text-anchor="middle">harness</text>
+        <rect class="box" x="230" y="112" width="150" height="36" rx="4"/>
+        <text class="lbl" x="305" y="135" text-anchor="middle">tools/tasks</text>
+        <rect class="box" x="400" y="112" width="150" height="36" rx="4"/>
+        <text class="lbl" x="475" y="135" text-anchor="middle">tools/lsp</text>
+        <rect class="box" x="570" y="112" width="150" height="36" rx="4"/>
+        <text class="lbl" x="645" y="135" text-anchor="middle">tools/web</text>
+
+        <rect class="box" x="230" y="202" width="150" height="36" rx="4"/>
+        <text class="lbl" x="305" y="225" text-anchor="middle">tools/fs</text>
+        <rect class="box" x="570" y="202" width="150" height="36" rx="4"/>
+        <text class="lbl" x="645" y="225" text-anchor="middle">llm</text>
+
+        <rect class="hl" x="60" y="300" width="660" height="46" rx="4"/>
+        <text class="lbl" x="390" y="320" text-anchor="middle">emma-tool-api</text>
+        <text class="tiny" x="390" y="336" text-anchor="middle">the shared vocabulary</text>
+
+        <path class="edge" d="M 360 52 L 150 112" marker-end="url(#arch-arrow)"/>
+        <path class="edge" d="M 375 52 L 310 112" marker-end="url(#arch-arrow)"/>
+        <path class="edge" d="M 405 52 L 465 112" marker-end="url(#arch-arrow)"/>
+        <path class="edge" d="M 420 52 L 630 112" marker-end="url(#arch-arrow)"/>
+        <path class="edge" d="M 340 48 C 240 60 30 70 30 180 L 30 220 L 224 220" marker-end="url(#arch-arrow)"/>
+        <path class="edge" d="M 442 48 C 560 58 752 70 752 180 L 752 220 L 726 220" marker-end="url(#arch-arrow)"/>
+
+        <path class="edge-hl" d="M 305 148 L 305 196" marker-end="url(#arch-arrow-hl)"/>
+        <path class="edge-hl" d="M 462 148 L 356 196" marker-end="url(#arch-arrow-hl)"/>
+        <text class="sm" x="393" y="180" text-anchor="middle">containment</text>
+
+        <path class="edge-hl" d="M 645 148 L 645 196" marker-end="url(#arch-arrow-hl)"/>
+        <text class="sm" x="656" y="178">credentials</text>
+
+        <path class="edge" d="M 135 148 L 135 294" marker-end="url(#arch-arrow)"/>
+        <path class="edge" d="M 305 238 L 305 294" marker-end="url(#arch-arrow)"/>
+        <path class="edge" d="M 355 148 L 410 294" marker-end="url(#arch-arrow)"/>
+        <path class="edge" d="M 475 148 L 475 294" marker-end="url(#arch-arrow)"/>
+        <path class="edge" d="M 585 148 L 520 294" marker-end="url(#arch-arrow)"/>
+        <path class="edge-dash" d="M 645 238 L 645 294" marker-end="url(#arch-arrow)"/>
+        <text class="sm" x="656" y="272">dev only</text>
+      </svg>
+    </div>
+    <figcaption>
+      Edges read from the eight <code>Cargo.toml</code> files on 2026-08-16.
+      Pink marks the two that are not obvious from the names.
+    </figcaption>
+  </figure>
+  <span class="src">crates/{tool-api,harness,llm,emma}/Cargo.toml, tools/{fs,tasks,web,lsp}/Cargo.toml</span>
+
+  <h2 id="edges">The four facts in that picture</h2>
+
+  <h3>No tool crate depends on the harness</h3>
+
+  <p>
+    A tool receives a context and returns an outcome. It has no type through
+    which it could reach the loop, the approval gate, or the session log, so a
+    tool cannot start a goal, grant itself permission, or write a record the
+    loop did not write. <span class="chip test">tested</span> by the graph
+    itself: adding such a call would not compile.
+  </p>
+
+  <h3><code>tools/tasks</code> and <code>tools/lsp</code> depend on <code>tools/fs</code></h3>
+
+  <p>
+    Both need to decide whether a path is inside the working directory, and
+    path containment has one implementation rather than three. Containment
+    written twice is containment that disagrees with itself on the third
+    unusual input — a symlink, a UNC path, a trailing dot — and the disagreement
+    surfaces as one tool refusing what another allowed.
+  </p>
+
+  <h3><code>tools/web</code> depends on <code>llm</code>, and not for the model</h3>
+
+  <p>
+    It reads <code>ApiKey</code> and the credentials path. Web search needs a
+    key, and credential resolution lives in <code>llm</code> because that is
+    where the provider that owns the account lives. This edge is the one people
+    misread as the browser calling a model. It does not.
+  </p>
+  <span class="src">tools/web/Cargo.toml, crates/llm/src/auth.rs</span>
+
+  <h3><code>llm</code>'s dependency on <code>tool-api</code> is dev-only</h3>
+
+  <p>
+    The provider layer does not need the tool vocabulary to build a request —
+    tool schemas arrive as already-rendered JSON. It needs the vocabulary only
+    to test the seam where the two meet, so the dependency sits under
+    <code>[dev-dependencies]</code> and the seam test is inline in
+    <code>anthropic.rs</code> rather than in a <code>tests/</code> directory.
+  </p>
+
+  <h2 id="toolapi">Why <code>tool-api</code> is small</h2>
+
+  <p>
+    Every crate above it depends on it, so anything added there is added to
+    everything, and every tool has to answer it. That cost is why
+    <code>ToolMeta</code> carries less than it could.
+  </p>
+
+  <p>
+    <code>needs_approval</code> was removed after it turned out nothing read it:
+    the approval gate derives what it needs from the two axes a tool already
+    declares, and a third field that only looked like it mattered is a field
+    fifteen tools maintain for no reader.
+  </p>
+
+  <div class="note warn">
+    <span class="h">The gap this leaves — <code>ToolCtx</code> has no session slot</span>
+    <p>
+      There is nowhere in the context for per-session state, so read-tracking
+      and anything else a tool needs to remember across calls has no home.
+      Constructing tools individually compiles and then silently misbehaves.
+    </p>
+    <p>
+      <strong>Three crates document this separately</strong> — <code>tools/fs</code>,
+      <code>tools/lsp</code> and <code>tools/web</code> each warn about it in
+      their own words, which is what a missing shared abstraction looks like
+      from below. Backlog item 17.
+      <span class="chip unv">unverified</span> — the failure is described in
+      three comments; no test reproduces it. What would settle it: construct two
+      tools separately, exercise the shared state, and assert the divergence.
+    </p>
+  </div>
+
+  <h2 id="split">The library and the binary</h2>
+
+  <p>
+    Everything that makes a decision lives in the library. <code>main.rs</code>
+    parses arguments and starts things. The reason is testability: a scripted
+    <code>Provider</code> can drive an entire goal — tool calls, approvals,
+    compaction, endings — with no network and no API key, which is how most of
+    the loop's behaviour is covered at all.
+  </p>
+
+  <div class="note warn">
+    <span class="h">The split is not clean</span>
+    <p>
+      <code>main.rs</code> opens by saying it is "wiring, and nothing else".
+      <code>run()</code> is 634 lines of policy sitting above the point a
+      scripted provider attaches, so the code that decides what happens before
+      the loop starts is the part the seam cannot reach.
+      <span class="chip unv">unverified</span> — found by reading, in
+      <code>notes/map-architecture.md</code>; no measurement of what that code
+      does that is untested. Backlog item 19.
+    </p>
+  </div>
+
+  <h2 id="crates">What each crate is</h2>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Crate</th><th>Holds</th></tr></thead>
+    <tbody>
+      <tr><td><code>tool-api</code></td>
+          <td>The <code>Tool</code> trait, <code>ToolMeta</code>, <code>ToolCtx</code>, <code>ToolOutcome</code>. The vocabulary every other crate agrees on.</td></tr>
+      <tr><td><code>llm</code></td>
+          <td>The provider boundary, the Anthropic client, typed content blocks, per-model limits and cache floors, retry, credentials. See <a href="providers.html">Providers</a>.</td></tr>
+      <tr><td><code>harness</code></td>
+          <td>Configuration discovery across <code>.emma/</code> and <code>.claude/</code>, agent definitions, skills, commands, hooks, the status line. See <a href="config.html">Configuration</a>.</td></tr>
+      <tr><td><code>emma</code></td>
+          <td>The loop, goals, sessions, the approval gate, permissions, delegation, the terminal, and <code>main.rs</code>.</td></tr>
+      <tr><td><code>tools/fs</code></td>
+          <td><code>Read</code>, <code>Write</code>, <code>Edit</code>, <code>Glob</code>, <code>Grep</code>, <code>Bash</code>, and path containment.</td></tr>
+      <tr><td><code>tools/tasks</code></td>
+          <td>The task list a goal-holding loop writes down what is left in.</td></tr>
+      <tr><td><code>tools/web</code></td>
+          <td><code>WebSearch</code>, <code>WebFetch</code> rendering in real Chrome, and five tools driving a live page.</td></tr>
+      <tr><td><code>tools/lsp</code></td>
+          <td><code>FindReferences</code>, <code>GoToDefinition</code>, <code>Hover</code>, <code>DocumentSymbols</code>.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="unverified">What is not verified on this page</h2>
+
+  <ul class="body">
+    <li>
+      The dependency edges were read from the manifests on 2026-08-16 and are
+      accurate for commit <code>20ac400</code>. A manifest change moves them and
+      nothing here notices.
+      <span class="chip unv">unverified</span> — what would settle it
+      continuously: a test that reads the manifests and asserts the edge set.
+    </li>
+    <li>
+      "No tool crate depends on the harness" rests on the manifests, not on a
+      test that would fail if someone added the dependency. It would fail at
+      compile time for a cyclic edge, but a non-cyclic one would simply appear.
+      <span class="chip unv">unverified</span>
+    </li>
+    <li>
+      The <code>ToolCtx</code> hazard and the <code>main.rs</code> policy count
+      both come from <code>notes/map-architecture.md</code>, whose citations
+      were sampled and confirmed on 2026-08-16 but not exhaustively re-read
+      here.
+      <span class="chip unv">unverified</span>
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · <a href="index.html">back to the start</a>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

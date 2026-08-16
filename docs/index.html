@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>What Emma is · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav here" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">Documentation</p>
+  <h1>Emma, the harness</h1>
+
+  <p class="lede">
+    A coding agent for one person on one machine: a goal-holding loop, its
+    tools, a consent gate, and a terminal — all of it in one binary you own.
+  </p>
+
+  <h2 id="goal">What it is for</h2>
+
+  <p>
+    A harness decides what the model sees before you type anything, what it can
+    reach for, and what you look at while it works. In most harnesses those
+    decisions are made once, elsewhere, for everyone. Emma is the case where
+    they are yours. Four things follow.
+  </p>
+
+  <h3>Spend less context on the harness</h3>
+
+  <p>
+    Claude Code sends on the order of 30,000 tokens of system prompt before the
+    first user word. <span class="chip unv">unverified</span> — widely reported,
+    not measured here. Every token of that is one you paid for and cannot use
+    for the actual work, and it is paid again on every uncached call.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Emma's own prompt has never been counted</span>
+    <p>
+      There is no <code>emma stats</code>, and no measurement of Emma's system
+      field and tool schemas exists. "Smaller than the alternative" is an
+      intention with no number behind it.
+      <span class="chip unv">unverified</span>
+    </p>
+    <p>
+      What would settle it: render one real request and count the system field
+      and tool schemas with <code>/v1/messages/count_tokens</code>. That is the
+      same method that bracketed the cache floors, and costs about the same —
+      a fraction of a cent.
+    </p>
+  </div>
+
+  <p>
+    One related figure in the source is easy to misread. A bare
+    <code>Hello</code> once cost <strong>22,083 tokens</strong>, and that was
+    behaviour rather than prompt size: Emma used to prepend "Work toward this
+    goal. You have tools; use them" to every input, so a greeting sent the model
+    to run <code>pwd &amp;&amp; ls -la</code> and read the task file before
+    answering. Moving that text into the standing contract fixed it. The rule it
+    left behind: a preamble applied to every input is an instruction the user
+    did not write and cannot see.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — <code>opening</code>, <code>standing_contract</code></span>
+
+  <h3>The browser is in the binary</h3>
+
+  <p>
+    Not an MCP server to install, configure and keep running beside it.
+    <code>WebFetch</code> renders in real Chrome, and five tools drive a live
+    page — open, read, act, fill, close. A harness that can only fetch HTML is
+    guessing at anything rendered client-side. See <a href="tools.html">Tools</a>.
+  </p>
+
+  <h3>Nothing hosted, nothing you cannot change</h3>
+
+  <p>
+    Every decision lives in the library rather than <code>main.rs</code>, so a
+    scripted provider can drive the whole loop with no network — which is also
+    what makes the deciding parts testable. There is no service to depend on,
+    no account to keep, and no release to wait for.
+  </p>
+
+  <h3>The interface follows the project</h3>
+
+  <p>
+    Colours are named by role and loaded from JSON themes; the sidebar's tools
+    launch real programs on your machine; the layout is changeable because it is
+    ours. See <a href="terminal.html">The terminal</a>.
+  </p>
+
+  <h2 id="honesty">What it reports</h2>
+
+  <p>
+    A tool that truncates names the limit that cut it, how much was lost, and
+    how to get the rest — or says that no argument raises it. A tool that cannot
+    compute something says so instead of returning a plausible substitute. A
+    tool that fails returns a result the model reads and acts on; the loop does
+    not abort.
+  </p>
+
+  <p>
+    The approval gate is a consent interface rather than a sandbox. It enforces
+    nothing a tool does not declare about itself, and <code>Bash</code> can do
+    anything — <a href="consent.html">the consent page</a> says where that ends,
+    in more detail than most readers will expect.
+  </p>
+
+  <p>
+    A subagent returns prose. Underneath it, the harness appends a footer built
+    from the calls it recorded, not from the subagent's account, so the two can
+    be compared. There is a test where a scripted subagent claims in fluent
+    prose to have read two files and run the test suite while calling no tool at
+    all.
+  </p>
+
+  <h2 id="reading">The marks on these pages</h2>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> observed against the real API, terminal, or file on disk</div>
+    <div><span class="chip test">tested</span> covered by a test shown to fail when the guarantee is removed</div>
+    <div><span class="chip unv">unverified</span> believed, not checked — with what would settle it</div>
+  </div>
+
+  <p>
+    Claims about behaviour name the file they came from, so they can be checked
+    against the code rather than taken on trust.
+  </p>
+
+  <h2 id="pages">The pages</h2>
+
+  <div class="cards">
+    <a class="card" href="architecture.html">
+      <b>Architecture</b>
+      <span>Eight crates, what depends on what, and the two edges that surprise people.</span>
+    </a>
+    <a class="card" href="loop.html">
+      <b>The agent loop</b>
+      <span>One turn end to end, where failures converge, how a goal ends, and what bounds it.</span>
+    </a>
+    <a class="card" href="session.html">
+      <b>Sessions &amp; context</b>
+      <span>The append-only log, resuming, and compaction without a model call.</span>
+    </a>
+    <a class="card" href="providers.html">
+      <b>Providers &amp; models</b>
+      <span>Typed content blocks, per-model limits, and caching that fails silently.</span>
+    </a>
+    <a class="card" href="tools.html">
+      <b>Tools</b>
+      <span>Every tool's arguments, refusals and truncation rules, and the trait they share.</span>
+    </a>
+    <a class="card" href="consent.html">
+      <b>Consent &amp; permissions</b>
+      <span>The gate, the precedence ladder, rules, hooks — and what none of it enforces.</span>
+    </a>
+    <a class="card" href="delegation.html">
+      <b>Delegation</b>
+      <span>Subagents with their own budgets, and a footer to check them against.</span>
+    </a>
+    <a class="card" href="terminal.html">
+      <b>The terminal</b>
+      <span>The full-screen frame, colour as roles, themes, and the user tools.</span>
+    </a>
+    <a class="card" href="config.html">
+      <b>Configuration</b>
+      <span>What is read from <code>.emma/</code> and <code>.claude/</code>, and in what order.</span>
+    </a>
+    <a class="card" href="records.html">
+      <b>Records &amp; house rules</b>
+      <span>Five records, five jobs, and the conventions that keep them apart.</span>
+    </a>
+    <a class="card" href="roadmap.html">
+      <b>Roadmap &amp; defects</b>
+      <span>Known defects, what is planned, and what was looked at and refused.</span>
+    </a>
+    <a class="card" href="unverified.html">
+      <b>What is not verified</b>
+      <span>Everything believed but unchecked, with what would settle each.</span>
+    </a>
+  </div>
+
+  <h2 id="record">Why the record is this detailed</h2>
+
+  <p>
+    Emma is built mostly by agents, in sessions. Context carries inside a
+    session and the rules carry across them, but the person holding the
+    reasoning changes constantly, so anything kept only in someone's head is
+    gone by the next one.
+  </p>
+
+  <p>
+    The alternative to writing down what was measured and what was assumed is
+    re-deriving it, and there are receipts for what that costs here: a strict
+    wire decoder that passed 712 tests and then decoded no real tool call on its
+    first live request; an editing technique adopted from a write-up that turned
+    out to describe the reverse of what it did; a test-count command that
+    reported green over a red test. The conventions on
+    <a href="records.html">Records &amp; house rules</a> come from those.
+  </p>
+
+  <footer class="pg">
+    Emma 0.1.0 · single-user CLI coding agent in Rust ·
+    open <code>docs/index.html</code> directly; no server required
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

@@ -5,6 +5,42 @@ emma}` plus `tools/{fs, tasks, web, lsp}`. The loop lives in
 `crates/emma/src/agent.rs`; everything with a decision in it is in the library
 rather than `main.rs`, so a scripted `Provider` can drive it without a network.
 
+## `docs/` is the source of truth. Read it first; leave it true.
+
+**`docs/` describes how Emma works and why. It is not a rendering of a truth
+that lives somewhere else — it is the place a stranger goes first, and the place
+that has to be right.** Open `docs/index.html` in a browser; it needs no server
+and no build step. `docs/CONTRACT.md` says how a page is written.
+
+**Read the page for the area you are about to touch before you touch it.** It
+is faster than reading the crate, and it carries the arguments — what was tried,
+what was reversed, and which part will bite you — that the code cannot.
+
+**A behaviour that exists in the code, or is decided in `notes/`, and that
+`docs/` does not describe or describes wrongly, is a defect of the same kind as
+a failing test.** Not untidiness to file for later. It is fixed in the change
+that caused it, by whoever caused it — the same reasoning as a lesson: relayed
+through somebody else it loses whatever they did not think worth repeating.
+**A commit that changes what Emma does and leaves the docs describing the old
+behaviour is incomplete.**
+
+**Every non-obvious claim on a page carries an evidence chip** — `certified`
+(proven against the real API, terminal, or file on disk), `tested` (a test shown
+to fail when the guarantee is removed), or `unverified` (believed, not checked,
+and then say what would settle it). **When a status changes, move the chip.** A
+stale `certified` is worse than an honest `unverified`, because the whole site's
+credibility rests on the green ones meaning something. A page with no amber on
+it has not been honest yet.
+
+**Diagrams are drawn from the source, at the time of drawing.** A diagram is
+trusted in proportion to how confident it looks, so one drawn from recollection
+launders a guess into a reference. Read the manifest, read the function, then
+draw.
+
+The other records keep their jobs — this one describes the _system_, never the
+project's week. Where `docs/` and a note disagree, the code decides, and the
+disagreement is itself worth a sentence.
+
 ## Finish by writing down what you learned, and where things stand
 
 **Every task ends with two things, or a sentence saying either one didn't

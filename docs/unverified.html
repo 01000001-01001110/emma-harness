@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>What is not verified · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav here" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">The project</p>
+  <h1>What is not verified</h1>
+
+  <p class="lede">
+    Everything believed but unchecked, gathered from the amber marks on the
+    other pages, with the experiment that would settle each one.
+  </p>
+
+  <p>
+    This page exists so the amber does not stay scattered. Each row names what
+    is claimed, why nobody has confirmed it, and what it would take. Rows leave
+    when someone runs the experiment, not when someone becomes confident.
+  </p>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> observed against the real API, terminal, or file on disk</div>
+    <div><span class="chip test">tested</span> covered by a test shown to fail when the guarantee is removed</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <h2 id="cheap">Cheap to settle, worth doing first</h2>
+
+  <p>
+    Each of these costs minutes or a fraction of a cent, and each one currently
+    props up something larger.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Claim</th><th>What would settle it</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Emma's system prompt is smaller than the alternative.</strong>
+            No measurement of the system field or tool schemas exists, and there
+            is no <code>emma stats</code>. The comparison figure for Claude Code
+            (~30,000 tokens) is widely reported and equally unmeasured here.</td>
+        <td>Render one real request and count the system field and tool schemas
+            with <code>/v1/messages/count_tokens</code>. Same method that
+            bracketed the cache floors. See <a href="index.html#goal">the goals</a>.</td>
+      </tr>
+      <tr>
+        <td><strong>Eight of the ten per-model cache floors.</strong> Only
+            <code>claude-opus-5</code> and <code>claude-haiku-4-5</code> were
+            measured against the live API. The rest are transcription from a
+            document dated 2026-08-11, and four rows present in that document
+            are missing from the table entirely.</td>
+        <td>The same two-request canary per model, a fraction of a cent each.
+            See <a href="providers.html">Providers</a>.</td>
+      </tr>
+      <tr>
+        <td><strong>The <code>chars / 4</code> token estimate.</strong> Called
+            an under-count in both <code>agent.rs</code> and
+            <code>anthropic.rs</code>; nobody has measured the real ratio. It
+            now matters more, because a per-model floor of 4,096 means an
+            under-count withholds a marker from a 16 KB prefix rather than a
+            2 KB one.</td>
+        <td>Count a real prefix with <code>count_tokens</code> and compare
+            against the estimate.</td>
+      </tr>
+      <tr>
+        <td><strong>Whether the two SVG figures on each page render correctly.</strong>
+            Every diagram in this site was validated by parsing the XML and
+            checking coordinates against the <code>viewBox</code>. None was
+            looked at.</td>
+        <td>Open the pages in a browser. A stranded label or an overlapping box
+            is invisible to arithmetic.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="platform">Needs a machine we do not have here</h2>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Claim</th><th>What would settle it</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Anything about macOS behaviour.</strong> Eight tests failed
+            there and have been fixed by reading, not by running. Cross-compilation
+            covers five of eight packages; three pull a dependency needing a C
+            toolchain this machine lacks. One <code>#[cfg(unix)]</code> test could
+            not be compiled anywhere.</td>
+        <td>Pull and run the suite on the Mac. Three minutes.</td>
+      </tr>
+      <tr>
+        <td><strong>The unix arm of the hook fix.</strong> Windows has no
+            SIGPIPE, which is what makes abandoning the pipe safe there. On unix,
+            closing the read end can kill a daemon that later writes.</td>
+        <td>Run the <code>leak.cmd</code> equivalent on Linux and check whether
+            the daemon survives.</td>
+      </tr>
+      <tr>
+        <td><strong>Chrome is never reaped on unix.</strong> The child is
+            dropped without waiting, so every killed browser should leave a
+            zombie. Found by reading; never observed. Note that
+            <code>kill -0</code> succeeds against a zombie, so the obvious check
+            reports the opposite of the truth.</td>
+        <td>Open and close a session on Linux or macOS, then check
+            <code>ps -o state=</code> for the pid.</td>
+      </tr>
+      <tr>
+        <td><strong>Whether a daemonized hook outlives Emma's own process.</strong>
+            The environment it was tested in confounds the result: a plain
+            unrelated parent behaved the same way, so nothing there is
+            attributable to Emma's code.</td>
+        <td>A run from a normal desktop session rather than a sandboxed one.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="surface">Nobody has looked at it</h2>
+
+  <p>
+    A cell buffer is not a console, and a fully tested scrollback defect has
+    shipped from <code>crates/emma/src/term/</code> twice. These are the claims
+    that only a human with a terminal can close.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Claim</th><th>What would settle it</th></tr></thead>
+    <tbody>
+      <tr><td>Whether the full-screen interface looks right at all.</td>
+          <td>Run it and look.</td></tr>
+      <tr><td>Whether the approval prompts, boot warnings and "ignoring N line(s)" notices read correctly on a real terminal.</td>
+          <td>Configure a rule that triggers each, then start Emma.</td></tr>
+      <tr><td>Ctrl-C specifically restoring the alternate screen. The mechanism is global and idempotent and reached from the panic hook and <code>process::exit</code>, but no Ctrl-C-specific certification is recorded.</td>
+          <td>Press Ctrl-C in a real session and confirm the terminal is intact.</td></tr>
+      <tr><td>Whether a <code>#[cfg(unix)]</code> arm added for the platform sweep even compiles.</td>
+          <td>Build on the Mac. It could not be compiled on this machine.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="evidence">Claims resting on records rather than observation</h2>
+
+  <p>
+    These are marked <span class="chip test">tested</span> or
+    <span class="chip cert">certified</span> elsewhere on the site, and the
+    marks are honest, but the person who wrote the page did not personally
+    re-run the thing. The distinction matters because a test's own claim about
+    what it catches is itself a claim.
+  </p>
+
+  <ul class="body">
+    <li>
+      Most <span class="chip test">tested</span> chips mean the test exists and
+      passes, and that its recorded mutation argument was read and found sound.
+      Four pages ran fresh mutations of their own; the others did not, because
+      six agents shared one working tree and could not safely break the code.
+      <strong>What would settle it:</strong> run the named mutations one at a
+      time on a clean tree.
+    </li>
+    <li>
+      The live cache-floor certification is quoted from a status entry and a
+      commit message. <strong>No raw request or response body survives in
+      <code>notes/</code>.</strong> The numbers are specific and consistent, and
+      there is no transcript behind them.
+    </li>
+    <li>
+      Judge-reliability figures, reward-hacking rates and licence findings on
+      other projects were read through <code>notes/research-*.md</code> rather
+      than from the papers and repositories directly.
+    </li>
+    <li>
+      <code>notes/map-architecture.md</code>'s citations were sampled and found
+      consistent on 2026-08-16, roughly sixty of them. The rest were not opened.
+      Two figures taken from it turned out to be wrong when counted, which is
+      why this row exists.
+    </li>
+  </ul>
+
+  <h2 id="structural">Structural, and unlikely to be settled soon</h2>
+
+  <div class="note warn">
+    <span class="h">The done check grades its own homework</span>
+    <p>
+      <code>Ending::Done</code> looks the same whether the goal was met or the
+      measurement was gamed. Published chance-corrected agreement for model
+      judges runs about 0.38 to 0.51, and measured reward-hacking rates on
+      agentic benchmarks exceed 30%. An independent judge and a git receipt are
+      designed in <code>notes/plan-loops-stage-1.md</code> and
+      <code>notes/plan-loops-v2.md</code>, and neither is built.
+    </p>
+  </div>
+
+  <div class="note warn">
+    <span class="h">The gate has no floor</span>
+    <p>
+      Nothing anywhere is an unconditional deny. Three other projects keep one,
+      and the third is MIT and copyable. The counter-argument is recorded too: a
+      floor that fires on a legitimate command is an outage rather than a safety
+      property. See <a href="consent.html">Consent</a>.
+    </p>
+  </div>
+
+  <div class="note warn">
+    <span class="h">Compaction has never run outside its tests</span>
+    <p>
+      Zero <code>compacted</code> records exist across 100 session files. The
+      largest input any call has carried is 95,524 tokens against a 120,000 cap,
+      so the path has never been reached in real use.
+      <strong>What would settle it:</strong> a session long enough to cross the
+      threshold, with the resulting record inspected.
+    </p>
+  </div>
+
+  <footer class="pg">
+    Emma 0.1.0 · <a href="index.html">back to the start</a> ·
+    rows leave this page when the experiment runs
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>
