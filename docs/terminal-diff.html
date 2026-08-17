@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>What a write would change &middot; The terminal &middot; Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav here" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/emma/src/term/diff.rs</p>
+  <h1>What a write would change</h1>
+
+  <nav class="chapter">
+      <a class="up" href="terminal.html">The terminal</a>
+      <a href="terminal-surface.html">Surface</a>
+      <a href="terminal-frame.html">Frame</a>
+      <a href="terminal-layout.html">Layout</a>
+      <a href="terminal-colour.html">Colour</a>
+      <a href="terminal-themes.html">Themes</a>
+      <a href="terminal-skin.html">Vocabulary</a>
+      <a href="terminal-transcript.html">Transcript</a>
+      <a href="terminal-markdown.html">Markdown</a>
+      <span class="now">Diffs</span>
+      <a href="terminal-status.html">Status</a>
+      <a href="terminal-sidebar.html">Sidebar</a>
+      <a href="terminal-dock.html">Dock</a>
+      <a href="terminal-usertools.html">User tools</a>
+    </nav>
+
+  <p class="lede">
+    A <code>Write</code> prompt that said <code>write src/auth.rs — 4,102 bytes,
+    118 lines</code> withheld the one fact that matters. An <code>Edit</code>
+    prompt did better and still made the reader do the diffing, twenty
+    <code>-</code> lines above twenty <code>+</code> lines of which three
+    differed. This file is the missing half, and it is arranged around one rule:
+    a diff is never fabricated.
+  </p>
+
+  <h2 id="never">Every case where an honest diff cannot be produced</h2>
+
+  <p>
+    The type says so before the code does. <code>Change</code> has three
+    variants, and the two that are not a patch are the point of it:
+    &ldquo;there is no honest diff here&rdquo; and &ldquo;there is no change
+    here&rdquo; are both answers a prompt must be able to give.
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Case</th><th>Answer</th></tr></thead>
+      <tbody>
+        <tr><td>Either side contains a NUL byte</td><td><code>Undiffable</code>, naming which side</td></tr>
+        <tr><td>The file is not UTF-8, larger than <code>MAX_READ</code>, a directory, or unreadable</td><td><code>Undiffable</code>, naming why</td></tr>
+        <tr><td>Either side has more lines than <code>MAX_LINES</code></td><td><code>Undiffable</code>, with both counts</td></tr>
+        <tr><td>The changed region exceeds <code>MAX_CELLS</code></td><td><code>Patch { coarse: true }</code>, labelled in the summary</td></tr>
+        <tr><td>The two sides are the same bytes</td><td><code>Identical</code>, said out loud</td></tr>
+        <tr><td>They differ only in line endings</td><td>A patch with no hunks and a note saying so</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <span class="src">crates/emma/src/term/diff.rs — <code>enum Change</code>, <code>compute</code>, <code>before</code></span>
+
+  <p>
+    The last row is the subtle one. <code>compute</code> returns early when the
+    two texts are equal, so reaching the end with no hunks and no notes means
+    the sides differ and nothing found a line or an ending to point at:
+  </p>
+
+  <p class="faint">crates/emma/src/term/diff.rs &middot; the tail of <code>compute</code></p>
+  <pre><code>    <span class="c">// The two texts differ — `compute` returned early if they did not — and yet</span>
+    <span class="c">// nothing above found a line or an ending to point at, which leaves mixed</span>
+    <span class="c">// endings inside one file as the only remaining explanation. Saying nothing</span>
+    <span class="c">// here would render as "no lines changed" against two visibly different</span>
+    <span class="c">// files, which is the shape of a fabricated diff even though every part of</span>
+    <span class="c">// it is true.</span>
+    <span class="k">if</span> hunks.is_empty() &amp;&amp; notes.is_empty() {
+        notes.push(
+            "the two differ only in line endings, which this diff compares without".to_string(),
+        );
+    }</code></pre>
+  <span class="src">crates/emma/src/term/diff.rs — <code>compute</code></span>
+
+  <h2 id="sides">Two sides, and where each comes from</h2>
+
+  <p>
+    <code>Write</code> carries the whole new text and the old text is on disk,
+    so its diff is the file against the proposal and its line numbers are real.
+    <code>Edit</code> carries <code>old_string</code> and
+    <code>new_string</code>, which <em>are</em> the two sides, so the diff is a
+    function of the arguments alone and cannot disagree with what the tool will
+    do. What it loses is position, so <code>Patch::anchored</code> is false and
+    no <code>@@</code> header is printed. A <code>@@ -1</code> there would be an
+    invented fact.
+    <span class="chip test">tested</span>:
+    <code>an_unanchored_diff_prints_no_line_numbers_it_does_not_have</code>
+    asserts the absence <em>and</em> that a whole-file diff does carry them,
+    which makes it a distinction rather than a missing feature.
+  </p>
+
+  <p>
+    Neither is the diff of what happened. Both are computed before the write,
+    from a proposal. A tool that then fails, or is refused, changed nothing, and
+    the transcript says so on its own line.
+  </p>
+
+  <h3>Only <code>NotFound</code> is a new file</h3>
+
+  <p class="faint">crates/emma/src/term/diff.rs &middot; <code>before</code></p>
+  <pre><code><span class="c">/// The file as it stands, for `Write` to be diffed against.</span>
+<span class="c">///</span>
+<span class="c">/// **Every failure is named rather than swallowed.** A file that cannot be read</span>
+<span class="c">/// must not fall through to "missing", because "missing" renders as a brand new</span>
+<span class="c">/// file made entirely of additions — which is precisely the mislabelled</span>
+<span class="c">/// destructive change this file exists to make impossible. Only `NotFound` is</span>
+<span class="c">/// `Missing`.</span>
+fn before(path: &amp;str) -&gt; Before {
+    <span class="w">…</span>
+    <span class="k">let</span> meta = <span class="k">match</span> std::fs::metadata(&amp;full) {
+        Ok(m) =&gt; m,
+        Err(e) <span class="k">if</span> e.kind() == std::io::ErrorKind::NotFound =&gt; <span class="k">return</span> Before::Missing,
+        Err(e) =&gt; <span class="k">return</span> Before::Unreadable(format!("{path} could not be read: {e}")),
+    };</code></pre>
+  <span class="src">crates/emma/src/term/diff.rs — <code>before</code>, <code>enum Before</code></span>
+
+  <p>
+    <span class="chip test">tested</span>:
+    <code>every_way_of_failing_to_read_the_old_side_is_a_refusal_and_not_a_creation</code>
+    covers non-UTF-8 bytes and a path the platform refuses to stat, and
+    <code>a_file_that_cannot_be_read_is_never_drawn_as_a_new_one</code> covers
+    an over-large file and a directory. All four assert both halves: the
+    refusal is spoken, <em>and</em> no <code>+</code> row was drawn.
+  </p>
+
+  <h2 id="crlf">Line endings, which on this machine are the whole hazard</h2>
+
+  <p>
+    Emma is developed on Windows against a CRLF working tree. A diff comparing
+    raw lines would report every line of every file as changed the first time
+    anything normalised them, <em>&ldquo;which is worse than no diff: it buries
+    the one real change in two thousand false ones.&rdquo;</em>
+  </p>
+
+  <p>
+    So <code>split</code> strips a trailing <code>\r</code> before lines are
+    compared and records that it did, and a change <em>in</em> the endings
+    becomes one sentence. The same goes for a missing final newline.
+    <span class="chip test">tested</span>:
+    <code>changing_only_the_line_endings_is_one_sentence_and_not_a_wall</code>
+    builds a two-thousand-line CRLF file against its LF twin, asserts both
+    <code>added</code> and <code>removed</code> are zero, and asserts the whole
+    rendered output is under five lines.
+    <code>a_real_change_inside_a_crlf_file_is_the_only_thing_reported</code>
+    holds the other end and also checks no stray carriage return reached the
+    drawn rows.
+  </p>
+
+  <h2 id="algorithm">A prefix trim and an LCS, bounded</h2>
+
+  <p>
+    <code>similar</code> is the obvious crate and was not taken. The requirement
+    a general crate does not offer is that the diff be <strong>bounded</strong>:
+    this runs on the interactive path for every <code>Write</code> a model
+    makes, <em>&ldquo;so a two-hundred-megabyte file has to cost a sentence
+    rather than a swap storm. Every limit in this file is that requirement
+    showing through.&rdquo;</em>
+  </p>
+
+  <p class="faint">crates/emma/src/term/diff.rs &middot; the four limits</p>
+  <pre><code><span class="c">/// The most of a file that is read to diff against. Past this the prompt says</span>
+<span class="c">/// how big the file is instead, which is a fact, rather than a diff of the first</span>
+<span class="c">/// two megabytes, which would be a lie by omission.</span>
+pub const MAX_READ: u64 = 2 * 1024 * 1024;
+
+<span class="c">/// The most lines either side may have before an exact diff is refused.</span>
+pub const MAX_LINES: usize = 50_000;
+
+<span class="c">/// The most LCS cells to fill for the changed region, after the common prefix</span>
+<span class="c">/// and suffix are trimmed off. 250k is a 500×500 middle — an edit that rewrites</span>
+<span class="c">/// five hundred consecutive lines is a rewrite, and gets shown as one.</span>
+const MAX_CELLS: usize = 250_000;
+
+<span class="c">/// Unchanged lines kept either side of a change, as `git diff` does.</span>
+const CONTEXT: usize = 3;</code></pre>
+  <span class="src">crates/emma/src/term/diff.rs — the <em>Limits</em> region</span>
+
+  <p>
+    <code>ops</code> trims the common prefix and suffix, then either runs
+    <code>middle</code> (the classic LCS table, backtracked into rows) or, past
+    the cell bound, emits every removal followed by every addition and sets
+    <code>coarse</code>. The table is <code>u32</code> rather than
+    <code>usize</code>, <em>&ldquo;a megabyte on a 32-bit count against two on a
+    64-bit one is worth having on a path a person is waiting on.&rdquo;</em>
+    <code>hunks</code> groups changed rows with <code>CONTEXT</code> either side
+    and merges runs that would share their context, tracking old and new line
+    numbers as it walks.
+  </p>
+
+  <h2 id="budget">The budget, and why a coarse patch splits it</h2>
+
+  <p>
+    <code>BUDGET</code> is 40 drawn body rows, the number the old
+    <code>approval::diff</code> used, <em>&ldquo;so the cut this replaces is no
+    larger than the one it inherits.&rdquo;</em> The summary and the notes sit
+    <em>outside</em> it: a cut diff that no longer said <code>-1,412
+    lines</code> would withhold the fact the prompt exists to supply.
+  </p>
+
+  <p class="faint">crates/emma/src/term/diff.rs &middot; <code>coarse_rows</code></p>
+  <pre><code><span class="c">/// A coarse patch, with the budget split between the two sides.</span>
+<span class="c">///</span>
+<span class="c">/// **Why this is not the ordinary head-of-the-diff cut.** A coarse patch is one</span>
+<span class="c">/// block of removals followed by one block of additions, so taking the first</span>
+<span class="c">/// forty rows takes forty removals and shows *no* additions at all — a</span>
+<span class="c">/// thousand-line rewrite drawn as a thousand-line deletion. That is `codex-rs`</span>
+<span class="c">/// #34515 with the signs the other way round, and it is worst in the case that</span>
+<span class="c">/// matters most: the reader is deciding whether to allow a destructive write.</span>
+<span class="c">/// So each side gets half the budget, whatever is left over goes to whichever</span>
+<span class="c">/// side can use it, and the closing row names how much of *each* went.</span>
+fn coarse_rows(patch: &amp;Patch, budget: usize) -&gt; Vec&lt;Out&gt; {
+    <span class="w">…</span>
+    <span class="k">let</span> half = budget / 2;
+    <span class="c">// Each side asks for half; a side that wants less than half hands the rest</span>
+    <span class="c">// over rather than leaving the budget unspent.</span>
+    <span class="k">let</span> take_del = dels
+        .len()
+        .min(half + half.saturating_sub(adds.len().min(half)));
+    <span class="k">let</span> take_add = adds.len().min(budget - take_del.min(budget));</code></pre>
+  <span class="src">crates/emma/src/term/diff.rs — <code>coarse_rows</code>, <code>BUDGET</code></span>
+
+  <p>
+    <span class="chip test">tested</span>:
+    <code>a_coarse_patch_spends_a_side_of_the_budget_it_does_not_need</code>
+    diffs a 50,000-line file against six lines and asserts exactly 6 additions
+    and 34 removals, so the slack really moves.
+    <code>a_region_too_large_to_line_up_is_shown_coarsely_and_says_so</code>
+    checks both <code>- a 1</code> and <code>+ b 1</code> are on screen for an
+    800-against-800 rewrite, which is the mislabelling case in the shape where it
+    costs most.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect: hunk headers are drawn outside the budget</span>
+    <p>
+      In <code>Change::out</code>, the ordinary path pushes
+      <code>Out::Hunk</code> for each hunk before consuming rows, and
+      <code>room</code> is decremented only by <code>took</code>, the body rows
+      taken. A patch with many small scattered hunks can therefore draw up to
+      <code>BUDGET</code> header rows <em>plus</em> <code>BUDGET</code> body
+      rows. The size tests use a single-hunk fixture and a coarse fixture, and
+      both assert <code>out.lines().count() &lt;= BUDGET + 8</code>, which a
+      forty-hunk patch would exceed.
+      <span class="chip cert">certified</span>: read the loop in
+      <code>Change::out</code>. <code>room</code> gates entry to the loop and
+      bounds <code>take</code>, and <code>out.push(Out::Hunk(&hellip;))</code>
+      happens before either.
+    </p>
+    <span class="src">crates/emma/src/term/diff.rs — <code>Change::out</code></span>
+  </div>
+
+  <div class="note warn">
+    <span class="h">Defect: <code>Change::creation</code> skips three checks the other paths make</span>
+    <p>
+      <code>creation</code> is the <code>Write</code>-to-a-missing-file path. It
+      checks <code>MAX_LINES</code> and nothing else. It does not scan for NUL
+      bytes, which live in <code>compute</code>, so a <code>Write</code>
+      creating a new binary file is drawn as a screen of <code>+</code> rows
+      where the same content over an existing file is refused as binary. It
+      applies no byte limit to the model's <code>content</code>, where the
+      existing-file path has <code>MAX_READ</code>. And it reports no
+      line-ending or final-newline note, because those are gathered in
+      <code>compute</code> too.
+      <span class="chip cert">certified</span>: <code>creation</code> is 35
+      lines and contains one guard, on <code>text.lines.len()</code>.
+      <code>Change::out</code> runs <code>sanitise</code> over every row before
+      it becomes an <code>Out</code>, so the control bytes never reach a cell
+      and the symptom is a long and meaningless diff rather than a corrupted
+      frame.
+    </p>
+    <span class="src">crates/emma/src/term/diff.rs — <code>Change::creation</code>, <code>compute</code></span>
+  </div>
+
+  <h2 id="gutter">The gutter, and the rule this file inverts</h2>
+
+  <p>
+    <code>markdown.rs</code> refuses to insert anything into text a reader
+    copies. This file does the opposite: every row carries a
+    <code>+</code>, <code>-</code> or two spaces. The distinction is stated
+    rather than treated as an exception:
+  </p>
+
+  <div class="note">
+    <p>
+      <em>&ldquo;A diff is not the file. It is a report <em>about</em> a change,
+      in the format every reader already knows from <code>git diff</code>, and
+      pasting it into a bug report is the use, pasting it into a compiler is
+      not.&rdquo;</em>
+    </p>
+    <span class="src">crates/emma/src/term/diff.rs module doc, §"What is drawn, and what a reader copies"</span>
+  </div>
+
+  <p class="faint">crates/emma/src/term/diff.rs &middot; <code>text_of</code></p>
+  <pre><code><span class="c">/// The text of one row, gutter and all. **The single place the gutter is</span>
+<span class="c">/// written**, so the panel and the transcript cannot disagree about which side a</span>
+<span class="c">/// line is on — which is the `#34515` failure, a delete-only patch that read as</span>
+<span class="c">/// add-only, made structurally impossible rather than merely tested for.</span>
+fn text_of(out: &amp;Out) -&gt; String {
+    <span class="k">match</span> out {
+        Out::Meta(t) =&gt; format!("  {t}"),
+        Out::Hunk(t) =&gt; format!("  {t}"),
+        Out::Cut(t) =&gt; format!("  … {t}"),
+        Out::Add(t) =&gt; format!("  + {t}"),
+        Out::Del(t) =&gt; format!("  - {t}"),
+        Out::Context(t) =&gt; format!("    {t}"),
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/term/diff.rs — <code>text_of</code>, <code>enum Out</code></span>
+
+  <p>
+    The gutter is also the only distinction that survives <code>NO_COLOR</code>,
+    a sixteen-colour terminal and the ASCII glyph set, which is
+    <code>render.rs</code>'s standing rule applied here. <code>to_text</code>
+    and <code>to_lines</code> both consume <code>out</code>, so the plain text
+    in the approval panel and the coloured lines on the transcript cannot show
+    different diffs, or cut at different places and disagree about how much was
+    left out.
+    <span class="chip test">tested</span>:
+    <code>the_two_renderers_cut_at_the_same_place</code> compares them line by
+    line at budgets 1, 4 and 40.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect: the fidelity loop in the gutter test cannot fail</span>
+    <p>
+      <code>an_addition_and_a_removal_differ_in_gutter_as_well_as_in_colour</code>
+      closes with <code>for level in [Level::None, Level::Ansi16,
+      Level::Ansi256]</code> and then calls
+      <code>Change::file("a\n", "b\n").to_text(BUDGET)</code>, which takes no
+      <code>Skin</code> and cannot see <code>level</code>. The variable is used
+      only in the failure message, so the identical assertion runs three times
+      while the comment claims coverage of three fidelities. The colour half of
+      the test, above the loop, is genuine and does check
+      <code>Role::Ok</code> against <code>Role::Err</code>.
+      <span class="chip cert">certified</span>: <code>to_text</code>'s signature
+      is <code>fn to_text(&amp;self, budget: usize) -&gt; String</code>.
+    </p>
+    <span class="src">crates/emma/src/term/diff.rs — <code>an_addition_and_a_removal_differ_in_gutter_as_well_as_in_colour</code>, <code>Change::to_text</code></span>
+  </div>
+
+  <h2 id="summary">The one line that is never cut</h2>
+
+  <p class="faint">crates/emma/src/term/diff.rs &middot; <code>Patch::summary</code></p>
+  <pre><code>    pub fn summary(&amp;self) -&gt; String {
+        <span class="k">let</span> plural = |n: usize| <span class="k">if</span> n == 1 { "line" } <span class="k">else</span> { "lines" };
+        <span class="k">let mut</span> out = <span class="k">match</span> (self.added, self.removed) {
+            (0, 0) =&gt; "no lines changed".to_string(),
+            (a, 0) =&gt; format!("+{a} {}", plural(a)),
+            (0, r) =&gt; format!("-{r} {}", plural(r)),
+            (a, r) =&gt; format!("+{a} -{r} lines"),
+        };
+        <span class="k">if</span> self.coarse {
+            out.push_str(
+                ", shown as one replacement — the changed region is too large to \
+                 line up exactly",
+            );
+        }
+        out
+    }</code></pre>
+  <span class="src">crates/emma/src/term/diff.rs — <code>Patch::summary</code></span>
+
+  <p>
+    Its doc names the incident it defends against: <em>&ldquo;the failure
+    <code>codex-rs</code> shipped twice — an empty diff body, and a delete-only
+    patch that read as add-only — where the <em>magnitude</em> of a destructive
+    change went missing at exactly the prompt that existed to show
+    it.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>a_huge_diff_is_cut_and_names_the_size_of_what_it_cut</code> renders a
+    two-hundred-row change inside a forty-row budget and asserts
+    <code>+100 -100 lines</code> is still on screen, and
+    <code>deleting_most_of_a_file_reads_as_a_removal_and_not_as_an_addition</code>
+    asserts a 39-line deletion draws no <code>+</code> at all.
+  </p>
+
+  <h2 id="wiring">Which calls get a diff</h2>
+
+  <p>
+    <code>changes_a_file(tool)</code> is <code>matches!(tool, "Write" |
+    "Edit")</code>, and it is consulted by two callers so that &ldquo;the diff is
+    drawn&rdquo; and &ldquo;the diff is not repeated&rdquo; cannot come apart.
+    <code>Term::tool_started</code> draws it; <code>Term::prompt_header</code>
+    skips echoing the preview for the same set, because otherwise the same forty
+    rows land on screen twice in a row, and <em>&ldquo;a reader scrolling back
+    through two copies of a diff has to work out whether they are two
+    changes.&rdquo;</em>
+    <span class="chip test">tested</span> from the other file:
+    <code>the_tools_whose_diff_is_drawn_are_exactly_the_ones_the_prompt_does_not_repeat</code>
+    is written as &ldquo;these are the same set&rdquo; rather than as two
+    <code>contains</code> calls, <em>&ldquo;because the hazard is a writing tool
+    added to one list and not the other.&rdquo;</em>
+  </p>
+
+  <p>
+    <code>for_call</code> returns <code>None</code> for anything else, and also
+    for a <code>Write</code> or <code>Edit</code> missing its arguments, rather
+    than diffing against the empty string.
+    <span class="chip test">tested</span>:
+    <code>a_tool_with_no_diff_to_show_gets_none_rather_than_an_invented_one</code>.
+  </p>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    <code>diff.rs</code> is 1,335 lines and was read in full for this page. It
+    declares 19 function items above the test boundary:
+    <code>Patch::summary</code>; four <code>Change</code> constructors and
+    renderers (<code>between</code>, <code>file</code>, <code>creation</code>,
+    <code>out</code>) plus <code>to_text</code> and <code>to_lines</code>;
+    <code>compute</code>, <code>endings</code>, <code>split</code>;
+    <code>ops</code>, <code>middle</code>, <code>hunks</code>;
+    <code>coarse_rows</code>, <code>text_of</code>, <code>sanitise</code>;
+    <code>changes_a_file</code>, <code>for_call</code>, <code>before</code>. All
+    19 are named here: 19 of 19, along with the five constants and all eight
+    types. Fourteen of its twenty-two tests are cited.
+  </p>
+
+  <p>
+    <strong>Not settled here.</strong> The module's own test region says
+    <em>&ldquo;each of these fails if the behaviour is removed — the mutations
+    are in the report&rdquo;</em>, referring to a report that is not in
+    <code>docs/</code>. No mutation was run for this page.
+    <span class="chip unv">unverified</span>: delete the <code>coarse</code>
+    branch in <code>ops</code>, delete the <code>Out::Meta(patch.summary())</code>
+    push in <code>out</code>, and change <code>Before::Unreadable</code> to
+    <code>Before::Missing</code> in <code>before</code>, running the suite after
+    each and putting it back.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="terminal-status.html">the status bar</a>, whose one law is
+      that everything on it is true. Back to
+      <a href="terminal.html">The terminal</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

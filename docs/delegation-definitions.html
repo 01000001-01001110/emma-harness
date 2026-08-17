@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent definitions · Delegation · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav here" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<h1>Agent definitions, frontmatter and discovery</h1>
+
+  <nav class="chapter">
+    <a class="up" href="delegation.html">Delegation</a>
+    <a href="delegation-nest.html">The nested run</a>
+    <a href="delegation-serialised.html">One at a time</a>
+    <span class="now">Agent definitions</span>
+    <a href="delegation-tools.html">resolve_tools</a>
+    <a href="delegation-brief.html">The brief</a>
+    <a href="delegation-footer.html">The footer</a>
+    <a href="delegation-budgets.html">Budgets &amp; spend</a>
+    <a href="delegation-agents-cmd.html">emma agents</a>
+  </nav>
+
+  <p class="lede">
+    A delegation target is a file:
+    <code>&lt;harness&gt;/agents/&lt;name&gt;.md</code>, in Claude Code's format,
+    unchanged. Four frontmatter keys are read, everything else is ignored, and
+    the parser has already shipped a defect that made 86 of 90 real files mean
+    something other than what they said while nothing errored.
+  </p>
+  <span class="src">crates/harness/src/claude.rs — the agents region</span>
+
+  <p>
+    The same file can also be selected as a <em>persona</em> by a human at
+    startup, and the two uses have opposite selection rules. A persona is chosen
+    by the operator, once, and a typo in it is worth refusing to boot over. An
+    <code>AgentDef</code> is chosen by the model from a closed list, out of a
+    directory somebody accumulated over months. So they have separate accessors
+    in <code>Harness</code> and no function takes a boolean saying which it is.
+  </p>
+  <span class="src">crates/harness/src/lib.rs — Harness::agent_types, Harness::persona</span>
+
+  <p>
+    This page covers the agents half of <code>claude.rs</code>: six functions
+    and two types. The other half of that file, <code>settings.json</code> and
+    hook translation, belongs to
+    <a href="config.html">Configuration</a> and is not read here.
+  </p>
+
+  <h2 id="front">The four keys that are read</h2>
+
+<pre><code><span class="c">/// The frontmatter fields Emma reads from `agents/&lt;name&gt;.md`. Permissive for the</span>
+<span class="c">/// same reason `Settings` is: `category`, `version`, `color` and whatever else</span>
+<span class="c">/// Claude Code grows are not Emma's business, and refusing to boot over them</span>
+<span class="c">/// would make this compatibility feature an obstacle. **It must never gain</span>
+<span class="c">/// `deny_unknown_fields`** — measured against a real library of 90 agent files,</span>
+<span class="c">/// `category` and `version` appear throughout and every one of them would have</span>
+<span class="c">/// been a boot failure.</span>
+<span class="c">///</span>
+<span class="c">/// Four fields are read and every one of them has a reader:</span>
+<span class="c">///</span>
+<span class="c">/// - `name` — checked against the file stem, which wins. See [`agents`].</span>
+<span class="c">/// - `description` — what the calling model reads to choose an agent, and the</span>
+<span class="c">///   only field a delegation target cannot do without. 63 of those 90 files</span>
+<span class="c">///   carry it beside a `name`, 23 carry it alone, and 4 carry neither.</span>
+<span class="c">/// - `tools` — the allowlist, in either spelling. See [`Tools::allowlist`] for</span>
+<span class="c">///   what an *empty* one means, which is the trap in this format.</span>
+<span class="c">/// - `model` — a per-agent model override. Honoured, because a file that says</span>
+<span class="c">///   `model: claude-sonnet-4-5` and runs on something else is a lie the user</span>
+<span class="c">///   cannot see.</span>
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct AgentFront {
+    #[serde(default)]
+    pub(crate) name: Option&lt;String&gt;,
+    #[serde(default)]
+    pub(crate) description: Option&lt;String&gt;,
+    #[serde(default)]
+    pub(crate) tools: Option&lt;Tools&gt;,
+    #[serde(default)]
+    pub(crate) model: Option&lt;String&gt;,
+    <span class="c">/// Model calls this agent gets. Claude Code spells it `maxTurns`; both</span>
+    <span class="c">/// spellings are accepted because Emma's own files are snake_case and the</span>
+    <span class="c">/// foreign ones are not, and a budget that silently does not apply is worse</span>
+    <span class="c">/// than no budget.</span>
+    #[serde(default, alias = "maxTurns")]
+    pub(crate) max_turns: Option&lt;u32&gt;,
+    <span class="c">/// Weighted tokens this agent may spend, out of what remains of the</span>
+    <span class="c">/// caller's. See `emma::delegate` for the ceiling it is clamped to.</span>
+    #[serde(default, alias = "maxTokens")]
+    pub(crate) max_tokens: Option&lt;i64&gt;,
+}</code></pre>
+  <span class="src">crates/harness/src/claude.rs — AgentFront, quoted entire with its doc</span>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Key</th><th>Read as</th><th>Default</th></tr></thead>
+    <tbody>
+      <tr><td><code>name</code></td><td>checked against the file stem, which wins</td><td>none; a disagreement is noted, not resolved</td></tr>
+      <tr><td><code>description</code></td><td>what the calling model reads to choose</td><td>none; a file without one is not offered</td></tr>
+      <tr><td><code>tools</code></td><td>a YAML list or one comma-separated string</td><td><a href="delegation-tools.html">inherit everything</a></td></tr>
+      <tr><td><code>model</code></td><td>a per-agent model id</td><td>the parent's, read at call time</td></tr>
+      <tr><td><code>max_turns</code> / <code>maxTurns</code></td><td>model calls for the sub-run</td><td><code>SUB_ITERATIONS</code>, 20</td></tr>
+      <tr><td><code>max_tokens</code> / <code>maxTokens</code></td><td>a ceiling, clamped by the share</td><td>whatever the share allows</td></tr>
+      <tr><td>everything else</td><td>ignored</td><td>—</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/harness/src/claude.rs — AgentFront; crates/emma/src/delegate.rs — Delegate::new, SUB_ITERATIONS</span>
+
+  <p>
+    That is six fields on the struct against four in the doc's own count, and
+    the two budget keys are the ones the sentence predates. Both spellings of
+    each are accepted, because Emma's own files are snake_case and the foreign
+    ones are camelCase, and a budget that silently does not apply is worse than
+    no budget. <span class="chip cert">certified</span> The struct carries
+    <code>alias = "maxTurns"</code> and <code>alias = "maxTokens"</code>, visible
+    in the quote above.
+  </p>
+
+  <p>
+    <code>AgentFront</code> must never gain <code>deny_unknown_fields</code>.
+    Measured against a real 90-file library, <code>category</code> and
+    <code>version</code> appear throughout, and under a strict struct every one
+    of those files is a boot failure. The whole crate rules the same way twice
+    more: refusing to start over a key belonging to another program is an outage,
+    not a safety property.
+  </p>
+  <span class="src">crates/harness/src/claude.rs — AgentFront, Settings, module doc</span>
+
+  <h2 id="tools">Two spellings of a tool list, and one trap</h2>
+
+<pre><code><span class="c">/// Claude Code writes `tools` either as a YAML list or as one comma-separated</span>
+<span class="c">/// string. Both are common in the wild; accepting one and silently ignoring the</span>
+<span class="c">/// other would produce an empty allowlist, which under Emma's rules means "no</span>
+<span class="c">/// tools at all" — a spectacular way to fail quietly.</span>
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum Tools {
+    List(Vec&lt;String&gt;),
+    Csv(String),
+}
+
+impl Tools {
+    pub(crate) fn into_vec(self) -&gt; Vec&lt;String&gt; {
+        match self {
+            Self::List(v) =&gt; v,
+            Self::Csv(s) =&gt; s
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect(),
+        }
+    }
+
+    <span class="c">/// The allowlist an agent file declares, where **empty means "inherit"</span>
+    <span class="c">/// rather than "nothing"**.</span>
+    <span class="c">///</span>
+    <span class="c">/// This is the trap in the format and it is live. `tools:` with no value</span>
+    <span class="c">/// parses as YAML null and never reaches here; `tools: []` and `tools: ""`</span>
+    <span class="c">/// do, and under Emma's rules an empty allowlist means *no tools at all* —</span>
+    <span class="c">/// which is the failure the note on [`Tools`] predicts, arriving through the</span>
+    <span class="c">/// value rather than through the spelling. In Claude Code an absent `tools`</span>
+    <span class="c">/// means inherit everything, and a present-but-empty one is the same</span>
+    <span class="c">/// statement written differently: nobody writes `tools: []` meaning "this</span>
+    <span class="c">/// agent may do nothing".</span>
+    <span class="c">///</span>
+    <span class="c">/// So all three collapse to `None`, and `None` is the caller's signal to</span>
+    <span class="c">/// inherit. An agent that really should have no tools is expressed by not</span>
+    <span class="c">/// registering it, not by a list that reads as a typo.</span>
+    pub(crate) fn allowlist(front: Option&lt;Self&gt;) -&gt; Option&lt;Vec&lt;String&gt;&gt; {
+        let names = front?.into_vec();
+        (!names.is_empty()).then_some(names)
+    }
+}</code></pre>
+  <span class="src">crates/harness/src/claude.rs — Tools, Tools::into_vec, Tools::allowlist, quoted entire</span>
+
+  <p>
+    <code>#[serde(untagged)]</code> is what accepts both a YAML list and a
+    comma-separated string. Accepting one and silently ignoring the other would
+    produce an empty allowlist, and under Emma's rules an empty allowlist would
+    have meant no tools at all.
+  </p>
+
+  <p>
+    <code>allowlist</code> is the collapse: <code>tools:</code> with no value
+    parses as YAML null and never reaches the function;
+    <code>tools: []</code> and <code>tools: ""</code> do reach it and come out as
+    <code>None</code>. All three therefore say "inherit", which is the ruling
+    <a href="delegation-tools.html">resolve_tools</a> acts on. An agent that
+    really should have no tools is expressed by not registering it.
+  </p>
+
+  <h2 id="split">The CRLF defect, and why nothing failed</h2>
+
+  <p>
+    <code>split_agent</code> once required <code>---\n</code> exactly. Every CRLF
+    agent file therefore fell through to "this file has no frontmatter": its
+    <code>tools</code> was ignored, its <code>description</code> was invisible so
+    it was never offered for delegation, and its <code>name:</code>,
+    <code>model:</code> and <code>category:</code> lines were handed to the model
+    as standing instructions. Nothing errored. The file simply did not mean what
+    it said.
+  </p>
+
+<pre><code><span class="c">/// Split an agent file into the frontmatter Emma reads and the body it puts in</span>
+<span class="c">/// the prompt.</span>
+<span class="c">///</span>
+<span class="c">/// The frontmatter is **stripped**, and that is the one place the "nothing is</span>
+<span class="c">/// trimmed or re-wrapped" rule is bent. It is bent knowingly: `model:` and</span>
+<span class="c">/// `tools:` are configuration, and sending them to the model as standing</span>
+<span class="c">/// instructions would be telling it about machinery it cannot use. A file with</span>
+<span class="c">/// no frontmatter is all body, which is also the correct answer.</span>
+<span class="c">/// **Line endings are tolerated, and that is not tidiness.** This required</span>
+<span class="c">/// `---\n` exactly, so every CRLF agent file — which is every one of them on a</span>
+<span class="c">/// Windows machine, and 90 out of 90 in the library this was measured against —</span>
+<span class="c">/// fell through to "no frontmatter": its `tools` was ignored, its `description`</span>
+<span class="c">/// was invisible, and its `name:`, `model:` and `category:` lines were handed to</span>
+<span class="c">/// the model as standing instructions. Nothing failed; the file simply did not</span>
+<span class="c">/// mean what it said. A byte-exact opener is a parser that works on the machine</span>
+<span class="c">/// its author used.</span>
+<span class="c">///</span>
+<span class="c">/// The third element is the YAML error, when the frontmatter was found and could</span>
+<span class="c">/// not be read. It used to be `unwrap_or_default()` and nothing else, which is</span>
+<span class="c">/// how the failure above stayed invisible: an unreadable file and a file with no</span>
+<span class="c">/// frontmatter produced the same empty value, and neither said so.</span>
+pub(crate) fn split_agent(text: &amp;str) -&gt; (AgentFront, &amp;str, Option&lt;String&gt;) {
+    <span class="c">// A byte-order mark before the opener is common from Windows editors, and it</span>
+    <span class="c">// is the same class of silent miss.</span>
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let Some(rest) = open_frontmatter(text) else {
+        return (AgentFront::default(), text, None);
+    };
+    let Some(end) = rest.find("\n---") else {
+        return (AgentFront::default(), text, None);
+    };
+    let body = rest[end + 4..].trim_start_matches(['\r', '\n']);
+    match serde_yaml::from_str(&amp;rest[..end]) {
+        Ok(front) =&gt; (front, body, None),
+        Err(e) =&gt; (AgentFront::default(), body, Some(e.to_string())),
+    }
+}
+
+<span class="c">/// `---` on the first line, whatever the file's line endings are.</span>
+fn open_frontmatter(text: &amp;str) -&gt; Option&lt;&amp;str&gt; {
+    let rest = text.strip_prefix("---")?;
+    let rest = rest.strip_prefix('\r').unwrap_or(rest);
+    rest.strip_prefix('\n')
+}</code></pre>
+  <span class="src">crates/harness/src/claude.rs — split_agent, open_frontmatter, quoted entire</span>
+
+  <p>
+    <span class="chip cert">certified</span> Counted from disk today: of the 90
+    files in <code>~/.claude/agents/</code>, <strong>86 contain CRLF and 4 do
+    not</strong>, so under the old opener exactly 4 of 90 parsed and 86 were
+    silently inert. Repeat it with
+    <code>python -c "import glob;fs=glob.glob('~/.claude/agents/*.md');
+    print(sum(1 for f in fs if b'\r\n' in open(f,'rb').read()), len(fs))"</code>
+    with the path expanded. <code>split_agent</code>'s own doc records 90 out of
+    90 as CRLF when it was written; the directory reads 86 today, so one of the
+    two numbers is stale by construction and the byte count is the one that was
+    re-run.
+  </p>
+  <span class="src">crates/harness/src/claude.rs — split_agent; ~/.claude/agents/</span>
+
+  <p>
+    What kept the defect invisible was the error handling rather than the
+    parser. The YAML result was <code>unwrap_or_default()</code> and nothing
+    else, so an unreadable frontmatter and an absent one produced the same empty
+    value and neither said so. The third element of the return tuple is that
+    repair: the YAML error, when frontmatter was found and could not be read. A
+    leading byte-order mark is stripped in the same function, for the same
+    reason, arriving from the same editors.
+  </p>
+
+  <p>
+    Note what <code>split_agent</code> still does not do. The closing fence is
+    found with <code>rest.find("\n---")</code>, which matches anywhere in the
+    file rather than only at a line start followed by a line end, so a body line
+    beginning <code>---</code> ends the frontmatter early. And the frontmatter is
+    <strong>stripped</strong> from the body, which bends the crate's
+    "nothing is trimmed or re-wrapped" rule knowingly: <code>model:</code> and
+    <code>tools:</code> are configuration, and sending them to the model as
+    standing instructions would be telling it about machinery it cannot use.
+  </p>
+  <span class="src">crates/harness/src/claude.rs — split_agent</span>
+
+  <h2 id="discovery">Where the files are found</h2>
+
+<pre><code><span class="c">/// The agent files available to select **or to delegate to**, by file stem,</span>
+<span class="c">/// sorted.</span>
+<span class="c">///</span>
+<span class="c">/// **The file stem is the name, and a `name:` in frontmatter that disagrees</span>
+<span class="c">/// loses.** The stem is what `EMMA_PERSONA` names, what `agent_path` builds,</span>
+<span class="c">/// and the only one of the two guaranteed unique — two files may declare the</span>
+<span class="c">/// same `name`, and a catalogue keyed on a value that can collide silently</span>
+<span class="c">/// drops one of them. The disagreement is worth saying out loud rather than</span>
+<span class="c">/// resolving quietly, so `load_agents` notes it.</span>
+<span class="c">///</span>
+<span class="c">/// Top-level `*.md` only. A real library has subdirectories under `agents/`</span>
+<span class="c">/// (23 of them, 205 files, on the machine this was measured against) and</span>
+<span class="c">/// walking into them would flatten two namespaces into one where a collision is</span>
+<span class="c">/// resolved by directory iteration order. Stated rather than discovered.</span>
+pub(crate) fn agents(root: &amp;Path) -&gt; Result&lt;Vec&lt;String&gt;&gt; {
+    let dir = root.join("agents");
+    let mut out = Vec::new();
+    if !dir.is_dir() {
+        return Ok(out);
+    }
+    for entry in std::fs::read_dir(&amp;dir).with_context(|| format!("reading {}", dir.display()))? {
+        let path = entry?.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            out.push(
+                path.file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+pub(crate) fn agent_path(root: &amp;Path, name: &amp;str) -&gt; PathBuf {
+    root.join("agents").join(format!("{name}.md"))
+}</code></pre>
+  <span class="src">crates/harness/src/claude.rs — agents, agent_path, quoted entire</span>
+
+  <p>
+    The file stem is the name and a <code>name:</code> that disagrees loses. The
+    stem is what <code>EMMA_PERSONA</code> names, what <code>agent_path</code>
+    builds, and the only one of the two guaranteed unique: two files may declare
+    the same <code>name</code>, and a catalogue keyed on a value that can collide
+    silently drops one of them.
+  </p>
+
+  <p>
+    Top-level <code>*.md</code> only, and no walk into subdirectories.
+    <span class="chip cert">certified</span> The library on this machine has 23
+    subdirectories under <code>agents/</code>, and none of their files is a
+    delegation target: <code>ls -d ~/.claude/agents/*/ | wc -l</code>. Walking
+    into them would flatten two namespaces into one where a collision is
+    resolved by directory iteration order.
+  </p>
+  <span class="src">crates/harness/src/claude.rs — agents</span>
+
+  <p>
+    There is no user scope for agent files, which is the part most likely to
+    surprise someone arriving from Claude Code. <code>discover</code> walks up
+    from the working directory the way git looks for <code>.git</code>; the
+    nearest ancestor wins, and within one directory <code>.emma/</code> beats
+    <code>.claude/</code> outright, never merged. At the home directory the rules
+    change: <code>~/.claude/</code> is skipped so completely it never reaches the
+    list of places searched. It is another program's user-scope configuration,
+    and adopting it would hand Emma standing instructions from a directory the
+    user never associated with this project. Permission rules are the one
+    exception, and only the <code>deny</code> list; see
+    <a href="consent-rules.html">Permission rules</a>.
+  </p>
+  <span class="src">crates/harness/src/lib.rs — discover_in; crates/emma/src/permissions.rs</span>
+
+  <h2 id="load">load_agents, and what it drops</h2>
+
+<pre><code><span class="c">/// Every agent file in `&lt;root&gt;/agents/`, read as a delegation target, plus the</span>
+<span class="c">/// notes about the ones that were dropped and why.</span>
+<span class="c">///</span>
+<span class="c">/// **Nothing here fails the boot.** A persona is selected by the operator at</span>
+<span class="c">/// startup and a bad one is their mistake; an agent library is a directory</span>
+<span class="c">/// somebody accumulated over months, and refusing to start because one file in</span>
+<span class="c">/// ninety has no `description` is the outage this crate keeps ruling against.</span>
+<span class="c">/// The dropped ones are named instead, and the names are shown by</span>
+<span class="c">/// `emma config check` and at startup.</span>
+<span class="c">///</span>
+<span class="c">/// `description` is the one field a target cannot do without: it is what the</span>
+<span class="c">/// calling model reads to choose. A file with a body and no description is a</span>
+<span class="c">/// persona, not a delegation target, and it stays available as the former.</span>
+pub(crate) fn load_agents(root: &amp;Path) -&gt; Result&lt;(Vec&lt;crate::AgentDef&gt;, Vec&lt;String&gt;)&gt; {
+    let mut out = Vec::new();
+    let mut notes = Vec::new();
+    for name in agents(root)? {
+        let path = agent_path(root, &amp;name);
+        let raw = match std::fs::read_to_string(&amp;path) {
+            Ok(raw) =&gt; raw,
+            Err(e) =&gt; {
+                notes.push(format!("agent `{name}` was not read: {e}"));
+                continue;
+            }
+        };
+        let (front, body, bad_yaml) = split_agent(&amp;raw);
+        if let Some(problem) = bad_yaml {
+            notes.push(format!(
+                "agent `{name}`: its frontmatter could not be read, so nothing in it applied — \n                 not offered for delegation. {problem}"
+            ));
+            continue;
+        }
+        if let Some(declared) = front.name.as_deref() {
+            if declared != name {
+                notes.push(format!(
+                    "agent `{name}` declares name `{declared}`; the file name wins"
+                ));
+            }
+        }
+        let Some(description) = front.description.filter(|d| !d.trim().is_empty()) else {
+            notes.push(format!(
+                "agent `{name}` has no description, so nothing could tell a model when to \
+                 use it — not offered for delegation"
+            ));
+            continue;
+        };
+        out.push(crate::AgentDef {
+            name,
+            description: description.trim().to_string(),
+            instructions: body.to_string(),
+            tools: Tools::allowlist(front.tools),
+            model: front.model,
+            max_turns: front.max_turns,
+            max_tokens: front.max_tokens,
+        });
+    }
+    Ok((out, notes))
+}</code></pre>
+  <span class="src">crates/harness/src/claude.rs — load_agents, quoted entire</span>
+
+  <p>
+    Nothing here fails the boot. Four things can drop a file, and each is
+    reported rather than swallowed: the file could not be read, its frontmatter
+    could not be parsed, it declared a <code>name</code> that disagrees with its
+    stem (noted, but still offered), or it has no <code>description</code>. The
+    notes reach the operator through <code>emma config check</code> and the
+    startup banner.
+  </p>
+
+  <h3 id="note-defect">A defect in the note itself</h3>
+
+  <p>
+    The bad-frontmatter note is a Rust string carrying a literal <code>\n</code>
+    followed by the source file's own indentation, rather than the
+    <code>\</code>-continuation the three notes around it use. So the sentence
+    breaks mid-clause and resumes seventeen columns in. Run against a scratch
+    harness holding one file whose <code>description</code> contains an unquoted
+    colon:
+  </p>
+
+  <pre><code>agents         scout
+               offered to the model as the `Delegate` tool, which is registered at run time and so is not in the tools line above
+               agent `broken`: its frontmatter could not be read, so nothing in it applied — 
+                 not offered for delegation. mapping values are not allowed in this context at line 1 column 20
+               agent `nodesc` has no description, so nothing could tell a model when to use it — not offered for delegation
+               agent `scout` declares name `other`; the file name wins</code></pre>
+  <span class="src">emma config check against a three-file scratch harness, 2026-08-16 <span class="chip cert">certified</span></span>
+
+  <p>
+    <span class="chip cert">certified</span> and repeatable: write
+    <code>agents/broken.md</code> with the frontmatter
+    <code>description: broken: yes: no</code>, <code>agents/nodesc.md</code> with
+    an empty frontmatter block, and <code>agents/scout.md</code> declaring
+    <code>name: other</code>; point <code>EMMA_ROOT</code> at that harness and
+    run <code>emma config check</code>. The output above is verbatim, trailing
+    space included. The three other notes in the same function wrap correctly, so
+    the fix is one line and this page does not make it.
+  </p>
+  <span class="src">crates/harness/src/claude.rs — load_agents, the bad_yaml note</span>
+
+  <h2 id="library">What 90 real files resolve to</h2>
+
+  <div class="note good">
+    <span class="h">Measured against one accumulated library</span>
+    <p>
+      <span class="chip cert">certified</span> 90 files, of which
+      <strong>84 are offered for delegation</strong>. Four are dropped for having
+      no <code>description</code> (<code>market-trends-analyst</code>,
+      <code>report-index-builder</code>, <code>research-analyst</code>,
+      <code>solution-researcher</code>) and two for frontmatter that will not
+      parse (<code>performance-specialist</code> and
+      <code>understanding-planner</code>, both <em>"mapping values are not
+      allowed in this context"</em>, which is an unquoted colon in a
+      description). Twelve more are offered under their stem with a note that
+      their <code>name:</code> disagrees.
+    </p>
+    <p>
+      <span class="chip cert">certified</span> 14 of those files spell their
+      tools <code>read</code>, <code>write</code>, <code>edit</code> in
+      lower case, which is why matching in
+      <a href="delegation-tools.html">resolve_tools</a> is case-insensitive.
+      Re-counted today by parsing each file's <code>tools:</code> block and
+      looking for those three tokens.
+    </p>
+    <span class="src">crates/emma/src/commands.rs — config check; crates/harness/src/claude.rs — load_agents; ~/.claude/agents/</span>
+  </div>
+
+  <h2 id="instructions">Both halves of the prompt</h2>
+
+  <p>
+    An agent type's instructions are the project's standing instructions and
+    then the file's body, in that order. Both halves, because standing rules
+    about evidence and honesty are not persona-specific: a delegated agent that
+    does not inherit <em>report what the checks actually said</em> is one that
+    reports what they were expected to say. A file with an empty body gets the
+    project's instructions alone.
+  </p>
+
+<pre><code>            let instructions = match def.instructions.trim().is_empty() {
+                true =&gt; nest.harness.instructions.clone(),
+                false =&gt; format!("{}\n\n{}", nest.harness.instructions, def.instructions)
+                    .trim_start()
+                    .to_string(),
+            };</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::new</span>
+
+  <h2 id="describe">The catalogue in the tool's description</h2>
+
+  <p>
+    Each resolved type contributes one line to the <code>Delegate</code> tool's
+    description, sorted by name because <code>types</code> is a
+    <code>BTreeMap</code>, and truncated to 300 characters by
+    <code>one_line</code>.
+  </p>
+
+<pre><code><span class="c">/// The catalogue the description carries, composed at load and sorted.</span>
+<span class="c">///</span>
+<span class="c">/// Same mechanism as `Skill`'s, and the same answer to the objection that a</span>
+<span class="c">/// description cannot vary by machine because it is hashed:</span>
+<span class="c">/// `Registry::schema_hash`'s own doc says it is a change detector for a human</span>
+<span class="c">/// reading a log, not an identity. The real constraint is byte-stability</span>
+<span class="c">/// *between calls on one machine*, which sorting satisfies.</span>
+fn describe(types: &amp;BTreeMap&lt;String, AgentType&gt;) -&gt; String {
+    let mut out = String::from(DESCRIPTION);
+    out.push_str("\n\nAvailable:\n");
+    for ty in types.values() {
+        out.push_str(&amp;format!(
+            "\n- `{}` — {}",
+            ty.name,
+            one_line(&amp;ty.description)
+        ));
+    }
+    out.push('\n');
+    out
+}
+
+fn one_line(text: &amp;str) -&gt; String {
+    let text = text.split_whitespace().collect::&lt;Vec&lt;_&gt;&gt;().join(" ");
+    if text.chars().count() &gt; 300 {
+        format!("{}…", text.chars().take(300).collect::&lt;String&gt;())
+    } else {
+        text
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — describe, one_line, quoted entire</span>
+
+  <p>
+    The objection this answers is that a description cannot vary by machine
+    because it is hashed. <code>Registry::schema_hash</code>'s own doc says it is
+    a change detector for a human reading a log rather than an identity; the
+    constraint that matters is byte-stability between calls on one machine, and
+    sorting satisfies it. <code>one_line</code> is used twice more, on a task
+    line for the terminal and on a command for the footer, and it counts
+    <code>chars</code> rather than bytes, so a description of 300 emoji is
+    truncated at 300 of them.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — describe, one_line; crates/tool-api/src/lib.rs — Registry::schema_hash</span>
+
+  <h2 id="unsettled">What is not settled here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> The early-close behaviour of
+      <code>rest.find("\n---")</code> is read off the source, not run. No test in
+      <code>claude.rs</code> covers a body containing a line of three dashes.
+      <em>What would settle it:</em> a unit test over <code>split_agent</code>
+      with <code>---</code> inside the body, asserting where the body starts.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> The 90-file figures are one
+      library on one machine, and the counts on this page were re-run against it
+      today. <em>What would settle the wider claim:</em> nothing available here;
+      it is a statement about other people's directories.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> Nothing on this page has been
+      checked against Claude Code's current agent-file documentation. The format
+      claims here come from the code's own comments and from the files on disk.
+      <em>What would settle it:</em> reading the published format spec beside a
+      dated note of when.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> <code>claude.rs</code> has no
+      test module at all, so every claim on this page about how a file parses
+      rests on reading the code and on running the binary against real files.
+      <em>What would settle it:</em> unit tests over <code>split_agent</code> and
+      <code>Tools::allowlist</code>, which are pure functions and cost nothing.
+    </li>
+    <li>
+      <span class="chip cert">certified</span> The agents half of
+      <code>claude.rs</code> is six functions and two types, all quoted above:
+      <code>into_vec</code>, <code>allowlist</code>, <code>split_agent</code>,
+      <code>open_frontmatter</code>, <code>agents</code>,
+      <code>agent_path</code>, <code>load_agents</code> — seven, counting
+      <code>agent_path</code>, which is three lines and joins a path.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · read at commit <code>62ab9c3</code> ·
+    <code>crates/harness/src/claude.rs</code> ·
+    <code>crates/emma/src/delegate.rs</code> ·
+    <a href="delegation.html">back to the chapter</a>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The status bar &middot; The terminal &middot; Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav here" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/emma/src/term/{statusbar,statusline}.rs</p>
+  <h1>The status bar</h1>
+
+  <nav class="chapter">
+      <a class="up" href="terminal.html">The terminal</a>
+      <a href="terminal-surface.html">Surface</a>
+      <a href="terminal-frame.html">Frame</a>
+      <a href="terminal-layout.html">Layout</a>
+      <a href="terminal-colour.html">Colour</a>
+      <a href="terminal-themes.html">Themes</a>
+      <a href="terminal-skin.html">Vocabulary</a>
+      <a href="terminal-transcript.html">Transcript</a>
+      <a href="terminal-markdown.html">Markdown</a>
+      <a href="terminal-diff.html">Diffs</a>
+      <span class="now">Status</span>
+      <a href="terminal-sidebar.html">Sidebar</a>
+      <a href="terminal-dock.html">Dock</a>
+      <a href="terminal-usertools.html">User tools</a>
+    </nav>
+
+  <p class="lede">
+    One row, and it inherits the inline row's one law: everything on it is true.
+    A field whose value was never measured is absent rather than zero, and a row
+    that runs out of room drops whole cells in a stated order rather than
+    cutting a number in half. Beside it, <code>statusline.rs</code> lets a
+    configured program take that row instead, translating its bytes into styles
+    rather than letting them through.
+  </p>
+
+  <h2 id="shapes">Two kinds of number, drawn as different pictures</h2>
+
+  <p>
+    <code>ctx_*</code> is a <em>snapshot</em>: how full the context window is
+    right now, and it rises and falls. <code>total_*</code> is an
+    <em>accumulation</em>: what the goal has been billed for, and it only rises.
+    The inline row put both on screen as <code>used/cap</code> pairs and the
+    owner read them as inverted, because a total is usually larger than a level
+    and two identically-shaped numbers invite comparison.
+  </p>
+
+  <p>
+    The inline row answered with a rename, <code>spend</code> to
+    <code>total</code>. This row goes further: the snapshot is a percentage and
+    a meter, the shape of a level, and the accumulation is raw grouped counts,
+    the shape of a bill. <em>&ldquo;Two different pictures cannot be read as
+    each other's inverse.&rdquo;</em>
+  </p>
+
+  <p>
+    <span class="chip test">tested</span>:
+    <code>the_snapshot_and_the_accumulation_have_different_shapes</code> pins it
+    as shape rather than as literals. It slices the rendered row at the vertical
+    rules and asserts the context cell contains no <code>/</code> and the tokens
+    cell no <code>%</code>. That is what must not regress; the label itself was
+    free to become <code>TOKENS</code> once shape carried the guard, which is
+    what the mockup says and what the owner asked for after measuring the built
+    bar against the image.
+  </p>
+
+  <h2 id="ladder">The drop order, as a ladder</h2>
+
+  <p>
+    <code>compose</code> walks eleven steps and returns the first that fits.
+    Each is strictly poorer than the one before, so what survives at any width
+    is a statement of priority.
+  </p>
+
+  <p class="faint">crates/emma/src/term/statusbar.rs &middot; <code>compose</code> and its ladder</p>
+  <pre><code><span class="c">/// 1. the env value is shortened (a name may be fitted; a number never is)</span>
+<span class="c">/// 2. the help hints go (they are the only cell that is not a measurement)</span>
+<span class="c">/// 3. the ↑/↓ split goes (the TOKENS figure it details survives)</span>
+<span class="c">/// 4. the meter shrinks to five segments (still a proportion)</span>
+<span class="c">/// 5. the env cell goes whole</span>
+<span class="c">/// 6. the tokens cell goes whole (a fact to know; the level is a decision to</span>
+<span class="c">///    make)</span>
+<span class="c">/// 7. the meter goes, keeping the percentage</span>
+<span class="c">/// 8. the mode cell goes, clock and all</span>
+<span class="c">/// 9. the context label goes, keeping the bare percentage — last thing</span>
+<span class="c">///    standing, because running out of context forces the next action</span>
+<span class="c">/// 10. nothing: an empty row rather than a cut number</span>
+fn compose(width: u16, bar: &amp;Bar, skin: &amp;Skin) -&gt; Line&lt;'static&gt; {
+    <span class="k">for</span> step in 0..=10 {
+        <span class="k">if let</span> Some(line) = attempt(step, width, bar, skin) {
+            <span class="k">return</span> line;
+        }
+    }
+    unreachable!("the last step always fits: it is empty")
+}</code></pre>
+  <span class="src">crates/emma/src/term/statusbar.rs — <code>compose</code>, <code>attempt</code></span>
+
+  <p>
+    The reason context survives longest is stated rather than assumed:
+    <em>&ldquo;Running out of context forces an action, compact or start over,
+    so the context percentage is the last thing standing. The spent total is a
+    fact to know; the context level is a decision to make.&rdquo;</em>
+  </p>
+
+  <p>
+    A cell's separator is part of the cell for this purpose, so when a cell goes
+    its rule goes with it and the rules can never be what pushes a row over its
+    width.
+  </p>
+
+  <p>
+    <span class="chip test">tested</span>, and both tests are properties rather
+    than thresholds. <code>what_survives_at_any_width_respects_the_order</code>
+    walks widths 0 to 220 and asserts six implications of the form &ldquo;if this
+    poorer thing survived, this richer thing survived too&rdquo;, so a
+    reordering of the ladder breaks one of them at some width whatever the exact
+    thresholds are. <code>no_width_overflows_the_row_or_cuts_a_number</code>
+    walks the same range and asserts both that the composed width never exceeds
+    the row and that wherever a cell's marker appears, its number appears whole.
+  </p>
+
+  <p>
+    That second test is also the proof that the two width computations agree.
+    <code>row_width</code> and <code>layout</code> each compute the help cell's
+    fixed cost, and the comment says what a disagreement would do:
+    <em>&ldquo;the env-room arithmetic hands out columns the layout will refuse,
+    and some width overflows — the property test walks every width precisely to
+    catch that drift.&rdquo;</em>
+  </p>
+
+  <h2 id="absence">Absence, encoded three ways</h2>
+
+  <p>
+    <code>Bar</code>'s counts are bare <code>i64</code> because that is the
+    shared contract with the shell, so absence is encoded in the values:
+    <strong>a cap that is not positive is no cap</strong>, so no percentage or
+    meter is drawn against it, and a cell with neither a positive count nor a
+    positive cap does not appear at all. <code>up</code>, <code>down</code> and
+    <code>elapsed</code> keep the honest type: <code>None</code> is unknown,
+    <code>Some(0)</code> is a measured zero, and the two render differently
+    because they are different facts.
+  </p>
+
+  <p>
+    A negative count is treated as absent rather than clamped, and the comment
+    gives the reason in one clause: <em>&ldquo;a clamped zero would claim a
+    measured zero.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>an_unknown_count_is_absent_and_a_measured_zero_is_zero</code> checks
+    all three cases in one test.
+  </p>
+
+  <p>
+    A label is never drawn over an empty value.
+    <em>&ldquo;The mockup's MODE and ENV are placeholder content, and rendering
+    their labels regardless would be the bar pretending Emma has features it
+    does not.&rdquo;</em>
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect: one element of the empty-value loop cannot fail</span>
+    <p>
+      <code>an_empty_value_takes_its_label_with_it</code> loops over
+      <code>["MODE", "ENV", "TOTAL", "CONTEXT", "%"]</code> and asserts each is
+      absent. <code>TOTAL</code> is not a string this module emits under any
+      input: <code>tokens_cell</code> writes <code>label("TOKENS", skin)</code>
+      and nothing else writes the word. So that element passes whatever the
+      cell does, and it is left over from the <code>TOTAL</code> to
+      <code>TOKENS</code> rename. The other four elements are genuine.
+      <span class="chip cert">certified</span>: <code>grep -o 'TOTAL'</code>
+      over the production half of <code>statusbar.rs</code> matches nothing;
+      the word appears only in this test and in the sibling test that asserts
+      <code>!out.contains("TOTAL")</code> for the same reason.
+    </p>
+    <span class="src">crates/emma/src/term/statusbar.rs — <code>an_empty_value_takes_its_label_with_it</code>, <code>tokens_cell</code></span>
+  </div>
+
+  <h2 id="meter">The meter's arithmetic errs in one direction</h2>
+
+  <p class="faint">crates/emma/src/term/statusbar.rs &middot; <code>percent</code>, <code>filled</code></p>
+  <pre><code>fn percent(used: i64, cap: i64) -&gt; i64 {
+    <span class="k">let</span> used = used.max(0);
+    <span class="c">// Manual ceiling: `i64::div_ceil` is unstable on this toolchain, and both</span>
+    <span class="c">// operands are non-negative with a positive divisor, where this form is</span>
+    <span class="c">// exact.</span>
+    <span class="k">let</span> p = (used * 100 + cap - 1) / cap;
+    <span class="k">if</span> used &lt; cap {
+        p.min(99)
+    } <span class="k">else</span> {
+        p
+    }
+}
+
+<span class="c">/// Filled segments: a partial segment rounds up — so anything used shows as at</span>
+<span class="c">/// least one — but the last segment fills only at the cap. Floor would do the</span>
+<span class="c">/// opposite: at 99% it shows nine of ten and offers a segment of room that</span>
+<span class="c">/// does not exist.</span>
+fn filled(used: i64, cap: i64, segments: usize) -&gt; usize {
+    <span class="k">let</span> used = used.max(0);
+    <span class="k">if</span> used &gt;= cap {
+        <span class="k">return</span> segments;
+    }
+    <span class="k">let</span> f = ((used * segments <span class="k">as</span> i64 + cap - 1) / cap) <span class="k">as</span> usize;
+    f.min(segments - 1)
+}</code></pre>
+  <span class="src">crates/emma/src/term/statusbar.rs — the <em>meter's arithmetic</em> region</span>
+
+  <p>
+    Both roundings may overstate what is used and never what is left, and the
+    region comment prices the asymmetry: <em>&ldquo;A meter that reads full at
+    99% panics nobody into anything worse than an early compaction; a meter that
+    shows a free segment at the cap invites one more call that the budget
+    machinery then eats. Overstating room is the lie that costs money, so it is
+    the one this arithmetic cannot produce.&rdquo;</em> Past the cap the real
+    figure shows, because a level over its cap is a fact the user should see
+    stated plainly.
+    <span class="chip test">tested</span> at the edges, and by two property
+    tests: <code>the_meter_never_reads_full_below_the_cap</code> and
+    <code>anything_used_fills_at_least_one_segment</code>.
+  </p>
+
+  <p>
+    The filled glyph is <code>&#9610;</code>, the left three-quarters block,
+    rather than <code>&#9608;</code>. Ten adjacent full blocks fuse into one
+    solid bar and the proportion stops being countable, which was the owner's
+    &ldquo;separators between the segments&rdquo; report. The three-quarters
+    glyph buys the gap without spending an extra column, and it matches the
+    image, where each meter block inks about 7px of a 9.3px cell. The empty
+    glyph is <code>&#9617;</code> rather than a grey block, and that is a
+    deliberate deviation from the mockup: filled and empty must differ by
+    <em>shape</em>, not colour alone, <em>&ldquo;or the meter dies at
+    <code>Level::None</code> — the mock was never run on a colourless
+    terminal.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>the_filled_segments_stay_individually_countable</code> goes red if
+    <code>&#9608;</code> ever returns.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect, unreachable today: <code>filled</code> underflows at zero segments</span>
+    <p>
+      <code>f.min(segments - 1)</code> on a <code>usize</code> panics when
+      <code>segments</code> is zero. <code>context_cell</code> guards it with
+      <code>if segments &gt; 0</code>, and the ladder only ever passes 10, 5 or
+      0, so nothing reaches it today. It is worth naming because the same file's
+      tests argue the opposite standard for a sibling helper:
+      <code>group</code> is tested on negative input with the comment
+      <em>&ldquo;a helper that panics or garbles on an input it &lsquo;never
+      gets&rsquo; is a trap for the next caller.&rdquo;</em>
+      <span class="chip cert">certified</span>: read <code>filled</code>'s last
+      line and <code>context_cell</code>'s guard.
+    </p>
+    <span class="src">crates/emma/src/term/statusbar.rs — <code>filled</code>, <code>context_cell</code>, <code>numbers_are_grouped_and_clocks_read_the_way_the_old_row_wrote_them</code></span>
+  </div>
+
+  <h2 id="layout">The rules, and where the slack goes</h2>
+
+  <p>
+    The mockup divides the bar with vertical rules at every cell boundary,
+    including the help cell's, because <em>&ldquo;right-aligned hints with only
+    air before them read as loose text, not as a divided bar.&rdquo;</em> The
+    row's slack is spread evenly across the gaps rather than piled up in front
+    of the hints, and the extra columns split around the glyph so the rule stays
+    near the middle of its gap.
+  </p>
+
+  <p>
+    Without a help cell nothing anchors the right edge, so the row stays
+    left-packed at minimum gaps: <em>&ldquo;trailing background is invisible,
+    widened gaps between survivors are not.&rdquo;</em> With nothing measured at
+    all there is no rule, because a divider needs two sides.
+    <span class="chip test">tested</span>:
+    <code>every_cell_boundary_carries_a_rule_and_the_slack_is_shared</code>
+    counts four rules for four cells plus help, and asserts the largest gap
+    exceeds the smallest by at most one, so no gap can hoard the leftover width.
+    <code>a_dropped_cell_takes_its_rule_with_it</code> holds the other end.
+  </p>
+
+  <p>
+    Two other numbers earn a sentence each. <code>SEGMENTS_FULL</code> is 10,
+    though the image shows eleven blocks; the doc calls that <em>&ldquo;the
+    mock's artist losing count, not a specification.&rdquo;</em>
+    <code>ENV_MIN</code> is 6, below which the env value is dropped whole rather
+    than fitted: <em>&ldquo;<code>clau&hellip;</code> still identifies a model,
+    <code>cl&hellip;</code> identifies nothing.&rdquo;</em> The env cell is the
+    only one whose value may be shortened, because it is a name, and
+    <em>&ldquo;a fitted name still identifies, a fitted number
+    misleads.&rdquo;</em>
+  </p>
+
+  <p>
+    <code>group</code> writes <code>12,842</code> rather than
+    <code>12k</code>, and the region comment says why it does not
+    match <code>render.rs</code>'s <code>human</code>: the inline row shared one
+    line with everything else and had to abbreviate; this bar drops whole cells
+    instead, <em>&ldquo;so abbreviation here would be precision surrendered with
+    nothing bought.&rdquo;</em> <code>clock</code> is a knowing four-line
+    duplicate of <code>render.rs</code>'s, kept local because that file was
+    under concurrent edit, and pinned to the same outputs by both test suites so
+    the two cannot drift.
+  </p>
+
+  <h2 id="colours">The cell that the prose got wrong three times</h2>
+
+  <p>
+    The <code>&#8593;</code>/<code>&#8595;</code> parenthetical inside the
+    TOKENS cell was described wrongly in the design note repeatedly, so the
+    styles are pinned span by span from the image instead. The up arrow and its
+    figure are one green span, one space apart. Two spaces separate the up
+    figure from the down arrow. The down <em>arrow</em> is accent and its
+    <em>figure</em> is plain foreground, <em>&ldquo;the image is unambiguous
+    (the digits sample neutral grey-white, the arrow pink), and the doc's
+    &lsquo;↓ in accent&rsquo; describes only the arrow. Painting the figure
+    accent was this cell's third prose-derived error.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>the_down_arrow_is_accent_but_its_figure_is_foreground</code> asserts
+    three spans by content and by style.
+  </p>
+
+  <p>
+    Cell labels are accent and bold, not grey. The prose description said grey;
+    the picture says accent, and the file's rule is that the picture wins. Bold
+    so the label still stands apart at <code>Level::None</code>. Two spaces
+    separate every label from its value, measured off the image's character
+    grid.
+  </p>
+
+  <p>
+    The ASCII set is a second vocabulary chosen off the skin's rather than added
+    to it, and the two sets are told apart by <code>skin.glyphs == ASCII</code>,
+    which works because <code>Glyphs</code> derives <code>PartialEq</code>. It
+    wraps the meter in <code>[ ]</code> <em>&ldquo;so a run of <code>#</code>
+    and <code>-</code> still reads as a gauge rather than as
+    punctuation&rdquo;</em>; the block glyphs need no frame.
+    <span class="chip test">tested</span>:
+    <code>the_ascii_meter_is_a_bracketed_gauge</code> asserts
+    <code>[#######---]</code> and that no Unicode-only glyph survives.
+  </p>
+
+  <h2 id="statusline">Somebody else's program in the same row</h2>
+
+  <p>
+    <code>statusline.rs</code> owns the two things the terminal is responsible
+    for when a status program is configured: keeping it off the paint path, and
+    turning its bytes into cells.
+  </p>
+
+  <h3>Running it can never be part of drawing</h3>
+
+  <p>
+    <code>Frame::paint</code> is called from the keyboard reader, from the clock
+    thread, from every transcript write and from the middle of a streamed
+    answer. If any of those could wait on a subprocess, a status script that
+    blocks becomes <em>&ldquo;a terminal that has stopped echoing what the user
+    types.&rdquo;</em> So paint reads a value and never produces one: it copies
+    whatever string is in <code>View::custom_status</code> and returns.
+  </p>
+
+  <p>
+    Producing it is a task fed by a one-slot channel. Sending is
+    <code>try_send</code> and a full channel is dropped on the floor, which is
+    the coalescing: while a run is in flight, every trigger that arrives
+    collapses onto the request already queued. The debounce is 300ms, Claude
+    Code's number, <em>&ldquo;for the same reason: a burst of assistant messages
+    should cost one invocation, not eight.&rdquo;</em> After the sleep the loop
+    drains the channel and keeps the newest payload.
+  </p>
+
+  <p>
+    The <code>Weak&lt;Frame&gt;</code> is upgraded per iteration rather than
+    held, <em>&ldquo;so a frame torn down mid-sleep ends this task at the next
+    turn of the loop.&rdquo;</em> A failure message is spoken once per distinct
+    message through <code>note_once</code>, so a script broken on every
+    invocation says so once rather than five times a second.
+  </p>
+
+  <div class="note">
+    <span class="h">A timeout that was not a timeout</span>
+    <p>
+      Until 2026-08-14 the &ldquo;timed out&rdquo; message also caught a program
+      that had exited in milliseconds but had started something which inherited
+      its stdout: the supervisor was waiting for the pipe to close rather than
+      for the program to exit, so the row said <code>statusLine timed out after
+      2000ms</code> on every debounced repaint of a script that had answered
+      every time. The fix is in <code>emma_harness::hooks::exec</code>, and
+      nothing in this file changed, <em>&ldquo;which is the argument for the
+      status line reusing that supervisor rather than owning one.&rdquo;</em>
+    </p>
+    <span class="src">crates/emma/src/term/statusline.rs module doc</span>
+  </div>
+
+  <p>
+    Only the first non-empty line is taken. Claude Code renders every printed
+    line as its own row; Emma cannot, because the inline viewport's height is
+    fixed at install and <em>&ldquo;a status line that could claim two rows
+    would be a viewport that resizes under a running program — the class of bug
+    that ate the last two attempts at this file.&rdquo;</em> The limit is stated
+    here rather than discovered by somebody whose two-line script silently lost
+    its second line.
+    <span class="chip test">tested</span>:
+    <code>a_program_that_prints_several_lines_yields_the_first_of_them</code>,
+    including that a program printing nothing yields <code>None</code> and so
+    leaves the built-in row alone.
+  </p>
+
+  <h3>Bytes are parsed rather than printed</h3>
+
+  <p>
+    Claude Code honours ANSI colour in a status script's stdout by letting the
+    bytes through. Emma cannot, because these bytes go into a ratatui cell
+    buffer: <em>&ldquo;an escape byte written into a cell is a byte ratatui
+    counts as one column and the terminal counts as none, and from that moment
+    the diff is wrong about every row below it.&rdquo;</em>
+  </p>
+
+  <p class="faint">crates/emma/src/term/statusline.rs &middot; <code>consume_escape</code></p>
+  <pre><code>fn consume_escape(chars: &amp;<span class="k">mut</span> std::iter::Peekable&lt;std::str::Chars&lt;'_&gt;&gt;) -&gt; Option&lt;Vec&lt;i64&gt;&gt; {
+    <span class="k">match</span> chars.next() {
+        <span class="c">// CSI: parameters, then one final byte in `@`–`~`.</span>
+        Some('[') =&gt; {
+            <span class="k">let mut</span> params = String::new();
+            <span class="k">for</span> c in chars.by_ref() {
+                <span class="k">if</span> ('\x40'..='\x7e').contains(&amp;c) {
+                    <span class="k">return</span> (c == 'm').then(|| parse_params(&amp;params));
+                }
+                params.push(c);
+            }
+            None
+        }
+        <span class="c">// OSC: runs to a BEL or an ST (`ESC \`). This is where a hyperlink</span>
+        <span class="c">// lives, and where an unterminated one would otherwise eat the line.</span>
+        Some(']') =&gt; {
+            <span class="k">while let</span> Some(c) = chars.next() {
+                <span class="k">if</span> c == '\x07' {
+                    <span class="k">break</span>;
+                }
+                <span class="k">if</span> c == '\x1b' &amp;&amp; chars.peek() == Some(&amp;'\\') {
+                    chars.next();
+                    <span class="k">break</span>;
+                }
+            }
+            None
+        }
+        <span class="c">// Anything else is a two-byte sequence, already consumed.</span>
+        _ =&gt; None,
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/term/statusline.rs — <code>to_line</code>, <code>consume_escape</code>, <code>apply_sgr</code></span>
+
+  <p>
+    The iterator is left just past the sequence either way, <em>&ldquo;which is
+    what makes &lsquo;no escape byte survives&rsquo; true rather than
+    approximate: an unrecognised sequence is consumed and discarded, never
+    emitted a character at a time.&rdquo;</em> A status script emitting an OSC 8
+    hyperlink gets its text and not its link, which is a feature not arriving;
+    the same sequence in the raw buffer would be a corrupted frame.
+  </p>
+
+  <p>
+    <code>apply_sgr</code> understands bold, dim, italic, underline, reversed
+    and their offs, the sixteen named colours in both ranges, both extended
+    forms, and the two resets. <code>0</code> returns to <code>base</code>, the
+    palette's own idea of a status row, rather than to the terminal's raw
+    default, <em>&ldquo;otherwise <code>\033[0m</code> halfway through a script's
+    output would drop the row onto whatever colours the user's shell happens to
+    have.&rdquo;</em> Unknown parameters are ignored rather than guessed at.
+  </p>
+
+  <p>
+    <span class="chip test">tested</span>:
+    <code>no_escape_byte_or_control_character_ever_reaches_a_cell</code> runs
+    ten hostile inputs including an OSC 8 hyperlink, an ST-terminated OSC, a
+    truncated escape, raw control bytes, and <code>\x1b[2;20r</code>, the
+    scroll-region sequence this project's own scrollback defect was made of. The
+    doc says why it is one test over everything rather than one per case:
+    <em>&ldquo;the property is universal and a per-case test passes the moment
+    somebody adds a sequence nobody thought of.&rdquo;</em> A sibling asserts the
+    text <em>around</em> a dropped sequence survives, <em>&ldquo;otherwise the
+    safe thing would be to render nothing, which is not a status line.&rdquo;</em>
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect: the ITU-T subparameter form parses to the wrong colour</span>
+    <p>
+      <code>parse_params</code> splits on <code>;</code> and <code>:</code>
+      alike, so <code>38:2::250:189:47</code> becomes
+      <code>[38, 2, 0, 250, 189, 47]</code>, because the empty colour-space
+      field parses as zero. <code>extended</code> then reads
+      <code>(rest[1], rest[2], rest[3])</code> as
+      <code>(0, 250, 189)</code>, a visibly wrong colour, and consumes four
+      parameters leaving <code>47</code> to be read as an unknown SGR. No escape
+      byte survives either way, so this is a wrong answer rather than a leak.
+      Accepting <code>:</code> at all is what makes the subparameter form parse
+      instead of being dropped, so the fix is to treat a colon-separated run
+      differently rather than to stop splitting on it.
+      <span class="chip unv">unverified</span>: reasoned from
+      <code>parse_params</code> and <code>extended</code>, not reproduced. A
+      status script emitting <code>\x1b[38:2::250:189:47m</code>, or a test
+      asserting the resulting <code>Color::Rgb</code>, would settle it.
+    </p>
+    <span class="src">crates/emma/src/term/statusline.rs — <code>parse_params</code>, <code>extended</code></span>
+  </div>
+
+  <h3>What Emma says about itself</h3>
+
+  <p>
+    <code>payload</code> builds the stdin document, and every field is a
+    measurement or a fact. Emma has one name for a model and no prettier one to
+    offer, so <code>id</code> and <code>display_name</code> both carry it,
+    <em>&ldquo;a script reading <code>display_name</code>, which is what every
+    published example reads, gets something real.&rdquo;</em> Emma does not
+    change directory mid-session and has no <code>/add-dir</code>, so
+    <code>current_dir</code> and <code>project_dir</code> are the same and
+    <code>added_dirs</code> is empty. <code>exceeds_200k_tokens</code> is fixed
+    at 200k regardless of the actual window, and copying Claude Code is the
+    point: <em>&ldquo;a script branching on it here must branch the same way it
+    does there.&rdquo;</em>
+  </p>
+
+  <p>
+    A program that answers <strong>replaces</strong> the built-in line entirely.
+    Anything it does not print is gone, and the docs are asked to state that
+    rather than leave it to be discovered.
+    <span class="chip test">tested</span> from <code>view.rs</code>:
+    <code>a_configured_status_line_takes_the_last_row_and_the_builtin_one_goes</code>
+    asserts no fragment of the built-in survives anywhere, and
+    <code>nothing_a_status_program_prints_can_write_an_escape_into_the_viewport</code>
+    proves the translator is actually on the render path rather than merely
+    correct in isolation.
+  </p>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    Both files were read in full. <code>statusbar.rs</code> is 1,144 lines and
+    declares 18 function items: <code>render</code>, <code>bar_glyphs</code>,
+    <code>compose</code>, <code>attempt</code>, <code>layout</code>,
+    <code>sep_width</code>, <code>row_width</code>, <code>label</code>, three
+    cell builders, <code>env_value</code>, <code>help_cell</code>,
+    <code>percent</code>, <code>filled</code>, <code>meter</code>,
+    <code>group</code>, <code>clock</code>. All 18 are named here: 18 of 18,
+    along with its three constants and both types. Fourteen of its twenty-one
+    tests are cited.
+  </p>
+
+  <p>
+    <code>statusline.rs</code> is 574 lines and 11 function items:
+    <code>spawn</code>, <code>note_once</code>, <code>first_line</code>,
+    <code>payload</code>, <code>to_line</code>, <code>consume_escape</code>,
+    <code>parse_params</code>, <code>apply_sgr</code>, <code>basic</code>,
+    <code>extended</code>, <code>clamp</code>. All 11 named: 11 of 11. Five of
+    its seven tests are cited.
+  </p>
+
+  <p>
+    <strong>Not settled here.</strong> Nobody has configured a status program
+    and watched the row. The translator is proven against strings and the
+    scheduling is proven by construction, but the whole feature is
+    <span class="chip unv">unverified</span> end to end: a script that prints a
+    coloured branch name, configured in settings, run against a live session,
+    with the debounce watched under a fast turn.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="terminal-sidebar.html">the sidebar</a>, three sections and
+      a right edge measured off the image. Back to
+      <a href="terminal.html">The terminal</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

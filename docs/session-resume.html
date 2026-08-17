@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Resume, and what is not replayed · Sessions &amp; context · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav here" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">Sessions &amp; context</p>
+  <h1>Resume, and what is not replayed</h1>
+
+  <nav class="chapter">
+    <a class="up" href="session.html">Sessions &amp; context</a>
+    <a href="session-file.html">The file</a>
+    <a href="session-records.html">Records</a>
+    <a href="session-fold.html">The fold</a>
+    <span class="now">Resume</span>
+    <a href="session-continuity.html">Continuity</a>
+    <a href="session-compaction.html">Compaction</a>
+    <a href="session-corpus.html">The corpus</a>
+  </nav>
+
+  <p class="lede">
+    <code>emma --resume</code> answers three questions the fold refuses:
+    which file, what the interrupted goal had already spent, and which calls it
+    had already been told not to repeat. It answers a fourth by not answering
+    it. Nothing in this path runs a tool.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>restore</code>, <code>restore_records</code>, <code>locate</code>; crates/emma/src/cli.rs; crates/emma/src/main.rs</span>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven, and repeatable: a file, a command, a count you can redo</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+    <div><span class="chip test">tested</span> a test that was shown to fail</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <h2 id="cli">Which file</h2>
+
+  <p>
+    <code>emma --resume [&lt;id&gt;] [&lt;goal text&gt;]</code>. The parser tells
+    an id from a goal by the fixed <code>sess-</code> prefix every id carries,
+    which is why <code>new_id</code>'s format is a parsing decision as well as a
+    sorting one.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/cli.rs</span>
+<span class="c">// Spelled as a flag rather than a subcommand because it modifies a
+// run — it takes the same goal text, the same budgets and the same
+// approval rules — where `api`, `model` and `init` replace one.</span>
+"--resume" =&gt; {
+    if !matches!(command, None | Some(Command::Run(_))) {
+        return Err("--resume cannot be combined with another command.".into());
+    }
+    <span class="c">// A session id or a goal, told apart by the fixed `sess-`
+    // prefix `SessionLog::new_id` gives every id. The alternative
+    // is a second flag for the id, which makes the common
+    // spelling — bare `--resume` with a goal after it — the one
+    // that needs explaining.</span>
+    let named = it.peek().is_some_and(|a| a.starts_with("sess-"));
+    let session = if named { it.next() } else { None };
+    command = Some(Command::Resume {
+        session,
+        goal: None,
+    });
+}</code></pre>
+
+  <p>
+    A goal that genuinely starts with the word <code>sess-</code> would be read
+    as an id, and the failure is loud: <code>locate</code> refuses with
+    <code>no session `…` in …</code> rather than starting the wrong
+    conversation.
+    <span class="chip test">tested</span>
+    <code>resume_tells_a_session_id_from_a_goal_by_its_prefix</code> in
+    <code>cli.rs</code> checks the three spellings, and
+    <code>-p --resume</code> is rejected for the same reason any unattended run
+    without a goal is.
+  </p>
+  <span class="src">crates/emma/src/cli.rs — the <code>--resume</code> arm and its tests</span>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// Which session file `--resume` means.
+///
+/// **Named wins outright.** `--resume &lt;id&gt;` is a request for one session and is
+/// not filtered by the working directory: a user who names a session has
+/// already answered the question the directory rule exists to answer, and
+/// second-guessing them would refuse a file that is plainly there.
+///
+/// **Bare `--resume` means "the one I was last running here".** Sessions from
+/// every project share one directory, so the newest file overall is routinely
+/// somebody else's work — resuming that into this tree is a conversation about
+/// the wrong repository with write tools attached. Ids sort by time, so newest
+/// is the last id rather than the newest mtime: an mtime moves when a file is
+/// copied and an id does not.
+///
+/// Files are opened newest-first and the walk stops at the first match, so the
+/// usual case reads one file. It is still a scan, and it is the "queries across
+/// sessions" cost the module doc names as a thing that would change the format
+/// if it ever mattered at scale.</span>
+pub fn locate(dir: &amp;Path, id: Option&lt;&amp;str&gt;, cwd: &amp;Path) -&gt; Result&lt;PathBuf&gt; {
+    if let Some(id) = id {
+        <span class="c">// Accept what `emma` prints at startup, which is a path ending in
+        // `.jsonl`, as well as the bare id.</span>
+        let id = id.strip_suffix(".jsonl").unwrap_or(id);
+        let path = dir.join(format!("{id}.jsonl"));
+        if path.is_file() {
+            return Ok(path);
+        }
+        bail!("no session `{id}` in {}", dir.display());
+    }
+
+    let mut candidates: Vec&lt;PathBuf&gt; = Vec::new();
+    if dir.is_dir() {
+        for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+            let path = entry?.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                candidates.push(path);
+            }
+        }
+    }
+    candidates.sort();
+    for path in candidates.iter().rev() {
+        let Ok(records) = SessionLog::read(path) else {
+            continue;
+        };
+        if records
+            .iter()
+            .any(|r| r["kind"] == "goal" &amp;&amp; same_dir(&amp;string(r, "cwd"), cwd))
+        {
+            return Ok(path.clone());
+        }
+    }
+    bail!(
+        "no session recorded in {} was run from {}. Name one with `emma --resume &lt;id&gt;`.",
+        dir.display(),
+        cwd.display()
+    );
+}</code></pre>
+
+  <p>
+    The bare case reads whole files, in id order, newest first, and stops at the
+    first that has a <code>goal</code> record from this directory. In a
+    directory where roughly half the files are empty and nothing recent ran
+    here, that is a read of every file: 103 files at the last count, 48 of them
+    zero bytes. The cost is bounded by the directory rather than by a constant,
+    which is the difference between this and the first-run scan on
+    <a href="session-continuity.html">Continuity</a>, and the module doc names
+    it as the first of the three things that would justify a database.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>locate</code>, module doc</span>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// Whether a recorded working directory is this one. Canonicalised on both
+/// sides rather than compared as bytes, for the reason `harness::discover_in`
+/// gives: case, a trailing separator, a short name and a symlinked path are all
+/// ways two spellings name one directory. An empty recording — a session from
+/// before the field existed — matches nothing rather than everything.</span>
+fn same_dir(recorded: &amp;str, cwd: &amp;Path) -&gt; bool {
+    if recorded.is_empty() {
+        return false;
+    }
+    let real = |p: &amp;Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    real(Path::new(recorded)) == real(cwd)
+}</code></pre>
+
+  <p>
+    A recorded directory that no longer exists canonicalises to itself, so a
+    session recorded in a deleted tree can still be matched by a
+    <code>cwd</code> that spells it identically, and cannot be matched
+    otherwise. The empty-string case matters more than it looks: it is what a
+    session written before the <code>cwd</code> field existed carries, and
+    treating it as a wildcard would make bare <code>--resume</code> pick up
+    somebody else's old conversation.
+    <span class="chip test">tested</span>
+    <code>the_newest_session_for_this_directory_is_the_one_resumed</code> in
+    <code>crates/emma/tests/resume.rs</code>.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>same_dir</code></span>
+
+  <h2 id="restore">What comes out of the file</h2>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// Everything `--resume` needs out of one session file.</span>
+#[derive(Debug)]
+pub struct Restored {
+    <span class="c">/// The session id, which is the file stem — a resumed run appends to this
+    /// same file rather than starting a new one, so the transcript of a goal
+    /// stays in one place.</span>
+    pub id: String,
+    pub path: PathBuf,
+    pub resumed: Resumed,
+    pub continuity: Continuity,
+}
+
+<span class="c">/// Read one session file into everything a resumed run needs.</span>
+pub fn restore(path: &amp;Path) -&gt; Result&lt;Restored&gt; {
+    let records = SessionLog::read(path)?;
+    if !records.iter().any(|r| r["kind"] == "goal") {
+        bail!(
+            "{} records no goal, so there is nothing to resume",
+            path.display()
+        );
+    }
+    Ok(Restored {
+        id: path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        path: path.to_path_buf(),
+        resumed: restore_records(&amp;records),
+        continuity: continuity_of(&amp;records),
+    })
+}</code></pre>
+
+  <p>
+    The refusal is what a named <code>--resume</code> of an empty file hits, and
+    it is the reader that keeps the 48 empty files in the directory from being a
+    problem rather than merely clutter. The id is the file stem, so the resumed
+    run reopens the same path in append mode and the second leg lands after the
+    first. <code>main.rs</code> resolves all of this before the log is opened,
+    which is the ordering that makes a resume of a resume fold the whole file
+    rather than the last leg of it.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>restore</code>; crates/emma/src/main.rs</span>
+
+  <h2 id="counters">The counters, and why they are not zero</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+pub struct Resumed {
+    <span class="c">/// The message list the interrupted run last sent, in order. Placed whole
+    /// into `query` — see `Agent::run_goal`.</span>
+    pub messages: Vec&lt;Message&gt;,
+    pub tokens: i64,
+    pub iterations: u32,
+    pub kicks: u32,
+    <span class="c">/// Memo keys — see [`memo_key`] — for calls that had failed with nothing
+    /// having succeeded since.</span>
+    pub failed_now: Vec&lt;String&gt;,
+    <span class="c">/// Human-readable labels for everything that failed during the goal, which
+    /// is what a kick quotes back.</span>
+    pub failed_ever: Vec&lt;String&gt;,
+}</code></pre>
+
+  <p>
+    Without the three counters, resume is a way to spend past a cap: a goal that
+    ended on <code>Ending::Tokens</code> could be resumed indefinitely and the
+    limit it hit would mean nothing. Without the memo, the resumed model is
+    handed back the identical failing call it had already been refused.
+    <span class="chip test">tested</span>, one test per field in
+    <code>crates/emma/tests/resume.rs</code>:
+    <code>a_resumed_run_inherits_the_tokens_the_first_one_spent</code>,
+    <code>…the_model_calls_the_first_one_made</code>,
+    <code>…the_nudges_the_first_one_used</code> and
+    <code>…the_call_that_already_failed</code>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Resumed</code>; crates/emma/tests/resume.rs</span>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// [`restore`] over records already read — the testable half, and the half with
+/// the reasoning in it.
+///
+/// **Every counter resets at a `goal` record.** Budgets are per goal in the
+/// loop, so a session with three finished goals in it must not hand the fourth
+/// the sum of the first three; what a resume inherits is the spend of the goal
+/// it is continuing. `goal_finished` overrides the running totals where it is
+/// present because it is the loop's own arithmetic; the running totals are what
+/// answer the case the file exists for, which is a run that was killed and
+/// never wrote one.</span>
+pub fn restore_records(records: &amp;[Value]) -&gt; Resumed {
+    let mut r = Resumed {
+        messages: fold_records(records),
+        ..Default::default()
+    };
+    <span class="c">// `tool_call` carries the arguments and `tool_result` carries the verdict,
+    // and they are two records joined by the call id. Neither alone is enough:
+    // the memo is keyed on the arguments, and whether the call failed is only
+    // in the block.</span>
+    let mut args: HashMap&lt;String, (String, Value)&gt; = HashMap::new();
+    for record in records {
+        match record["kind"].as_str().unwrap_or_default() {
+            "goal" =&gt; {
+                r.tokens = 0;
+                r.iterations = 0;
+                r.kicks = 0;
+                r.failed_now.clear();
+                r.failed_ever.clear();
+                args.clear();
+            }</code></pre>
+
+  <p>
+    One pass for the messages, through <code>fold_records</code>, and a second
+    pass here for everything a message list cannot express. The reset at each
+    <code>goal</code> is what makes the numbers per goal rather than per file.
+    <code>args</code> resets with them, so a call id reused across goals cannot
+    resurrect an old memo entry.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs — restore_records, continued</span>
+            "model_call" =&gt; {
+                r.iterations += 1;
+                <span class="c">// `cost_tokens`, not `billable_total_tokens`: the budget counts
+                // a cached read at what it costs rather than at its size, and a
+                // resume that summed the raw field would restore a meter in
+                // different units from the one the loop enforces — the same
+                // record, read two ways. The raw fields are still in the record
+                // beside it, and a log written before the weighting existed
+                // falls back to them rather than restoring zero.</span>
+                r.tokens += record["cost_tokens"]
+                    .as_i64()
+                    .unwrap_or_else(|| record["billable_total_tokens"].as_i64().unwrap_or(0));
+            }
+            "kick" =&gt; {
+                r.kicks = record["n"].as_u64().unwrap_or(u64::from(r.kicks) + 1) as u32;
+            }</code></pre>
+
+  <p>
+    The fallback is live rather than theoretical.
+    <span class="chip cert">certified</span>: 51 of the 103 session files in
+    <code>~/.emma/sessions/</code> at 2026-08-16 20:28 EDT contain a
+    <code>model_call</code> record, and 12 of those 51 have no
+    <code>cost_tokens</code> field on any of them. Resuming one of those twelve
+    restores a meter summed from <code>billable_total_tokens</code>, in units
+    the running budget does not enforce. The script is on
+    <a href="session-corpus.html">The corpus</a>.
+  </p>
+
+  <p>
+    <code>kicks</code> takes the recorded <code>n</code> rather than counting,
+    so a gap in the records cannot make the nudge budget look emptier than it
+    was; the counting fallback is there for a record written without the field.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs — restore_records, continued</span>
+            "tool_call" =&gt; {
+                if let (Some(id), Some(tool)) = (str_of(record, "id"), str_of(record, "tool")) {
+                    args.insert(id, (tool, record["args"].clone()));
+                }
+            }
+            "tool_result" =&gt; {
+                let failed = record["block"]["is_error"] == Value::Bool(true);
+                if !failed {
+                    <span class="c">// The loop's rule, replayed: something changed, so every
+                    // earlier failure is worth trying again. A fold that only
+                    // accumulated failures would restore a memo that forbids
+                    // calls the original run had already re-allowed.</span>
+                    r.failed_now.clear();
+                    continue;
+                }
+                <span class="c">// Only the failures that got as far as being dispatched are
+                // recoverable, because only those wrote a `tool_call` with the
+                // arguments in it. An unknown tool or a schema violation fails
+                // before that record exists, and is not restored — the cost is
+                // that the resumed model may re-issue one call that cannot run
+                // and gets told so again, which is a wasted turn rather than a
+                // side effect.</span>
+                let Some(id) = str_of(record, "id") else {
+                    continue;
+                };
+                let Some((tool, input)) = args.get(&amp;id) else {
+                    continue;
+                };
+                let key = memo_key_of(tool, input);
+                if !r.failed_now.contains(&amp;key) {
+                    r.failed_now.push(key);
+                }
+                let label = label_of(tool, input);
+                if !r.failed_ever.contains(&amp;label) {
+                    r.failed_ever.push(label);
+                }
+            }</code></pre>
+
+  <p>
+    <code>failed_now</code> is "nothing has changed since this failed" and is
+    cleared by any success, exactly as the loop clears it. <code>failed_ever</code>
+    accumulates for the whole goal and is what a nudge quotes back, so it is not
+    cleared. The keys come from <code>memo_key_of</code> and
+    <code>label_of</code> in <code>agent.rs</code>, the same two functions the
+    live loop uses, which is what keeps a restored memo from being keyed
+    differently from the one it continues. See
+    <a href="loop-memo.html">The memo rule</a>.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>restore_records</code>; crates/emma/src/agent.rs — <code>memo_key_of</code>, <code>label_of</code></span>
+
+  <p>
+    The <code>let Some((tool, input)) = args.get(&amp;id) else { continue }</code>
+    line is where the pairing gap from
+    <a href="session-records.html#pairing">Records</a> lands. A result whose call
+    was never dispatched has no arguments in the file, so it cannot be keyed and
+    is skipped. Two such results exist in the real corpus, both from the memo
+    itself.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs — restore_records, continued</span>
+            <span class="c">// A delegation's own `sub.model_call` records are namespaced and
+            // therefore invisible to the arm above, so a resumed parent would
+            // restore a meter missing everything its delegations spent — a way to
+            // spend past a cap, which is the exact failure `Resumed`'s doc is
+            // written about. This record is the parent-level fact that closes it,
+            // and it deliberately does not touch `iterations`: the parent made
+            // one model call for that turn, not fifteen.</span>
+            "delegation" =&gt; r.tokens += record["cost_tokens"].as_i64().unwrap_or(0),
+            "goal_finished" =&gt; {
+                r.tokens = record["tokens"].as_i64().unwrap_or(r.tokens);
+                r.iterations = record["iterations"]
+                    .as_u64()
+                    .unwrap_or(u64::from(r.iterations)) as u32;
+                r.kicks = record["kicks"].as_u64().unwrap_or(u64::from(r.kicks)) as u32;
+            }
+            _ =&gt; {}
+        }
+    }
+    r
+}</code></pre>
+
+  <p>
+    <code>goal_finished</code> assigns rather than adds, so it overrides the
+    running totals with the loop's own arithmetic wherever it exists. A
+    <code>delegation</code> record that arrives after the last
+    <code>goal_finished</code> of a goal would therefore be counted; one that
+    arrives before it is overwritten, because the loop's own total already
+    includes it. That ordering holds because a delegation is a tool call inside
+    a turn and <code>goal_finished</code> is written after the loop breaks.
+    <span class="chip test">tested</span> across sessions by
+    <code>what_a_delegation_cost_can_be_read_back_across_sessions</code> in
+    <code>crates/emma/tests/delegate.rs</code>.
+  </p>
+
+  <h2 id="notreplayed">What does not come back</h2>
+
+  <p>
+    <strong>No tool is replayed.</strong> The region header in
+    <code>session.rs</code> states the absence as a decision rather than leaving
+    it to be noticed.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs — the Resume region header</span>
+<span class="c">// What is *not* here, stated because its absence is a decision: replay.
+// Nothing in this section runs a tool. A turn dropped for unmatched tool ids
+// means those calls never happened as far as the restored conversation is
+// concerned, and re-running them to close the gap would re-run a `Write` or a
+// `Bash` against a working tree that has moved on since. Handing the model the
+// record and letting it decide what to redo costs a turn; replaying costs
+// whatever the tool did the second time.</span></code></pre>
+
+  <p>
+    <span class="chip test">tested</span>
+    <code>a_resumed_run_replays_no_tools</code>. The gap goes to the model as a
+    gap: the dropped turn is simply not in the conversation, and the model
+    decides what to redo from what it can see.
+  </p>
+  <span class="src">crates/emma/src/session.rs — Resume region header; crates/emma/tests/resume.rs</span>
+
+  <p>
+    <strong>The split between finished and in-flight does not come back
+    either.</strong> The file records the messages, not the boundary, so the
+    loop puts the whole restored list into <code>query</code> and starts the new
+    goal on the end of it.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::run_goal</span>
+<span class="c">// The restored conversation, with this goal's opening on the end. All
+// of it goes in `query` and none of it in the chapters: the split point
+// is not recorded in the file — the chapters are the goals that have
+// finished, `query` is the goal in flight, and the fold returns one flat
+// list — and guessing it wrong is a message list the API refuses. The
+// cost is cache: the chapters carry a breakpoint that would be
+// byte-stable for the rest of the session, and a restored prefix sitting
+// in `query` does not get it. That is a bill, and a wrong split is an
+// outage.
+//
+// The second cost is compaction: a restored block is one chapter's worth
+// of `query` however many goals went into it, so it is compacted as a
+// unit at the end of this goal — a resume that comes back over
+// `max_context` therefore runs this one goal at that size, and only this
+// one. That is the same flattening resume already does, showing up once
+// more.</span>
+let resuming_a_goal_in_flight = !resumed.messages.is_empty();
+let mut query: Vec&lt;Message&gt; = open_query(resumed.messages, opening);</code></pre>
+
+  <p>
+    Two costs, both stated rather than discovered. A restored prefix pays full
+    price on every call of the resumed goal instead of the 0.1× cache read it
+    would otherwise get, and a resume that comes back over
+    <code>max_context</code> runs that goal at that size because compaction
+    works in whole chapters and the restored block is one chapter. Neither is
+    an outage. Guessing the split wrong would be.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, <code>open_query</code>; <a href="loop-one-turn.html">One turn</a></span>
+
+  <p>
+    <code>resuming_a_goal_in_flight</code> also seeds <code>worked</code>, so a
+    resumed run does not read its first stop as a conversational answer, and the
+    stall rule reads <code>kicked</code> rather than <code>kicks</code> for the
+    same reason: the nudge budget comes back across a resume, but the last nudge
+    was answered by a human typing a new goal. Reading the budget there would
+    end every resumed run on its first stop.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>; <a href="loop-endings.html">Endings</a></span>
+
+  <h2 id="startup">What the user is told</h2>
+
+  <pre><code><span class="c">// crates/emma/src/main.rs</span>
+<span class="c">// The spend is shown against the caps rather than on its own,
+// because the number that matters to somebody deciding whether to
+// resume is the headroom: a session restored at 59/60 calls will
+// stop again immediately, and that is worth knowing before it does
+// rather than after.</span>
+let b = &amp;opts.budgets;
+let r = &amp;restored.resumed;
+term.note(&amp;format!(
+    "resuming {} — {} messages restored. Already spent on this goal: {}/{} calls, \
+     {}/{} tokens, {}/{} nudges.",
+    restored.id,
+    r.messages.len(),
+    r.iterations,
+    b.max_iterations,
+    r.tokens,
+    b.max_tokens,
+    r.kicks,
+    b.max_kicks
+));</code></pre>
+
+  <p>
+    The continuity warnings are not printed here. They wait until the tool
+    surface is final, and that is on
+    <a href="session-continuity.html">Continuity</a>.
+  </p>
+
+  <h2 id="coverage">What this page covers</h2>
+
+  <p>
+    From <code>session.rs</code>: <code>Restored</code>, <code>restore</code>,
+    <code>restore_records</code> with every arm quoted, <code>locate</code>,
+    <code>same_dir</code> and <code>str_of</code>. From <code>agent.rs</code>:
+    <code>Resumed</code> and the places <code>run_goal</code> spends it.
+    <code>continuity_of</code> and the <code>Continuity</code> type are the next
+    page's. The <code>--resume</code> arm of <code>cli.rs</code> and the resume
+    block of <code>main.rs</code> are quoted here because the file-selection
+    rule is split across all three.
+  </p>
+
+  <h2 id="unverified">What is not verified here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> A resume of a session written by
+      an older build, where the <code>cost_tokens</code> fallback fires. Twelve
+      files on this machine would take that path, and none has been resumed
+      during this write-up. Settle it by resuming one and comparing the
+      reported spend against a sum of <code>billable_total_tokens</code>.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> The cost of a bare
+      <code>--resume</code> in a large directory. The walk is a whole-file read
+      per candidate and nobody has timed it. Settle it by timing
+      <code>emma --resume</code> in a directory with a few thousand files.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> Whether the cache breakpoint is
+      really lost on a restored prefix. The comment says so and the mechanism is
+      plausible; no invoice or usage record in this tree shows it. Settle it by
+      resuming a large session and comparing
+      <code>cache_read_input_tokens</code> on the first two calls.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> How this page renders. No browser
+      drew it.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    <p>
+      Written against commit <code>62ab9c3</code>. Next:
+      <a href="session-continuity.html">Continuity, and the first run</a>, which
+      is what the same records say about the harness rather than the
+      conversation.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

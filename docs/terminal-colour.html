@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Colour, named by role &middot; The terminal &middot; Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav here" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/emma/src/term/palette.rs</p>
+  <h1>Colour, named by role</h1>
+
+  <nav class="chapter">
+      <a class="up" href="terminal.html">The terminal</a>
+      <a href="terminal-surface.html">Surface</a>
+      <a href="terminal-frame.html">Frame</a>
+      <a href="terminal-layout.html">Layout</a>
+      <span class="now">Colour</span>
+      <a href="terminal-themes.html">Themes</a>
+      <a href="terminal-skin.html">Vocabulary</a>
+      <a href="terminal-transcript.html">Transcript</a>
+      <a href="terminal-markdown.html">Markdown</a>
+      <a href="terminal-diff.html">Diffs</a>
+      <a href="terminal-status.html">Status</a>
+      <a href="terminal-sidebar.html">Sidebar</a>
+      <a href="terminal-dock.html">Dock</a>
+      <a href="terminal-usertools.html">User tools</a>
+    </nav>
+
+  <p class="lede">
+    Nothing in <code>term/</code> names a colour at the point of use. Text is
+    given a role, and the role is resolved at one function. That single
+    substitution point is what makes the sixteen-colour fallback one
+    <code>match</code> rather than a change at every call site, and it is also
+    where <code>NO_COLOR</code> stops being a preference and becomes
+    unreachable-by-construction.
+  </p>
+
+  <h2 id="rules">Three rules above the roles</h2>
+
+  <p>
+    Each of the three is in the module doc, and each is there because the
+    alternative breaks on a machine nobody here can see.
+  </p>
+
+  <ul class="body">
+    <li>
+      <strong>Ordinary text is never given a colour.</strong> Emma cannot ask
+      the terminal what its background is. Gruvbox's foreground is
+      <code>#ebdbb2</code>, a cream that is invisible on white, so body text is
+      <code>Color::Reset</code>, whatever the user already chose.
+    </li>
+    <li>
+      <strong>Colour is never the only signal.</strong> Every event that gets a
+      colour also gets its own glyph and its own weight. A terminal rendering
+      <code>#b8bb26</code> as a muddy olive still shows <code>&#10003;</code>
+      where a success was, and the same redundancy covers the readers who cannot
+      distinguish the red from the green.
+    </li>
+    <li>
+      <strong>Nothing paints a lone background.</strong> The two places a
+      background exists set foreground and background together, which is what
+      makes them legible against an unknown ground. Both degrade to reversed
+      video at <code>Level::None</code>.
+    </li>
+  </ul>
+  <span class="src">crates/emma/src/term/palette.rs module doc</span>
+
+  <p>
+    The first and third are enforced twice, and the module says why:
+    <em>&ldquo;once by the loader, which refuses the keys by name, and once here
+    in <code>Palette::color</code>, which returns before the theme is read. The
+    loader can only refuse data it has thought of; this function cannot be given
+    data at all.&rdquo;</em>
+  </p>
+
+  <h2 id="level">How much colour, from six inputs</h2>
+
+  <p class="faint">crates/emma/src/term/palette.rs &middot; <code>Level::of</code></p>
+  <pre><code>    pub fn of(
+        color: bool,
+        no_color: bool,
+        override_var: Option&lt;&amp;str&gt;,
+        colorterm: Option&lt;&amp;str&gt;,
+        term: Option&lt;&amp;str&gt;,
+        windows_terminal: bool,
+    ) -&gt; Self {
+        <span class="k">if let</span> Some(v) = override_var {
+            <span class="k">match</span> v.trim().to_ascii_lowercase().as_str() {
+                "none" | "0" | "off" =&gt; <span class="k">return</span> Self::None,
+                "16" | "ansi" =&gt; <span class="k">return</span> Self::Ansi16,
+                "256" =&gt; <span class="k">return</span> Self::Ansi256,
+                "truecolor" | "24bit" | "full" =&gt; <span class="k">return</span> Self::Truecolor,
+                <span class="c">// An unreadable value is not permission to guess loudly.</span>
+                _ =&gt; <span class="k">return</span> Self::Ansi16,
+            }
+        }
+        <span class="k">if</span> no_color || !color {
+            <span class="k">return</span> Self::None;
+        }
+        <span class="k">if</span> matches!(colorterm, Some(v) <span class="k">if</span> v.contains("truecolor") || v.contains("24bit")) {
+            <span class="k">return</span> Self::Truecolor;
+        }
+        <span class="k">if</span> windows_terminal {
+            <span class="k">return</span> Self::Truecolor;
+        }
+        <span class="k">match</span> term {
+            Some(t) <span class="k">if</span> t.contains("256color") =&gt; Self::Ansi256,
+            Some("dumb") =&gt; Self::None,
+            None =&gt; Self::Ansi16,
+            Some(_) =&gt; Self::Ansi16,
+        }
+    }</code></pre>
+  <span class="src">crates/emma/src/term/palette.rs — <code>Level::of</code>, <code>Level::detect</code></span>
+
+  <p>
+    The environment is an argument rather than a global, which is what makes the
+    whole ladder testable; <code>Level::detect</code> is the one line that reads
+    the real process. The order is <em>&ldquo;so the honest signals beat the
+    hopeful ones&rdquo;</em>: an explicit override first, since the person
+    setting <code>EMMA_COLORS</code> is looking at a terminal Emma guessed wrong
+    about; then <code>NO_COLOR</code> and &ldquo;this is not a terminal at
+    all&rdquo;; then the environment's own claims.
+    <code>WT_SESSION</code> is the Windows Terminal case, which does 24-bit and
+    sets neither a useful <code>COLORTERM</code> nor a useful
+    <code>TERM</code>.
+  </p>
+
+  <p>
+    An unreadable override resolves to <code>Ansi16</code> rather than to
+    truecolor, and the comment carries the reasoning in seven words:
+    <em>&ldquo;an unreadable value is not permission to guess loudly.&rdquo;</em>
+    <span class="chip test">tested</span>: four tests over
+    <code>Level::of</code>, including
+    <code>the_override_beats_every_other_signal</code>, which sets
+    <code>EMMA_COLORS=256</code> against <code>NO_COLOR</code> and
+    <code>TERM=dumb</code> together and still gets <code>Ansi256</code>.
+  </p>
+
+  <p>
+    A theme is not one of the six inputs. That is what stops <code>/theme</code>
+    from promoting a sixteen-colour console, and
+    <code>Palette::with_theme</code> has no way to detect anything, so the
+    property holds by signature.
+    <span class="chip test">tested</span>:
+    <code>a_theme_chooses_colours_and_never_how_many_of_them_there_are</code>.
+  </p>
+
+  <h2 id="roles">Eight roles, and what each is for</h2>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Role</th><th>What it means</th><th>Built-in, at 24 bits</th></tr></thead>
+      <tbody>
+        <tr><td><code>Text</code></td><td>The user's own foreground. Never a hex.</td><td><code>Color::Reset</code></td></tr>
+        <tr><td><code>Dim</code></td><td>Notes, borders, counts, the parts of a line nobody reads twice.</td><td><code>#8f8f94</code></td></tr>
+        <tr><td><code>Ok</code></td><td>Something worked.</td><td><code>#b8bb26</code></td></tr>
+        <tr><td><code>Err</code></td><td>Something failed.</td><td><code>#fb4934</code></td></tr>
+        <tr><td><code>Warn</code></td><td>Something needs a human, or was refused.</td><td><code>#fabd2f</code></td></tr>
+        <tr><td><code>Info</code></td><td>A tool, a host, a path: the nouns in a line.</td><td><code>#8ec07c</code></td></tr>
+        <tr><td><code>Accent</code></td><td>The goal, the prompt, Emma itself.</td><td><code>#f5548f</code></td></tr>
+        <tr><td><code>Ground</code></td><td>Only ever a foreground on an accent background: the answer keys.</td><td><code>#0d0d10</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <span class="src">crates/emma/src/term/palette.rs — <code>enum Role</code>; crates/emma/src/term/theme.rs — <code>BUILTIN</code></span>
+
+  <p>
+    The values moved into <code>theme.rs</code> when themes landed. The
+    <em>arguments</em> for them stayed here, and the region comment says why:
+    they are arguments about what a role means, <em>&ldquo;and the person most
+    likely to reverse one by accident is somebody editing a theme file who never
+    opens the loader.&rdquo;</em> Four of them are worth carrying.
+  </p>
+
+  <ul class="body">
+    <li>
+      <code>Dim</code> is a neutral grey rather than Gruvbox's warm
+      <code>#928374</code>, because a warm grey beside a pink accent reads as a
+      third, muddier colour rather than as an absence of one.
+    </li>
+    <li>
+      <code>Accent</code> at sixteen colours is not <code>LightRed</code>,
+      even though the hue is nearer.
+      <code>Role::Err</code> owns red at that level, and the accent is what a
+      user's own message is drawn in, so a goal line that read as an error would
+      be worse than one that reads as violet.
+    </li>
+    <li>
+      <code>Warn</code> is yellow at every level even though the 24-bit yellow
+      is nearer to some oranges: a warning that changes hue between terminals is
+      a warning somebody has to re-learn.
+    </li>
+    <li>
+      <code>Text</code> has no value reachable here at all, and that is the
+      point. The rest of this page is about that short-circuit.
+    </li>
+  </ul>
+
+  <h2 id="color">The one substitution point</h2>
+
+  <p class="faint">crates/emma/src/term/palette.rs &middot; <code>Palette::color</code></p>
+  <pre><code>    pub fn color(&amp;self, role: Role) -&gt; Color {
+        <span class="k">if</span> self.level == Level::None || role == Role::Text {
+            <span class="k">return</span> Color::Reset;
+        }
+        <span class="k">match</span> self.level {
+            Level::Truecolor =&gt; {
+                <span class="k">let</span> (r, g, b) = self.theme.rgb(role);
+                Color::Rgb(r, g, b)
+            }
+            Level::Ansi256 =&gt; Color::Indexed(self.theme.indexed(role)),
+            _ =&gt; self.theme.ansi16(role),
+        }
+    }</code></pre>
+  <span class="src">crates/emma/src/term/palette.rs — <code>Palette::color</code></span>
+
+  <p>
+    The doc calls the first line's <em>position</em> the argument:
+    <code>Level::None</code> and <code>Role::Text</code> both return before the
+    theme is read, so there is no path on which a theme is consulted and either
+    of them applies. The alternative was a check inside the theme loader, and it
+    is weaker for a stated reason: <em>&ldquo;a check can be forgotten by
+    whoever adds the next method here.&rdquo;</em>
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Fidelity</th><th>What is sent</th><th>Where the value comes from</th></tr></thead>
+      <tbody>
+        <tr><td><code>Truecolor</code></td><td><code>Color::Rgb</code>, the exact hex</td><td>Declared by the theme.</td></tr>
+        <tr><td><code>Ansi256</code></td><td><code>Color::Indexed</code>, the xterm cube</td><td>Declared by the theme, or derived by nearest neighbour.</td></tr>
+        <tr><td><code>Ansi16</code></td><td>A named ANSI colour</td><td>Declared, or inherited from the built-in role. Never derived.</td></tr>
+        <tr><td><code>None</code></td><td><code>Color::Reset</code>; emphasis becomes bold, dim or reversed</td><td>Returned before the theme is read.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>The test that has teeth under any theme</h3>
+
+  <p>
+    <code>with_no_colour_nothing_a_theme_could_say_reaches_the_screen</code>
+    names the mutation it must not survive: moving the theme lookup above the
+    short-circuit. Its doc explains why the assertion fails under that mutation
+    for <em>every</em> theme rather than for the one the fixture carries. A
+    theme carries a value for every role including <code>Text</code>; without
+    the short-circuit, truecolor returns <code>Color::Rgb</code> and 256 returns
+    <code>Color::Indexed</code>, neither of which can ever equal
+    <code>Color::Reset</code>.
+    <span class="chip test">tested</span>, and its sibling
+    <code>ordinary_text_is_never_given_a_colour_at_any_fidelity</code> holds the
+    <code>Role::Text</code> half at all four levels.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span>: the mutation itself was not run
+    for this page. What would settle it is moving the two-line early return
+    below the <code>match</code>, running
+    <code>cargo test -p emma --lib term::palette</code>, watching those two go
+    red, and putting it back.
+  </p>
+
+  <h2 id="pairs">The two backgrounds</h2>
+
+  <p class="faint">crates/emma/src/term/palette.rs &middot; <code>Palette::chip</code>, <code>Palette::band</code></p>
+  <pre><code>    pub fn chip(&amp;self, role: Role) -&gt; Style {
+        <span class="k">if</span> self.level == Level::None {
+            <span class="c">// No colour to invert, so the emphasis has to come from somewhere:</span>
+            <span class="c">// reversed video is the one attribute every terminal has.</span>
+            <span class="k">return</span> Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD);
+        }
+        Style::default()
+            .fg(self.color(Role::Ground))
+            .bg(self.color(role))
+            .add_modifier(Modifier::BOLD)
+    }</code></pre>
+  <span class="src">crates/emma/src/term/palette.rs — <code>chip</code>, <code>band</code>, <code>BAND_ANSI16_BG</code></span>
+
+  <p>
+    <code>chip</code> is the approval prompt's answer keys, and its background is
+    the <em>caller's</em> argument: the prompt draws its answer key on
+    <code>Role::Accent</code> and its refusal on <code>Role::Warn</code>, so a
+    stored pair with a fixed background could not say both. <code>band</code> is
+    the sidebar's selected-session row, and that one <em>is</em> a stored pair,
+    because the colour has no role behind it: accent text on a barely-raised
+    near-black, rgb(25,27,30), measured off <code>notes/mockup-tui.png</code> on
+    2026-08-13.
+  </p>
+
+  <p>
+    The band lived in <code>sidebar.rs</code> behind a note saying it was there
+    only because this file was not that workstream's to grow. It moved here, and
+    the reason is the whole premise of the module: <em>&ldquo;a second private
+    colour table outside the one substitution point is exactly the drift a theme
+    cannot be applied to.&rdquo;</em>
+  </p>
+
+  <p>
+    Its two non-hex fidelities differ from each other, and the asymmetry is the
+    same one themes use. The 256 index is <em>derived</em> from the pair's own
+    hex, because that is mechanical: <code>nearest_index</code> puts
+    rgb(25,27,30) on 234, the greyscale ramp's <code>#1c1c1c</code>. The
+    sixteen-colour background is <em>not</em> derived, because nearest distance
+    on a near-black picks black, which is the terminal's own background on the
+    machines this band exists for, <em>&ldquo;and a band the same colour as the
+    ground is not a band.&rdquo;</em> <code>BAND_ANSI16_BG</code> is
+    <code>DarkGray</code>, chosen by intent.
+  </p>
+
+  <p>
+    <span class="chip test">tested</span>:
+    <code>the_selection_band_is_the_measured_pair_at_every_fidelity</code> pins
+    all four, and closes with a property rather than a literal, that the band is
+    never equal to <code>chip(Role::Accent)</code> at any fidelity. That is the
+    regression the owner reported by eye as &ldquo;not formatted like the
+    image&rdquo;, when an earlier draft reused the chip's dark-on-pink and the
+    sidebar row read as a second approval prompt.
+    <code>nothing_paints_a_background_except_the_named_pairs</code> holds the
+    other end: every role is a lone foreground, and both pairs set both halves
+    and are never equal to each other.
+  </p>
+
+  <h2 id="nearest">The derivation, and the two indices it gets wrong</h2>
+
+  <p class="faint">crates/emma/src/term/palette.rs &middot; <code>nearest_index</code></p>
+  <pre><code>fn nearest_index(rgb: (u8, u8, u8)) -&gt; u8 {
+    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    <span class="w">…</span>
+    <span class="c">// A tie goes to the lower index — `min_by_key` keeps the first — so the</span>
+    <span class="c">// cube wins over the ramp where both land on the same distance, which is</span>
+    <span class="c">// the same order the two structures have in the palette itself.</span>
+    cube.chain(ramp)
+        .min_by_key(|&amp;(_, candidate)| dist(rgb, candidate))
+        .map(|(idx, _)| idx)
+        .expect("the cube and the ramp are both non-empty")
+}</code></pre>
+  <span class="src">crates/emma/src/term/palette.rs — <code>nearest_index</code></span>
+
+  <p>
+    Squared RGB distance over the 6&times;6&times;6 cube (indices 16 to 231,
+    levels 0/95/135/175/215/255) and the 24-step greyscale ramp (232 to 255,
+    value <code>8 + 10i</code>). The first sixteen entries are excluded, because
+    they are whatever the user's terminal theme says they are, so
+    &ldquo;nearest&rdquo; is a claim about a colour this process cannot see.
+  </p>
+
+  <p>
+    Only pairs come through this function, and only for their 256-colour half. A
+    role's index is <em>declared</em> by the theme, and the reason is measured
+    rather than asserted: the derivation reproduces five of the seven shipped
+    indices exactly and disagrees with two by a shade of the same hue.
+    <code>Err</code> derives to 203 where the customary Gruvbox terminal mapping
+    is 167, and <code>Dim</code> to 246 where it is 245, one greyscale step.
+    Both divergences are pinned by
+    <code>the_256_derivation_reproduces_the_measured_table</code> rather than
+    smoothed over, <em>&ldquo;because the reason the built-in theme
+    <em>declares</em> those two indices is that this function would otherwise
+    quietly change what Emma looks like.&rdquo;</em>
+    <span class="chip test">tested</span>
+  </p>
+
+  <div class="note">
+    <span class="h">A consequence the file states rather than hides</span>
+    <p>
+      Where a pair's half names a role whose index the theme <em>declared</em>
+      against the derivation, the band will use the derived one, because
+      <code>Palette::band</code> calls <code>nearest_index</code> on the pair's
+      hex rather than reading the role's declared index. For the built-in theme
+      the two agree: accent derives to the 204 it declares, which is what the
+      test pins. A theme declaring an <code>ansi256</code> for
+      <code>accent</code> and naming <code>accent</code> as its selection
+      foreground would see the declared index in ordinary text and the derived
+      one in the band.
+      <span class="chip unv">unverified</span> as a visible symptom; it follows
+      from reading <code>band</code> beside <code>Theme::indexed</code>. A theme
+      file declaring a distant <code>ansi256</code> for
+      <code>accent</code>, rendered at <code>Level::Ansi256</code>, would settle
+      it.
+    </p>
+    <span class="src">crates/emma/src/term/palette.rs — <code>nearest_index</code> doc, <code>band</code></span>
+  </div>
+
+  <h2 id="copy">Why the whole thing is <code>Copy</code></h2>
+
+  <p>
+    <code>Palette</code> is two fields, a <code>Level</code> and a
+    <code>Theme</code>, and it is <code>Copy</code>. Roughly thirty call sites
+    pass one by value, and the <code>Skin</code> that holds one is stored in
+    widgets across the module. A <code>Theme</code> holding a
+    <code>String</code> would end that and cascade through every signature in
+    <code>term/</code>, which is why themes are resolved to fixed-size data at
+    load. <span class="chip test">tested</span>:
+    <code>a_palette_is_still_copy</code> asserts it of
+    <code>Palette</code>, <code>Theme</code> and <code>Level</code> through a
+    <code>fn assert_copy&lt;T: Copy&gt;()</code>.
+  </p>
+
+  <p>
+    The four small helpers on top of <code>color</code> are
+    <code>style</code> (a foreground), <code>dim</code> (the
+    <code>Dim</code> role <em>plus</em> <code>Modifier::DIM</code>, so a
+    colourless terminal still separates a note from a line somebody has to
+    read), <code>bold</code>, and the two pair functions above.
+    <code>Palette::new(level)</code> and <code>Palette::with_theme(level,
+    BUILTIN)</code> are the same thing, which is what keeps the thirty
+    <code>Palette::new</code> call sites honest.
+  </p>
+
+  <h2 id="table">The whole built-in palette, pinned</h2>
+
+  <p>
+    <code>the_built_in_theme_renders_exactly_what_shipped</code> is a full table
+    of eight roles at four fidelities, thirty-two assertions, and its doc says
+    why it is written as literals rather than as properties: <em>&ldquo;the
+    failure it guards against is a single value drifting during the move, which
+    no property test can see, since every property here (degradation, accent
+    &ne; error, no lone background) would still hold of a subtly different
+    palette. Somebody who changes a colour on purpose edits this table and says
+    so; nobody changes one by accident.&rdquo;</em>
+    <span class="chip test">tested</span>
+  </p>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    <code>palette.rs</code> is 814 lines and was read in full for this page,
+    tests included. It declares 12 function items above the test boundary:
+    <code>Level::of</code>, <code>Level::detect</code>,
+    <code>Palette::new</code>, <code>with_theme</code>, <code>color</code>,
+    <code>style</code>, <code>dim</code>, <code>bold</code>, <code>chip</code>,
+    <code>band</code>, <code>nearest_index</code> and its inner
+    <code>dist</code>. All 12 are named here: 12 of 12. Two constants
+    (<code>BAND_ANSI16_BG</code>, and <code>LEVELS</code> inside the
+    derivation) and three types (<code>Level</code>, <code>Role</code>,
+    <code>Palette</code>) are covered. Eleven of its eighteen tests are cited by
+    name; the seven that are not are the per-fidelity degradation checks
+    (<code>a_sixteen_colour_terminal_is_never_sent_a_hex_or_an_index</code> and
+    four siblings), <code>the_answer_keys_keep_a_dark_foreground_on_the_accent</code>
+    and <code>with_no_colour_a_chip_is_still_unmissable</code>, all of which
+    assert the table above.
+  </p>
+
+  <p>
+    <strong>Not settled here.</strong> Whether a 256-colour terminal's rendering
+    of index 204 is close enough to <code>#f5548f</code> to be
+    indistinguishable, which the region comment claims. That is a statement
+    about a screen and no test in this repository reads one.
+    <span class="chip unv">unverified</span>: two terminals side by side, one
+    forced to <code>EMMA_COLORS=256</code> and one to truecolor, would settle
+    it.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="terminal-themes.html">themes as data on disk</a>, where the
+      values come from and what a broken file costs. Back to
+      <a href="terminal.html">The terminal</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

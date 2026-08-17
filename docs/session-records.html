@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Every record, field by field · Sessions &amp; context · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav here" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">Sessions &amp; context</p>
+  <h1>Every record, field by field</h1>
+
+  <nav class="chapter">
+    <a class="up" href="session.html">Sessions &amp; context</a>
+    <a href="session-file.html">The file</a>
+    <span class="now">Records</span>
+    <a href="session-fold.html">The fold</a>
+    <a href="session-resume.html">Resume</a>
+    <a href="session-continuity.html">Continuity</a>
+    <a href="session-compaction.html">Compaction</a>
+    <a href="session-corpus.html">The corpus</a>
+  </nav>
+
+  <p class="lede">
+    Seventeen kinds, written from four files, plus the same kinds again under a
+    <code>sub.</code> prefix when a delegation is running. This page is meant to
+    be enough on its own: what writes each one, every field on it, who reads it
+    back, and the two pairing rules a parser gets wrong if nobody says them.
+  </p>
+  <span class="src">crates/emma/src/agent.rs · delegate.rs · main.rs · session.rs</span>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven, and repeatable: a file, a command, a count you can redo</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+    <div><span class="chip test">tested</span> a test that was shown to fail</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <h2 id="universal">The two fields every record has</h2>
+
+  <p>
+    <code>kind</code> and <code>at_ms</code>, both inserted by
+    <code>SessionLog::append</code> rather than by the call site.
+    <code>at_ms</code> is unix milliseconds at the moment of the append, which
+    for a <code>tool_result</code> is after the tool ran and for a
+    <code>tool_call</code> is before it started. Nothing else appears on every
+    record. <code>turn_id</code> comes close and is missing from the eight
+    session-level kinds below.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>SessionLog::append</code></span>
+
+  <p>
+    Both readers, <code>Fold::record</code> and <code>restore_records</code>,
+    match on <code>kind</code> with a <code>_ =&gt; {}</code> arm. An unknown
+    kind is skipped rather than fatal, which is what lets a file written by an
+    older build still fold, and what makes the <code>sub.</code> prefix work
+    without either reader mentioning delegation.
+  </p>
+
+  <h2 id="session-level">Session-level records</h2>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>kind</th><th>written by</th><th>fields</th><th>read back by</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>goal</code></td>
+        <td><code>Agent::run_goal</code>, first thing</td>
+        <td><code>session_id</code>, <code>text</code> (what you typed),
+            <code>opening</code> (the composed user turn, including anything a
+            <code>UserPromptSubmit</code> hook injected), <code>cwd</code>,
+            <code>instructions_hash</code>, <code>tool_schema_hash</code>,
+            <code>model</code>, <code>done_check</code></td>
+        <td>fold (opens a goal, and <code>opening</code> becomes the first user
+            message), restore (resets every counter), continuity, and both
+            directory scans</td>
+      </tr>
+      <tr>
+        <td><code>goal_finished</code></td>
+        <td><code>Agent::run_goal</code>, after the loop breaks</td>
+        <td><code>ending</code>, <code>detail</code> (a string for
+            <code>Ending::Provider</code>, <code>null</code> otherwise),
+            <code>tokens</code>, <code>iterations</code>, <code>kicks</code>,
+            <code>elapsed_ms</code></td>
+        <td>fold (the note saying a goal stopped short), restore (these three
+            counters override the running totals)</td>
+      </tr>
+      <tr>
+        <td><code>compacted</code></td>
+        <td><code>Agent::compact</code></td>
+        <td><code>why</code>, <code>goals</code>, <code>drop_messages</code>,
+            <code>messages</code> (the replacement, verbatim),
+            <code>request_tokens</code>, <code>max_context</code>,
+            <code>estimated_before</code>, <code>estimated_after</code></td>
+        <td>fold, which replays it rather than re-deriving it</td>
+      </tr>
+      <tr>
+        <td><code>cleared</code></td>
+        <td><code>Agent::clear</code>, which is <code>/clear</code></td>
+        <td><code>goals</code>, <code>messages</code></td>
+        <td>fold, which empties both its lists</td>
+      </tr>
+      <tr>
+        <td><code>model_changed</code></td>
+        <td><code>Agent::set_provider</code>, which is <code>/model &lt;id&gt;</code></td>
+        <td><code>from</code>, <code>to</code></td>
+        <td>nobody. A human reading the file</td>
+      </tr>
+      <tr>
+        <td><code>prompt_blocked</code></td>
+        <td><code>main.rs</code>, when a <code>UserPromptSubmit</code> hook refuses</td>
+        <td><code>text</code>, <code>reason</code></td>
+        <td>nobody. It is what stops a refused prompt from being a turn nobody
+            can account for afterwards</td>
+      </tr>
+      <tr>
+        <td><code>hook</code></td>
+        <td><code>main.rs</code> for prompt hooks, <code>Agent::log_hooks</code>
+            for tool hooks, one record per run</td>
+        <td><code>run</code> (the serialised <code>HookRun</code>), plus
+            <code>turn_id</code> on the tool ones</td>
+        <td>nobody</td>
+      </tr>
+      <tr>
+        <td><code>delegation</code></td>
+        <td><code>Delegate</code>, once per delegation, at the parent's level
+            and under the parent's own <code>kind</code></td>
+        <td><code>sub_id</code>, <code>parent_turn_id</code>,
+            <code>agent</code>, <code>task</code>, <code>ending</code>,
+            <code>cost_tokens</code>, <code>iterations</code>,
+            <code>elapsed_ms</code>, <code>tool_calls</code>,
+            <code>files_read</code>, <code>fetched</code>,
+            <code>other_tool_calls</code>, <code>commands</code>,
+            <code>failed_commands</code>, <code>denied</code>,
+            <code>max_tokens</code>, <code>max_iterations</code></td>
+        <td>restore, for <code>cost_tokens</code> only; and
+            <code>emma agents</code></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/emma/src/agent.rs — <code>run_goal</code>, <code>clear</code>, <code>set_provider</code>, <code>compact</code>, <code>log_hooks</code>; crates/emma/src/main.rs; crates/emma/src/delegate.rs</span>
+
+  <p>
+    The <code>goal</code> record is the one worth reading in the source,
+    because two of its fields exist for readers who are not the fold and the
+    comments say which.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::run_goal</span>
+self.s.log.append(
+    "goal",
+    json!({
+        "session_id": self.s.session_id,
+        "text": goal.text,
+        "opening": opening,
+        <span class="c">// The one field written for a reader rather than for the fold.
+        // Bare `--resume` means "the session I was last running *here*",
+        // and a file that does not say where it ran cannot answer that —
+        // so the working directory is recorded once per goal, which is
+        // also the only place the answer could change within a session.</span>
+        "cwd": self.s.cwd.display().to_string(),
+        "instructions_hash": emma_harness::hash::short(self.s.instructions),
+        "tool_schema_hash": self.s.tools.schema_hash(),
+        "model": self.s.provider.model_id(),
+        "done_check": self.s.done.name(),
+    }),
+);</code></pre>
+
+  <p>
+    <code>opening</code> is the composed user turn and not the words you typed;
+    <code>text</code> is the words you typed. The fold rebuilds the first
+    message of a goal from <code>opening</code>, so a hook that injected
+    context in front of the prompt is inside the replayed conversation and a
+    resume sends what the model originally saw. <code>done_check</code> is the
+    <em>name</em> of the completion rule rather than the rule, and the comment
+    above the call explains why the composed string is stored instead of being
+    re-derived: a fold that rebuilt it would need a name-to-implementation table
+    kept in step with <code>goal.rs</code> forever.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, the comment above the <code>goal</code> append</span>
+
+  <h2 id="turn-level">Turn-level records</h2>
+
+  <p>
+    Each of these carries <code>turn_id</code>, which is
+    <code>turn-&lt;n&gt;</code> counting from the start of the session rather
+    than the start of the goal. <code>/clear</code> does not reset it, because
+    the ids have to stay unique inside a file that is not cleared.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>kind</th><th>when</th><th>fields beyond <code>turn_id</code></th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>model_call</code></td>
+        <td>after each model call, before the token budget is tested</td>
+        <td><code>iteration</code>, <code>stop_reason</code>,
+            <code>input_tokens</code>, <code>output_tokens</code>,
+            <code>cache_creation_input_tokens</code>,
+            <code>cache_read_input_tokens</code>,
+            <code>billable_total_tokens</code>, <code>cost_tokens</code>,
+            <code>goal_total_so_far</code></td>
+      </tr>
+      <tr>
+        <td><code>assistant</code></td>
+        <td>once per turn, whatever the turn contained</td>
+        <td><code>text</code> (the plain prose, for <code>grep</code>),
+            <code>raw_content</code> (the provider's own content array, and the
+            only field a resume can use)</td>
+      </tr>
+      <tr>
+        <td><code>kick</code></td>
+        <td>the model stopped without claiming completion and is nudged</td>
+        <td><code>n</code> (which nudge this is), <code>why</code> (for a
+            human), <code>text</code> (what was actually sent)</td>
+      </tr>
+      <tr>
+        <td><code>tool_call</code></td>
+        <td>a call that passed the name check, the schema check and the memo,
+            written immediately before the hooks and the approval gate</td>
+        <td><code>id</code>, <code>tool</code>, <code>args</code></td>
+      </tr>
+      <tr>
+        <td><code>tool_unknown</code></td>
+        <td>the model named a tool that is not registered</td>
+        <td><code>tool</code>, <code>id</code></td>
+      </tr>
+      <tr>
+        <td><code>denied</code></td>
+        <td>a <code>PreToolUse</code> hook refused, or the human did</td>
+        <td><code>id</code>, <code>by</code> (<code>"hook"</code> or
+            <code>"user"</code>), <code>reason</code></td>
+      </tr>
+      <tr>
+        <td><code>tool_failed</code></td>
+        <td>the tool ran and returned a typed <code>ToolError</code></td>
+        <td><code>id</code>, <code>tool</code>, <code>kind</code>,
+            <code>detail</code></td>
+      </tr>
+      <tr>
+        <td><code>tool_fault</code></td>
+        <td>the tool claimed the session cannot continue, which it does not get
+            to decide; it becomes a result the model reads</td>
+        <td><code>id</code>, <code>tool</code>, <code>detail</code></td>
+      </tr>
+      <tr>
+        <td><code>tool_result</code></td>
+        <td>always, success or failure, once per <code>tool_use</code></td>
+        <td><code>id</code>, <code>tool</code>, <code>block</code> (the whole
+            content block as sent, carrying <code>type</code>,
+            <code>tool_use_id</code>, <code>content</code> and, on a failure,
+            <code>is_error</code>), <code>truncated</code>
+            (<code>null</code> on every failure path)</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/emma/src/agent.rs — <code>run_goal</code>, <code>run_tool_call</code>, <code>log_result_block</code></span>
+
+  <p>
+    <code>model_call</code> carries four raw provider fields plus two derived
+    ones because the two derived numbers answer different questions and the
+    project has already been bitten by one number answering both.
+    <code>billable_total_tokens</code> is how much context the call carried;
+    <code>cost_tokens</code> is the same call weighted by price, a cache write
+    at 1.25× and a cache read at 0.1×, and it is the only one a budget is
+    tested against. A resume sums <code>cost_tokens</code> for that reason. See
+    <a href="loop-budgets.html">Budgets</a>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — the <code>model_call</code> append, <code>cost_tokens</code></span>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::log_result_block</span>
+self.s.log.append(
+    "tool_result",
+    json!({ "turn_id": turn_id, "id": call.id, "tool": call.name,
+            <span class="c">// Written as the content block it becomes, `type` tag and
+            // all, because that is the shape the fold reads back and the
+            // shape `restore_records` tests `is_error` on.</span>
+            "block": ContentBlock::ToolResult(block.clone()),
+            "truncated": truncated }),
+);</code></pre>
+
+  <p>
+    The block rather than the rendered string, because the string alone cannot
+    be turned back into a message: the block carries the
+    <code>tool_use_id</code> that pairs it with its call, and
+    <code>is_error</code> when it failed. The content is one JSON string deeper
+    than it would otherwise be, which is the price of the record being
+    sufficient rather than merely readable, and it is not stored twice. A tool's
+    output is the largest thing in the file.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::log_result_block</code></span>
+
+  <h2 id="pairing">Two pairing rules a parser needs</h2>
+
+  <div class="note">
+    <span class="h">A failure writes two records, and sometimes only one</span>
+    <p>
+      Every failure gets the prose record naming what went wrong
+      (<code>tool_unknown</code>, <code>denied</code>, <code>tool_failed</code>
+      or <code>tool_fault</code>) and then the <code>tool_result</code> that was
+      actually sent, under the same kind a success uses. The fold rebuilds the
+      user turn from those blocks, and a fold that skipped failures would
+      reconstruct a turn answering only the calls that worked, which the API
+      rejects.
+    </p>
+    <p>
+      Two failure classes produce a <code>tool_result</code> with no preceding
+      <code>tool_call</code>: a schema violation and the already-failed memo.
+      Both are refused inside <code>run_tool_call</code> before the
+      <code>tool_call</code> record is written, so anything joining calls to
+      results by <code>id</code> will meet results with no call.
+      <span class="chip cert">certified</span> in the corpus, not only in the
+      source: at 2026-08-16 20:28 EDT two <code>tool_result</code> records in
+      <code>~/.emma/sessions/</code> have no earlier <code>tool_call</code> with
+      their id, in <code>sess-1786386360054-46700.jsonl</code> and
+      <code>sess-1786387904169-52756.jsonl</code>, and both carry
+      <code>"kind":"already_failed"</code> inside the block. The script is on
+      <a href="session-corpus.html">The corpus</a>. The schema-violation class
+      has not appeared in this corpus at all.
+    </p>
+  </div>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code>, the <code>fail</code> closure; crates/emma/src/session.rs — <code>restore_records</code></span>
+
+  <p>
+    The order inside <code>run_tool_call</code> is what produces that gap. The
+    unknown-tool check, <code>validate_args</code> and the memo check all come
+    before the <code>tool_call</code> append; the hooks and the approval gate
+    come after it. So a <code>denied</code> record always has a
+    <code>tool_call</code> above it with the same id, and an
+    <code>already_failed</code> result never does.
+    <code>restore_records</code> states the cost of that in its own comment:
+    those two classes are not restored into the memo, so a resumed model may
+    re-issue one call that cannot run and be told so again.
+  </p>
+
+  <div class="note">
+    <span class="h">A turn and its results are placed together or not at all</span>
+    <p>
+      The second rule, and the one that decides what a parser may keep. The API
+      rejects an assistant turn carrying a <code>tool_use</code> that no
+      <code>tool_result</code> answers, and equally a result answering nothing.
+      A run killed between the model call and the last of its tools leaves
+      exactly that in the file. Keeping the half that survived produces a
+      message list the next request cannot send, so the fold drops both.
+      <a href="session-fold.html">The fold</a> has the code and the mutation
+      that proves the check is live.
+    </p>
+  </div>
+
+  <h2 id="sub">Records a delegation wrote</h2>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// A second view of this same file for one delegation, and the buffer its
+/// records also land in.
+///
+/// **Why the `kind`s are namespaced.** [`fold_records`] and
+/// [`restore_records`] match on `kind` and both have a `_ => {}` arm, so
+/// `sub.assistant` and `sub.model_call` are ignored for free — which is the
+/// whole mechanism. Written under the parent's own names the damage would
+/// not be subtle: a sub `assistant` record arriving between the parent's
+/// `tool_call` and its `tool_result` calls `close_turn`, which places the
+/// parent's held turn *without* its results, `answered()` fails, and the
+/// parent's whole turn is silently dropped from every resume of that
+/// session. `tests/delegate.rs` folds a session containing a delegation and
+/// asserts the parent's message list is unchanged, because without that test
+/// this is a convention rather than a property.
+///
+/// The three stamped fields are what make the file greppable back apart:
+/// which delegation wrote a record, which of the parent's turns asked for
+/// it, and which agent type ran.</span>
+pub fn subagent(&amp;self, sub_id: &amp;str, parent_turn_id: &amp;str, agent: &amp;str) -&gt; (Self, Records) {
+    let tap: Records = Arc::new(Mutex::new(Vec::new()));
+    (
+        Self {
+            id: self.id.clone(),
+            path: self.path.clone(),
+            file: self.file.clone(),
+            prefix: Some("sub"),
+            stamp: vec![
+                ("sub_id".into(), json!(sub_id)),
+                ("parent_turn_id".into(), json!(parent_turn_id)),
+                ("agent".into(), json!(agent)),
+            ],
+            tap: Some(tap.clone()),
+        },
+        tap,
+    )
+}</code></pre>
+
+  <p>
+    Same <code>Arc&lt;Mutex&lt;Option&lt;File&gt;&gt;&gt;</code>, so both runs
+    write to one file through one lock and the records interleave in real time
+    rather than being buffered and appended at the end. What separates them is
+    the prefix on the <code>kind</code> and the three stamped fields on every
+    payload. A delegated run therefore writes <code>sub.goal</code>,
+    <code>sub.model_call</code>, <code>sub.assistant</code>,
+    <code>sub.tool_call</code>, <code>sub.tool_result</code>,
+    <code>sub.goal_finished</code> and so on for every kind its loop reaches,
+    since it is the same <code>Agent::run_goal</code> doing the writing.
+    <span class="chip cert">certified</span>: all six of those appear in
+    <code>~/.emma/sessions/</code> today, alongside exactly one
+    <code>delegation</code> record. Counts on
+    <a href="session-corpus.html">The corpus</a>.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>SessionLog::subagent</code>; crates/emma/src/delegate.rs</span>
+
+  <p>
+    <span class="chip test">tested</span>
+    <code>folding_a_session_containing_a_delegation_returns_the_parents_conversation</code>
+    in <code>crates/emma/tests/delegate.rs</code> is what makes the prefix a
+    property rather than a habit. Without it, a rename of one
+    <code>kind</code> at one call site would drop a parent turn from every
+    future resume and nothing would say so.
+  </p>
+
+  <h3>The tap, and why the footer is a record</h3>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs — the SessionLog fields</span>
+<span class="c">/// Every record this view wrote, kept in memory for whoever is composing a
+/// footer out of them.
+///
+/// **This is what makes the delegation footer a record rather than a
+/// claim.** `Delegate` reads these back — the tool calls, their results, the
+/// denials, the ending — and writes the footer from them, so what the parent
+/// is told about what a subagent did comes from the loop rather than from the
+/// subagent. Reading the file back instead would work everywhere except
+/// where the log is [`SessionLog::none`], which is exactly where the tests
+/// are.</span>
+tap: Option&lt;Records&gt;,</code></pre>
+
+  <p>
+    <code>Records</code> is <code>Arc&lt;Mutex&lt;Vec&lt;Value&gt;&gt;&gt;</code>
+    and <code>subagent</code> returns a second handle to it, so
+    <code>Delegate</code> holds one end while the nested loop fills the other.
+    The footer it composes and the parent-level <code>delegation</code> record
+    are both built from those values. See
+    <a href="delegation.html">Delegation</a> for what the footer says.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>Records</code>, <code>SessionLog::tap</code>; crates/emma/src/delegate.rs</span>
+
+  <h2 id="parse">Parsing a session from scratch</h2>
+
+  <p>
+    Read the file, drop lines that will not parse, then walk in order. Five
+    kinds rebuild the conversation and everything else is audit trail.
+  </p>
+
+  <ol class="body">
+    <li>
+      <code>goal</code> opens a goal. Its <code>opening</code> is the first user
+      message. If a goal was already open, close it first.
+    </li>
+    <li>
+      <code>assistant</code> holds a turn. Its <code>raw_content</code> array is
+      the assistant message, blocks and all. A record without that field cannot
+      be used and costs its whole turn.
+    </li>
+    <li>
+      <code>tool_result</code> accumulates. Its <code>block</code> is a content
+      block that goes into a user message pairing with the held turn.
+    </li>
+    <li>
+      <code>kick</code> closes a turn that made no tool calls. Its
+      <code>text</code> is a user message, and it is dropped if the turn before
+      it could not be placed.
+    </li>
+    <li>
+      <code>cleared</code> throws away everything before it, both the finished
+      goals and the one in flight.
+    </li>
+  </ol>
+
+  <p>
+    Then <code>compacted</code>, which is a splice rather than a message:
+    drop <code>drop_messages</code> off the front of the finished-goal list and
+    insert the recorded <code>messages</code> in their place. The count indexes
+    finished goals only. All of this is
+    <a href="session-fold.html">the fold</a>, in code, with the arms in the
+    order the reader hits them.
+  </p>
+
+  <p>
+    Records under <code>sub.</code> are skipped by that walk. Records with no
+    arm are skipped too, which today means <code>model_call</code>,
+    <code>tool_call</code>, <code>tool_unknown</code>, <code>denied</code>,
+    <code>tool_failed</code>, <code>tool_fault</code>, <code>hook</code>,
+    <code>model_changed</code>, <code>prompt_blocked</code> and
+    <code>delegation</code>. Three of those are read by
+    <a href="session-resume.html">restore</a> for numbers rather than messages.
+  </p>
+
+  <h2 id="coverage">What this page covers</h2>
+
+  <p>
+    All seventeen record kinds Emma writes, their fields and their writers, plus
+    <code>SessionLog::subagent</code> and the <code>Records</code> tap from
+    <code>session.rs</code>. The field lists were read off the
+    <code>json!</code> macro at each call site rather than from the corpus, so a
+    field a run has never produced is still listed.
+    <span class="chip cert">certified</span> that the list is complete for this
+    commit: <code>grep -rn "\.append(" --include=*.rs crates/</code>, with
+    <code>session.rs</code>'s own definition excluded, returns 20 call sites.
+    Sixteen are in <code>agent.rs</code>, one in <code>delegate.rs</code>, two
+    in <code>main.rs</code>, and one in <code>crates/emma/tests/resume.rs</code>.
+    Seven of the sixteen in <code>agent.rs</code> write turn-level tool records
+    from <code>run_tool_call</code> and <code>log_result_block</code>.
+  </p>
+
+  <h2 id="unverified">What is not verified here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> The <code>tool_fault</code>,
+      <code>tool_unknown</code>, <code>prompt_blocked</code> and
+      <code>compacted</code> field lists have no example in the real corpus:
+      zero of each exist there. They are read off the call sites. Settle it by
+      provoking one of each and reading the line.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> Whether records from a
+      delegation and its parent can interleave <em>within</em> a single line.
+      One mutex per file makes that look impossible, but no test writes from two
+      views concurrently. Settle it by running a delegation and checking every
+      line parses, which today it does for the one delegated session in the
+      corpus.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> How this page renders. No
+      browser drew it.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    <p>
+      Written against commit <code>62ab9c3</code>. Next:
+      <a href="session-fold.html">The fold</a>, which is the first of these
+      records' two readers.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

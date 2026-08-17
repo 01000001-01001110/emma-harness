@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>It did not apply · Configuration · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav here" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/emma/src/commands.rs · config check</p>
+  <h1>Why did my setting not apply</h1>
+
+  <nav class="chapter">
+      <a class="up" href="config.html">Configuration</a>
+      <a href="config-discovery.html">Discovery</a>
+      <a href="config-files.html">Every file</a>
+      <a href="config-spine.html">The spine</a>
+      <a href="config-claude.html">Reading <code>.claude/</code></a>
+      <a href="config-skills.html">Skills &amp; commands</a>
+      <a href="config-agents.html">Agents</a>
+      <a href="config-personal.html">Your own files</a>
+      <a href="config-themes.html">Themes</a>
+      <span class="now">It did not apply</span>
+    </nav>
+
+  <p class="lede">
+    In the order worth checking, because each step rules out the ones below it.
+    The first question is not "is my key spelled right", it is "did Emma read the
+    file I edited at all", and it is the common answer.
+  </p>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven, and a reader can repeat it: a file, a command, a count</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+    <div><span class="chip test">tested</span> a test that was shown to fail</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <p>
+    One command answers most of this, makes no model call, and prints what
+    actually resolved rather than what a file says.
+  </p>
+
+<pre><code><span class="c">$ emma config check          # in C:\src\emma</span>
+cwd            C:\src\emma
+harness        C:\src\emma\.emma
+flavor         emma
+persona        emma
+instructions   b6dd1dabd7468355 (800 bytes)
+config         edd1817c1861d002
+tools          Read, Write, Edit, Glob, Grep, Bash, TaskCreate, TaskGet, TaskList, TaskUpdate,
+               FindReferences, GoToDefinition, Hover, DocumentSymbols, WebFetch, WebSearch,
+               BrowserOpen, BrowserRead, BrowserAct, BrowserFill, BrowserClose
+tool schema    ce26c5f39467e4f0
+skills         (none)
+agents         (none)
+commands       (none)
+hooks          (none)
+permissions    <span class="w">(none — every write, command and host is asked about)</span>
+               a remembered grant is written to C:\src\emma\.emma\settings.local.json
+provider       anthropic  (settings.json)
+model          claude-sonnet-5  (settings.json)
+api key        found (stored file)
+
+no model was called.</code></pre>
+  <span class="chip cert">certified</span>: release binary at commit <code>62ab9c3</code>, this repository, 2026-08-16. Verbatim apart from wrapping the tools line, which the binary prints on one line.
+  <span class="src">crates/emma/src/commands.rs — <code>config_check</code>, <code>configured</code>, <code>shadowed</code></span>
+
+  <h2 id="one">1 · A different directory was loaded than the one you edited</h2>
+
+  <p>
+    Three causes, and all three look identical from inside the editor:
+    <code>.emma/</code> beat a <code>.claude/</code> sitting beside it, a
+    <em>nearer</em> ancestor had a harness you had forgotten about, or
+    <code>EMMA_ROOT</code> is exported in that shell. Read the first three lines
+    of the report: <code>cwd</code>, <code>harness</code>, <code>flavor</code>.
+    If <code>harness</code> is not the directory you edited, nothing below
+    matters.
+  </p>
+
+  <p>
+    A fourth cause is narrower and worth knowing because it has no message at
+    all: the home directory's <code>.emma/</code> is only a harness when it holds
+    a <code>config.json</code> or a <code>personas/</code>. A
+    <code>~/.emma/</code> holding a stored key and a settings file is walked past,
+    and the run gets the absent-harness refusal rather than a silent boot.
+    <a href="config-discovery.html">Discovery</a> has the whole walk.
+  </p>
+
+  <h2 id="two">2 · The key is real, but it belongs in a different file</h2>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>if you wrote…</th><th>in…</th><th>it belongs in…</th></tr></thead>
+    <tbody>
+      <tr><td><code>theme</code>, <code>provider</code>, <code>model</code>, <code>tools</code></td>
+          <td><code>.emma/config.json</code></td>
+          <td><code>~/.emma/settings.json</code>, and the spine would have
+              <em>refused to start</em> over it, so if Emma booted, that is not
+              what happened</td></tr>
+      <tr><td><code>permissions.allow</code></td>
+          <td><code>~/.claude/settings.json</code></td>
+          <td>the project's spine or <code>settings.local.json</code>. User
+              scope contributes <code>deny</code> only, silently</td></tr>
+      <tr><td>a hook for <code>SessionStart</code>, <code>Stop</code>, <code>PreCompact</code></td>
+          <td>either spine</td>
+          <td>nowhere: Emma has three events, and this is a startup error
+              rather than a skip, so again, if Emma booted, this is not it</td></tr>
+      <tr><td>a skill or agent in a subdirectory</td>
+          <td><code>agents/&lt;sub&gt;/x.md</code></td>
+          <td>top level. <code>agents/</code> and <code>commands/</code> read
+              <code>*.md</code> at the top only; <code>skills/</code> wants
+              <code>&lt;name&gt;/SKILL.md</code> exactly</td></tr>
+      <tr><td>a hook or status-line command outside <code>hooks/</code></td>
+          <td>either spine</td>
+          <td><code>&lt;harness&gt;/hooks/</code>. An absolute path or a shell
+              string is a startup error for a hook and a note for a status
+              line</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>
+    Two of those rows say "if Emma booted, this is not it", and that is the most
+    useful property the chapter has. Emma's own format refuses rather than
+    ignores, so a misplaced key in <code>.emma/config.json</code> cannot be the
+    explanation for a run that started.
+  </p>
+
+  <h2 id="three">3 · The key was swallowed rather than refused</h2>
+
+  <p>
+    Three files ignore keys they do not know, and in all three a misspelling is
+    silence:
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>file or block</th><th>unknown key</th><th>why</th></tr></thead>
+    <tbody>
+      <tr><td><code>.claude/settings.json</code>, outer level</td>
+          <td>ignored</td>
+          <td>Somebody else's format, carrying keys Emma has no opinion about.
+              Denying them would refuse the boot in essentially every real
+              Claude Code repository</td></tr>
+      <tr><td><code>permissions</code>, in either spine</td>
+          <td>ignored</td>
+          <td><code>defaultMode</code> and <code>additionalDirectories</code> are
+              real keys in real files. This is the one permissive block inside
+              Emma's own strict file</td></tr>
+      <tr><td><code>statusLine</code>, in either spine</td>
+          <td>ignored</td>
+          <td><code>refreshInterval</code> and friends are display preferences</td></tr>
+      <tr><td><code>.claude/skills/*/SKILL.md</code> frontmatter</td>
+          <td>ignored</td>
+          <td>Real skills carry <code>model-role</code>, <code>version</code> and
+              <code>allowed-tools</code>; under the strict struct every one of
+              them took the boot down</td></tr>
+      <tr><td><code>agents/*.md</code> frontmatter</td>
+          <td>ignored</td>
+          <td>Measured against 90 real agent files, <code>category</code> and
+              <code>version</code> appear throughout</td></tr>
+      <tr><td><code>~/.emma/settings.json</code>, entirely</td>
+          <td>ignored, and a parse failure is too</td>
+          <td>A preference store that refused to start would be the tail
+              wagging the dog</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>
+    So: if you edited a permissive file, compare your key against the tables on
+    <a href="config-claude.html">the compatibility page</a> and
+    <a href="config-personal.html">your own files</a> by eye. There is no
+    spelling check available, and that is the price of one format belonging to
+    another program and the other being a preference store that must not refuse
+    to start. <code>.emma/config.json</code>'s outer level is the opposite and
+    would have named your key and the whole valid vocabulary.
+  </p>
+
+  <p>
+    The lower-level version of the same thing is a value swallowed by
+    <em>shape</em> rather than by name. <code>tools: []</code> in an agent file
+    means inherit, not nothing. A theme role spelled wrongly is a notice and
+    costs that role only. A skill under <code>.claude/</code> whose frontmatter
+    will not parse is skipped with a line on stderr that scrolls past on a busy
+    start, and <code>config check</code> is where the surviving list is.
+  </p>
+
+  <h2 id="four">4 · It applied, and it does not take effect until the next start</h2>
+
+  <p>
+    Everything the harness reads is resolved once at startup into a value the
+    loop consumes; nothing re-reads a configuration file mid-run.
+    <code>/theme</code> is the one that surprises people, and the command says so
+    itself: a theme is read once, so selecting one <em>is</em> writing it down,
+    and there is no <code>--save</code> to forget.
+  </p>
+
+  <p>
+    The exception runs the other way. <code>~/.emma/settings.json</code> is
+    re-read on every <code>usertools</code> call rather than cached, so an editor
+    changed through the Settings tool is live on the next frame. In the same
+    module, <code>PATH</code> lookups <em>are</em> cached for the life of the
+    process, so a program installed mid-session appears after a restart.
+  </p>
+
+  <h2 id="five">5 · It loaded, and was rejected at use</h2>
+
+  <p>
+    A rule Emma cannot evaluate is the clearest case: it is in the file, it is
+    listed by <code>config check</code>, and it approves nothing. That is a
+    <em>note</em> rather than a refusal, because a file written correctly for a
+    program with a larger vocabulary is not a broken file.
+  </p>
+
+<pre><code>permissions    2 rule(s)
+               deny  WebFetch(domain:evil.test)   …\.claude\settings.json
+               allow Bash(ls:*)                   …\.claude\settings.json
+               <span class="w">! …\.claude\settings.json: `Bash(ls:*)` is an allow rule Emma cannot
+               evaluate — `ls:*` is not a specifier this build understands, so it
+               approves nothing and those calls will still ask.</span></code></pre>
+  <span class="chip cert">certified</span>: release binary at <code>62ab9c3</code>, scratch <code>.claude/</code> harness, 2026-08-16. Wrapped for the page.
+
+  <p>
+    Four things share that shape: loaded, named, and doing nothing. A configured
+    editor that is not on <code>PATH</code>; an agent with no
+    <code>description</code>; a project command a built-in shadows; and the
+    permission rule above. <code>config check</code> prints all four.
+  </p>
+
+  <div class="note warn">
+    <span class="h">The fifth one does not print, and it is worth knowing about</span>
+    <p>
+      A <code>statusLine</code> Emma refused produces a sentence, and
+      <code>config check</code> never asks for it. The report comes back
+      complete and ordinary with no mention of the status line at all.
+      <span class="chip cert">certified</span>: a scratch harness whose
+      <code>settings.json</code> asks for an inline <code>jq</code> pipeline
+      prints a nineteen-line report in which <code>grep -ci status</code> finds
+      nothing.
+      <a href="config-files.html#load">The files page</a> has the call graph.
+      The note does reach an interactive run through <code>Term::warn</code>;
+      <span class="chip unv">unverified</span> that it is legible there.
+    </p>
+  </div>
+
+  <h2 id="notconfig">Two failures that are not configuration at all</h2>
+
+  <p>
+    <strong>Approval.</strong> If Emma keeps asking about something you granted,
+    the rule may be right and simply not matching. That is
+    <a href="consent-matching.html">Consent &amp; permissions</a>, not this
+    chapter. And the gate is a consent interface rather than a sandbox: it
+    enforces nothing a tool does not honestly declare, and <code>Bash</code> can
+    do anything.
+  </p>
+
+  <p>
+    <strong>An unknown <code>/word</code>.</strong> It is not an error and not a
+    missing command. Anything that is not a known command file passes through to
+    the model as ordinary text, which is indistinguishable from a command that
+    "did nothing" if you were expecting an expansion.
+  </p>
+
+  <h2 id="messages">The refusals, by their first line</h2>
+
+  <p>
+    Every one of these was produced by the release binary at
+    <code>62ab9c3</code> on 2026-08-16, in a scratch tree, and each is quoted
+    from its run elsewhere in the chapter. They are gathered here because the
+    thing a person has in front of them is the message, not the page.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>the message starts</th><th>what happened</th><th>where</th></tr></thead>
+    <tbody>
+      <tr><td><code>no `.emma/` or `.claude/` found</code></td>
+          <td>No harness anywhere from the working directory up to home</td>
+          <td><a href="config-discovery.html#notclaude">Discovery</a></td></tr>
+      <tr><td><code>EMMA_ROOT=`…` is not a directory</code></td>
+          <td>The override was set and does not name a directory. Nothing was
+              searched</td>
+          <td><a href="config-discovery.html#override">Discovery</a></td></tr>
+      <tr><td><code>… is malformed</code> / <code>unknown field</code></td>
+          <td>A typo'd key in <code>.emma/config.json</code>. The message lists
+              the whole valid vocabulary</td>
+          <td><a href="config-spine.html#keys">The spine</a></td></tr>
+      <tr><td><code>… is malformed</code> / <code>key must be a string</code></td>
+          <td><code>settings.local.json</code> is not JSON</td>
+          <td><a href="config-spine.html#permissions">The spine</a></td></tr>
+      <tr><td><code>no `default_persona`, but … contains …</code></td>
+          <td>Persona directories nobody selected, in <code>.emma/</code> only</td>
+          <td><a href="config-spine.html#personas">The spine</a></td></tr>
+      <tr><td><code>persona names tool `…`, which this binary does not register</code></td>
+          <td>A typo in a persona's <code>tools</code> allowlist</td>
+          <td><a href="config-spine.html#tools">The spine</a></td></tr>
+      <tr><td><code>hook event `…` is not implemented by Emma</code></td>
+          <td>A hook attached to one of Claude Code's other events</td>
+          <td><a href="config-spine.html#hooks">The spine</a></td></tr>
+      <tr><td><code>`…` is a shell command</code> / <code>is an absolute path</code></td>
+          <td>A hook or status-line command Emma cannot exec as an argv</td>
+          <td><a href="config-claude.html#command">Reading <code>.claude/</code></a></td></tr>
+      <tr><td><code>bad frontmatter</code> / <code>unknown field</code></td>
+          <td>A <code>SKILL.md</code> under <code>.emma/</code> with a third key</td>
+          <td><a href="config-skills.html#strict">Skills &amp; commands</a></td></tr>
+      <tr><td><code>emma: skipping skill …</code> (stderr)</td>
+          <td>A <code>SKILL.md</code> under <code>.claude/</code> that will not
+              parse. The boot continues</td>
+          <td><a href="config-skills.html#strict">Skills &amp; commands</a></td></tr>
+      <tr><td><code>agent `…` has no description</code></td>
+          <td>An agent file that is still a persona and is not a delegation
+              target</td>
+          <td><a href="config-agents.html#drop">Agents</a></td></tr>
+      <tr><td><code>provider NOT USABLE — unknown provider `…`</code></td>
+          <td><code>~/.emma/settings.json</code> names a provider this build does
+              not have. Printed, not fatal</td>
+          <td><a href="config-personal.html#provider">Your own files</a></td></tr>
+      <tr><td><code>api key NOT FOUND — …</code></td>
+          <td>No environment key and nothing usable in
+              <code>credentials.json</code></td>
+          <td><a href="config-personal.html#credentials">Your own files</a></td></tr>
+      <tr><td><code>! … is not a colour</code> and seven siblings</td>
+          <td>A theme problem. Never fatal, at most five printed</td>
+          <td><a href="config-themes.html#seen">Themes</a></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="notverified">What this page did not settle</h2>
+
+  <ul class="body">
+    <li>
+      <strong>The shadowed-command note.</strong> The table above lists the four
+      loaded-but-inert cases <code>config check</code> prints. Three were seen; a
+      project command shadowed by a built-in was not.
+      <span class="chip unv">unverified</span>. Settle it with a
+      <code>commands/exit.md</code> in a scratch harness.
+    </li>
+    <li>
+      <strong>Everything downstream of loading.</strong> This chapter ends where
+      a value reaches the loop. Whether a permission rule then fires, whether a
+      hook then blocks, and whether a delegated agent then runs are three other
+      chapters, and nothing on this page called a model.
+      <span class="chip unv">unverified</span> here by construction.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · this page is a route through the chapter rather than a source
+    file's page · the command is
+    <code>crates/emma/src/commands.rs — config_check</code> ·
+    rules are <a href="consent.html">Consent &amp; permissions</a> ·
+    colours are <a href="terminal.html">The terminal</a> ·
+    contract: <code>docs/CONTRACT.md</code>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

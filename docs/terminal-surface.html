@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Which surface a run gets &middot; The terminal &middot; Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav here" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/emma/src/term.rs</p>
+  <h1>Which surface a run gets</h1>
+
+  <nav class="chapter">
+      <a class="up" href="terminal.html">The terminal</a>
+      <span class="now">Surface</span>
+      <a href="terminal-frame.html">Frame</a>
+      <a href="terminal-layout.html">Layout</a>
+      <a href="terminal-colour.html">Colour</a>
+      <a href="terminal-themes.html">Themes</a>
+      <a href="terminal-skin.html">Vocabulary</a>
+      <a href="terminal-transcript.html">Transcript</a>
+      <a href="terminal-markdown.html">Markdown</a>
+      <a href="terminal-diff.html">Diffs</a>
+      <a href="terminal-status.html">Status</a>
+      <a href="terminal-sidebar.html">Sidebar</a>
+      <a href="terminal-dock.html">Dock</a>
+      <a href="terminal-usertools.html">User tools</a>
+    </nav>
+
+  <p class="lede">
+    One field on one struct decides whether Emma draws a full-screen
+    application or writes a stream of lines: <code>frame:
+    Option&lt;Arc&lt;Frame&gt;&gt;</code>. Everything else in this chapter hangs
+    off which of the two it is. The decision itself is a pure function of five
+    inputs that runs before anything is drawn, plus, on Windows, two console
+    settings that are changed and then read back, because a call that reports
+    success is not the same claim as a console that honoured it.
+  </p>
+
+  <h2 id="term">The one struct every write goes through</h2>
+
+  <p>
+    <code>Term</code> holds nine fields and forty-one methods, and the split
+    that matters is between two of the fields. <code>quiet</code> decides which
+    stream the running commentary goes to: under <code>-p</code> the
+    assistant's prose still goes to stdout while notes, tool lines and warnings
+    go to stderr, so a script can pipe the answer without filtering the
+    commentary out of it. <code>frame</code> decides whether any of it is drawn
+    into cells.
+  </p>
+
+  <p class="faint">crates/emma/src/term.rs &middot; <code>struct Term</code>, the two decisive fields</p>
+  <pre><code>pub struct Term {
+    skin: Skin,
+    <span class="c">/// `-p`: assistant prose still goes to stdout, but the running commentary</span>
+    <span class="c">/// goes to stderr so a script can pipe the answer without filtering it.</span>
+    quiet: bool,
+    enabled: bool,
+    <span class="c">/// The viewport, when the terminal was verified able to carry one. `None`</span>
+    <span class="c">/// is the whole fallback: every method checks it and takes the plain path,</span>
+    <span class="c">/// which is why `printing()` and `silent()` need no special handling beyond</span>
+    <span class="c">/// never constructing one.</span>
+    frame: Option&lt;Arc&lt;Frame&gt;&gt;,</code></pre>
+  <span class="src">crates/emma/src/term.rs — <code>struct Term</code></span>
+
+  <p>
+    The other seven fields are state that has to survive across
+    <code>&amp;self</code> calls, which is why three of them are behind a
+    <code>Mutex</code>: <code>marker</code> holds the completion-marker filter
+    part-way through a streamed answer, <code>pending</code> holds the approval
+    question while <code>prompt_header</code> and <code>prompt_question</code>
+    fill it in from two separate calls, and <code>spacing</code> holds the
+    blank-row state machine for the path that has no frame.
+    <code>subordinate</code> marks a nested run's view; <code>record</code> is
+    an optional log of what the meters and the prompt were told;
+    <code>enabled</code> is <code>false</code> only for
+    <code>Term::silent</code>.
+  </p>
+
+  <p>
+    Four constructors, and only one of them can draw.
+    <code>Term::interactive</code> is the sole caller of
+    <code>Frame::install</code>. <code>Term::printing</code> is
+    <code>-p</code>, <code>Term::silent</code> writes nothing at all, and
+    <code>Term::recording</code> is <code>silent</code> plus a
+    <code>Vec&lt;String&gt;</code> of what was said. All three set
+    <code>frame: None</code> in their initialisers. They do not decline to draw;
+    they have nothing to draw with.
+    <span class="chip test">tested</span>: <code>printing_never_draws_a_viewport</code>
+    and <code>a_silent_terminal_never_draws_and_never_takes_a_terminal</code>,
+    which calls every write method in turn to prove none of them reaches for
+    stdout on the disabled path.
+  </p>
+  <span class="src">crates/emma/src/term.rs — <code>Term::interactive</code>, <code>printing</code>, <code>silent</code>, <code>recording</code></span>
+
+  <h2 id="fallback">Six ways to refuse</h2>
+
+  <p>
+    Whether to draw at all is separated from the drawing, and the reason is
+    asymmetry of cost. Getting it wrong in one direction produces a plain
+    terminal where a pretty one was possible. Getting it wrong in the other
+    produces <em>&ldquo;a garbled terminal on somebody else&rsquo;s machine, or
+    a file full of escape sequences.&rdquo;</em>
+  </p>
+
+  <p class="faint">crates/emma/src/term.rs &middot; <code>fallback_reason</code></p>
+  <pre><code><span class="c">/// Below this the viewport would be most of the screen, so it is not worth</span>
+<span class="c">/// drawing.</span>
+const MIN_ROWS: u16 = 8;
+const MIN_COLS: u16 = 24;
+
+<span class="c">/// Why the viewport is not being drawn, or `None` to draw it.</span>
+fn fallback_reason(
+    stdout_tty: bool,
+    stdin_tty: bool,
+    term_var: Option&lt;&amp;str&gt;,
+    opted_out: bool,
+    size: Option&lt;(u16, u16)&gt;,
+) -&gt; Option&lt;&amp;'static str&gt; {
+    <span class="k">if</span> opted_out {
+        <span class="k">return</span> Some("EMMA_NO_FRAME is set");
+    }
+    <span class="c">// Both directions matter and for different reasons. Redirected output means</span>
+    <span class="c">// the escape sequences end up in somebody's file; redirected input means</span>
+    <span class="c">// there is nobody typing — and raw mode on a pipe is meaningless.</span>
+    <span class="k">if</span> !stdout_tty {
+        <span class="k">return</span> Some("stdout is not a terminal");
+    }
+    <span class="k">if</span> !stdin_tty {
+        <span class="k">return</span> Some("stdin is not a terminal");
+    }
+    <span class="c">// `dumb` is the one value that promises the opposite of what we need.</span>
+    <span class="k">if</span> term_var == Some("dumb") {
+        <span class="k">return</span> Some("TERM=dumb");
+    }
+    <span class="k">match</span> size {
+        None =&gt; Some("the window size could not be read"),
+        Some((cols, rows)) <span class="k">if</span> rows &lt; MIN_ROWS || cols &lt; MIN_COLS =&gt; Some("the window is too small"),
+        Some(_) =&gt; None,
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/term.rs — <code>fallback_reason</code>, <code>MIN_ROWS</code>, <code>MIN_COLS</code></span>
+
+  <p>
+    The environment variable is the first arm, and the test that
+    pins the ordering says why: <em>&ldquo;somebody setting this has a broken
+    terminal in front of them and no interest in the other five checks
+    agreeing.&rdquo;</em> No <code>TERM</code> at all is not a refusal, because
+    that is the ordinary Windows case. An unknown platform answers
+    <code>None</code> from <code>terminal_size</code> and lands on
+    <em>&ldquo;the window size could not be read&rdquo;</em>, so the fallback is
+    what a port to anything else gets by default.
+    <span class="chip test">tested</span>: five tests, one per refusal, plus
+    <code>a_real_terminal_of_a_reasonable_size_gets_the_viewport</code> for the
+    accepting case.
+  </p>
+
+  <p>
+    <code>frame_wanted</code> asks the same question of the real process and
+    exists because the answer is needed <em>before</em> the frame is installed:
+    the Windows code page is changed only for a run that will draw, and the
+    glyph set is chosen from what the console says afterwards.
+    <code>Frame::install</code> asks it again for itself, and the doc comment
+    prices the duplication: <em>&ldquo;a check that lives in two places is
+    cheaper than an installer that trusts its caller.&rdquo;</em>
+  </p>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 760 300" role="img"
+           aria-label="Term::interactive asks frame_wanted, which is fallback_reason over the real process. A refusal takes the plain path with the console left as found. An acceptance adopts the UTF-8 output code page, then Frame::install re-asks fallback_reason, proves VT on Windows, and reads EMMA_UI. If install refuses after the code page was changed, the console is restored and the glyph set re-decided.">
+        <defs>
+          <marker id="srf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          </marker>
+          <marker id="srf-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          </marker>
+        </defs>
+
+        <rect class="box" x="8" y="12" width="150" height="34" rx="4" />
+        <text class="lbl" x="83" y="34" text-anchor="middle">Term::interactive</text>
+
+        <path class="edge" d="M158 29 H208" marker-end="url(#srf-arrow)" />
+
+        <rect class="box" x="214" y="6" width="180" height="46" rx="4" />
+        <text class="lbl" x="304" y="24" text-anchor="middle">frame_wanted</text>
+        <text class="tiny" x="304" y="40" text-anchor="middle">fallback_reason, 5 inputs</text>
+
+        <path class="edge-dash" d="M304 52 V96" marker-end="url(#srf-arrow)" />
+        <text class="tiny" x="312" y="80">Some(reason)</text>
+
+        <rect class="box" x="198" y="102" width="212" height="60" rx="4" />
+        <text class="lbl" x="304" y="122" text-anchor="middle">console_is_utf8()</text>
+        <text class="tiny" x="304" y="139" text-anchor="middle">ask, never change</text>
+        <text class="tiny" x="304" y="154" text-anchor="middle">glyphs = ASCII unless proved</text>
+
+        <path class="edge" d="M304 162 V194" marker-end="url(#srf-arrow)" />
+        <rect class="box" x="190" y="200" width="228" height="46" rx="4" />
+        <text class="lbl" x="304" y="218" text-anchor="middle">plain lines</text>
+        <text class="tiny" x="304" y="234" text-anchor="middle">-p &middot; pipes &middot; EMMA_NO_FRAME &middot; no console</text>
+
+        <path class="edge-hl" d="M394 29 H452" marker-end="url(#srf-arrow-hl)" />
+        <text class="tiny" x="400" y="21">None</text>
+
+        <rect class="hl" x="458" y="6" width="212" height="46" rx="4" />
+        <text class="lbl" x="564" y="24" text-anchor="middle">adopt_utf8_output()</text>
+        <text class="tiny" x="564" y="40" text-anchor="middle">set &middot; read back &middot; believe read-back</text>
+
+        <path class="edge-hl" d="M564 52 V84" marker-end="url(#srf-arrow-hl)" />
+
+        <rect class="hl" x="458" y="90" width="212" height="72" rx="4" />
+        <text class="lbl" x="564" y="110" text-anchor="middle">Frame::install</text>
+        <text class="tiny" x="564" y="126" text-anchor="middle">fallback_reason again</text>
+        <text class="tiny" x="564" y="141" text-anchor="middle">enable_vt() on windows</text>
+        <text class="tiny" x="564" y="156" text-anchor="middle">EMMA_UI read here</text>
+
+        <path class="edge-dash" d="M458 130 H432 V126 H420" marker-end="url(#srf-arrow)" />
+        <text class="tiny" x="424" y="118">refused</text>
+
+        <path class="edge-hl" d="M564 162 V194" marker-end="url(#srf-arrow-hl)" />
+        <rect class="hl" x="458" y="200" width="212" height="46" rx="4" />
+        <text class="lbl" x="564" y="218" text-anchor="middle">a Frame</text>
+        <text class="tiny" x="564" y="234" text-anchor="middle">full-screen, or inline</text>
+
+        <text class="tiny" x="8" y="278">A refusal after the code page moved calls restore_console_cp() and re-reads the console</text>
+        <text class="tiny" x="8" y="292">before choosing glyphs: a Unicode transcript on a restored 437 console is the mojibake case.</text>
+      </svg>
+    </div>
+    <figcaption>
+      The startup path, drawn from <code>Term::interactive</code>,
+      <code>frame_wanted</code>, <code>adopt_utf8_output</code> and
+      <code>Frame::install</code>. Dashed edges are refusals. The glyph set is
+      decided twice on the refusing branch, once from
+      <code>adopt_utf8_output</code> and again from <code>console_is_utf8</code>
+      after the code page is put back.
+    </figcaption>
+  </figure>
+
+  <h2 id="windows">The two Windows settings that are changed rather than asked</h2>
+
+  <p>
+    Detection alone was tried for the code page and was correct and useless. A
+    normal PowerShell window reports code page 437, so the honest answer was
+    always no and the box was always <code>+---+</code>. The module records the
+    premise the old code got wrong: <em>&ldquo;a legacy code page is not a
+    property of the terminal, it is a setting, and it is ours to set for the
+    duration of the run.&rdquo;</em>
+  </p>
+
+  <p class="faint">crates/emma/src/term.rs &middot; <code>adopt_utf8_output</code>, windows</p>
+  <pre><code>#[cfg(windows)]
+fn adopt_utf8_output() -&gt; bool {
+    <span class="k">use</span> std::sync::atomic::Ordering;
+
+    <span class="k">use</span> windows_sys::Win32::System::Console::{GetConsoleOutputCP, SetConsoleOutputCP};
+    <span class="k">unsafe</span> {
+        <span class="k">let</span> original = GetConsoleOutputCP();
+        <span class="k">if</span> original == CP_UTF8 {
+            <span class="k">return</span> true;
+        }
+        <span class="k">if</span> original == 0 {
+            <span class="c">// No console attached — a redirected handle, or a service. Nothing</span>
+            <span class="c">// to set and nothing to render.</span>
+            <span class="k">return</span> false;
+        }
+        SetConsoleOutputCP(CP_UTF8);
+        <span class="c">// Believe the console, not the call.</span>
+        <span class="k">if</span> GetConsoleOutputCP() != CP_UTF8 {
+            <span class="c">// Whatever it did with the request, it is not UTF-8 now, and we</span>
+            <span class="c">// may have moved it somewhere it did not start.</span>
+            SetConsoleOutputCP(original);
+            <span class="k">return</span> false;
+        }
+        ORIGINAL_CP.store(original, Ordering::SeqCst);
+        true
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/term.rs — <code>adopt_utf8_output</code>, <code>CP_UTF8</code>, <code>ORIGINAL_CP</code></span>
+
+  <p>
+    Three outcomes, and the middle one is the interesting refusal. A console
+    that was <em>already</em> 65001 returns true without recording an original,
+    so <code>restore_console_cp</code> leaves it alone on the way out: it was
+    not Emma's to change. A <code>GetConsoleOutputCP</code> of zero means no
+    console at all. And a set that did not stick is undone before returning
+    false, because the console may have moved somewhere it did not start.
+    <code>ORIGINAL_CP</code> uses <code>0</code> as its
+    &ldquo;not ours to restore&rdquo; sentinel, which is safe because zero is
+    not a code page.
+  </p>
+
+  <p>
+    <code>enable_vt</code> has the same shape and a second job.
+    <code>SetConsoleMode</code> returning success is not the claim that the flag
+    was honoured, and legacy <code>conhost.exe</code> fails the call outright.
+    The read-back also decides which of crossterm's two code paths runs: with
+    VT proved it writes escape sequences, and without it makes WinAPI calls in
+    <em>screen buffer</em> coordinates. On Windows the buffer is usually far
+    taller than the window, so a repaint aimed at row 40 of a nine-thousand-row
+    buffer goes somewhere invisible. The comment names that as
+    <em>&ldquo;the exact failure the first attempt at this file
+    shipped.&rdquo;</em> Its sentinel is <code>u32::MAX</code>, because no real
+    console mode has every bit set.
+  </p>
+  <span class="src">crates/emma/src/term.rs — <code>enable_vt</code>, <code>ORIGINAL_MODE</code>, <code>restore_console_mode</code></span>
+
+  <p>
+    <code>terminal_size</code> exists in three <code>cfg</code> variants and
+    measures the visible window rather than the buffer, for the same reason.
+    On Windows it is <code>GetConsoleScreenBufferInfo</code> and the arithmetic
+    <code>srWindow.Right - srWindow.Left + 1</code>; on unix it is
+    <code>ioctl(TIOCGWINSZ)</code>; on anything else it returns
+    <code>None</code>, with the comment <em>&ldquo;an unknown platform gets the
+    fallback, which is the whole product.&rdquo;</em> Both live variants reject
+    a zero or negative size rather than passing it on.
+  </p>
+
+  <div class="note">
+    <span class="h">The glyph set is a consequence, not a choice</span>
+    <p>
+      <code>prefers_ascii(opted_out, utf8)</code> is two booleans and one
+      <code>||</code>, and it is biased: UTF-8 has to be <em>proved</em> before
+      the Unicode set is used, because <em>&ldquo;a transcript made of question
+      marks reads as a broken program rather than as a stylistic
+      choice.&rdquo;</em> <code>EMMA_ASCII_FRAME</code> is the opt-out and it
+      outranks a console that was successfully moved to UTF-8.
+      <span class="chip test">tested</span>:
+      <code>a_code_page_change_that_did_not_take_still_gets_ascii</code> asserts
+      the decision at <code>prefers_ascii</code> rather than at the syscall,
+      which is where a silently-failed <code>SetConsoleOutputCP</code> arrives.
+    </p>
+    <span class="src">crates/emma/src/term.rs — <code>prefers_ascii</code>, <code>console_is_utf8</code></span>
+  </div>
+
+  <h2 id="pipe">What a redirected run actually produced</h2>
+
+  <p>
+    The claim this whole gate exists for is that nothing Emma writes to a
+    non-terminal contains an escape byte. Two tests assert it on the renderer
+    (<a href="terminal-skin.html">the vocabulary</a> covers those), and it is
+    also checkable end to end against the built binary. Redirecting both streams
+    of a real <code>-p</code> run:
+  </p>
+
+  <pre><code>$ emma -p "say the single word: ok" &gt; p.out 2&gt; p.err
+
+p.out  3 bytes, 0 escape bytes:  b'ok\n'
+p.err 84 bytes, 0 escape bytes:  b'&gt; say the single word: ok\n\n= goal complete\n
+                                   1 calls | 1555 tokens (cache-weighted)\n'</code></pre>
+
+  <p>
+    <span class="chip cert">certified</span> 2026-08-16 at <code>62ab9c3</code>
+    on Windows 11, and repeatable: run the command above and count
+    <code>\x1b</code> in both files. Three separate claims fall out of those
+    eighty-seven bytes. The answer went to stdout alone, which is what
+    <code>quiet</code> is for. Neither stream carries an escape byte. And the
+    glyphs are the ASCII set (<code>&gt;</code> for the goal, <code>=</code> for
+    the ending, <code>|</code> for the separator) because a run that will not
+    draw asks the console rather than changing it, and this one was redirected.
+  </p>
+
+  <div class="note warn">
+    <span class="h">The one residual escape route, and it is upstream</span>
+    <p>
+      <code>Term::delta</code> passes the model's own characters through
+      untouched on the fallback path. That is what keeps <code>emma &hellip; |
+      tee</code> free of anything <em>Emma</em> invented, and it also means an
+      escape sequence written <em>by the model</em> is not filtered there.
+      Inside the frame it is: <code>markdown::sanitise</code> drops every
+      control character before a cell is written.
+      <span class="chip unv">unverified</span> that a model reply containing
+      <code>\x1b</code> reaches a pipe intact. Reported from a reading of
+      <code>Term::delta</code> and <code>write_out</code>; a run whose prompt
+      asks the model to emit a literal escape byte, piped to a file, would
+      settle it.
+    </p>
+    <span class="src">crates/emma/src/term.rs — <code>Term::delta</code>, <code>write_out</code>; crates/emma/src/term/markdown.rs — <code>sanitise</code></span>
+  </div>
+
+  <h2 id="subordinate">A nested run gets a different terminal</h2>
+
+  <p>
+    <code>Term::subordinate</code> shares the frame, the skin and the stdin
+    path, and swallows exactly seven calls. Four are the status meters
+    (<code>set_budgets</code>, <code>goal_started</code>,
+    <code>goal_ended</code>, <code>spent</code>) and three are the assistant's
+    prose (<code>delta</code>, <code>text</code>, <code>end_of_text</code>).
+    The meters are the interesting half. The doc names the defect it exists to
+    fix: a nested agent driving them would re-point the context and token
+    meters at the sub's caps for the rest of the process, stop the parent's
+    clock while the parent is still running, and feed the live line a per-goal
+    figure smaller than the parent's, so the meter would jump backwards
+    mid-goal.
+  </p>
+
+  <p>
+    The four meter calls all go through one private funnel,
+    <code>Term::meter</code>, <em>&ldquo;so a meter added later cannot forget
+    the rule&rdquo;</em>. What a subordinate terminal must <strong>not</strong>
+    swallow is the approval prompt: a subagent inherits the gate, and
+    <code>prompt_header</code>, <code>prompt_question</code>,
+    <code>prompt_network_question</code> and <code>prompt_answered</code>
+    render exactly as they do for the parent.
+    <code>Term::recording</code> exists so a test can see both halves of that
+    rule rather than only one, because <em>&ldquo;a no-op nobody can observe is
+    a rule nobody can test.&rdquo;</em>
+  </p>
+  <span class="src">crates/emma/src/term.rs — <code>subordinate</code>, <code>meter</code>, <code>remember</code>, <code>recording</code>, <code>recorded</code></span>
+
+  <h2 id="drop">The exit line</h2>
+
+  <p class="faint">crates/emma/src/term.rs &middot; <code>impl Drop for Term</code></p>
+  <pre><code><span class="k">impl</span> Drop <span class="k">for</span> Term {
+    <span class="c">/// The ordinary exit path. `restore_terminal` is idempotent and global, so</span>
+    <span class="c">/// this racing the panic hook or an explicit call costs nothing.</span>
+    fn drop(&amp;<span class="k">mut</span> self) {
+        <span class="c">// Not on a subordinate view: it shares the parent's frame and goes out</span>
+        <span class="c">// of scope at the end of every delegation, which is the middle of the</span>
+        <span class="c">// parent's run. Restoring there would put the terminal back while the</span>
+        <span class="c">// session is still drawing into it.</span>
+        <span class="k">if</span> self.frame.is_some() &amp;&amp; !self.subordinate {
+            <span class="k">let</span> pointer = self.frame.as_ref().and_then(|f| f.session_pointer());
+            restore_terminal();
+            <span class="w">…</span>
+            <span class="k">if let</span> Some(path) = pointer {
+                println!("session: {path}");
+            }
+        }
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/term.rs — <code>impl Drop for Term</code> (the omitted lines are a six-line comment quoted on <a href="terminal-frame.html">the frame page</a>)</span>
+
+  <p>
+    The pointer is read <em>before</em> the restore and printed
+    <em>after</em> it, so the line lands on the normal screen the alternate
+    screen just gave back. <code>Frame::session_pointer</code> returns
+    <code>None</code> on the inline path, because there the transcript is
+    already in the shell's scrollback and needs no pointer.
+  </p>
+
+  <h2 id="rest">The rest of the file, accounted for</h2>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Group</th><th>What it is</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>The write methods</td>
+          <td>
+            <code>note</code>, <code>warn</code>, <code>banner</code>,
+            <code>tool_started</code>, <code>tool_result</code>,
+            <code>tool_failed</code>, <code>tool_blocked</code>,
+            <code>tool_refused</code>, <code>kick</code>, <code>ending</code>,
+            <code>welcome</code>. Each asks <code>Skin</code> for lines and
+            hands them to <code>side</code>. Only <code>tool_started</code> does
+            more: it appends the diff for a tool that changes a file, and it is
+            the only place a change reaches the transcript, because the prompt
+            fires for a subset of calls and a <code>Write</code> covered by an
+            <code>allow</code> rule would otherwise change a file with nothing
+            on screen but its name.
+          </td>
+        </tr>
+        <tr>
+          <td>The two exits</td>
+          <td>
+            <code>side</code> writes through <code>render::for_stream</code> to
+            stdout or stderr depending on <code>quiet</code>, or to
+            <code>Frame::write_lines</code>. <code>write_out</code> is the
+            prose path and bypasses the spacing rule entirely, then tells it so
+            with <code>wrote_text(false)</code>.
+          </td>
+        </tr>
+        <tr>
+          <td>The prompt trio</td>
+          <td>
+            <code>prompt_header</code> fills the evidence,
+            <code>prompt_question</code> and
+            <code>prompt_network_question</code> compose the keys, and both
+            funnel into the private <code>question</code>. The network question
+            offers <code>[r]</code> (this host) and <code>[t]</code> (every call
+            this tool makes anywhere) as separate keys, because
+            <em>&ldquo;a grant somebody arrived at by pressing the obvious key
+            is a grant they did not read.&rdquo;</em>
+          </td>
+        </tr>
+        <tr>
+          <td>Small readers</td>
+          <td>
+            <code>framed</code>, <code>colour_level</code>,
+            <code>recorded</code>, <code>line_source</code>,
+            <code>set_status</code>, <code>set_status_source</code>,
+            <code>goal_prompt</code>, <code>filtered</code>. Uninteresting
+            except <code>colour_level</code>, which exists so
+            <code>/theme</code> can say plainly that a setting will not change
+            anything under <code>NO_COLOR</code>.
+          </td>
+        </tr>
+        <tr>
+          <td><code>summarise_args</code></td>
+          <td>
+            Which single argument identifies a tool call on one line, per tool
+            rather than by rule. A <code>Write</code> banner showing its content
+            would push the next twenty tool calls off the screen, so
+            <code>Write</code> shows <code>file_path</code>. Long values are cut
+            at 88 characters and newlines become spaces.
+            <span class="chip test">tested</span> with a 5,000-character
+            <code>content</code> field.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2 id="grep">One test that asserts on this file's own source</h2>
+
+  <p>
+    <code>no_emitter_between_here_and_the_terminal_writes_a_blank_row_of_its_own</code>
+    reads <code>term.rs</code>, <code>term/frame.rs</code> and
+    <code>term/app.rs</code> through <code>include_str!</code>, strips lines
+    beginning <code>//</code>, and asserts that a needle assembled at runtime as
+    <code>format!("Line::{}()", "default")</code> appears in none of them. Blank
+    rows are boundaries, decided in <code>spacing.rs</code> alone.
+  </p>
+
+  <p>
+    Two things about it are worth carrying. The needle is assembled rather than
+    written out <em>&ldquo;because this file is its own haystack&rdquo;</em>,
+    which is the same technique the manifest test uses. And the doc names the
+    exception rather than leaving it to be discovered: a block's
+    <em>internal</em> layout may use blank rows, which is what
+    <code>welcome.rs</code> does between its sections.
+    <span class="chip test">tested</span>, and the failure it prevents has no
+    other witness: a second hand-rolled <code>Line::default()</code> beside a
+    <code>separate()</code> passes every test that renders lines and produces
+    two blank rows on a real screen.
+  </p>
+  <span class="src">crates/emma/src/term.rs — <code>no_emitter_between_here_and_the_terminal_writes_a_blank_row_of_its_own</code></span>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    <code>term.rs</code> is 1,533 lines and was read in full for this page.
+    Above the <code>#[cfg(test)]</code> boundary it declares 56 function items,
+    counting the <code>cfg</code>-duplicated <code>terminal_size</code> (three),
+    <code>console_is_utf8</code> (two) and <code>adopt_utf8_output</code> (two)
+    separately. Forty-one are <code>Term</code> methods, one is
+    <code>Drop::drop</code>, and fourteen are free functions. Every one is named
+    on this page: 56 of 56. Twelve of the fourteen tests are described or cited;
+    the two that are not are
+    <code>the_banner_argument_is_the_one_a_human_would_look_at</code> and
+    <code>a_long_command_is_cut_to_one_line</code>, both covering
+    <code>summarise_args</code>, which the table above summarises.
+  </p>
+
+  <p>
+    <strong>Not settled here.</strong> Whether the frame that
+    <code>Frame::install</code> returns <em>looks</em> right on any console. A
+    test binary is handed a pipe by cargo, which is exactly the condition under
+    which <code>fallback_reason</code> says no, so <code>install</code> cannot
+    run inside one at all.
+    <span class="chip unv">unverified</span>: a run in Windows Terminal,
+    conhost, iTerm2 and a Linux terminal at several window sizes, with
+    screenshots, would settle it.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="terminal-frame.html">the frame</a>, and the three things
+      about it that hold without exception. Back to
+      <a href="terminal.html">The terminal</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The corpus, as it actually is · Sessions &amp; context · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav here" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">Sessions &amp; context</p>
+  <h1>The corpus, as it actually is</h1>
+
+  <nav class="chapter">
+    <a class="up" href="session.html">Sessions &amp; context</a>
+    <a href="session-file.html">The file</a>
+    <a href="session-records.html">Records</a>
+    <a href="session-fold.html">The fold</a>
+    <a href="session-resume.html">Resume</a>
+    <a href="session-continuity.html">Continuity</a>
+    <a href="session-compaction.html">Compaction</a>
+    <span class="now">The corpus</span>
+  </nav>
+
+  <p class="lede">
+    Every other page in this chapter describes a format. This one describes the
+    data that exists in it on the owner's machine, counted rather than
+    remembered, with the script attached so the count can be redone rather than
+    believed. One backlog item turns on these numbers, and it spent its first
+    write-up blocked on the wrong one.
+  </p>
+  <span class="src">~/.emma/sessions/ · notes/improvements.md §6</span>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven, and repeatable: a file, a command, a count you can redo</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+    <div><span class="chip test">tested</span> a test that was shown to fail</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <h2 id="count">The count, at 2026-08-16 20:39 EDT</h2>
+
+<pre><code><span class="c"># the whole sweep, from ~/.emma/sessions/</span>
+import os, glob, json, collections
+fs = sorted(glob.glob('*.jsonl'))
+sizes = {f: os.path.getsize(f) for f in fs}
+kinds = collections.Counter()
+for f in fs:
+    for ln in open(f, 'rb').read().split(b'\n'):
+        if ln.strip():
+            kinds[json.loads(ln.decode('utf-8')).get('kind')] += 1
+
+<span class="c">files                     103
+empty (0 bytes)            48
+files carrying a goal      55
+records, all files        791
+lines that would not parse  0
+largest file          272,923 bytes  sess-1786385316950-34808.jsonl</span></code></pre>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>kind</th><th>records</th><th>kind</th><th>records</th></tr></thead>
+    <tbody>
+      <tr><td><code>model_call</code></td><td class="num">177</td><td><code>model_changed</code></td><td class="num">3</td></tr>
+      <tr><td><code>assistant</code></td><td class="num">162</td><td><code>sub.model_call</code></td><td class="num">3</td></tr>
+      <tr><td><code>tool_result</code></td><td class="num">139</td><td><code>sub.assistant</code></td><td class="num">3</td></tr>
+      <tr><td><code>tool_call</code></td><td class="num">138</td><td><code>tool_failed</code></td><td class="num">2</td></tr>
+      <tr><td><code>goal</code></td><td class="num">61</td><td><code>sub.tool_call</code></td><td class="num">2</td></tr>
+      <tr><td><code>goal_finished</code></td><td class="num">56</td><td><code>sub.tool_result</code></td><td class="num">2</td></tr>
+      <tr><td><code>denied</code></td><td class="num">29</td><td><code>cleared</code></td><td class="num">1</td></tr>
+      <tr><td><code>kick</code></td><td class="num">5</td><td><code>sub.goal</code></td><td class="num">1</td></tr>
+      <tr><td><code>hook</code></td><td class="num">5</td><td><code>sub.goal_finished</code></td><td class="num">1</td></tr>
+      <tr><td colspan="4"><code>delegation</code> <span class="num">1</span> · and none at all of
+          <code>compacted</code>, <code>tool_unknown</code>,
+          <code>tool_fault</code> or <code>prompt_blocked</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    <span class="chip cert">certified</span>: the script above, run against
+    <code>~/.emma/sessions/</code> at 2026-08-16 20:39 EDT.
+  </p>
+
+  <h2 id="moving">The directory moved while this page was being written</h2>
+
+  <p>
+    An earlier run of the same script, less than an hour before, read
+    100 files and 779 records, with 52 carrying a goal. The run above read 103
+    files and 791 records, with 55 carrying a goal. Three sessions were recorded
+    in between, by whatever else was using this machine.
+    <span class="chip obs">observed</span> during this write-up on 2026-08-16,
+    and not repeatable: the earlier state is gone. What that means for every
+    figure on this page is that it is a reading with a timestamp, not a
+    property, and the number to distrust first is any one quoted without one.
+  </p>
+
+  <h2 id="empty">Half the corpus is empty files</h2>
+
+  <p>
+    48 of 103 are zero bytes. <code>SessionLog::open</code> creates the file at
+    startup, before anything has happened, so a run that never reaches a goal
+    leaves one behind and nothing prunes them.
+    <span class="chip cert">certified</span>: 55 files carry at least one
+    <code>goal</code> record, and 48 are empty, which accounts for all 103.
+    Every non-empty file in this corpus has a goal in it.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>SessionLog::open</code></span>
+
+  <p>
+    All three readers cope. <code>restore</code> refuses a file with no
+    <code>goal</code> record and says so.
+    <a href="session-resume.html"><code>locate</code></a> and the
+    <a href="session-continuity.html">first-run scan</a> read each one, find no
+    matching record, and move on. What the empty files cost is a file read each
+    in both scans, and what they cost a reader is that every count anyone quotes
+    about this directory has to subtract them first.
+  </p>
+
+  <h2 id="compaction">Compaction has never fired here</h2>
+
+  <p>
+    <span class="chip cert">certified</span>: zero <code>compacted</code>
+    records across 103 files and 177 <code>model_call</code> records. The
+    largest input any call carried is 95,524 tokens against the 120,000 default
+    cap, computed as
+    <code>input_tokens + cache_read_input_tokens + cache_creation_input_tokens</code>
+    over every <code>model_call</code> record in the directory. Close, and never
+    over.
+  </p>
+
+  <p>
+    So <a href="session-compaction.html">everything about the trigger</a> rests
+    on tests with an artificially small cap and on reading the function. The
+    mechanism is exercised, by tests that set <code>max_context</code> to 400
+    and to 1. The threshold, in ordinary use, is not.
+  </p>
+
+  <h2 id="overshoot">The budget overshoot is in a file you can grep</h2>
+
+  <p>
+    The largest <code>goal_finished.tokens</code> in the directory is
+    <strong>579,565</strong>, against a 500,000 budget, and it is in
+    <code>sess-1786385316950-34808.jsonl</code>. That file is also the largest
+    in the corpus at 272,923 bytes.
+    <span class="chip cert">certified</span>: grep the file for
+    <code>"kind":"goal_finished"</code> and read the <code>tokens</code> field.
+    It confirms from disk what <code>agent.rs</code> says about the token budget
+    being tested after a call rather than before, so the call that crosses the
+    cap is paid for in full.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Budgets::max_tokens</code>; ~/.emma/sessions/sess-1786385316950-34808.jsonl</span>
+
+  <h2 id="item6">One delegation record, and a backlog item that turned on it</h2>
+
+  <p>
+    <code>notes/improvements.md</code> item 6, "every delegation pays an
+    unamortisable cache write", needs a delegation-clustering number to decide
+    whether moving <code>deliver</code> out of the <code>SubagentClaim</code>
+    contract is worth it. The item recorded the corpus as "86 files, mostly 0
+    bytes, largest 4.7 KB" and concluded it would unblock itself with use.
+  </p>
+
+  <p>
+    Both halves were wrong in the same way. The directory is not thin: 103
+    files, largest 266 KB. And the blocking query returns one.
+    <span class="chip cert">certified</span>: there is exactly one
+    <code>delegation</code> record in the entire corpus, in
+    <code>sess-1786710409801-39600.jsonl</code>. Delegation has barely been used
+    on this machine, and ordinary session growth does not produce a clustering
+    number, so the item is blocked on usage rather than on size. The correction
+    is recorded in the item itself and the lesson is
+    <code>notes/lessons/a-blocker-recorded-as-a-size-problem-was-a-usage-problem.md</code>:
+    record the count the blocking query returned, not a summary of the corpus it
+    ran against.
+  </p>
+  <span class="src">notes/improvements.md §6</span>
+
+  <p>
+    The one delegated session also carries the only
+    <code>sub.goal</code> and <code>sub.goal_finished</code> records in the
+    corpus, which is a second reason it is worth knowing which file it is: it is
+    the only place the <code>sub.</code> namespacing on
+    <a href="session-records.html">Records</a> can be checked against real data.
+  </p>
+
+  <h2 id="queries">Four queries worth keeping</h2>
+
+  <p>
+    Each of these certifies a claim made elsewhere in the chapter, and each is
+    short enough to re-run.
+  </p>
+
+<pre><code><span class="c"># 1. tool_result records with no earlier tool_call of the same id.
+#    Result at 2026-08-16 20:28 EDT: 2, both carrying "already_failed",
+#    in sess-1786386360054-46700.jsonl and sess-1786387904169-52756.jsonl.</span>
+for f in fs:
+    calls = set()
+    for r in records(f):
+        if r.get('kind') == 'tool_call': calls.add(r.get('id'))
+        if r.get('kind') == 'tool_result' and r.get('id') not in calls: print(f, r)
+
+<span class="c"># 2. assistant records an older build wrote, which the fold drops whole.
+#    Result: 4 of 162, in sess-1786359974006-49144.jsonl (turn-3) and
+#    sess-1786360025848-40224.jsonl (turns 3, 15, 16).</span>
+[r for f in fs for r in records(f)
+ if r.get('kind') == 'assistant' and 'raw_content' not in r]
+
+<span class="c"># 3. files whose model_call records predate cost_tokens, where a resume
+#    falls back to billable_total_tokens. Result: 12 of the 51 files that
+#    have any model_call at all.</span>
+
+<span class="c"># 4. the largest input any single call carried. Result: 95,524 tokens.</span>
+max(r['input_tokens'] + r['cache_read_input_tokens'] + r['cache_creation_input_tokens']
+    for f in fs for r in records(f) if r.get('kind') == 'model_call')</code></pre>
+
+  <p>
+    <span class="chip cert">certified</span>: queries 1, 2 and 4 were run at
+    2026-08-16 20:28 EDT and query 1 again at 20:39; the results quoted are what
+    came back. The three sessions that arrived between the two runs did not
+    change any of them.
+  </p>
+
+  <h2 id="reading">What these numbers are good for, and what they are not</h2>
+
+  <p>
+    They are one machine on one evening. They settle questions of the form "does
+    this ever happen in real use", which is the form that keeps turning out to
+    matter here: compaction does not, delegation almost never does, the
+    older-format assistant record still does, and the memo's orphan
+    <code>tool_result</code> does. They settle nothing about how Emma behaves on
+    anyone else's machine, and nothing about the future.
+  </p>
+
+  <p>
+    This is the third time the directory has been counted in a written record.
+    The first count was a summary that did not answer the query it was cited
+    for. The second, on 2026-08-16, was accurate and was overtaken within the
+    day. That is the argument for the timestamps rather than a caveat about
+    them.
+  </p>
+
+  <h2 id="coverage">What this page covers</h2>
+
+  <p>
+    The whole of <code>~/.emma/sessions/</code> as it stood at 2026-08-16 20:39
+    EDT: file count, empty count, largest file, record count, per-kind
+    histogram, and the four queries the rest of the chapter cites. It covers no
+    source code. Everything here is a reading of data produced by the code the
+    other pages describe.
+  </p>
+
+  <h2 id="unverified">What is not verified here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> Whether this corpus is
+      representative of anything. One user, one machine, about a week of
+      use, and much of it made by agents working on Emma itself rather than by
+      someone using Emma for other work. Settle it by counting a second
+      machine's directory, which nobody has.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> Whether the 48 empty files have
+      any cost worth measuring. The two scans read each one, and nobody has
+      timed the difference. Settle it by timing startup before and after
+      deleting them.
+    </li>
+    <li>
+      <span class="chip obs">observed</span> The mid-write-up growth from 100
+      files to 103. It happened, it is not repeatable, and the earlier state
+      cannot be recovered to check the diff.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    <p>
+      Written against commit <code>62ab9c3</code>. Back to
+      <a href="session.html">Sessions &amp; context</a> for the shape of the
+      chapter, or <a href="roadmap.html">Roadmap &amp; defects</a> for what the
+      counts above leave open.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Budgets and spend · Delegation · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav here" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<h1>Budgets, spend, and how a delegation ends</h1>
+
+  <nav class="chapter">
+    <a class="up" href="delegation.html">Delegation</a>
+    <a href="delegation-nest.html">The nested run</a>
+    <a href="delegation-serialised.html">One at a time</a>
+    <a href="delegation-definitions.html">Agent definitions</a>
+    <a href="delegation-tools.html">resolve_tools</a>
+    <a href="delegation-brief.html">The brief</a>
+    <a href="delegation-footer.html">The footer</a>
+    <span class="now">Budgets &amp; spend</span>
+    <a href="delegation-agents-cmd.html">emma agents</a>
+  </nav>
+
+  <p class="lede">
+    A delegation spends the parent's tokens, not its own. Four constants bound
+    how much, one arithmetic function derives the sub's budget from what is
+    left, and a shared meter makes "one goal, one number" the same integer
+    rather than a convention.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — the bounds region, Delegate::sub_budgets; crates/emma/src/agent.rs — Spend</span>
+
+  <h2 id="constants">Four constants</h2>
+
+<pre><code><span class="c">// region: What a delegation is bounded by</span>
+<span class="c">// ---------------------------------------------------------------------------</span>
+<span class="c">// What a delegation is bounded by</span>
+<span class="c">//</span>
+<span class="c">// Four constants and the arithmetic over them. They are constants rather than</span>
+<span class="c">// judgements at the call site for the reason every truncation cap in this</span>
+<span class="c">// repository is: a bound nobody can find is a bound nobody can change.</span>
+<span class="c">// ---------------------------------------------------------------------------</span>
+
+<span class="c">/// Model calls a subagent gets when its file does not say. Against the</span>
+<span class="c">/// parent's default of 60, because iterations are the bound that catches "one</span>
+<span class="c">/// cheap tool forever", and an exploration that has not converged in twenty</span>
+<span class="c">/// calls is not going to.</span>
+const SUB_ITERATIONS: u32 = 20;
+
+<span class="c">/// The most of the *remaining* goal budget one delegation may spend: half.</span>
+<span class="c">/// Half rather than all, so a subagent that runs away leaves the parent enough</span>
+<span class="c">/// to report what happened and finish — the same argument shape as `compact`</span>
+<span class="c">/// targeting half the context cap.</span>
+const SUB_TOKEN_SHARE: i64 = 2;
+
+<span class="c">/// Below this much remaining allowance a delegation refuses to start.</span>
+<span class="c">///</span>
+<span class="c">/// A delegation launched with nothing left returns a perfectly good answer into</span>
+<span class="c">/// a goal that then immediately ends, and the work is lost from the conversation</span>
+<span class="c">/// even though it was paid for. The refusal is a `tool_result` the model can</span>
+<span class="c">/// read and route around — never a missing tool, which would be a capability</span>
+<span class="c">/// that silently disappears late in every goal.</span>
+const MIN_REMAINING_TOKENS: i64 = 20_000;
+
+<span class="c">/// A subagent's own deadline, capped below the parent's.</span>
+<span class="c">///</span>
+<span class="c">/// The parent's wall clock keeps running independently and is checked at the</span>
+<span class="c">/// parent's next iteration boundary, so a long delegation can overshoot the</span>
+<span class="c">/// parent's deadline by up to this. Bounded, and stated rather than discovered.</span>
+const SUB_WALL_CLOCK: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+<span class="c">/// How many paths or commands a footer lists before it says "and N more".</span>
+const FOOTER_ITEMS: usize = 12;
+
+<span class="c">// endregion: What a delegation is bounded by</span></code></pre>
+  <span class="src">crates/emma/src/delegate.rs — the bounds region, quoted entire</span>
+
+  <p>
+    They are constants rather than judgements at the call site for the reason
+    every truncation cap in this repository is: a bound nobody can find is a
+    bound nobody can change. <code>FOOTER_ITEMS</code> is in the same block and
+    belongs to <a href="delegation-footer.html#footer-fn">the footer</a>.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Constant</th><th>Value</th><th>What it is measured against</th></tr></thead>
+    <tbody>
+      <tr><td><code>SUB_ITERATIONS</code></td><td>20</td><td>the parent's default of 60. Iterations catch "one cheap tool forever", and an exploration that has not converged in twenty calls is not going to</td></tr>
+      <tr><td><code>SUB_TOKEN_SHARE</code></td><td>2, so half of what remains</td><td><code>compact</code> targeting half the context cap: a runaway leaves the parent enough to report what happened and finish</td></tr>
+      <tr><td><code>MIN_REMAINING_TOKENS</code></td><td>20,000</td><td>nothing; it is the floor below which a delegation refuses to start</td></tr>
+      <tr><td><code>SUB_WALL_CLOCK</code></td><td>5 minutes</td><td>the parent's own deadline, which it is capped below</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="arith">The arithmetic, and the refusal</h2>
+
+<pre><code>    <span class="c">/// The budget one delegation gets, or the reason it cannot start.</span>
+    <span class="c">///</span>
+    <span class="c">/// Both halves of the arithmetic are here rather than inline in `invoke`</span>
+    <span class="c">/// because they are the same fact seen twice: what is left of the parent's</span>
+    <span class="c">/// allowance decides whether to run at all *and* how much of it to lend.</span>
+    fn sub_budgets(&amp;self, ty: &amp;AgentType) -&gt; Result&lt;Budgets, ToolError&gt; {
+        let remaining = self.nest.budgets.max_tokens - self.nest.spend.get();
+        if remaining &lt; MIN_REMAINING_TOKENS {
+            <span class="c">// `Unavailable` and phrased as "I cannot", per `ToolError`'s own</span>
+            <span class="c">// rule: this is the machinery being out of room, not the work being</span>
+            <span class="c">// impossible.</span>
+            return Err(ToolError::Unavailable(format!(
+                "I cannot start a delegation: this goal has {remaining} of its {} token \
+                 allowance left and a subagent needs at least {MIN_REMAINING_TOKENS}. Do the \
+                 work here, or tell the user the budget needs raising.",
+                self.nest.budgets.max_tokens
+            )));
+        }
+        let share = remaining / SUB_TOKEN_SHARE;
+        Ok(Budgets {
+            max_iterations: ty.max_iterations,
+            max_tokens: ty.max_tokens.map_or(share, |cap| cap.min(share)),
+            wall_clock: SUB_WALL_CLOCK.min(self.nest.budgets.wall_clock),
+            <span class="c">// One nudge. A subagent that has stopped without claiming completion</span>
+            <span class="c">// has usually said most of what it found, and the parent gets that</span>
+            <span class="c">// text either way — a second and third nudge spends the parent's</span>
+            <span class="c">// budget arguing with a run the parent cannot see.</span>
+            max_kicks: 1,
+            max_context: self.nest.budgets.max_context,
+        })
+    }</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::sub_budgets, quoted entire</span>
+
+  <div class="formula">
+    max_tokens = min(the file's max_tokens, (the parent's cap − spent so far) ÷ 2)
+    <em>and if (the parent's cap − spent) &lt; 20,000, the delegation does not start at all</em>
+  </div>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::sub_budgets</span>
+
+  <p>
+    Both halves are in one function because they are the same fact seen twice:
+    what is left of the parent's allowance decides whether to run at all
+    <em>and</em> how much of it to lend. The refusal is
+    <code>ToolError::Unavailable</code> and is phrased as "I cannot", per
+    <code>ToolError</code>'s own rule, because this is the machinery being out of
+    room rather than the work being impossible. It is a <code>tool_result</code>
+    the model reads and routes around, never a tool that disappears from the
+    schema, which would be a capability quietly vanishing late in every goal.
+    <span class="chip test">tested</span>
+    <code>a_delegation_refuses_to_start_when_the_goal_has_almost_nothing_left</code>.
+  </p>
+  <span class="src">crates/emma/tests/delegate.rs::a_delegation_refuses_to_start_when_the_goal_has_almost_nothing_left; crates/tool-api/src/lib.rs — ToolError</span>
+
+  <p>
+    The refusal message names three numbers: what is left, the goal's whole
+    allowance, and the minimum. A model that reads it can tell the difference
+    between a goal that started small and one that has been spent, and the last
+    sentence tells it what to do instead.
+  </p>
+
+  <p>
+    <code>max_kicks: 1</code>. A subagent that has stopped without claiming
+    completion has usually said most of what it found, and the parent gets that
+    text either way, so a second and third nudge spends the parent's budget
+    arguing with a run the parent cannot see. <code>max_context</code> is the
+    parent's number verbatim, and the design note records a misreading of that:
+    "its own" means the sub compacts its own chapters independently, against the
+    same numeric cap.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::sub_budgets; notes/design-subagents-mechanism.md — the dated header</span>
+
+  <p>
+    The wall clock is <code>min(5 minutes, the parent's remaining
+    wall_clock)</code>, and the parent's clock keeps running independently while
+    the sub runs. It is only checked at the parent's next iteration boundary, so
+    one long delegation can overshoot the parent's deadline by up to five
+    minutes, and four back-to-back delegations by up to twenty. Bounded, and
+    stated rather than discovered.
+  </p>
+
+  <h2 id="spend">How a child's spend reaches the parent</h2>
+
+<pre><code><span class="c">/// The token meter one goal is charged against, shared with anything it</span>
+<span class="c">/// delegates to.</span>
+<span class="c">///</span>
+<span class="c">/// **Why it is not a local.** `run_goal` kept `let mut tokens` and tested it</span>
+<span class="c">/// after every call, which is exactly right for a loop that is the only thing</span>
+<span class="c">/// spending. A delegation is a second loop spending the same budget, and it</span>
+<span class="c">/// cannot reach a local — so the owner's ruling that a subagent spends the</span>
+<span class="c">/// parent's budget is either this type or an `if call.name == "Delegate"` in</span>
+<span class="c">/// `run_tool_call` adding the tool's self-reported cost. The second is the loop</span>
+<span class="c">/// branching on a tool's identity, which the module doc forbids and which this</span>
+<span class="c">/// project has already paid to remove twice.</span>
+<span class="c">///</span>
+<span class="c">/// **The parent link, and why `set` does not follow it.** A nested run gets a</span>
+<span class="c">/// meter of its own whose every `add` also lands on its parent's, so the sub's</span>
+<span class="c">/// spend charges the parent as it happens and the parent's `tokens &gt; max_tokens`</span>
+<span class="c">/// test sees it on its very next iteration. `set` is the per-goal reset and</span>
+<span class="c">/// stays local: a nested `run_goal` opening its own goal would otherwise zero</span>
+<span class="c">/// the meter of the goal that is paying for it.</span>
+#[derive(Debug, Default)]
+pub struct Spend {
+    counted: std::sync::atomic::AtomicI64,
+    parent: Option&lt;Arc&lt;Spend&gt;&gt;,
+}
+
+impl Spend {
+    pub fn new() -&gt; Arc&lt;Self&gt; {
+        Arc::new(Self::default())
+    }
+
+    <span class="c">/// A meter of its own that also charges `parent`.</span>
+    pub fn child(parent: &amp;Arc&lt;Self&gt;) -&gt; Arc&lt;Self&gt; {
+        Arc::new(Self {
+            counted: std::sync::atomic::AtomicI64::new(0),
+            parent: Some(parent.clone()),
+        })
+    }
+
+    <span class="c">/// Charge, and answer what this meter now reads.</span>
+    pub fn add(&amp;self, tokens: i64) -&gt; i64 {
+        if let Some(parent) = &amp;self.parent {
+            parent.add(tokens);
+        }
+        self.counted.fetch_add(tokens, Ordering::SeqCst) + tokens
+    }
+
+    pub fn get(&amp;self) -&gt; i64 {
+        self.counted.load(Ordering::SeqCst)
+    }
+
+    <span class="c">/// The per-goal reset. Local by design — see the type's doc.</span>
+    pub fn set(&amp;self, tokens: i64) {
+        self.counted.store(tokens, Ordering::SeqCst);
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/agent.rs — Spend, quoted entire with its doc</span>
+
+  <p>
+    <code>add</code> walks up the chain and <code>set</code> does not, and that
+    asymmetry is the whole mechanism. If <code>set</code> propagated, a nested
+    goal opening would zero the meter of the goal paying for it. If
+    <code>add</code> did not, a delegation would be a way to spend past the
+    parent's cap. Because the charge lands as it happens, the parent's
+    <code>tokens &gt; max_tokens</code> test sees a runaway sub on the parent's
+    very next iteration rather than at the end of the delegation.
+  </p>
+
+  <p>
+    The alternative the type's doc rejects is worth naming: a
+    <code>run_tool_call</code> that adds a tool's self-reported cost when the
+    tool's name is <code>Delegate</code>. That is the loop branching on a tool's
+    identity, which the module doc forbids and which this project has already
+    paid to remove twice.
+  </p>
+
+  <p>
+    <span class="chip test">tested</span>
+    <code>a_subagents_spend_charges_the_parents_meter</code> drives a
+    100-token parent call, a 7,000-token sub call, a 300-token sub answer and a
+    100-token parent answer, and asserts 7,500 on the parent's meter and 7,500
+    in the goal's outcome. <a href="loop-budgets.html">The agent loop</a> covers
+    <code>Spend</code>, the three different token numbers and what a resume
+    restores.
+  </p>
+  <span class="src">crates/emma/tests/delegate.rs::a_subagents_spend_charges_the_parents_meter</span>
+
+  <h2 id="record">The parent-level record</h2>
+
+  <p>
+    One line per delegation, written after the run and before the tool answers.
+    It carries what "is this agent type worth using?" needs, and the
+    <code>cost_tokens</code> a resumed parent adds back to its meter.
+  </p>
+
+<pre><code>        let seen = records.lock().map(|r| r.clone()).unwrap_or_default();
+        let facts = Facts::from(&amp;seen);
+        let footer = facts.footer();
+        self.nest.term.note(&amp;format!("{agent} {}", facts.summary()));
+        <span class="c">// The parent-level record: one line per delegation carrying everything</span>
+        <span class="c">// "is this agent type worth using?" needs, and the `cost_tokens` a</span>
+        <span class="c">// resumed parent adds back to its meter. `emma agents` reads these.</span>
+        self.nest.log.append(
+            "delegation",
+            json!({
+                "sub_id": sub_id,
+                "parent_turn_id": ctx.turn_id,
+                "agent": agent,
+                "task": args.get("task"),
+                "ending": outcome.ending.as_str(),
+                "cost_tokens": outcome.tokens,
+                "iterations": outcome.iterations,
+                "elapsed_ms": facts.elapsed_ms,
+                "tool_calls": facts.tool_calls,
+                <span class="c">// `files_read` keeps its name though the footer's word is now</span>
+                <span class="c">// "touched": `emma agents` reads these keys, and renaming a</span>
+                <span class="c">// JSONL field to match a cosmetic rewording breaks a consumer</span>
+                <span class="c">// for nothing.</span>
+                "files_read": facts.files.len(),
+                "fetched": facts.fetched.len(),
+                "other_tool_calls": facts.other.values().sum::&lt;usize&gt;(),
+                "commands": facts.commands.len(),
+                "failed_commands": facts.commands.iter().filter(|c| c.1 != Some(0)).count(),
+                "denied": facts.denied.len(),
+                "max_tokens": budgets.max_tokens,
+                "max_iterations": budgets.max_iterations,
+            }),
+        );</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::invoke, the delegation record</span>
+
+  <p>
+    <code>files_read</code> keeps its name though the footer's word is now
+    "touched", because <code>emma agents</code> reads these keys and renaming a
+    JSONL field to match a cosmetic rewording breaks a consumer for nothing.
+    <code>failed_commands</code> is computed here rather than stored on
+    <code>Facts</code>: it is the count of commands whose recorded status is
+    anything but <code>Some(0)</code>, which folds "exited non-zero" and "no
+    result arrived" into one number.
+  </p>
+
+  <div class="note warn">
+    <span class="h">One field is absent, and it is the one nothing else can recover</span>
+    <p>
+      <code>facts.searches</code> is not written to this record.
+      <code>fetched</code>, <code>other_tool_calls</code>, <code>commands</code>,
+      <code>denied</code> and <code>files_read</code> all are. So a delegation
+      that only searched leaves a parent-level record saying it touched no files,
+      ran no commands and fetched nothing, with the search recoverable only from
+      the <code>sub.*</code> records further up the same file.
+      <a href="delegation-agents-cmd.html#defects">emma agents</a> is where that
+      omission becomes visible. <span class="chip cert">certified</span> from a
+      real record on this machine, which has no <code>searches</code> key while
+      the footer for the same run reads <code>searched for (1)</code>.
+    </p>
+    <span class="src">crates/emma/src/delegate.rs — the delegation record; ~/.emma/sessions/sess-1786710409801-39600.jsonl</span>
+  </div>
+
+  <p>
+    <span class="chip test">tested</span> A resumed parent adds back what its
+    delegations spent from <code>cost_tokens</code>, since a resume that dropped
+    it would come back with a meter missing everything its subagents spent.
+    <code>a_resumed_parent_gets_back_what_its_delegations_spent</code>.
+  </p>
+  <span class="src">crates/emma/tests/delegate.rs::a_resumed_parent_gets_back_what_its_delegations_spent</span>
+
+  <h2 id="endings">How a delegation ends, from the parent's side</h2>
+
+<pre><code>        let body = format!("{}\n\n{footer}", outcome.text.trim());
+        Ok(match outcome.ending {
+            <span class="c">// `main.rs` already treats these two together as success: a brief</span>
+            <span class="c">// needing no tools was still answered.</span>
+            Ending::Done | Ending::Answered =&gt; {
+                Ok(ToolOutcome::new(body).with_display(facts.summary()))
+            }
+            <span class="c">// The machinery, not the work.</span>
+            Ending::Provider(ref e) =&gt; Err(ToolError::Unavailable(format!(
+                "the delegated agent's provider failed: {e}"
+            ))),
+            <span class="c">// Everything else did work and did not claim completion. The text is</span>
+            <span class="c">// usually most of the answer, and throwing it away to return a clean</span>
+            <span class="c">// error throws away everything that was paid for — so it is carried,</span>
+            <span class="c">// under an ending that says not to re-issue the same brief.</span>
+            _ =&gt; Err(ToolError::Failed(format!(
+                "the delegated agent stopped without finishing: {}\n\nWhat it had at that \
+                 point, and what it actually did:\n\n{body}\n\nRe-issuing the same brief will \
+                 hit the same wall. Narrow it, or do the work here.",
+                outcome.ending.message(&amp;budgets)
+            ))),
+        })
+    }</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::invoke, the ending match, quoted entire</span>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>The sub's ending</th><th>What the parent gets</th></tr></thead>
+    <tbody>
+      <tr><td><code>Done</code>, <code>Answered</code></td><td>a successful <code>ToolOutcome</code>: the message, the footer, and <code>Facts::summary</code> as the one-line display</td></tr>
+      <tr><td><code>Provider(e)</code></td><td><code>ToolError::Unavailable</code> naming the provider failure: the machinery, not the work</td></tr>
+      <tr><td>anything else</td><td><code>ToolError::Failed</code> <strong>carrying the text and the footer anyway</strong>, plus "re-issuing the same brief will hit the same wall"</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>
+    The third row is the loop's governing rule applied without an exception for
+    this tool: a failed delegation is an observation the model routes around, not
+    an abort. Throwing the partial answer away to return a clean error would
+    throw away everything that was paid for, and the wording tells the model not
+    to re-issue the brief unchanged, which is the memo rule stated in prose
+    because the memo itself only catches identical calls.
+    <span class="chip test">tested</span>
+    <code>a_subagent_that_ran_out_of_budget_is_not_reported_as_a_finished_one</code>.
+  </p>
+  <span class="src">crates/emma/tests/delegate.rs::a_subagent_that_ran_out_of_budget_is_not_reported_as_a_finished_one; crates/emma/src/agent.rs — the memo</span>
+
+  <p>
+    <code>Ending::message(&amp;budgets)</code> supplies the sentence in the
+    error, so a sub that hit its token cap says which cap and a sub that hit its
+    iteration cap says that instead. The body is
+    <code>format!("{}\n\n{footer}", outcome.text.trim())</code> in both arms, so
+    the footer is under the message whether the delegation succeeded or not.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::invoke; crates/emma/src/agent.rs — Ending::message</span>
+
+  <h2 id="unsettled">What is not settled here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> The overshoot arithmetic is read
+      off <code>SUB_WALL_CLOCK</code> and the loop's deadline check, not
+      observed. No test runs a delegation past the parent's deadline.
+      <em>What would settle it:</em> a scripted sub that sleeps past a short
+      parent <code>wall_clock</code>, asserting the parent's ending and its
+      elapsed time.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> Whether half is the right share
+      has never been measured; it is an argument by analogy with
+      <code>compact</code>. <em>What would settle it:</em> a corpus of
+      delegations with their endings, which needs more than the one recorded run
+      on this machine.
+    </li>
+    <li>
+      <span class="chip cert">certified</span> The <code>searches</code>
+      omission, above: the record on disk has 19 keys and none of them is
+      <code>searches</code>.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · read at commit <code>62ab9c3</code> ·
+    <code>crates/emma/src/delegate.rs</code> ·
+    <code>crates/emma/src/agent.rs</code> ·
+    <a href="delegation.html">back to the chapter</a>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

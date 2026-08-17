@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Skills &amp; commands · Configuration · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav here" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/harness/src/lib.rs · the Skills and Loading regions</p>
+  <h1>Skills and commands</h1>
+
+  <nav class="chapter">
+      <a class="up" href="config.html">Configuration</a>
+      <a href="config-discovery.html">Discovery</a>
+      <a href="config-files.html">Every file</a>
+      <a href="config-spine.html">The spine</a>
+      <a href="config-claude.html">Reading <code>.claude/</code></a>
+      <span class="now">Skills &amp; commands</span>
+      <a href="config-agents.html">Agents</a>
+      <a href="config-personal.html">Your own files</a>
+      <a href="config-themes.html">Themes</a>
+      <a href="config-notapplied.html">It did not apply</a>
+    </nav>
+
+  <p class="lede">
+    Two directories with the same layout in both flavours, which is the whole
+    point of reading a second directory name at all. A skill is text the model
+    asks for by name; a command is text a person summons with a slash. Neither
+    can change what the runtime does, and the strictness each is read with
+    depends on whose format the file is written in.
+  </p>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven, and a reader can repeat it: a file, a command, a count</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+    <div><span class="chip test">tested</span> a test that was shown to fail</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <h2 id="layout">Skills: <code>skills/&lt;name&gt;/SKILL.md</code></h2>
+
+  <p>
+    A directory per skill, each holding a file called <code>SKILL.md</code>
+    exactly. Markdown with YAML frontmatter; Emma reads two fields and the body
+    after the frontmatter is the skill. A subdirectory without a
+    <code>SKILL.md</code> is skipped without complaint, and a loose file directly
+    in <code>skills/</code> is ignored.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>load_skills</code></p>
+<pre><code>fn load_skills(
+    root: &amp;Path,
+    spine_path: &amp;Path,
+    flavor: Flavor,
+    elected: Option&lt;&amp;[String]&gt;,
+) -&gt; Result&lt;Vec&lt;SkillDef&gt;&gt; {
+    let dir = root.join("skills");
+    // A `BTreeMap` keyed on the front-matter name gives the sorted catalogue the
+    // prompt prefix needs, whatever order the directory iterated in.
+    let mut found: BTreeMap&lt;String, SkillDef&gt; = BTreeMap::new();
+    if dir.is_dir() {
+        for entry in
+            std::fs::read_dir(&amp;dir).with_context(|| format!("reading {}", dir.display()))?
+        {
+            // A subdirectory without a `SKILL.md` is skipped without complaint,
+            // and a loose file in `skills/` is ignored.
+            let path = entry?.path().join("SKILL.md");
+            if !path.is_file() {
+                continue;
+            }
+            let text = std::fs::read_to_string(&amp;path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            let (front, body) = match (split_skill(&amp;text, &amp;path, flavor), flavor) {
+                (Ok(v), _) =&gt; v,
+                // Emma's own format: a file this loader cannot read is a mistake
+                // in a file the operator wrote for Emma, and it stops the boot
+                // like every other one.
+                (Err(e), Flavor::Emma) =&gt; return Err(e),
+                // A foreign format. The skill is unusable either way; the choice
+                // is only whether it costs the operator this skill or every
+                // skill. It is named on stderr rather than dropped, because a
+                // catalogue quietly one shorter than the directory is the kind of
+                // gap nobody notices until the model cannot find a skill that is
+                // plainly there.
+                (Err(e), Flavor::Claude) =&gt; {
+                    eprintln!("emma: skipping skill {}: {e:#}", path.display());
+                    continue;
+                }
+            };
+            found.insert(
+                front.name.clone(),
+                SkillDef::new(front.name, front.description, body),
+            );
+        }
+    }</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>load_skills</code></span>
+
+  <p>
+    The catalogue is keyed and sorted by the <em>frontmatter</em> name rather
+    than by the directory name, and never by directory iteration order, because
+    the catalogue rides in the prompt prefix that the provider caches as an exact
+    byte match. Two skills declaring the same <code>name</code> collapse to one,
+    with the later iteration winning.
+  </p>
+
+  <h2 id="strict">The strictness split, and what it cost to learn</h2>
+
+  <p>
+    Two structs, two fields each, and the difference between them is one
+    attribute.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>Front</code>, <code>ClaudeFront</code></p>
+<pre><code>/// Only `name` and `description` are read. A skill is markdown; anything the
+/// runtime must branch on belongs in the spine.
+///
+/// **Strict for `.emma/`.** Both fields are required and `deny_unknown_fields`
+/// is on, so a `SKILL.md` missing either — or carrying any third key — fails the
+/// load and takes the boot with it. In Emma's own format an unknown key can only
+/// be the user's typo, and this is the attribute that catches it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Front {
+    name: String,
+    description: String,
+}
+
+/// The same two fields, read from a `.claude/skills/` file, where the rest of the
+/// frontmatter is somebody else's business.
+///
+/// **The ruling, and it is the `settings.json` argument one level down.** Real
+/// skills on a working machine carry `model-role`, `version` and
+/// `allowed-tools`; under the strict struct above, every one of them took the
+/// whole boot down. A rule that fires on correct configuration is an outage, not
+/// a safety property — and unlike `.emma/`, an unrecognised key here is not a
+/// typo in Emma's format, it is a key Emma has no opinion about in someone
+/// else's. So unknown keys are ignored, and a file that cannot be read at all is
+/// skipped with a warning rather than taken as a reason not to start.
+///
+/// `name` and `description` stay required, because they are not decoration: they
+/// are the catalogue line the model chooses the skill from, and a skill with no
+/// name cannot be asked for.
+#[derive(Deserialize)]
+struct ClaudeFront {
+    name: String,
+    description: String,
+}</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>Front</code>, <code>ClaudeFront</code></span>
+
+  <p>Both halves, from a shell:</p>
+
+<pre><code><span class="c">$ cat .claude/skills/demo/SKILL.md</span>
+---
+name: demo
+description: A demo skill.
+version: 3
+allowed-tools: Read, Grep
+model-role: sonnet
+---
+Body of the demo skill.
+
+<span class="c">$ emma config check | grep skills</span>
+skills         demo, licenced
+
+<span class="c">$ cat .emma/skills/broken/SKILL.md    # the same three extra keys, Emma's flavour</span>
+<span class="c">$ emma config check</span>
+Error: …\cfg\em\.emma\skills\broken\SKILL.md: bad frontmatter
+
+Caused by:
+    <span class="w">unknown field `version`, expected `name` or `description` at line 3 column 1</span></code></pre>
+  <span class="chip cert">certified</span>: release binary at <code>62ab9c3</code>, two scratch harnesses, 2026-08-16. Same three extra keys; one loads, one refuses the boot.
+
+  <p>
+    A <code>.claude/</code> skill that cannot be parsed at all is named on stderr
+    and the rest of the catalogue survives. The line goes to stderr rather than
+    into the report, so on a busy start it scrolls past:
+  </p>
+
+<pre><code><span class="c">$ emma config check              # skills/broken/SKILL.md has a YAML list where a string goes</span>
+emma: skipping skill …\.claude\skills\broken\SKILL.md: …\SKILL.md: bad frontmatter:
+description: invalid type: sequence, expected a string at line 2 column 14
+cwd            …\cfg\cc
+…
+skills         demo, licenced</code></pre>
+  <span class="chip cert">certified</span>: same run, same day. The broken skill is absent from the catalogue and the other two are unaffected.
+
+  <h2 id="split">Splitting the file</h2>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>split_skill</code></p>
+<pre><code>fn split_skill(text: &amp;str, path: &amp;Path, flavor: Flavor) -&gt; Result&lt;(Front, String)&gt; {
+    let named = |what: &amp;str| format!("{}: {what}", path.display());
+    let text = match flavor {
+        Flavor::Emma =&gt; text,
+        Flavor::Claude =&gt; after_licence_header(text),
+    };
+    let rest = text
+        .strip_prefix("---\n")
+        .with_context(|| named("expected YAML frontmatter"))?;
+    let end = rest
+        .find("\n---")
+        .with_context(|| named("frontmatter is not closed"))?;
+    let front: Front = match flavor {
+        Flavor::Emma =&gt; serde_yaml::from_str(&amp;rest[..end]),
+        Flavor::Claude =&gt; serde_yaml::from_str::&lt;ClaudeFront&gt;(&amp;rest[..end]).map(Front::from),
+    }
+    .with_context(|| named("bad frontmatter"))?;
+    Ok((front, rest[end + 4..].trim_start().to_string()))
+}</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>split_skill</code></span>
+
+  <p>
+    The opener is <code>"---\n"</code> byte for byte. A skill file written with
+    CRLF endings does not match it and is refused, or under
+    <code>.claude/</code> skipped. That is the same shape as the defect the agent
+    parser was fixed for, and it has not been fixed here. The
+    <code>after_licence_header</code> doc names it and the one beside it:
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>after_licence_header</code></p>
+<pre><code>/// Step over an HTML comment before the frontmatter, `.claude/` only.
+///
+/// A licence header above the `---` is common enough to be worth handling rather
+/// than skipping: the file is well-formed, it simply does not open with its own
+/// first line, and refusing it would drop a skill for a reason the operator can
+/// do nothing about. It steps over comments and blank lines and nothing else — a
+/// file with real prose above its frontmatter is not a skill with a header, it is
+/// a file whose frontmatter is somewhere in the middle, and guessing at that is
+/// how a parser starts reading text nobody meant as configuration.
+///
+/// Not covered: a `---\r\n` opener, or a byte-order mark. Both would still be
+/// skipped-with-a-warning rather than fatal, which is the property that mattered.
+fn after_licence_header(text: &amp;str) -&gt; &amp;str {
+    let mut rest = text.trim_start();
+    while let Some(body) = rest.strip_prefix("&lt;!--") {
+        let Some(end) = body.find("--&gt;") else {
+            return rest;
+        };
+        rest = body[end + 3..].trim_start();
+    }
+    rest
+}</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>after_licence_header</code></span>
+
+  <p>
+    <code>trim_start</code> is what steps over blank lines, and the loop handles
+    several stacked comments. An unterminated <code>&lt;!--</code> returns the
+    text unchanged, which then fails the frontmatter check with the ordinary
+    message rather than looping.
+    <span class="chip cert">certified</span>: a scratch skill opening with
+    <code>&lt;!-- (c) somebody 2026 --&gt;</code> and a blank line before its
+    <code>---</code> loads and appears in the catalogue as <code>licenced</code>.
+  </p>
+
+  <div class="note warn">
+    <span class="h">CRLF is a live gap here, and it is fixed one file away</span>
+    <p>
+      <code>split_agent</code> in <code>claude.rs</code> tolerates
+      <code>---\r\n</code> and a byte-order mark, because requiring
+      <code>---\n</code> exactly had made 90 out of 90 agent files in a real
+      library parse as having no frontmatter at all. <code>split_skill</code>
+      still requires <code>---\n</code>. Its consequence is milder, because a
+      skill that will not split is refused or skipped rather than silently
+      meaning something else, and the doc says that is the property that
+      mattered. It is still a file written on Windows failing for a reason its
+      author cannot see from the file.
+      <span class="chip unv">unverified</span> as a live failure: no CRLF
+      <code>SKILL.md</code> was fed to the binary here. Settle it by saving a
+      working <code>SKILL.md</code> with CRLF endings and re-running
+      <code>emma config check</code>; the expected result is
+      <code>expected YAML frontmatter</code>.
+    </p>
+  </div>
+
+  <h2 id="catalog">What a skill becomes</h2>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>SkillDef</code></p>
+<pre><code>/// One skill, resolved by the harness.
+///
+/// `hash` is over the body only, so it identifies the exact text a turn was
+/// given, independent of how the catalogue described it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillDef {
+    pub name: String,
+    pub description: String,
+    pub body: String,
+    pub hash: String,
+}</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>SkillDef</code>, <code>SkillDef::new</code></span>
+
+  <p>
+    Four accessors sit on <code>Harness</code>. <code>skills()</code> returns the
+    sorted slice, <code>skill(name)</code> finds one, <code>skill_names()</code>
+    gives the closed enum a tool schema puts in its <code>name</code> argument,
+    and <code>skill_catalog()</code> composes the description lines. The last one
+    is the interesting one, because its return type carries a decision.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>Harness::skill_catalog</code></p>
+<pre><code>    /// The catalogue lines a `load_skill` description is composed from, or
+    /// `None` when there are no skills.
+    ///
+    /// `None` is the signal not to register the tool at all. Offering a
+    /// capability that cannot work is a trap with a description attached, and
+    /// returning an empty string instead would make that mistake invisible at
+    /// the call site. The preamble is the tool's own prose and stays in the
+    /// tool's crate; only the part that varies with the loaded harness is here.
+    pub fn skill_catalog(&amp;self) -&gt; Option&lt;String&gt; {
+        if self.skills.is_empty() {
+            return None;
+        }
+        let mut out = String::new();
+        for s in &amp;self.skills {
+            out.push_str(&amp;format!("\n- `{}` — {}", s.name, s.description.trim()));
+        }
+        out.push('\n');
+        Some(out)
+    }</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>Harness::skill_catalog</code>, <code>skill_names</code></span>
+
+  <p>
+    A harness with no skills does not register the <code>Skill</code> tool.
+    <span class="chip cert">certified</span>: the <code>tools</code> line from
+    <code>config check</code> in this repository, which has no skills, runs
+    <code>… Hover, DocumentSymbols, WebFetch, …</code>; the same line in the
+    scratch <code>.claude/</code> harness with two skills reads
+    <code>… Hover, DocumentSymbols, <strong>Skill</strong>, WebFetch, …</code>.
+    Twenty-one tools against twenty-two, and the <code>tool schema</code> hashes
+    differ accordingly.
+  </p>
+
+  <p>
+    <code>skill_names</code>'s doc carries the reason the argument is an enum
+    rather than a path: a tool that reads a model-supplied path is an
+    arbitrary-file-read tool with a friendly description. What a skill can do is
+    add text to one turn, and it is loaded by a tool call, so its body reaches
+    the model only when the model asks for it by name.
+  </p>
+
+  <h2 id="election">A persona may narrow the pool</h2>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>load_skills</code>, the election</p>
+<pre><code>    let Some(elected) = elected else {
+        return Ok(found.into_values().collect());
+    };
+    let mut out = BTreeMap::new();
+    for want in elected {
+        let skill = found.remove(want).with_context(|| {
+            format!(
+                "{}: persona elects skill `{want}`, which {} does not contain",
+                spine_path.display(),
+                dir.display()
+            )
+        })?;
+        out.insert(skill.name.clone(), skill);
+    }
+    Ok(out.into_values().collect())</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>load_skills</code></span>
+
+  <p>
+    Electing a skill that is not in the directory fails the boot. The elected
+    names go back through a second <code>BTreeMap</code> before becoming a
+    vector, so a persona's <code>skills</code> array is a set rather than an
+    ordering: writing them in a different order produces the same catalogue and
+    therefore the same cached prompt prefix.
+  </p>
+
+  <h2 id="commands">Commands: <code>commands/&lt;name&gt;.md</code></h2>
+
+  <p>
+    Top-level <code>*.md</code> only, and the file stem is the name. There is no
+    frontmatter, no strictness question, and no failure mode beyond a file that
+    cannot be read.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>load_commands</code></p>
+<pre><code>fn load_commands(root: &amp;Path) -&gt; Result&lt;BTreeMap&lt;String, String&gt;&gt; {
+    let dir = root.join("commands");
+    let mut out = BTreeMap::new();
+    if !dir.is_dir() {
+        return Ok(out);
+    }
+    for entry in std::fs::read_dir(&amp;dir).with_context(|| format!("reading {}", dir.display()))? {
+        let path = entry?.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let name = path.file_stem().unwrap_or_default().to_string_lossy();
+        let body = std::fs::read_to_string(&amp;path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        out.insert(name.into_owned(), body.trim().to_string());
+    }
+    Ok(out)
+}</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>load_commands</code></span>
+
+  <p>
+    <code>body.trim()</code> is the second of the two places the "nothing is
+    trimmed" prompt rule is bent, and the module doc says why: a command body is
+    not always-on prompt text, it is text a person typed a <code>/name</code> to
+    summon. A subdirectory under <code>commands/</code> is skipped by the
+    extension test rather than walked.
+  </p>
+
+  <p>
+    Expansion happens at intake, and the model never learns commands exist.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>Harness::expand_command</code></p>
+<pre><code>    /// Server-side expansion at intake. `None` for anything that is not a known
+    /// command, including an unknown `/word`, which passes through as ordinary
+    /// text. The model never learns commands exist.
+    pub fn expand_command(&amp;self, raw: &amp;str) -&gt; Option&lt;Expansion&gt; {
+        let rest = raw.strip_prefix('/')?;
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let (name, tail) = rest.split_at(end);
+        let body = self.commands.get(name)?;
+        let tail = tail.trim();
+        Some(Expansion {
+            command: name.to_string(),
+            raw: raw.to_string(),
+            text: if tail.is_empty() {
+                body.clone()
+            } else {
+                format!("{body}\n\n{tail}")
+            },
+        })
+    }</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>expand_command</code>, <code>Expansion</code></span>
+
+  <p>
+    The tail is appended after a blank line when there is one, and both halves
+    are kept on the <code>Expansion</code> so the session log can record what the
+    person typed as well as what the model was asked. An unknown
+    <code>/word</code> is not an error and not a missing command: it returns
+    <code>None</code> and passes through to the model as ordinary text, which is
+    indistinguishable from a command that "did nothing" if an expansion was
+    expected.
+  </p>
+
+  <div class="note">
+    <span class="h">A built-in of the same name wins, and says so</span>
+    <p>
+      <code>main</code> matches its own commands before
+      <code>expand_command</code> is reached, so a
+      <code>commands/exit.md</code> has never been reachable.
+      <code>emma config check</code> names any project command that a built-in
+      shadows, with the sentence "is shadowed by Emma's own /name and cannot be
+      reached. Rename the file." The alternative, a checkout being able to
+      shadow <code>/model</code> or <code>/clear</code>, would let a repository
+      take away Emma's own control surface.
+      <span class="chip unv">unverified</span>: no shadowing command file was
+      built here. Settle it by putting a <code>commands/exit.md</code> in a
+      scratch harness and re-running <code>config check</code>.
+    </p>
+  </div>
+  <span class="src">crates/emma/src/commands.rs — <code>shadowed</code>; crates/emma/src/session_command.rs — <code>BUILTINS</code></span>
+
+  <p>
+    Loaded, both directories at once, in the scratch harness this page has been
+    quoting:
+  </p>
+
+<pre><code><span class="c">$ emma config check</span>
+skills         demo, licenced
+agents         helper
+commands       /go</code></pre>
+  <span class="chip cert">certified</span>: release binary, 2026-08-16, a <code>.claude/</code> holding three skill directories (one unparseable), two agent files and one command.
+
+  <h2 id="notverified">What this page did not settle</h2>
+
+  <ul class="body">
+    <li>
+      <strong>A CRLF <code>SKILL.md</code>.</strong> Stated above as a gap read
+      off <code>split_skill</code>'s byte-exact opener, not reproduced.
+      <span class="chip unv">unverified</span>. Settle it by writing one and
+      reading the message.
+    </li>
+    <li>
+      <strong>Two skills declaring the same frontmatter name.</strong> The
+      <code>BTreeMap</code> insert means one wins and nothing is said. Which one
+      depends on directory iteration order, which is not defined.
+      <span class="chip unv">unverified</span>. Settle it with two directories
+      whose <code>SKILL.md</code> files both say <code>name: demo</code>, run ten
+      times, and see whether the surviving body is stable.
+    </li>
+    <li>
+      <strong>What a loaded skill body does to a turn.</strong> This page covers
+      how the pool is resolved. The tool that loads one, and what the body is
+      concatenated with, is <a href="tools-ctx.html">Tools</a>, and nothing here
+      ran a model.
+      <span class="chip unv">unverified</span> on this page.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · this page covers <code>SkillDef</code>,
+    <code>load_skills</code>, <code>split_skill</code>,
+    <code>after_licence_header</code>, <code>Front</code>,
+    <code>ClaudeFront</code>, <code>skills</code>, <code>skill</code>,
+    <code>skill_names</code>, <code>skill_catalog</code>,
+    <code>load_commands</code>, <code>expand_command</code> and
+    <code>command_names</code> ·
+    next: <a href="config-agents.html">agent files</a> ·
+    contract: <code>docs/CONTRACT.md</code>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

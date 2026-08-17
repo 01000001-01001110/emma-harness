@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The retained transcript &middot; The terminal &middot; Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav here" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/emma/src/term/{transcript,chat}.rs</p>
+  <h1>The retained transcript</h1>
+
+  <nav class="chapter">
+      <a class="up" href="terminal.html">The terminal</a>
+      <a href="terminal-surface.html">Surface</a>
+      <a href="terminal-frame.html">Frame</a>
+      <a href="terminal-layout.html">Layout</a>
+      <a href="terminal-colour.html">Colour</a>
+      <a href="terminal-themes.html">Themes</a>
+      <a href="terminal-skin.html">Vocabulary</a>
+      <span class="now">Transcript</span>
+      <a href="terminal-markdown.html">Markdown</a>
+      <a href="terminal-diff.html">Diffs</a>
+      <a href="terminal-status.html">Status</a>
+      <a href="terminal-sidebar.html">Sidebar</a>
+      <a href="terminal-dock.html">Dock</a>
+      <a href="terminal-usertools.html">User tools</a>
+    </nav>
+
+  <p class="lede">
+    Inline, the transcript was never Emma's. <code>insert_before</code> handed
+    each line to the terminal, which wrapped it, kept tens of thousands of them
+    in scrollback, scrolled them with the user's own keys and reflowed them on
+    resize, for no code and no memory here. The alternate screen took all of
+    that, and <code>transcript.rs</code> is the whole of the replacement:
+    append, cap, scroll, follow the tail, re-wrap. <code>chat.rs</code> paints
+    the visible window of it and decides nothing.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect: the module doc describes a world that ended</span>
+    <p>
+      <code>transcript.rs</code>'s doc says <strong>&ldquo;It is not wired into
+      the live UI. Nothing constructs one outside tests. The inline viewport
+      still writes through <code>insert_before</code> and still gets its
+      scrollback for free; this is here so that the flip, when it comes, is a
+      change of caller rather than a change of design.&rdquo;</strong> The flip
+      came. <code>App::new</code> constructs
+      <code>Transcript::new(Cap::default())</code>, <code>App::render</code>
+      drives it, <code>chat::render</code> paints it, and
+      <code>frame.rs</code> binds six methods on it to keys. That paragraph sits
+      at the head of the subsystem's most consequential new module.
+      <span class="chip cert">certified</span>: one non-test construction site,
+      <code>crates/emma/src/term/app.rs</code>, <code>App::new</code>.
+    </p>
+    <span class="src">crates/emma/src/term/transcript.rs module doc; crates/emma/src/term/app.rs — <code>App::new</code></span>
+  </div>
+
+  <h2 id="entries">An entry keeps its source, not its pixels</h2>
+
+  <p class="faint">crates/emma/src/term/transcript.rs &middot; <code>EntryKind</code></p>
+  <pre><code><span class="c">/// One block in the conversation.</span>
+#[derive(Debug, Clone)]
+pub enum EntryKind {
+    <span class="c">/// What the user typed, verbatim — a goal or a command line.</span>
+    User(String),
+    <span class="c">/// Assistant prose, as the markdown it arrived as. The last entry may still</span>
+    <span class="c">/// be growing: `done` is false until the turn ends.</span>
+    Assistant { source: String, done: bool },
+    <span class="c">/// Tool traffic — the `◆ ✓ ✗ ⊘ ⊗` vocabulary and diff hunks — already</span>
+    <span class="c">/// line-shaped by [`Skin`] and [`super::diff`].</span>
+    Activity(Vec&lt;Line&lt;'static&gt;&gt;),
+    <span class="c">/// Notes, warnings, endings, the welcome, an answered prompt. Also [`Skin`]</span>
+    <span class="c">/// output; separate from `Activity` because the two get different gutters</span>
+    <span class="c">/// when the two-column transcript is built.</span>
+    Note(Vec&lt;Line&lt;'static&gt;&gt;),
+}</code></pre>
+  <span class="src">crates/emma/src/term/transcript.rs — <code>EntryKind</code>, <code>Voice</code></span>
+
+  <p>
+    An <code>Assistant</code> entry holds the markdown it arrived as, so a
+    resize re-runs <a href="terminal-markdown.html">the same renderer</a>
+    streaming uses. Two renderers of the same text would drift.
+    <code>Activity</code> and <code>Note</code> have no source: they arrive
+    already line-shaped from <code>Skin</code>, so re-wrapping them means
+    splitting the styled line rather than re-styling a split one, which is what
+    <code>render::wrap_line</code> is for. The doc says what would change that
+    and when: search will want plain source for those too, <em>&ldquo;and that
+    is a change to this type, made when search is built, not guessed at
+    now.&rdquo;</em>
+  </p>
+
+  <p>
+    <code>Voice</code> is derived from the kind here rather than in
+    <code>chat.rs</code>, and the reason is a failure mode:
+    <em>&ldquo;the alternative is the pane sniffing styled spans to guess who is
+    talking — which works until the day <code>Skin</code> restyles anything, and
+    then fails silently.&rdquo;</em>
+  </p>
+
+  <p>
+    <code>Entry::render</code> is the one place a kind becomes rows, and it ends
+    by stripping leading and trailing blanks:
+  </p>
+
+  <pre><code>        <span class="c">// A block that ends in blank rows of its own would double the separator</span>
+        <span class="c">// the next block gets — the defect `super::spacing` was written for,</span>
+        <span class="c">// arriving here from a different direction.</span>
+        <span class="k">while</span> self.lines.last().is_some_and(is_blank) {
+            self.lines.pop();
+        }
+        <span class="k">while</span> self.lines.first().is_some_and(is_blank) {
+            self.lines.remove(0);
+        }</code></pre>
+
+  <p>
+    An <code>Assistant</code> entry always gets a fresh <code>Markdown</code>
+    per render, because <code>Markdown</code> carries an open-fence bit across
+    lines: <em>&ldquo;re-running an entry means re-running all of it — starting
+    mid-way would render the inside of a code block as prose.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>no_entry_carries_a_blank_row_of_its_own</code>, and
+    <code>blocks_are_separated_by_exactly_one_blank_row</code> for the other
+    half.
+  </p>
+
+  <h2 id="scroll">The scroll position is measured from the bottom</h2>
+
+  <p>
+    The design proposed an offset from the tail rather than an index into the
+    buffer, so that dropping the oldest entries at the cap cannot move what the
+    user is looking at. The module says that is half the answer, and names where
+    the other half came from:
+  </p>
+
+  <div class="note">
+    <p>
+      <em>&ldquo;An offset from the tail is stable against the front, and slides
+      forward by every row that arrives at the <em>back</em>. A view scrolled up
+      ten rows that receives ten more rows of tool output is no longer looking
+      at the same text, which is the failure the whole latch exists to prevent,
+      arriving from the direction the plan did not check. So a scrolled view has
+      its offset grown by whatever was appended below it, and stays still. The
+      tests here found that; the design document did not.&rdquo;</em>
+    </p>
+    <span class="src">crates/emma/src/term/transcript.rs module doc, §"Three decisions worth the argument"</span>
+  </div>
+
+  <p class="faint">crates/emma/src/term/transcript.rs &middot; <code>appended</code>, <code>window</code></p>
+  <pre><code>    fn appended(&amp;<span class="k">mut</span> self, rows: usize) {
+        <span class="k">if</span> self.follow {
+            self.scroll = 0;
+        } <span class="k">else</span> {
+            self.scroll = (self.scroll + rows).min(self.max_scroll());
+        }
+    }
+
+<span class="w">…</span>
+
+    <span class="c">/// The half-open row range a pane of this height is looking at.</span>
+    <span class="c">///</span>
+    <span class="c">/// **The scroll cannot lift the window off the top of the buffer.** The</span>
+    <span class="c">/// offset is counted from the bottom and knows nothing about the pane's</span>
+    <span class="c">/// height, so the clamp has to happen where the height is known: scrolled</span>
+    <span class="c">/// all the way up, the window is the *first* `height` rows rather than a</span>
+    <span class="c">/// sliver of them. Home showing one row of a twenty-row pane is the kind of</span>
+    <span class="c">/// arithmetic that looks right in the type and wrong on the screen.</span>
+    fn window(&amp;self, total: usize, height: u16) -&gt; (usize, usize) {
+        <span class="k">let</span> height = usize::from(height);
+        <span class="k">if</span> height == 0 || total == 0 {
+            <span class="k">return</span> (0, 0);
+        }
+        <span class="k">let</span> end = total.saturating_sub(self.scroll).max(height.min(total));
+        (end.saturating_sub(height), end)
+    }</code></pre>
+  <span class="src">crates/emma/src/term/transcript.rs — <code>appended</code>, <code>window</code>, <code>max_scroll</code></span>
+
+  <p>
+    <span class="chip test">tested</span>:
+    <code>scrolling_up_survives_everything_that_arrives_afterwards</code>
+    scrolls up ten rows, pushes ten more blocks, and asserts the visible rows
+    are byte-identical to before, then asserts <code>behind(3)</code> is thirty
+    rather than ten. <code>the_cap_binding_does_not_move_the_readers_page</code>
+    does the same from the front, with a cap tight enough to bind.
+    <code>scrolling_cannot_pass_the_top_or_the_bottom</code> holds the clamp,
+    and its comment explains why <code>top.len() == 3</code> is the assertion
+    that matters: without the clamp the top of the buffer draws as one row in a
+    three-row pane, and <code>first() == "line 0"</code> is true either way.
+  </p>
+
+  <p>
+    Five methods move the view. <code>scroll_up</code> breaks the follow latch;
+    <code>scroll_down</code> re-latches on arrival at the tail, because
+    <em>&ldquo;arriving at the bottom and <em>not</em> being pinned there is a
+    state nobody asked for and nobody can see&rdquo;</em>;
+    <code>follow_tail</code> is the End key and every submit;
+    <code>to_top</code> is Home. <code>max_scroll</code> is one row short of
+    everything, so <code>behind</code> cannot claim rows nobody can scroll past.
+  </p>
+
+  <h2 id="cap">The cap, and how it names what it dropped</h2>
+
+  <p class="faint">crates/emma/src/term/transcript.rs &middot; <code>Cap</code></p>
+  <pre><code><span class="c">/// How much is kept. Whichever binds first.</span>
+<span class="c">///</span>
+<span class="c">/// **Both numbers are guesses and are written down as such.** The plan proposes</span>
+<span class="c">/// them, the evaluation calls them a guess, and neither is wrong: terminal</span>
+<span class="c">/// scrollback was effectively unbounded and this is a ceiling that did not exist</span>
+<span class="c">/// before. What makes it honest rather than a silent loss is [`Transcript::dropped`]</span>
+<span class="c">/// and the marker row it produces — the cap is allowed to bind, it is not</span>
+<span class="c">/// allowed to bind quietly. The measurement that should set them is a real</span>
+<span class="c">/// session's memory footprint, and it has not been taken.</span>
+#[derive(Debug, Clone, Copy)]
+pub struct Cap {
+    pub entries: usize,
+    pub rows: usize,
+}</code></pre>
+  <span class="src">crates/emma/src/term/transcript.rs — <code>Cap</code>, <code>enforce_cap</code>, <code>dropped_marker</code></span>
+
+  <p>
+    2,000 entries or 50,000 rendered rows. When the cap binds the dropped
+    entries are gone entirely; what survives is two counters and a marker row
+    rendered at the top of the buffer, naming the loss and the remedy. The
+    marker is never removed, <em>&ldquo;because the fact that output is missing
+    does not expire&rdquo;</em>, and it wraps rather than truncating. An earlier
+    version cut it to one row, and what fell off the end at eighty columns was
+    the path to the complete record, which is the whole remedy the row exists to
+    carry.
+    <span class="chip test">tested</span>:
+    <code>the_marker_keeps_its_remedy_at_every_width</code> runs at 24, 40, 60,
+    80 and 120 columns and also asserts <code>height()</code> equals
+    <code>total()</code>, so the marker's measured height and its rendered
+    height cannot disagree.
+  </p>
+
+  <p>
+    <code>enforce_cap</code> stops while <code>self.entries.len() &gt; 1</code>
+    on the row half, so a single block taller than the whole budget survives:
+    it is still the block the user is looking at.
+    <span class="chip test">tested</span>:
+    <code>the_row_budget_binds_without_emptying_the_buffer</code> pushes a
+    400-character line into a two-row cap and asserts the buffer still holds it
+    and reports nothing lost.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Two defects around the cap</span>
+    <p>
+      <code>set_width</code> re-renders every entry and recomputes
+      <code>self.rows</code>, but never calls <code>enforce_cap</code>.
+      Narrowing the window multiplies rows, so the buffer sits above
+      <code>cap.rows</code> until the next append. The row half of the cap is a
+      ceiling checked on append rather than a ceiling.
+      <span class="chip cert">certified</span>: <code>set_width</code>'s body is
+      eighteen lines and contains no call to <code>enforce_cap</code>.
+    </p>
+    <p>
+      <code>dropped_rows</code> accumulates <code>gone.lines.len()</code> at
+      whatever width was current when each entry was dropped, and
+      <code>dropped_marker</code> prints the running sum as one figure. After a
+      resize that figure corresponds to no width the user ever had, in the one
+      row whose job is to be accurate about loss.
+      <span class="chip unv">unverified</span> as a visible symptom; the
+      arithmetic is plain in <code>enforce_cap</code>. A test that drops entries
+      at 120 columns, resizes to 40, drops more, and compares the marker's count
+      against a re-render would settle it.
+    </p>
+    <span class="src">crates/emma/src/term/transcript.rs — <code>set_width</code>, <code>enforce_cap</code>, <code>dropped_marker</code></span>
+  </div>
+
+  <h2 id="eager">Eager rendering, and the number behind it</h2>
+
+  <p>
+    The plan proposed rendering lazily from the tail on resize. That needs a
+    height estimate for the entries nobody has rendered yet, <em>&ldquo;and an
+    estimate that is ever wrong is a view that jumps under the
+    reader.&rdquo;</em> Rendering everything is exact, keeps the row total the
+    cap is enforced against always true, and is bounded by the cap itself.
+  </p>
+
+  <p>
+    &ldquo;Cheap at transcript scale&rdquo; was the plan's assertion, and the
+    module turned it into a measurement rather than leaving it.
+    <code>a_full_buffer_rewraps_faster_than_a_frame</code> builds 1,000 entries
+    of a realistic mix and re-wraps 120 columns to 80.
+  </p>
+
+  <pre><code>$ cargo test -p emma --lib \
+    term::transcript::tests::a_full_buffer_rewraps_faster_than_a_frame -- --nocapture
+
+rewrap: 1000 entries, 5000 rows, 21.1768ms</code></pre>
+
+  <p>
+    <span class="chip cert">certified</span> 2026-08-16 at <code>62ab9c3</code>,
+    debug build, Windows 11, and repeatable with the command above. That
+    reproduces the module's recorded 21&nbsp;ms debug figure exactly; its
+    companion 3.5&nbsp;ms release figure was not re-run for this page.
+    <span class="chip unv">unverified</span>: the module extrapolates linearly
+    to roughly 35&nbsp;ms at the full 50,000-row cap, which would be two frames
+    rather than none, and nobody has measured at the cap. Building 10,000
+    entries and timing one <code>set_width</code> would settle it.
+  </p>
+
+  <p>
+    The assertion's bound is a hundred milliseconds rather than sixteen, and the
+    doc says why: <em>&ldquo;this runs on whatever machine CI has and a flaky
+    timing test gets deleted, which would lose the measurement
+    entirely.&rdquo;</em> The real number is printed on every run.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect: the whole buffer is cloned once per paint</span>
+    <p>
+      <code>visible_tagged</code> calls <code>tagged</code>, which walks every
+      entry and calls <code>render::owned</code> on every line, building a
+      <code>Vec&lt;TaggedRow&gt;</code> of the entire buffer, and then truncates
+      and drains it to the pane's window. <code>chat::render</code> calls it
+      once per paint, and <code>Frame::paint</code> is called from the keyboard
+      reader, from the clock thread twice a second, from every transcript write
+      and from the middle of a streamed answer. At the default 50,000-row cap
+      that is 50,000 line clones per frame to show about forty rows. The
+      measured claim in this module covers resize cost, not per-frame assembly.
+      <span class="chip unv">unverified</span> as a felt symptom: no measurement
+      of the paint path exists. Timing <code>visible_tagged</code> at the cap,
+      the way the resize test times <code>set_width</code>, would settle it.
+    </p>
+    <span class="src">crates/emma/src/term/transcript.rs — <code>tagged</code>, <code>visible_tagged</code>; crates/emma/src/term/chat.rs — <code>render</code></span>
+  </div>
+
+  <h2 id="tagged">One assembly, two readers</h2>
+
+  <p>
+    <code>rows</code> and <code>visible</code> are both cut from
+    <code>tagged</code>, and the doc names what two assemblies would cost:
+    <em>&ldquo;two assemblies of the same rows is how a label and the scroll
+    arithmetic drift apart.&rdquo;</em> A <code>TaggedRow</code> carries its
+    line and <code>Option&lt;(usize, Voice, bool)&gt;</code>: the block's index,
+    its voice, and whether this row opens it. <code>None</code> is the cap
+    marker and the blank separators, which belong to no block.
+    <span class="chip test">tested</span>:
+    <code>tagged_rows_are_the_same_rows_with_the_speaker_attached</code> asserts
+    the two assemblies produce identical text, that no separator was given to a
+    block, and that each block's first row is flagged once with the right voice.
+  </p>
+
+  <p>
+    <code>total()</code> exists so the scroll bounds do not have to materialise
+    the buffer to answer &ldquo;how far can I scroll&rdquo;. It sums
+    <code>self.rows</code>, the separators, and <code>marker_rows</code>, which
+    is measured by <code>remeasure_marker</code> whenever the marker could have
+    changed rather than estimated: <em>&ldquo;an estimate that is ever wrong is
+    a scroll bound that is wrong, and a scroll bound that is wrong is a row of
+    the transcript nobody can reach.&rdquo;</em>
+  </p>
+
+  <h2 id="chat">The pane that paints it</h2>
+
+  <p>
+    <code>chat.rs</code> holds no state, opens no terminal, and decides nothing
+    about scrolling. It takes the visible window and places it. The whole file
+    is five functions and 544 lines, most of them module doc and tests.
+  </p>
+
+  <p class="faint">crates/emma/src/term/chat.rs &middot; the columns</p>
+  <pre><code><span class="c">/// The speaker column: `Emma` plus breathing room, the widest label first.</span>
+pub const GUTTER: u16 = 7;
+
+<span class="c">/// The message column is never squeezed below this to pay for the gutter.</span>
+<span class="c">///</span>
+<span class="c">/// 61 puts the collapse where the design's §9 puts it — a 70-column window</span>
+<span class="c">/// minus its border and the gutter — but stated in the pane's own</span>
+<span class="c">/// coordinates, because this module sees an area, not a window.</span>
+const MIN_MESSAGE: u16 = 61;
+
+<span class="c">/// The gutter this pane will draw at this width. Zero when the pane cannot</span>
+<span class="c">/// afford one.</span>
+pub fn gutter(width: u16) -&gt; u16 {
+    <span class="k">if</span> width &gt;= GUTTER + MIN_MESSAGE {
+        GUTTER
+    } <span class="k">else</span> {
+        0
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/term/chat.rs — <code>GUTTER</code>, <code>MIN_MESSAGE</code>, <code>gutter</code>, <code>message_width</code></span>
+
+  <p>
+    Which voices get a label is the file's main judgement, and each arm has an
+    argument. <code>You</code> and <code>Emma</code> get one.
+    <strong>Tool traffic does not</strong>, because <em>&ldquo;an
+    <code>Emma</code> label beside <code>&#10007; Bash failed</code> would claim
+    the failure as prose&rdquo;</em>, and the <code>&#9670; &#10003; &#10007;
+    &#8856; &#8855;</code> vocabulary already says what each line is at every
+    fidelity. Notes, warnings, endings and the welcome get the same treatment,
+    as the harness talking about itself. The approval panel is not here at all:
+    it is fixed chrome, precisely so no amount of transcript can move it.
+  </p>
+
+  <p>
+    The label rides the block's first <em>visible</em> row rather than its first
+    row, so a long answer scrolled halfway off the top still says who is
+    speaking. One rule covers both cases, <em>&ldquo;so the cut case cannot be
+    the untested one.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>a_block_cut_at_the_top_keeps_its_speaker</code> streams thirty
+    paragraphs, scrolls up ten rows, and asserts the pane's top row is a middle
+    paragraph <em>and</em> that the gutter beside it says <code>Emma</code>.
+  </p>
+
+  <p>
+    The gutter is in tension with <code>markdown.rs</code>'s refusal to insert
+    anything into copied text, and the module resolves it rather than ignoring
+    it: native selection over a cell grid already interleaves sidebar columns,
+    borders and gutter into every line, <em>&ldquo;so per-line purity is gone
+    before this module draws anything, and <code>/export</code> is the honest
+    copy path.&rdquo;</em> Given that, the gutter contains only spaces and, on a
+    first visible row, the speaker's name: no rail, no vertical bar, no glyph.
+  </p>
+
+  <p>
+    The scroll indicator is one dim right-aligned overlay on the pane's last
+    row: <code>&#8595; N rows below &middot; End</code>. It uses
+    <code>Transcript::behind</code>, which takes the pane height because
+    <em>&ldquo;the offset alone over-reports at the top of a short buffer&hellip;
+    An indicator that promises rows the End key does not produce is a readout
+    that lies.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>the_indicator_appears_only_behind_the_tail_and_names_the_count</code>,
+    and a sibling for the ASCII arrow.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect: the indicator can be cut without saying so</span>
+    <p>
+      <code>indicator</code> computes
+      <code>width = cols(&amp;text).min(usize::from(area.width))</code> and
+      calls <code>buf.set_stringn</code>, which truncates with no ellipsis. On a
+      pane narrower than <code>&nbsp;&#8595; 12 rows below &middot; End&nbsp;</code>,
+      about twenty-four columns, the row is silently cut against the standing
+      rule that a cut says it was cut. The two indicator tests both run at
+      eighty columns.
+      <span class="chip unv">unverified</span>: a render at width 16 with a
+      scrolled buffer would settle it.
+    </p>
+    <span class="src">crates/emma/src/term/chat.rs — <code>indicator</code></span>
+  </div>
+
+  <p>
+    The pane clamps rather than wrapping. <code>render</code> intersects the
+    area with the buffer first, <em>&ldquo;a caller handing an area that leaks
+    past the buffer would turn every set below into a panic&rdquo;</em>, and
+    then <code>buf.set_line(area.x + gutter, y, &amp;row.line, area.width -
+    gutter)</code> guarantees nothing paints past the pane whatever width the
+    transcript happened to be wrapped at.
+    <span class="chip test">tested</span>:
+    <code>nothing_paints_outside_the_pane</code> wraps at 200, far wider than
+    the pane, and paints into a 30-column sub-rectangle of a 60-column buffer, then checks
+    every cell outside it.
+  </p>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    Both files were read in full. <code>transcript.rs</code> is 1,117 lines and
+    declares 30 function items above the test boundary:
+    <code>EntryKind::voice</code>, <code>Entry::render</code>,
+    <code>is_blank</code>, <code>Cap::default</code>, and 26
+    <code>Transcript</code> methods. All 30 are named on this page: 30 of 30.
+    <code>chat.rs</code> is 544 lines and 5 functions, <code>gutter</code>,
+    <code>message_width</code>, <code>render</code>, <code>label</code>,
+    <code>indicator</code>: 5 of 5. Eleven of the transcript's twenty tests and
+    six of the pane's eleven are cited by name; the rest are the wrapping cases
+    (three), the streaming cases (three) and the pane's colour and ASCII
+    degradation checks.
+  </p>
+
+  <p>
+    <strong>Not settled here.</strong> Everything above reads a
+    <code>Vec&lt;Line&gt;</code> or a <code>Buffer</code>. Whether the buffer
+    <em>feels</em> like scrollback, whether the wheel at three rows a notch is
+    the right speed, and whether a scrolled reader can find their place again
+    are questions no test in this repository asks.
+    <span class="chip unv">unverified</span>: a long real session, scrolled by
+    every bound key and by the wheel, in each target terminal.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="terminal-markdown.html">markdown, one line at a time</a>,
+      the renderer both the stream and the resize path run. Back to
+      <a href="terminal.html">The terminal</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,755 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Compaction without a model call · Sessions &amp; context · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav here" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">Sessions &amp; context</p>
+  <h1>Compaction without a model call</h1>
+
+  <nav class="chapter">
+    <a class="up" href="session.html">Sessions &amp; context</a>
+    <a href="session-file.html">The file</a>
+    <a href="session-records.html">Records</a>
+    <a href="session-fold.html">The fold</a>
+    <a href="session-resume.html">Resume</a>
+    <a href="session-continuity.html">Continuity</a>
+    <span class="now">Compaction</span>
+    <a href="session-corpus.html">The corpus</a>
+  </nav>
+
+  <p class="lede">
+    Whole finished goals, replaced oldest-first with their goal text, their
+    final answer and a fixed sentence saying the tool traffic is gone. No model
+    is asked anything. The design note for this feature recommended the
+    opposite, and saying so is most of what this page is for.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>compact_if_needed</code>, <code>compact</code>, <code>summarise</code>, <code>estimate</code></span>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven, and repeatable: a file, a command, a count you can redo</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+    <div><span class="chip test">tested</span> a test that was shown to fail</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <h2 id="chapters">What it operates on</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+struct Chapter {
+    goal: String,
+    answer: String,
+    messages: Vec&lt;Message&gt;,
+    <span class="c">/// Already a summary. Summarising it again would produce the same two
+    /// messages and a second log record saying nothing happened.</span>
+    summarised: bool,
+}</code></pre>
+
+  <p>
+    A chapter is one whole goal. Compaction works in chapters because cutting
+    anywhere else risks separating a <code>tool_use</code> from the result that
+    answers it, and a boundary that is "wherever the arithmetic landed" is one
+    somebody has to re-derive every time they read the code. <code>goal</code>
+    and <code>answer</code> live beside the messages because they are what a
+    summary is made of, and deriving them back out of the message list
+    afterwards would be guesswork.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Chapter</code> and its doc</span>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// The whole session as one message list — every goal, in order, with the
+/// tool traffic that has not been compacted away.
+///
+/// This is what a request carries as `Request::history`, and it is what a
+/// fold of the session file must equal.</span>
+pub fn conversation(&amp;self) -&gt; Vec&lt;Message&gt; {
+    self.chapters
+        .iter()
+        .flat_map(|c| c.messages.iter().cloned())
+        .collect()
+}</code></pre>
+
+  <p>
+    <code>estimated_context</code> is that flattening measured by
+    <code>estimate</code>, and it is what <code>/model</code> and the compaction
+    receipt quote as "roughly N tokens". It enforces nothing.
+  </p>
+
+  <h2 id="trigger">The trigger is measured</h2>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 940 404" role="img" aria-label="The compaction decision: the trigger is the provider's measured input for the last call, with the chars-over-four estimate standing in only at goal open; over the cap, whole chapters are taken oldest-first until the remainder fits half the cap, and a replacement that would not shrink the conversation is abandoned.">
+        <defs>
+          <marker id="scmp2-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
+          </marker>
+          <marker id="scmp2-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
+          </marker>
+        </defs>
+
+        <rect class="box" x="16" y="16" width="290" height="44" rx="3"/>
+        <text class="sm" x="30" y="36">measured: last call's billable input</text>
+        <text class="tiny" x="30" y="52">usage.billable_input_tokens()</text>
+
+        <rect class="box" x="16" y="76" width="290" height="44" rx="3" stroke-dasharray="4 4"/>
+        <text class="sm" x="30" y="96">estimate: wire chars / 4</text>
+        <text class="tiny" x="30" y="112">only at goal open, before any call</text>
+
+        <path class="edge" marker-end="url(#scmp2-arrow)" d="M306,38 L360,38 L360,58 L390,58"/>
+        <path class="edge-dash" marker-end="url(#scmp2-arrow)" d="M306,98 L360,98 L360,78 L390,78"/>
+
+        <rect class="hl" x="394" y="42" width="190" height="52" rx="3"/>
+        <text class="sm" x="489" y="66" text-anchor="middle">size &gt; max_context?</text>
+        <text class="tiny" x="489" y="84" text-anchor="middle">cap ≤ 0 disables it entirely</text>
+
+        <path class="edge" marker-end="url(#scmp2-arrow)" d="M584,68 L688,68"/>
+        <text class="tiny" x="626" y="60">no</text>
+        <rect class="box" x="692" y="46" width="232" height="44" rx="3"/>
+        <text class="sm" x="708" y="66">send it unchanged</text>
+        <text class="tiny" x="708" y="82">nothing is recorded</text>
+
+        <path class="edge-hl" marker-end="url(#scmp2-arrow-hl)" d="M489,94 L489,130"/>
+        <text class="tiny" x="500" y="118">yes</text>
+
+        <rect class="box" x="300" y="134" width="378" height="44" rx="3"/>
+        <text class="sm" x="316" y="154">target = max(max_context / 2, 1)</text>
+        <text class="tiny" x="316" y="170">half, not all: the goal now starting needs room to work in</text>
+
+        <path class="edge-hl" marker-end="url(#scmp2-arrow-hl)" d="M489,178 L489,202"/>
+
+        <rect class="box" x="300" y="206" width="378" height="46" rx="3"/>
+        <text class="sm" x="316" y="226">take chapters oldest-first while remainder &gt; target</text>
+        <text class="tiny" x="316" y="242">whole goals only; sizes measured once, not per step</text>
+
+        <path class="edge-hl" marker-end="url(#scmp2-arrow-hl)" d="M489,252 L489,276"/>
+
+        <rect class="box" x="300" y="280" width="378" height="46" rx="3"/>
+        <text class="sm" x="316" y="300">each becomes: goal text · final answer · the note</text>
+        <text class="tiny" x="316" y="316">two Messages. no model is asked anything.</text>
+
+        <path class="edge" marker-end="url(#scmp2-arrow)" d="M678,303 L714,303"/>
+        <rect class="hl" x="718" y="280" width="206" height="46" rx="3"/>
+        <text class="sm" x="732" y="300">after ≥ before?</text>
+        <text class="tiny" x="732" y="316">abandon, and say which case</text>
+
+        <path class="edge-hl" marker-end="url(#scmp2-arrow-hl)" d="M489,326 L489,350"/>
+
+        <rect class="box" x="300" y="354" width="378" height="44" rx="3"/>
+        <text class="sm" x="316" y="374">append `compacted`: drop_messages + the messages</text>
+        <text class="tiny" x="316" y="390">both halves, so the fold replays instead of re-deciding</text>
+      </svg>
+    </div>
+    <figcaption>
+      Read off <code>Agent::compact_if_needed</code> and
+      <code>Agent::compact</code>. The two pink boxes are the only branches:
+      whether the last request was over the cap, and whether the replacement
+      comes out smaller than what it replaces. Everything between them is
+      arithmetic.
+    </figcaption>
+  </figure>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+fn compact_if_needed(&amp;mut self, measured: Option&lt;i64&gt;, why: &amp;str) {
+    let cap = self.s.budgets.max_context;
+    if cap &lt;= 0 {
+        return;
+    }
+    let size = measured.unwrap_or_else(|| estimate(&amp;self.conversation()));
+    if size &lt;= cap {
+        return;
+    }
+    <span class="c">// Half the cap rather than all of it: the goal now running needs room
+    // to work in, and compacting to exactly the limit would mean compacting
+    // again on the next call.</span>
+    let target = (cap / 2).max(1);
+    <span class="c">// Measured once per chapter rather than once per step. Re-summing the
+    // whole conversation on every iteration of the loop below is quadratic
+    // in a list whose elements are file contents.</span>
+    let sizes: Vec&lt;i64&gt; = self
+        .chapters
+        .iter()
+        .map(|c| estimate(&amp;c.messages))
+        .collect();
+    let mut remaining: i64 = sizes.iter().sum();
+    let mut take = 0;
+    while take &lt; sizes.len() &amp;&amp; remaining &gt; target {
+        remaining -= sizes[take];
+        take += 1;
+    }
+    self.compact(take, size, why);
+}</code></pre>
+
+  <p>
+    <code>cap &lt;= 0</code> disables compaction entirely, which is how
+    <code>--max-context 0</code> turns it off. <code>measured</code> is the
+    provider's own <code>billable_input_tokens</code> for the previous call,
+    which covers the whole request: the system prompt and the tool schemas as
+    well as the conversation. The estimate stands in for one case, the first
+    check of a goal on a process that has not called the model yet, and in
+    practice that is a resume into a large session.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>compact_if_needed</code>, and its two call sites in <code>run_goal</code></span>
+
+  <p>
+    Two call sites. One before the first request of a goal, with
+    <code>None</code> and the reason "a new goal opened over the context limit";
+    one inside the loop, after the budget guards and before the request is
+    built, with <code>self.last_input</code> and the reason "the request passed
+    the context limit". The second is why the request that goes out is the
+    compacted one rather than the next one after it.
+  </p>
+
+  <p>
+    The counting loop is greedy over whole chapters and stops as soon as the
+    remainder fits, so it never takes the newest goal unless it has to take
+    everything. It measures each chapter once. Re-summing the conversation
+    inside the loop would be quadratic in a list whose elements are file
+    contents, which is the kind of cost that is invisible until a session gets
+    large enough to need compaction in the first place.
+  </p>
+
+  <h2 id="compact">Replacing them</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+fn compact(&amp;mut self, take: usize, size: i64, why: &amp;str) -&gt; Compacted {
+    let take = take.min(self.chapters.len());
+    if take == 0 {
+        return Compacted::Nothing("there is nothing behind the current goal".into());
+    }
+    let before: i64 = self.chapters[..take]
+        .iter()
+        .map(|c| estimate(&amp;c.messages))
+        .sum();
+    let replacement: Vec&lt;Message&gt; = self.chapters[..take].iter().flat_map(summarise).collect();
+    let after = estimate(&amp;replacement);</code></pre>
+
+  <p>
+    One implementation with two doors. The threshold path counts until the
+    remainder fits half the cap; <code>/compact</code> counts every finished
+    goal, or every one but the last. Everything after the count is here once,
+    because two compaction implementations would be two things a resume could
+    disagree with, and the fold has no summarising code of its own to be the
+    second.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// What a compacted goal leaves behind: the goal, the answer, and a sentence
+/// saying what is no longer there.
+///
+/// Exactly the collapse `run_goal` used to apply to every goal the moment it
+/// finished — see [`Agent::chapters`]. The note is the part that is new, and it
+/// is the difference between a model that reads a file again and one that
+/// answers from a recollection of it.</span>
+fn summarise(c: &amp;Chapter) -&gt; Vec&lt;Message&gt; {
+    if c.summarised {
+        return c.messages.clone();
+    }
+    let goal = if c.goal.trim().is_empty() {
+        "[an earlier goal]"
+    } else {
+        c.goal.trim()
+    };
+    let answer = if c.answer.trim().is_empty() {
+        "[this goal ended without a final message]"
+    } else {
+        c.answer.trim()
+    };
+    vec![
+        Message::user(goal),
+        Message::assistant_text(format!("{answer}\n\n{COMPACTED_NOTE}")),
+    ]
+}
+
+<span class="c">/// Said to the model, in the place the traffic used to be.</span>
+const COMPACTED_NOTE: &amp;str = "[Summarised to save context. The tool calls from this goal and \
+     their results — file contents, command output, diffs — are no longer in this conversation. \
+     Read anything you need again rather than recalling it.]";</code></pre>
+
+  <p>
+    A compacted goal is exactly two messages: a user message that is the goal
+    text, and an assistant message that is the final answer plus the note. Empty
+    fields get stated placeholders rather than blank strings, so a goal that
+    ended without a final message says so instead of producing an assistant
+    message that opens with a newline. An already-summarised chapter comes back
+    unchanged, which is what stops a second pass wrapping it in a second note.
+  </p>
+
+  <p>
+    <strong>What a folded goal loses</strong>: every tool call and every result,
+    which means file contents, command output and diffs, and every intermediate
+    assistant turn with its thinking blocks. What survives for the life of the
+    session is every goal's words and every goal's final answer. The note exists
+    because a model that does not know a file has left its context answers from
+    a memory of it, and a confident wrong answer costs more than a second read.
+    <span class="chip test">tested</span>
+    <code>compaction_drops_the_oldest_tool_traffic_and_keeps_the_words</code> in
+    <code>crates/emma/tests/conversation.rs</code> asserts the file body absent,
+    the goal present, the answer present and the note present, in the bytes the
+    fake provider actually received.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>summarise</code>, <code>COMPACTED_NOTE</code>; crates/emma/tests/conversation.rs</span>
+
+  <h2 id="nothing">The compaction that would not shrink anything</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::compact</span>
+<span class="c">// A conversation summarising would not shrink has nothing to give.
+// Stopping here rather than rewriting it into itself is what keeps a
+// session under a cap it cannot reach from logging a record and
+// reporting a saving on every single call.
+//
+// **Two different situations reach this line and a user needs to be
+// told which.** Automatic compaction is silent either way; `/compact` is
+// not, and the first live run of it said "already summarised" about two
+// goals that plainly were not — because those goals were four words
+// long and `COMPACTED_NOTE` is three hundred characters, so the
+// replacement was *larger* than what it replaced. The sentence was true
+// of the arithmetic and false about the conversation, which is the class
+// of untruth this repository has already paid for twice.</span>
+if after &gt;= before {
+    let all_summaries = self.chapters[..take].iter().all(|c| c.summarised);
+    return Compacted::Nothing(if all_summaries {
+        "the conversation is already summarised — there is nothing left to take out".into()
+    } else {
+        format!(
+            "summarising those {take} goal(s) would not make the conversation smaller. \
+             Compaction replaces a goal with its text, its answer and a note saying the \
+             tool results are gone, and here that note is longer than what it would \
+             replace — roughly {before} tokens becoming {after}."
+        )
+    });
+}</code></pre>
+
+  <p>
+    The note is roughly three hundred characters, so two four-word goals compact
+    upward and the guard fires. That is not a corner case invented for a test;
+    it is what the first live <code>/compact</code> did, and the bug it produced
+    was a sentence rather than a crash. The arithmetic was right and the
+    explanation was wrong, so a user was told their conversation was already
+    summarised when it was nothing of the sort. There are now two branches, and
+    the second quotes the before and after so the claim can be checked against
+    the numbers.
+    <span class="chip test">tested</span>
+    <code>compaction_stops_when_there_is_nothing_left_to_win</code>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>compact</code>, the <code>after &gt;= before</code> branch</span>
+
+  <h2 id="record">The record the fold replays</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::compact</span>
+let dropped: usize = self.chapters[..take].iter().map(|c| c.messages.len()).sum();
+self.chapters.drain(..take);
+self.chapters.insert(
+    0,
+    Chapter {
+        goal: String::new(),
+        answer: String::new(),
+        messages: replacement.clone(),
+        summarised: true,
+    },
+);
+<span class="c">// Both halves, because the fold replays this rather than re-deciding
+// it: how many messages off the front went, and exactly what took their
+// place. It is also the one record a human reads to find out what the
+// model stopped being able to see.</span>
+self.s.log.append(
+    "compacted",
+    json!({
+        "why": why,
+        "goals": take,
+        "drop_messages": dropped,
+        "messages": replacement,
+        "request_tokens": size,
+        "max_context": self.s.budgets.max_context,
+        "estimated_before": before,
+        "estimated_after": after,
+    }),
+);</code></pre>
+
+  <p>
+    The replaced chapters become one chapter with empty <code>goal</code> and
+    <code>answer</code> and <code>summarised: true</code>, which is why
+    <code>summarise</code>'s placeholders exist: a later compaction that reaches
+    this chapter returns its messages unchanged, and a
+    <code>Cleared</code> receipt counts it as not a goal.
+    <code>drop_messages</code> counts the messages that left, so the fold's
+    splice removes the same prefix from a list it rebuilt independently. See
+    <a href="session-fold.html#arms">the fold's <code>compacted</code> arm</a>,
+    which is also where that arm's failure mode on a malformed record is
+    described.
+    <span class="chip test">tested</span>
+    <code>compact_is_replayed_by_the_fold_rather_than_re_decided</code> in
+    <code>crates/emma/tests/commands.rs</code>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>compact</code>; crates/emma/src/session.rs — <code>Fold::record</code></span>
+
+  <p>
+    The threshold path then narrates itself through <code>term.note</code>,
+    naming the messages dropped, the goals taken and the before and after. A
+    user-triggered compaction skips that line because <code>/compact</code>
+    reports its own, and two notes for one action reads as two actions.
+  </p>
+
+  <h2 id="reversal">The design note recommended a model call, and was overruled</h2>
+
+  <p>
+    <code>notes/design-session-and-context.md</code> §2 surveyed six shipped
+    tools and recommended what all of them do: summarise with one model call,
+    same model, tools absent, effort low, against a fixed template asking for
+    objectives, what was verified, decisions and why, what failed, files
+    touched, what is next. It also recommended trigger-high/compact-low
+    hysteresis, crossing around 120k and compacting down to 30–40k, and that the
+    <code>compacted</code> record carry the summary plus <em>references</em> to
+    the retained turns rather than copies of them.
+  </p>
+
+  <p>
+    None of the three shipped. The note is still in the tree and still reads as
+    current advice, so the three departures belong in one place, or the
+    recommendation comes back.
+  </p>
+
+  <ul class="body">
+    <li>
+      <strong>No model call.</strong> Three arguments, in the order
+      <code>agent.rs</code> makes them: it would spend the budget of whichever
+      goal happens to be running; it can fail in the middle of one; and it
+      produces a claim about the conversation where the mechanical version
+      produces a record of it. The note conceded the same failure mode, that the
+      summary is written by the same process that is being summarised and will
+      sometimes be wrong. It offered two mitigations and described neither as a
+      fix.
+    </li>
+    <li>
+      <strong>Half the cap, not a fixed floor.</strong>
+      <code>target = (cap / 2).max(1)</code> is 60,000 at the default rather
+      than the note's 30–40k. Same effect on how often compaction fires, and no
+      second constant to keep in step with the first.
+    </li>
+    <li>
+      <strong>The replacement is written into the record whole.</strong> The
+      note argued for references, citing a bug in another tool where
+      re-serialising surviving history made the log grow without bound. The code
+      stores <code>drop_messages</code> and the exact replacement
+      <code>messages</code>, so a resume replays the compaction instead of
+      re-deriving it, and <code>session.rs</code> contains no summarising code
+      that could disagree with the loop's. The growth the note warned about is
+      bounded here by the replacement being two short messages per goal rather
+      than a retained window of turns.
+    </li>
+  </ul>
+  <span class="src">notes/design-session-and-context.md §2 and its 2026-08-16 header note; crates/emma/src/agent.rs — <code>compact_if_needed</code> doc</span>
+
+  <h2 id="commands">The two doors a user has</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// Compact at the user's request rather than at the threshold.
+///
+/// `everything` includes the goal that has just finished. The default keeps
+/// it because "everything but the last goal" is a rule somebody can hold in
+/// their head, where a target size is arithmetic they would have to be told.
+///
+/// It goes through the same [`Agent::compact`] the threshold does, so there
+/// is one compaction implementation, one `compacted` record and one fold
+/// arm replaying it.</span>
+pub fn compact_now(&amp;mut self, everything: bool) -&gt; Compacted {
+    let n = self.chapters.len();
+    let take = if everything { n } else { n.saturating_sub(1) };</code></pre>
+
+  <p>
+    <code>/compact &lt;words&gt;</code> is refused rather than ignored, and the
+    refusal names a workflow that does work.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/session_command.rs — compact</span>
+<span class="c">// Said rather than ignored. `Agent::compact`'s doc rules that
+// compaction is not model-summarised — a call there spends the running
+// goal's budget, can fail mid-goal, and produces a *claim* about the
+// conversation where the current code produces a *record* of it. An
+// instruction can only be honoured by a model, so the honest answer is
+// to say so and name the workflow that does work.</span>
+say(
+    s.term,
+    &amp;format!(
+        "compaction replaces each finished goal with its goal text and its final \
+         answer. It does not call a model, so it cannot follow an instruction — \
+         \"{words}\" would be silently ignored, which is worse than saying so.\n\
+         Run /compact on its own, or state what to keep as an ordinary goal first \
+         (\"summarise what we established about the API\") — the answer of a goal \
+         always survives compaction, so it will still be there afterwards."
+    ),
+);</code></pre>
+
+  <p>
+    The workaround it offers is real rather than a deflection: a goal's answer
+    is one of the two things compaction keeps, so asking for the summary as an
+    ordinary goal puts it somewhere compaction cannot take it.
+    <span class="chip test">tested</span>
+    <code>compact_with_an_instruction_says_it_cannot_follow_one</code> and
+    <code>compact_tells_all_from_an_instruction_it_cannot_honour</code>.
+  </p>
+  <span class="src">crates/emma/src/session_command.rs — <code>compact</code>; crates/emma/tests/commands.rs</span>
+
+  <h2 id="clear">The other thing that shortens a conversation</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// Drop the conversation without ending the session.
+///
+/// A `cleared` record goes in the log, and `session::Fold` honours it — the
+/// bytes stay in the file for a human to read and the fold skips them.
+/// Without that arm `--resume` would fold the whole file and un-clear the
+/// session, which would make this command a lie.
+///
+/// `turn_seq` is deliberately **kept**: turn ids have to stay unique inside
+/// one session file, and the file is not cleared.</span>
+pub fn clear(&amp;mut self) -&gt; Cleared {
+    let cleared = Cleared {
+        goals: self.chapters.iter().filter(|c| !c.summarised).count(),
+        messages: self.chapters.iter().map(|c| c.messages.len()).sum(),
+    };
+    self.chapters.clear();
+    self.last_ending = None;
+    self.last_input = None;
+    <span class="c">// A resume that has not been spent yet is still a conversation waiting
+    // to be injected into the next goal's query. Leaving it would mean
+    // `/clear` on a `--resume`d session cleared everything except the thing
+    // the user was most obviously trying to get rid of.</span>
+    self.resumed = None;
+    self.s.log.append(
+        "cleared",
+        json!({ "goals": cleared.goals, "messages": cleared.messages }),
+    );
+    cleared
+}</code></pre>
+
+  <p>
+    <code>/clear</code> is not compaction and shares none of its code. It drops
+    everything, writes its counts into the record, and clears
+    <code>last_input</code> so the next goal's compaction check has no stale
+    measurement to compare against. A summarised chapter is not counted as a
+    goal in the receipt, which keeps the number honest about what the user is
+    losing.
+  </p>
+
+  <p>
+    The receipt in <code>session_command.rs</code> then says what survived: the
+    session's tool and host grants, the transcript path, the model and the
+    session id. Grants are consent about the process rather than about the
+    conversation, and clearing them would make nothing safer, since the human is
+    still at the keyboard and would be asked the same questions again. What
+    silence would cost is the ability to notice, so the receipt names them.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::clear</code>, <code>Cleared</code>; crates/emma/src/session_command.rs — <code>clear</code></span>
+
+  <h2 id="estimator">The estimator, and where its error lands</h2>
+
+  <pre><code><span class="c">// crates/emma/src/agent.rs</span>
+<span class="c">/// Roughly how many tokens a message list is worth.
+///
+/// `chars / 4`, the same conservative ratio `emma-llm`'s packer uses to decide
+/// whether a prefix is worth a cache breakpoint, and documented there as
+/// under-counting what the provider bills. It is used here for two things that
+/// tolerate it — deciding *how much* to drop once a measured number has already
+/// said dropping is necessary, and standing in for that measurement on the one
+/// call of a process that has none. It is never what fires a budget.</span>
+fn estimate(messages: &amp;[Message]) -&gt; i64 {
+    let chars: usize = messages.iter().map(|m| m.content.wire_len()).sum();
+    (chars / 4) as i64
+}</code></pre>
+
+  <p>
+    <code>wire_len</code> is the rendered JSON length, quotes and escapes
+    included, because the provider tokenises those too. The under-count has a
+    direction, and it lands differently on each consumer.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>consumer</th><th>an under-count means</th><th>which is</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>the compaction trigger at goal open</td>
+        <td>the cap looks further away than it is, so compaction fires later, or
+            not at all, on the first call</td>
+        <td>tolerable: the next call reports a measured number and the check
+            runs again before the request goes out</td>
+      </tr>
+      <tr>
+        <td>how many chapters to take</td>
+        <td>every chapter looks smaller, so slightly more may be taken than
+            strictly needed</td>
+        <td>tolerable: the error is toward compacting more, not less</td>
+      </tr>
+      <tr>
+        <td>the cache-breakpoint gate in <code>emma-llm</code></td>
+        <td>a prefix that really does clear the model's floor is judged not to,
+            and the marker is withheld</td>
+        <td>a bill: the forgone 0.9× read discount on that span, with no symptom
+            anywhere except the invoice</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/emma/src/agent.rs — <code>estimate</code>; crates/llm/src/anthropic.rs — <code>CHARS_PER_TOKEN</code>, <code>clears_minimum</code></span>
+
+  <p>
+    The third row is where the margin widened. The gate used to be one constant,
+    512, which was right for <code>claude-opus-5</code>. The floor is per-model
+    and not monotonic with release date, and the table now runs from 512 to
+    4,096: <code>claude-haiku-4-5</code> and <code>claude-opus-4-6</code> cache
+    nothing under 4,096 tokens, and a model the table has never heard of is
+    assumed to be at 4,096 too. At a 512 floor the gap between an under-counting
+    estimate and the truth costs a marker on a prefix of a couple of kilobytes.
+    At 4,096 it is a prefix of roughly sixteen kilobytes going unmarked, and one
+    <code>/model</code> or one Haiku-typed delegation is enough to reach that
+    floor.
+    <span class="chip unv">unverified</span>: the direction of the error is
+    stated in both source files and matches English-plus-JSON tokenising at
+    closer to 3.5 characters per token, but nobody in this tree has measured
+    Emma's own wire bytes against a token count. Settle it by sending a request
+    of known rendered length with caching off and comparing
+    <code>wire_len / 4</code> against the <code>input_tokens</code> the API
+    reports, or by pushing the same bytes through the token-counting endpoint.
+  </p>
+
+  <div class="note warn">
+    <span class="h">What the estimate does not touch</span>
+    <p>
+      The token budget. <code>--max-tokens</code> is enforced on
+      <code>cost_tokens</code>, computed from the provider's own usage numbers
+      with the cache multipliers applied, and no estimate is involved. It is
+      tested after each call rather than before, so the call that crosses it is
+      paid for in full: a 500,000 budget stopped a real run at 579,565.
+      <span class="chip cert">certified</span>, and greppable. That figure is
+      the largest <code>goal_finished.tokens</code> in
+      <code>~/.emma/sessions/</code>, and it is in
+      <code>sess-1786385316950-34808.jsonl</code>, which is also the largest
+      file in the directory at 272,923 bytes. Re-read at 2026-08-16 20:28 EDT.
+    </p>
+  </div>
+  <span class="src">crates/emma/src/agent.rs — <code>cost_tokens</code>, <code>Budgets::max_tokens</code>; ~/.emma/sessions/</span>
+
+  <h2 id="never">It has never fired outside a test</h2>
+
+  <p>
+    <span class="chip cert">certified</span>: zero <code>compacted</code>
+    records exist in the 103 session files on this machine, across 177
+    <code>model_call</code> records, at 2026-08-16 20:28 EDT. The largest input
+    any call carried is 95,524 tokens against the 120,000 default cap. Close,
+    and never over. So every claim on this page about the <em>trigger</em> rests
+    on tests and on reading, with no production firing behind it. The
+    <em>mechanism</em> is exercised by tests that set
+    <code>max_context</code> to 400 and to 1.
+    <span class="chip unv">unverified</span> against a live provider: settle it
+    by running a real session with <code>--max-context</code> set to something
+    an ordinary conversation crosses, and reading the <code>compacted</code>
+    record back.
+  </p>
+  <span class="src">~/.emma/sessions/ as counted on <a href="session-corpus.html">The corpus</a>; crates/emma/tests/conversation.rs</span>
+
+  <h2 id="coverage">What this page covers</h2>
+
+  <p>
+    From <code>agent.rs</code>: <code>compact_if_needed</code>,
+    <code>compact</code>, <code>compact_now</code>, <code>summarise</code>,
+    <code>COMPACTED_NOTE</code>, <code>estimate</code>,
+    <code>estimated_context</code>, <code>conversation</code>,
+    <code>clear</code>, and the <code>Chapter</code>, <code>Compacted</code> and
+    <code>Cleared</code> types. From <code>session_command.rs</code>: the
+    <code>compact</code> and <code>clear</code> handlers.
+    <code>cost_tokens</code> is quoted on <a href="loop-budgets.html">Budgets</a>
+    and referred to here. The fold's side of the <code>compacted</code> record
+    is on <a href="session-fold.html">The fold</a>.
+  </p>
+
+  <h2 id="unverified">What is not verified here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> Automatic compaction against a
+      live provider. Zero records in the real corpus. Settle it by running with
+      a small <code>--max-context</code>.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> The chars-per-token ratio. Both
+      source files call <code>chars / 4</code> an under-count and nobody has
+      measured it.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> What a model does with the
+      compacted note in practice. The argument for it is that a model answering
+      from a memory of a dropped file is worse than a second read; no run in
+      this tree has been observed re-reading a file because of the note. Settle
+      it by compacting a session that read a large file and asking a question
+      about that file.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> How this page renders. The figure
+      was drawn from the two functions and its geometry checked by arithmetic.
+      No browser drew it.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    <p>
+      Written against commit <code>62ab9c3</code>. Next:
+      <a href="session-corpus.html">The corpus, as it actually is</a>, which is
+      where every count on this page comes from.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

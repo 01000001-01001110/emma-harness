@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The nested run · Delegation · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav here" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<h1>The nested run, and what it borrows</h1>
+
+  <nav class="chapter">
+    <a class="up" href="delegation.html">Delegation</a>
+    <span class="now">The nested run</span>
+    <a href="delegation-serialised.html">One at a time</a>
+    <a href="delegation-definitions.html">Agent definitions</a>
+    <a href="delegation-tools.html">resolve_tools</a>
+    <a href="delegation-brief.html">The brief</a>
+    <a href="delegation-footer.html">The footer</a>
+    <a href="delegation-budgets.html">Budgets &amp; spend</a>
+    <a href="delegation-agents-cmd.html">emma agents</a>
+  </nav>
+
+  <p class="lede">
+    A delegation is <code>Agent::run_goal</code> called a second time from
+    inside one <code>Tool::invoke</code>. The child gets its own registry, its
+    own instructions, its own budgets and its own done-check. Everything else it
+    uses belongs to the parent, and each of those is shared rather than copied
+    for a reason that is written down beside it.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — Nest, Delegate::invoke</span>
+
+  <h2 id="notool">The loop does not know this tool exists</h2>
+
+  <p>
+    <code>Delegate</code> implements <code>Tool</code> and nothing in
+    <code>agent.rs</code> branches on it. That is the same invariant the loop
+    states about every tool: nothing there reads a tool's identity, its
+    <code>ToolError::kind</code>, or its exit status. A loop carrying
+    <code>if call.name == "Delegate"</code> would be re-acquiring knowledge two
+    other parts of the codebase paid to remove. What nesting needs — a shared
+    token meter, a namespaced log, a subordinate terminal — arrives as values in
+    <code>Setup</code>, not as branches inside the loop.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — module doc; crates/emma/src/agent.rs — module doc</span>
+
+  <p>
+    It lives in <code>crates/emma/src/</code> rather than under
+    <code>tools/</code>, and that placement is forced. <code>tools/fs</code>,
+    <code>tools/tasks</code> and <code>tools/web</code> depend on
+    <code>tool-api</code> and not on the <code>emma</code> crate; a tool that
+    runs the loop needs <code>Agent</code>, <code>Setup</code>,
+    <code>Approvals</code>, <code>SessionLog</code> and <code>Term</code>, all of
+    which live here. Moving the file down a level inverts the dependency into a
+    cycle Cargo refuses. <code>Skill</code> is the tool whose content comes from
+    the harness; this is the tool whose content comes from the loop.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — module doc; crates/tools/*/Cargo.toml</span>
+
+  <h2 id="nest">Nest, item by item</h2>
+
+  <p>
+    <code>Nest</code> is the parent's half of the arrangement, built once in
+    <code>main.rs</code> and handed to <code>Delegate::new</code>. Its doc names
+    a reason per field, which is the part worth reading:
+  </p>
+
+<pre><code><span class="c">/// Everything a nested run borrows from the process it is nested in.</span>
+<span class="c">///</span>
+<span class="c">/// Shared rather than copied, every one of them for a stated reason: the</span>
+<span class="c">/// approval gate and both its grant sets, so a host approved once stays</span>
+<span class="c">/// approved and a sub-approval reaches the same keyboard; the session file, so</span>
+<span class="c">/// one `grep` still answers what this session did; the interrupt, so one</span>
+<span class="c">/// Ctrl-C stops both loops in the right order; the harness, so hooks and the</span>
+<span class="c">/// working directory are the project's; and the token meter, so the owner's</span>
+<span class="c">/// "one goal, one meter" is the same integer rather than a convention.</span>
+pub struct Nest {
+    pub harness: Arc&lt;Harness&gt;,
+    pub approvals: Arc&lt;Approvals&gt;,
+    pub log: Arc&lt;SessionLog&gt;,
+    pub term: Arc&lt;Term&gt;,
+    pub interrupt: Arc&lt;Interrupt&gt;,
+    pub spend: Arc&lt;Spend&gt;,
+    pub cwd: PathBuf,
+    pub session_id: String,
+    pub caching: Caching,
+    <span class="c">/// The *parent's* budgets, which is what a sub-budget is derived from.</span>
+    pub budgets: Budgets,
+    <span class="c">/// The provider in force right now, for an agent type that named no model</span>
+    <span class="c">/// of its own. See [`AgentType::provider`] and [`Running`].</span>
+    pub running: Running,
+}</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Nest, quoted entire</span>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Field</th><th>Shared or new</th><th>What breaks otherwise</th></tr></thead>
+    <tbody>
+      <tr><td><code>approvals</code></td><td>shared, with both grant sets</td><td>a host approved once would be asked about again, and a sub-approval would reach a keyboard nobody is at</td></tr>
+      <tr><td><code>log</code></td><td>shared file, re-stamped by <code>SessionLog::subagent</code></td><td>one <code>grep</code> would stop answering what a session did</td></tr>
+      <tr><td><code>term</code></td><td><code>subordinate()</code> of the parent's</td><td>the process's status meters would be driven with a sub-run's numbers</td></tr>
+      <tr><td><code>interrupt</code></td><td>shared</td><td>Ctrl-C would stop one loop and leave the other</td></tr>
+      <tr><td><code>spend</code></td><td>a child meter that charges this one</td><td>a delegation would be a way to spend past the parent's cap</td></tr>
+      <tr><td><code>harness</code>, <code>cwd</code></td><td>shared</td><td>hooks and the working directory would stop being the project's</td></tr>
+      <tr><td><code>budgets</code></td><td>the parent's, as the input to the sub's</td><td>there would be nothing to derive a share from</td></tr>
+      <tr><td><code>running</code></td><td>shared handle, read at call time</td><td>see below</td></tr>
+      <tr><td><code>caching</code>, <code>session_id</code></td><td>copied</td><td>nothing; they are plain values</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/emma/src/delegate.rs — Nest; crates/emma/src/session.rs — SessionLog::subagent; crates/emma/src/term.rs — Term::subordinate</span>
+
+  <h2 id="provider">Why a type that names no model holds no client</h2>
+
+  <p>
+    An <code>AgentType</code> stores <code>provider: Option&lt;Arc&lt;dyn
+    Provider&gt;&gt;</code>, and <code>None</code> is the specification rather
+    than an optimisation. A file that names no model is asking to run on
+    whatever the caller is running on, and since <code>/model</code> that is a
+    fact which changes mid-session. Holding a clone of the parent's client in the
+    struct would freeze it at boot: after a <code>/model</code>, every subagent
+    that named no model would go on using the model the user had just changed
+    away from, silently, while the status row said otherwise.
+  </p>
+
+<pre><code>pub type ProviderFor&lt;'a&gt; = dyn Fn(Option&lt;&amp;str&gt;) -&gt; Option&lt;Arc&lt;dyn Provider&gt;&gt; + 'a;
+
+<span class="c">/// One delegation target, resolved.</span>
+struct AgentType {
+    name: String,
+    description: String,
+    <span class="c">/// The project's standing instructions and then the agent file's body. Both</span>
+    <span class="c">/// halves on purpose: standing rules about evidence and honesty are not</span>
+    <span class="c">/// persona-specific, and a delegated agent that does not inherit *report</span>
+    <span class="c">/// what the checks actually said* is one that reports what they were</span>
+    <span class="c">/// expected to say.</span>
+    instructions: String,
+    <span class="c">/// This type's own tools. Never contains [`NAME`] — see the module doc.</span>
+    tools: Registry,
+    <span class="c">/// The client for the model this type's file named, or `None` for "the</span>
+    <span class="c">/// parent's, whatever it is when the delegation runs".</span>
+    <span class="c">///</span>
+    <span class="c">/// **`None` is not an optimisation, it is the specification.** An agent file</span>
+    <span class="c">/// that names nothing is asking to run on whatever the caller is running on,</span>
+    <span class="c">/// and since `/model` that is a fact which changes mid-session. Holding a</span>
+    <span class="c">/// clone of the parent's client here would freeze it at boot: after a</span>
+    <span class="c">/// `/model`, every subagent that named no model would go on using the model</span>
+    <span class="c">/// the user had just changed away from, silently, while the status row said</span>
+    <span class="c">/// otherwise. Resolved at call time from [`Nest::running`] instead.</span>
+    <span class="c">///</span>
+    <span class="c">/// A file that *does* name a model is the opposite case and is built once,</span>
+    <span class="c">/// here: the file is a fixed fact and `/model` is not about it.</span>
+    provider: Option&lt;Arc&lt;dyn Provider&gt;&gt;,
+    max_iterations: u32,
+    <span class="c">/// A ceiling from the file, before the share of the remaining allowance is</span>
+    <span class="c">/// applied. `None` means "whatever the share allows".</span>
+    max_tokens: Option&lt;i64&gt;,
+}</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — ProviderFor, AgentType, quoted entire</span>
+
+  <p>
+    The other half is in <code>invoke</code>: <code>ty.provider.clone()</code>,
+    and where that is <code>None</code>, <code>self.nest.running.get()</code>,
+    read at the moment the delegation starts. A file that <em>does</em> name a
+    model is the opposite case and is resolved once, at construction, through
+    the <code>ProviderFor</code> closure <code>main.rs</code> supplies: the file
+    is a fixed fact and <code>/model</code> is not about it.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — AgentType::provider, Delegate::invoke; crates/emma/src/agent.rs — Running</span>
+
+  <p>
+    <span class="chip unv">unverified</span> No test drives <code>/model</code>
+    and then delegates. The integration tests all pass
+    <code>&amp;|_| None</code> as <code>provider_for</code>, so every scripted
+    subagent takes the <code>Running::get()</code> path and the named-model path
+    is exercised by nothing. <em>What would settle it:</em> a test with two
+    scripted providers, an agent file naming the second, and an assertion about
+    which transcript the sub's turns landed in.
+  </p>
+  <span class="src">crates/emma/tests/delegate.rs — every Delegate::new call site</span>
+
+  <h2 id="setup">The Setup a nested run is built from</h2>
+
+  <p>
+    This is the whole of the arrangement in one expression. Read it beside the
+    table above: every line is either the parent's value or the type's own, and
+    there is no third source.
+  </p>
+
+<pre><code>        let done = SubagentClaim {
+            deliver: args
+                .get("deliver")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        };
+        let outcome: Outcome = {
+            let mut sub = Agent::new(Setup {
+                provider: ty
+                    .provider
+                    .clone()
+                    .unwrap_or_else(|| self.nest.running.get()),
+                harness: &amp;self.nest.harness,
+                instructions: &amp;ty.instructions,
+                tools: &amp;ty.tools,
+                approvals: &amp;self.nest.approvals,
+                log: &amp;log,
+                term: &amp;term,
+                interrupt: self.nest.interrupt.clone(),
+                <span class="c">// Its own meter, charging the parent's as it goes. One goal, one</span>
+                <span class="c">// meter, in the strongest sense available: the same integer.</span>
+                spend: Spend::child(&amp;self.nest.spend),
+                done: &amp;done,
+                cwd: self.nest.cwd.clone(),
+                session_id: self.nest.session_id.clone(),
+                budgets,
+                caching: self.nest.caching,
+                <span class="c">// Never `Stream`: a delegation reports once at the end, and a</span>
+                <span class="c">// subordinate `Term` swallows prose anyway, so streaming it</span>
+                <span class="c">// would be bytes nobody reads.</span>
+                mode: Mode::Batch,
+            });
+            sub.run_goal(&amp;Goal::new(brief)).await
+        };</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::invoke, the Setup block</span>
+
+  <p>
+    <code>Mode::Batch</code> is the one line that reads as a preference and is
+    not. A subordinate <code>Term</code> swallows the assistant's prose, so a
+    streamed delegation would be bytes assembled and then dropped. The sub
+    reports once, at the end, through the tool result.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::invoke; crates/emma/src/term.rs — Term::subordinate</span>
+
+  <h2 id="term">The subordinate terminal</h2>
+
+  <p>
+    A nested <code>Agent</code> driving the process's status meters is a bug that
+    already happened: <code>set_budgets</code> re-pointed the context and token
+    meters at the sub's caps for the rest of the process,
+    <code>goal_ended</code> stopped the parent's clock while the parent was
+    still running, and <code>spent</code> fed the live line a per-goal figure
+    smaller than the parent's, so the meter jumped backwards mid-goal.
+  </p>
+
+<pre><code>    <span class="c">/// A nested run's view of this terminal.</span>
+    <span class="c">///</span>
+    <span class="c">/// **The bug this exists to fix.** `Term` carries the *process's* status</span>
+    <span class="c">/// meters, and a nested [`crate::agent::Agent`] would drive them with a</span>
+    <span class="c">/// nested run's numbers: `set_budgets` would re-point the context and token</span>
+    <span class="c">/// meters at the sub's caps for the rest of the process, `goal_ended` would</span>
+    <span class="c">/// stop the parent's clock while the parent is still running, and `spent`</span>
+    <span class="c">/// would feed the live line a per-goal figure smaller than the parent's, so</span>
+    <span class="c">/// the meter would jump backwards mid-goal. A meter measured against the</span>
+    <span class="c">/// wrong cap is the kind of untruth the status line exists to not have.</span>
+    <span class="c">///</span>
+    <span class="c">/// So a subordinate terminal shares the frame, the skin and the stdin path,</span>
+    <span class="c">/// and swallows exactly four calls: `set_budgets`, `goal_started`,</span>
+    <span class="c">/// `goal_ended` and `spent`. It swallows the assistant's prose as well —</span>
+    <span class="c">/// `delta`, `text`, `end_of_text` — because a delegation reports once at the</span>
+    <span class="c">/// end rather than streaming a second conversation into the first.</span>
+    <span class="c">///</span>
+    <span class="c">/// **What it must not swallow is the approval prompt.** A subagent inherits</span>
+    <span class="c">/// the gate, and a prompt the user cannot see is the same defect as a prompt</span>
+    <span class="c">/// they cannot evaluate, with the argument already made. `prompt_header`,</span>
+    <span class="c">/// `prompt_question`, `prompt_network_question` and `prompt_answered` render</span>
+    <span class="c">/// exactly as they do for the parent, and so do the tool lines and notes —</span>
+    <span class="c">/// the sub's activity becomes ordinary lines on the parent's transcript.</span>
+    pub fn subordinate(&amp;self) -&gt; Self {
+        Self {
+            skin: self.skin,
+            quiet: self.quiet,
+            enabled: self.enabled,
+            frame: self.frame.clone(),
+            marker: Mutex::default(),
+            pending: Mutex::default(),
+            subordinate: true,
+            record: self.record.clone(),
+            spacing: Mutex::default(),
+        }
+    }
+
+    <span class="c">/// Anything that moves the status meters, which a subordinate terminal does</span>
+    <span class="c">/// not have. One funnel rather than four `if`s, so a meter added later</span>
+    <span class="c">/// cannot forget the rule.</span>
+    fn meter(&amp;self, event: &amp;str, f: impl FnOnce(&amp;Frame)) {
+        if self.subordinate {
+            return;
+        }
+        self.remember(event);
+        if let Some(frame) = &amp;self.frame {
+            f(frame);
+        }
+    }</code></pre>
+  <span class="src">crates/emma/src/term.rs — Term::subordinate and Term::meter, quoted entire</span>
+
+  <p>
+    <code>meter</code> is one funnel rather than four <code>if</code>s, so a
+    fifth meter added later cannot forget the rule. What a subordinate terminal
+    does <em>not</em> swallow is the approval prompt: a subagent inherits the
+    gate, and a prompt the user cannot see is the same defect as one they cannot
+    evaluate. <code>prompt_header</code>, <code>prompt_question</code>,
+    <code>prompt_network_question</code> and <code>prompt_answered</code> render
+    exactly as they do for the parent, and so do tool lines and notes.
+    <span class="chip test">tested</span>
+    <code>constructing_an_agent_never_moves_the_status_meters</code> and
+    <code>a_nested_run_moves_no_meter_and_still_reaches_the_keyboard</code> hold
+    both halves: no meter event recorded, and the approval prompt still reached.
+  </p>
+  <span class="src">crates/emma/tests/delegate.rs::constructing_an_agent_never_moves_the_status_meters, ::a_nested_run_moves_no_meter_and_still_reaches_the_keyboard</span>
+
+  <h2 id="log">The log, and why the record kinds are namespaced</h2>
+
+  <p>
+    <code>SessionLog::subagent</code> returns two things: a log that writes into
+    the same file under a <code>sub</code> prefix with three stamped fields, and
+    a <code>Records</code> handle that collects everything that log wrote. The
+    second is what the footer is built from; nothing else reads it.
+  </p>
+
+<pre><code>    <span class="c">///</span>
+    <span class="c">/// **Why the `kind`s are namespaced.** [`fold_records`] and</span>
+    <span class="c">/// [`restore_records`] match on `kind` and both have a `_ =&gt; {}` arm, so</span>
+    <span class="c">/// `sub.assistant` and `sub.model_call` are ignored for free — which is the</span>
+    <span class="c">/// whole mechanism. Written under the parent's own names the damage would</span>
+    <span class="c">/// not be subtle: a sub `assistant` record arriving between the parent's</span>
+    <span class="c">/// `tool_call` and its `tool_result` calls `close_turn`, which places the</span>
+    <span class="c">/// parent's held turn *without* its results, `answered()` fails, and the</span>
+    <span class="c">/// parent's whole turn is silently dropped from every resume of that</span>
+    <span class="c">/// session. `tests/delegate.rs` folds a session containing a delegation and</span>
+    <span class="c">/// asserts the parent's message list is unchanged, because without that test</span>
+    <span class="c">/// this is a convention rather than a property.</span>
+    <span class="c">///</span>
+    <span class="c">/// The three stamped fields are what make the file greppable back apart:</span>
+    <span class="c">/// which delegation wrote a record, which of the parent's turns asked for</span>
+    <span class="c">/// it, and which agent type ran.</span>
+    pub fn subagent(&amp;self, sub_id: &amp;str, parent_turn_id: &amp;str, agent: &amp;str) -&gt; (Self, Records) {
+        let tap: Records = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                id: self.id.clone(),
+                path: self.path.clone(),
+                file: self.file.clone(),
+                prefix: Some("sub"),
+                stamp: vec![
+                    ("sub_id".into(), json!(sub_id)),
+                    ("parent_turn_id".into(), json!(parent_turn_id)),
+                    ("agent".into(), json!(agent)),
+                ],
+                tap: Some(tap.clone()),
+            },
+            tap,
+        )
+    }</code></pre>
+  <span class="src">crates/emma/src/session.rs — SessionLog::subagent, with the tail of its doc</span>
+
+  <p>
+    The namespacing is not tidiness. <code>fold_records</code> and
+    <code>restore_records</code> match on <code>kind</code> and both carry a
+    <code>_ =&gt; {}</code> arm, so <code>sub.assistant</code> and
+    <code>sub.model_call</code> are ignored for free. Written under the parent's
+    own names, a sub <code>assistant</code> record arriving between the parent's
+    <code>tool_call</code> and its <code>tool_result</code> would call
+    <code>close_turn</code>, place the parent's held turn without its results,
+    fail <code>answered()</code>, and drop the parent's whole turn from every
+    resume of that session. <span class="chip test">tested</span>
+    <code>folding_a_session_containing_a_delegation_returns_the_parents_conversation</code>
+    asserts the parent's message list is unchanged.
+  </p>
+  <span class="src">crates/emma/src/session.rs — SessionLog::subagent, fold_records; crates/emma/tests/delegate.rs::folding_a_session_containing_a_delegation_returns_the_parents_conversation</span>
+
+  <p>
+    The three stamped fields are <code>sub_id</code>,
+    <code>parent_turn_id</code> and <code>agent</code>. <code>sub_id</code> is
+    <code>format!("sub-{}-{n}", ctx.turn_id)</code> where <code>n</code> comes
+    off an <code>AtomicU64</code> on the tool, so two delegations in one parent
+    turn are <code>sub-turn-1-1</code> and <code>sub-turn-1-2</code> and the file
+    can be greppable back apart by delegation, by parent turn, or by agent type.
+    <span class="chip cert">certified</span> A real record on this machine
+    carries <code>"sub_id": "sub-turn-1-1"</code>, <code>"parent_turn_id":
+    "turn-1"</code>: <code>grep '"kind": *"delegation"'
+    ~/.emma/sessions/*.jsonl</code>.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::invoke, Delegate::seq; ~/.emma/sessions/sess-1786710409801-39600.jsonl</span>
+
+  <h2 id="line">What the parent's screen shows</h2>
+
+  <p>
+    Two notes bracket the run, both on the parent's terminal because
+    <code>self.nest.term</code> is the parent's and only <code>term</code> is the
+    subordinate one. The opening note names the agent, its tool count, the token
+    budget it was given and the first line of the task; the closing note is the
+    agent name and <code>Facts::summary()</code>. Between them the sub's own tool
+    lines and any approval prompts land as ordinary lines.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::invoke, Term::note</span>
+
+  <p>
+    <span class="chip unv">unverified</span> Neither note has been read off a
+    real console by this page's author; they are quoted from the source, and the
+    one live delegation on this machine predates any transcript that was kept.
+    <em>What would settle it:</em> a delegation run under the frame with the
+    scrollback captured, or an <code>EMMA_NO_FRAME</code> run piped to a file.
+  </p>
+
+  <h2 id="unsettled">What is not settled here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> The named-model path, as above.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> <code>Interrupt</code> is shared,
+      and the claim that one Ctrl-C stops both loops "in the right order" is the
+      module doc's, not a measurement. No test interrupts a nested run.
+      <em>What would settle it:</em> a test that trips the interrupt while a
+      scripted sub is mid-turn and asserts both endings.
+    </li>
+    <li>
+      <span class="chip cert">certified</span> <code>Nest</code> has eleven
+      fields and every one is in the table above. The quoted struct carries
+      twelve <code>pub</code> lines, of which the first is the struct itself.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · read at commit <code>62ab9c3</code> ·
+    <code>crates/emma/src/delegate.rs</code> ·
+    <code>crates/emma/src/term.rs</code> ·
+    <code>crates/emma/src/session.rs</code> ·
+    <a href="delegation.html">back to the chapter</a>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

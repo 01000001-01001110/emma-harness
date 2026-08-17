@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Continuity, and the first run · Sessions &amp; context · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav here" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">Sessions &amp; context</p>
+  <h1>Continuity, and the first run</h1>
+
+  <nav class="chapter">
+    <a class="up" href="session.html">Sessions &amp; context</a>
+    <a href="session-file.html">The file</a>
+    <a href="session-records.html">Records</a>
+    <a href="session-fold.html">The fold</a>
+    <a href="session-resume.html">Resume</a>
+    <span class="now">Continuity</span>
+    <a href="session-compaction.html">Compaction</a>
+    <a href="session-corpus.html">The corpus</a>
+  </nav>
+
+  <p class="lede">
+    Two questions answered out of the same records, neither about the
+    conversation. What was the interrupted run booted against, and has anybody
+    used Emma in this directory before? Both are read from transcripts rather
+    than from a marker file, and both are honest about what they did not look
+    at.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>Continuity</code>, <code>continuity_of</code>, <code>FirstRun</code>, <code>first_run</code></span>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven, and repeatable: a file, a command, a count you can redo</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+    <div><span class="chip test">tested</span> a test that was shown to fail</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <h2 id="fields">Four fields, any of which may be missing</h2>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// What the file says the interrupted run was booted against.
+///
+/// Every field is a string that may be empty, because a session written before
+/// a field existed simply does not have it, and a warning derived from a
+/// missing value is noise that trains people to ignore warnings.</span>
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Continuity {
+    pub instructions_hash: String,
+    pub tool_schema_hash: String,
+    pub model: String,
+    pub cwd: String,
+}</code></pre>
+
+  <p>
+    Strings rather than <code>Option</code>s, with the empty string carrying the
+    "not recorded" meaning, and the check below skipping any field that is
+    empty. It comes to the same thing and it makes the missing case the default
+    for a struct that derives <code>Default</code>. <code>cwd</code> is on the
+    type and is not compared by <code>differences</code>: the working directory
+    is what <code>locate</code> and <code>first_run</code> match on, and
+    resuming a session into a different tree is a request the user made
+    explicitly by naming it.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>Continuity</code>, <code>locate</code></span>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// The last `goal` record's account of the harness, because it is the one the
+/// restored messages were actually produced under.</span>
+fn continuity_of(records: &amp;[Value]) -&gt; Continuity {
+    let mut out = Continuity::default();
+    for record in records {
+        if record["kind"] == "goal" {
+            out = Continuity {
+                instructions_hash: string(record, "instructions_hash"),
+                tool_schema_hash: string(record, "tool_schema_hash"),
+                model: string(record, "model"),
+                cwd: string(record, "cwd"),
+            };
+        }
+    }
+    out
+}</code></pre>
+
+  <p>
+    Last rather than first, and assigned whole rather than merged field by
+    field. A session whose model changed halfway through reports the model of
+    its final goal, which is the one the restored messages were produced under.
+    The record is a <code>goal</code> record, so a <code>/model</code> switch
+    inside a goal is not picked up here at all; it leaves a
+    <code>model_changed</code> record that nothing reads back.
+    <code>sub.goal</code> records are invisible to the comparison
+    <code>record["kind"] == "goal"</code>, so a delegation's model does not
+    overwrite the parent's.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>continuity_of</code>; crates/emma/src/agent.rs — <code>set_provider</code></span>
+
+  <h2 id="differences">Warn, do not refuse</h2>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// What changed between the run that wrote the file and the run about to
+/// continue it, in sentences a user can act on.
+///
+/// **Warn, do not refuse.** The user asked to resume; declining would leave
+/// them with a transcript and no way to use it, and the thing that is
+/// actually dangerous is not the change but the change being invisible. A
+/// conversation continuing under instructions it was never held to is the
+/// "booted on the wrong prompt" failure this project has already paid for,
+/// arriving one level along — so each line names the field, the old value
+/// and the new one.</span>
+pub fn differences(
+    &amp;self,
+    instructions_hash: &amp;str,
+    tool_schema_hash: &amp;str,
+    model: &amp;str,
+) -&gt; Vec&lt;String&gt; {
+    let mut out = Vec::new();
+    let mut check = |what: &amp;str, was: &amp;str, now: &amp;str, cost: &amp;str| {
+        if !was.is_empty() &amp;&amp; was != now {
+            out.push(format!(
+                "{what} changed since this session ran: {was} → {now}. {cost}"
+            ));
+        }
+    };
+    check(
+        "instructions",
+        &amp;self.instructions_hash,
+        instructions_hash,
+        "The restored conversation was produced under a prompt this run is not using.",
+    );
+    check(
+        "tool schema",
+        &amp;self.tool_schema_hash,
+        tool_schema_hash,
+        "A tool the transcript calls may not exist now, or may take different arguments.",
+    );
+    check(
+        "model",
+        &amp;self.model,
+        model,
+        "The turns being handed back were written by a different model.",
+    );
+    out
+}</code></pre>
+
+  <p>
+    Each line names the field, the old value, the new one and what the
+    difference costs. The cost sentences are the part worth having: a hash pair
+    tells a user something changed and not what it means for the conversation
+    they are about to continue. An empty recorded value produces no line, so a
+    file from before a field existed is silent rather than noisy.
+    <span class="chip test">tested</span>
+    <code>resuming_into_a_changed_harness_names_what_changed</code> in
+    <code>crates/emma/tests/resume.rs</code>.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>Continuity::differences</code></span>
+
+  <p>
+    The three warnings are emitted late in startup rather than beside the
+    resume line, because <code>Delegate</code> is registered after the resume is
+    resolved and a schema hash taken earlier would hash a tool surface no
+    request will carry. <code>main.rs</code> calls
+    <code>differences</code> after <code>harness.select_tools(registry)</code>
+    has consumed the registry, and prints each line through
+    <code>term.warn</code>.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/main.rs</span>
+if let Some(restored) = &amp;restored {
+    for line in restored.continuity.differences(
+        &amp;harness.instructions_hash(),
+        &amp;tools.schema_hash(),
+        provider.model_id(),
+    ) {
+        term.warn(&amp;line);
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/main.rs</span>
+
+  <p>
+    <span class="chip unv">unverified</span> what a real model change does to a
+    restored conversation. <code>differences</code> is tested on strings.
+    Whether one model accepts another's signed thinking blocks is stated in
+    <code>agent.rs</code> as not established in this tree, which is why the
+    compact-and-retry recovery on <a href="loop-seam.html">Seams</a> exists at
+    all. Settle it by resuming a session recorded under one model into another
+    and reading what the provider says.
+  </p>
+
+  <h2 id="firstrun">Whether anyone has used Emma here</h2>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// Whether this is somebody's first run, and how that was decided.
+///
+/// **Decided from the session history rather than from a marker file.** A
+/// marker is a second source of truth that can be deleted, copied between
+/// machines, or written by a run that then crashed — and the question "has
+/// anyone used Emma here?" already has an answer on disk, in the transcripts.
+///
+/// Two reasons, kept apart because they mean different things to the person
+/// reading the welcome: there is no session directory at all, or there is one
+/// and nothing in it was run from this working directory. The second is the
+/// common one — a new project on a machine that has used Emma before — and it
+/// is deliberately treated as a first run, because what the welcome lists is
+/// *this project's* harness, commands and skills.
+///
+/// **The scan is bounded.** Sessions from every project share one directory and
+/// this runs at startup on every interactive run, so only the newest
+/// [`FIRST_RUN_SCAN`] files are read. That makes the answer "no *recent*
+/// session from here", which is what [`FirstRun::reason`] says — an honest
+/// narrower claim rather than a broad one that would cost a full directory read
+/// before the first prompt.</span>
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FirstRun {
+    <span class="c">/// Emma has never had anywhere to write a transcript.</span>
+    NoSessionDirectory,
+    <span class="c">/// There are sessions, and none of the recent ones ran here.</span>
+    NoneFromHere,
+}
+
+<span class="c">/// How many session files back the first-run check looks. Fifty is far more
+/// than a person switches between in a day and is one directory read plus fifty
+/// small file reads in the worst case.</span>
+const FIRST_RUN_SCAN: usize = 50;</code></pre>
+
+  <p>
+    Fifty files, newest id first. The bound is what separates this from
+    <code>locate</code>, which reads the whole directory if it has to:
+    <code>locate</code> runs when a user asked for a session and can afford the
+    scan, while this runs before the first prompt of every interactive run and
+    cannot.
+  </p>
+
+  <p>
+    The trade is stated rather than hidden. A session that ran here long enough
+    ago falls off the end of the window and the welcome is shown again, which is
+    why <code>reason</code> says "no recent session was recorded from this
+    directory" and not "you have never worked here".
+    <span class="chip test">tested</span>
+    <code>the_scan_is_bounded_so_startup_does_not_read_a_whole_history</code>
+    writes one session from <code>here</code>, then
+    <code>FIRST_RUN_SCAN + 1</code> sessions from elsewhere, and asserts the
+    answer is <code>NoneFromHere</code>.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>FIRST_RUN_SCAN</code> and its test</span>
+
+  <p>
+    In the corpus today that window covers under half the directory:
+    <span class="chip cert">certified</span>, 103 files at 2026-08-16 20:28 EDT
+    against a 50-file scan, so 53 files are out of reach of the check even
+    though <code>locate</code> would still find them. The counts are on
+    <a href="session-corpus.html">The corpus</a>.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+pub fn first_run(dir: Option&lt;&amp;Path&gt;, cwd: &amp;Path) -&gt; Option&lt;FirstRun&gt; {
+    let Some(dir) = dir.filter(|d| d.is_dir()) else {
+        return Some(FirstRun::NoSessionDirectory);
+    };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Some(FirstRun::NoSessionDirectory);
+    };
+    let mut candidates: Vec&lt;PathBuf&gt; = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("jsonl"))
+        .collect();
+    if candidates.is_empty() {
+        return Some(FirstRun::NoSessionDirectory);
+    }
+    <span class="c">// Ids sort by time, so the newest are at the end — the same ordering
+    // `locate` relies on, and for the same reason: an mtime moves when a file
+    // is copied and an id does not.</span>
+    candidates.sort();
+    for path in candidates.iter().rev().take(FIRST_RUN_SCAN) {
+        let Ok(records) = SessionLog::read(path) else {
+            continue;
+        };
+        if records
+            .iter()
+            .any(|r| r["kind"] == "goal" &amp;&amp; same_dir(&amp;string(r, "cwd"), cwd))
+        {
+            return None;
+        }
+    }
+    Some(FirstRun::NoneFromHere)
+}</code></pre>
+
+  <p>
+    <code>None</code> is the not-a-first-run answer, which reads oddly and keeps
+    the caller simple: <code>main.rs</code> does
+    <code>if let Some(why) = session::first_run(…)</code> and prints the welcome
+    with the reason. Three separate paths return
+    <code>NoSessionDirectory</code>: no directory was resolved, the directory
+    will not open, and the directory has no <code>.jsonl</code> in it. The test
+    covers the first and the third together, on the argument that they are the
+    same answer to the person reading the welcome, and the second is the
+    unreadable-directory case that nothing exercises.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>first_run</code>; crates/emma/src/main.rs</span>
+
+  <p>
+    The match on each file is the same one <code>locate</code> uses: a
+    <code>goal</code> record whose <code>cwd</code> canonicalises to this one.
+    <code>same_dir</code> is on <a href="session-resume.html">Resume</a>, and
+    its empty-string rule is what stops the 48 empty files and the pre-<code>cwd</code>
+    records from counting as a match.
+  </p>
+
+  <p>
+    The 48 empty files still cost a read each. <code>SessionLog::read</code>
+    returns an empty vector for a zero-byte file, the <code>any</code> is false,
+    and the walk continues. Emptiness is not tested for.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+impl FirstRun {
+    <span class="c">/// Said out loud in the welcome, so a returning user can tell whether
+    /// something is wrong rather than wondering why they are being introduced
+    /// to a tool they already use.</span>
+    pub fn reason(self) -&gt; &amp;'static str {
+        match self {
+            Self::NoSessionDirectory =&gt; {
+                "there is no session directory yet, so nothing has been recorded anywhere"
+            }
+            Self::NoneFromHere =&gt; "no recent session was recorded from this directory",
+        }
+    }
+}</code></pre>
+
+  <p>
+    <span class="chip test">tested</span> three ways.
+    <code>a_machine_that_has_never_run_emma_is_a_first_run</code> covers a
+    missing directory, a <code>None</code> directory and an empty one.
+    <code>a_new_project_on_a_machine_with_history_is_still_a_first_run</code>
+    is the case that decides whether the welcome is worth having: a session
+    recorded from elsewhere yields <code>NoneFromHere</code>, and once something
+    has run here the answer becomes <code>None</code>.
+    <code>each_reason_says_which_one_it_was</code> asserts the two sentences
+    differ in the way a reader needs.
+  </p>
+  <span class="src">crates/emma/src/session.rs — the first-run tests</span>
+
+  <h2 id="coverage">What this page covers</h2>
+
+  <p>
+    From <code>session.rs</code>: <code>Continuity</code> and
+    <code>Continuity::differences</code>, <code>continuity_of</code>,
+    <code>FirstRun</code>, <code>FirstRun::reason</code>,
+    <code>FIRST_RUN_SCAN</code> and <code>first_run</code>, plus the four unit
+    tests over the first-run behaviour. <code>same_dir</code> is shared with
+    <code>locate</code> and is quoted on
+    <a href="session-resume.html">Resume</a>. The welcome itself, which is what
+    <code>FirstRun</code> is for, is on
+    <a href="getting-started.html">Getting started</a>.
+  </p>
+
+  <h2 id="unverified">What is not verified here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> Whether a genuine model change
+      across a resume is accepted by the provider. Tested on strings only.
+      Settle it by resuming a session recorded on one model under another.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> The unreadable-directory path in
+      <code>first_run</code>. Nothing exercises a directory that exists and
+      will not open. Settle it by removing the read permission on
+      <code>~/.emma/sessions/</code> and starting Emma.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> What the first-run check costs at
+      startup in the real directory. Fifty file reads is the stated worst case
+      and nobody has timed it. Settle it by timing startup with and without the
+      check.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> How this page renders. No browser
+      drew it.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    <p>
+      Written against commit <code>62ab9c3</code>. Next:
+      <a href="session-compaction.html">Compaction without a model call</a>,
+      which is the only thing that shortens a conversation apart from
+      <code>/clear</code>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

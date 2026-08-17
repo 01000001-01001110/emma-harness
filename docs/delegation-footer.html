@@ -1,0 +1,790 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The footer · Delegation · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav here" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<h1>The footer, which the subagent did not write</h1>
+
+  <nav class="chapter">
+    <a class="up" href="delegation.html">Delegation</a>
+    <a href="delegation-nest.html">The nested run</a>
+    <a href="delegation-serialised.html">One at a time</a>
+    <a href="delegation-definitions.html">Agent definitions</a>
+    <a href="delegation-tools.html">resolve_tools</a>
+    <a href="delegation-brief.html">The brief</a>
+    <span class="now">The footer</span>
+    <a href="delegation-budgets.html">Budgets &amp; spend</a>
+    <a href="delegation-agents-cmd.html">emma agents</a>
+  </nav>
+
+  <p class="lede">
+    A subagent's deliverable is a description of work rather than the work. So
+    the parent is handed a second thing beside the message, composed from the
+    records the loop wrote while the child ran. <code>Facts::from</code> takes
+    that record stream and takes no text the model produced.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — the footer region</span>
+
+<pre><code><span class="c">// region: The footer, which the subagent did not write</span>
+<span class="c">// ---------------------------------------------------------------------------</span>
+<span class="c">// The footer, which the subagent did not write</span>
+<span class="c">//</span>
+<span class="c">// The part of this design that matters. A subagent's deliverable is by</span>
+<span class="c">// construction a description of work rather than the work, and the failure that</span>
+<span class="c">// produces is documented rather than hypothetical: *"subagents imply they read</span>
+<span class="c">// file content but demonstrably did not — they infer behavior from filenames,</span>
+<span class="c">// variable names, or comments instead of tracing actual code logic"*</span>
+<span class="c">// (anthropics/claude-code#40339, closed as not planned).</span>
+<span class="c">//</span>
+<span class="c">// Requiring the subagent to cite what it read is an improvement and is still an</span>
+<span class="c">// assertion that looks like a verification: a run that hallucinated a conclusion</span>
+<span class="c">// will hallucinate a plausible list of files to go with it. The harness already</span>
+<span class="c">// knows. Every one of these numbers comes out of the records the *loop* wrote</span>
+<span class="c">// during that run — `Facts::from` takes them and nothing else, and takes no</span>
+<span class="c">// text the model produced.</span>
+<span class="c">//</span>
+<span class="c">// **Every recorded tool call appears in exactly one footer category, and a</span>
+<span class="c">// call can be described coarsely but can never vanish.** That is the invariant</span>
+<span class="c">// the categories are arranged around, and it is a repair rather than an</span>
+<span class="c">// original virtue: the categories are keyed on argument names, so for a while</span>
+<span class="c">// any call carrying none of `file_path`/`pattern`/`command` — `WebFetch(url)`,</span>
+<span class="c">// `WebSearch(query)`, `Skill`, every `Task*` — was counted in `tool_calls` and</span>
+<span class="c">// named nowhere, which reads as `files read: none` under a paragraph</span>
+<span class="c">// describing five fetches. Coarseness is visible and self-correcting; a parent</span>
+<span class="c">// reading `other tool calls: Frobnicate ×2` knows the record is coarse.</span>
+<span class="c">// Silence is not: it is the footer partly believing the account it exists to</span>
+<span class="c">// check.</span>
+<span class="c">//</span>
+<span class="c">// **What it proves and what it does not.** It proves what was looked at, what</span>
+<span class="c">// was run, and how the run ended. It does not prove the conclusion follows from</span>
+<span class="c">// any of it. The worst case of this whole design is that the footer becomes the</span>
+<span class="c">// thing everyone trusts — `done · 14 files · 3 commands` reads like verification</span>
+<span class="c">// and is only attendance. It reports counts rather than adjectives for that</span>
+<span class="c">// reason, and nothing anywhere claims the conclusion was checked.</span>
+<span class="c">// ---------------------------------------------------------------------------</span></code></pre>
+  <span class="src">crates/emma/src/delegate.rs — the footer region doc, quoted entire</span>
+
+  <h2 id="boundary">Two things cross the boundary, from different places</h2>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 780 400" role="img"
+           aria-label="The parent-child boundary. Delegate::invoke sends a brief into a nested run with its own registry, budget and instructions. Two things come back from different places: the sub's final message, written by its model, and the loop's own records of every tool call, result, denial and ending. Facts::from reads only the records and builds the footer. The tool result the parent's model reads is the message with the footer under it.">
+        <defs>
+          <marker id="ftr-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
+          </marker>
+          <marker id="ftr-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
+          </marker>
+        </defs>
+
+        <rect class="ghost" x="300" y="14" width="466" height="182" rx="4"/>
+        <text class="tiny" x="312" y="32">the nested run — its own registry, instructions, budgets, DoneCheck, provider</text>
+
+        <rect class="hl" x="14" y="52" width="248" height="40" rx="3"/>
+        <text class="lbl" x="28" y="70">parent loop</text>
+        <text class="sm" x="28" y="86">Delegate::invoke</text>
+
+        <path class="edge" d="M262 72 L326 72" marker-end="url(#ftr-arrow)"/>
+        <text class="tiny" x="266" y="62">brief()</text>
+
+        <rect class="box" x="326" y="46" width="416" height="36" rx="3"/>
+        <text class="lbl" x="340" y="69">Agent::run_goal — the second loop</text>
+
+        <path class="edge" d="M430 82 L430 108" marker-end="url(#ftr-arrow)"/>
+        <path class="edge-hl" d="M640 82 L640 108" marker-end="url(#ftr-arrow-hl)"/>
+
+        <rect class="box" x="326" y="110" width="192" height="66" rx="3"/>
+        <text class="lbl" x="338" y="132">its model writes</text>
+        <text class="sm" x="338" y="150">the final message</text>
+        <text class="tiny" x="338" y="166">outcome.text</text>
+
+        <rect class="hl" x="546" y="110" width="196" height="66" rx="3"/>
+        <text class="lbl" x="558" y="132">the loop writes</text>
+        <text class="sm" x="558" y="150">sub.tool_call · tool_result</text>
+        <text class="sm" x="558" y="164">sub.denied · goal_finished</text>
+
+        <path class="edge" d="M422 176 L422 232 L150 232 L150 268" marker-end="url(#ftr-arrow)"/>
+        <text class="tiny" x="172" y="226">the agent's own account — carried verbatim, never parsed</text>
+
+        <path class="edge-hl" d="M644 176 L644 300 L568 300" marker-end="url(#ftr-arrow-hl)"/>
+
+        <rect class="hl" x="304" y="278" width="264" height="44" rx="3"/>
+        <text class="lbl" x="318" y="299">Facts::from(records)</text>
+        <text class="sm" x="318" y="315">→ footer()</text>
+
+        <path class="edge-hl" d="M304 300 L270 300" marker-end="url(#ftr-arrow-hl)"/>
+
+        <rect class="box" x="14" y="270" width="252" height="60" rx="3"/>
+        <text class="lbl" x="28" y="292">one tool_result</text>
+        <text class="sm" x="28" y="310">the message, then the footer</text>
+        <text class="sm" x="28" y="324">under it</text>
+
+        <path class="edge" d="M140 330 L140 356" marker-end="url(#ftr-arrow)"/>
+        <text class="tiny" x="14" y="374">the parent's model — which read neither the transcript nor a file the sub opened</text>
+      </svg>
+    </div>
+    <figcaption>
+      Drawn from <code>Delegate::invoke</code> and
+      <code>SessionLog::subagent</code>. The pink path is the one the design
+      turns on: <code>subagent</code> returns a log <em>and</em> a shared
+      <code>Records</code> vector, <code>Facts::from</code> reads that vector and
+      nothing else, and <code>footer()</code> is built from <code>Facts</code>.
+      <code>outcome.text</code> reaches the body by string concatenation and is
+      not an input to any category.
+    </figcaption>
+  </figure>
+
+  <h2 id="facts">What Facts holds</h2>
+
+<pre><code><span class="c">/// What one delegation actually did, read out of its own log.</span>
+#[derive(Default)]
+struct Facts {
+    ending: String,
+    detail: Option&lt;String&gt;,
+    tokens: i64,
+    iterations: u64,
+    elapsed_ms: u64,
+    tool_calls: usize,
+    files: Vec&lt;String&gt;,
+    searches: Vec&lt;String&gt;,
+    <span class="c">/// Where it went. `url` is `WebFetch`'s argument name, and egress is the</span>
+    <span class="c">/// class of call the rest of this design treats as the sensitive one — a</span>
+    <span class="c">/// footer that reported five fetches as `files read: none` was</span>
+    <span class="c">/// under-reporting precisely there.</span>
+    fetched: Vec&lt;String&gt;,
+    <span class="c">/// Every call whose arguments matched no probe above, tallied by the tool</span>
+    <span class="c">/// name **the loop recorded**. Coarse on purpose, and the reason it exists</span>
+    <span class="c">/// is in the region doc: a call may be described coarsely, never omitted.</span>
+    other: BTreeMap&lt;String, usize&gt;,
+    <span class="c">/// The command, and the exit status its result reported. `None` is a command</span>
+    <span class="c">/// whose result never arrived — interrupted, or refused.</span>
+    commands: Vec&lt;(String, Option&lt;i64&gt;)&gt;,
+    denied: Vec&lt;String&gt;,
+}</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Facts, quoted entire</span>
+
+  <p>
+    Four of the lists dedupe on insert through <code>push_unique</code>, and
+    <code>commands</code> does not: two identical <code>cargo test</code> runs
+    are two entries, because their exit statuses can differ and collapsing them
+    would hide the second. <code>other</code> is a tally rather than a list,
+    since the thing worth reporting about an unrecognised call is that it
+    happened and how often.
+  </p>
+
+  <h2 id="from">Facts::from, and the mutation to try on it</h2>
+
+<pre><code>impl Facts {
+    <span class="c">/// **The mutation to try on this function:** compose it from the subagent's</span>
+    <span class="c">/// final message instead of from `records`. `tests/delegate.rs` has a test</span>
+    <span class="c">/// whose scripted subagent claims to have read files it never opened and run</span>
+    <span class="c">/// a command that never ran; it goes red the moment this reads testimony</span>
+    <span class="c">/// rather than the log.</span>
+    fn from(records: &amp;[Value]) -&gt; Self {
+        let mut facts = Self::default();
+        let mut by_id: std::collections::HashMap&lt;String, (String, Value)&gt; = Default::default();
+        for record in records {
+            match record["kind"].as_str().unwrap_or_default() {
+                "sub.tool_call" =&gt; {
+                    facts.tool_calls += 1;
+                    let (Some(id), Some(tool)) = (str_of(record, "id"), str_of(record, "tool"))
+                    else {
+                        continue;
+                    };
+                    let args = record["args"].clone();
+                    <span class="c">// Keyed on the argument rather than on the tool's name, the</span>
+                    <span class="c">// same way `agent::compact` and `term::summarise_args`</span>
+                    <span class="c">// already are: this file has no business knowing which</span>
+                    <span class="c">// tools a build registers, and an agent library names tools</span>
+                    <span class="c">// that do not exist here at all.</span>
+                    <span class="c">//</span>
+                    <span class="c">// **The last arm is the one that makes the convention</span>
+                    <span class="c">// safe.** Keying on argument names means a tool naming its</span>
+                    <span class="c">// arguments something else falls through every probe, and</span>
+                    <span class="c">// until this arm existed it fell through into silence —</span>
+                    <span class="c">// Emma's own `WebFetch(url)` and `WebSearch(query)` among</span>
+                    <span class="c">// them, which is how five fetches footered as</span>
+                    <span class="c">// `files read: none` over `5 tool calls`. The residual is</span>
+                    <span class="c">// keyed on the tool name out of the record, which is a</span>
+                    <span class="c">// fact the loop wrote and not knowledge of the registry.</span>
+                    if let Some(path) = str_of(&amp;args, "file_path") {
+                        push_unique(&amp;mut facts.files, path);
+                    } else if let Some(pattern) = str_of(&amp;args, "pattern") {
+                        push_unique(&amp;mut facts.searches, pattern);
+                    } else if let Some(command) = str_of(&amp;args, "command") {
+                        facts.commands.push((one_line(&amp;command), None));
+                    } else if let Some(url) = str_of(&amp;args, "url") {
+                        push_unique(&amp;mut facts.fetched, url);
+                    } else if let Some(query) = str_of(&amp;args, "query") {
+                        <span class="c">// A search by any other argument name is still a</span>
+                        <span class="c">// search, so it joins the list it belongs in rather</span>
+                        <span class="c">// than earning a line of its own.</span>
+                        push_unique(&amp;mut facts.searches, query);
+                    } else {
+                        *facts.other.entry(tool.clone()).or_default() += 1;
+                    }
+                    by_id.insert(id, (tool, args));
+                }
+                "sub.tool_result" =&gt; {
+                    let Some(id) = str_of(record, "id") else {
+                        continue;
+                    };
+                    let Some((_, args)) = by_id.get(&amp;id) else {
+                        continue;
+                    };
+                    let Some(command) = str_of(args, "command") else {
+                        continue;
+                    };
+                    let content = record["block"]["content"].as_str().unwrap_or_default();
+                    let status = exit_status(content);
+                    let command = one_line(&amp;command);
+                    if let Some(slot) = facts
+                        .commands
+                        .iter_mut()
+                        .find(|(c, s)| *c == command &amp;&amp; s.is_none())
+                    {
+                        slot.1 = status;
+                    }
+                }
+                "sub.denied" =&gt; {
+                    let by = str_of(record, "by").unwrap_or_else(|| "?".into());
+                    let what = str_of(record, "id")
+                        .and_then(|id| by_id.get(&amp;id).map(|(tool, _)| tool.clone()))
+                        .unwrap_or_else(|| "a call".into());
+                    push_unique(
+                        &amp;mut facts.denied,
+                        format!(
+                            "{what} ({})",
+                            if by == "hook" { "policy" } else { "declined" }
+                        ),
+                    );
+                }
+                "sub.goal_finished" =&gt; {
+                    facts.ending = string(record, "ending");
+                    facts.detail = record["detail"].as_str().map(str::to_string);
+                    facts.tokens = record["tokens"].as_i64().unwrap_or(0);
+                    facts.iterations = record["iterations"].as_u64().unwrap_or(0);
+                    facts.elapsed_ms = record["elapsed_ms"].as_u64().unwrap_or(0);
+                }
+                _ =&gt; {}
+            }
+        }
+        facts
+    }</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Facts::from, quoted entire</span>
+
+  <p>
+    Four record kinds are read and everything else falls through the
+    <code>_ =&gt; {}</code> arm. <code>sub.tool_call</code> counts, categorises
+    and remembers the call by id. <code>sub.tool_result</code> looks the id back
+    up and, only where the remembered arguments carried a <code>command</code>,
+    parses an exit status into the first matching slot that has none.
+    <code>sub.denied</code> names the tool from the same map and says whether a
+    hook or a person refused it. <code>sub.goal_finished</code> carries the
+    ending, the detail, the tokens, the iterations and the elapsed time.
+  </p>
+
+  <p>
+    The slot search is <code>*c == command &amp;&amp; s.is_none()</code>, which
+    is what keeps two identical commands from both taking the first result. A
+    result whose id was never seen as a call, or whose call carried no
+    <code>command</code>, is skipped: there is nothing in the categories for it
+    to change.
+  </p>
+
+  <h2 id="categories">Every recorded call lands in exactly one category</h2>
+
+  <p>
+    The probe chain keys on <em>argument names</em>, the way
+    <code>agent::compact</code> and <code>term::summarise_args</code> already do.
+    This file has no business knowing which tools a build registers, and an agent
+    library names tools that do not exist here at all.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Argument seen</th><th>Footer line</th><th>Emma's tools that carry it</th></tr></thead>
+    <tbody>
+      <tr><td><code>file_path</code></td><td><code>files touched</code></td><td><code>Read</code>, <code>Write</code>, <code>Edit</code>, and all four LSP tools</td></tr>
+      <tr><td><code>pattern</code></td><td><code>searched for</code></td><td><code>Grep</code>, <code>Glob</code></td></tr>
+      <tr><td><code>command</code></td><td><code>commands run</code>, with the exit status from its result</td><td><code>Bash</code></td></tr>
+      <tr><td><code>url</code></td><td><code>fetched</code></td><td><code>WebFetch</code>, <code>BrowserOpen</code></td></tr>
+      <tr><td><code>query</code></td><td><code>searched for</code></td><td><code>WebSearch</code></td></tr>
+      <tr><td>none of them</td><td><code>other tool calls: Tool ×N</code></td><td>the four <code>Task</code> tools, <code>BrowserRead</code>/<code>Act</code>/<code>Fill</code>/<code>Close</code>, which key on <code>session</code>, and <code>Skill</code>(<code>name</code>) where the harness has skills</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/emma/src/delegate.rs — Facts::from; tools/*/src/*.rs — each tool's input_schema</span>
+
+  <p>
+    <span class="chip cert">certified</span> The right-hand column was built by
+    reading every <code>input_schema</code> in the tree rather than from memory:
+    of the 21 tools this build registers, 13 carry one of the five probed names
+    and 8 fall in the residual. Repeat it by extracting the top-level
+    <code>properties</code> keys from each <code>fn input_schema</code> under
+    <code>tools/</code> and <code>crates/emma/src/skill.rs</code>.
+  </p>
+
+  <p>
+    The last row is a repair rather than an original property. Until the residual
+    existed, a call carrying none of the first three argument names fell through
+    into silence, and Emma's own <code>WebFetch(url)</code> and
+    <code>WebSearch(query)</code> were among them. That is how five fetches
+    footered as <code>files read: none</code> over <code>5 tool calls</code>: a
+    parent reading a paragraph about five pages, with a record underneath
+    appearing to say nothing had been touched. Coarseness is visible and
+    self-correcting, because a parent reading <code>other tool calls: Frobnicate
+    ×2</code> knows the record is coarse. Silence is not.
+    <span class="chip test">tested</span>
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — tests::the_arguments_emmas_own_web_tools_use_reach_the_footer, tests::a_call_whose_arguments_match_no_probe_is_named_coarsely_rather_than_dropped</span>
+
+  <p>
+    The partition is asserted as arithmetic:
+    <code>files + searches + fetched + commands + other == tool_calls</code>,
+    over eight calls whose arguments are all distinct so that de-duplication
+    cannot hide a missing one. A probe added later that forgets the residual, or
+    a residual that double-counts, breaks it without anybody having to think of
+    the tool it would happen to. A second test asserts the complement: a
+    recognised call is in its own category and <em>not</em> also in the residual,
+    because a parent who reads <code>Read ×3</code> beside three named files
+    learns nothing and doubts both. <span class="chip test">tested</span>
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — tests::every_recorded_call_lands_in_exactly_one_footer_category, tests::a_recognised_call_is_in_its_own_category_and_not_also_in_the_residual</span>
+
+  <p>
+    The chain is <code>else if</code>, so the order decides ties. A call carrying
+    both <code>file_path</code> and <code>pattern</code> is a file, and a call
+    carrying both <code>url</code> and <code>query</code> is a fetch. No tool in
+    this build carries two of them, so the order has never had to be argued.
+    <span class="chip unv">unverified</span> as a claim about tools generally:
+    an agent library can name anything, and a foreign tool taking
+    <code>pattern</code> and <code>command</code> together would be filed as a
+    search. <em>What would settle it:</em> nothing worth building; the residual
+    guarantees it is still counted.
+  </p>
+
+  <h2 id="footer-fn">What the parent reads</h2>
+
+<pre><code>    <span class="c">/// What the parent reads under the subagent's own words.</span>
+    <span class="c">///</span>
+    <span class="c">/// The ending is first because it is the single most valuable field here:</span>
+    <span class="c">/// [`Ending::Tokens`] and [`Ending::Done`] otherwise leave the same</span>
+    <span class="c">/// confident final paragraph, and without this line the parent cannot tell</span>
+    <span class="c">/// a finished run from a truncated one.</span>
+    fn footer(&amp;self) -&gt; String {
+        let mut out = String::from(
+            "--- what this agent actually did (recorded by the harness, \
+                                    not written by the agent) ---\n",
+        );
+        out.push_str(&amp;format!(
+            "ended: {}{}\n",
+            if self.ending.is_empty() {
+                "unknown — no record of how this run stopped"
+            } else {
+                &amp;self.ending
+            },
+            match &amp;self.detail {
+                Some(detail) =&gt; format!(" ({detail})"),
+                None =&gt; String::new(),
+            }
+        ));
+        if self.ending != "done" &amp;&amp; self.ending != "answered" &amp;&amp; !self.ending.is_empty() {
+            out.push_str(
+                "note: it did not claim the work was finished, so read what follows as partial.\n",
+            );
+        }
+        <span class="c">// "touched", not "read": `Write` and `Edit` carry `file_path` too, so</span>
+        <span class="c">// a written file has always landed in this list. The neutral word</span>
+        <span class="c">// costs nothing and stops the over-claim; splitting read from written</span>
+        <span class="c">// would need the tool-name knowledge this file has deliberately</span>
+        <span class="c">// refused.</span>
+        out.push_str(&amp;listed("files touched", &amp;self.files));
+        out.push_str(&amp;listed("searched for", &amp;self.searches));
+        out.push_str(&amp;listed("fetched", &amp;self.fetched));
+        let commands: Vec&lt;String&gt; = self
+            .commands
+            .iter()
+            .map(|(command, status)| match status {
+                Some(code) =&gt; format!("{command} → exit {code}"),
+                None =&gt; format!("{command} → no result (refused, or the run stopped)"),
+            })
+            .collect();
+        out.push_str(&amp;listed("commands run", &amp;commands));
+        <span class="c">// The residual. Named only when there is something in it — an empty</span>
+        <span class="c">// bucket has nothing to disclose, and the categories above already say</span>
+        <span class="c">// `none` for themselves.</span>
+        if !self.other.is_empty() {
+            let other: Vec&lt;String&gt; = self
+                .other
+                .iter()
+                .map(|(tool, n)| format!("{tool} ×{n}"))
+                .collect();
+            out.push_str(&amp;listed("other tool calls", &amp;other));
+        }
+        if !self.denied.is_empty() {
+            out.push_str(&amp;listed("refused or blocked", &amp;self.denied));
+        }
+        out.push_str(&amp;format!(
+            "spent: {} model calls, {} tokens, {}s\n",
+            self.iterations,
+            self.tokens,
+            self.elapsed_ms / 1000
+        ));
+        out
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Facts::footer, quoted entire</span>
+
+  <p>
+    The ending is first because it is the most valuable field.
+    <code>Ending::Tokens</code> and <code>Ending::Done</code> otherwise leave the
+    same confident final paragraph, and without this line the parent cannot tell
+    a finished run from a truncated one. Anything that is not <code>done</code>
+    or <code>answered</code> gets a second line saying to read what follows as
+    partial, and a run with no record of how it stopped says <em>"unknown — no
+    record of how this run stopped"</em> rather than implying success.
+    <span class="chip test">tested</span>
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — tests::an_ending_that_is_not_done_is_called_out_rather_than_merely_named, tests::a_run_with_no_record_of_its_ending_says_so_rather_than_implying_success</span>
+
+  <p>
+    <strong>Files touched, not files read.</strong> <code>Write</code> and
+    <code>Edit</code> carry <code>file_path</code> too, so a written file has
+    always landed in that list, and under the
+    <a href="delegation-tools.html">inherit-everything default</a> a subagent
+    holding <code>Write</code> is the ordinary case rather than the exotic one.
+    Splitting read from written would need the tool-name knowledge this file has
+    refused; the neutral word costs nothing and stops the over-claim.
+  </p>
+
+  <p>
+    Four categories say <code>none</code> when they are empty. The residual stays
+    quiet instead, and so does <code>refused or blocked</code>: an empty bucket
+    has nothing to disclose, and <code>other tool calls: none</code> on every
+    footer is noise rather than honesty. <span class="chip test">tested</span>
+    The empty-record test asserts <code>files touched: none</code> and
+    <code>fetched: none</code> are present and that <code>other tool calls</code>
+    is absent.
+  </p>
+
+<pre><code><span class="c">/// A capped list, and an honest count when it is capped. Never present a cut</span>
+<span class="c">/// list as a whole one — the same discipline `read.md` and `bash.md` state.</span>
+fn listed(what: &amp;str, items: &amp;[String]) -&gt; String {
+    if items.is_empty() {
+        return format!("{what}: none\n");
+    }
+    let shown: Vec&lt;&amp;String&gt; = items.iter().take(FOOTER_ITEMS).collect();
+    let mut out = format!("{what} ({}):\n", items.len());
+    for item in shown {
+        out.push_str(&amp;format!("  {item}\n"));
+    }
+    if items.len() &gt; FOOTER_ITEMS {
+        out.push_str(&amp;format!("  … and {} more\n", items.len() - FOOTER_ITEMS));
+    }
+    out
+}</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — listed, quoted entire</span>
+
+  <p>
+    <code>FOOTER_ITEMS</code> is 12, and the count in the heading is the full
+    count rather than the shown one: <code>files touched (30):</code> then
+    <code>… and 18 more</code>. Never a cut list presented as a whole one, which
+    is the discipline <code>read.md</code> and <code>bash.md</code> already
+    state. <span class="chip test">tested</span>
+    <code>a_long_file_list_is_cut_and_says_it_was</code> drives 30 distinct
+    paths and asserts both strings.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — FOOTER_ITEMS, listed; tests::a_long_file_list_is_cut_and_says_it_was</span>
+
+  <h2 id="exit">An exit status, read only from where Bash puts it</h2>
+
+<pre><code><span class="c">/// `Bash` carries `exit status &lt;n&gt;` as the first line of its content, and the</span>
+<span class="c">/// loop treats a non-zero exit as an ordinary result. A footer line reading</span>
+<span class="c">/// `cargo test → exit 101` beside a final message reading "the tests pass" is a</span>
+<span class="c">/// contradiction the parent can see, and it is the most common lie a coding</span>
+<span class="c">/// subagent can tell.</span>
+fn exit_status(content: &amp;str) -&gt; Option&lt;i64&gt; {
+    content
+        .lines()
+        .next()?
+        .trim()
+        .strip_prefix("exit status ")?
+        .trim()
+        .parse()
+        .ok()
+}
+
+fn push_unique(list: &amp;mut Vec&lt;String&gt;, item: String) {
+    if !list.contains(&amp;item) {
+        list.push(item);
+    }
+}
+
+fn str_of(value: &amp;Value, key: &amp;str) -&gt; Option&lt;String&gt; {
+    value.get(key)?.as_str().map(str::to_string)
+}
+
+fn string(value: &amp;Value, key: &amp;str) -&gt; String {
+    value[key].as_str().unwrap_or_default().to_string()
+}</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — exit_status, push_unique, str_of, string, quoted entire</span>
+
+  <p>
+    <code>strip_prefix("exit status ")</code> on the first line and nothing else.
+    Prose that merely mentions a status, <em>"the command exited with status
+    0"</em>, which is what a model writes, yields <code>None</code> and the
+    footer line reads <code>→ no result (refused, or the run stopped)</code>. A
+    footer line reading <code>cargo test → exit 101</code> beside a final message
+    reading "the tests pass" is a contradiction the parent can see, and it is the
+    most common lie a coding subagent can tell.
+    <span class="chip test">tested</span>
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — tests::an_exit_status_is_read_only_from_where_bash_actually_puts_it, tests::a_commands_exit_status_reaches_the_footer</span>
+
+  <p>
+    <code>string</code> indexes with <code>value[key]</code>, which answers
+    <code>Value::Null</code> for a missing key rather than panicking, so a
+    <code>sub.goal_finished</code> record missing its <code>ending</code> becomes
+    the empty string and takes the "unknown" branch. <code>str_of</code> is the
+    <code>Option</code>-returning form used everywhere a missing key means skip
+    this record.
+  </p>
+
+  <h2 id="real">A real footer</h2>
+
+  <p>
+    From the one live delegation recorded on this machine, a <code>scout</code>
+    agent asked for the current stable Rust version. The whole
+    <code>tool_result</code> the parent's model received:
+  </p>
+
+  <pre><code>The current stable version of Rust is **1.97.1**, a point release published on
+July 16, 2026, which fixed a miscompilation bug in an LLVM optimization present
+since Rust 1.87. This was confirmed via the official Rust Blog announcement at
+blog.rust-lang.org/2026/07/16/Rust-1.97.1/ (accessed 2026-08-14), which serves
+as the canonical "latest release" page for the language.
+
+GOAL COMPLETE
+
+<span class="c">--- what this agent actually did (recorded by the harness, not written by the agent) ---</span>
+ended: done
+files touched: none
+searched for (1):
+  current stable Rust version
+fetched (1):
+  https://blog.rust-lang.org/releases/latest/
+commands run: none
+spent: 3 model calls, 7319 tokens, 12s</code></pre>
+  <span class="src">~/.emma/sessions/sess-1786710409801-39600.jsonl — the tool_result for Delegate, turn-1 <span class="chip cert">certified</span></span>
+
+  <p>
+    <span class="chip cert">certified</span> Read back today by filtering that
+    file for records whose <code>kind</code> is <code>tool_result</code> and
+    whose content contains <em>what this agent actually did</em>. Line breaks are
+    the file's; only the paragraph rewrap for this page's width differs.
+  </p>
+
+  <p>
+    Note what the footer discloses that the prose does not. The blog URL the
+    agent cites in its answer is not the URL it fetched: it says
+    <code>/2026/07/16/Rust-1.97.1/</code> and it fetched
+    <code>/releases/latest/</code>. Nothing censors the claim, because the sub's
+    account is what the caller asked for. The record beside it is what makes the
+    difference visible.
+  </p>
+
+  <h2 id="mutation">The test the design turns on</h2>
+
+  <p>
+    <code>the_footer_is_the_harnesss_record_and_not_the_subagents_account</code>,
+    in <code>crates/emma/tests/delegate.rs</code>. A scripted subagent is given a
+    <code>Read</code> tool, calls nothing at all, and answers in fluent prose:
+  </p>
+
+<pre><code>    let fake = Fake::new(vec![
+        delegate_to("explorer", "check the retry tests"),
+        text(
+            "I read src/retry.rs and tests/retry.rs, and ran `cargo test` — exit status 0, \
+             everything passes.\n\nGOAL COMPLETE",
+        ),
+        text("Done.\n\nGOAL COMPLETE"),
+    ]);</code></pre>
+  <span class="src">crates/emma/tests/delegate.rs::the_footer_is_the_harnesss_record_and_not_the_subagents_account — the scripted final message</span>
+
+  <p>
+    It asserts four things. That the sub's tool was called zero times. That the
+    claim reaches the parent <strong>verbatim</strong>, since the subagent's own
+    account is what the caller asked for and censoring it would remove the thing
+    being checked. That the footer says <code>files touched: none</code> and
+    <code>commands run: none</code>. And that the string
+    <code>cargo test → exit</code> appears nowhere, so the footer has not echoed
+    the model's account of a command back as though it were a record.
+    <span class="chip test">tested</span>
+  </p>
+
+<pre><code>    assert_eq!(run.outcome.ending, Ending::Done);
+    assert_eq!(
+        read_calls.load(Ordering::SeqCst),
+        0,
+        "the sub called nothing"
+    );
+
+    let seen = fake.transcript();
+    assert!(
+        seen.contains("I read src/retry.rs"),
+        "the claim was censored: {seen}"
+    );
+    assert!(
+        seen.contains("files touched: none"),
+        "the footer credited files nothing opened: {seen}"
+    );
+    assert!(
+        seen.contains("commands run: none"),
+        "the footer credited a command nothing ran: {seen}"
+    );
+    assert!(
+        !seen.contains("cargo test → exit"),
+        "the footer echoed the model's account of a command: {seen}"</code></pre>
+  <span class="src">crates/emma/tests/delegate.rs — the four assertions</span>
+
+  <p>
+    Its doc names the mutation: compose the footer from
+    <code>outcome.text</code> rather than from the run's records and it goes red,
+    because the two claimed paths appear under <code>files touched</code> and the
+    invented exit status appears under <code>commands run</code>. That is the
+    difference between a record and a claim, and <code>Facts::from</code>'s own
+    doc points at the same mutation from the other side.
+  </p>
+  <span class="src">crates/emma/tests/delegate.rs — the test's doc comment; crates/emma/src/delegate.rs — Facts::from</span>
+
+  <h2 id="summary">The one-line summary</h2>
+
+<pre><code>    <span class="c">/// One line, for the terminal and for the tool's `display`.</span>
+    fn summary(&amp;self) -&gt; String {
+        format!(
+            "{} · {} tool calls · {} files · {} commands · {}s · {} tokens",
+            self.ending,
+            self.tool_calls,
+            self.files.len(),
+            self.commands.len(),
+            self.elapsed_ms / 1000,
+            self.tokens
+        )
+    }</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Facts::summary, quoted entire</span>
+
+  <p>
+    Used twice: as the closing note on the parent's terminal, and as the tool
+    outcome's <code>display</code>, which is the line the transcript keeps.
+    Seconds are integer division, so a delegation lasting 900 ms reads as
+    <code>0s</code>.
+  </p>
+
+  <div class="note warn">
+    <span class="h">What the footer proves, and what it does not</span>
+    <p>
+      It proves what was looked at, what was run, and how the run ended. It does
+      not prove the conclusion follows from any of it. The worst case of this
+      design is that the footer becomes the thing everyone trusts:
+      <code>done · 14 files · 3 commands</code> reads like verification and is
+      only attendance. It reports counts rather than adjectives for that reason,
+      and nothing anywhere claims the conclusion was checked.
+    </p>
+    <span class="src">crates/emma/src/delegate.rs — the footer region doc</span>
+  </div>
+
+  <h2 id="unsettled">What is not settled here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> The probe order, as above.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> Nothing tests the
+      <code>sub.denied</code> path against a real refusal.
+      <code>a_refused_call_is_in_the_footer_because_the_parent_cannot_see_the_prompt</code>
+      feeds a hand-written record, and no integration test declines a sub's call
+      at the gate. <em>What would settle it:</em> a scripted approval queue answering
+      <code>n</code> to a sub's <code>Write</code>, asserting <code>refused or
+      blocked</code> in the parent's tool result.
+    </li>
+    <li>
+      <span class="chip obs">observed</span> The real footer above was produced
+      once, on 2026-08-14, by whoever ran that session. The record is still on
+      disk and re-readable, which is what makes the <em>quote</em> certified; the
+      run itself is not repeatable, since it called a live model and a live web
+      page.
+    </li>
+    <li>
+      <span class="chip cert">certified</span> The unit tests in
+      <code>delegate.rs</code> are ten, all over <code>Facts</code> and
+      <code>exit_status</code>: <code>grep -c "#\[test\]"
+      crates/emma/src/delegate.rs</code> answers 10.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · read at commit <code>62ab9c3</code> ·
+    <code>crates/emma/src/delegate.rs</code> ·
+    <code>crates/emma/tests/delegate.rs</code> ·
+    <a href="delegation.html">back to the chapter</a>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

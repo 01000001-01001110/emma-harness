@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Your own files · Configuration · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav here" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/emma/src/settings.rs · usertools.rs · crates/llm/src/auth.rs</p>
+  <h1>Your own files: preferences, tools and the key</h1>
+
+  <nav class="chapter">
+      <a class="up" href="config.html">Configuration</a>
+      <a href="config-discovery.html">Discovery</a>
+      <a href="config-files.html">Every file</a>
+      <a href="config-spine.html">The spine</a>
+      <a href="config-claude.html">Reading <code>.claude/</code></a>
+      <a href="config-skills.html">Skills &amp; commands</a>
+      <a href="config-agents.html">Agents</a>
+      <span class="now">Your own files</span>
+      <a href="config-themes.html">Themes</a>
+      <a href="config-notapplied.html">It did not apply</a>
+    </nav>
+
+  <p class="lede">
+    Two files under the home directory, never in the working tree, read by the
+    binary and the provider crate rather than by the harness. One holds
+    preferences and fails by going quiet; the other holds secrets and fails by
+    refusing. Both rules were paid for: a preference store that refused to start
+    would be the tail wagging the dog, and a credential write that replaced the
+    document deleted a key belonging to another part of the program.
+  </p>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven, and a reader can repeat it: a file, a command, a count</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+    <div><span class="chip test">tested</span> a test that was shown to fail</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <h2 id="why">Why these are not in the project</h2>
+
+  <p class="faint">crates/emma/src/settings.rs · module doc</p>
+<pre><code>//! `~/.emma/settings.json` — the small amount of state that belongs to the
+//! person rather than to the project.
+//!
+//! It lives beside `credentials.json` under the home directory and **never** in
+//! the working tree, for the same reason the key does: Emma runs inside
+//! repositories, and anything it writes next to the code is something the next
+//! `git add .` publishes. A model id is not a secret, but a file Emma creates
+//! in someone's repository without being asked is a surprise either way.
+//!
+//! Deliberately *not* the harness. `.emma/config.json` is the project's
+//! configuration, read by `emma-harness`, and putting a personal default in it
+//! would mean two files answering "what is the model" with no rule for
+//! disagreeing.
+//!
+//! **A model is not a model without a provider.** `claude-opus-5` means nothing
+//! to anyone but Anthropic, so the stored unit is a provider plus a model *per
+//! provider*: switching away and back must not cost you the model you had
+//! chosen, because re-typing it is the entire annoyance of switching. The file
+//! written before providers existed — a bare `{"model": …}` — is read as
+//! Anthropic's, silently, because the only possible answer to a prompt asking
+//! about it is yes.</code></pre>
+  <span class="src">crates/emma/src/settings.rs — module doc</span>
+
+  <h2 id="keys">Six keys, and a seventh is silence</h2>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>key</th><th>type</th><th>what it does</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>provider</code></td>
+        <td>string</td>
+        <td>Which provider this build should use. An unknown one is an error and
+            never a fallback, because falling back to Anthropic would make a
+            mis-set provider indistinguishable from a correct one.</td>
+      </tr>
+      <tr>
+        <td><code>models</code></td>
+        <td>object</td>
+        <td>provider → the model last chosen for it. Per provider so that
+            switching away and back costs nothing.</td>
+      </tr>
+      <tr>
+        <td><code>validated</code></td>
+        <td>object</td>
+        <td>provider → <code>{at, how}</code>, where <code>how</code> is
+            <code>checked</code> or <code>forced</code>. Nothing writes it yet;
+            it is read and written back so a build that does validate does not
+            have its record stripped by one that does not.</td>
+      </tr>
+      <tr>
+        <td><code>tools</code></td>
+        <td>object</td>
+        <td>The sidebar's user tools. Four optional keys, <a href="#tools">below</a>.</td>
+      </tr>
+      <tr>
+        <td><code>theme</code></td>
+        <td>string</td>
+        <td>The theme file's name. Absent means the built-in. See
+            <a href="config-themes.html">Themes</a>.</td>
+      </tr>
+      <tr>
+        <td><code>model</code></td>
+        <td>string</td>
+        <td><em>Legacy.</em> The pre-provider spelling. Read as Anthropic's,
+            never written back, so it survives being read and disappears on the
+            first save.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/emma/src/settings.rs — <code>Settings</code>, <code>Validation</code>, <code>How</code></span>
+
+  <p>
+    Every field carries <code>skip_serializing_if</code>, so a save writes only
+    what is set. A settings file that grew a <code>tools</code> key because this
+    build knows the word would be a file that mutates on every save, and a file
+    that mutates on every save is one nobody can diff.
+    <span class="chip test">tested</span>:
+    <code>tool_settings_round_trip_and_an_empty_block_is_never_written</code>
+    asserts the raw text does not contain <code>tools</code> after a save with
+    nothing set, and
+    <code>a_theme_choice_round_trips_and_an_unthemed_file_never_grows_the_key</code>
+    does the same for <code>theme</code>.
+  </p>
+
+  <p class="faint">crates/emma/src/settings.rs · the legacy field</p>
+<pre><code>    /// The pre-provider spelling. Deserialized and never written back, so it
+    /// survives being read and disappears on the first save. Private because
+    /// nothing outside this module has any business setting it: it is an input
+    /// to [`load`]'s migration and nothing else.
+    #[serde(default, rename = "model", skip_serializing)]
+    legacy_model: Option&lt;String&gt;,</code></pre>
+  <span class="src">crates/emma/src/settings.rs — <code>Settings::legacy_model</code></span>
+
+  <h2 id="quiet">A file that will not parse is read as an empty one</h2>
+
+  <p class="faint">crates/emma/src/settings.rs · <code>load</code></p>
+<pre><code>/// A missing or unreadable file is an empty `Settings`, not an error: this is a
+/// preference store, and refusing to start because a preference could not be
+/// read would be the tail wagging the dog.
+///
+/// Reading is also where the pre-provider file becomes a provider-scoped one.
+/// It is done here rather than in a migration step so that every reader gets
+/// the same answer whether or not anything has written since — there is no
+/// window in which `emma` and `emma config check` disagree about the model.
+pub fn load(home: &amp;Path) -&gt; Settings {
+    let mut settings: Settings = std::fs::read_to_string(path(home))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&amp;raw).ok())
+        .unwrap_or_default();
+    if let Some(model) = settings.legacy_model.take() {
+        // Anthropic is safe to assume: it is the only provider that has ever
+        // existed here, so a model set before providers were a concept was set
+        // for that one.
+        settings
+            .models
+            .entry(DEFAULT_PROVIDER.to_string())
+            .or_insert(model);
+        settings
+            .provider
+            .get_or_insert_with(|| DEFAULT_PROVIDER.to_string());
+    }
+    settings
+}</code></pre>
+  <span class="src">crates/emma/src/settings.rs — <code>load</code>, <code>path</code>, <code>save</code></span>
+
+  <p>
+    <strong>There is no <code>deny_unknown_fields</code> on this struct and no
+    error path out of <code>load</code>.</strong> Two <code>.ok()</code> calls
+    swallow both an unreadable file and unparseable JSON. The consequence for a
+    reader is that a typo here is <em>silence</em>, not a message:
+    <code>{"provdier": "anthropic"}</code> boots happily on the built-in default.
+    <span class="chip test">tested</span>:
+    <code>a_corrupt_settings_file_is_not_a_startup_failure</code> writes
+    <code>{ not json</code> and asserts both sources come back as
+    <code>built-in default</code>.
+  </p>
+
+  <p>
+    The check available is the pair of lines <code>config check</code> prints,
+    which name the source of each answer rather than only the value:
+  </p>
+
+<pre><code><span class="c">$ emma config check | tail -5      # HOME pointed at a scratch directory</span>
+provider       anthropic  (built-in default)
+model          claude-opus-5  (built-in default)
+api key        NOT FOUND — no API key for anthropic. Set ANTHROPIC_API_KEY, or run
+`emma set-provider anthropic` to store one at …\fakehome\.emma\credentials.json</code></pre>
+  <span class="chip cert">certified</span>: release binary at <code>62ab9c3</code>, scratch home, 2026-08-16. In this repository the same two lines read <code>anthropic (settings.json)</code> and <code>claude-sonnet-5 (settings.json)</code>. Wrapped for the page; the error is one line.
+
+  <p>
+    The legacy migration is live rather than historical. The owner's real file
+    holds one key, <code>model</code>, and the resolved model this repository
+    reports is that migration firing at read time.
+    <span class="chip test">tested</span>:
+    <code>a_model_set_before_providers_existed_still_runs</code> pins the owner's
+    file byte for byte with the comment "If this test goes red, an upgrade
+    silently moved somebody off the model they chose", and asserts that the first
+    save drops the flat key rather than leaving a second answer behind.
+  </p>
+
+  <h2 id="provider">An unknown provider is an error</h2>
+
+  <p class="faint">crates/emma/src/settings.rs · <code>resolve_kind</code>, the doc and the resolution</p>
+<pre><code>/// **An unknown provider is an error and never a fallback.** Falling back to
+/// Anthropic would make a mis-set provider indistinguishable from a correct
+/// one — same output, same bill, no message — and the mistake would only
+/// surface as a model id that "does not exist". The error names what this build
+/// supports.
+///
+/// `--model` on its own still means "this model, on the current provider",
+/// which is what it means today; a cross-provider override for one run is
+/// `--provider X --model Y`.</code></pre>
+<pre><code>    let (model, model_source) = match flag_model {
+        Some(model) =&gt; (model.to_string(), "--model"),
+        // Keyed by the *resolved* provider's canonical name, so a settings file
+        // written as `Anthropic` and a flag typed as `anthropic` find the same
+        // entry.
+        None =&gt; match settings.as_ref().and_then(|s| s.models.get(kind.name())) {
+            Some(model) =&gt; (model.clone(), "settings.json"),
+            None =&gt; (kind.default_model().to_string(), "built-in default"),
+        },
+    };</code></pre>
+  <span class="src">crates/emma/src/settings.rs — <code>resolve_kind</code>, <code>Resolved</code></span>
+
+  <p>
+    Three sources per answer, in a fixed order: a flag, then the file, then the
+    built-in. <code>config check</code> refuses to hide the failure, because it
+    is the command people run when something is wrong:
+  </p>
+
+<pre><code><span class="c">$ cat ~/.emma/settings.json</span>
+{"provider":"openai","models":{"openai":"gpt-5.5"}}
+<span class="c">$ emma config check | tail -4</span>
+provider       NOT USABLE — unknown provider `openai`. This build supports: anthropic
+               nothing will run until `emma set-provider &lt;name&gt;` names one this build supports
+
+no model was called.</code></pre>
+  <span class="chip cert">certified</span>: scratch home, release binary, 2026-08-16. Exit code 0: the report is the point, so it prints rather than failing.
+  <span class="chip test">tested</span>:
+  <code>a_provider_this_build_cannot_run_is_refused_rather_than_swapped</code>
+  asserts the error names both <code>openai</code> and <code>anthropic</code>,
+  through the settings file and through the flag.
+
+  <h2 id="tools">The <code>tools</code> block</h2>
+
+  <p>
+    Four optional strings. These are the sidebar keys a <em>person</em> presses,
+    not anything the model can reach, and they are read by
+    <code>crate::usertools</code> rather than by anything in the harness.
+  </p>
+
+  <p class="faint">crates/emma/src/settings.rs · <code>ToolSettings</code></p>
+<pre><code>/// What the user has said about their tools, all optional. Values are a bare
+/// program name (looked up on PATH) or an absolute path — never a command
+/// *line*: `usertools` spawns argv directly and refuses to word-split a
+/// string, because splitting is the first half of running text through a
+/// shell and a path with a space in it is not an argument boundary.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolSettings {
+    /// The shell the Shell tool opens. Windows honours this directly; see
+    /// `usertools` for why mac/linux v1 lets the terminal app pick instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option&lt;String&gt;,
+    /// The editor the Code and Settings tools open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor: Option&lt;String&gt;,
+    /// The file manager, when the OS default (`explorer`/`open`/`xdg-open`)
+    /// is not the one wanted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_browser: Option&lt;String&gt;,
+    /// Where the Data Explorer points. Absolute path; defaults to `~/.emma`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_dir: Option&lt;String&gt;,
+}</code></pre>
+  <span class="src">crates/emma/src/settings.rs — <code>ToolSettings</code></span>
+
+  <p>
+    <strong>Every value is one program name or one absolute path, and never a
+    command line.</strong> A bare name is looked up on <code>PATH</code>; an
+    absolute path is checked for existence. Splitting a string on spaces is the
+    first half of running text through a shell, and a path with a space in it is
+    not an argument boundary. So a value carrying arguments is not split. It
+    fails, and the failure names the rule rather than only the symptom.
+  </p>
+
+  <p class="faint">crates/emma/src/usertools.rs · <code>resolve_value</code></p>
+<pre><code>fn resolve_value(m: &amp;dyn Machine, value: &amp;str, origin: &amp;str) -&gt; Result&lt;PathBuf, String&gt; {
+    let p = Path::new(value);
+    if p.is_absolute() {
+        if m.exists(p) {
+            Ok(p.to_path_buf())
+        } else {
+            Err(format!("{origin} is set to {value}, which does not exist"))
+        }
+    } else if let Some(found) = m.find(value) {
+        Ok(found)
+    } else if value.chars().any(char::is_whitespace) {
+        Err(format!(
+            "{origin} is set to {value}, which is not on PATH (a configured value is one \
+             program name or absolute path, never a command line)"
+        ))
+    } else {
+        Err(format!("{origin} is set to {value}, which is not on PATH"))
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/usertools.rs — <code>resolve_value</code></span>
+
+  <p>
+    The whitespace arm exists because the generic message, "which is not on
+    PATH", sends somebody to check their PATH for a program that was never the
+    problem. A value that does not resolve is an error naming it and is never
+    quietly swapped for a probed default: a silent substitution looks identical
+    to success right up until the wrong program opens.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>key</th><th>what it points at</th><th>absent means</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>shell</code></td>
+        <td>The shell the Shell tool opens. Windows honours it directly.</td>
+        <td>Probe the machine. On mac and linux the terminal <em>application</em>
+            is opened and lets the user's shell be picked, because Emma holds
+            this terminal and has nowhere to put a child that wants one.</td>
+      </tr>
+      <tr>
+        <td><code>editor</code></td>
+        <td>The editor the Code and Settings tools open.</td>
+        <td><code>$VISUAL</code>, then <code>$EDITOR</code>, then a probe of
+            <code>code, cursor, subl, zed</code>, and <code>nvim</code> on
+            Windows only, where a new console can hold it.</td>
+      </tr>
+      <tr>
+        <td><code>file_browser</code></td>
+        <td>The file manager.</td>
+        <td>The OS default: <code>explorer</code>, <code>open</code>,
+            <code>xdg-open</code>.</td>
+      </tr>
+      <tr>
+        <td><code>data_dir</code></td>
+        <td>Where the Data Explorer points. Absolute path.</td>
+        <td><code>~/.emma</code>.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/emma/src/usertools.rs — <code>resolve_editor</code>, <code>probe_first</code>, <code>console_hostable</code>, the module doc</span>
+
+  <p>
+    <code>$VISUAL</code> and <code>$EDITOR</code> get the one concession, and it
+    is a concession to the world rather than to the rule: those variables really
+    do hold command lines, so a value there that does not resolve <em>as a
+    whole</em> is skipped and the chain continues to the probe. Skipped, not
+    split. Two smaller behaviours are worth knowing: a <code>.cmd</code> or
+    <code>.bat</code> target is refused with a sentence saying to point the
+    setting at the underlying <code>.exe</code>, because a script cannot own a
+    console window; and <code>settings.json</code> is re-read on every call
+    rather than cached, so the Settings tool's own writes appear on the next
+    frame, while <code>PATH</code> lookups are cached for the life of the
+    process.
+  </p>
+
+  <h2 id="credentials">Credentials</h2>
+
+  <p>
+    <code>~/.emma/credentials.json</code>, keyed by provider, with the
+    environment consulted first. <a href="providers-credentials.html">Providers
+    &amp; models</a> covers <code>auth.rs</code> in full: the precedence rule,
+    the redaction, and the audit that moved it. Three things belong on a
+    configuration page.
+  </p>
+
+  <p>
+    <strong>Never the project directory.</strong> Nothing in
+    <code>auth.rs</code> resolves a path relative to the working directory. The
+    home path is computed rather than searched upward, which is what makes it a
+    property rather than an intention.
+    <span class="chip test">tested</span>:
+    <code>a_credentials_file_in_the_project_directory_is_ignored</code> plants a
+    real <code>credentials.json</code> in a scratch cwd and asserts the error
+    names a path under the fake home.
+  </p>
+
+  <p class="faint">crates/llm/src/auth.rs · <code>credentials_path</code>, <code>stored_providers</code></p>
+<pre><code>/// `~/.emma/credentials.json`. A function rather than a constant because every
+/// caller must pass the home it means — tests included, which is the only
+/// reason they can run without touching the developer's real credentials.
+pub fn credentials_path(home: &amp;Path) -&gt; PathBuf {
+    home.join(".emma").join("credentials.json")
+}</code></pre>
+<pre><code>/// Which providers have a key stored in the file. Names only — `config check`
+/// answers "did I store that key?" without being a way to read one back.
+pub fn stored_providers(home: &amp;Path) -&gt; Vec&lt;String&gt; {
+    read_keys(&amp;credentials_path(home))
+        .map(|keys| keys.into_keys().collect())
+        .unwrap_or_default()
+}</code></pre>
+  <span class="src">crates/llm/src/auth.rs — <code>credentials_path</code>, <code>stored_providers</code></span>
+
+  <div class="note warn">
+    <span class="h">The scar: a write that deleted a key it never knew about</span>
+    <p>
+      This file holds more than one program's secrets. The web tools keep
+      <code>brave_search_api_key</code> at its top level, beside the provider
+      entries. A write that serialised a fresh document, the obvious
+      implementation, deleted whichever keys the caller did not happen to know
+      about, silently, and the symptom arrived hours later as a tool that had
+      stopped being registered.
+    </p>
+    <p>
+      <code>store</code> now reads the file, replaces one provider's entry, and
+      writes back everything else it found. A file that cannot be parsed is an
+      error rather than something to overwrite, for the same reason: overwriting
+      is how the other keys are lost.
+      <span class="chip cert">certified</span>: a scratch
+      <code>credentials.json</code> holding
+      <code>{"providers":{"anthropic":{"api_key":"sk-a"}},"brave_search_api_key":"bk-1"}</code>,
+      after <code>emma set-provider anthropic</code> with a new key on stdin,
+      reads
+      <code>{"brave_search_api_key":"bk-1","providers":{"anthropic":{"api_key":"sk-newkey"}}}</code>.
+      Release binary, 2026-08-16.
+    </p>
+  </div>
+
+  <p>
+    Both failure directions are visible from <code>config check</code>, which
+    reports whether a key resolved and from which source, by name and never by
+    value:
+  </p>
+
+<pre><code><span class="c">$ emma config check | tail -4        # a key stored and a key exported</span>
+api key        found (ANTHROPIC_API_KEY)
+               the environment overrides the key stored for anthropic
+
+<span class="c">$ printf 'not json' &gt; ~/.emma/credentials.json &amp;&amp; emma config check | tail -3</span>
+api key        NOT FOUND — …\fakehome\.emma\credentials.json is not valid credentials JSON:
+expected ident at line 1 column 2</code></pre>
+  <span class="chip cert">certified</span>: release binary, 2026-08-16. The first is this repository with <code>ANTHROPIC_API_KEY</code> exported; the hour that second line saves is a key stored, a key exported, and no way to tell which one the 401 came from.
+
+  <h2 id="notverified">What this page did not settle</h2>
+
+  <ul class="body">
+    <li>
+      <strong>The user-tool launch path.</strong> Everything about
+      <code>tools.shell</code>, <code>tools.editor</code>,
+      <code>tools.file_browser</code> and <code>tools.data_dir</code> comes from
+      reading <code>usertools.rs</code>, whose decision layer is pure and
+      testable. No program was launched from a running frame here, and the
+      <code>code --wait</code> message was never seen on a screen.
+      <span class="chip unv">unverified</span>. Settle it by setting
+      <code>tools.editor</code> to a value with an argument in it, pressing
+      <code>c</code> in the frame, and reading the sentence.
+    </li>
+    <li>
+      <strong>The Windows credential ACL.</strong> The claim in
+      <code>write_private</code>'s <code>cfg(not(unix))</code> arm is that a file
+      in the user's profile is already protected by the profile's default ACL.
+      Nothing in this tree reads an ACL, and the source says the same.
+      <span class="chip unv">unverified</span>. Settle it with
+      <code>icacls %USERPROFILE%\.emma\credentials.json</code> on a machine with
+      a second local account.
+    </li>
+    <li>
+      <strong><code>validated</code>.</strong> Nothing writes it. The
+      round-tripping is
+      <span class="chip test">tested</span> by
+      <code>a_validation_written_by_a_later_build_is_not_stripped_by_this_one</code>,
+      but no build exists that produces one, so what the two values would mean in
+      practice is still hypothetical.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · this page covers <code>crates/emma/src/settings.rs</code> in
+    full and the parts of <code>crates/llm/src/auth.rs</code> and
+    <code>crates/emma/src/usertools.rs</code> that a configuration file reaches ·
+    the key's own chapter is <a href="providers-credentials.html">Credentials</a> ·
+    contract: <code>docs/CONTRACT.md</code>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

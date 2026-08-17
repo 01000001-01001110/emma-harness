@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Markdown, one line at a time &middot; The terminal &middot; Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav here" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/emma/src/term/markdown.rs</p>
+  <h1>Markdown, one line at a time</h1>
+
+  <nav class="chapter">
+      <a class="up" href="terminal.html">The terminal</a>
+      <a href="terminal-surface.html">Surface</a>
+      <a href="terminal-frame.html">Frame</a>
+      <a href="terminal-layout.html">Layout</a>
+      <a href="terminal-colour.html">Colour</a>
+      <a href="terminal-themes.html">Themes</a>
+      <a href="terminal-skin.html">Vocabulary</a>
+      <a href="terminal-transcript.html">Transcript</a>
+      <span class="now">Markdown</span>
+      <a href="terminal-diff.html">Diffs</a>
+      <a href="terminal-status.html">Status</a>
+      <a href="terminal-sidebar.html">Sidebar</a>
+      <a href="terminal-dock.html">Dock</a>
+      <a href="terminal-usertools.html">User tools</a>
+    </nav>
+
+  <p class="lede">
+    The model writes markdown. This is as much of it as a terminal transcript
+    can carry honestly, and the boundary that makes it possible is the newline:
+    every block this file recognises is decided by the <em>start</em> of a line,
+    so one complete line is all the context any of them needs, and the only
+    state crossing lines is whether a fence is open.
+  </p>
+
+  <h2 id="nodep">Why not <code>pulldown-cmark</code></h2>
+
+  <p>
+    The obvious answer, and the wrong shape for this job twice over. It is an
+    <em>event</em> parser over a whole document, <em>&ldquo;it wants the text
+    before it can tell you what the text was&rdquo;</em>, and prose here arrives
+    in fragments, a few characters at a time, with the screen updating as it
+    goes. And it parses the whole of CommonMark, including link reference
+    definitions, HTML blocks and setext headings, none of which a terminal can
+    render as anything other than the characters they were written with.
+  </p>
+
+  <p>
+    Buffering a paragraph until it is complete was rejected on feel rather than
+    on architecture: <em>&ldquo;Emma streams because forty seconds of blank
+    terminal is indistinguishable from a hang; a renderer that waits for a blank
+    line before it prints anything reintroduces exactly that pause, at the end
+    of every paragraph, in the one place the user is actually reading.&rdquo;</em>
+  </p>
+
+  <p>
+    The costs are stated rather than discovered. <strong>Setext headings</strong>
+    (<code>Title</code> under <code>=====</code>) cannot be recognised, because
+    by the time the underline arrives the title has already been printed; they
+    degrade to a paragraph and a rule, which is what they look like.
+    <strong>Tables</strong> are not aligned, because column widths are a property
+    of the whole table; their rows are printed as written.
+  </p>
+
+  <h2 id="line">The one entry point</h2>
+
+  <p class="faint">crates/emma/src/term/markdown.rs &middot; <code>Markdown::line</code></p>
+  <pre><code>    pub fn line(&amp;<span class="k">mut</span> self, raw: &amp;str, width: u16, skin: &amp;Skin) -&gt; Vec&lt;Line&lt;'static&gt;&gt; {
+        <span class="k">let</span> width = usize::from(width.max(1));
+        <span class="k">let</span> raw = sanitise(raw);
+
+        <span class="k">if let</span> Some((ch, len)) = self.fence {
+            <span class="k">if</span> closing_fence(&amp;raw, ch, len) {
+                self.fence = None;
+                <span class="k">return</span> vec![rule(skin, width, "")];
+            }
+            <span class="k">return</span> code_rows(&amp;raw, width, skin);
+        }
+        <span class="k">if let</span> Some((ch, len, info)) = opening_fence(&amp;raw) {
+            self.fence = Some((ch, len));
+            <span class="k">return</span> vec![rule(skin, width, &amp;info)];
+        }
+        <span class="k">if</span> raw.trim().is_empty() {
+            <span class="k">return</span> vec![Line::default()];
+        }
+        <span class="k">if</span> thematic_break(&amp;raw) {
+            <span class="k">return</span> vec![rule(skin, width, "")];
+        }
+        <span class="k">if let</span> Some((level, text)) = heading(&amp;raw) {
+            <span class="w">…</span>
+        }
+        <span class="k">if let</span> Some((indent, marker, rest)) = list_item(&amp;raw) {
+            <span class="w">…</span>
+        }
+        <span class="k">if let</span> Some(rest) = quote(&amp;raw) {
+            <span class="w">…</span>
+        }
+        <span class="k">let</span> spans = inline(&amp;raw, skin, skin.palette.style(Role::Text));
+        flow(Vec::new(), spans, width, 0)
+    }</code></pre>
+  <span class="src">crates/emma/src/term/markdown.rs — <code>Markdown::line</code></span>
+
+  <p>
+    The fence check is first, and that ordering is the whole of the state
+    machine: inside a fence, nothing else is recognised. The last arm is prose,
+    which is why every shape that is <em>nearly</em> something renders as a
+    paragraph rather than as a mistake. The recognisers are narrow:
+    <em>&ldquo;a shape that is <em>nearly</em> a heading is a paragraph, and a
+    paragraph is always renderable.&rdquo;</em>
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Recogniser</th><th>What it accepts, and what it refuses</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>heading</code></td>
+          <td>
+            One to six hashes <em>followed by a space</em>. The space is
+            required, so <code>#hashtag</code> and <code>#1</code> are prose,
+            which is what a model writing about an issue number meant. Closing
+            hashes are dropped, as CommonMark says.
+          </td>
+        </tr>
+        <tr>
+          <td><code>list_item</code></td>
+          <td>
+            <code>-</code>, <code>*</code>, <code>+</code>, or up to nine digits
+            then <code>.</code> or <code>)</code>, each followed by a space.
+            Indent above 12 is refused outright: <em>&ldquo;a deeply indented
+            line is somebody's code block and is left alone.&rdquo;</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>quote</code></td>
+          <td>A leading <code>&gt;</code>, and one optional space after it.</td>
+        </tr>
+        <tr>
+          <td><code>thematic_break</code></td>
+          <td>Three or more of <code>-</code>, <code>*</code> or <code>_</code> and nothing else on the line.</td>
+        </tr>
+        <tr>
+          <td><code>opening_fence</code></td>
+          <td>
+            Three or more backticks or tildes. A backtick fence whose info
+            string contains a backtick is refused, <em>&ldquo;that rule is what
+            stops <code>`a` and `b`</code> in a sentence from opening a code
+            block.&rdquo;</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>closing_fence</code></td>
+          <td>
+            The same character, at least as many, and nothing else on the line,
+            which is what lets a backtick block contain a <code>~~~</code> line.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    <span class="chip test">tested</span>:
+    <code>a_fence_closes_only_on_the_mark_that_opened_it</code>,
+    <code>inline_backticks_never_open_a_code_block</code>, and the heading test
+    which asserts <code>#3 failed</code> stays prose.
+  </p>
+
+  <h2 id="three">The three guarantees</h2>
+
+  <p>
+    Every line this file produces is written into scrollback or into a retained
+    buffer and is final. Three rules follow, and each one is a test.
+  </p>
+
+  <h3>1. Nothing is reflowed that changes meaning</h3>
+
+  <p>
+    Prose is wrapped at word boundaries, which is better than the terminal's own
+    wrap. A line inside a fenced code block is never wrapped at a word: it is
+    continued at the exact column the window ends, which is what the terminal
+    itself would have done, and joining the rows back together reproduces the
+    source byte for byte.
+  </p>
+
+  <p class="faint">crates/emma/src/term/markdown.rs &middot; <code>code_rows</code></p>
+  <pre><code><span class="c">/// A line inside a fenced block, split only where the window ends.</span>
+<span class="c">///</span>
+<span class="c">/// **Never at a space.** Wrapping code at a word boundary changes what it says;</span>
+<span class="c">/// the terminal would have broken it at the last column anyway, and breaking it</span>
+<span class="c">/// here as well means the row count `frame.rs` reserves is right.</span>
+fn code_rows(text: &amp;str, width: usize, skin: &amp;Skin) -&gt; Vec&lt;Line&lt;'static&gt;&gt; {
+    <span class="k">let</span> style = skin.palette.style(Role::Info);
+    <span class="k">if</span> text.is_empty() {
+        <span class="k">return</span> vec![Line::from(Span::styled(String::new(), style))];
+    }
+    <span class="k">let mut</span> rows = Vec::new();
+    <span class="k">let mut</span> rest = text.to_string();
+    <span class="k">while</span> !rest.is_empty() {
+        <span class="k">let</span> (head, tail) = split_at_cols(&amp;rest, width);
+        <span class="k">if</span> head.is_empty() {
+            <span class="c">// A single glyph wider than the whole window. Emit it rather than</span>
+            <span class="c">// spinning: a lost character is worse than a row that is one column</span>
+            <span class="c">// over on a terminal two columns wide.</span>
+            rows.push(Line::from(Span::styled(rest, style)));
+            <span class="k">break</span>;
+        }
+        rows.push(Line::from(Span::styled(head, style)));
+        rest = tail;
+    }
+    rows
+}</code></pre>
+  <span class="src">crates/emma/src/term/markdown.rs — <code>code_rows</code>, <code>split_at_cols</code></span>
+
+  <p>
+    <span class="chip test">tested</span>:
+    <code>a_fenced_code_block_is_never_reflowed_and_never_loses_a_character</code>
+    is written as &ldquo;the rows concatenate back to the source&rdquo; rather
+    than as a width check, <em>&ldquo;because that is the property: a
+    word-wrapped code line would still be under the width and would still be
+    wrong.&rdquo;</em> It then renders the <em>same text outside a fence</em> and
+    asserts that one <em>does</em> break at a space, which is what makes the
+    first assertion a distinction rather than a tautology.
+  </p>
+
+  <h3>2. Nothing is inserted into what a reader copies</h3>
+
+  <p>
+    No gutter down the side of a code block, no <code>&#9474;</code> in front of
+    a quote, no added indent. The markers this file <em>removes</em>, the hashes
+    of a heading, the <code>**</code> of a bold run, the backticks around a code
+    span, are removed because that is what rendering them means, and nothing
+    takes their place. The quote's <code>&gt;</code> is kept rather than swapped
+    for <code>&#9474;</code>, because the swap <em>&ldquo;would put a character
+    into the copy that the model never wrote.&rdquo;</em> It is kept as
+    <code>"&gt; "</code> with the source's own space, so the marker column costs
+    the copy nothing and the text lines up under itself when it wraps.
+  </p>
+
+  <p>
+    The fence itself is not printed, on the ground that
+    <code>```</code> on a screen is three characters of syntax; a dim rule takes
+    its place with the language written into it. It is the block's own row
+    either way, so nothing a reader copies out of the code gains a character.
+  </p>
+
+  <h3>3. Every row fits the width it was given</h3>
+
+  <p>
+    <code>insert_before</code> is told in advance how many rows to make room
+    for, and that count is <code>ceil(width / columns)</code>. A row wider than
+    the window takes a row more than was reserved and its tail lands on the
+    viewport. So the wrap is what keeps the arithmetic in <code>frame.rs</code>
+    true.
+    <span class="chip test">tested</span>:
+    <code>no_row_is_ever_wider_than_the_window</code> renders a five-line
+    document, including an unbreakable word, at widths 8, 12, 20, 40 and 80 and
+    checks every row.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect: two paths can still emit an over-wide row</span>
+    <p>
+      <code>rule</code> builds a fence's replacement as
+      <code>{head} {lang} {tail}</code> where <code>tail_room =
+      width.min(72).saturating_sub(cols(&amp;head) + cols(&amp;lang) + 2)</code>.
+      The subtraction saturates, but the pieces in front of it do not: at width
+      8, <code>```typescript</code> gives a two-column head, a ten-column
+      language and two spaces, so the row is fourteen columns wide with a
+      <code>tail_room</code> of zero. The guarding test's document uses
+      <code>```rust</code>, which is exactly eight columns at width 8 and fits.
+    </p>
+    <p>
+      <code>flow</code> has the mirror case. <code>hang</code> is clamped to
+      <code>width - 1</code>, but the <code>lead</code> spans are pushed into
+      <code>cur</code> before any wrap can occur, so a list item whose indent
+      plus bullet plus space exceeds the width starts over budget. The refusal
+      at <code>indent &gt; 12</code> bounds it, but 12 plus a bullet plus a space
+      is 14, and the fallback gate allows a 24-column window.
+      <span class="chip unv">unverified</span> for both: reasoned from the
+      arithmetic, not reproduced. A two-case test at width 8, one rendering
+      <code>```typescript</code> and one rendering twelve spaces then
+      <code>- x</code>, would settle it.
+    </p>
+    <span class="src">crates/emma/src/term/markdown.rs — <code>rule</code>, <code>flow</code></span>
+  </div>
+
+  <h2 id="inline">Two inline constructs, and the one that is absent</h2>
+
+  <p>
+    <code>inline</code> resolves code spans and bold runs and nothing else. The
+    choice of which two is the judgement: <em>&ldquo;one is a colour, the other
+    is a weight, and both exist at every fidelity down to a monochrome
+    console.&rdquo;</em>
+  </p>
+
+  <p>
+    <em>Italic</em> is absent, and the region comment gives three
+    reasons: <code>Modifier::ITALIC</code> is not written by
+    <code>render::codes</code>, several terminals render it as reverse video,
+    and a <code>*</code> in running prose is more often a footnote or a glob
+    than an emphasis. Leaving the asterisks alone shows the reader exactly what
+    the model wrote.
+  </p>
+
+  <p>
+    Emphasis is applied <em>on top</em> of the surrounding block's style, so a
+    bold word in a heading stays the heading's colour and a code span in a quote
+    is still dim behind its own colour. <code>code_style</code> is the mechanism:
+    it takes <code>Role::Info</code>'s colour and copies the base's
+    <code>add_modifier</code> over it.
+    <span class="chip test">tested</span>:
+    <code>bold_and_inline_code_are_styled_and_their_markers_go</code> checks the
+    code span is coloured across <em>every word of it</em>, because
+    <em>&ldquo;wrapping splits spans, and a style that survived only the first
+    word would look right at this width and wrong at a narrower one.&rdquo;</em>
+  </p>
+
+  <h2 id="flow">The wrapper, and the hanging indent</h2>
+
+  <p>
+    <code>flow(lead, body, width, hang)</code> is the prose path.
+    <code>lead</code> is drawn once on the first row (a bullet, a <code>&gt;</code>)
+    and counts toward that row's width; <code>hang</code> is how far the rows
+    after it are indented, <em>&ldquo;so a wrapped list item lines up under its
+    own text&rdquo;</em> and reads as one item rather than as two.
+  </p>
+
+  <p>
+    Two mechanisms inside it are worth naming. <code>tokens</code> splits the
+    styled spans into runs of whitespace and runs of not-whitespace, carrying
+    each span's style, so a wrap can happen between words without losing where a
+    style boundary was. And <code>pending</code> holds the space
+    <em>before</em> a word rather than after it, so a line break eats the space
+    rather than leaving a trailing one on the row above. A word longer than the
+    window has nowhere to go but across rows, and
+    <em>&ldquo;a character boundary is the only honest place to put the
+    break.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>prose_is_wrapped_at_words_to_the_width_it_was_given</code> asserts
+    both the widths and that the joined words are the original sentence.
+  </p>
+
+  <h2 id="sanitise">What may reach a cell</h2>
+
+  <p class="faint">crates/emma/src/term/markdown.rs &middot; <code>sanitise</code></p>
+  <pre><code><span class="c">/// What may reach a cell.</span>
+<span class="c">///</span>
+<span class="c">/// A model can put anything in its prose, including the escape byte that would</span>
+<span class="c">/// otherwise be written straight into the terminal — where it is a control</span>
+<span class="c">/// sequence rather than text, and where ratatui counts it as a column the</span>
+<span class="c">/// terminal does not. That is the same class of defect the status line already</span>
+<span class="c">/// refuses (`view.rs`), applied to the one other thing on screen that comes from</span>
+<span class="c">/// outside. Tabs become spaces because a tab in a cell has no width anybody</span>
+<span class="c">/// agrees on; everything else that is not printable is dropped.</span>
+fn sanitise(raw: &amp;str) -&gt; String {
+    <span class="k">let mut</span> out = String::with_capacity(raw.len());
+    <span class="k">for</span> ch in raw.chars() {
+        <span class="k">match</span> ch {
+            '\t' =&gt; out.push_str("    "),
+            '\r' | '\n' =&gt; {}
+            c <span class="k">if</span> c.is_control() =&gt; {}
+            c =&gt; out.push(c),
+        }
+    }
+    out
+}</code></pre>
+  <span class="src">crates/emma/src/term/markdown.rs — <code>sanitise</code></span>
+
+  <p>
+    <span class="chip test">tested</span>:
+    <code>an_escape_byte_in_the_models_prose_never_reaches_a_cell</code> feeds
+    <code>hello \x1b[31mred\x1b[0m \x07 and\ttabs</code> and asserts no control
+    character survives <em>and</em> that the words did, which is what makes it a
+    translation rather than a refusal to draw.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Two smaller defects, both about a promise slightly overstated</span>
+    <p>
+      <code>heading</code> ends with
+      <code>.trim_end_matches('#').trim_end()</code>, which drops a trailing
+      hash that is part of the text: <code>&#35; C&#35;</code> renders as
+      <code>C</code>. CommonMark's rule requires the closing sequence to be
+      preceded by a space, and this implementation does not check for one.
+    </p>
+    <p>
+      <code>sanitise</code> expands a tab to four spaces, and it runs on
+      <em>every</em> line including the ones inside a fence. So the guarantee
+      that a fenced block's rows concatenate back to the source does not hold
+      for tab-indented code: the rows concatenate back to a
+      spaces-for-tabs version of it. Both facts follow from reading the two
+      functions; neither is a crash and neither has a test.
+      <span class="chip unv">unverified</span>: rendering
+      <code>&#35; C&#35;</code> and a tab-indented fenced block and comparing
+      against the source would settle both.
+    </p>
+    <span class="src">crates/emma/src/term/markdown.rs — <code>heading</code>, <code>sanitise</code>, <code>code_rows</code></span>
+  </div>
+
+  <h2 id="fence">One malformed answer must not style the next one</h2>
+
+  <p>
+    <code>Markdown::reset</code> is one line and exists for one failure: a model
+    that opens a fence and never closes it would otherwise leave the
+    <em>next</em> answer rendered as code, <em>&ldquo;one malformed reply
+    poisoning every reply after it, which is a worse failure than the malformed
+    one.&rdquo;</em> <code>Frame::flush_prose</code> calls it at the end of every
+    inline turn, and the full-screen path re-runs a fresh <code>Markdown</code>
+    per entry, so neither can carry a fence across an answer.
+    <span class="chip test">tested</span>:
+    <code>an_unclosed_fence_does_not_leak_into_the_next_answer</code>.
+  </p>
+
+  <h2 id="unrecognised">What is not understood is printed</h2>
+
+  <p>
+    Tables, images, links, HTML spans, footnotes and <code>*italics*</code> all
+    reach the screen as the text they were written as. <strong>Content is never
+    swallowed</strong>: the worst case is plain.
+    <span class="chip test">tested</span>:
+    <code>what_is_not_understood_is_printed_rather_than_swallowed</code> asserts
+    six needles including <code>| a | b |</code>,
+    <code>[a link](https://example.com)</code> and
+    <code>&lt;div&gt;html&lt;/div&gt;</code> survive intact.
+  </p>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    <code>markdown.rs</code> is 886 lines and was read in full for this page. It
+    declares 20 function items above the test boundary: four
+    <code>Markdown</code> methods (<code>new</code>, <code>reset</code>,
+    <code>in_code</code>, <code>line</code>), six recognisers, four inline
+    helpers (<code>inline</code>, <code>flush</code>, <code>code_style</code>,
+    and the local <code>cols</code>), four fitting functions
+    (<code>flow</code>, <code>tokens</code>, <code>split_at_cols</code>,
+    <code>code_rows</code>), <code>rule</code> and <code>sanitise</code>. All 20
+    are named here: 20 of 20. Ten of its sixteen tests are cited; the six that
+    are not are the degradation checks (ASCII, sixteen-colour, no-colour) and
+    three shape tests for quotes, blank lines and lists.
+  </p>
+
+  <p>
+    <strong>Not settled here.</strong> Whether the rendered result reads as
+    markdown. Every test compares strings and widths; nobody has looked at a
+    heading, a bullet list and a fenced block side by side on a console and
+    judged the result.
+    <span class="chip unv">unverified</span>: one real answer containing all
+    four block kinds, photographed.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="terminal-diff.html">what a write would change</a>, the one
+      renderer that breaks this file's copy rule. Back to
+      <a href="terminal.html">The terminal</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The input dock &middot; The terminal &middot; Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav here" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/emma/src/term/{view,input,menu}.rs</p>
+  <h1>The input dock</h1>
+
+  <nav class="chapter">
+      <a class="up" href="terminal.html">The terminal</a>
+      <a href="terminal-surface.html">Surface</a>
+      <a href="terminal-frame.html">Frame</a>
+      <a href="terminal-layout.html">Layout</a>
+      <a href="terminal-colour.html">Colour</a>
+      <a href="terminal-themes.html">Themes</a>
+      <a href="terminal-skin.html">Vocabulary</a>
+      <a href="terminal-transcript.html">Transcript</a>
+      <a href="terminal-markdown.html">Markdown</a>
+      <a href="terminal-diff.html">Diffs</a>
+      <a href="terminal-status.html">Status</a>
+      <a href="terminal-sidebar.html">Sidebar</a>
+      <span class="now">Dock</span>
+      <a href="terminal-usertools.html">User tools</a>
+    </nav>
+
+  <p class="lede">
+    Three files meet at the bottom of the screen. <code>view.rs</code> draws the
+    input box, the menu and the approval panel, and the full-screen frame
+    borrows two of its renderers rather than growing its own.
+    <code>input.rs</code> is the one place stdin is read, and holds the property
+    in this subsystem that is not allowed to change. <code>menu.rs</code>
+    decides what <code>/</code> shows and when it is allowed to show it.
+  </p>
+
+  <h2 id="drain">The property that cannot regress</h2>
+
+  <p>
+    <strong>The queue must be empty before a question is asked.</strong> The
+    reader is eager: it consumes whatever is typed, whenever it is typed, and
+    holds it. Without a drain, a line typed while the agent was working is
+    waiting when the next prompt appears and is handed over as the answer.
+  </p>
+
+  <div class="note warn">
+    <p>
+      <em>&ldquo;That is not a stale-input annoyance — it is one question being
+      answered by a keystroke aimed at another, and the place it matters most is
+      the approval gate, where the line in question is a
+      <code>y</code>.&rdquo;</em>
+    </p>
+    <p>
+      <span class="chip obs">observed</span>, on the first real run, and
+      recorded in the module doc: an answered <code>y</code> outlived a turn that
+      aborted on its token budget and was consumed as the <em>next goal</em>.
+      The same path could as easily have approved a <code>Bash</code> command
+      the user never saw, and left a log saying they approved it. The transcript
+      of that run is not in the tree.
+    </p>
+    <span class="src">crates/emma/src/term/input.rs module doc</span>
+  </div>
+
+  <p>
+    Raw mode strengthened this rather than weakening it. Under cooked mode there
+    was a second buffer nothing in this process could reach: the line discipline
+    held a partly-typed line, so a half-typed <code>y</code> followed by return
+    after a question appeared would still answer it. In raw mode Emma holds that
+    buffer itself.
+  </p>
+
+  <p class="faint">crates/emma/src/term/input.rs &middot; <code>LineSource::drain</code></p>
+  <pre><code>    pub fn drain(&amp;<span class="k">mut</span> self) -&gt; usize {
+        <span class="k">let mut</span> dropped = 0;
+        <span class="k">while</span> self.rx.try_recv().is_ok() {
+            dropped += 1;
+        }
+        <span class="k">if let</span> Some(editing) = &amp;self.editing {
+            <span class="k">let mut</span> ed = editing.lock().unwrap_or_else(|e| e.into_inner());
+            <span class="k">if</span> !ed.is_empty() {
+                dropped += 1;
+                ed.clear();
+            }
+        }
+        <span class="c">// The menu is a third place a keystroke can sit: an open one has a</span>
+        <span class="c">// highlighted command, and Enter would turn it into a line. It closes</span>
+        <span class="c">// with the rest, and is not counted — nothing was typed into it that</span>
+        <span class="c">// the editor above did not already account for.</span>
+        <span class="k">if let</span> Some(menu) = &amp;self.menu {
+            menu.lock().unwrap_or_else(|e| e.into_inner()).close();
+        }
+        <span class="k">if let</span> Some(frame) = &amp;self.frame {
+            frame.set_input("", 0);
+            frame.set_menu(None);
+            frame.draw();
+        }
+        dropped
+    }</code></pre>
+  <span class="src">crates/emma/src/term/input.rs — <code>LineSource::drain</code></span>
+
+  <p>
+    Three hiding places, one call. The count is returned rather than swallowed
+    <em>&ldquo;because silently eating a line a person typed is its own small
+    betrayal&rdquo;</em>, and the caller says so. After a drain the input box is
+    visibly empty, <em>&ldquo;which is the version of this property a user can
+    check.&rdquo;</em>
+  </p>
+
+  <p>
+    <span class="chip test">tested</span>, four ways.
+    <code>a_line_typed_before_the_question_cannot_answer_it</code> is the
+    original;
+    <code>a_half_typed_answer_is_drained_as_well_as_a_submitted_one</code> is
+    the ground raw mode gained, and its doc says it is written from the hole
+    rather than from the implementation;
+    <code>draining_closes_the_command_menu_as_well</code> checks the fixture
+    really opened a menu first, <em>&ldquo;so this proves nothing&rdquo;</em> if
+    it did not; and <code>a_pasted_line_is_drained_like_a_typed_one</code>
+    covers the newest entrance.
+    <code>draining_an_empty_queue_drops_nothing_and_says_so</code> guards the
+    count, because <em>&ldquo;a false positive there tells a user their input
+    was eaten when it was not.&rdquo;</em>
+  </p>
+
+  <h3>What never enters the channel</h3>
+
+  <p>
+    Four classes of keystroke are consumed reader-locally and never become a
+    line: the pane keys, the tool chords, the four menu keys, and every mouse
+    event. Each mutates view state through the frame and returns, so
+    <em>&ldquo;a scroll cannot become a line, so it cannot answer a
+    question&rdquo;</em>, and the drain guarantee is untouched by construction
+    rather than by care.
+  </p>
+
+  <p>
+    The transcript's scroll position is likewise exempt from the drain, as a
+    decision rather than an omission: <em>&ldquo;a scroll offset cannot answer a
+    question, and yanking the reader's page because a prompt appeared would be
+    hostile.&rdquo;</em>
+  </p>
+
+  <h2 id="editor">The line editor</h2>
+
+  <p>
+    Fifteen match arms and a paste handler, and the scope is argued rather than
+    left minimal by accident: <em>&ldquo;Everything here is a key that a user pressing
+    it would be surprised not to have. Anything more — history, completion, word
+    motion beyond <code>Ctrl-W</code> — is a text editor, and Emma already has
+    one of those as a tool.&rdquo;</em>
+  </p>
+
+  <p>
+    Three of the arms are defensive rather than functional. A
+    <code>KeyEventKind::Release</code> returns <code>Ignore</code>, because
+    Windows reports both edges and acting on both types every character twice.
+    <code>Ctrl-C</code> clears the buffer as well as interrupting,
+    <em>&ldquo;a user who hits Ctrl-C and then types a goal must not find the
+    interrupted line still in front of it.&rdquo;</em> And an unimplemented
+    modifier arm catches every remaining <code>Ctrl</code> or <code>Alt</code>
+    character:
+  </p>
+
+  <pre><code>            <span class="c">// A modifier we do not implement must not type its letter: `Ctrl-R`</span>
+            <span class="c">// arriving as an `r` in the middle of a goal is worse than nothing</span>
+            <span class="c">// happening.</span>
+            KeyCode::Char(_) <span class="k">if</span> ctrl || key.modifiers.contains(KeyModifiers::ALT) =&gt; Action::Ignore,</code></pre>
+  <span class="src">crates/emma/src/term/input.rs — <code>Editor::key</code></span>
+
+  <h3>Paste, and why it cannot submit</h3>
+
+  <p>
+    Without bracketed paste the terminal delivers a pasted block as the
+    keystrokes it resembles, and the first <code>\n</code> in it is
+    indistinguishable from Enter: half a code block is submitted as a goal and
+    the other half is typed into whatever comes next. The red-team evaluation
+    ranked that first on the list of things that would sink the redesign.
+    <code>ESC[?2004h</code> from <a href="terminal-frame.html">the frame</a>
+    makes the terminal wrap the block in markers, and crossterm hands it here as
+    one <code>Event::Paste</code>. <strong>Nothing in
+    <code>Editor::paste</code> can submit.</strong>
+  </p>
+
+  <p>
+    Line breaks become spaces, and a run of them collapses to one, because this
+    editor is one line: <em>&ldquo;until [a multi-line editor] is [built], the
+    choice is between flattening the paste and refusing it, and a flattened
+    stack trace is still the stack trace the user meant to ask about.&rdquo;</em>
+    Everything else that is not printable is dropped, tabs included, because a
+    clipboard is untrusted bytes and <em>&ldquo;a tab in a cell is not eight
+    columns, it is one cell containing a tab.&rdquo;</em>
+  </p>
+
+  <p>
+    <span class="chip test">tested</span>:
+    <code>pasting_a_block_full_of_newlines_never_submits_it</code> pastes fifty
+    lines, asserts <code>Action::Edit</code>, asserts no newline survived, and
+    then asserts it takes an actual Enter to send it.
+    <code>control_bytes_in_a_paste_never_reach_the_line</code> pins the exact
+    surviving string, <code>safe[31mred text tabbed</code>, which shows the
+    <code>[31m</code> was only ever dangerous because of the escape in front of
+    it.
+  </p>
+
+  <h2 id="routing">Which key acts on which pane</h2>
+
+  <p class="faint">crates/emma/src/term/input.rs &middot; <code>pane_key</code>, <code>tool_key</code></p>
+  <pre><code>pub fn pane_key(key: KeyEvent, editor_empty: bool, prompt_pending: bool) -&gt; Option&lt;PaneKey&gt; {
+    <span class="k">if</span> key.kind == KeyEventKind::Release {
+        <span class="k">return</span> None;
+    }
+    <span class="k">let</span> ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    <span class="k">match</span> key.code {
+        KeyCode::PageUp =&gt; Some(PaneKey::PageUp),
+        KeyCode::PageDown =&gt; Some(PaneKey::PageDown),
+        KeyCode::Up <span class="k">if</span> ctrl =&gt; Some(PaneKey::RowUp),
+        KeyCode::Down <span class="k">if</span> ctrl =&gt; Some(PaneKey::RowDown),
+        KeyCode::Home <span class="k">if</span> editor_empty =&gt; Some(PaneKey::Top),
+        KeyCode::End <span class="k">if</span> editor_empty =&gt; Some(PaneKey::Tail),
+        KeyCode::Char('b') <span class="k">if</span> ctrl &amp;&amp; !prompt_pending =&gt; Some(PaneKey::Sidebar),
+        _ =&gt; None,
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/term/input.rs — <code>pane_key</code>, <code>PaneKey</code>, <code>WHEEL_ROWS</code></span>
+
+  <p>
+    Three rules are encoded in those seven arms. Scrolling works
+    <strong>while a goal runs and while a question is pending</strong>, because
+    <em>&ldquo;reading the evidence above an approval prompt is exactly when
+    scrolling matters most, and the prompt itself is fixed chrome that scrolling
+    cannot move.&rdquo;</em> <code>Home</code>/<code>End</code> belong to the
+    editor while there is a line to move within and to the transcript when there
+    is not: <em>&ldquo;one rule, no mode: the keys act on the thing that can
+    act.&rdquo;</em> And <code>Ctrl-B</code> dies under a prompt, so nothing
+    aimed at a pane can read as part of an answer.
+    <span class="chip test">tested</span>, three tests, including one asserting
+    <code>Ctrl-Down</code> still scrolls with <code>prompt_pending</code> true.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect: a comment credits a mechanism that is not there, and another names a feature that does not exist</span>
+    <p>
+      Inside <code>LineSource::raw</code>, the reader loop opens with
+      <em>&ldquo;A poll rather than a blocking read, so a frame that has been
+      torn down does not leave a thread wedged inside the console driver holding
+      a handle nobody can close.&rdquo;</em> The line under it is
+      <code>match event::read()</code>, which blocks. The stated failure is not
+      prevented by the mechanism the comment credits; whether it happens in
+      practice is a separate question the comment does not answer.
+    </p>
+    <p>
+      Separately, inside
+      <code>the_pane_keys_route_to_the_transcript_and_nothing_else_does</code>,
+      a comment reads <em>&ldquo;Ctrl turns the arrows into row scrolling; plain
+      arrows stay with history and the menu.&rdquo;</em> There is no history:
+      the module doc says <em>&ldquo;there is no history and no
+      completion&rdquo;</em>, and <code>Editor::key</code> has no
+      <code>Up</code>/<code>Down</code> arm at all, so bare arrows fall to
+      <code>Action::Ignore</code>. A reader would conclude <code>Up</code>
+      recalls the previous goal.
+      <span class="chip cert">certified</span> for both: read the two lines
+      against the code immediately below them. The second is in a test comment
+      rather than in <code>pane_key</code>'s own doc, which is accurate.
+    </p>
+    <span class="src">crates/emma/src/term/input.rs — <code>LineSource::raw</code>, <code>the_pane_keys_route_to_the_transcript_and_nothing_else_does</code>, <code>Editor::key</code></span>
+  </div>
+
+  <h3>Why the tool chords are <code>Alt+&lt;key&gt;</code></h3>
+
+  <p>
+    The mockup showed bare <code>s</code>/<code>c</code>/<code>f</code> bindings.
+    The design refused them outright: <em>&ldquo;a bare letter that acts while
+    the input box exists is a footgun.&rdquo;</em> The softer rule,
+    <em>only when the editor is empty</em>, dies on a fact the approval-gate keys
+    never meet:
+  </p>
+
+  <div class="note warn">
+    <p>
+      <em>&ldquo;the first character of <em>every</em> goal lands on an empty
+      editor, so a bare <code>s</code> binding makes any goal beginning with
+      <code>s</code> start a shell instead.&rdquo;</em>
+    </p>
+    <span class="src">crates/emma/src/term/input.rs — <code>tool_key</code></span>
+  </div>
+
+  <p>
+    An Alt chord types nothing, which puts it in <code>Ctrl-B</code>'s class:
+    safe whatever the editor holds, so the editor's content is not consulted.
+    Ctrl is excluded from the match because AltGr arrives as Ctrl+Alt on Windows
+    layouts and produces real characters. Which letters are bound is the
+    catalogue's knowledge rather than this function's: <code>tool_key</code>
+    returns the character and the frame looks it up.
+  </p>
+
+  <p>
+    <span class="chip test">tested</span>:
+    <code>a_bare_letter_is_never_a_tool_shortcut</code> walks seven characters
+    and its doc says <em>&ldquo;If this test goes red, that refuted idea is
+    back&rdquo;</em>, which is what makes it a guard rather than a check.
+    <code>alt_chords_launch_tools_and_die_under_a_prompt</code> covers the four
+    ways the chord must not fire: under a prompt, on a release edge, under
+    AltGr, and with no Alt at all.
+  </p>
+
+  <h2 id="menu">What <code>/</code> shows</h2>
+
+  <p>
+    <code>menu.rs</code> is pure: a filter string and a list of names in, an open
+    or closed menu out. The reason for the split is stated: the menu's behaviour
+    <em>&ldquo;is the part that can be wrong in a way nobody can see from a test
+    binary — cargo hands the tests a pipe, so the viewport is never drawn while
+    they run. What <em>can</em> be asserted is when it opens, what it filters to,
+    what closes it and what an approval does to it.&rdquo;</em>
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Rule</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Opens on a leading <code>/</code> and nothing else</td>
+          <td>A second <code>/</code>, or any whitespace, means a path or a command with arguments rather than somebody reaching for a list.</td>
+        </tr>
+        <tr>
+          <td>No match closes it</td>
+          <td><em>&ldquo;A popup with nothing in it, sitting over the text somebody is trying to type, is a trap.&rdquo;</em></td>
+        </tr>
+        <tr>
+          <td>Esc leaves the text alone</td>
+          <td>Clearing what somebody typed is <em>&ldquo;the same class of theft as the drain eating a line, and the drain at least has a safety argument.&rdquo;</em></td>
+        </tr>
+        <tr>
+          <td>A pending question outranks it</td>
+          <td>Passed in as an argument rather than looked up, <em>&ldquo;so that the rule is a thing a test states rather than a thing a terminal has to be in front of.&rdquo;</em></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <span class="src">crates/emma/src/term/menu.rs module doc, <code>sync</code></span>
+
+  <p>
+    <code>dismissed_at</code> is a fifth rule that only exists because of the
+    third: after Esc, the menu stays shut while what the user types still starts
+    with the text they dismissed it at, since <em>&ldquo;reopening a popup
+    somebody just dismissed, on their next keystroke, is worse than never having
+    shown it.&rdquo;</em> <code>sync</code> also holds the selection on the same
+    command while it survives the filter, <em>&ldquo;so narrowing does not move
+    the selection out from under a hand that is already on Enter.&rdquo;</em>
+    <span class="chip test">tested</span>, both.
+  </p>
+
+  <p>
+    Nothing is invented. The vocabulary is Emma's own
+    <code>session_command::BUILTINS</code> plus whatever the harness loaded, in
+    the harness's order, and a harness command with no description gets
+    <code>NO_DESCRIPTION</code> rather than a summary invented from prompt text:
+    <em>&ldquo;a summary invented from prompt text is a description of a command
+    that nobody wrote and nobody can correct.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>the_menu_and_the_parser_agree_on_the_vocabulary</code> checks both
+    directions, that every built-in has a row and that every row parses,
+    <em>&ldquo;which is what stops the ninth command shipping
+    undiscoverable.&rdquo;</em>
+  </p>
+
+  <p>
+    A name collision resolves to the built-in, and the project's row is
+    <em>marked</em> rather than duplicated or dropped: <em>&ldquo;two identical
+    rows would read as a bug, and dropping it silently would hide the collision
+    entirely.&rdquo;</em> That is the one place the menu composes a sentence, and
+    the file says why it is allowed to: what it composes is a fact about
+    <em>resolution</em>, not a summary of a file nobody wrote a description for.
+    <span class="chip test">tested</span>:
+    <code>a_project_command_a_builtin_shadows_gets_one_marked_row_not_two</code>.
+  </p>
+
+  <h2 id="view">What the dock draws</h2>
+
+  <p>
+    <code>View::render</code> lays out bottom-up: the body, the hint, and the
+    status on the very last row. The comment records the reversal and the reason
+    for it: the status used to be the first row, and the owner asked for what
+    the terminal agents he uses do, <em>&ldquo;the chat bar at the bottom of the
+    window with the status underneath it. The eye ends where the cursor is, and
+    the two rows below the box are the two that never move.&rdquo;</em>
+  </p>
+
+  <p>
+    Nothing was added by the reorder, which is the part the comment insists on:
+    <em>&ldquo;These are the same two rows of chrome the old order spent,
+    reordered, so <code>body</code> gets exactly the height it got before and
+    every case that fitted still fits.&rdquo;</em> A third fixed row would have
+    cost the five-row viewport the ability to show a command <em>and</em> the
+    keys to approve it.
+    <span class="chip test">tested</span>:
+    <code>the_reordering_cost_the_body_no_rows_at_the_smallest_viewport_emma_draws</code>
+    at heights 5, 8 and 10, and
+    <code>the_input_box_is_at_the_bottom_with_the_hint_and_then_the_status_beneath_it</code>,
+    which asserts the ordering by row index rather than by three
+    <code>contains</code> calls, <em>&ldquo;because the property <em>is</em> the
+    ordering: a test that only asked whether each piece appeared somewhere would
+    pass the layout this replaced.&rdquo;</em>
+  </p>
+
+  <p>
+    The hint keeps a row of its own rather than sharing the status row, and the
+    reason is the status row's law: <em>&ldquo;sharing that row with a fixed
+    sentence would mean an advice string deciding whether a measurement
+    fits.&rdquo;</em> Showing it only when it has something to say was the other
+    candidate and is worse in the hand, because the row would come and go as the
+    mode changed, <em>moving the input box under the user's fingers</em>.
+  </p>
+
+  <h3>The box is laid out first</h3>
+
+  <p class="faint">crates/emma/src/term/view.rs &middot; <code>render_input</code></p>
+  <pre><code>        <span class="c">// Three rows for the box, whatever is left above it. When there is not</span>
+        <span class="c">// even three, the box wins: a stream with nowhere to type is worse than</span>
+        <span class="c">// a stream nobody can see the last line of.</span>
+        <span class="k">let</span> box_rows = 3.min(area.height);
+        <span class="k">let</span> [above, boxed] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(box_rows)]).areas(area);</code></pre>
+  <span class="src">crates/emma/src/term/view.rs — <code>render_input</code></span>
+
+  <p>
+    Whatever is above it, a paragraph arriving or a command menu, takes what is
+    left. That makes &ldquo;the menu must not push the input off screen on a
+    short viewport&rdquo; a property of the layout rather than of a check
+    somebody has to remember.
+    <span class="chip test">tested</span>:
+    <code>a_short_viewport_keeps_the_input_box_and_shortens_the_menu</code> at
+    seven rows and again at six.
+  </p>
+
+  <p>
+    Three smaller decisions live in the same function. The border is accent
+    rather than grey, because <em>&ldquo;a widget that is the same weight as its
+    own decoration reads as decoration.&rdquo;</em> An empty box shows
+    <code>menu::PLACEHOLDER</code>, since a new user's first question is what
+    this takes and the answer was previously nowhere except a note that had
+    already scrolled away. And the mockup's <code>[send: Enter]</code> is drawn
+    inside the right border only while it cannot collide with the typed line,
+    because <em>&ldquo;a hint that overwrites the sentence it is hinting about is
+    worse than none.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>the_send_hint_sits_inside_the_box_and_yields_to_a_long_line</code>.
+  </p>
+
+  <h3>The approval panel drops its border before its evidence</h3>
+
+  <p>
+    A box costs two rows, and on a short window those two rows are the
+    difference between showing the command and showing nothing but a title and a
+    <code>[y]</code>. <em>&ldquo;A prompt the user cannot evaluate manufactures
+    consent — that argument is older than this file — so the decoration goes
+    first and the title becomes an ordinary line.&rdquo;</em> The keys and the
+    answer share the last row and are laid out first: whatever else has to go,
+    the way to answer the question does not.
+    <span class="chip test">tested</span>:
+    <code>the_shortest_viewport_drops_the_border_rather_than_the_evidence</code>
+    at five rows asserts the title, the command and the keys are all present and
+    the border is not, and
+    <code>a_huge_preview_loses_lines_rather_than_the_answer_keys</code> asserts
+    the count of what was dropped points back at the transcript.
+  </p>
+
+  <p>
+    Both <code>render_input</code> and <code>render_prompt</code> are
+    <code>pub(crate)</code> with the reason attached: <em>&ldquo;the approval
+    panel must be the identical panel in both frames, because a consent
+    interface with two renderings is two interfaces.&rdquo;</em>
+    <a href="terminal-layout.html">The full-screen dock</a> calls them with a
+    different rectangle and nothing else.
+  </p>
+
+  <p>
+    The cursor is returned rather than set, because <code>Terminal::draw</code>
+    wants it after the frame is rendered. Both paths compute it in
+    <em>columns</em> through <code>cols_upto</code>, because the editor counts
+    characters and the cursor goes on a cell.
+    <span class="chip test">tested</span>:
+    <code>the_cursor_lands_on_the_right_column_after_wide_characters</code>,
+    whose doc names the failure the previous version had:
+    <em>&ldquo;the character-counted version passed every test above because
+    every string in them is one column per character.&rdquo;</em>
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect: two tests in <code>view.rs</code> assert nothing</span>
+    <p>
+      <code>a_viewport_with_almost_no_rows_still_draws_something</code> and
+      <code>a_menu_on_a_viewport_with_no_room_above_the_box_draws_nothing_and_panics_at_nothing</code>
+      both loop over small heights and discard their results with
+      <code>let (_rows, _cursor) = draw(&hellip;)</code>. The
+      &ldquo;panics at nothing&rdquo; half of the second name is genuinely
+      covered, since a panic would fail the test. &ldquo;Draws something&rdquo;
+      and &ldquo;draws nothing&rdquo; are not covered at all.
+      <span class="chip cert">certified</span>: both test bodies are three lines
+      and contain no <code>assert</code>.
+    </p>
+    <span class="src">crates/emma/src/term/view.rs — the two named tests</span>
+  </div>
+
+  <div class="note warn">
+    <span class="h">Defect: the input box does not scroll horizontally</span>
+    <p>
+      <code>render_input</code> draws <code>self.input</code> as one span into
+      the box's inner rectangle, and <code>cursor_at</code> clamps the column to
+      <code>area.width - 1</code>. Past the inner width the text is clipped by
+      the buffer and the caret stops moving, so neither the text nor the cursor
+      tracks what is being typed. <code>Editor::paste</code> flattens a
+      multi-line block onto one line, which makes a long line easy to reach
+      without typing one.
+      <span class="chip unv">unverified</span> as a felt symptom: no test drives
+      an input longer than the box, and the send-hint test's fifty characters
+      still fit in sixty columns. Typing past the box in a real run, or a test
+      rendering a 200-character input at width 40, would settle it.
+    </p>
+    <span class="src">crates/emma/src/term/view.rs — <code>render_input</code>, <code>cursor_at</code></span>
+  </div>
+
+  <h2 id="two-readers">Two readers, one type</h2>
+
+  <p>
+    <code>LineSource::stdin</code> is the cooked reader: whole lines, edited by
+    the terminal, a thread and a channel. It is unchanged from before the frame
+    existed, because <em>&ldquo;it is what every fallback run uses
+    and the fallback is the product.&rdquo;</em> Its <code>editing</code>,
+    <code>menu</code> and <code>frame</code> fields are all <code>None</code>,
+    so <code>drain</code> reaches only the channel, which is all there is.
+  </p>
+
+  <p>
+    <code>LineSource::raw</code> is the frame's, and its loop is the only place
+    a <code>crossterm::Event</code> is inspected. The ordering in it is the
+    routing table: pane keys, then tool chords, then menu keys, then the editor.
+    Mouse events handle the wheel and exactly one click, a plain left
+    <em>press</em>, and refuse anything Shift-modified even where a terminal
+    forwards it, because <em>&ldquo;Shift-drag is the terminal's own selection —
+    the one copy route left on the alternate screen — and this arm must never
+    bid for it.&rdquo;</em> A resize is a redraw and nothing else, since ratatui
+    re-measures on every draw.
+  </p>
+
+  <p>
+    <code>WHEEL_ROWS</code> is 3, <em>&ldquo;what terminals themselves scroll
+    by&rdquo;</em>. A submit and a menu-accepted command both snap the view to
+    the tail, <em>&ldquo;the answer to what was just sent is about to arrive
+    there, and a reader parked fifty rows up would watch nothing
+    happen.&rdquo;</em>
+  </p>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    All three files were read in full.
+  </p>
+
+  <ul class="body">
+    <li>
+      <strong><code>view.rs</code>, 1,074 lines, 9 of 9 function items named.</strong>
+      <code>View::new</code>, <code>render</code>, <code>status_row</code>,
+      <code>hint</code>, <code>render_input</code>, <code>render_menu</code>,
+      <code>render_prompt</code>, <code>preview_lines</code>, and the free
+      <code>cursor_at</code>. Three types (<code>Mode</code>,
+      <code>Prompt</code>, <code>View</code>) covered. Eleven of its
+      twenty-three tests are cited.
+    </li>
+    <li>
+      <strong><code>input.rs</code>, 1,135 lines, 15 of 15.</strong> Six
+      <code>Editor</code> methods, three pure routers (<code>menu_key</code>,
+      <code>pane_key</code>, <code>tool_key</code>), and six
+      <code>LineSource</code> items including the two <code>#[cfg(test)]</code>
+      constructors. Five types and <code>WHEEL_ROWS</code> covered. Twelve of
+      its eighteen tests are cited.
+    </li>
+    <li>
+      <strong><code>menu.rs</code>, 519 lines, 9 of 9.</strong>
+      <code>Entry::about</code> and eight <code>Menu</code> methods. All four
+      constants and three types covered. Seven of its fourteen tests are cited.
+    </li>
+  </ul>
+
+  <p>
+    <strong>Not settled here.</strong> Two things. The drain is proven over a
+    scripted queue and a hand-built editor; the <em>reader thread</em> that
+    fills them has never been driven by a test, because it needs a terminal.
+    <span class="chip unv">unverified</span>: type into a running Emma while a
+    goal is in flight, then trigger an approval, and check the box is empty and
+    the count is reported. And the whole of <code>Editor</code>'s Windows
+    double-fire guard rests on crossterm reporting
+    <code>KeyEventKind::Release</code>, which the tests simulate by setting the
+    field by hand.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="terminal-usertools.html">the tools a person launches</a>,
+      and the Windows spawn every <code>std::process</code> shape got wrong.
+      Back to <a href="terminal.html">The terminal</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

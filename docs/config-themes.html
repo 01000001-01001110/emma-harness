@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Themes · Configuration · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav here" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/emma/src/term/theme.rs · session_command.rs</p>
+  <h1>Themes, and why a broken one costs colour and never the boot</h1>
+
+  <nav class="chapter">
+      <a class="up" href="config.html">Configuration</a>
+      <a href="config-discovery.html">Discovery</a>
+      <a href="config-files.html">Every file</a>
+      <a href="config-spine.html">The spine</a>
+      <a href="config-claude.html">Reading <code>.claude/</code></a>
+      <a href="config-skills.html">Skills &amp; commands</a>
+      <a href="config-agents.html">Agents</a>
+      <a href="config-personal.html">Your own files</a>
+      <span class="now">Themes</span>
+      <a href="config-notapplied.html">It did not apply</a>
+    </nav>
+
+  <p class="lede">
+    A theme is a JSON file of colours, and every rule in the loader exists so
+    that letting a stranger choose the colours cannot cost more than colour.
+    Nothing here returns a <code>Result</code>. A bad hex loses one role, a file
+    that is not JSON loses the theme, and either way Emma boots and says what
+    happened.
+  </p>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven, and a reader can repeat it: a file, a command, a count</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+    <div><span class="chip test">tested</span> a test that was shown to fail</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <h2 id="where">Two directories, and the order between them</h2>
+
+  <p>
+    <code>~/.emma/themes/&lt;name&gt;.json</code>, then
+    <code>&lt;harness root&gt;/themes/&lt;name&gt;.json</code>. Themes ride the
+    discovery that already happened, so in a <code>.claude/</code> project the
+    project's themes live in <code>.claude/themes/</code> rather than in a
+    directory of their own.
+  </p>
+
+  <p class="faint">crates/emma/src/session_command.rs · <code>theme_dirs</code></p>
+<pre><code>/// The two directories, in the order a name is looked for in them.
+///
+/// **Yours beats the project's**, following the harness's own argument for
+/// skipping `~/.claude/`: a project cannot select a theme, so the only way a
+/// repository could change your colours is by shadowing a name you had already
+/// chosen, and this order is what closes that. The reverse — your file
+/// shadowing the project's — is not a risk, it is the preference working.
+fn theme_dirs(home: Option&lt;&amp;Path&gt;, root: &amp;Path) -&gt; Vec&lt;(&amp;'static str, PathBuf)&gt; {
+    let mut dirs = Vec::new();
+    if let Some(home) = home {
+        dirs.push(("yours", home.join(".emma").join("themes")));
+    }
+    // The harness root is already `.emma/` or `.claude/`, whichever this
+    // directory has, so themes ride the discovery that has already happened
+    // rather than getting a second rule to be wrong about.
+    dirs.push(("this project", root.join("themes")));
+    dirs
+}</code></pre>
+  <span class="src">crates/emma/src/session_command.rs — <code>theme_dirs</code>, <code>available</code></span>
+
+  <p>
+    <strong>Selection lives only in <code>~/.emma/settings.json</code></strong>
+    under <code>theme</code>, and the project's <code>config.json</code> has no
+    counterpart. That is the same ruling as the model, applied a second time:
+    theme <em>files</em> may live in either place, and the choice is personal.
+  </p>
+
+  <h2 id="load">The loader</h2>
+
+  <p class="faint">crates/emma/src/term/theme.rs · <code>load</code>, the doc</p>
+<pre><code>/// The theme in force, and everything that went wrong getting there.
+///
+/// **This never fails and never blocks the boot.** A missing file, a file that
+/// is not JSON, a hex that is not a hex — each costs exactly as much colour as
+/// it has to and produces a sentence saying so. The caller's job is to put
+/// those sentences on screen through the same channel every other Emma
+/// observation uses; at `Level::None` they are the only honest thing to say,
+/// because the theme was never going to be consulted anyway.
+///
+/// `name` is the one-run override. With `None` the selection comes from
+/// `~/.emma/settings.json`, and never from the project's `config.json`:
+/// `settings.rs` already ruled that a personal default in a project's
+/// configuration is two files answering one question with no rule for
+/// disagreeing.
+///
+/// **User themes beat project themes on a name collision.** A project cannot
+/// *select* a theme, so shadowing a name somebody already chose is the only way
+/// a repository could repaint their screen, and this order is the door that
+/// closes. The reverse — your own theme winning over the project's — is not a
+/// risk; it is the preference working.
+pub fn load(
+    home: Option&lt;&amp;Path&gt;,
+    harness_root: Option&lt;&amp;Path&gt;,
+    name: Option&lt;&amp;str&gt;,
+) -&gt; (Theme, Vec&lt;String&gt;) {</code></pre>
+  <span class="src">crates/emma/src/term/theme.rs — <code>load</code></span>
+
+  <p>
+    Four exits before a single colour is parsed: no selection returns the
+    built-in with no notices; a reserved name returns the built-in with a notice
+    if a file of that name exists; a name found in neither directory returns the
+    built-in and names both paths; and a file whose top level is not a JSON
+    object, or which is not JSON at all, returns the built-in quoting serde's
+    own line and column.
+  </p>
+
+  <p class="faint">crates/emma/src/term/theme.rs · <code>load</code>, the reserved name and the read</p>
+<pre><code>    if RESERVED.contains(&amp;selected.as_str()) {
+        // The name resolves to the built-in either way; the notice exists so an
+        // author who wrote a file of that name is told why it did nothing,
+        // rather than concluding their JSON is broken.
+        if let Some(path) = searched.iter().find(|p| p.exists()) {
+            notices.push(format!(
+                "{} is a built-in theme name, so {} is ignored; copy it to another name and select that",
+                selected,
+                path.display()
+            ));
+        }
+        return (BUILTIN, notices);
+    }</code></pre>
+<pre><code>        Err(e) =&gt; {
+            // serde's line and column, verbatim: "expected `,` at line 7
+            // column 3" is the whole of what the user needs, and paraphrasing
+            // it would lose the position.
+            notices.push(format!(
+                "{} could not be read ({e}); using the built-in theme",
+                path.display()
+            ));
+            return (BUILTIN, notices);
+        }</code></pre>
+  <span class="src">crates/emma/src/term/theme.rs — <code>load</code>, <code>RESERVED</code></span>
+
+  <p>
+    <code>RESERVED</code> holds one name, <code>emma</code>, so a cloned
+    repository cannot silently change what stock Emma looks like by shipping a
+    <code>themes/emma.json</code>.
+  </p>
+
+  <h2 id="keys">What a file may contain</h2>
+
+  <p class="faint">crates/emma/src/term/theme.rs · the name tables</p>
+<pre><code>/// Every role name a file may use, including the one that is refused — a typo
+/// of `text` should be told about `text`, not about seven names that do not
+/// include it.
+const ROLE_NAMES: [&amp;str; 8] = [
+    "text", "dim", "ok", "err", "warn", "info", "accent", "ground",
+];
+
+/// The settable roles, by the name a file spells them with.
+const SETTABLE: [(&amp;str, Role); 7] = [
+    ("dim", Role::Dim),
+    ("ok", Role::Ok),
+    ("err", Role::Err),
+    ("warn", Role::Warn),
+    ("info", Role::Info),
+    ("accent", Role::Accent),
+    ("ground", Role::Ground),
+];
+
+/// How many problems are worth putting above somebody's first prompt. A wall of
+/// warnings is its own defect; past this the count and the path are what the
+/// user needs, because the file is where they are going to go and look.
+const MAX_NOTICES: usize = 5;</code></pre>
+  <span class="src">crates/emma/src/term/theme.rs — <code>ROLE_NAMES</code>, <code>SETTABLE</code>, <code>MAX_NOTICES</code>, <code>RESERVED</code></span>
+
+  <p>
+    Eight role names exist and seven may be set. The eighth is in the list on
+    purpose, so a person who misspells <code>text</code> is told about
+    <code>text</code> rather than about seven names that do not include it.
+  </p>
+
+  <p>
+    Four top-level keys are recognised: <code>name</code>, <code>about</code>,
+    <code>roles</code> and <code>pairs</code>. Anything else is a notice and is
+    ignored, with two names getting a specific sentence instead of the generic
+    one.
+  </p>
+
+  <p class="faint">crates/emma/src/term/theme.rs · <code>apply</code>, the key loop</p>
+<pre><code>    // Unknown keys are noted and ignored rather than refused, for the reason
+    // `statusline.rs` gives for the same choice: this is a display preference
+    // file, and a build that adds a key should not make the file unreadable to
+    // the build beside it.
+    for key in doc.keys() {
+        match key.as_str() {
+            "name" | "about" | "roles" | "pairs" =&gt; {}
+            "background" | "ground_fill" =&gt; notices.push(format!(
+                "{key} is not settable: the terminal's background is the terminal theme's, \
+                 and Emma cannot ask what it currently is — backgrounds are declared as pairs, \
+                 which set both halves"
+            )),
+            "glyphs" =&gt; notices.push(
+                "glyphs is not settable: the ASCII set exists because a console at code page 437 \
+                 renders box drawing as mojibake, which is detected rather than chosen — \
+                 EMMA_ASCII_FRAME is the supported control"
+                    .to_string(),
+            ),
+            other =&gt; notices.push(format!("{other} is not a theme key; ignored")),
+        }
+    }
+
+    // The filename is the identity, so a `name` that disagrees with it is a
+    // note and not an error: the file still works, and being told is what stops
+    // somebody editing the wrong one for an hour.</code></pre>
+  <span class="src">crates/emma/src/term/theme.rs — <code>apply</code></span>
+
+  <p>
+    Roles are applied before pairs, because a pair may name a role as one of its
+    halves and has to see the theme's value rather than the built-in's.
+  </p>
+
+  <h2 id="roles">Two things a theme may not do</h2>
+
+  <p class="faint">crates/emma/src/term/theme.rs · module doc</p>
+<pre><code>//! **Two things a theme may not do, and both are about a screen nobody here can
+//! see.** It may not set [`Role::Text`], because a theme author has one
+//! terminal and their foreground is what makes Emma unusable for the person
+//! with the opposite background — and that person reads it as Emma being
+//! broken. And it may not set a background on its own: backgrounds are declared
+//! as [`Pair`]s, fg and bg together, because a pair is legible whatever is
+//! behind it and a lone background is a colour against an unknown one.</code></pre>
+  <span class="src">crates/emma/src/term/theme.rs — module doc, <code>apply_roles</code>, <code>pair_halves</code></span>
+
+  <p>
+    Both refusals produce a sentence rather than a silent drop, and
+    <code>roles.text</code>'s is the longest string in the file, because the
+    person it protects is not the person reading the message.
+  </p>
+
+  <p class="faint">crates/emma/src/term/theme.rs · <code>apply_roles</code></p>
+<pre><code>    for (name, spec) in roles {
+        if name == "text" {
+            notices.push(
+                "roles.text is not settable: body text is the terminal's own foreground, and a \
+                 foreground chosen against one background is invisible on the opposite one — \
+                 which the person it breaks for reads as Emma being broken, not the theme"
+                    .to_string(),
+            );
+            continue;
+        }
+        let Some(&amp;(_, role)) = SETTABLE.iter().find(|(n, _)| n == name) else {
+            notices.push(format!(
+                "\"{name}\" is not a role; the roles are {}",
+                ROLE_NAMES.join(", ")
+            ));
+            continue;
+        };
+        if let Some(entry) = role_entry(name, role, spec, notices) {
+            theme.roles[slot(role)] = entry;
+        }
+    }</code></pre>
+  <span class="src">crates/emma/src/term/theme.rs — <code>apply_roles</code></span>
+
+  <h2 id="granularity">The granularity is one role</h2>
+
+  <p class="faint">crates/emma/src/term/theme.rs · <code>role_entry</code>, the doc and the two ends</p>
+<pre><code>/// One role's three values, or `None` when the role keeps the built-in's.
+///
+/// The granularity is the point: a typo in one hex costs that role and leaves
+/// the other seven applied, because a theme thrown away over one character is a
+/// theme its author cannot debug.</code></pre>
+<pre><code>    let Some(rgb) = parse_hex(&amp;hex) else {
+        notices.push(format!(
+            "roles.{name}: \"{hex}\" is not a colour — write #rrggbb or #rgb; \
+             the built-in colour is kept"
+        ));
+        return None;
+    };
+    Some(Entry {
+        rgb,
+        idx: declared_idx.unwrap_or_else(|| derive_index(rgb)),
+        // Inherited, never derived. Distance at sixteen colours is exactly how
+        // an accent becomes the colour that means failure.
+        ansi: declared_ansi.unwrap_or(inherited.ansi),
+    })</code></pre>
+  <span class="src">crates/emma/src/term/theme.rs — <code>role_entry</code>, <code>parse_hex</code>, <code>named_ansi</code>, <code>derive_index</code></span>
+
+  <p>
+    A role may be a bare hex string or an object with <code>hex</code>,
+    <code>ansi256</code> and <code>ansi16</code>. <code>hex</code> is required
+    inside the object form, because there is nothing to derive the other
+    fidelities from without it. An <code>ansi256</code> that is not a whole
+    number from 0 to 255 falls back to the derived cube entry, and an
+    <code>ansi16</code> that is not one of the sixteen names falls back to the
+    built-in role's. Each of those is a notice and none of them costs the role.
+  </p>
+
+  <p>
+    The asymmetry between the two fallbacks is the measured one. The 256-colour
+    index is derived by nearest neighbour over the xterm cube; the 16-colour name
+    is inherited from the built-in role instead, because the same arithmetic at
+    sixteen colours makes <code>Accent</code> a light red, which is how every
+    goal line comes to read as an error. Intent cannot be computed.
+  </p>
+
+  <p>
+    <code>parse_hex</code> accepts <code>#rrggbb</code> and <code>#rgb</code> and
+    nothing else: a bare word is a colour name in some other file's vocabulary
+    and would be a guess in this one. <code>named_ansi</code> accepts
+    <code>grey</code> beside <code>gray</code>, because half the world writes it
+    that way and a spelling is not an intent.
+  </p>
+
+  <h2 id="pairs">Pairs: both halves or neither</h2>
+
+  <p class="faint">crates/emma/src/term/theme.rs · <code>pair_halves</code>, the doc and the collision check</p>
+<pre><code>/// Both halves of a pair, or `None` when the pair keeps the built-in's.
+///
+/// Two invariants, and neither is negotiable. **Both halves or neither**: a
+/// half-declared pair applied half-way is a foreground against a background
+/// nobody chose. And **`fg != bg` after resolution at every fidelity**, checked
+/// on the resolved values rather than on the hexes, because the realistic
+/// failure is two different hexes collapsing onto the same named colour at
+/// sixteen — which a check on the hexes cannot see.
+///
+/// Not attempted: a contrast ratio. WCAG arithmetic against a terminal whose
+/// gamma and palette are unknown is a number that looks authoritative and is
+/// not, and this repository has a lesson about that exact shape of claim.</code></pre>
+<pre><code>    if halves[0].rgb == halves[1].rgb
+        || halves[0].idx == halves[1].idx
+        || halves[0].ansi == halves[1].ansi
+    {
+        notices.push(format!(
+            "pairs.{name} resolves to the same colour on both halves at one of the three \
+             fidelities, which would draw it invisible; the built-in pair is kept"
+        ));
+        return None;
+    }</code></pre>
+  <span class="src">crates/emma/src/term/theme.rs — <code>pair_halves</code>, <code>half_entry</code>, <code>apply_pairs</code></span>
+
+  <p>
+    Two pairs exist, <code>chip</code> and <code>selection</code>, and a half may
+    be a hex or the name of a role. A bare hex has no role to inherit a
+    16-colour name from, so it takes the built-in half's, which is the same rule
+    the roles follow applied to the only other thing that has one.
+    <code>text</code> cannot be a half either: it is not a colour Emma has, it is
+    whatever the terminal is already drawing in.
+  </p>
+
+  <p>
+    The collision check is an <code>||</code> across three fidelities rather than
+    an <code>&amp;&amp;</code>, so a pair that is legible in truecolor and
+    invisible at sixteen colours is rejected outright rather than accepted for
+    the terminal its author happened to have.
+  </p>
+
+  <h2 id="seen">The whole of it, on one file</h2>
+
+  <p>
+    A scratch theme selected from a scratch home, with a wrong name, a bad hex, a
+    role that does not exist, an out-of-range <code>ansi256</code>, an
+    <code>ansi16</code> that is not a colour name, a bare background, a
+    <code>roles.text</code>, and a half-declared pair. Nine problems, five
+    printed, and the boot survives.
+  </p>
+
+<pre><code><span class="c">$ cat ~/.emma/settings.json</span>
+{"theme":"oxide"}
+<span class="c">$ cat ~/.emma/themes/oxide.json</span>
+{
+  "name": "rust",
+  "about": "a scratch theme",
+  "roles": {
+    "accent": "#ff8800",
+    "ok": "nothex",
+    "text": "#ffffff",
+    "warm": "#123456",
+    "err": {"hex": "#cc2222", "ansi16": "burgundy", "ansi256": 900}
+  },
+  "background": "#000000",
+  "pairs": {"chip": {"fg": "#ffffff"}}
+}
+
+<span class="c">$ emma -p "hi"</span>
+<span class="w">! background is not settable: the terminal's background is the terminal theme's, and Emma
+  cannot ask what it currently is — backgrounds are declared as pairs, which set both halves</span>
+<span class="w">! …\fakehome\.emma\themes\oxide.json calls itself "rust"; the filename is the name, so it
+  is "oxide"</span>
+<span class="w">! roles.err.ansi256 must be a whole number from 0 to 255; the nearest cube entry is used
+  instead</span>
+<span class="w">! roles.err.ansi16 is not one of the sixteen colour names; the built-in role's name is kept</span>
+<span class="w">! roles.ok: "nothex" is not a colour — write #rrggbb or #rgb; the built-in colour is kept</span>
+<span class="w">! ...and 3 more problems in …\fakehome\.emma\themes\oxide.json</span>
+
+&gt; hi
+
+= stopped: the API rejected this key (HTTP 401). …</code></pre>
+  <span class="chip cert">certified</span>: release binary at <code>62ab9c3</code>, 2026-08-16, run with <code>HOME</code> and <code>ANTHROPIC_API_KEY</code> pointed at scratch values so the goal opened and then failed on the key rather than on the theme. Notices wrapped for the page; the ellipsis on the last line is Emma's, and the <code>...and 3 more</code> line is <code>cap</code> firing at <code>MAX_NOTICES</code>.
+
+  <p>
+    The overflow line is ASCII rather than an ellipsis character, and
+    <code>cap</code>'s doc says why: it has to print on a console that has not
+    been moved to UTF-8, and a message about a broken file that is itself
+    mojibake is a second problem stacked on the first.
+  </p>
+
+  <h2 id="select">Selecting one</h2>
+
+  <p>
+    <code>/theme</code> lists what is available and which is selected;
+    <code>/theme &lt;name&gt;</code> selects one. <strong>It takes effect at the
+    next start</strong>, and there is no <code>--save</code>, because a theme is
+    read once at startup, so selecting one <em>is</em> writing it down. A live
+    swap would have to reach every drawn surface at once while the retained
+    transcript still holds rows already styled under the old colours, so the
+    realistic outcome of repainting is a half-recoloured screen.
+  </p>
+
+  <p>
+    The name is loaded before it is saved, so a selection known to be broken is
+    never written, and the write is a load-mutate-save round trip through the
+    same shared settings document, for the reason the credentials scar on
+    <a href="config-personal.html#credentials">your own files</a> gives.
+    Under <code>NO_COLOR</code> the preference is still written, with a sentence
+    saying the screen will not change: the person may well be setting up for a
+    terminal they will use later.
+  </p>
+  <span class="src">crates/emma/src/session_command.rs — the <code>/theme</code> region, <code>theme</code>, <code>write_theme</code></span>
+
+  <p>
+    The colour model itself, the roles, the three fidelities and what
+    <code>NO_COLOR</code> does are <a href="terminal.html">The terminal</a>.
+  </p>
+
+  <h2 id="notverified">What this page did not settle</h2>
+
+  <ul class="body">
+    <li>
+      <strong>What the colours look like.</strong> The run above proves the
+      notices and the boot. Nothing here confirms that <code>accent</code>
+      actually drew in <code>#ff8800</code>, because the run was
+      <code>-p</code> and printed no styled output.
+      <span class="chip unv">unverified</span>. Settle it by selecting the same
+      theme, restarting into the frame, and looking at a goal line.
+    </li>
+    <li>
+      <strong><code>/theme</code> itself.</strong> Listing, selecting, the
+      reserved-name notice at selection time and the <code>NO_COLOR</code>
+      sentence are read off <code>session_command.rs</code>. No slash command was
+      typed in this session.
+      <span class="chip unv">unverified</span>. Settle it by running
+      <code>/theme</code> and then <code>/theme oxide</code> and reading both
+      outputs.
+    </li>
+    <li>
+      <strong>Project-scope theme files.</strong> The two-directory order is
+      quoted from <code>theme_dirs</code> and <code>load</code>. Only the home
+      directory was used here; no <code>&lt;harness&gt;/themes/</code> was
+      created, so the shadowing rule was not exercised.
+      <span class="chip unv">unverified</span>. Settle it by putting a file of
+      the same name in both directories with visibly different accents.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · this page covers the "Reading a theme file" region of
+    <code>crates/emma/src/term/theme.rs</code>: <code>load</code>,
+    <code>apply</code>, <code>apply_roles</code>, <code>role_entry</code>,
+    <code>apply_pairs</code>, <code>pair_halves</code>, <code>half_entry</code>,
+    <code>parse_hex</code>, <code>named_ansi</code>, <code>cap</code> and the
+    four constants, plus <code>theme_dirs</code> ·
+    the colour model is <a href="terminal.html">The terminal</a> ·
+    contract: <code>docs/CONTRACT.md</code>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

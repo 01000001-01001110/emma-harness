@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reading .claude/ · Configuration · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav here" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/harness/src/claude.rs · lib.rs</p>
+  <h1>Reading <code>.claude/</code>, and what is not adopted</h1>
+
+  <nav class="chapter">
+      <a class="up" href="config.html">Configuration</a>
+      <a href="config-discovery.html">Discovery</a>
+      <a href="config-files.html">Every file</a>
+      <a href="config-spine.html">The spine</a>
+      <span class="now">Reading <code>.claude/</code></span>
+      <a href="config-skills.html">Skills &amp; commands</a>
+      <a href="config-agents.html">Agents</a>
+      <a href="config-personal.html">Your own files</a>
+      <a href="config-themes.html">Themes</a>
+      <a href="config-notapplied.html">It did not apply</a>
+    </nav>
+
+  <p class="lede">
+    Emma recognises a <code>.claude/</code> directory so that a skill, a command
+    or an agent already written for Claude Code works without being rewritten.
+    That is the whole of the ambition. What this page is mostly about is the
+    other half: the four things that were not carried over, and the
+    one rule people most often assume and which is the reverse of the truth.
+    <strong>Emma does not adopt your global Claude Code configuration.</strong>
+  </p>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven, and a reader can repeat it: a file, a command, a count</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+    <div><span class="chip test">tested</span> a test that was shown to fail</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <h2 id="four">The four that were not carried over</h2>
+
+  <p>
+    The harness was ported from an earlier design, and its module doc opens by
+    listing what was changed rather than leaving a reader to discover the
+    differences one bug at a time.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · module doc, opening</p>
+<pre><code>//! Most of the reasoning below was argued out and paid for in an earlier design
+//! and carried over intact. Four things were deliberately not carried over,
+//! because they were wrong for Emma rather than merely differently named, and
+//! each is documented at the code that changed: discovery no longer walks into
+//! `~/.claude/` (`discover_from`); the "persona files nothing selects → refuse"
+//! rule applies to `.emma/` only (`select_persona`); a persona's `tools` list is
+//! a real filter rather than an assertion that removes nothing
+//! (`select_tools`); and `deny_unknown_fields` stops at the outer level of
+//! `.claude/settings.json` and at `.claude/` skill frontmatter (`claude.rs`,
+//! `ClaudeFront`). The through-line is that the earlier
+//! tool surface was read-only by construction while Emma's writes files and runs
+//! commands, so several rules that were merely tidy there are load-bearing here
+//! — and one that was safe there would be an outage here.</code></pre>
+  <span class="src">crates/harness/src/lib.rs — module doc</span>
+
+  <p>
+    Those four are, in order:
+    <a href="config-discovery.html#notclaude">the discovery skip</a>,
+    <a href="config-agents.html#unselected">the unselected-persona rule</a>,
+    <a href="config-spine.html#tools">the tool allowlist</a>, and the strictness
+    ruling below. The first is listed first, and it is the one this chapter had
+    to be written carefully around, because the plausible guess is the opposite
+    of what the code does.
+  </p>
+
+  <h2 id="settings">What Emma reads out of <code>settings.json</code></h2>
+
+  <p>
+    Three keys, and everything else in the file is ignored without complaint.
+  </p>
+
+  <p class="faint">crates/harness/src/claude.rs · <code>Settings</code></p>
+<pre><code>/// The subset of `settings.json` Emma reads. Unknown keys are ignored on
+/// purpose — see the module docs.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct Settings {
+    #[serde(default)]
+    hooks: BTreeMap&lt;String, Vec&lt;Group&gt;&gt;,
+    /// The bottom row of the screen, when the user named a program to draw it.
+    /// Read rather than ignored as of `statusline.rs`, which carries the whole
+    /// argument — including why this one key is honoured while the rest of the
+    /// file still is not.
+    #[serde(default, rename = "statusLine")]
+    pub(crate) status_line: Option&lt;crate::statusline::StatusLineBlock&gt;,
+    /// The permission rules. Read rather than ignored as of
+    /// `emma::permissions`, which carries the whole argument — including why
+    /// the *shape* is honoured here while the rule vocabulary Emma can actually
+    /// evaluate is much smaller than Claude Code's.
+    ///
+    /// The block itself stays permissive: `defaultMode`, `additionalDirectories`
+    /// and `disableBypassPermissionsMode` are real keys in real files, Emma has
+    /// no opinion about any of them, and the module doc's ruling applies —
+    /// refusing to boot over a key belonging to another program is an outage,
+    /// not a safety property.
+    #[serde(default)]
+    pub(crate) permissions: crate::PermissionBlock,
+}</code></pre>
+  <span class="src">crates/harness/src/claude.rs — <code>Settings</code></span>
+
+  <div class="note warn">
+    <span class="h"><code>deny_unknown_fields</code> cannot go on this file</span>
+    <p>
+      It carries keys Emma has no opinion about, written by a program Emma does
+      not run, and denying them would mean refusing to boot in essentially every
+      real Claude Code repository. A rule that fires on correct configuration is
+      an outage rather than a safety property. So the outer object is permissive
+      and the <code>hooks</code> block inside it is strict, which is where a
+      silently-ignored key would cost something.
+    </p>
+    <p>
+      The consequence for a reader: a misspelling of any key at that level is
+      silence, including a misspelling of a key Emma <em>does</em> read. There is
+      no spelling check available here at all. The compensations that exist are
+      the strict inner blocks and <code>emma config check</code>, which prints
+      what was actually taken.
+    </p>
+  </div>
+
+  <p>
+    The owner's own user-scope file is the demonstration of the scale. It carries
+    ten top-level keys, of which Emma models one.
+  </p>
+
+<pre><code><span class="c">$ python -c "import json;print(sorted(json.load(open(r'C:\Users\owner\.claude\settings.json')).keys()))"</span>
+['$schema', 'agentPushNotifEnabled', 'effortLevel', 'enabledPlugins',
+ 'extraKnownMarketplaces', 'feedbackSurveyState', 'hooks', <span class="s">'permissions'</span>,
+ 'remoteControlAtStartup', 'skipDangerousModePermissionPrompt']</code></pre>
+  <span class="chip obs">observed</span>: the owner&rsquo;s real file, read 2026-08-16. Nobody else has this file, so the ten names are not reproducible; what a reader can repeat is the command, against their own. It has a <code>hooks</code> key too, and user scope is not read for hooks, so that one is ignored along with the other eight.
+
+  <p>
+    Two levels below, the strictness comes back. A hook group and a hook entry
+    are both <code>deny_unknown_fields</code>, because that is where a
+    silently-ignored key changes who a policy guards.
+  </p>
+
+  <p class="faint">crates/harness/src/claude.rs · <code>Group</code>, <code>Entry</code></p>
+<pre><code>/// One matcher and the commands attached to it. Strict, because this is the
+/// security-relevant part: a misspelled `mathcer` here would produce a hook that
+/// guards every tool instead of one, and it would look like it was working.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Group {
+    #[serde(default)]
+    matcher: Option&lt;String&gt;,
+    #[serde(default)]
+    hooks: Vec&lt;Entry&gt;,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Entry {
+    #[serde(rename = "type")]
+    kind: String,
+    command: String,
+    /// Claude Code counts this in **seconds**. Emma's spine counts milliseconds.
+    #[serde(default)]
+    timeout: Option&lt;u64&gt;,
+}</code></pre>
+  <span class="src">crates/harness/src/claude.rs — <code>Group</code>, <code>Entry</code></span>
+
+  <p>
+    Claude Code nests event, then groups, then commands. Emma's own spine is a
+    flat map of name to definition, so the reader synthesises names from
+    positions in the file and multiplies the timeout by a thousand.
+  </p>
+
+  <p class="faint">crates/harness/src/claude.rs · <code>Settings::into_hook_defs</code></p>
+<pre><code>    /// Flatten Claude Code's event → groups → commands nesting into Emma's flat
+    /// `name → HookDef` map.
+    ///
+    /// Names are synthesised as `&lt;Event&gt;[g][h]` from the position in the file.
+    /// They are stable for a given file and they sort deterministically, which
+    /// is all the ordering contract requires; there is nothing in the source
+    /// format to name them after.
+    pub(crate) fn into_hook_defs(self, root: &amp;Path) -&gt; Result&lt;BTreeMap&lt;String, HookDef&gt;&gt; {
+        let mut out = BTreeMap::new();
+        for (event, groups) in self.hooks {
+            // The loud failure. Emma implements three events; the rest are real
+            // Claude Code events that would silently never fire here, and an
+            // operator who wrote a `Stop` guard would believe they had one.
+            HookEvent::parse(&amp;event).with_context(|| {
+                format!("{}: hooks.{event}", root.join("settings.json").display())
+            })?;
+            for (g, group) in groups.into_iter().enumerate() {
+                for (h, entry) in group.hooks.into_iter().enumerate() {
+                    let name = format!("{event}[{g}][{h}]");
+                    if entry.kind != "command" {
+                        bail!(
+                            "{}: hook `{name}` has type `{}`; Emma runs command hooks only",
+                            root.join("settings.json").display(),
+                            entry.kind
+                        );
+                    }</code></pre>
+  <span class="src">crates/harness/src/claude.rs — <code>Settings::into_hook_defs</code></span>
+
+  <p>
+    The unit conversion is one line and is the kind of thing that is invisible
+    until a five-second guard behaves like a five-millisecond one:
+    <code>timeout_ms: entry.timeout.map(|s| s.saturating_mul(1_000))</code>, with
+    the comment <code>// Seconds there, milliseconds here.</code> above it.
+  </p>
+
+  <h2 id="command">The one place Emma refuses what Claude Code accepts</h2>
+
+  <p>
+    Claude Code's <code>command</code> is a shell string: it may pipe, expand
+    variables, or name any executable on the box. Emma canonicalises a path,
+    containment-checks it inside <code>&lt;root&gt;/hooks/</code>, and execs an
+    argv with a cleared environment. Both cannot be true at once.
+  </p>
+
+  <p class="faint">crates/harness/src/claude.rs · <code>translate_command</code></p>
+<pre><code>/// Turn a Claude Code command string into a path Emma can exec, or refuse.
+///
+/// Used by both things a `settings.json` can point Emma at — a hook and a
+/// `statusLine` — because they are the same hazard wearing two names, and
+/// `name` is what puts the caller into the sentence.
+///
+/// **This is the one place the two systems genuinely disagree, and Emma does not
+/// blink.** Claude Code's `command` is a shell string: it may pipe, expand
+/// variables, or name any executable on the box. Emma canonicalises a path,
+/// containment-checks it inside `hooks/`, and execs an argv with a cleared
+/// environment. Honouring a shell string would mean dropping every one of those,
+/// at the exact point where Emma is deciding whether to let a model run `Bash`.
+///
+/// So: `$CLAUDE_PROJECT_DIR/.claude/hooks/x.sh` and `.claude/hooks/x.sh` and
+/// `hooks/x.sh` all resolve. Anything else is a startup error that says what to
+/// do about it — which is the same ruling as the unimplemented event, for the
+/// same reason. A guard that cannot be honoured must not be quietly dropped.
+pub(crate) fn translate_command(root: &amp;Path, name: &amp;str, raw: &amp;str) -&gt; Result&lt;String&gt; {
+    let dir_name = root
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ".claude".into());
+    let mut rest = raw.trim();
+    for prefix in ["${CLAUDE_PROJECT_DIR}/", "$CLAUDE_PROJECT_DIR/"] {
+        if let Some(stripped) = rest.strip_prefix(prefix) {
+            rest = stripped;
+            break;
+        }
+    }
+    // `$CLAUDE_PROJECT_DIR` names the directory *containing* `.claude/`, so a
+    // path relative to it still carries the directory name.
+    let rest = rest
+        .strip_prefix(&amp;format!("{dir_name}/"))
+        .unwrap_or(rest)
+        .trim_start_matches("./");
+
+    if rest.is_empty() || rest.contains(SHELL_METACHARACTERS) || rest.contains(char::is_whitespace)
+    {
+        bail!(
+            "{name}: `{raw}` is a shell command. Emma execs a contained \
+             executable with a cleared environment and cannot honour a shell \
+             string without dropping that. Move it into {}/hooks/ and reference \
+             it by path",
+            root.display()
+        );
+    }
+    // `is_absolute()` alone is not enough: on Windows `/usr/bin/true` is a
+    // *relative* path, so a unix-authored config would fall through to the
+    // canonicalise-and-contain check and be refused for the wrong reason — with
+    // an error about a missing file rather than about containment. The rule is
+    // the same on both platforms, so the check has to be too.
+    let rooted =
+        rest.starts_with('/') || rest.starts_with('\\') || rest.as_bytes().get(1) == Some(&amp;b':');
+    if rooted || Path::new(rest).is_absolute() {
+        bail!(
+            "{name}: `{raw}` is an absolute path. A command named by \
+             configuration must live inside {}/hooks/ so the config cannot run \
+             arbitrary executables",
+            root.display()
+        );
+    }
+    Ok(rest.to_string())
+}</code></pre>
+  <span class="src">crates/harness/src/claude.rs — <code>translate_command</code></span>
+
+  <p>
+    Three prefixes are stripped and after that the string has to be a plain
+    relative path. Whitespace is refused as a class rather than as a list, and
+    the set that produced that decision is worth reading, because it is a scar:
+  </p>
+
+  <p class="faint">crates/harness/src/claude.rs · <code>SHELL_METACHARACTERS</code></p>
+<pre><code>/// Anything in a command string that means a shell would have to interpret it.
+/// Emma execs an argv, so a string needing a shell cannot be honoured — see
+/// `translate_command`.
+///
+/// Whitespace is handled separately and as a class rather than listed here. It
+/// used to be one explicit `' '` check beside this set, which left the tab out:
+/// `hooks/guard.sh\t--strict` walked past the refusal and failed further down as
+/// a missing file, so the operator got the right verdict with the wrong sentence
+/// pointing at the wrong problem. Every character that separates arguments has
+/// to be caught by the same rule, or the next one to be forgotten is the next
+/// one added.
+///
+/// The rest are the shell's own operators: redirection and pipes, command and
+/// variable substitution, quoting, globbing and brace/tilde expansion, history
+/// and comments, and `%` for Windows' own expansion. A filename containing one
+/// of these is refused; renaming a hook script is cheaper than deciding at
+/// startup which of them a shell would have acted on.
+const SHELL_METACHARACTERS: &amp;[char] = &amp;[
+    '|', '&amp;', ';', '&lt;', '&gt;', '(', ')', '$', '`', '"', '\'', '*', '?', '[', ']', '{', '}', '~', '#',
+    '!', '%', '=',
+];</code></pre>
+  <span class="src">crates/harness/src/claude.rs — <code>SHELL_METACHARACTERS</code></span>
+
+  <p>
+    Twenty-two characters, and the practical effect is that a hook script cannot
+    be named <code>guard!.sh</code> or <code>pre=check.sh</code>. Its own doc
+    makes the trade explicit: renaming a hook script is cheaper than deciding at
+    startup which of these a shell would have acted on.
+    <span class="chip cert">certified</span>: 22 entries, countable in the quoted
+    array.
+  </p>
+
+  <h2 id="user">User scope: <code>deny</code> rules, and nothing else</h2>
+
+  <p>
+    This is the one place a file in the home directory reaches into a project
+    run, and it is worth being exact about what crosses.
+    <code>~/.claude/settings.json</code> contributes its <code>deny</code> list.
+    It never contributes <code>allow</code> and never contributes
+    <code>ask</code>. It is not read as a harness, does not supply hooks, does
+    not supply a status line, and does not supply agents or skills.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>user_permissions</code>, the doc</p>
+<pre><code>/// The **user scope**: `~/.claude/settings.json`, and `deny` rules only.
+///
+/// **This is a deliberate divergence from Claude Code, and it is the one
+/// judgement call in the feature.** There, user settings carry `allow`, `deny`
+/// and `ask`, and all three apply in every project. Here only `deny` crosses,
+/// for the reason `discover_in` already refuses to adopt `~/.claude/` as a
+/// harness: it is *another program's* global configuration, and a grant made
+/// there was made for that program, in a session Emma was not part of, possibly
+/// years ago.
+///
+/// This is not hypothetical. The owner's own `~/.claude/settings.json`, at the
+/// time this was written, carries `Bash(rm:*)`, `Bash(bash:*)` and
+/// `Bash(powershell.exe:*)` in its `allow` list, plus `"defaultMode":
+/// "dontAsk"`. Honouring user-scope `allow` would have handed Emma an
+/// unprompted shell in every repository on the machine, granted by nobody, on
+/// the first run after this feature shipped.
+///
+/// `deny` is safe in the other direction and is imported for exactly that
+/// reason: it only ever removes a capability, it cannot be the mechanism of a
+/// surprise, and a host somebody blocked globally is a host they meant. `ask`
+/// is left out with `allow` rather than with `deny` — it is not restrictive
+/// enough to be worth importing and not permissive enough to be dangerous, and
+/// a rule that only prompts more is not worth a second scope to explain.</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>user_permissions</code></span>
+
+  <p>
+    The function is short enough to read whole, and the two things worth
+    noticing are that the <code>deny</code> list is moved into a fresh block with
+    the other two defaulted away, and that a parse failure returns an empty
+    vector rather than a <code>?</code>.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>user_permissions</code>, the body</p>
+<pre><code>pub fn user_permissions(home: Option&lt;&amp;Path&gt;) -&gt; Result&lt;Vec&lt;PermissionEntry&gt;&gt; {
+    let Some(home) = home else {
+        return Ok(Vec::new());
+    };
+    let file = home.join(CLAUDE_DIR_NAME).join("settings.json");
+    let raw = read_if_present(&amp;file)?;
+    if raw.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    #[derive(Deserialize)]
+    struct User {
+        #[serde(default)]
+        permissions: PermissionBlock,
+    }
+    // Never `?`. A personal settings file belonging to another program is not
+    // this project's to refuse to start over — and the only thing taken from it
+    // is restrictions, so failing to read it can only leave Emma asking more
+    // often.
+    let Ok(parsed) = serde_json::from_str::&lt;User&gt;(&amp;raw) else {
+        return Ok(Vec::new());
+    };
+    let mut entries = Vec::new();
+    PermissionBlock {
+        deny: parsed.permissions.deny,
+        ..Default::default()
+    }
+    .into_entries(&amp;file, &amp;mut entries);
+    Ok(entries)
+}</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>user_permissions</code></span>
+
+  <p>
+    The <code>..Default::default()</code> is where <code>allow</code> and
+    <code>ask</code> stop. They are parsed, because the same
+    <code>PermissionBlock</code> is used everywhere, and then dropped rather than
+    filtered later, so there is no path by which a user-scope grant reaches the
+    matcher.
+  </p>
+
+  <p>
+    Here it is happening. A scratch home holds a
+    <code>~/.claude/settings.json</code> with one rule in each list; a scratch
+    project holds its own <code>.claude/settings.json</code> with one rule in
+    each list. Three rules arrive, and the one that did not is the user-scope
+    <code>allow</code>:
+  </p>
+
+<pre><code><span class="c">$ cat $X/.claude/settings.json</span>
+{"permissions":{"allow":["Bash(rm:*)"],"deny":["WebFetch(domain:blocked.test)"]}}
+<span class="c">$ HOME=$X emma config check</span>
+permissions    3 rule(s)
+               deny  WebFetch(domain:evil.test)     …\cfg\cc\.claude\settings.json
+               allow Bash(ls:*)                     …\cfg\cc\.claude\settings.json
+               <span class="s">deny  WebFetch(domain:blocked.test)  …\home2\.claude\settings.json</span>
+               <span class="w">! …\cfg\cc\.claude\settings.json: `Bash(ls:*)` is an allow rule Emma cannot
+               evaluate — `ls:*` is not a specifier this build understands, so it
+               approves nothing and those calls will still ask.</span>
+               a remembered grant is written to …\cfg\cc\.claude\settings.local.json</code></pre>
+  <span class="chip cert">certified</span>: release binary at <code>62ab9c3</code>, two scratch trees, 2026-08-16. <code>Bash(rm:*)</code> is in the user file and is absent from the report; the user-scope <code>deny</code> is present and carries its own path. Repeat it by pointing <code>HOME</code> at a directory holding a <code>.claude/settings.json</code> with both lists.
+
+  <p>
+    The same thing against the owner's real file, from this repository, is the
+    quieter half of the demonstration: sixty-four standing grants for another
+    program, contributing nothing.
+  </p>
+
+<pre><code><span class="c">$ python -c "...json.load(...)['permissions']..."</span>
+allow: 64 deny: 0 ask: 0
+defaultMode: 'auto'
+sample allow: ['Bash(bash setup:*)', 'Bash(bash:*)', 'Bash(powershell.exe:*)', …, 'Bash(rm:*)']
+
+<span class="c">$ emma config check          # in C:\src\emma</span>
+permissions    <span class="w">(none — every write, command and host is asked about)</span></code></pre>
+  <span class="chip obs">observed</span>: the owner&rsquo;s <code>C:\Users\owner\.claude\settings.json</code>, counted 2026-08-16. The counts are one machine&rsquo;s and will drift. The <code>permissions (none)</code> line beside them is <span class="chip cert">certified</span> and repeats from any clone of this repository whose home directory carries no <code>deny</code> rules.
+
+  <div class="note warn">
+    <span class="h">Two documents are out of date, in different ways</span>
+    <p>
+      <code>user_permissions</code>'s own doc quotes the owner's file as carrying
+      <code>"defaultMode": "dontAsk"</code>. That file now reads
+      <code>"defaultMode": "auto"</code>. The three <code>allow</code> rules it
+      names are all still there and the argument is unaffected, but the quoted
+      value is stale.
+      <span class="chip cert">certified</span>: read from the file 2026-08-16;
+      the count is 64 <code>allow</code>, 0 <code>deny</code>, 0 <code>ask</code>.
+    </p>
+    <p>
+      <code>notes/claude-code-compatibility.md</code>'s mapping table is stale in
+      one direction and says so in a header note dated 2026-08-16: Emma now reads
+      <em>more</em> of <code>.claude/</code> than the table lists. Agent files are
+      delegation targets as well as persona material, the
+      <code>permissions</code> block is read from three files, and
+      <code>statusLine</code> is honoured. Nothing in the table maps less than it
+      says, which is why the note calls the staleness one-directional.
+    </p>
+  </div>
+
+  <h2 id="rest">What is out of scope entirely</h2>
+
+  <p>
+    Emma runs on the Anthropic API. It does not shell out to the
+    <code>claude</code> binary and does not use the Agent SDK, decided
+    2026-08-09 after the CLI was checked against version <code>2.1.226</code>
+    rather than assumed. MCP servers are out of scope until there is a reason.
+    Neither decision is a gap in this chapter: they are why the compatibility
+    surface is a set of file formats rather than a protocol.
+  </p>
+  <span class="src">crates/harness/src/claude.rs (module doc); notes/claude-code-compatibility.md</span>
+
+  <h2 id="notverified">What this page did not settle</h2>
+
+  <ul class="body">
+    <li>
+      <strong>The <code>$CLAUDE_PROJECT_DIR</code> prefixes.</strong> All three
+      accepted spellings are read off <code>translate_command</code>. The scratch
+      harnesses here used the bare <code>hooks/x.sh</code> form only.
+      <span class="chip unv">unverified</span>. Settle it with three
+      <code>settings.json</code> files naming the same script three ways; all
+      three should resolve to one <code>hooks</code> entry with the same hash in
+      <code>config check</code>.
+    </li>
+    <li>
+      <strong>The tab in a command string.</strong> The scar the metacharacter
+      set records is a tab walking past a space-only check. The current code
+      catches whitespace as a class, which covers it by construction, but no
+      tab-separated command string was fed to the binary here.
+      <span class="chip unv">unverified</span>. Settle it with
+      <code>"command": "hooks/guard.sh\t--strict"</code>; the error should say
+      "is a shell command" rather than "no such command".
+    </li>
+    <li>
+      <strong>Whether user-scope <code>deny</code> actually blocks.</strong> This
+      page certifies that the rule arrives, with its source path. Whether the
+      matcher then refuses a <code>WebFetch</code> to that host is
+      <a href="consent-matching.html">Consent &amp; permissions</a> and was not
+      exercised here.
+      <span class="chip unv">unverified</span> on this page. Settle it by asking
+      Emma to fetch the denied host and reading what the gate says.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · this page covers <code>crates/harness/src/claude.rs</code>'s
+    settings half (<code>Settings</code>, <code>Group</code>, <code>Entry</code>,
+    <code>read</code>, <code>into_hook_defs</code>,
+    <code>translate_command</code>, <code>SHELL_METACHARACTERS</code>) and
+    <code>user_permissions</code> · its agents half is
+    <a href="config-agents.html">Agents</a> ·
+    contract: <code>docs/CONTRACT.md</code>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

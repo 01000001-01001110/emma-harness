@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Discovery · Configuration · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav here" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/harness/src/lib.rs · the Discovery region</p>
+  <h1>Finding the harness, and the two places the walk refuses to look</h1>
+
+  <nav class="chapter">
+      <a class="up" href="config.html">Configuration</a>
+      <span class="now">Discovery</span>
+      <a href="config-files.html">Every file</a>
+      <a href="config-spine.html">The spine</a>
+      <a href="config-claude.html">Reading <code>.claude/</code></a>
+      <a href="config-skills.html">Skills &amp; commands</a>
+      <a href="config-agents.html">Agents</a>
+      <a href="config-personal.html">Your own files</a>
+      <a href="config-themes.html">Themes</a>
+      <a href="config-notapplied.html">It did not apply</a>
+    </nav>
+
+  <p class="lede">
+    One question, answered before a single byte of configuration is read: which
+    directory is the harness. A wrong answer here boots Emma on a prompt nobody
+    chose, and it then writes files and runs commands under that prompt without
+    anything looking wrong. Two of the rules below exist because that already
+    happened, once each.
+  </p>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven, and a reader can repeat it: a file, a command, a count</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+    <div><span class="chip test">tested</span> a test that was shown to fail</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <h2 id="shape">The walk</h2>
+
+  <p>
+    Emma finds its harness the way git finds <code>.git</code>: from the working
+    directory, climbing. Each ancestor is asked for <code>.emma/</code> and then
+    for <code>.claude/</code>, and the first directory that answers is the whole
+    answer. Nearest ancestor wins. Within one directory <code>.emma/</code>
+    wins, and the loser is ignored rather than merged, because merging means
+    "which file did this instruction come from" stops having an answer.
+  </p>
+  <span class="src">crates/harness/src/lib.rs — <code>discover</code>, <code>discover_from</code>, <code>discover_in</code></span>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>discover</code>, <code>discover_from</code></p>
+<pre><code>/// Find the harness the way git finds `.git`: walk up from the working
+/// directory. `EMMA_ROOT` overrides it outright.
+pub fn discover() -&gt; Result&lt;PathBuf&gt; {
+    let cwd = std::env::current_dir().context("reading the working directory")?;
+    discover_from(&amp;cwd, std::env::var_os(ROOT_ENV).map(PathBuf::from))
+}
+
+/// The testable half: `overridden` is threaded rather than read, so a test does
+/// not have to mutate process environment.
+///
+/// **Precedence, decided before it is discovered.** Nearest ancestor wins, and
+/// within a single directory `.emma/` beats `.claude/` outright — the loser is
+/// ignored entirely, never merged. Merging is convenient and is exactly how a
+/// configuration system becomes impossible to reason about, because the answer
+/// to "where did this instruction come from" stops being a file.
+pub fn discover_from(start: &amp;Path, overridden: Option&lt;PathBuf&gt;) -&gt; Result&lt;PathBuf&gt; {
+    discover_in(start, overridden, home_dir())
+}</code></pre>
+  <span class="src">crates/harness/src/lib.rs — the Discovery region</span>
+
+  <p>
+    Three functions for one walk, and the middle one earns its place in the
+    call graph as the seam a test binds to. <code>discover</code> reads the
+    process environment and nothing else does, so every rule below can be
+    exercised without a test mutating state that the rest of a threaded test
+    binary shares. <code>discover_in</code> takes the home directory as a third
+    argument for the same reason, and its own doc records why that seam had to be
+    widened a second time.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>discover_in</code>, the doc comment</p>
+<pre><code>/// The same walk with the home directory threaded in as well, so the result does
+/// not depend on the environment of the process that called it.
+///
+/// It exists because `discover_from` did not thread it and every test of the
+/// home-scope rules below therefore either mutated `HOME` — shared state in a
+/// binary cargo runs threaded — or walked out of its scratch directory into the
+/// developer's real home and answered differently on different machines. Both of
+/// those happened, and the second one is how the `~/.emma/` defect below was
+/// found. `discover_from` is kept and delegates here; it is the signature the
+/// binary calls.</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>discover_in</code></span>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 940 366" role="img" aria-label="Harness discovery: EMMA_ROOT overrides everything; otherwise the walk climbs from the working directory trying .emma then .claude in each ancestor, first hit wins, the home directory offers only .emma and only when it holds config.json or personas, the home directory's .claude is never considered, and nothing found is a refusal to start.">
+        <defs>
+          <marker id="disc-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
+          </marker>
+          <marker id="disc-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
+          </marker>
+        </defs>
+
+        <rect class="hl" x="16" y="14" width="216" height="44" rx="3"/>
+        <text class="sm on-hl" x="30" y="34">EMMA_ROOT set?</text>
+        <text class="tiny" x="30" y="50">read, not searched for</text>
+
+        <path class="edge" marker-end="url(#disc-arrow)" d="M232,36 L296,36"/>
+        <text class="tiny" x="248" y="28">yes</text>
+        <rect class="box" x="300" y="14" width="330" height="44" rx="3"/>
+        <text class="sm" x="314" y="34">that directory, whatever it is named</text>
+        <text class="tiny" x="314" y="50">not a directory → startup error, and no search happens</text>
+
+        <path class="edge-hl" marker-end="url(#disc-arrow-hl)" d="M124,58 L124,84"/>
+        <text class="tiny" x="134" y="76">no</text>
+
+        <text class="tiny" x="16" y="100">then each ancestor of the working directory, nearest first, first hit wins:</text>
+
+        <path class="edge-hl" marker-end="url(#disc-arrow-hl)" d="M124,112 L124,284"/>
+        <text class="tiny" x="16" y="200">up the tree</text>
+
+        <rect class="box" x="146" y="112" width="200" height="34" rx="3"/>
+        <text class="sm" x="160" y="134">cwd/.emma</text>
+        <path class="edge" marker-end="url(#disc-arrow)" d="M346,129 L368,129"/>
+        <rect class="box" x="372" y="112" width="200" height="34" rx="3"/>
+        <text class="sm" x="386" y="134">cwd/.claude</text>
+        <text class="tiny" x="592" y="133">tried only when there is no .emma/ beside it</text>
+
+        <rect class="box" x="146" y="158" width="200" height="34" rx="3"/>
+        <text class="sm" x="160" y="180">../.emma</text>
+        <path class="edge" marker-end="url(#disc-arrow)" d="M346,175 L368,175"/>
+        <rect class="box" x="372" y="158" width="200" height="34" rx="3"/>
+        <text class="sm" x="386" y="180">../.claude</text>
+        <text class="tiny" x="592" y="179">the loser is ignored, never merged</text>
+
+        <text class="sm" x="240" y="214">…</text>
+        <text class="sm" x="466" y="214">…</text>
+
+        <rect class="box" x="146" y="234" width="200" height="50" rx="3"/>
+        <text class="sm" x="160" y="254">$HOME/.emma</text>
+        <text class="tiny" x="160" y="270">only with config.json or personas/</text>
+        <rect class="ghost" x="372" y="234" width="200" height="50" rx="3"/>
+        <text class="tiny" x="386" y="256">$HOME/.claude</text>
+        <text class="tiny" x="386" y="272">never considered, never listed</text>
+        <text class="tiny" x="592" y="255">the walk stops here: above it are</text>
+        <text class="tiny" x="592" y="271">C:\Users and /home, which belong to nobody</text>
+
+        <path class="edge-hl" marker-end="url(#disc-arrow-hl)" d="M246,284 L246,308"/>
+        <rect class="box" x="146" y="312" width="426" height="44" rx="3"/>
+        <text class="sm" x="160" y="332">nothing found → refuse to start</text>
+        <text class="tiny" x="160" y="348">every path searched is printed. there is no compiled-in fallback prompt.</text>
+      </svg>
+    </div>
+    <figcaption>
+      Read off <code>discover_in</code>. The two things worth noticing are on
+      the bottom row: the home directory offers only <code>.emma/</code>, and it
+      offers it only when somebody put a <code>config.json</code> or a
+      <code>personas/</code> there by hand.
+    </figcaption>
+  </figure>
+
+  <h2 id="body">The loop, in full</h2>
+
+  <p>
+    Every rule this page describes is in one function. It is quoted whole,
+    comments included, because in this one the comments are three-quarters of
+    what is being asserted.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>discover_in</code></p>
+<pre><code>pub fn discover_in(
+    start: &amp;Path,
+    overridden: Option&lt;PathBuf&gt;,
+    home: Option&lt;PathBuf&gt;,
+) -&gt; Result&lt;PathBuf&gt; {
+    if let Some(p) = overridden {
+        if p.is_dir() {
+            return Ok(p);
+        }
+        // An override that fell back to a search would boot the agent on
+        // configuration nobody asked for.
+        bail!("{ROOT_ENV}=`{}` is not a directory", p.display());
+    }
+    let home = home.map(|h| real(&amp;h));
+    let mut searched = Vec::new();
+    for dir in start.ancestors() {
+        // The home directory gets different rules, and this is the comparison
+        // that decides whether they apply. It canonicalises both sides rather
+        // than comparing bytes, because "is this the same directory" is a
+        // question for the filesystem and not for a string: case is only one of
+        // the ways two spellings of one directory differ, alongside a trailing
+        // separator, a `..` in the middle, a Windows 8.3 short name, and a home
+        // reached through a symlink. A case-insensitive compare would fix the one
+        // that bit us — `C:\Users\Owner` against `C:\Users\owner`, which left the
+        // skip below inert and adopted the user's global `.claude/` — and leave
+        // the rest. `real` falls back to the path as given when it cannot ask, so
+        // a home that does not exist is still compared, just exactly.
+        let at_home = home.as_deref() == Some(real(dir).as_path());
+
+        // `~/.claude/` is Claude Code's **user-scope** configuration — global
+        // permissions, global agents, global skills, for a different program.
+        // Adopting it as this project's harness would hand Emma standing
+        // instructions from a directory the user never associated with this
+        // project, which is the "booted on the wrong prompt" failure arriving
+        // through the front door. It is skipped, and skipped so completely that
+        // it never reaches `searched`: an error listing a path Emma declined to
+        // consider reads as a bug in the search.
+        let names: &amp;[&amp;str] = if at_home {
+            &amp;[ROOT_DIR_NAME]
+        } else {
+            &amp;[ROOT_DIR_NAME, CLAUDE_DIR_NAME]
+        };</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>discover_in</code>, first half</span>
+
+  <p>
+    The rest of the loop is the candidate test, the eligibility rule that applies
+    only in the home directory, and the two exits.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>discover_in</code>, continued</p>
+<pre><code>        for name in names {
+            let candidate = dir.join(name);
+            // `~/.emma/` is Emma's own, so it is eligible — but only when it
+            // holds something a person put there on purpose.
+            //
+            // It used to be eligible for existing, and `emma api` creates it:
+            // storing a credential wrote `~/.emma/credentials.json`, and from
+            // that moment every project without a harness of its own adopted the
+            // home directory and booted with no instructions, no persona and the
+            // full write-capable tool surface. Nobody chose that; it was the side
+            // effect of saving a key. **The thing that makes a directory a
+            // harness has to be the thing a person put there on purpose** —
+            // `config.json` or `personas/`. Credentials and `sessions/` are
+            // Emma's bookkeeping and say nothing about how Emma is configured.
+            //
+            // Note what this is *not*: it is not the empty-harness boot. An
+            // `~/.emma/` holding only credentials is not a harness at all, the
+            // walk goes past it, and the operator gets the absent-harness
+            // refusal rather than a silent boot on nothing.
+            let eligible = !at_home || configured_by_hand(&amp;candidate);
+            if candidate.is_dir() &amp;&amp; eligible {
+                return Ok(candidate);
+            }
+            searched.push(match candidate.is_dir() {
+                // Named anyway, and named with the reason. The operator can see
+                // the directory; a refusal that omitted it would read as a search
+                // that never looked.
+                true =&gt; format!(
+                    "  {} (present, but holds no config.json or personas/, so it is \
+                     not a harness)",
+                    candidate.display()
+                ),
+                false =&gt; format!("  {}", candidate.display()),
+            });
+        }
+        // The home directory is the top of the search. Above it are `C:\Users`
+        // and `/home` — directories that belong to the machine rather than to any
+        // project, so a harness adopted from one of them is the same wrong-prompt
+        // boot with a longer walk. It also keeps discovery's answer a function of
+        // the tree the caller named.
+        if at_home {
+            break;
+        }
+    }
+    // No compiled-in fallback prompt, on purpose: an agent that boots without
+    // its configuration acts confidently from whatever it did have.
+    bail!(
+        "no `{ROOT_DIR_NAME}/` or `{CLAUDE_DIR_NAME}/` found. Searched, nearest first:\n{}",
+        searched.join("\n")
+    )
+}</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>discover_in</code>, second half</span>
+
+  <h2 id="notclaude">What is not adopted, and the sentence that proves it</h2>
+
+  <p>
+    <strong>The home directory's <code>.claude/</code> is never read as a
+    harness.</strong> This is the first of four things the crate's module doc
+    lists as not carried over from the design this harness was ported from, and it is the one most likely to be mis-stated, because the
+    obvious guess is that a program which recognises <code>.claude/</code> in a
+    project would also recognise the global one. It does not. It is another
+    program's user-scope configuration: global permissions, global agents, global
+    skills, chosen in sessions Emma was not part of.
+  </p>
+
+  <p>
+    The skip is complete enough that the path never enters the list of searched
+    directories, so a refusal cannot be misread as a search that looked and found
+    nothing.
+  </p>
+
+<pre><code><span class="c">$ ls -d ~/.claude ~/.emma</span>
+/c/Users/owner/.claude/  /c/Users/owner/.emma/
+
+<span class="c">$ cd /tmp/scratch/t3/sub &amp;&amp; emma config check</span>
+Error: no `.emma/` or `.claude/` found. Searched, nearest first:
+  …\scratchpad\cfg\t3\sub\.emma
+  …\scratchpad\cfg\t3\sub\.claude
+  …\scratchpad\cfg\t3\.emma
+  …\scratchpad\cfg\t3\.claude
+  <span class="c">… one .emma/.claude pair per ancestor, sixteen lines elided …</span>
+  C:\Users\owner\AppData\.emma
+  C:\Users\owner\AppData\.claude
+  C:\Users\owner\<span class="s">.emma (present, but holds no config.json or personas/, so it is not a harness)</span>
+<span class="c">// that is the last line. No C:\Users\owner\.claude, and nothing above home.</span></code></pre>
+  <span class="chip cert">certified</span>: release binary at commit <code>62ab9c3</code>, run 2026-08-16 in a scratch tree three levels deep. Middle paths elided; the last line is verbatim, and there is no line after it. The <em>shape</em> of the list repeats anywhere.
+  <span class="chip obs">observed</span>: that this particular machine has both a <code>~/.claude/</code> and a <code>~/.emma/</code> for the walk to pass, seen 2026-08-16, is the owner&rsquo;s and is not something a reader can reproduce on their own box.
+
+  <p>
+    The same thing on a home directory a test controls, where both directories
+    can be made to exist and neither is allowed to win:
+  </p>
+
+<pre><code><span class="c"># $X/.claude/settings.json and $X/.emma/ both exist; cwd is $X/sub</span>
+<span class="c">$ HOME=$X emma config check</span>
+Error: no `.emma/` or `.claude/` found. Searched, nearest first:
+  …\home2\sub\.emma
+  …\home2\sub\.claude
+  …\home2\<span class="s">.emma (present, but holds no config.json or personas/, so it is not a harness)</span>
+
+<span class="c">$ echo '{}' &gt; $X/.emma/config.json &amp;&amp; HOME=$X emma config check | head -3</span>
+cwd            …\home2\sub
+harness        …\home2\.emma
+flavor         emma</code></pre>
+  <span class="chip cert">certified</span>: same binary, same day. Three lines of search for a directory holding two candidate harnesses, and <code>.claude</code> is not one of them. Adding <code>config.json</code> by hand is what makes the other one a harness.
+
+  <div class="note warn">
+    <span class="h">Both home rules key off <code>$HOME</code>, and only off <code>$HOME</code></span>
+    <p>
+      <code>home_dir</code> reads <code>HOME</code>, then <code>USERPROFILE</code>,
+      and the eligibility rule and the <code>.claude</code> skip both apply at
+      whichever directory that names. A process whose <code>HOME</code> points
+      somewhere other than the real profile therefore walks through the real
+      profile as an ordinary ancestor, where <code>.emma/</code> is eligible for
+      existing and <code>.claude/</code> is a candidate.
+      <span class="chip obs">observed</span>: with <code>HOME</code> set to a
+      scratch directory and the working directory under
+      <code>C:\Users\owner\AppData\Local\Temp</code>, <code>config check</code>
+      reported <code>harness C:\Users\owner\.emma</code>, which the same binary
+      declines to adopt one command earlier when <code>HOME</code> is correct.
+      Seen once, on the owner&rsquo;s machine, 2026-08-16, and it depended on
+      that profile holding a <code>~/.emma/config.json</code> which this
+      session had just put there and then removed.
+    </p>
+    <p>
+      This is the failure the canonicalising comparison was written against,
+      reached through a different door: there the two spellings differed by case,
+      here they differ because something set the variable. Nothing in the source
+      claims to cover it, and the honest reading of the comment is that it is
+      about spellings of one path rather than about two different paths.
+    </p>
+  </div>
+
+  <h2 id="eligible">Why the home directory's <code>.emma/</code> has a second rule</h2>
+
+  <p>
+    It used to be eligible for existing. <code>emma api</code> creates
+    <code>~/.emma/</code> to store a key, so from the moment anybody saved a
+    credential, every project without a harness of its own adopted the home
+    directory and booted with no instructions, no persona, and the full
+    write-capable tool surface. Nobody chose that. It was the side effect of
+    saving a key.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>configured_by_hand</code>, <code>real</code>, <code>home_dir</code></p>
+<pre><code>/// What makes a directory in the home directory a harness rather than a place
+/// Emma keeps its own files. Deliberately narrow: these are the two things that
+/// only exist because someone wrote them.
+///
+/// The three files that turn up in `~/.emma/` and are **not** counted:
+/// `credentials.json` and `sessions/`, which Emma writes for itself, and
+/// `settings.json`, which is the person's own model preference and whose own
+/// module doc says it is deliberately not the harness. A personal default for
+/// one field is not a statement about what Emma should be told.
+fn configured_by_hand(dir: &amp;Path) -&gt; bool {
+    dir.join("config.json").is_file() || dir.join("personas").is_dir()
+}
+
+/// The filesystem's own answer for a path, for comparing two of them. Falls back
+/// to the path as given when the path does not exist or cannot be read, which
+/// makes the comparison exact again rather than wrong.
+fn real(path: &amp;Path) -&gt; PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Read rather than pulled from a crate: this is used for one comparison and a
+/// dependency would be a larger surface than the thing it replaces. `HOME` on
+/// unix, `USERPROFILE` on Windows; absent means "no home", which makes the skip
+/// above a no-op and is the safe direction — it searches more, never less.
+fn home_dir() -&gt; Option&lt;PathBuf&gt; {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}</code></pre>
+  <span class="src">crates/harness/src/lib.rs — the Discovery region's three helpers</span>
+
+  <p>
+    <code>configured_by_hand</code> checks two things and not four.
+    <code>config.json</code> and <code>personas/</code> are written by a person;
+    <code>credentials.json</code>, <code>sessions/</code> and
+    <code>settings.json</code> are written by Emma, and a directory Emma created
+    for its own bookkeeping says nothing about how Emma should be configured.
+    Note where this lands a home directory holding only Emma's own files: not in
+    the empty-harness boot, which is a real state with its own behaviour, but in
+    the absent case. The walk goes past it and the operator gets the refusal.
+  </p>
+
+  <h2 id="override">Overriding the walk</h2>
+
+  <p>
+    <code>EMMA_ROOT</code> replaces discovery outright, and a value that is not a
+    directory is an error rather than a fall-back to searching. An override that
+    quietly searched would boot the agent on configuration nobody asked for,
+    which is the failure the whole region is arranged against.
+  </p>
+
+<pre><code><span class="c">$ EMMA_ROOT=/tmp/scratch/nope emma config check</span>
+Error: EMMA_ROOT=`C:/Users/…/scratchpad/cfg/nope` is not a directory</code></pre>
+  <span class="chip cert">certified</span>: release binary, 2026-08-16. The message is one line and there is no search after it.
+
+  <p>
+    Which layout the directory is then read as comes from its <em>name</em>, not
+    from its contents. A directory called <code>.claude</code> is read as Claude
+    Code's layout and anything else as Emma's, so an override pointing at a
+    renamed copy of a <code>.claude/</code> tree will be read as
+    <code>.emma/</code> and will look for a <code>config.json</code> that is not
+    there. <code>Harness::load_as</code> exists for exactly that caller and
+    nothing in Emma calls it.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>Flavor</code></p>
+<pre><code>impl Flavor {
+    /// Inferred from the directory's own name, so `Harness::load(path)` does the
+    /// right thing without the caller having to remember which it handed over.
+    pub fn of(root: &amp;Path) -&gt; Self {
+        match root.file_name().and_then(|s| s.to_str()) {
+            Some(CLAUDE_DIR_NAME) =&gt; Self::Claude,
+            _ =&gt; Self::Emma,
+        }
+    }
+
+    fn spine_file(self) -&gt; &amp;'static str {
+        match self {
+            Self::Emma =&gt; "config.json",
+            Self::Claude =&gt; "settings.json",
+        }
+    }
+}</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>Flavor::of</code>, <code>Flavor::spine_file</code></span>
+
+  <p>
+    The other environment variable in this region selects a persona for one run
+    rather than a directory. <code>EMMA_PERSONA</code> beats the spine's
+    <code>default_persona</code>, and its constant carries the reason there is no
+    tool and no slash command that does the same thing: a model choosing its own
+    persona is a self-modifying prompt.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · the four names</p>
+<pre><code>pub const ROOT_DIR_NAME: &amp;str = ".emma";
+/// Also discovered, and read as a harness. Claude Code's directory.
+pub const CLAUDE_DIR_NAME: &amp;str = ".claude";
+/// Overrides discovery entirely. Named for the root, not a file: it points at
+/// the directory the whole harness is read from.
+pub const ROOT_ENV: &amp;str = "EMMA_ROOT";
+/// Per-session persona override. Selection is a runtime decision, never the
+/// model's: a model choosing its own persona is a self-modifying prompt.
+pub const PERSONA_ENV: &amp;str = "EMMA_PERSONA";</code></pre>
+  <span class="src">crates/harness/src/lib.rs — the names region</span>
+
+  <h2 id="precedence">Precedence, seen</h2>
+
+  <p>
+    A directory holding both <code>.emma/</code> and <code>.claude/</code>
+    resolves to the first without consulting the second, and the
+    <code>CLAUDE.md</code> beside them contributes nothing, because
+    <code>CLAUDE.md</code> is only a prompt layer in the Claude flavour.
+  </p>
+
+<pre><code><span class="c">$ ls -a           # .emma/config.json, .claude/, CLAUDE.md all present</span>
+<span class="c">$ emma config check | head -4</span>
+cwd            …\scratchpad\cfg\both
+harness        …\scratchpad\cfg\both\.emma
+flavor         emma
+persona        (none)</code></pre>
+  <span class="chip cert">certified</span>: scratch tree built 2026-08-16, release binary. <code>instructions</code> on the next line reported the empty-harness hash, so the sibling <code>CLAUDE.md</code> was not read.
+
+  <h2 id="notverified">What this page did not settle</h2>
+
+  <ul class="body">
+    <li>
+      <strong>The case-collision scar itself.</strong> The comment in
+      <code>discover_in</code> records that <code>C:\Users\Owner</code> against
+      <code>C:\Users\owner</code> once left the skip inert. Nothing here
+      reproduced that: the canonicalising comparison is in place now and the
+      spelling cannot be forced from outside.
+      <span class="chip unv">unverified</span>. Settle it by calling
+      <code>discover_in</code> directly with a <code>home</code> whose drive
+      letter or user segment differs in case from the ancestor's, and asserting
+      the returned path is not the home's <code>.claude</code>.
+    </li>
+    <li>
+      <strong>Symlinked and 8.3-short-name homes.</strong> The comment names
+      both as reasons the comparison canonicalises. Neither was constructed here.
+      <span class="chip unv">unverified</span>. Settle it on Windows with
+      <code>HOME</code> set to the <code>OWNER~1</code> form of the profile path
+      and a <code>~/.claude/</code> in place; the skip should still fire.
+    </li>
+    <li>
+      <strong>A home directory the platform will not name.</strong>
+      <code>home_dir</code> returning <code>None</code> makes the skip a no-op,
+      which the comment calls the safe direction because it searches more rather
+      than less. It also means <code>~/.claude/</code> becomes an ordinary
+      candidate on such a machine.
+      <span class="chip unv">unverified</span>. Settle it by unsetting both
+      <code>HOME</code> and <code>USERPROFILE</code> and running
+      <code>emma config check</code> from a directory under the profile.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · this page covers the Discovery region of
+    <code>crates/harness/src/lib.rs</code>: <code>discover</code>,
+    <code>discover_from</code>, <code>discover_in</code>,
+    <code>configured_by_hand</code>, <code>real</code>, <code>home_dir</code>,
+    <code>Flavor::of</code>, <code>Flavor::spine_file</code> and the four name
+    constants, 8 of 8 items in the region ·
+    next: <a href="config-files.html">every file Emma reads</a> ·
+    contract: <code>docs/CONTRACT.md</code>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

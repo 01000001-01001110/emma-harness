@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agents · Configuration · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav here" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/harness/src/claude.rs · lib.rs</p>
+  <h1>Agent files: one format, two jobs, nothing fatal</h1>
+
+  <nav class="chapter">
+      <a class="up" href="config.html">Configuration</a>
+      <a href="config-discovery.html">Discovery</a>
+      <a href="config-files.html">Every file</a>
+      <a href="config-spine.html">The spine</a>
+      <a href="config-claude.html">Reading <code>.claude/</code></a>
+      <a href="config-skills.html">Skills &amp; commands</a>
+      <span class="now">Agents</span>
+      <a href="config-personal.html">Your own files</a>
+      <a href="config-themes.html">Themes</a>
+      <a href="config-notapplied.html">It did not apply</a>
+    </nav>
+
+  <p class="lede">
+    One file format doing two jobs with opposite selection rules. As a
+    <em>persona</em> an agent file is chosen by a human at startup; as a
+    <em>delegation target</em> it is chosen by the model at call time from a
+    closed list. Nothing in this directory can fail the boot, which is the
+    reverse of every other rule in the chapter, and the reason is that an agent
+    library is something somebody accumulated over months rather than something
+    they wrote for Emma.
+  </p>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven, and a reader can repeat it: a file, a command, a count</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+    <div><span class="chip test">tested</span> a test that was shown to fail</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <h2 id="two">Two uses, two accessors, no boolean</h2>
+
+  <p class="faint">crates/harness/src/lib.rs · the Agent types region</p>
+<pre><code>// The same `agents/&lt;name&gt;.md` files a persona can be selected from, read for a
+// second and independent purpose: as things a *model* may delegate to. The file
+// format is Claude Code's and is not Emma's to change — `.emma/agents/` uses
+// it too, and `.emma/` still wins outright where both directories exist,
+// because `discover` already resolved that and this reads whatever it chose.
+//
+// The two uses share one format and have opposite selection rules, which is why
+// they have separate accessors and no function takes a boolean saying which it
+// is: `Harness::persona` is chosen by a human at startup, and an `AgentDef` is
+// chosen by the model at call time from a closed list. `PERSONA_ENV`'s comment —
+// *a model choosing its own persona is a self-modifying prompt* — is what makes
+// that distinction load-bearing rather than tidy.</code></pre>
+  <span class="src">crates/harness/src/lib.rs — the Agent types region comment</span>
+
+  <p>
+    The resolved value is narrow: every field on it has a reader,
+    and its doc names which one, because a field nobody reads is a declaration
+    pretending to be a mechanism.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>AgentDef</code></p>
+<pre><code>/// One delegation target, resolved from `agents/&lt;name&gt;.md`.
+///
+/// Every field here is consumed by `emma::delegate`, which is the rule this
+/// struct is written to: `name` and `description` compose the tool's catalogue
+/// and its closed enum, `instructions` is the sub-run's system prompt, `tools`
+/// selects its registry, `model` picks its provider, and the two budget fields
+/// bound what it may spend. A field nobody reads is a declaration pretending to
+/// be a mechanism.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentDef {
+    /// The file stem. See `claude::agents` for why it beats a `name:` in
+    /// frontmatter.
+    pub name: String,
+    /// What the calling model reads to decide whether to delegate here.
+    pub description: String,
+    /// The body of the file: the sub-run's standing instructions.
+    pub instructions: String,
+    /// `None` means "inherit whatever the caller has", which is Claude Code's
+    /// meaning for an absent list and — deliberately — for an empty one too.
+    /// See `claude::Tools::allowlist`.
+    pub tools: Option&lt;Vec&lt;String&gt;&gt;,
+    /// A model id, honoured rather than ignored.
+    pub model: Option&lt;String&gt;,
+    pub max_turns: Option&lt;u32&gt;,
+    pub max_tokens: Option&lt;i64&gt;,
+}</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>AgentDef</code></span>
+
+  <p>
+    What happens to those fields once a model delegates is
+    <a href="delegation.html">Delegation</a>. What belongs here is how the files
+    are found and read.
+  </p>
+
+  <h2 id="frontmatter">The frontmatter Emma reads</h2>
+
+  <p class="faint">crates/harness/src/claude.rs · <code>AgentFront</code></p>
+<pre><code>/// The frontmatter fields Emma reads from `agents/&lt;name&gt;.md`. Permissive for the
+/// same reason `Settings` is: `category`, `version`, `color` and whatever else
+/// Claude Code grows are not Emma's business, and refusing to boot over them
+/// would make this compatibility feature an obstacle. **It must never gain
+/// `deny_unknown_fields`** — measured against a real library of 90 agent files,
+/// `category` and `version` appear throughout and every one of them would have
+/// been a boot failure.
+///
+/// Four fields are read and every one of them has a reader:
+///
+/// - `name` — checked against the file stem, which wins. See [`agents`].
+/// - `description` — what the calling model reads to choose an agent, and the
+///   only field a delegation target cannot do without. 63 of those 90 files
+///   carry it beside a `name`, 23 carry it alone, and 4 carry neither.
+/// - `tools` — the allowlist, in either spelling. See [`Tools::allowlist`] for
+///   what an *empty* one means, which is the trap in this format.
+/// - `model` — a per-agent model override. Honoured, because a file that says
+///   `model: claude-sonnet-4-5` and runs on something else is a lie the user
+///   cannot see.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct AgentFront {
+    #[serde(default)]
+    pub(crate) name: Option&lt;String&gt;,
+    #[serde(default)]
+    pub(crate) description: Option&lt;String&gt;,
+    #[serde(default)]
+    pub(crate) tools: Option&lt;Tools&gt;,
+    #[serde(default)]
+    pub(crate) model: Option&lt;String&gt;,
+    /// Model calls this agent gets. Claude Code spells it `maxTurns`; both
+    /// spellings are accepted because Emma's own files are snake_case and the
+    /// foreign ones are not, and a budget that silently does not apply is worse
+    /// than no budget.
+    #[serde(default, alias = "maxTurns")]
+    pub(crate) max_turns: Option&lt;u32&gt;,
+    /// Weighted tokens this agent may spend, out of what remains of the
+    /// caller's. See `emma::delegate` for the ceiling it is clamped to.
+    #[serde(default, alias = "maxTokens")]
+    pub(crate) max_tokens: Option&lt;i64&gt;,
+}</code></pre>
+  <span class="src">crates/harness/src/claude.rs — <code>AgentFront</code></span>
+
+  <p>
+    The doc says four fields and the struct has six; the two budget fields were
+    added later and each accepts both a snake_case and a camelCase spelling,
+    because Emma's own files are written one way and foreign ones the other, and
+    a budget that silently does not apply is worse than no budget. The
+    <code>90</code>, <code>63</code>, <code>23</code> and <code>4</code> are
+    counts from a real library at some earlier date; see
+    <a href="#notverified">what this page did not settle</a>.
+  </p>
+
+  <h2 id="tools">The trap: <code>tools: []</code> means inherit</h2>
+
+  <p class="faint">crates/harness/src/claude.rs · <code>Tools</code>, <code>Tools::allowlist</code></p>
+<pre><code>/// Claude Code writes `tools` either as a YAML list or as one comma-separated
+/// string. Both are common in the wild; accepting one and silently ignoring the
+/// other would produce an empty allowlist, which under Emma's rules means "no
+/// tools at all" — a spectacular way to fail quietly.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum Tools {
+    List(Vec&lt;String&gt;),
+    Csv(String),
+}</code></pre>
+<pre><code>    /// The allowlist an agent file declares, where **empty means "inherit"
+    /// rather than "nothing"**.
+    ///
+    /// This is the trap in the format and it is live. `tools:` with no value
+    /// parses as YAML null and never reaches here; `tools: []` and `tools: ""`
+    /// do, and under Emma's rules an empty allowlist means *no tools at all* —
+    /// which is the failure the note on [`Tools`] predicts, arriving through the
+    /// value rather than through the spelling. In Claude Code an absent `tools`
+    /// means inherit everything, and a present-but-empty one is the same
+    /// statement written differently: nobody writes `tools: []` meaning "this
+    /// agent may do nothing".
+    ///
+    /// So all three collapse to `None`, and `None` is the caller's signal to
+    /// inherit. An agent that really should have no tools is expressed by not
+    /// registering it, not by a list that reads as a typo.
+    pub(crate) fn allowlist(front: Option&lt;Self&gt;) -&gt; Option&lt;Vec&lt;String&gt;&gt; {
+        let names = front?.into_vec();
+        (!names.is_empty()).then_some(names)
+    }</code></pre>
+  <span class="src">crates/harness/src/claude.rs — <code>Tools</code>, <code>Tools::into_vec</code>, <code>Tools::allowlist</code></span>
+
+  <p>
+    Read that against the persona block in <code>.emma/config.json</code>, where
+    an empty <code>hooks</code> array means "none of them". The two readings are
+    opposite and both are right: one is Emma's field with Emma's meaning, the
+    other is a foreign field whose meaning was already established elsewhere. The
+    reason it matters at load rather than only at delegation is in
+    <code>assemble</code>: a selected persona whose <code>tools: []</code> was
+    read as an empty allowlist would boot with no tools at all and look like a
+    model that refuses to work.
+  </p>
+
+  <p>
+    <code>into_vec</code> splits a CSV on commas, trims each name, and drops
+    empties, so <code>"Read, Grep,"</code> and <code>["Read", "Grep"]</code>
+    produce the same list.
+  </p>
+
+  <h2 id="split">Splitting the file, and the scar in the opener</h2>
+
+  <p class="faint">crates/harness/src/claude.rs · <code>split_agent</code></p>
+<pre><code>/// Split an agent file into the frontmatter Emma reads and the body it puts in
+/// the prompt.
+///
+/// The frontmatter is **stripped**, and that is the one place the "nothing is
+/// trimmed or re-wrapped" rule is bent. It is bent knowingly: `model:` and
+/// `tools:` are configuration, and sending them to the model as standing
+/// instructions would be telling it about machinery it cannot use. A file with
+/// no frontmatter is all body, which is also the correct answer.
+/// **Line endings are tolerated, and that is not tidiness.** This required
+/// `---\n` exactly, so every CRLF agent file — which is every one of them on a
+/// Windows machine, and 90 out of 90 in the library this was measured against —
+/// fell through to "no frontmatter": its `tools` was ignored, its `description`
+/// was invisible, and its `name:`, `model:` and `category:` lines were handed to
+/// the model as standing instructions. Nothing failed; the file simply did not
+/// mean what it said. A byte-exact opener is a parser that works on the machine
+/// its author used.
+///
+/// The third element is the YAML error, when the frontmatter was found and could
+/// not be read. It used to be `unwrap_or_default()` and nothing else, which is
+/// how the failure above stayed invisible: an unreadable file and a file with no
+/// frontmatter produced the same empty value, and neither said so.
+pub(crate) fn split_agent(text: &amp;str) -&gt; (AgentFront, &amp;str, Option&lt;String&gt;) {
+    // A byte-order mark before the opener is common from Windows editors, and it
+    // is the same class of silent miss.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let Some(rest) = open_frontmatter(text) else {
+        return (AgentFront::default(), text, None);
+    };
+    let Some(end) = rest.find("\n---") else {
+        return (AgentFront::default(), text, None);
+    };
+    let body = rest[end + 4..].trim_start_matches(['\r', '\n']);
+    match serde_yaml::from_str(&amp;rest[..end]) {
+        Ok(front) =&gt; (front, body, None),
+        Err(e) =&gt; (AgentFront::default(), body, Some(e.to_string())),
+    }
+}
+
+/// `---` on the first line, whatever the file's line endings are.
+fn open_frontmatter(text: &amp;str) -&gt; Option&lt;&amp;str&gt; {
+    let rest = text.strip_prefix("---")?;
+    let rest = rest.strip_prefix('\r').unwrap_or(rest);
+    rest.strip_prefix('\n')
+}</code></pre>
+  <span class="src">crates/harness/src/claude.rs — <code>split_agent</code>, <code>open_frontmatter</code></span>
+
+  <p>
+    Three failure shapes come out of one function and they are distinguishable,
+    which is the point of the third return value. No frontmatter at all returns
+    the whole text as body with no error. Frontmatter that opens and never closes
+    does the same. Frontmatter that opens, closes, and will not parse returns the
+    body plus the YAML error, and <code>load_agents</code> turns that into a note
+    and drops the file. Before the third element existed, the second and third
+    cases were indistinguishable from the first.
+  </p>
+
+  <h2 id="find">Which files are found</h2>
+
+  <p class="faint">crates/harness/src/claude.rs · <code>agents</code></p>
+<pre><code>/// The agent files available to select **or to delegate to**, by file stem,
+/// sorted.
+///
+/// **The file stem is the name, and a `name:` in frontmatter that disagrees
+/// loses.** The stem is what `EMMA_PERSONA` names, what `agent_path` builds,
+/// and the only one of the two guaranteed unique — two files may declare the
+/// same `name`, and a catalogue keyed on a value that can collide silently
+/// drops one of them. The disagreement is worth saying out loud rather than
+/// resolving quietly, so `load_agents` notes it.
+///
+/// Top-level `*.md` only. A real library has subdirectories under `agents/`
+/// (23 of them, 205 files, on the machine this was measured against) and
+/// walking into them would flatten two namespaces into one where a collision is
+/// resolved by directory iteration order. Stated rather than discovered.
+pub(crate) fn agents(root: &amp;Path) -&gt; Result&lt;Vec&lt;String&gt;&gt; {</code></pre>
+  <span class="src">crates/harness/src/claude.rs — <code>agents</code>, <code>agent_path</code></span>
+
+  <p>
+    <code>agent_path</code> is one line and builds
+    <code>&lt;root&gt;/agents/&lt;name&gt;.md</code>, which is the same
+    construction <code>agents</code> reverses, so the two cannot disagree about
+    where a name lives.
+  </p>
+
+  <h2 id="drop">Nothing here fails the boot</h2>
+
+  <p class="faint">crates/harness/src/claude.rs · <code>load_agents</code></p>
+<pre><code>/// Every agent file in `&lt;root&gt;/agents/`, read as a delegation target, plus the
+/// notes about the ones that were dropped and why.
+///
+/// **Nothing here fails the boot.** A persona is selected by the operator at
+/// startup and a bad one is their mistake; an agent library is a directory
+/// somebody accumulated over months, and refusing to start because one file in
+/// ninety has no `description` is the outage this crate keeps ruling against.
+/// The dropped ones are named instead, and the names are shown by
+/// `emma config check` and at startup.
+///
+/// `description` is the one field a target cannot do without: it is what the
+/// calling model reads to choose. A file with a body and no description is a
+/// persona, not a delegation target, and it stays available as the former.
+pub(crate) fn load_agents(root: &amp;Path) -&gt; Result&lt;(Vec&lt;crate::AgentDef&gt;, Vec&lt;String&gt;)&gt; {
+    let mut out = Vec::new();
+    let mut notes = Vec::new();
+    for name in agents(root)? {
+        let path = agent_path(root, &amp;name);
+        let raw = match std::fs::read_to_string(&amp;path) {
+            Ok(raw) =&gt; raw,
+            Err(e) =&gt; {
+                notes.push(format!("agent `{name}` was not read: {e}"));
+                continue;
+            }
+        };
+        let (front, body, bad_yaml) = split_agent(&amp;raw);</code></pre>
+  <span class="src">crates/harness/src/claude.rs — <code>load_agents</code></span>
+
+  <p>
+    Four ways a file produces a note. It could not be read; its frontmatter would
+    not parse; it declares a <code>name</code> that disagrees with its stem; or
+    it has no <code>description</code>. The first two and the last drop the file
+    from the delegation catalogue. The third does not: the file is still offered,
+    under its stem.
+  </p>
+
+  <p class="faint">crates/harness/src/claude.rs · <code>load_agents</code>, the notes</p>
+<pre><code>        if let Some(declared) = front.name.as_deref() {
+            if declared != name {
+                notes.push(format!(
+                    "agent `{name}` declares name `{declared}`; the file name wins"
+                ));
+            }
+        }
+        let Some(description) = front.description.filter(|d| !d.trim().is_empty()) else {
+            notes.push(format!(
+                "agent `{name}` has no description, so nothing could tell a model when to \
+                 use it — not offered for delegation"
+            ));
+            continue;
+        };</code></pre>
+  <span class="src">crates/harness/src/claude.rs — <code>load_agents</code></span>
+
+  <p>
+    Two agent files in a scratch harness, one of each kind, read by the release
+    binary:
+  </p>
+
+<pre><code><span class="c">$ cat .claude/agents/helper.md      # name: notmatching, tools: [], category, version</span>
+<span class="c">$ cat .claude/agents/nodesc.md      # name and model, no description</span>
+<span class="c">$ emma config check</span>
+agents         helper
+               offered to the model as the `Delegate` tool, which is registered at run
+               time and so is not in the tools line above
+               <span class="w">agent `helper` declares name `notmatching`; the file name wins</span>
+               <span class="w">agent `nodesc` has no description, so nothing could tell a model when to
+               use it — not offered for delegation</span></code></pre>
+  <span class="chip cert">certified</span>: release binary at <code>62ab9c3</code>, 2026-08-16. <code>helper</code> carries <code>category: misc</code> and <code>version: 2</code>, neither of which caused a murmur, and its <code>tools: []</code> did not remove its tools. Exit code 0.
+
+  <p>
+    <code>Delegate</code> is not in the <code>tools</code> line because it is
+    built from a provider and registered at run time, while
+    <code>config check</code> runs without one so that it still answers when the
+    key is the thing that is wrong. The report says that outright
+    rather than leaving a reader to conclude delegation is off.
+  </p>
+
+  <h2 id="unselected">A persona nobody selected: fatal in one flavour, fine in the other</h2>
+
+  <p>
+    This is the second of the four rules the crate's module doc lists as not
+    carried over.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>select_persona</code>, the Claude arm</p>
+<pre><code>        // **A deliberate divergence, and the one place the ported rule was wrong
+        // for Emma rather than merely different.** In `.emma/` a persona
+        // directory nobody selected is an accident, because personas *are* the
+        // prompt. In `.claude/` the prompt is `CLAUDE.md`, and `agents/` holds
+        // optional sub-agent definitions — a normal repository has a dozen and
+        // selects none. Applying the refusal here would mean Emma declines to
+        // start in almost every Claude Code checkout, which is not a safety
+        // property, it is an outage. Selecting an agent that does not exist is
+        // still a refusal: that one really is a mistake.
+        Flavor::Claude =&gt; {
+            let available = claude::agents(root)?;
+            match chosen {
+                Some(name) if claude::agent_path(root, &amp;name).is_file() =&gt; Ok(Some(name)),
+                Some(name) =&gt; bail!(
+                    "{PERSONA_ENV}: agent `{name}` is selected but {} does not exist (have: {})",
+                    claude::agent_path(root, &amp;name).display(),
+                    available.join(", ")
+                ),
+                None =&gt; Ok(None),
+            }
+        }</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>select_persona</code></span>
+
+  <p>
+    <span class="chip cert">certified</span>: the scratch <code>.claude/</code>
+    harness above holds two agent files, selects neither, and reports
+    <code>persona (none)</code> with exit code 0. The equivalent
+    <code>.emma/</code> tree with one unselected persona directory refuses to
+    start, and that run is on <a href="config-spine.html#personas">the spine
+    page</a>.
+  </p>
+
+  <p>
+    When an agent <em>is</em> selected as the persona, its body becomes the last
+    prompt layer and its <code>tools</code> becomes the allowlist, both taken
+    from the one read of the file, because reading it twice would be two chances
+    to disagree. That is <code>assemble</code>'s Claude arm, quoted on
+    <a href="config-files.html#prompt">the files page</a>.
+  </p>
+
+  <h2 id="notverified">What this page did not settle</h2>
+
+  <ul class="body">
+    <li>
+      <strong>The 90-file and 205-file library figures.</strong> They are quoted
+      from source comments in <code>claude.rs</code>, which record a measurement
+      made against a real library at some earlier date. They were not re-counted
+      for this page and the library has certainly moved.
+      <span class="chip unv">unverified</span>. Settle it by counting
+      <code>~/.claude/agents/</code> again, or by treating them as what they are:
+      evidence that the permissive ruling was measured, not a current inventory.
+    </li>
+    <li>
+      <strong>A CRLF agent file, and a byte-order mark.</strong> Both are handled
+      by <code>open_frontmatter</code> and the <code>strip_prefix</code> above
+      it, and both were the scar the doc records. Neither was constructed here:
+      the scratch files were written with LF. <strong>Neither is covered by a
+      test, either.</strong>
+      <span class="chip cert">certified</span>: no fixture in
+      <code>crates/harness/tests/</code> writes an agent file with a CRLF opener
+      or a byte-order mark, and no test names either behaviour.
+      <code>grep -rniE 'crlf|feff' crates/harness/tests/</code> returns three
+      lines, all in <code>harness_load.rs</code> and all about a prompt layer's
+      CRLF bytes surviving assembly unchanged, which is the opposite concern.
+      So the frontmatter tolerance could be deleted and the suite would stay
+      green, which is the shape of failure it was added to fix.
+      <span class="chip unv">unverified</span> from a shell. Settle it by saving
+      an agent file with CRLF endings and checking that its
+      <code>description</code> still reaches <code>config check</code>.
+    </li>
+    <li>
+      <strong><code>maxTurns</code> and <code>maxTokens</code>.</strong> Both
+      aliases are read off the <code>serde</code> attributes. No agent file here
+      declared either, and what the numbers then bound is
+      <a href="delegation.html">Delegation</a>.
+      <span class="chip unv">unverified</span>. Settle it by declaring
+      <code>maxTurns: 2</code> and watching a delegated run stop.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · this page covers <code>AgentDef</code>,
+    <code>AgentFront</code>, <code>Tools</code>, <code>Tools::into_vec</code>,
+    <code>Tools::allowlist</code>, <code>split_agent</code>,
+    <code>open_frontmatter</code>, <code>agents</code>, <code>agent_path</code>,
+    <code>load_agents</code>, <code>agent_types</code>, <code>agent_notes</code>
+    and <code>select_persona</code>'s Claude arm ·
+    what a delegated run does is <a href="delegation.html">Delegation</a> ·
+    contract: <code>docs/CONTRACT.md</code>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

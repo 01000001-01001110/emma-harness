@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>emma agents · Delegation · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav here" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<h1><code>emma agents</code>, and two defects in its table</h1>
+
+  <nav class="chapter">
+    <a class="up" href="delegation.html">Delegation</a>
+    <a href="delegation-nest.html">The nested run</a>
+    <a href="delegation-serialised.html">One at a time</a>
+    <a href="delegation-definitions.html">Agent definitions</a>
+    <a href="delegation-tools.html">resolve_tools</a>
+    <a href="delegation-brief.html">The brief</a>
+    <a href="delegation-footer.html">The footer</a>
+    <a href="delegation-budgets.html">Budgets &amp; spend</a>
+    <span class="now">emma agents</span>
+  </nav>
+
+  <p class="lede">
+    One command reads every session file on the machine, keeps the
+    <code>delegation</code> records and prints what each agent type has cost. It
+    calls no model, loads no harness and needs no API key. Two of its columns are
+    wrong, and a third thing it cannot show at all.
+  </p>
+  <span class="src">crates/emma/src/commands.rs — the emma agents region</span>
+
+  <h2 id="why">Why the records exist</h2>
+
+<pre><code><span class="c">// region: emma agents</span>
+<span class="c">// ---------------------------------------------------------------------------</span>
+<span class="c">// `emma agents`</span>
+<span class="c">//</span>
+<span class="c">// The reason the delegation records exist. Published measurements say</span>
+<span class="c">// multi-agent *loses* on coding tasks — 49–54% single-agent against 10% and 3%</span>
+<span class="c">// on SWE-bench Lite, at nine times the spend — but those measured one</span>
+<span class="c">// configuration, and here an agent type is a file a person edits. That makes</span>
+<span class="c">// the published verdict a baseline rather than a verdict, and the only thing</span>
+<span class="c">// that turns a baseline into an answer is measuring your own.</span>
+<span class="c">//</span>
+<span class="c">// So: the smallest thing that answers "is this type worth using?". It reads the</span>
+<span class="c">// same JSONL a person already greps, it calls no model, and it is deliberately</span>
+<span class="c">// not a dashboard. `config check` is the shape it copies.</span>
+<span class="c">// ---------------------------------------------------------------------------</span></code></pre>
+  <span class="src">crates/emma/src/commands.rs — the region doc, quoted entire</span>
+
+  <p>
+    The published verdict is a baseline rather than a verdict because it measured
+    one configuration, and here an agent type is a file a person edits. Turning a
+    baseline into an answer means measuring your own, which is what this command
+    is for and the whole of what it does.
+  </p>
+
+  <h2 id="run">What it prints</h2>
+
+  <pre><code><span class="c">$ emma agents</span>
+sessions       100
+delegations    1
+
+agent                     runs  finished  tokens/run   s/run   calls   files    cmds  denied
+scout                        1       1/1        7319      12     3.0     0.0     0.0       0
+
+  scout: done 1
+
+most recent
+  sess-1786710409801-39600  scout  done  7319 tokens  12s  Find out what the current stable version of the Rust progra…
+
+Every number here was recorded by the harness from each sub-run's own log, not
+reported by the agent. The full traffic is in the same files, under `sub.*` records.</code></pre>
+  <span class="src">target/release/emma.exe agents, run on this machine 2026-08-16 <span class="chip cert">certified</span></span>
+
+  <p>
+    <span class="chip cert">certified</span> Verbatim, wrapping included, from
+    <code>./target/release/emma.exe agents</code> against
+    <code>emma 0.1.0</code>. The last two lines are one paragraph the terminal
+    wrapped; everything above is the program's own line breaks. Repeat it by
+    running the same binary with a session directory that has delegations in it.
+  </p>
+
+  <p>
+    With nothing recorded it says so rather than printing an empty table:
+  </p>
+
+  <pre><code>sessions       0
+delegations    0
+
+Nothing has been delegated from this machine yet, so there is nothing to compare. `emma config check` lists the agent types this directory offers.</code></pre>
+  <span class="src">emma agents --session-dir &lt;an empty directory&gt;, 2026-08-16 <span class="chip cert">certified</span></span>
+
+  <p>
+    It returns from <code>main</code> before the async runtime is built, which is
+    what lets it answer when the thing being investigated is why a run will not
+    start. <span class="chip cert">certified</span> Both runs above were made
+    from a directory with no harness above it and with no API key in the
+    environment.
+  </p>
+  <span class="src">crates/emma/src/main.rs — Command::Agents</span>
+
+  <h2 id="tally">One tally per agent type</h2>
+
+<pre><code><span class="c">/// One agent type's record, summed across every session on this machine.</span>
+#[derive(Default)]
+struct Tally {
+    runs: u64,
+    finished: u64,
+    tokens: i64,
+    elapsed_ms: u64,
+    iterations: u64,
+    tool_calls: u64,
+    files: u64,
+    commands: u64,
+    failed_commands: u64,
+    denied: u64,
+    endings: std::collections::BTreeMap&lt;String, u64&gt;,
+}</code></pre>
+  <span class="src">crates/emma/src/commands.rs — Tally, quoted entire</span>
+
+  <h2 id="read">Reading the records</h2>
+
+<pre><code><span class="c">/// What each agent type has cost and produced, across every recorded session.</span>
+<span class="c">///</span>
+<span class="c">/// **Every number here is the harness's, not a model's.** They come off the</span>
+<span class="c">/// `delegation` records the `Delegate` tool writes from each sub-run's own log —</span>
+<span class="c">/// the same records the footer is built from — so this answers what happened</span>
+<span class="c">/// rather than what was reported.</span>
+pub fn agents(session_dir: Option&lt;&amp;Path&gt;, out: &amp;mut dyn Write) -&gt; Result&lt;()&gt; {
+    let Some(dir) = session_dir else {
+        bail!(
+            "no session directory: the home directory could not be determined, so there is \
+             nothing recorded to read. Name one with --session-dir."
+        );
+    };
+    let mut files: Vec&lt;std::path::PathBuf&gt; = Vec::new();
+    if dir.is_dir() {
+        for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+            let path = entry?.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                files.push(path);
+            }
+        }
+    }
+    <span class="c">// Ids sort by time, and an id does not move when a file is copied — the same</span>
+    <span class="c">// ordering `session::locate` relies on.</span>
+    files.sort();
+
+    let mut by_agent: std::collections::BTreeMap&lt;String, Tally&gt; = Default::default();
+    let mut recent: Vec&lt;(String, String, String, i64, u64, String)&gt; = Vec::new();
+    for path in &amp;files {
+        let Ok(records) = crate::session::SessionLog::read(path) else {
+            continue;
+        };
+        let session = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        for record in records {
+            if record["kind"] != "delegation" {
+                continue;
+            }
+            let agent = record["agent"].as_str().unwrap_or("?").to_string();
+            let ending = record["ending"].as_str().unwrap_or("?").to_string();
+            let tokens = record["cost_tokens"].as_i64().unwrap_or(0);
+            let elapsed = record["elapsed_ms"].as_u64().unwrap_or(0);
+            let tally = by_agent.entry(agent.clone()).or_default();
+            tally.runs += 1;
+            <span class="c">// `answered` counts with `done` for the same reason `main` treats</span>
+            <span class="c">// them together: a brief that needed no tools was still answered.</span>
+            if ending == "done" || ending == "answered" {
+                tally.finished += 1;
+            }
+            tally.tokens += tokens;
+            tally.elapsed_ms += elapsed;
+            tally.iterations += record["iterations"].as_u64().unwrap_or(0);
+            tally.tool_calls += record["tool_calls"].as_u64().unwrap_or(0);
+            tally.files += record["files_read"].as_u64().unwrap_or(0);
+            tally.commands += record["commands"].as_u64().unwrap_or(0);
+            tally.failed_commands += record["failed_commands"].as_u64().unwrap_or(0);
+            tally.denied += record["denied"].as_u64().unwrap_or(0);
+            *tally.endings.entry(ending.clone()).or_default() += 1;
+            recent.push((
+                session.clone(),
+                agent,
+                ending,
+                tokens,
+                elapsed,
+                one_line(record["task"].as_str().unwrap_or("")),
+            ));
+        }
+    }</code></pre>
+  <span class="src">crates/emma/src/commands.rs — agents, the reading half</span>
+
+  <p>
+    Every <code>*.jsonl</code> in the directory, sorted by name, which is sorted
+    by time because a session id begins with a timestamp and does not move when
+    a file is copied. A file that will not parse is skipped rather than failing
+    the command, since one corrupt session should not hide ninety-nine good ones.
+    A missing session directory is the one hard error, and it says how to name
+    one.
+  </p>
+
+  <p>
+    <code>answered</code> counts with <code>done</code> towards
+    <code>finished</code>, the same way <code>main</code> treats them: a brief
+    that needed no tools was still answered. Everything else is a plain sum, and
+    <code>recent</code> collects one tuple per delegation in file order so the
+    tail can be taken from the end.
+  </p>
+
+  <h2 id="print">Printing it</h2>
+
+<pre><code>    writeln!(out, "sessions       {}", files.len())?;
+    writeln!(
+        out,
+        "delegations    {}",
+        by_agent.values().map(|t| t.runs).sum::&lt;u64&gt;()
+    )?;
+    if by_agent.is_empty() {
+        writeln!(
+            out,
+            "\nNothing has been delegated from this machine yet, so there is nothing to \
+             compare. `emma config check` lists the agent types this directory offers."
+        )?;
+        return Ok(());
+    }
+
+    writeln!(
+        out,
+        "\n{:&lt;24}{:&gt;6}{:&gt;10}{:&gt;12}{:&gt;8}{:&gt;8}{:&gt;8}{:&gt;8}{:&gt;8}",
+        "agent", "runs", "finished", "tokens/run", "s/run", "calls", "files", "cmds", "denied"
+    )?;
+    for (name, t) in &amp;by_agent {
+        let per = |n: u64| n as f64 / t.runs as f64;
+        writeln!(
+            out,
+            "{:&lt;24}{:&gt;6}{:&gt;10}{:&gt;12}{:&gt;8.0}{:&gt;8.1}{:&gt;8.1}{:&gt;8.1}{:&gt;8}",
+            trim_to(name, 23),
+            t.runs,
+            format!("{}/{}", t.finished, t.runs),
+            t.tokens / t.runs as i64,
+            per(t.elapsed_ms) / 1000.0,
+            per(t.iterations),
+            per(t.files),
+            per(t.commands),
+            t.denied,
+        )?;
+    }
+    <span class="c">// The endings, spelled out. "finished 6/8" does not say whether the other</span>
+    <span class="c">// two ran out of budget or were interrupted, and those are different</span>
+    <span class="c">// problems with different fixes — one is a number to raise, the other is</span>
+    <span class="c">// not.</span>
+    writeln!(out)?;
+    for (name, t) in &amp;by_agent {
+        let endings: Vec&lt;String&gt; = t
+            .endings
+            .iter()
+            .map(|(ending, n)| format!("{ending} {n}"))
+            .collect();
+        let mut line = format!("{name}: {}", endings.join(", "));
+        if t.failed_commands &gt; 0 {
+            line.push_str(&amp;format!(
+                ", {} of its {} commands exited non-zero",
+                t.failed_commands, t.commands
+            ));
+        }
+        writeln!(out, "  {line}")?;
+    }
+
+    writeln!(out, "\nmost recent")?;
+    for (session, agent, ending, tokens, elapsed, task) in recent.iter().rev().take(RECENT) {
+        writeln!(
+            out,
+            "  {session}  {agent}  {ending}  {tokens} tokens  {}s  {task}",
+            elapsed / 1000
+        )?;
+    }
+    writeln!(
+        out,
+        "\nEvery number here was recorded by the harness from each sub-run's own log, not \
+         reported by the agent. The full traffic is in the same files, under `sub.*` records."
+    )?;
+    Ok(())
+}
+
+<span class="c">/// How many delegations the tail lists. Bounded here rather than at the call</span>
+<span class="c">/// site, so the cap is a thing somebody can find and change.</span>
+const RECENT: usize = 10;</code></pre>
+  <span class="src">crates/emma/src/commands.rs — agents, the printing half, and RECENT</span>
+
+  <p>
+    The endings are spelled out on their own line rather than left as
+    <code>finished 6/8</code>, because "the other two" being out of budget and
+    "the other two" being interrupted are different problems with different
+    fixes: one is a number to raise and the other is not. Failed commands are
+    called out for the same reason. <code>3 of its 9 commands exited
+    non-zero</code> is the sentence that says an agent type is reporting success
+    over red output, and it appears only when the count is above zero.
+  </p>
+
+  <p>
+    Names are trimmed to 23 characters in a 24-wide column, task lines to 60,
+    and the tail to <code>RECENT</code>, which is 10. Every cap is a named
+    constant or a literal in one place.
+  </p>
+
+  <h2 id="defects">Two defects, and one thing the record cannot recover</h2>
+
+  <div class="note warn">
+    <span class="h">The column headed <code>calls</code> prints model calls</span>
+    <p>
+      The row writes <code>per(t.iterations)</code> under the heading
+      <code>calls</code>. <code>t.tool_calls</code> is accumulated from
+      <code>record["tool_calls"]</code> a few lines above and then printed
+      nowhere. <span class="chip cert">certified</span> against the run at the
+      top of this page: the JSONL record for that delegation reads
+      <code>"tool_calls": 2</code> and <code>"iterations": 3</code>, and the
+      table shows <code>3.0</code>. Read it back with a one-line filter over
+      <code>~/.emma/sessions/sess-1786710409801-39600.jsonl</code> for records
+      whose <code>kind</code> is <code>delegation</code>.
+    </p>
+    <span class="src">crates/emma/src/commands.rs — agents, the row format; ~/.emma/sessions/sess-1786710409801-39600.jsonl</span>
+  </div>
+
+  <div class="note warn">
+    <span class="h">The table cannot show a search or a fetch</span>
+    <p>
+      Its columns are files, commands and denials. The same run made one
+      <code>WebSearch</code> and one <code>WebFetch</code>, both visible in
+      <a href="delegation-footer.html#real">the footer</a>, and the table renders
+      the run as <code>files 0.0 cmds 0.0</code>.
+      <span class="chip cert">certified</span>: compare the two blocks on this
+      page against the footer on that one.
+    </p>
+    <p>
+      Two different causes sit under one symptom. <code>fetched</code> and
+      <code>other_tool_calls</code> <em>are</em> in the parent-level record and
+      are simply not read here, which is a column away from being fixed.
+      <strong><code>searches</code> is not in the record at all</strong>, so no
+      amount of reading it recovers them: the fix has to add a field to
+      <code>Delegate</code>'s <code>delegation</code> record first, and old
+      sessions will never have it. This is the silence the footer's residual
+      category was built to end, reappearing one layer up.
+      <span class="chip cert">certified</span> The record on disk has 19 keys and
+      none of them is <code>searches</code>.
+    </p>
+    <span class="src">crates/emma/src/commands.rs — agents; crates/emma/src/delegate.rs — the delegation record</span>
+  </div>
+
+  <p>
+    Neither is fixed here, because this page's author does not change source.
+    Both are reported to <a href="roadmap.html">Roadmap &amp; defects</a>.
+  </p>
+
+  <h2 id="unsettled">What is not settled here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> Every number in the table above
+      comes from a single delegation, so the per-run averages are that one run
+      and nothing has been exercised at scale. A tally that summed wrongly across
+      sessions would look identical here. <em>What would settle it:</em> the
+      integration test
+      <code>what_a_delegation_cost_can_be_read_back_across_sessions</code> covers
+      two sessions; a live corpus does not exist.
+    </li>
+    <li>
+      <span class="chip test">tested</span> The empty case is asserted by
+      <code>asking_what_delegation_cost_before_delegating_anything_says_so</code>,
+      and the cross-session read by
+      <code>what_a_delegation_cost_can_be_read_back_across_sessions</code>.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> No test asserts the column
+      headings against the values under them, which is why the
+      <code>calls</code> defect survived. <em>What would settle it:</em> a test
+      that writes a record with <code>tool_calls</code> and
+      <code>iterations</code> set to different values and asserts which number
+      lands under which heading.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · read at commit <code>62ab9c3</code> ·
+    <code>crates/emma/src/commands.rs</code> ·
+    <code>crates/emma/src/delegate.rs</code> ·
+    <a href="delegation.html">back to the chapter</a>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

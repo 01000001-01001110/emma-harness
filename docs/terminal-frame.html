@@ -1,0 +1,804 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The frame, and the three absolutes &middot; The terminal &middot; Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav here" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/emma/src/term/frame.rs</p>
+  <h1>The frame, and the three absolutes</h1>
+
+  <nav class="chapter">
+      <a class="up" href="terminal.html">The terminal</a>
+      <a href="terminal-surface.html">Surface</a>
+      <span class="now">Frame</span>
+      <a href="terminal-layout.html">Layout</a>
+      <a href="terminal-colour.html">Colour</a>
+      <a href="terminal-themes.html">Themes</a>
+      <a href="terminal-skin.html">Vocabulary</a>
+      <a href="terminal-transcript.html">Transcript</a>
+      <a href="terminal-markdown.html">Markdown</a>
+      <a href="terminal-diff.html">Diffs</a>
+      <a href="terminal-status.html">Status</a>
+      <a href="terminal-sidebar.html">Sidebar</a>
+      <a href="terminal-dock.html">Dock</a>
+      <a href="terminal-usertools.html">User tools</a>
+    </nav>
+
+  <p class="lede">
+    This is the only module in <code>term/</code> that owns a terminal. It
+    installs one of two viewports, holds the locks, writes the entry and leave
+    bytes, and gives the terminal back on every path out of the process that
+    in-process code can see. It spent its whole life arguing against the
+    alternate screen and then entered it, and the file says so in the first
+    paragraph rather than quietly dropping the argument.
+  </p>
+
+  <h2 id="reversal">The reversal, and what it did to the manifest test</h2>
+
+  <div class="note">
+    <span class="h">2026-08-12</span>
+    <p>
+      The rule was <strong><code>Viewport::Inline</code> only, never the
+      alternate screen</strong>, and this file spent its life arguing for it: it
+      costs terminal scrollback and native mouse selection, and Emma's output is
+      a transcript people read after the run. The owner reversed it on the
+      ground that the multi-pane layout he specified cannot be drawn inline. The
+      module doc records the outcome in six words: <em>&ldquo;That argument was
+      true and it lost.&rdquo;</em>
+    </p>
+    <span class="src">crates/emma/src/term/frame.rs module doc; notes/design-tui-fullscreen.md §0, §2</span>
+  </div>
+
+  <p>
+    The test that had asserted &ldquo;no alternate-screen entry anywhere&rdquo;
+    was rewritten rather than deleted, and its doc comment names which assertion
+    died and why. Three claims survive in it. Two of them are about counting
+    occurrences in this file's own source, so both needles are assembled at
+    runtime, <em>&ldquo;because this file is its own haystack and a literal
+    would match itself.&rdquo;</em>
+  </p>
+
+  <p class="faint">crates/emma/src/term/frame.rs &middot; <code>the_scrolling_regions_feature_is_never_enabled</code></p>
+  <pre><code>    <span class="c">// Comments stripped: this file argues about the feature by name several</span>
+    <span class="c">// times over, and the manifest explains why it is off. What must not</span>
+    <span class="c">// appear is a *declaration* of it.</span>
+    <span class="k">let</span> manifest: String = include_str!("../../Cargo.toml")
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect::&lt;Vec&lt;_&gt;&gt;()
+        .join(" ");
+    assert!(
+        !manifest.contains("scrolling-regions"),
+        <span class="w">…</span>
+    );
+    <span class="c">// The needles are assembled rather than written out, because this file</span>
+    <span class="c">// is its own haystack and a literal would match itself.</span>
+    <span class="k">let</span> source = include_str!("frame.rs");
+    <span class="k">let</span> viewport = format!("View{}", "port::");
+    assert!(
+        source
+            .split(viewport.as_str())
+            .skip(1)
+            .all(|rest| rest.starts_with("Inline") || rest.starts_with("Fullscreen")),
+        "a viewport beyond the sanctioned two is constructed here"
+    );</code></pre>
+  <span class="src">crates/emma/src/term/frame.rs — <code>the_scrolling_regions_feature_is_never_enabled</code></span>
+
+  <p>
+    Stripping comment lines before the manifest search is what makes the
+    assertion mean something. <code>crates/emma/Cargo.toml</code> explains at
+    length why the feature is off, so the string appears in it several times
+    over; without the filter the test would fail on the explanation.
+    <span class="chip cert">certified</span> that the manifest declares no such
+    feature: <code>grep -n ratatui crates/emma/Cargo.toml</code> at
+    <code>62ab9c3</code> shows one dependency line,
+    <code>ratatui = { version = "0.29", default-features = false, features =
+    ["crossterm"] }</code>, and nothing else.
+  </p>
+
+  <p>
+    The reason the feature stays off outlives the reversal. With it on, the
+    <em>inline</em> path's <code>insert_before</code> is implemented with
+    <code>ESC[{top};{bottom}r</code>, and a DEC scrolling region whose top
+    margin is below row 1 <strong>discards</strong> the lines that leave it.
+    That shipped here once, and the owner's first complaint was that he could
+    not scroll. The inline path survives as an escape hatch, so the hazard
+    survives with it.
+  </p>
+
+  <p>
+    The third assertion counts the alternate screen's enter and leave sequences,
+    comments stripped, and demands one of each.
+    <span class="chip test">tested</span> A second occurrence of the enter
+    bytes would be <em>&ldquo;an entry outside the latch's knowledge&rdquo;</em>,
+    which is exactly what the restore path cannot survive.
+  </p>
+
+  <h2 id="absolute-1">Absolute 1: the plain fallback never touches the alternate screen</h2>
+
+  <p>
+    <code>ALT_ENTER</code> is a constant, written at one place, inside
+    <code>Frame::install</code>, after <code>fallback_reason</code> has returned
+    <code>None</code> and, on Windows, after VT has been proved. There is no
+    other emitter, and the manifest test above is what keeps it that way.
+  </p>
+
+  <p class="faint">crates/emma/src/term/frame.rs &middot; <code>ALT_ENTER</code>, <code>ALT_LEAVE</code></p>
+  <pre><code><span class="c">/// The alternate screen. `?1049h` switches to a cleared second buffer and</span>
+<span class="c">/// `?1049l` restores the first, prior content and all — which is what makes</span>
+<span class="c">/// the full-screen exit story *simpler* than the inline one: there is nothing</span>
+<span class="c">/// to erase. Kept out of [`enter_modes`] because it is entered *before* the</span>
+<span class="c">/// `Terminal` is built (ratatui must measure the screen it will draw on) and</span>
+<span class="c">/// left conditionally (see [`restore_terminal`]); the pairing test scans both</span>
+<span class="c">/// pairs, so the split cannot hide an unmatched `h`.</span>
+<span class="c">///</span>
+<span class="c">/// The `2J`+`H` after the switch is deliberate: xterm clears on entry, but</span>
+<span class="c">/// "cleared" is the terminal's promise, not DEC's, and one explicit erase is</span>
+<span class="c">/// cheaper than certifying every console's reading of 1049.</span>
+const ALT_ENTER: &amp;str = "\x1b[?1049h\x1b[2J\x1b[H";
+const ALT_LEAVE: &amp;str = "\x1b[?1049l";</code></pre>
+  <span class="src">crates/emma/src/term/frame.rs — the <em>Terminal modes</em> region</span>
+
+  <p>
+    A run without a <code>Frame</code> cannot emit those bytes, and
+    <a href="terminal-surface.html">the surface page</a> covers the three
+    constructors that never build one. The second half of the guarantee, that
+    nothing else Emma writes to a pipe is an escape byte either, rests on
+    <code>render::for_stream</code> branching on the palette level.
+  </p>
+
+  <h2 id="absolute-2">Absolute 2: every exit path leaves it</h2>
+
+  <p>
+    <code>restore_terminal</code> is idempotent, global, and takes no arguments.
+    All three follow from one constraint: <em>&ldquo;a panic hook has no
+    <code>self</code>.&rdquo;</em> The state it undoes lives in five
+    process-global atomics rather than in a struct, because only one of the
+    callers has a <code>Frame</code> in hand.
+  </p>
+
+  <p class="faint">crates/emma/src/term/frame.rs &middot; <code>restore_terminal</code></p>
+  <pre><code>pub fn restore_terminal() {
+    <span class="k">if</span> !FRAME_ON.swap(false, Ordering::SeqCst) {
+        <span class="k">return</span>;
+    }
+    <span class="k">if</span> RAW_ON.swap(false, Ordering::SeqCst) {
+        <span class="k">let</span> _ = disable_raw_mode();
+    }
+    <span class="k">if</span> MOUSE_ON.swap(false, Ordering::SeqCst) {
+        <span class="c">// Through crossterm rather than a string on purpose: on Windows the</span>
+        <span class="c">// enable was a console-mode change, and only the matching command</span>
+        <span class="c">// undoes it. On unix this writes the `?100x` lows.</span>
+        <span class="k">let</span> _ = execute!(std::io::stdout(), DisableMouseCapture);
+    }
+    <span class="c">// Leaving the alternate screen restores the prior shell content wholesale,</span>
+    <span class="c">// which is the erase arithmetic's whole job done by the terminal; the</span>
+    <span class="c">// inline path still erases its own rows. The `?1049l` is written only when</span>
+    <span class="c">// `?1049h` was: a leave on the normal screen carries an implicit cursor</span>
+    <span class="c">// restore that nothing saved, and terminals answer that by moving the</span>
+    <span class="c">// cursor somewhere surprising.</span>
+    <span class="k">let mut</span> out = <span class="k">if</span> ALT_ON.swap(false, Ordering::SeqCst) {
+        CURSOR_ROW.store(u16::MAX, Ordering::SeqCst);
+        ALT_LEAVE.to_string()
+    } <span class="k">else</span> {
+        erase_frame()
+    };
+    out.push_str(&amp;leave_modes());
+    <span class="k">let mut</span> stdout = std::io::stdout();
+    <span class="k">let</span> _ = stdout.write_all(out.as_bytes());
+    <span class="k">let</span> _ = stdout.flush();
+    #[cfg(windows)]
+    {
+        super::restore_console_mode();
+        <span class="c">// The code page Emma set for itself. Restored last, after the last</span>
+        <span class="c">// byte this function writes has gone out, so the escape sequences above</span>
+        <span class="c">// are decoded by the console we were drawing under.</span>
+        super::restore_console_cp();
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/term/frame.rs — <code>restore_terminal</code>, <code>FRAME_ON</code>, <code>RAW_ON</code>, <code>ALT_ON</code>, <code>MOUSE_ON</code>, <code>CURSOR_ROW</code></span>
+
+  <p>
+    Every latch is cleared with <code>swap</code>, which is why the panic hook
+    and <code>Drop</code> racing each other costs nothing: the second caller
+    reads <code>false</code> and returns. <code>FRAME_ON</code> guards the whole
+    function, so a restore on a run that never drew writes not one byte.
+    <span class="chip test">tested</span>:
+    <code>restoring_a_terminal_that_was_never_drawn_on_writes_nothing</code> and
+    <code>restore_runs_once_however_many_times_it_is_called</code>, the second
+    of which flips <code>FRAME_ON</code> and <code>ALT_ON</code> by hand,
+    because a test binary has no terminal and <code>install</code> correctly
+    refuses to run in one.
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Way out</th><th>How it reaches the restore</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>ordinary return</td>
+          <td><code>Term</code>'s <code>Drop</code>, which then prints the <code>session:</code> line onto the restored screen.</td>
+        </tr>
+        <tr>
+          <td><code>Drop</code> during unwind</td>
+          <td>The same impl. Racing the panic hook costs nothing, because the flag is cleared with a <code>swap</code>.</td>
+        </tr>
+        <tr>
+          <td>panic</td>
+          <td>
+            A hook installed by <code>PANIC_HOOK.call_once</code> in
+            <code>install</code>. It restores <em>before</em> chaining to the
+            previous hook, <em>&ldquo;so the message is readable and so the
+            terminal is echoing again by the time anybody reads it.&rdquo;</em>
+          </td>
+        </tr>
+        <tr>
+          <td>Ctrl-C</td>
+          <td>
+            Raw mode turns off the terminal's own signal generation on both
+            platforms (<code>ISIG</code> on unix,
+            <code>ENABLE_PROCESSED_INPUT</code> on Windows), so
+            <code>tokio::signal</code> will not fire and the keystroke is the
+            only delivery there is. <a href="terminal-dock.html">The dock</a>
+            owns it; the run then unwinds through the paths above.
+          </td>
+        </tr>
+        <tr>
+          <td><code>process::exit</code></td>
+          <td>
+            <code>main.rs</code> calls <code>restore_terminal()</code> first,
+            because <code>process::exit</code> runs no destructors and
+            <code>Term</code>'s would not run there.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <span class="src">crates/emma/src/term.rs — <code>impl Drop for Term</code>; crates/emma/src/term/frame.rs — <code>install</code>, <code>restore_terminal</code>; crates/emma/src/main.rs</span>
+
+  <h3>Three orderings inside install that change the outcome</h3>
+
+  <ul class="body">
+    <li>
+      <code>ALT_ON</code> is stored <em>before</em> the enter bytes are written.
+      A panic in between would otherwise strand the alternate screen behind a
+      restore that refuses to run. The failed-write branch clears it again and
+      drops raw mode, because <em>&ldquo;half-installed is the worst state to
+      leave a terminal in.&rdquo;</em>
+    </li>
+    <li>
+      The private modes are enabled <em>after</em> <code>FRAME_ON</code>, since
+      <code>FRAME_ON</code> is what makes the restore willing to turn them off.
+      <em>&ldquo;Being late costs nothing; being early costs a shell that pastes
+      escape markers into itself.&rdquo;</em>
+    </li>
+    <li>
+      The Windows code page is restored last, after the final byte has gone out,
+      so the escapes above it are decoded by the console they were written for.
+    </li>
+  </ul>
+
+  <h3>The pairing test, and the one mode it cannot cover</h3>
+
+  <p class="faint">crates/emma/src/term/frame.rs &middot; <code>every_terminal_mode_the_frame_sets_is_unset_on_the_way_out</code></p>
+  <pre><code>        <span class="k">let</span> leaving = format!("{ALT_LEAVE}{}", leave_modes());
+        <span class="k">let mut</span> found = 0;
+        <span class="k">for</span> on in format!("{}{ALT_ENTER}", enter_modes()).split_inclusive('h') {
+            <span class="k">let</span> Some(number) = on.strip_prefix("\x1b[?").and_then(|s| s.strip_suffix('h')) <span class="k">else</span> {
+                <span class="k">continue</span>;
+            };
+            found += 1;
+            assert!(
+                leaving.contains(&amp;format!("\x1b[?{number}l")),
+                "mode {number} is set on the way in and never unset: {leaving:?}"
+            );
+        }
+        assert!(found &gt;= 2, "the enter sequences set fewer modes than exist");</code></pre>
+  <span class="src">crates/emma/src/term/frame.rs — <code>every_terminal_mode_the_frame_sets_is_unset_on_the_way_out</code></span>
+
+  <p>
+    Adding a mode to <code>enter_modes</code> without adding it to
+    <code>leave_modes</code> fails in CI rather than on somebody else's
+    terminal. Today <code>enter_modes</code> is <code>PASTE_ON</code> alone and
+    <code>leave_modes</code> is <code>{PASTE_OFF}{SYNC_END}\x1b[?25h\x1b[0m</code>:
+    paste off, any synchronized update ended, the cursor shown, and every
+    attribute dropped. A frame torn down mid-paint could otherwise leave a shell
+    prompt bold, invisible, or not repainting at all until the terminal's own
+    timeout fired.
+  </p>
+
+  <p>
+    The cost of bracketed paste left on is worth stating plainly, because it
+    outlives the process: a shell inheriting it receives <code>ESC[200~</code>
+    around everything anybody pastes into it, forever, from a program that has
+    exited. Mouse capture cannot ride in the pairing test, because on Windows
+    the enable is a console-mode change rather than bytes, so its pairing is
+    asserted on the source instead. The test says so of itself:
+    <em>&ldquo;Weak as assertions go, and said so; the live pairing is a
+    certification item.&rdquo;</em>
+    <span class="chip unv">unverified</span>: exit a framed run and check the
+    shell reports mouse events normally.
+  </p>
+
+  <div class="note warn">
+    <span class="h">What the restore does not cover, per the code</span>
+    <p>
+      <code>SIGKILL</code>, a stack overflow that skips the hook, and
+      <code>std::process::abort</code>. Those strand raw mode already and strand
+      the alternate screen now, <em>&ldquo;and no in-process code can do
+      otherwise.&rdquo;</em> The design note adds a class the inline design could
+      not have: a multiplexer or ssh session detached mid-frame, or a dropped
+      connection with the alternate screen still entered.
+      <span class="chip unv">unverified</span>: no tmux or ssh certification
+      exists in the tree. Detaching mid-frame, resizing the pane and reattaching
+      would settle it.
+    </p>
+    <span class="src">crates/emma/src/term/frame.rs module doc; notes/design-tui-fullscreen.md §2.1, §2.4</span>
+  </div>
+
+  <h2 id="absolute-3">Absolute 3: <code>EMMA_UI=inline</code> is an escape hatch with an expiry</h2>
+
+  <p>
+    The old inline viewport was not deleted. One environment variable selects
+    it, and the test is narrow:
+  </p>
+
+  <p class="faint">crates/emma/src/term/frame.rs &middot; inside <code>Frame::install</code></p>
+  <pre><code>        <span class="c">// The escape hatch: the inline viewport, for one release. Anything</span>
+        <span class="c">// else — including the variable being unset, which is the ordinary</span>
+        <span class="c">// case — is the full-screen app.</span>
+        <span class="k">let</span> inline = std::env::var("EMMA_UI").is_ok_and(|v| v.eq_ignore_ascii_case("inline"));</code></pre>
+  <span class="src">crates/emma/src/term/frame.rs — <code>Frame::install</code>; notes/design-tui-fullscreen.md §2.3</span>
+
+  <p>
+    It is kept <strong>for one release</strong>, as a soak period, so the flip's
+    cost can be discovered against a real terminal rather than in theory. The
+    two are different code rather than a flag inside one renderer, and
+    <code>enum Ui</code> is what carries the difference through
+    <code>Inner</code>. <code>Ui::Full</code> boxes its <code>App</code>, which
+    the comment explains as <em>&ldquo;one heap hop per lock, against an
+    <code>Inner</code> that already lives behind a mutex.&rdquo;</em>
+  </p>
+
+  <div class="note warn">
+    <span class="h">Not documented where a user would look</span>
+    <p>
+      <code>emma --help</code> at <code>62ab9c3</code> describes the frame as
+      <em>&ldquo;a status row on top, the transcript scrolling between, and the
+      prompt pinned to the bottom row&rdquo;</em>, which is the
+      <em>inline</em> layout. The default has been the full-screen app since
+      2026-08-12: the status bar is at the bottom, the sidebar is on the left,
+      and the input dock sits above the hint row. <code>--help</code> also
+      names <code>EMMA_NO_FRAME</code> and never mentions
+      <code>EMMA_UI</code>.
+      <span class="chip cert">certified</span> 2026-08-16 by running
+      <code>emma --help</code> and grepping its output for
+      <code>EMMA_UI</code>: zero hits, one hit for
+      <code>EMMA_NO_FRAME</code>.
+    </p>
+    <span class="src">crates/emma/src/cli.rs (the help text), read via <code>emma --help</code> at 62ab9c3</span>
+  </div>
+
+  <h2 id="install">What install does, in order</h2>
+
+  <p>
+    <code>Frame::install</code> is the longest function in the file and every
+    step of it can refuse. In order: <code>fallback_reason</code>;
+    <code>enable_vt</code> on Windows; the <code>EMMA_UI</code> read; a
+    <code>\r\n</code> to stdout so the viewport is not drawn over the shell
+    prompt; <code>enable_raw_mode</code>; the alternate-screen enter when not
+    inline; <code>open_viewport</code> or <code>open_fullscreen</code>; the
+    panic hook; <code>FRAME_ON</code>; <code>enter_modes</code>; mouse capture
+    when not inline; the user-tool catalogue; and finally the
+    <code>Arc&lt;Frame&gt;</code>, a first <code>draw</code>, and a clock
+    thread.
+  </p>
+
+  <p>
+    Two of those deserve a sentence. Mouse capture is enabled only on the
+    full-screen path, and the comment is unusually blunt about the reason:
+    <em>&ldquo;on the alternate screen the wheel does nothing at all without it
+    — not &lsquo;less useful&rsquo;, nothing.&rdquo;</em> Inline, the terminal
+    owns the wheel, and taking it would break scrollback that still works. And
+    the catalogue is probed here against the directory Emma was started in, so
+    the TOOLS section is never a placeholder on the first paint;
+    <code>set_identity</code> re-probes it when the run's real working directory
+    arrives.
+  </p>
+
+  <p>
+    <code>spawn_clock</code> holds a <code>Weak&lt;Frame&gt;</code> and redraws
+    twice a second while a goal is running, so the elapsed field is a clock
+    rather than a timestamp from the last thing that happened. It is a plain
+    thread rather than a tokio task <em>&ldquo;so it keeps ticking through a
+    blocking tool call&rdquo;</em>, and the <code>Weak</code> is what lets the
+    thread die with the frame.
+  </p>
+  <span class="src">crates/emma/src/term/frame.rs — <code>install</code>, <code>spawn_clock</code>, <code>PANIC_HOOK</code></span>
+
+  <h2 id="sync">Synchronized output</h2>
+
+  <p>
+    <code>ESC[?2026h</code> asks the terminal to stop presenting frames until
+    the matching <code>l</code>, so a repaint made of several writes reaches the
+    eye as one picture instead of as its steps. <code>synchronized</code> writes
+    both straight to <code>stdout</code> rather than through the backend,
+    because they are not drawing operations and both go into the same global
+    buffer, so the order they were written in is the order they go out in.
+  </p>
+
+  <p>
+    On a terminal that does not implement it, nothing happens: DECSET with an
+    unrecognised parameter is defined to be ignored, and 2026 is registered, so
+    a terminal either honours it or drops it. The file names which terminals
+    honour it (Windows Terminal, WezTerm, kitty, foot, iTerm2, Ghostty) and
+    which ignores it (legacy conhost).
+    <span class="chip unv">unverified</span> here: that list is not sourced in
+    the file and was not re-checked for this page. Reading each terminal's
+    release notes, or writing the sequence and watching for a paused frame,
+    would settle it.
+  </p>
+
+  <p>
+    The failure worth naming is an unmatched <code>h</code>: a terminal that
+    never sees the <code>l</code> stops updating. Every terminal implementing
+    the mode implements a timeout for that reason, and <code>SYNC_END</code> is
+    also on the restore path.
+    <span class="chip test">tested</span>:
+    <code>a_synchronized_update_is_always_ended_including_on_the_way_out</code>
+    pins both constants and then asserts on this file's own source that
+    <code>out.push_str(SYNC_END)</code> still appears in the restore.
+  </p>
+
+  <h2 id="anchoring">Anchoring, which is now only the resize path</h2>
+
+  <p>
+    The inline viewport's top row is computed by ratatui from wherever the
+    cursor is when the <code>Terminal</code> is built, and every
+    <code>insert_before</code> moves it one row further down until it reaches
+    the bottom. So the box is under the last line of output at all times, which
+    is the only definition of &ldquo;pinned to the bottom&rdquo; that is true on
+    the first frame as well as the hundredth.
+  </p>
+
+  <p>
+    The version this replaces walked the cursor down to
+    <code>height - view_rows</code> before handing over the backend. That put
+    the box on the last row immediately and, on a fresh shell, left every row it
+    walked over blank. The region comment records the outcome: <em>&ldquo;The
+    owner sent a screenshot of that, too. The walk cost the
+    <em>transcript</em> nothing, which was the property that mattered and the
+    property that was tested; what it cost was the screen.&rdquo;</em>
+  </p>
+
+  <p>
+    So <code>install</code> now anchors nothing, and there is a test asserting
+    that on this file's source, because <code>install</code> cannot run in a
+    test binary:
+    <code>install_hands_the_terminal_to_ratatui_without_moving_the_cursor_first</code>
+    slices the source between <code>pub fn install(</code> and
+    <code>PANIC_HOOK.call_once</code>, strips comments, and refuses
+    <code>anchor(</code>. Both <code>expect</code> messages say the assertion
+    has become vacuous if the anchor points move, which is the honest failure
+    mode for a source-grep test.
+    <span class="chip test">tested</span>
+  </p>
+
+  <p>
+    What is left of anchoring is the resize path, and it is one bit:
+  </p>
+
+  <p class="faint">crates/emma/src/term/frame.rs &middot; <code>anchor_row</code>, <code>resize_target</code></p>
+  <pre><code><span class="c">/// The row the viewport's top belongs on: the window's height, less the frame's.</span>
+fn anchor_row(screen_rows: u16, view_rows: u16) -&gt; u16 {
+    screen_rows.saturating_sub(view_rows)
+}
+
+<span class="c">/// Where a resize should put the viewport's top row, or `None` to leave it on</span>
+<span class="c">/// the row the erase left the cursor on.</span>
+<span class="c">///</span>
+<span class="c">/// The whole of the resize decision, as a function of one bit, so that what</span>
+<span class="c">/// [`Inner::reanchor`] does and what the tests assert are the same code rather</span>
+<span class="c">/// than two statements of it — `reanchor` itself writes to the process's real</span>
+<span class="c">/// stdout and cannot be called from a test binary.</span>
+<span class="c">///</span>
+<span class="c">/// `None` is not "do nothing safe": it is the answer for a frame still sitting</span>
+<span class="c">/// under the two lines of output it belongs to, which a taller window must not</span>
+<span class="c">/// drag to the bottom. That is the startup void arriving through the resize</span>
+<span class="c">/// path.</span>
+fn resize_target(pinned: bool, screen_rows: u16, height: u16) -&gt; Option&lt;u16&gt; {
+    pinned.then(|| anchor_row(screen_rows, height))
+}</code></pre>
+  <span class="src">crates/emma/src/term/frame.rs — the <em>Anchoring</em> region</span>
+
+  <p>
+    <code>pinned</code> is a latch rather than a comparison, because a window
+    dragged taller makes the old bottom row an ordinary middle row and there is
+    then nothing left on screen to work it out from. It is set in
+    <code>Inner::paint</code> from ratatui's own idea of where the viewport is,
+    <em>&ldquo;because that is the number <code>insert_before</code> moves and
+    the only one that can answer &lsquo;has it arrived yet&rsquo;.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>a_resized_window_puts_a_pinned_frame_back_on_its_last_rows</code> over
+    three size changes, and
+    <code>a_resized_window_leaves_an_unpinned_frame_under_its_own_output</code>
+    for the other bit.
+  </p>
+
+  <p>
+    <code>reanchor</code> also names a hazard it cannot remove. Asking where the
+    cursor is costs a round trip through the terminal on unix, and by the time a
+    resize happens the reader thread is on stdin too, so the answer can go to
+    the wrong reader. The exposure is not new: ratatui's own
+    <code>autoresize</code> asks the same question on the first draw after any
+    resize. When it fails, <code>anchor</code> moves nothing and the frame stays
+    where it was, <em>&ldquo;untidy, not broken.&rdquo;</em>
+    <span class="chip unv">unverified</span>: nobody has provoked the race. A
+    resize storm on a unix terminal while a goal streams would settle it.
+  </p>
+
+  <h2 id="paint">Two paints, one function each</h2>
+
+  <p>
+    <code>Inner::paint</code> branches on <code>Ui</code>. Inline, it calls
+    <code>paint_into</code>, then updates the <code>pinned</code> latch and
+    stores <code>CURSOR_ROW</code>, which is the climb count the erase uses.
+    Full-screen, it builds a <code>statusbar::Bar</code> from the view's status
+    and hands the whole window to <code>App::render</code>, leaving
+    <code>CURSOR_ROW</code> parked at &ldquo;nothing drawn&rdquo; because the
+    full-screen restore leaves the alternate screen rather than erasing rows.
+  </p>
+
+  <p>
+    The <code>Bar</code> construction encodes one rule worth reading. An
+    unmeasured <code>context</code> or <code>spend</code> becomes
+    <code>(0, 0)</code>, never <code>(0, real_cap)</code>, <em>&ldquo;which
+    would draw an invented &lsquo;0% of the budget&rsquo; before the first model
+    call reports.&rdquo;</em> The <code>up</code>/<code>down</code> raw token
+    split is <code>None</code> because the loop does not carry it yet: absent,
+    not zero.
+  </p>
+
+  <p>
+    Four functions are generic over <code>Backend</code> so a
+    <code>TestBackend</code> can drive the same ratatui code a real terminal
+    runs: <code>open_viewport</code>, <code>open_fullscreen</code>,
+    <code>emit_block</code> and <code>paint_into</code>, plus
+    <code>emit_into</code> under them. Without that,
+    <em>&ldquo;output goes above and the question stays below&rdquo;</em> would
+    be a claim about a mechanism nobody in this repository can observe.
+  </p>
+
+  <p>
+    <code>emit_into</code> computes the row count in advance because that is
+    what <code>insert_before</code> makes room for: guess low and the last row
+    of a wrapped line lands on top of the viewport. It measures with
+    <code>rows_used</code>, which counts display columns rather than characters,
+    and caps a single insert at <code>MAX_INSERT_ROWS = 500</code>, the backstop
+    for a tool that returns fifty thousand lines.
+    <span class="chip test">tested</span>:
+    <code>a_wrapped_transcript_line_gets_all_the_rows_it_needs</code> asserts
+    that a hundred-character line arrives whole across three rows <em>and</em>
+    that the viewport under it is unbroken.
+  </p>
+
+  <div class="note">
+    <span class="h">The one cell where the test screen and a real terminal disagree</span>
+    <p>
+      ratatui clears a moved inline viewport by putting the cursor on its
+      top-left and asking for <code>ClearType::AfterCursor</code>. crossterm
+      sends <code>ESC[J</code>, which clears from and including the cursor cell;
+      <code>TestBackend</code> implements it as <code>content[index + 1..]</code>,
+      which leaves that cell alone. So every time the frame moves down a row the
+      cell buffer keeps a stale <code>&#x256d;</code> at column zero of the row
+      the border used to be on, and a real console does not. The test helper
+      <code>boxes_in</code> counts a whole corner rather than one glyph to get
+      past it, and the doc says which way round it is: <em>&ldquo;for once the
+      test screen shows a defect the terminal will not have, rather than hiding
+      one it will.&rdquo;</em> <span class="chip test">tested</span> that a
+      genuinely duplicated box still fails, because a duplicated box brings its
+      border with it.
+    </p>
+    <span class="src">crates/emma/src/term/frame.rs — <code>boxes_in</code>; notes/lessons/testbackend-clears-one-cell-fewer&hellip;</span>
+  </div>
+
+  <h2 id="api">The Frame's public surface</h2>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Group</th><th>Methods, and what is decided in them</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Writing</td>
+          <td>
+            <code>draw</code>, <code>write_lines</code>,
+            <code>user_line</code>, <code>prose</code>,
+            <code>flush_prose</code>, <code>separate</code>,
+            <code>note_line</code>. <code>user_line</code> exists so the
+            full-screen chat pane can label a row <code>You</code> rather than
+            guessing the speaker back from styling.
+            <code>prose</code> forks hard: full-screen it streams into the
+            transcript's tail entry, inline it holds the fragment after the last
+            newline in <code>View::partial</code>, because a fragment inserted
+            above the viewport could never be extended.
+            <code>separate</code> is a no-op full-screen, where the transcript
+            buffer's own separators are the rule.
+          </td>
+        </tr>
+        <tr>
+          <td>View state</td>
+          <td>
+            <code>set_input</code>, <code>set_prompt</code>,
+            <code>set_menu</code>, <code>prompt_pending</code>,
+            <code>set_identity</code>. <code>set_prompt</code> closes the menu
+            when a question arrives, which is the second half of the rule
+            <a href="terminal-dock.html">the reader</a> enforces from the other
+            side.
+          </td>
+        </tr>
+        <tr>
+          <td>Meters</td>
+          <td>
+            <code>goal_started</code>, <code>goal_ended</code>,
+            <code>spent</code>, <code>set_budgets</code>. Each takes the lock,
+            mutates, paints, drops the lock, and <em>then</em> calls
+            <code>request_status</code>. The scoping is not tidiness:
+            <code>request_status</code> takes the same lock, and a method holding
+            it across the call would deadlock the first time anybody typed a
+            goal.
+          </td>
+        </tr>
+        <tr>
+          <td>Status program</td>
+          <td>
+            <code>set_status_source</code>, <code>request_status</code>,
+            <code>set_custom_status</code>. <code>request_status</code> builds a
+            payload and <code>try_send</code>s it into a one-slot channel; a
+            full channel means a fresher request is already queued and the right
+            answer is to do nothing. <code>status_requests</code> is a separate
+            mutex from <code>inner</code>, because <em>&ldquo;one mutex for two
+            unrelated things is how a repaint ends up waiting on a
+            subprocess.&rdquo;</em>
+          </td>
+        </tr>
+        <tr>
+          <td>Keys and mouse</td>
+          <td>
+            <code>scroll_rows</code>, <code>scroll_page</code>,
+            <code>scroll_top</code>, <code>scroll_tail</code>,
+            <code>toggle_sidebar</code>, <code>click</code>,
+            <code>launch_tool</code>. Every one is a no-op on the inline path.
+            They are called from the reader thread and never enter the line
+            channel, which is what keeps the drain guarantee untouched by
+            construction. <code>click</code> returns early while a prompt is
+            pending, and <code>launch_tool</code> spawns a thread because a
+            keystroke handler that waits on a process is an event loop that has
+            stopped.
+          </td>
+        </tr>
+        <tr>
+          <td>Plumbing</td>
+          <td>
+            <code>lock</code> (carries on through a poisoned mutex, because the
+            frame is already being torn down and a second panic helps nobody),
+            <code>session_pointer</code>, <code>view_rows</code>,
+            <code>Inner::emit</code>, <code>Inner::reanchor</code>.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    <code>view_rows(screen_rows)</code> is <code>(screen_rows / 3).clamp(5,
+    10)</code>, and the two bounds are argued: ten rows holds a status line, a
+    hint, an input box and five rows of a diff; five is the least that can hold
+    a question and the keys to answer it. Below that the fallback is a better
+    product than a viewport occupying most of the screen, which is why
+    <code>fallback_reason</code> refuses under eight rows outright.
+    <span class="chip test">tested</span>:
+    <code>the_viewport_is_a_third_of_the_window_within_reason</code>, at 40, 24,
+    9 and 120.
+  </p>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    <code>frame.rs</code> is 2,159 lines and was read in full for this page. It
+    declares 47 function items above the test boundary: 5 free functions in the
+    restore and modes regions, 3 more in the anchoring region, 5 backend-generic
+    operations, <code>view_rows</code>, <code>spawn_clock</code>, 29
+    <code>Frame</code> methods and 3 <code>Inner</code> methods. All 47 are
+    named on this page: 47 of 47. Of its 21 tests, 13 are cited by name here;
+    the other 8 are the inline-viewport drawing tests
+    (<code>output_goes_above_the_viewport&hellip;</code>,
+    <code>the_viewport_is_drawn_once&hellip;</code>,
+    <code>formatted_prose_lands_above_the_viewport&hellip;</code>, the two
+    startup-scrollback tests, the smallest-window test and the two spacing
+    tests), which cover the <code>EMMA_UI=inline</code> path and the blank-row
+    rule described on <a href="terminal-skin.html">the vocabulary page</a>.
+  </p>
+
+  <p>
+    <strong>Not settled here.</strong> Whether the enter and leave bytes reach
+    the terminal on each exit path is what no in-process test can see. The
+    pairing test asserts the strings match; the write itself is
+    <span class="chip unv">unverified</span>. What would settle it: run the
+    binary and take each exit in turn (quit, Ctrl-C, an induced panic, the
+    <code>process::exit</code> route), then check the shell echoes, the prior
+    content is back, and a paste carries no <code>ESC[200~</code>.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="terminal-layout.html">the window carve</a>, where the
+      alternate screen is divided into panes. Back to
+      <a href="terminal.html">The terminal</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

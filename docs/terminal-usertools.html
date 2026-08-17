@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The tools a person launches &middot; The terminal &middot; Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav here" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/emma/src/usertools.rs</p>
+  <h1>The tools a person launches</h1>
+
+  <nav class="chapter">
+      <a class="up" href="terminal.html">The terminal</a>
+      <a href="terminal-surface.html">Surface</a>
+      <a href="terminal-frame.html">Frame</a>
+      <a href="terminal-layout.html">Layout</a>
+      <a href="terminal-colour.html">Colour</a>
+      <a href="terminal-themes.html">Themes</a>
+      <a href="terminal-skin.html">Vocabulary</a>
+      <a href="terminal-transcript.html">Transcript</a>
+      <a href="terminal-markdown.html">Markdown</a>
+      <a href="terminal-diff.html">Diffs</a>
+      <a href="terminal-status.html">Status</a>
+      <a href="terminal-sidebar.html">Sidebar</a>
+      <a href="terminal-dock.html">Dock</a>
+      <span class="now">User tools</span>
+    </nav>
+
+  <p class="lede">
+    The sidebar's middle section lists seven entries in a fixed order. Five start
+    a program on the machine; two run inside Emma and say so rather than
+    pretending to launch. Three rules carry the design, and every one exists
+    because breaking it fails silently. The sharpest of them cost twenty-two
+    green tests and a canary in the wrong stream to find.
+  </p>
+
+  <h2 id="catalogue">Seven entries, always all seven</h2>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Tool</th><th>Key</th><th>What it opens</th></tr></thead>
+      <tbody>
+        <tr><td>Shell</td><td><code>Alt+s</code></td><td>A shell in the working directory, in a console of its own.</td></tr>
+        <tr><td>Code</td><td><code>Alt+c</code></td><td>The configured editor on the project.</td></tr>
+        <tr><td>File Browser</td><td><code>Alt+f</code></td><td>The OS file manager on the project.</td></tr>
+        <tr><td>Search</td><td><code>/</code></td><td>Nothing. Runs inside Emma; the frame owns the key.</td></tr>
+        <tr><td>Memory</td><td><code>Alt+m</code></td><td>Nothing. Same.</td></tr>
+        <tr><td>Data Explorer</td><td><code>Alt+d</code></td><td>The same file manager on Emma's own data directory.</td></tr>
+        <tr><td>Settings</td><td><code>Alt+,</code></td><td><code>~/.emma/settings.json</code> in something that can edit it.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <span class="src">crates/emma/src/usertools.rs — <code>enum Tool</code>, <code>ALL</code>, <code>Tool::key</code>, <code>Tool::label</code></span>
+
+  <p>
+    <code>Tool::in_app</code> is the two-variant predicate, and
+    <code>launch</code> refuses those two with a sentence rather than returning
+    success: <em>&ldquo;returning <code>Ok</code> for a launch that never
+    happened is a fake receipt.&rdquo;</em> They are still marked
+    <code>available: true</code> in the catalogue, because their keys really are
+    live in the frame, and <em>&ldquo;a probe failure must never mark them
+    dead.&rdquo;</em>
+  </p>
+
+  <p>
+    An unavailable tool stays in the list with <code>available: false</code> and
+    a detail naming what was looked for, because <em>&ldquo;a key that is absent
+    teaches nothing, a key that says &lsquo;none of code, cursor, subl, zed,
+    nvim is on PATH&rsquo; is a to-do list.&rdquo;</em>
+    <a href="terminal-sidebar.html">The sidebar</a> draws <code>n/a</code> where
+    the chord would be and dims the label.
+  </p>
+
+  <p>
+    <code>catalogue</code> may run on every draw, so PATH lookups are cached for
+    the life of the process. That also makes &ldquo;a program installed
+    mid-session appears after a restart&rdquo; true by construction rather than
+    intermittently. <code>settings.json</code> is re-read on every call, one
+    small file read, so the Settings tool's own writes show up on the next
+    frame.
+  </p>
+
+  <p>
+    <span class="chip cert">certified</span> against this machine, 2026-08-16,
+    by running the ignored probe test:
+  </p>
+
+  <pre><code>$ cargo test -p emma --lib usertools::tests::certify -- --ignored --nocapture
+
+Shell         [s] available=true -- powershell in C:\src\emma\crates\emma
+Code          [c] available=true -- code in C:\src\emma\crates\emma
+File Browser  [f] available=true -- explorer at C:\src\emma\crates\emma
+Search        [/] available=true -- search this project, inside Emma
+Memory        [m] available=true -- this project's memory, inside Emma
+Data Explorer [d] available=true -- explorer at C:\Users\owner\.emma
+Settings      [,] available=true -- code on C:\Users\owner\.emma\settings.json</code></pre>
+
+  <p>
+    Two things in that output are the design working. <code>Code</code> resolved
+    to <code>code</code> through the PATH probe, which on Windows means the
+    probe had to find <code>code.cmd</code> rather than a bare
+    <code>code</code>; and <code>Settings</code> reused the same editor rather
+    than falling back to notepad, so the fallback chain is in the branch it says
+    it is.
+  </p>
+
+  <h2 id="seam">The machine is a trait</h2>
+
+  <p>
+    Everything the decision layer wants to know about the world sits behind
+    <code>trait Machine</code>: <code>os</code>, <code>env</code>,
+    <code>find</code>, <code>exists</code>, <code>tools</code>,
+    <code>home</code>. <code>os()</code> returns data rather than being a
+    <code>cfg</code>, and the region comment says why: <em>&ldquo;the unix
+    refusal rules are asserted by tests that run on Windows.&rdquo;</em>
+  </p>
+
+  <p>
+    The test fixture's own helper carries the seam's honest limit, and it is
+    worth reading because it is the kind of thing usually left undiscovered:
+  </p>
+
+  <p class="faint">crates/emma/src/usertools.rs &middot; the test helper <code>host</code></p>
+  <pre><code>    <span class="c">/// The machine under test is fake — `Fake::new(Os::Windows)` models a</span>
+    <span class="c">/// Windows box on any host, which is the whole point of `Machine` — but</span>
+    <span class="c">/// `plan` resolves the paths it is handed with real `std::path`, and</span>
+    <span class="c">/// `std::path` only knows the separator of the platform it was compiled</span>
+    <span class="c">/// for. So a literal `C:\pwsh\pwsh.exe` is one filename on unix, whose</span>
+    <span class="c">/// `file_stem` is `C:\pwsh\pwsh` and which `is_absolute` denies. That does</span>
+    <span class="c">/// not make these tests fail on unix so much as make them assert something</span>
+    <span class="c">/// else: `what` reads `C:\pwsh\pwsh in …`, a configured program is looked</span>
+    <span class="c">/// for on `PATH` instead of on disk, and `nvim` stops being recognised as a</span>
+    <span class="c">/// terminal editor. **The fake OS decides the behaviour; the host decides</span>
+    <span class="c">/// the spelling**, and this is the second half.</span></code></pre>
+  <span class="src">crates/emma/src/usertools.rs — <code>host</code></span>
+
+  <h2 id="spawn">The defect that forced raw <code>CreateProcessW</code></h2>
+
+  <p>
+    The interactive frame owns the alternate screen, so a child process that
+    writes to that console wrecks the display. Unlike a dead key, the user
+    cannot tell what happened. On Windows, <strong>every spawn shape
+    <code>std::process</code> can express fails that requirement</strong>, and
+    each was refuted by measurement rather than by review.
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Shape</th><th>What was measured</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>CREATE_NEW_CONSOLE</code> + default stdio</td>
+          <td>
+            A new window whose handles still point at Emma's console: Rust sets
+            <code>STARTF_USESTDHANDLES</code> whenever the parent has std
+            handles at all. <strong>The first certify run's canary landed in
+            this process's own output stream.</strong>
+          </td>
+        </tr>
+        <tr>
+          <td><code>CREATE_NEW_CONSOLE</code> + null stdio</td>
+          <td>
+            An interactive shell reads a NUL stdout as redirection and dies.
+            Measured: a conhost-hosted client under NUL handles exits instantly
+            without running.
+          </td>
+        </tr>
+        <tr>
+          <td>hosting under <code>conhost.exe</code></td>
+          <td>
+            Flips modes on the same axis, a real window with no handle info, a
+            headless ConPTY renderer when handed pipes, so it inherits the same
+            problem.
+          </td>
+        </tr>
+        <tr>
+          <td>
+            <strong>raw <code>CreateProcessW</code>,
+            <code>bInheritHandles = FALSE</code>, no <code>hStd</code>
+            fields</strong>
+          </td>
+          <td>
+            The OS builds the console and binds the child's handles to it, and
+            nothing of Emma's can reach the child even in principle. This is what
+            ships. <code>tools/web</code> spawns its detached Chrome the same
+            way.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <span class="src">crates/emma/src/usertools.rs — the <em>Spawning</em> region comment</span>
+
+  <p class="faint">crates/emma/src/usertools.rs &middot; <code>new_console::spawn</code>, the call</p>
+  <pre><code>        <span class="c">// SAFETY: every pointer feeds a live, NUL-terminated buffer local to</span>
+        <span class="c">// this call; si/pi are zeroed out-params of the documented size.</span>
+        <span class="c">// bInheritHandles is FALSE and si.dwFlags stays 0 (no</span>
+        <span class="c">// STARTF_USESTDHANDLES), which is the whole argument of the region</span>
+        <span class="c">// comment: no handle of this process is reachable from the child.</span>
+        <span class="k">unsafe</span> {
+            <span class="k">let mut</span> si: STARTUPINFOW = std::mem::zeroed();
+            si.cb = std::mem::size_of::&lt;STARTUPINFOW&gt;() <span class="k">as</span> u32;
+            <span class="k">let mut</span> pi: PROCESS_INFORMATION = std::mem::zeroed();
+            <span class="k">let</span> ok = CreateProcessW(
+                app.as_ptr(),
+                cmdline.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0, <span class="c">// bInheritHandles = FALSE</span>
+                CREATE_NEW_CONSOLE,
+                std::ptr::null(),
+                dir.as_ptr(),
+                &amp;si,
+                &amp;<span class="k">mut</span> pi,
+            );</code></pre>
+  <span class="src">crates/emma/src/usertools.rs — <code>new_console::spawn</code></span>
+
+  <p>
+    <code>lpApplicationName</code> is passed as well as the command line's first
+    token, <em>&ldquo;the program to run is then never re-derived by parsing the
+    line, spaces or no spaces.&rdquo;</em> <code>append_arg</code> implements the
+    documented <code>CommandLineToArgvW</code> quoting rules, the same algorithm
+    std uses, and the doc says why the effort is warranted even though Windows
+    paths cannot contain a quote: <em>&ldquo;an argument is not always a path,
+    and a quoting bug here is an argv boundary moving — exactly the class of
+    failure this module refuses everywhere else.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>quoting_matches_the_commandlinetoargvw_rules</code> pins seven cases
+    including a trailing backslash inside quotes and an embedded quote with
+    backslashes in front of it.
+  </p>
+
+  <h3>What the certification actually asserts, and what it cannot</h3>
+
+  <p>
+    <strong>Twenty-two green tests said nothing about any of this</strong>, and
+    could not have: an inherited handle bypasses the test harness's own capture,
+    so the write reaches the console without passing through anything an
+    assertion can see. What caught it was a canary, a known string the spawned
+    child prints, and a human reading the run's scrollback for its absence.
+    That method is now the test, and it says so of itself:
+  </p>
+
+  <div class="note">
+    <p>
+      <em>&ldquo;run by hand&hellip; and read the OUTPUT, not just the pass: the
+      NewConsole test's claim is that the canary does NOT appear anywhere in the
+      run's output, which the assertion cannot see (an inherited handle bypasses
+      the test harness's capture) — the reader checking the scrollback is the
+      certification.&rdquo;</em>
+    </p>
+    <span class="src">crates/emma/src/usertools.rs — the <em>Certification against the real machine</em> region</span>
+  </div>
+
+  <p>
+    Its other two claims are ordinary assertions. The child's
+    <code>[Console]::IsOutputRedirected</code> must be <code>False</code>, which
+    would be <code>True</code> if conhost had passed Emma's null handles
+    through; and its working directory must be the launch directory, proving the
+    cwd survives the conhost hop.
+  </p>
+
+  <p>
+    <span class="chip cert">certified</span> 2026-08-16 at <code>62ab9c3</code>,
+    re-run for this page rather than cited:
+  </p>
+
+  <pre><code>$ cargo test -p emma --lib usertools::tests::certify -- --ignored --nocapture
+running 3 tests
+&hellip;
+test usertools::tests::certify_the_catalogue_on_this_machine ... ok
+test usertools::tests::certify_a_detached_child_runs_without_touching_this_console ... ok
+test usertools::tests::certify_a_new_console_child_gets_a_real_console_that_is_not_ours ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 477 filtered out
+
+$ &hellip; | grep -c 'USERTOOLS-CANARY'
+0</code></pre>
+
+  <p>
+    Zero occurrences of either canary in the run's output, which is the claim no
+    assertion can make. The detached test's own receipt is the exit code:
+    <code>exit 7</code> coming back proves the child really ran, and the canary
+    staying out of the output proves its stdout went to the null device.
+    Repeatable with the two commands above.
+  </p>
+
+  <h3>The other three spawn shapes</h3>
+
+  <p>
+    Windows <code>Detached</code> uses std, with <code>CREATE_NO_WINDOW</code>
+    plus null stdio. The window flag is needed because <em>&ldquo;a
+    <code>.cmd</code> shim like VS Code's runs via cmd.exe, a console program
+    that would otherwise flash or attach&rdquo;</em>, and the null stdio is so
+    nothing it prints can reach any console Emma owns.
+  </p>
+
+  <p>
+    Unix gets null stdio on every spawn, <em>&ldquo;the corruption channel is
+    writes to this terminal, and null closes it&rdquo;</em>, plus its own
+    process group so a signal aimed at Emma's group is not also aimed at the
+    child. <code>Window</code> is not consulted there, because both variants
+    detach the same way and <code>NewConsole</code> is never planned on unix.
+    <span class="chip test">tested</span>:
+    <code>gui_launches_are_detached_and_shells_get_their_own_console</code>
+    walks five tools on both unix flavours and asserts every plan is
+    <code>Detached</code>.
+  </p>
+
+  <p>
+    <code>adopt</code> is how a child is let go. Dropping a handle never kills a
+    process; on unix an unreaped child becomes a zombie if it exits before Emma
+    does, so a throwaway thread waits on it, <em>&ldquo;and if Emma exits first
+    the child is init's problem, which is the point.&rdquo;</em>
+  </p>
+
+  <h2 id="values">A configured value is one program, never a command line</h2>
+
+  <p class="faint">crates/emma/src/usertools.rs &middot; <code>resolve_value</code></p>
+  <pre><code>fn resolve_value(m: &amp;<span class="k">dyn</span> Machine, value: &amp;str, origin: &amp;str) -&gt; Result&lt;PathBuf, String&gt; {
+    <span class="k">let</span> p = Path::new(value);
+    <span class="k">if</span> p.is_absolute() {
+        <span class="k">if</span> m.exists(p) {
+            Ok(p.to_path_buf())
+        } <span class="k">else</span> {
+            Err(format!("{origin} is set to {value}, which does not exist"))
+        }
+    } <span class="k">else if let</span> Some(found) = m.find(value) {
+        Ok(found)
+    } <span class="k">else if</span> value.chars().any(char::is_whitespace) {
+        Err(format!(
+            "{origin} is set to {value}, which is not on PATH (a configured value is one \
+             program name or absolute path, never a command line)"
+        ))
+    } <span class="k">else</span> {
+        Err(format!("{origin} is set to {value}, which is not on PATH"))
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/usertools.rs — <code>resolve_value</code></span>
+
+  <p>
+    Splitting a string on spaces is the first half of running text through a
+    shell, and a path with a space in it is not an argument boundary. A value
+    that does not resolve produces an error naming it, never a fall-through to a
+    probe, because <em>&ldquo;a substitution looks identical to success right up
+    until the wrong program opens.&rdquo;</em> The extra clause for a value with
+    whitespace in it exists so the rule the user broke is named rather than
+    merely reported.
+  </p>
+
+  <p>
+    <code>$VISUAL</code> and <code>$EDITOR</code> get one concession, because the
+    wider world does put command lines in them: a value there that does not
+    resolve <em>as a whole</em> is skipped and the chain continues.
+    <strong>Skipped, not split.</strong>
+    <span class="chip test">tested</span>:
+    <code>an_editor_env_var_holding_a_command_line_is_skipped_not_split</code>
+    sets <code>EDITOR=vim -u NONE</code> with <code>vim</code> on PATH and
+    asserts the chain falls through to <code>code</code>, so
+    <em>&ldquo;split, this would be vim (with args smuggled somewhere); skipped
+    whole, the chain falls through to the probe.&rdquo;</em>
+    <code>the_editor_chain_is_setting_then_visual_then_editor_then_probe</code>
+    walks all four rungs.
+  </p>
+
+  <h2 id="refusals">Refusing at planning time rather than at the keypress</h2>
+
+  <p>
+    <code>plan</code> is pure: a tool and a machine in, a <code>Launch</code>
+    value or an error string out. Nothing in the region starts a process, which
+    is what makes every branch testable on any OS, and it is also why the
+    catalogue can say a tool is unavailable <em>before</em> the key is pressed.
+  </p>
+
+  <p>
+    Two refusals are worth reading. A <strong>terminal editor on unix</strong>
+    is refused rather than launched, and the message names the editor and where
+    it came from so the fix is obvious. <code>is_terminal_editor</code> is a
+    list rather than a heuristic, and the asymmetry is priced: <em>&ldquo;a wrong
+    &lsquo;GUI&rsquo; guess corrupts the screen, a wrong &lsquo;terminal&rsquo;
+    guess costs one settings line, so unknown names are assumed GUI and the list
+    holds only the certain cases.&rdquo;</em> That is also why the unix probe
+    list omits <code>nvim</code> entirely: probing for it would manufacture an
+    unavailability two lines later.
+  </p>
+
+  <p>
+    A <strong><code>.cmd</code> or <code>.bat</code> bound for a new
+    console</strong> is refused by <code>console_hostable</code>, because
+    <code>CreateProcessW</code> cannot execute a cmd script and routing one
+    through <code>cmd.exe</code> would re-open the handle question the raw spawn
+    exists to close. It is checked twice, at planning time so the catalogue can
+    say so, and again inside <code>new_console::spawn</code>, <em>&ldquo;which is
+    the layer that must hold even if a future plan forgets to ask.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>a_cmd_script_cannot_be_promised_a_console_window</code> also asserts
+    the other half, that a GUI editor as a <code>.cmd</code> shim stays fine,
+    because it takes the <code>Detached</code> path where std handles cmd.exe
+    itself.
+  </p>
+
+  <p>
+    The Settings tool has one sanctioned fallback, and the file argues it is not
+    a substitution smuggled past the rule: <em>&ldquo;the tool's promise is
+    &lsquo;edit your settings&rsquo;, not &lsquo;open your chosen editor&rsquo;,
+    and the detail names whichever program will actually appear.&rdquo;</em>
+    <code>fallback_opener</code> is notepad, <code>open -t</code>, or
+    <code>xdg-open</code>, and when neither the editor nor the opener exists
+    both absences are named so the user can fix either one.
+  </p>
+
+  <h2 id="probe">The PATH probe has to agree with the spawner</h2>
+
+  <p>
+    On Windows a launcher is often a <code>.cmd</code> shim and Rust's
+    <code>Command</code> does not consult PATHEXT, so the probe must, <em>&ldquo;or
+    <code>available: true</code> would name a program the spawn cannot
+    start.&rdquo;</em> <code>candidates</code> tries <code>exe</code>,
+    <code>com</code>, <code>cmd</code>, <code>bat</code> in that order, matching
+    the common PATHEXT prefix, and takes a name that already carries an
+    extension literally.
+  </p>
+
+  <p>
+    On unix there are no extensions to resolve and the thing separating a
+    program from a file is the executable bit, which <code>is_program</code>
+    consults. The test for it names what it is defending:
+    <em>&ldquo;Without this, that <code>mode &amp; 0o111</code> had no test on
+    any platform, and dropping it would have turned every readable file on
+    <code>PATH</code> into an installed editor.&rdquo;</em>
+    <span class="chip test">tested</span>, one <code>cfg</code>-gated test per
+    platform, both against a real temporary directory.
+  </p>
+
+  <p>
+    <code>search_in</code> takes the PATH explicitly rather than reading it,
+    <em>&ldquo;so tests can probe a constructed directory without mutating the
+    process environment other tests share.&rdquo;</em> The cache lives in
+    <code>RealMachine::find</code> above it, so the pure walk stays testable.
+  </p>
+
+  <h2 id="receipt">One string, two tenses</h2>
+
+  <p>
+    <code>Launch::what</code> is present tense with no verb,
+    <code>pwsh in C:\src\emma</code>. The catalogue shows it as-is;
+    <code>launch</code> prefixes <code>opened&nbsp;</code>. <em>&ldquo;One
+    string, two tenses, so the promise and the receipt cannot drift
+    apart.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>launch_returns_what_happened_in_words</code> compares against
+    <code>format!("opened pwsh in {}", cwd().display())</code>, and three
+    sibling tests prove no spawner is reached for an in-app tool, an unavailable
+    tool, or after a failed spawn.
+  </p>
+
+  <p>
+    <code>ensure_settings_file</code> creates <code>settings.json</code> through
+    <code>settings.rs</code> so the file an editor opens is the file every other
+    reader would have produced, and leaves an existing file byte-for-byte alone:
+    <em>&ldquo;load/save would reformat it, and a settings file that mutates on
+    open is one nobody can diff.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>ensure_settings_file_creates_once_and_never_clobbers</code> writes a
+    real choice into a temp home and compares the file before and after.
+  </p>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    <code>usertools.rs</code> is 1,736 lines and was read in full for this page.
+    Above the outer <code>#[cfg(test)]</code> boundary it declares 50 function
+    items, counting the <code>Machine</code> trait's six methods separately from
+    <code>RealMachine</code>'s six implementations and the
+    <code>cfg</code>-duplicated <code>candidates</code>,
+    <code>is_program</code> and <code>spawn_detached</code> as two each. Every
+    one is named on this page or in the tables above: 50 of 50. That is three
+    <code>Tool</code> methods, two public entry points, twelve machine-seam
+    items (the trait's six and <code>RealMachine</code>'s six), five probe
+    helpers, twenty planning functions, three spawning functions and the five
+    inside <code>new_console</code>. All six constants and all nine types are
+    covered. Sixteen of its twenty-four tests are cited, including all three
+    ignored certifications, which were <strong>run</strong> for this page rather
+    than cited.
+  </p>
+
+  <p>
+    <strong>Not settled here.</strong> The certification proves the child gets a
+    console that is not Emma's. It does not prove the <em>frame survives</em>
+    the launch: nobody has pressed <code>Alt+s</code> inside a running
+    full-screen Emma and looked at the screen afterwards.
+    <span class="chip unv">unverified</span>: launch each of the five spawning
+    tools from a live framed session and check the alternate screen is
+    undisturbed. The unix arms are
+    <span class="chip unv">unverified</span> entirely: every unix decision here
+    is asserted through a fake machine on a Windows host, and no unix box has
+    run this code.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Back to <a href="terminal.html">The terminal</a>, or to
+      <a href="terminal-surface.html">the first page</a>, which decides whether
+      any of this is drawn at all.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

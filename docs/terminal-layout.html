@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The window carve &middot; The terminal &middot; Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav here" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/emma/src/term/app.rs</p>
+  <h1>The window carve</h1>
+
+  <nav class="chapter">
+      <a class="up" href="terminal.html">The terminal</a>
+      <a href="terminal-surface.html">Surface</a>
+      <a href="terminal-frame.html">Frame</a>
+      <span class="now">Layout</span>
+      <a href="terminal-colour.html">Colour</a>
+      <a href="terminal-themes.html">Themes</a>
+      <a href="terminal-skin.html">Vocabulary</a>
+      <a href="terminal-transcript.html">Transcript</a>
+      <a href="terminal-markdown.html">Markdown</a>
+      <a href="terminal-diff.html">Diffs</a>
+      <a href="terminal-status.html">Status</a>
+      <a href="terminal-sidebar.html">Sidebar</a>
+      <a href="terminal-dock.html">Dock</a>
+      <a href="terminal-usertools.html">User tools</a>
+    </nav>
+
+  <p class="lede">
+    <code>app.rs</code> owns what happens on the alternate screen once
+    <code>frame.rs</code> has entered it. Everything here is pure over a
+    <code>Buffer</code>, so a test can hold the layout still, and the file says
+    why the split sits where it does: the terminal, the locks and the
+    entry bytes stay in <code>frame.rs</code>, <em>&ldquo;which has already
+    shipped two invisible-to-tests defects and does not need a third file's
+    worth of chances.&rdquo;</em>
+  </p>
+
+  <h2 id="regions">One function carves the window</h2>
+
+  <p>
+    <code>regions(area, sidebar_w, dock_h) -&gt; Regions</code> is arithmetic
+    over three numbers. The two inputs that depend on state, how wide the
+    sidebar is and how tall the dock needs to be, are computed before the call,
+    so the carve itself runs without a terminal and without a
+    <code>View</code>.
+  </p>
+
+  <p class="faint">crates/emma/src/term/app.rs &middot; <code>regions</code></p>
+  <pre><code>pub fn regions(area: Rect, sidebar_w: u16, dock_h: u16) -&gt; Regions {
+    <span class="c">// The mockup floats every box inside the window rather than flush against</span>
+    <span class="c">// it: ~14px of ground on an ~11.3px cell — one column each side, one row</span>
+    <span class="c">// above the panes and one below the bar. Shed first when the window is</span>
+    <span class="c">// small, because a float is the cheapest thing on screen; the horizontal</span>
+    <span class="c">// inset rides with the border threshold so the two shed as one look.</span>
+    <span class="k">let</span> inset_x = u16::from(area.width &gt;= UNBORDERED_COLS);
+    <span class="k">let</span> inset_y = u16::from(area.height &gt;= INSET_MIN_ROWS);
+    <span class="k">let</span> outer = area.inner(Margin::new(inset_x, inset_y));
+    <span class="k">let</span> status_h = <span class="k">if</span> area.height &lt; SLIM_STATUS_ROWS { 1 } <span class="k">else</span> { 3 };
+    <span class="c">// One blank row between the main pane's bottom border and the bar's top —</span>
+    <span class="c">// measured, not styled: pane bottom ≈982px, bar top ≈1006px, one cell row.</span>
+    <span class="c">// It rides with the bar's border: a window too short for the border has no</span>
+    <span class="c">// row to spend on a gap either.</span>
+    <span class="k">let</span> gap_h = u16::from(area.height &gt;= SLIM_STATUS_ROWS);
+    <span class="k">let</span> [content, _, status] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(gap_h),
+        Constraint::Length(status_h),
+    ])
+    .areas(outer);
+    <span class="k">let</span> gap_w = <span class="k">if</span> sidebar_w &gt; 0 { PANE_GAP_COLS } <span class="k">else</span> { 0 };
+    <span class="k">let</span> [sidebar, _, main] = Layout::horizontal([
+        Constraint::Length(sidebar_w),
+        Constraint::Length(gap_w),
+        Constraint::Min(0),
+    ])
+    .areas(content);
+    <span class="k">let</span> main_bordered = area.width &gt;= UNBORDERED_COLS &amp;&amp; main.width &gt;= 5 &amp;&amp; main.height &gt;= 3;
+    <span class="c">// Inside the border the image pads the content: border at ≈362px, text at</span>
+    <span class="c">// ≈393px — the border cell plus one more column ((2,1) counts the border).</span>
+    <span class="k">let</span> inner = <span class="k">if</span> main_bordered {
+        main.inner(Margin::new(2, 1))
+    } <span class="k">else</span> {
+        main
+    };
+    <span class="k">let</span> (header_h, rule_h) = <span class="k">if</span> area.height &lt; SLIM_HEADER_ROWS {
+        (1, 0)
+    } <span class="k">else</span> {
+        (2, 1)
+    };
+    <span class="k">let</span> [header, rule, chat, dock, hint] = Layout::vertical([
+        Constraint::Length(header_h),
+        Constraint::Length(rule_h),
+        Constraint::Min(1),
+        Constraint::Length(dock_h),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    <span class="w">…</span>
+}</code></pre>
+  <span class="src">crates/emma/src/term/app.rs — <code>regions</code>, <code>struct Regions</code></span>
+
+  <p>
+    Four constants set the thresholds, and each is a decision rather than a
+    round number. <code>UNBORDERED_COLS</code> is 60, below which the main pane
+    loses its border and the horizontal float goes with it, so the two shed as
+    one look. <code>SLIM_STATUS_ROWS</code> is 14 and takes the bar from three
+    rows to one, and the blank row above it rides along. <code>SLIM_HEADER_ROWS</code>
+    is 12, below which the header is one line and the rule disappears.
+    <code>INSET_MIN_ROWS</code> is 30, and its comment names the trade: rows are
+    the scarce axis, at 24 rows two of them are a whole approval key row, and
+    the mockup only speaks for one window size, so how it degrades is this
+    file's decision rather than the image's.
+  </p>
+
+  <h3>The numbers came from the image, not from the description of it</h3>
+
+  <p>
+    The module doc records why the pixels were re-measured on 2026-08-13:
+    <em>&ldquo;the prose description of that image was wrong in five recorded
+    places, and the design note's §1.1 sampled table, though pixel-derived,
+    still missed three facts.&rdquo;</em> The three are the ones a carve cannot
+    guess: the panes do not share edges, one blank row separates the main pane
+    from the status bar, and everything floats one cell inside the window edge.
+  </p>
+
+  <p class="faint">crates/emma/src/term/app.rs &middot; <code>PANE_GAP_COLS</code></p>
+  <pre><code><span class="c">/// Columns of ground between the sidebar's box and the main pane's. Measured</span>
+<span class="c">/// from the image: sidebar right edge ≈338px, main pane left edge ≈362px, at</span>
+<span class="c">/// ≈11.3px per cell — two columns, not shared borders. Zero when the sidebar</span>
+<span class="c">/// is collapsed: the gap is the sidebar's, and goes with it.</span>
+const PANE_GAP_COLS: u16 = 2;</code></pre>
+  <span class="src">crates/emma/src/term/app.rs — <code>PANE_GAP_COLS</code>; test <code>the_pane_gaps_measured_from_the_mockup_are_in_the_carve</code></span>
+
+  <p>
+    The test that pins all three works at 128&times;41, which is the mockup's own
+    cell grid (1448&times;1086 pixels at roughly 11.3&times;26 per cell). It also
+    checks the collapsed case, where the pane gap goes with the sidebar
+    <em>&ldquo;rather than becoming a stray two-column stripe of
+    nothing.&rdquo;</em> <span class="chip test">tested</span>
+  </p>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 760 372" role="img"
+           aria-label="The window carve: a one-cell float, then a sidebar of 22.4 percent clamped between 28 and 40 columns, two columns of gap, and a bordered main pane holding header, rule, chat, dock and hint stacked vertically, then a blank row and a three-row status bar.">
+        <rect x="10" y="10" width="740" height="352" rx="4" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="3 4" opacity="0.5" />
+        <text class="tiny" x="20" y="26">window &middot; inset 1 col / 1 row while cols &#8805; 60 and rows &#8805; 30</text>
+
+        <rect class="box" x="26" y="38" width="150" height="238" rx="3" />
+        <text class="lbl" x="101" y="60" text-anchor="middle">sidebar</text>
+        <text class="tiny" x="101" y="78" text-anchor="middle">SESSIONS  [+]</text>
+        <text class="tiny" x="101" y="96" text-anchor="middle">TOOLS</text>
+        <text class="tiny" x="101" y="114" text-anchor="middle">QUICK HELP</text>
+        <text class="tiny" x="101" y="146" text-anchor="middle">22.4% of cols</text>
+        <text class="tiny" x="101" y="162" text-anchor="middle">clamp 28..40</text>
+        <text class="tiny" x="101" y="178" text-anchor="middle">then &#8804; cols/2</text>
+        <text class="tiny" x="101" y="206" text-anchor="middle">0 when collapsed</text>
+        <text class="tiny" x="101" y="222" text-anchor="middle">auto below 100 cols</text>
+        <text class="tiny" x="101" y="238" text-anchor="middle">Ctrl-B latches</text>
+
+        <rect x="176" y="38" width="22" height="238" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="2 3" opacity="0.55" />
+        <text class="tiny" x="187" y="266" text-anchor="middle">2</text>
+
+        <rect class="box" x="198" y="38" width="536" height="238" rx="3" />
+        <text class="tiny" x="708" y="54" text-anchor="end">main</text>
+
+        <rect class="box" x="216" y="52" width="500" height="26" rx="2" />
+        <text class="tiny" x="228" y="69">header &mdash; 2 rows (1 below 12 rows)</text>
+
+        <rect class="box" x="216" y="82" width="500" height="14" rx="2" />
+        <text class="tiny" x="228" y="93">rule &mdash; 1 row, gone below 12 rows</text>
+
+        <rect class="hl" x="216" y="100" width="500" height="86" rx="2" />
+        <text class="lbl" x="228" y="120">chat &mdash; Constraint::Min(1)</text>
+        <text class="tiny" x="228" y="138">gutter 7 cols &middot; message &#8805; 61 cols</text>
+        <text class="tiny" x="228" y="154">You / Emma labelled &middot; tool traffic is not</text>
+        <text class="tiny" x="228" y="170">indicator drawn only behind the tail</text>
+
+        <rect class="hl" x="216" y="192" width="500" height="48" rx="2" />
+        <text class="lbl" x="228" y="212">input dock &mdash; 3 rows</text>
+        <text class="tiny" x="228" y="230">grows for the menu; the approval prompt REPLACES it</text>
+
+        <rect class="box" x="216" y="244" width="500" height="16" rx="2" />
+        <text class="tiny" x="228" y="256">hint &mdash; 1 row</text>
+
+        <text class="tiny" x="380" y="290" text-anchor="middle">one blank row &mdash; measured; rides with the bar&rsquo;s border</text>
+
+        <rect class="box" x="26" y="298" width="708" height="52" rx="3" />
+        <text class="lbl" x="40" y="318">status bar &mdash; 3 rows, 1 below 14</text>
+        <text class="tiny" x="40" y="338">MODE &#10216;mode&#10217; &#10216;clock&#10217; &#9474; TOKENS used/max (&#8593; &#8595;) &#9474; CONTEXT n% &#9610;&#9610;&#9610; &#9474; ENV model &middot; dir &#9474; /help &middot; /exit</text>
+      </svg>
+    </div>
+    <figcaption>
+      The carve, from <code>regions</code> and the five constants above it, with
+      the width rule from <code>sidebar::width</code>, the gutter and minimum
+      message width from <code>chat.rs</code>, and the cell order from
+      <code>statusbar::compose</code>. The two highlighted boxes are the regions
+      that change size during a run: the chat pane takes what is left, the dock
+      takes what the prompt or menu needs.
+    </figcaption>
+  </figure>
+
+  <h2 id="dock">How tall the dock is</h2>
+
+  <p class="faint">crates/emma/src/term/app.rs &middot; <code>dock_height</code></p>
+  <pre><code><span class="c">/// How many rows the dock needs: three for the input box, more while the menu</span>
+<span class="c">/// is up, and the approval panel's evidence when a question is pending. Capped</span>
+<span class="c">/// at half the pane — the prompt may grow upward into transcript rows (§4.6),</span>
+<span class="c">/// not through them.</span>
+pub fn dock_height(view: &amp;View, room: u16) -&gt; u16 {
+    <span class="k">let</span> room = room.max(1);
+    <span class="c">// The ceiling would like to be half the window and must never exceed the</span>
+    <span class="c">// window: on a degenerate frame half-of-room is below the floors, and a</span>
+    <span class="c">// clamp whose min exceeds its max is a panic, not a layout.</span>
+    <span class="k">let</span> ceiling = (room / 2).max(5).min(room);
+    <span class="k">let</span> bounded = |want: u16, floor: u16| want.clamp(floor.min(ceiling), ceiling);
+    <span class="k">match</span> &amp;view.prompt {
+        Some(p) =&gt; bounded((p.preview.len() <span class="k">as</span> u16).saturating_add(3), 5),
+        None =&gt; <span class="k">match</span> &amp;view.menu {
+            Some(m) =&gt; {
+                <span class="k">let</span> extra = (m.rows.len() <span class="k">as</span> u16 + u16::from(m.note.is_some())).min(8);
+                bounded(3 + extra, 3)
+            }
+            None =&gt; 3.min(ceiling),
+        },
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/term/app.rs — <code>dock_height</code></span>
+
+  <p>
+    Three cases, and the <code>clamp</code> guard in the middle is there because
+    a clamp whose minimum exceeds its maximum panics. On a degenerate frame half
+    of <code>room</code> falls below the floors, so <code>ceiling</code> is
+    itself capped at <code>room</code> and every floor is
+    <code>floor.min(ceiling)</code>.
+    <span class="chip test">tested</span>:
+    <code>the_dock_grows_for_the_menu_and_the_prompt_but_never_past_half_the_pane</code>
+    pins 3, 7 and 15 at <code>room = 30</code>, and
+    <code>degenerate_windows_are_survived</code> renders at 0&times;0, 1&times;1,
+    5&times;3, 24&times;8 and 200&times;2.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect: the dock is measured against the window, not the pane</span>
+    <p>
+      <code>App::render</code> calls <code>regions(area, sb_w, dock_height(view,
+      area.height))</code>. <code>area.height</code> is the <em>window</em>
+      height; <code>dock_height</code>'s doc says the cap is half the
+      <em>pane</em>, and half the window exceeds half the pane once the header,
+      the rule, the hint, the status bar and the vertical float are subtracted.
+      At 30 rows and a 40-line preview, <code>dock_height</code> returns 15
+      while the inner pane has about 22 rows to give, so the chat pane is
+      squeezed to what is left. <code>Layout::vertical</code> clamps rather than
+      panicking, so the symptom is a chat area driven toward zero rather than a
+      crash.
+      <span class="chip cert">certified</span>: read at the call site in
+      <code>App::render</code>, one line, and the only caller.
+    </p>
+    <span class="src">crates/emma/src/term/app.rs — <code>App::render</code>, <code>dock_height</code></span>
+  </div>
+
+  <h2 id="latch">The sidebar latch</h2>
+
+  <p class="faint">crates/emma/src/term/app.rs &middot; <code>Latch</code>, <code>hidden</code></p>
+  <pre><code><span class="c">/// Whether the sidebar is collapsed, and whether that was a person's decision.</span>
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Latch {
+    pub collapsed: bool,
+    pub by_user: bool,
+}
+
+<span class="c">/// Is the sidebar hidden at this width?</span>
+<span class="c">///</span>
+<span class="c">/// The user's latch wins outright; below it, the width decides. An automatic</span>
+<span class="c">/// collapse un-collapses when the window widens past the threshold again — it</span>
+<span class="c">/// was never a choice — which falls out of `by_user` being false rather than</span>
+<span class="c">/// being a rule of its own.</span>
+pub fn hidden(total_cols: u16, latch: Latch) -&gt; bool {
+    <span class="k">if</span> latch.by_user {
+        latch.collapsed
+    } <span class="k">else</span> {
+        total_cols &lt; sidebar::AUTO_COLLAPSE_COLS
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/term/app.rs — <code>Latch</code>, <code>hidden</code>; crates/emma/src/term/sidebar.rs — <code>AUTO_COLLAPSE_COLS</code></span>
+
+  <p>
+    Two bits: one for the posture, one for whose posture it is. The same shape
+    as <code>frame.rs</code>'s <code>pinned</code> latch, and for the same
+    reason: distinguish where the system put it from where the user put it.
+    <code>toggle_sidebar</code> always sets <code>by_user: true</code>, so a
+    keypress or a click wins in both directions and keeps winning when the
+    window is resized.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect: one assertion in the latch test cannot fail</span>
+    <p>
+      <code>the_sidebar_latch_honours_the_user_over_the_width</code> builds a
+      binding named <code>user_open</code> with <code>collapsed: false,
+      by_user: false</code> and then asserts <code>hidden(80, user_open)</code>.
+      With <code>by_user</code> false, <code>hidden</code> ignores
+      <code>collapsed</code> entirely and answers from the width, so that line
+      re-tests the automatic branch already asserted three lines above rather
+      than the user-opinion branch its name claims. The guarantee is covered
+      later in the same test through <code>App::toggle_sidebar</code>, and again
+      in <code>a_user_expand_below_the_threshold_survives_the_automatic_rule</code>,
+      so nothing is uncovered; the misleading binding is.
+      <span class="chip cert">certified</span>: read the three lines and the
+      body of <code>hidden</code> above.
+    </p>
+    <span class="src">crates/emma/src/term/app.rs — <code>the_sidebar_latch_honours_the_user_over_the_width</code></span>
+  </div>
+
+  <h2 id="click">The click, and the row it aims at</h2>
+
+  <p>
+    The collapse defect this fixes was reported as &ldquo;+ and - does not seem
+    to work&rdquo;: the owner aimed at the affordance with the mouse and nothing
+    routed a click anywhere.
+  </p>
+
+  <p class="faint">crates/emma/src/term/app.rs &middot; <code>App::click</code></p>
+  <pre><code>    pub fn click(&amp;<span class="k">mut</span> self, x: u16, y: u16, total_cols: u16) -&gt; bool {
+        <span class="k">let</span> r = self.side_rect;
+        <span class="c">// Under three cells either way the sidebar drew nothing (its own</span>
+        <span class="c">// rule), so there is no affordance on screen to have been aimed at.</span>
+        <span class="k">if</span> r.width &lt; 3 || r.height &lt; 3 {
+            <span class="k">return</span> false;
+        }
+        <span class="k">let</span> header_row = r.y + 1;
+        <span class="k">if</span> y == header_row &amp;&amp; x &gt; r.x &amp;&amp; x &lt; r.right().saturating_sub(1) {
+            self.toggle_sidebar(total_cols);
+            <span class="k">return</span> true;
+        }
+        false
+    }</code></pre>
+  <span class="src">crates/emma/src/term/app.rs — <code>App::click</code>, <code>side_rect</code></span>
+
+  <p>
+    <code>side_rect</code> is written down during <code>render</code>, because a
+    mouse aims at what was on screen at the last paint and only the layout knows
+    which cells were the sidebar's. The whole header row is the target rather
+    than the <code>[+]</code>'s three cells, and the doc gives the reason:
+    <em>&ldquo;the affordance's exact columns are the sidebar's internal layout,
+    which this file does not own, and a three-cell target at a guessed offset is
+    a miss magnet.&rdquo;</em> A collapsed sidebar has no cells and therefore no
+    click target; the way back is <code>Ctrl-B</code>, which the hint row names.
+    <span class="chip test">tested</span>:
+    <code>a_click_on_the_sessions_header_toggles_the_sidebar_and_latches</code>
+    also widens the window afterwards to prove the automatic rule does not
+    reopen what the user closed, and
+    <code>a_click_anywhere_but_the_header_row_toggles_nothing</code> tries four
+    near misses.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect: <code>header_row = r.y + 1</code> assumes an ordering the sidebar does not promise</span>
+    <p>
+      The hit-test hard-codes the SESSIONS header as the sidebar's first inner
+      row. Nothing in <code>sidebar.rs</code> pins that: <code>content()</code>
+      happens to push the SESSIONS header first, and the click test happens to
+      pass, but the two files agree by coincidence rather than by contract.
+      Adding a row above the first header, or reordering the sections, moves the
+      affordance and leaves the click on whatever is now on row one.
+      <span class="chip unv">unverified</span> as a live symptom, since the
+      ordering has not changed. A constant exported from <code>sidebar.rs</code>
+      naming the header's row offset, consulted here, would settle it.
+    </p>
+    <span class="src">crates/emma/src/term/app.rs — <code>App::click</code>; crates/emma/src/term/sidebar.rs — <code>content</code></span>
+  </div>
+
+  <h2 id="render">What <code>App::render</code> does, in order</h2>
+
+  <p>
+    Nine steps, and two of them are seams worth naming. It refuses a zero-sized
+    area; asks <code>hidden</code> and <code>sidebar::width</code>; carves;
+    writes down <code>side_rect</code>; draws the sidebar; draws the main pane's
+    border, header and rule; sets <code>wrap_width</code> and
+    <code>chat_height</code> and re-wraps the transcript; draws the chat pane;
+    draws the dock through <code>View</code>'s own renderers; draws the hint;
+    and finally draws the status bar, or the configured status program's row in
+    its place.
+  </p>
+
+  <p>
+    The first seam is the wrap width. Retained transcript entries are wrapped by
+    this file and painted by <code>chat.rs</code> at a gutter offset, so both
+    numbers are derived from one function of the pane's own rectangle:
+  </p>
+
+  <pre><code>        self.wrap_width = chat::message_width(r.chat.width.max(1));
+        self.chat_height = r.chat.height.max(1);
+        self.transcript.set_width(skin, self.wrap_width);
+        chat::render(r.chat, buf, &amp;self.transcript, skin);</code></pre>
+
+  <p>
+    The test that guards it says what would happen otherwise:
+    <em>&ldquo;if the two widths are derived separately, every wrapped row is
+    clipped by the gutter's width and no test in either file notices.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>the_wrap_width_is_the_chat_panes_message_width_exactly</code>, which
+    also asserts the two <em>differ</em> at 120 columns so the equality is not a
+    tautology.
+  </p>
+
+  <p>
+    The second is the dock. It is not a widget of its own: it is a rectangle
+    that <code>View</code>'s existing renderers paint into, the same
+    <code>render_input</code> and <code>render_prompt</code> the inline viewport
+    uses, marked <code>pub(crate)</code> with the argument attached:
+    <em>&ldquo;a consent interface with two renderings is two
+    interfaces.&rdquo;</em> When a question is pending the approval panel
+    <em>replaces</em> the input box in that rectangle.
+    <span class="chip test">tested</span>:
+    <code>a_pending_question_replaces_the_input_box_and_stays_on_screen</code>
+    pushes 200 blocks of output first, then asserts the title, the evidence and
+    the keys are all on screen and the input box is not.
+  </p>
+
+  <h2 id="chrome">The chrome this file draws itself</h2>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Function</th><th>What it decides</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>header</code></td>
+          <td>
+            Wordmark and version on one row, the working directory as a subtitle
+            on the next, both fitted with <code>render::fit</code>. At one row
+            the two collapse into <code>Emma &middot; v0.1.0</code>. The
+            mockup's serif wordmark and slogan are dropped as
+            <em>&ldquo;decoration a terminal cell cannot carry&rdquo;</em>: one
+            bold row, not figlet.
+          </td>
+        </tr>
+        <tr>
+          <td><code>hint</code></td>
+          <td>
+            The row under the dock, and the only permanently visible place the
+            keys are written down. Two strings, one per <code>Mode</code>. The
+            scrolled-behind indicator is not here: the chat pane
+            overlays it on its own last row, where the reader's eye already is.
+          </td>
+        </tr>
+        <tr>
+          <td><code>keymap</code></td>
+          <td>
+            Eleven rows for QUICK HELP, described as <em>&ldquo;the real keymap,
+            nothing aspirational&rdquo;</em>. <code>Shift+drag</code> is on it
+            because mouse capture takes plain drag-selection away, and that is
+            the one fact a user cannot guess.
+          </td>
+        </tr>
+        <tr>
+          <td><code>builtin_rows</code></td>
+          <td>
+            The TOOLS slot's original occupant: Emma's own
+            <code>session_command::BUILTINS</code>, mapped to
+            <code>/name</code>. Replaced at install by
+            <code>set_tools(tool_rows(&hellip;))</code>, so what actually ships
+            in that section is the user-tool catalogue.
+          </td>
+        </tr>
+        <tr>
+          <td><code>tool_rows</code></td>
+          <td>
+            The catalogue mapped into the sidebar's row contract, with the
+            <em>real</em> binding in the trailing column: <code>Alt+&lt;key&gt;</code>,
+            <code>/</code> for Search, and <code>n/a</code> where a tool cannot
+            launch. <code>Row</code> has no availability field, so the key
+            column carries that truth instead. <code>Entry::detail</code> has no
+            cell to land in and is dropped, <em>named here rather than
+            silently</em>.
+          </td>
+        </tr>
+        <tr>
+          <td><code>stem</code></td>
+          <td>
+            The last path component, for the status bar's ENV cell. A local copy
+            rather than <code>render.rs</code>'s, whose version is private.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    The remaining <code>App</code> methods are thin routers to the transcript:
+    <code>push_block</code>, <code>push_user</code>, <code>stream</code>,
+    <code>page</code>, <code>set_identity</code>. <code>push_user</code> keeps
+    the goal as a <code>User</code> entry rather than flattening it to activity
+    lines, because the kind is a fact and the pane should be told it rather than
+    reconstruct it from styling. <code>page</code> is
+    <code>chat_height - 1</code>, one row of continuity.
+  </p>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    <code>app.rs</code> is 1,076 lines and was read in full for this page. It
+    declares 19 function items above the test boundary: <code>hidden</code>,
+    <code>regions</code>, <code>dock_height</code>, twelve <code>App</code>
+    methods (<code>new</code>, <code>push_block</code>, <code>push_user</code>,
+    <code>stream</code>, <code>page</code>, <code>toggle_sidebar</code>,
+    <code>click</code>, <code>set_tools</code>, <code>set_identity</code>,
+    <code>render</code>, <code>hint</code>, <code>header</code>), and four free
+    functions (<code>builtin_rows</code>, <code>tool_rows</code>,
+    <code>keymap</code>, <code>stem</code>). All 19 are named here: 19 of 19,
+    along with all five constants (<code>SLIM_STATUS_ROWS</code>,
+    <code>SLIM_HEADER_ROWS</code>, <code>UNBORDERED_COLS</code>,
+    <code>INSET_MIN_ROWS</code>, <code>PANE_GAP_COLS</code>) and both types. Twelve of its twenty tests are cited.
+  </p>
+
+  <p>
+    <strong>Not settled here.</strong> Every test in this file reads a
+    <code>Buffer</code>. Whether the proportions <em>look</em> like the mockup
+    on a real console is
+    <span class="chip unv">unverified</span>, and the same class of gap has
+    shipped a defect from this subsystem twice. A run at several window sizes
+    with screenshots, compared against <code>notes/mockup-tui.png</code>, would
+    settle it.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="terminal-colour.html">colour, named by role</a>, and the
+      one point where a terminal that cannot render a value substitutes. Back to
+      <a href="terminal.html">The terminal</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

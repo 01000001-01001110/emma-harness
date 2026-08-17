@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The sidebar &middot; The terminal &middot; Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav here" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/emma/src/term/sidebar.rs</p>
+  <h1>The sidebar</h1>
+
+  <nav class="chapter">
+      <a class="up" href="terminal.html">The terminal</a>
+      <a href="terminal-surface.html">Surface</a>
+      <a href="terminal-frame.html">Frame</a>
+      <a href="terminal-layout.html">Layout</a>
+      <a href="terminal-colour.html">Colour</a>
+      <a href="terminal-themes.html">Themes</a>
+      <a href="terminal-skin.html">Vocabulary</a>
+      <a href="terminal-transcript.html">Transcript</a>
+      <a href="terminal-markdown.html">Markdown</a>
+      <a href="terminal-diff.html">Diffs</a>
+      <a href="terminal-status.html">Status</a>
+      <span class="now">Sidebar</span>
+      <a href="terminal-dock.html">Dock</a>
+      <a href="terminal-usertools.html">User tools</a>
+    </nav>
+
+  <p class="lede">
+    Sessions, tools, quick help, in a bordered box on the left. Pure rendering:
+    the shell owns the state and hands it in as a <code>State</code>, and
+    nothing here reads a file, takes a lock or asks the terminal a question.
+    Every number in it was measured off <code>notes/mockup-tui.png</code>
+    directly, and where the file and the design note disagree the file records
+    that the image won.
+  </p>
+
+  <h2 id="width">How wide</h2>
+
+  <p class="faint">crates/emma/src/term/sidebar.rs &middot; <code>width</code></p>
+  <pre><code><span class="c">/// The narrowest useful sidebar: a session name beside `Yesterday`, untouched.</span>
+pub const MIN_WIDTH: u16 = 28;
+
+<span class="c">/// The widest: past this an ultrawide window is spending columns on padding.</span>
+pub const MAX_WIDTH: u16 = 40;
+
+<span class="c">/// Below this many total columns the shell should collapse the sidebar</span>
+<span class="c">/// automatically. The *decision* is the shell's — a user who re-expanded below</span>
+<span class="c">/// the threshold is honoured (design §3.2) — but the number lives beside the</span>
+<span class="c">/// rest of the width arithmetic so the two cannot drift apart.</span>
+pub const AUTO_COLLAPSE_COLS: u16 = 100;
+
+<span class="c">/// The mockup's measured proportion, in thousandths: 22.4% of the width.</span>
+const PROPORTION_MILLIS: u32 = 224;
+
+<span class="c">/// How many columns the sidebar takes out of `total`. Zero when collapsed.</span>
+pub fn width(total: u16, collapsed: bool) -&gt; u16 {
+    <span class="k">if</span> collapsed {
+        <span class="k">return</span> 0;
+    }
+    <span class="k">let</span> measured = ((u32::from(total) * PROPORTION_MILLIS + 500) / 1000) <span class="k">as</span> u16;
+    <span class="c">// The half-of-total cap is applied after the floor on purpose: on a</span>
+    <span class="c">// terminal too narrow for the floor, "half of it" is the honest maximum,</span>
+    <span class="c">// not a licence to take 28 of 40 columns.</span>
+    measured.clamp(MIN_WIDTH, MAX_WIDTH).min(total / 2)
+}</code></pre>
+  <span class="src">crates/emma/src/term/sidebar.rs — <code>width</code> and the four constants above it</span>
+
+  <p>
+    The ordering of the clamp and the cap is the decision. Applying
+    <code>min(total / 2)</code> after the floor means a terminal too narrow for
+    28 columns gets a shrinking sidebar rather than one that eats the
+    transcript: <em>&ldquo;a &lsquo;side&rsquo; bar wider than the pane it sits
+    beside has the two the wrong way round.&rdquo;</em> The shell will usually
+    have collapsed it by then, but a user who re-expanded is honoured, and
+    honouring them must not mean a 28-column sidebar beside a 12-column
+    transcript.
+  </p>
+
+  <p>
+    <span class="chip test">tested</span>:
+    <code>an_expanded_sidebar_never_takes_more_than_half_the_terminal</code>
+    walks every width from 0 to 200 and asserts the property rather than
+    checking a threshold. <code>the_width_is_the_mockups_proportion_between_a_floor_and_a_ceiling</code>
+    pins four literals, because <em>&ldquo;clamp(round(0.224&middot;cols), 28,
+    40)&rdquo; is an argument in a comment until a number is written
+    down.&rdquo;</em> <code>a_collapsed_sidebar_takes_no_columns_at_any_size</code>
+    holds the contract the layout depends on, including at
+    <code>u16::MAX</code>.
+  </p>
+
+  <h2 id="grid">The measured grid</h2>
+
+  <p>
+    Three constants carry the whole geometry, and each was read off the image at
+    its 10px character pitch: headers two columns in from the border, list rows
+    led by <code>&nbsp;&gt;&nbsp;</code> or three spaces, and every
+    right-aligned column ending two columns before the border, so the pane
+    shares one right edge down its whole height.
+  </p>
+
+  <pre><code>const HEADER_INDENT: usize = 2;
+const LEAD: usize = 3;
+const RIGHT_PAD: usize = 2;</code></pre>
+  <span class="src">crates/emma/src/term/sidebar.rs — <code>HEADER_INDENT</code>, <code>LEAD</code>, <code>RIGHT_PAD</code></span>
+
+  <p>
+    The module doc records two places where the image overruled the design note.
+    The selected row is <em>accent text on a barely-raised near-black band</em>
+    (rgb 25,27,30 over a 13,15,19 ground), nothing like the approval chip's
+    dark-on-pink. And the <code>[+]</code> affordance is accent pink rather than
+    a dim note. On the second, the design's §3.2 had argued for <code>[-]</code>
+    on &ldquo;show the action&rdquo; grounds and flagged it as an open question;
+    the owner then ran the build against the image and reported the sidebar
+    &ldquo;not formatted like the image&rdquo;, which answered it in the other
+    direction.
+  </p>
+
+  <h2 id="rows">What gives when a row does not fit</h2>
+
+  <p class="faint">crates/emma/src/term/sidebar.rs &middot; <code>list_row</code></p>
+  <pre><code>fn list_row(row: &amp;Row, w: usize, skin: &amp;Skin) -&gt; Line&lt;'static&gt; {
+    <span class="k">let</span> lead_w = LEAD.min(w);
+    <span class="k">let</span> pad_w = RIGHT_PAD.min(w.saturating_sub(lead_w));
+    <span class="k">let</span> avail = w.saturating_sub(lead_w + pad_w);
+    <span class="k">let</span> trailing = clipped(&amp;row.trailing, avail / 2, skin);
+    <span class="k">let</span> t_w = cols(&amp;trailing);
+    <span class="k">let</span> name = clipped(
+        &amp;row.name,
+        avail.saturating_sub(t_w + usize::from(t_w &gt; 0)),
+        skin,
+    );
+    <span class="k">let</span> gap = avail.saturating_sub(cols(&amp;name) + t_w);
+    <span class="c">// The lead is ASCII by construction, so slicing it to the pane is a</span>
+    <span class="c">// byte-safe way to keep a one-column pane at one column.</span>
+    <span class="k">let</span> lead = &amp;(<span class="k">if</span> row.selected { " &gt; " } <span class="k">else</span> { "   " })[..lead_w];</code></pre>
+  <span class="src">crates/emma/src/term/sidebar.rs — <code>list_row</code></span>
+
+  <p>
+    The name truncates and the trailing column survives, and the doc argues the
+    priority: <em>&ldquo;the trailing column is short and uniform and the eye
+    scans it as a column: one row whose date is missing reads as a row with no
+    date, while a name cut short still reads as that name.&rdquo;</em> The
+    trailing text is itself capped at half the row, <em>&ldquo;so a pathological
+    value cannot invert the priority.&rdquo;</em>
+  </p>
+
+  <p>
+    The gap is computed <em>after</em> both cuts, from measured columns, so the
+    trailing text ends flush on the shared right edge whatever
+    <code>clipped</code> undershot by. A wide glyph that would not split leaves
+    the gap one wider, never the row one over.
+    <span class="chip test">tested</span>:
+    <code>a_cjk_trailing_column_ends_flush_with_the_shared_right_edge</code>
+    asserts <code>line.width() == 26</code> exactly and that the line ends with
+    the three CJK glyphs plus two spaces.
+  </p>
+
+  <h3>The one function that makes <code>fit</code> total</h3>
+
+  <p class="faint">crates/emma/src/term/sidebar.rs &middot; <code>clipped</code></p>
+  <pre><code><span class="c">/// [`fit`], made total. `fit` itself can overrun a budget narrower than its</span>
+<span class="c">/// own ellipsis — the ASCII set's `...` is three columns — and a row that</span>
+<span class="c">/// overruns writes into the border. Below that, a run of dots is all the cut</span>
+<span class="c">/// mark there is room for; zero is zero.</span>
+fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
+    <span class="k">if</span> cols(text) &lt;= budget {
+        <span class="k">return</span> text.to_string();
+    }
+    <span class="k">let</span> ellipsis = skin.glyphs.ellipsis;
+    <span class="k">if</span> budget &lt; cols(ellipsis) {
+        <span class="k">return</span> ".".repeat(budget);
+    }
+    fit(text, budget, ellipsis)
+}</code></pre>
+  <span class="src">crates/emma/src/term/sidebar.rs — <code>clipped</code>; crates/emma/src/term/render.rs — <code>fit</code></span>
+
+  <p>
+    This is the receipt for the <code>fit</code> defect
+    <a href="terminal-skin.html">the vocabulary page</a> reports: the file that
+    hit it wrote a wrapper rather than fixing the shared function, and said so.
+    <span class="chip test">tested</span>:
+    <code>a_budget_narrower_than_the_ellipsis_still_never_overruns</code> walks
+    budgets 0 to 10 in both glyph sets.
+  </p>
+
+  <p>
+    The property that matters for the pane as a whole is asserted on the
+    assembled <em>lines</em> rather than on the buffer, and the test says why:
+    <em>&ldquo;<code>set_line</code> clips, and a clipped overrun is exactly the
+    invisible defect this test exists to catch.&rdquo;</em>
+    <code>no_row_is_ever_wider_than_the_pane</code> walks widths 0 to 44 against
+    four hostile rows and five chrome lines.
+    <span class="chip test">tested</span>
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect: the overflow row is the one line that skips <code>clipped</code></span>
+    <p>
+      <code>fitted</code> cuts the assembled lines to the pane's height and
+      appends <code>&hellip; N more rows</code>, built with
+      <code>format!</code> and no width budget. It is the only assembled line in
+      the file that does not pass through <code>clipped</code>, and
+      <code>fitted</code> is absent from the vector
+      <code>no_row_is_ever_wider_than_the_pane</code> walks.
+      <code>render</code>'s <code>set_line</code> clips it, so the symptom is a
+      silently cut loss-count in the one row whose job is to count the loss out
+      loud. At the 28-column floor the text is about seventeen columns and fits;
+      it needs a pane narrower than that, which <code>width</code> can produce
+      on a terminal under 56 columns.
+      <span class="chip cert">certified</span>: read <code>fitted</code>, and
+      read the <code>chrome</code> vector in the guarding test, which contains
+      <code>header</code>, two <code>help_row</code>s and two
+      <code>note_rows</code> calls and no <code>fitted</code>.
+    </p>
+    <span class="src">crates/emma/src/term/sidebar.rs — <code>fitted</code>, <code>no_row_is_ever_wider_than_the_pane</code></span>
+  </div>
+
+  <h2 id="selection">The selected row, marked twice</h2>
+
+  <p>
+    A <code>&gt;</code> in the lead <em>and</em> a full-width band from
+    <code>Palette::band</code>. The band runs border to border, one style across
+    every span including the lead and the padding, <em>&ldquo;so the highlight
+    is the full row and not a patchwork — the image shows it running border to
+    border.&rdquo;</em> With no colour it degrades to reversed video, so the
+    selection is never carried by colour alone and the <code>&gt;</code>
+    survives everything.
+  </p>
+
+  <p>
+    <span class="chip test">tested</span> three ways.
+    <code>the_selected_row_is_distinguishable_with_no_colour_at_all</code>
+    asserts on the cells rather than on the marker, because
+    <em>&ldquo;the marker alone could pass with the band gone.&rdquo;</em>
+    <code>the_band_is_accent_on_a_subtle_ground_and_covers_the_full_row</code>
+    asserts every span carries the same style and that the band is not the chip.
+    And
+    <code>the_selected_row_is_painted_exactly_as_it_was_before_the_band_moved</code>
+    walks the painted cells from column 1 to 28 at three fidelities against the
+    exact colours the private table used to produce, then asserts the border
+    kept its own background: <em>&ldquo;the band is the row, not the
+    pane.&rdquo;</em>
+  </p>
+
+  <p>
+    That last test is the receipt for the move into
+    <a href="terminal-colour.html">the palette</a>. Its doc names the risk
+    precisely: not that the pair stops existing, which the test above would
+    catch, but that one of its four fidelities quietly changes value on the way
+    across, <em>&ldquo;and the <code>Ansi256</code> and <code>Ansi16</code> rows
+    are the ones worth having, because those are the two the palette now
+    computes differently.&rdquo;</em>
+  </p>
+
+  <h2 id="empty">A header over nothing</h2>
+
+  <p>
+    A header over an empty section reads as a broken pane, so each one says in
+    words what would be there. Four constants carry the sentences, and all four
+    are ASCII, for a stated reason: <em>&ldquo;they must render on the exact consoles the
+    ASCII glyph set exists for.&rdquo;</em>
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Constant</th><th>Text</th></tr></thead>
+      <tbody>
+        <tr><td><code>EMPTY_SESSIONS</code></td><td><code>no sessions yet</code></td></tr>
+        <tr><td><code>EMPTY_SESSIONS_HINT</code></td><td><code>this one appears here when it has a goal</code></td></tr>
+        <tr><td><code>EMPTY_COMMANDS</code></td><td><code>no commands yet: .emma/commands/</code></td></tr>
+        <tr><td><code>EMPTY_HELP</code></td><td><code>no keys bound</code></td></tr>
+        <tr><td><code>TOOL_MISSING</code></td><td><code>n/a</code></td></tr>
+        <tr><td><code>COLLAPSE_HINT</code></td><td><code>[+]</code></td></tr>
+        <tr><td><code>UNTITLED_SESSION</code></td><td><code>untitled</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <span class="src">crates/emma/src/term/sidebar.rs — the <em>empty states</em> region</span>
+
+  <p>
+    <code>note_rows</code> wraps these rather than truncating them, and the
+    reason is arithmetic: at the design's own 28-column floor the sessions hint
+    is wider than the pane, <em>&ldquo;and a truncated explanation is half an
+    explanation, which is the defect the sentence exists to prevent.&rdquo;</em>
+    A single word wider than the pane is still clipped with a mark, because
+    there is no honest wrap for it.
+    <span class="chip test">tested</span>:
+    <code>an_empty_section_explains_itself_rather_than_showing_a_bare_header</code>
+    draws an empty <code>State</code> at 30 columns, flattens the rows, and
+    asserts all four sentences arrived whole <em>and</em> that no ellipsis
+    appears anywhere.
+  </p>
+
+  <p>
+    <code>TOOL_MISSING</code> is a sentinel with a narrow contract, and the doc
+    says why it cannot collide: <em>&ldquo;<code>when</code> can never mint this
+    string and no single-key binding can be three characters, so neither a
+    session's date nor a live key collides.&rdquo;</em> <code>list_row</code>
+    treats it as a whole-row signal and dims the label with it, so the row reads
+    as switched off rather than broken, and the words carry what the dimming
+    cannot on a colourless console.
+    <span class="chip test">tested</span>:
+    <code>an_unavailable_tool_reads_as_switched_off_not_broken</code> checks the
+    dimmed label's colour against <code>Role::Dim</code> and an available
+    label's against <code>Color::Reset</code>, then re-draws the whole pane in
+    ASCII with no colour and asserts the words are still there.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect: the affordance's doc denies a click that is routed</span>
+    <p>
+      <code>COLLAPSE_HINT</code>'s doc says <em>&ldquo;What it does <em>not</em>
+      do is accept a click — the shell owns input, and until it routes a mouse
+      press here this is a label for Ctrl-B, drawn where the mockup drew
+      it.&rdquo;</em> The shell routes exactly that press.
+      <code>App::click</code> hit-tests the SESSIONS header row and toggles the
+      sidebar, and <code>a_click_on_the_sessions_header_toggles_the_sidebar_and_latches</code>
+      asserts it end to end. A reader of this file alone would conclude the
+      <code>[+]</code> is decorative.
+      <span class="chip cert">certified</span>: the two are in the tree together
+      at <code>62ab9c3</code> and the click test passes in the 477-test suite.
+    </p>
+    <span class="src">crates/emma/src/term/sidebar.rs — <code>COLLAPSE_HINT</code>; crates/emma/src/term/app.rs — <code>App::click</code></span>
+  </div>
+
+  <h2 id="clock">The session clock</h2>
+
+  <p>
+    Three public functions turn a session into a row.
+    <code>session_label</code> is the first goal with whitespace collapsed, so a
+    pasted multi-line goal stays one row, and <code>UNTITLED_SESSION</code> when
+    there is none. There is no length cap: <em>&ldquo;the pane
+    already truncates to fit, and two caps drift.&rdquo;</em> The doc names what
+    it replaced: <em>&ldquo;Sessions have ids (<code>sess-&lt;ms&gt;-&lt;pid&gt;</code>),
+    not names, and an id dressed up as a name is the filename defect this
+    constant replaces.&rdquo;</em>
+  </p>
+
+  <p>
+    <code>session_time_ms</code> digs the creation time out of an id, and
+    refuses anything that does not parse: <em>&ldquo;a made-up time is worse
+    than no column.&rdquo;</em> It requires the pid half to be all digits and
+    the millisecond half to be positive.
+    <span class="chip test">tested</span> against four malformed ids.
+  </p>
+
+  <p class="faint">crates/emma/src/term/sidebar.rs &middot; <code>when</code></p>
+  <pre><code>pub fn when(then_ms: i64, now_ms: i64, offset_min: i32) -&gt; String {
+    <span class="k">let</span> off = i64::from(offset_min) * 60_000;
+    <span class="k">let</span> t = then_ms.saturating_add(off);
+    <span class="k">let</span> n = now_ms.saturating_add(off);
+    <span class="k">let</span> t_day = t.div_euclid(DAY_MS);
+    <span class="k">let</span> n_day = n.div_euclid(DAY_MS);
+    <span class="k">if</span> t_day == n_day {
+        <span class="k">let</span> rem = t.rem_euclid(DAY_MS);
+        <span class="k">return</span> format!("{:02}:{:02}", rem / 3_600_000, rem % 3_600_000 / 60_000);
+    }
+    <span class="k">if</span> n_day - t_day == 1 {
+        <span class="k">return</span> "Yesterday".to_string();
+    }
+    <span class="w">…</span>
+}</code></pre>
+  <span class="src">crates/emma/src/term/sidebar.rs — <code>when</code>, <code>civil</code>, <code>MONTHS</code></span>
+
+  <p>
+    Four buckets: <code>12:42</code> for the same civil day,
+    <code>Yesterday</code>, <code>May 18</code> for this year, and
+    <code>May 2025</code> before that, because <em>&ldquo;a date from last May
+    shown bare would be a fresher claim than the file can back.&rdquo;</em> A
+    timestamp from the future renders as the date it says, because a skewed
+    clock is the caller's fact to keep.
+  </p>
+
+  <p>
+    <code>offset_min</code> is an argument and not a lookup, because std cannot
+    ask the OS for a timezone and this module draws. The doc names the failure
+    of passing zero: <em>&ldquo;An offset of 0 renders UTC under a local-looking
+    format, which is a quiet lie on any box west or east of Greenwich; the shell
+    must pass the real offset, not guess.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>the_offset_moves_the_midnight_boundary_not_just_the_clock</code>
+    shows two instants that are &ldquo;Yesterday&rdquo; in UTC and
+    <code>01:30</code> two hours east, and a case where the offset crosses a
+    civil <em>year</em>.
+  </p>
+
+  <p>
+    <code>civil</code> is Hinnant's <code>civil_from_days</code>, the standard
+    closed form, with <code>div_euclid</code>/<code>rem_euclid</code> standing in
+    for the paper's floored division. It is <em>&ldquo;exercised against known
+    calendar anchors in the tests rather than trusted on reputation&rdquo;</em>,
+    and the test's own doc records that the first draft of the anchor forgot
+    2020's leap day and the algorithm caught the fixture, <em>&ldquo;which is
+    the right direction for that to fail.&rdquo;</em>
+    <span class="chip test">tested</span>
+  </p>
+
+  <h2 id="assembly">Assembly, and the ASCII fallback</h2>
+
+  <p>
+    <code>render</code> refuses outright when collapsed or under three cells
+    either way: <em>&ldquo;the pane is absent, not clipped.&rdquo;</em>
+    Otherwise it draws one bordered block, calls <code>content</code> to build
+    every line at the inner width, hands them to <code>fitted</code> for the
+    height, and writes them row by row.
+  </p>
+
+  <p>
+    <code>content</code> is three sections with <code>section_break</code>
+    between them: a blank row, a thin rule inset one column, a blank row. Those
+    blanks are the sidebar's <em>internal</em> layout, which is the exception
+    <a href="terminal-skin.html">the spacing rule</a> already holds for
+    <code>welcome.rs</code>. A pane too narrow for an inset rule gets a blank
+    row instead, because <em>&ldquo;one stranded glyph does not read as a rule,
+    and the inset would overrun.&rdquo;</em>
+  </p>
+
+  <p>
+    <code>header</code> right-aligns the affordance and drops it <em>whole</em>
+    when it will not fit: <em>&ldquo;half of <code>[+]</code> is not a control,
+    it is debris.&rdquo;</em> Its right pad goes first, since one column off the
+    border still reads as the control. <code>help_row</code> gives every key a
+    shared column so the descriptions align, capped at half the pane so a long
+    key cannot push them all off the edge, and both halves are dim: the two
+    columns are told apart by alignment, <em>&ldquo;which no colour level takes
+    away.&rdquo;</em>
+  </p>
+
+  <p>
+    <span class="chip test">tested</span>:
+    <code>the_ascii_fallback_is_pure_ascii_and_still_reads_as_structure</code>
+    draws the whole pane at <code>Level::None</code> with the ASCII glyph set
+    and asserts every cell is ASCII, the headers survived, a rule survived and
+    the selection marker survived. <code>a_zero_or_tiny_area_is_survived</code>
+    renders at five degenerate sizes.
+  </p>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    <code>sidebar.rs</code> is 1,250 lines and was read in full for this page.
+    It declares 14 function items above the test boundary: <code>width</code>,
+    <code>session_label</code>, <code>session_time_ms</code>,
+    <code>when</code>, <code>civil</code>, <code>render</code>,
+    <code>content</code>, <code>section_break</code>, <code>header</code>,
+    <code>list_row</code>, <code>help_row</code>, <code>note_rows</code>,
+    <code>clipped</code>, <code>fitted</code>. All 14 are named here: 14 of 14,
+    along with all sixteen constants and both types
+    (<code>Row</code>, <code>State</code>). Sixteen of its twenty-four tests are
+    cited by name.
+  </p>
+
+  <p>
+    <strong>Not settled here.</strong> Everything in this file is measured
+    against an image, and every test reads a cell buffer. Whether the drawn pane
+    matches <code>notes/mockup-tui.png</code> is
+    <span class="chip unv">unverified</span> by anything but the owner's earlier
+    eyeball, which is what produced the two corrections the module records. What
+    would settle it: a screenshot at 128&times;41 laid over the mockup.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="terminal-dock.html">the input dock</a>, where the keyboard
+      is read and the one security property lives. Back to
+      <a href="terminal.html">The terminal</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

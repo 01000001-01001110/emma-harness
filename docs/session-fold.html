@@ -1,0 +1,689 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The fold · Sessions &amp; context · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav here" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">Sessions &amp; context</p>
+  <h1>The fold</h1>
+
+  <nav class="chapter">
+    <a class="up" href="session.html">Sessions &amp; context</a>
+    <a href="session-file.html">The file</a>
+    <a href="session-records.html">Records</a>
+    <span class="now">The fold</span>
+    <a href="session-resume.html">Resume</a>
+    <a href="session-continuity.html">Continuity</a>
+    <a href="session-compaction.html">Compaction</a>
+    <a href="session-corpus.html">The corpus</a>
+  </nav>
+
+  <p class="lede">
+    One walk over the records, seven arms and one catch-all, and a rule about
+    when half a turn is worse than none of it. What comes out is the message
+    list the last request carried, not a tidied version of the conversation.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>fold</code>, <code>fold_records</code>, <code>Fold</code></span>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven, and repeatable: a file, a command, a count you can redo</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+    <div><span class="chip test">tested</span> a test that was shown to fail</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <h2 id="what">What it returns, and what it refuses to decide</h2>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// The messages a session's last model call carried, in order.
+///
+/// Not "the conversation so far, tidied": every value here was written by the
+/// loop at the moment it appended the same value to `query`, so what comes back
+/// is the list itself rather than a reconstruction of it. That distinction is
+/// the whole point — see the module doc on thinking-block signatures.
+///
+/// What it is *not*: the list a resumed run should send. That one has a new
+/// user turn on the end and possibly a re-stated goal, and deciding its shape
+/// is the `--resume` command's job, not this function's.</span>
+pub fn fold(path: &amp;Path) -&gt; Result&lt;Vec&lt;Message&gt;&gt; {
+    Ok(fold_records(&amp;SessionLog::read(path)?))
+}
+
+<span class="c">/// [`fold`] over records already read — the testable half, and the one a caller
+/// that has the records for another reason should use.</span>
+pub fn fold_records(records: &amp;[Value]) -&gt; Vec&lt;Message&gt; {
+    let mut fold = Fold::default();
+    for record in records {
+        fold.record(record);
+    }
+    fold.finish()
+}</code></pre>
+
+  <p>
+    Every value in the output was written by the loop at the moment it appended
+    the same value to <code>query</code>. That is what makes the fold a replay
+    rather than a reconstruction, and the reason it matters is narrow and
+    expensive: this model family signs its thinking blocks, and a block
+    reassembled from its text is rejected on the <em>next</em> call. So the
+    <code>assistant</code> record stores the provider's own content array, and
+    the fold hands it back untouched.
+  </p>
+  <span class="src">crates/emma/src/session.rs — module doc; crates/emma/src/agent.rs — the <code>assistant</code> append</span>
+
+  <h2 id="state">The state a walk needs</h2>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// The state a walk over the records needs.
+///
+/// Two lists because the loop keeps two: `history` is the conversation up to
+/// the last finished goal — the part a request sends as `Request::history` —
+/// and `query` is the goal in progress. A fold that merged them would return
+/// the right conversation in the wrong shape and could not apply a compaction
+/// record, which counts messages in the first list only.
+///
+/// **Nothing here collapses a finished goal.** It used to: the loop kept two
+/// lines of prose per goal and the fold kept its own copy of that rule, which
+/// was two implementations of one decision and a `--resume` that reconstructed
+/// a different conversation the moment either moved. A finished goal now stays
+/// in the conversation in full, and the *only* thing that shortens it is
+/// compaction — which writes what it replaced the messages with into the
+/// record, so this reads it rather than re-deriving it.</span>
+#[derive(Default)]
+struct Fold {
+    history: Vec&lt;Message&gt;,
+    query: Vec&lt;Message&gt;,
+    in_goal: bool,
+    <span class="c">/// The ending of the goal that has just finished, from `goal_finished`.
+    /// Applied when the *next* goal opens — see [`Fold::close_goal`].</span>
+    finished: Option&lt;String&gt;,
+    <span class="c">/// An assistant turn that has been read but not yet placed, because what
+    /// follows it decides whether it can be placed at all.</span>
+    pending: Option&lt;Vec&lt;ContentBlock&gt;&gt;,
+    <span class="c">/// Result blocks for `pending`, accumulating until something closes them.</span>
+    results: Vec&lt;ToolResult&gt;,
+}</code></pre>
+
+  <p>
+    The collapse this doc describes as removed is worth stating as a reversal,
+    because the removed version is the obvious design and it will be proposed
+    again. A finished goal used to become two lines of prose the instant it
+    finished, in the loop, and the fold carried its own copy of that rule so a
+    resume would produce the same shape. Two implementations of one decision,
+    and the failure mode was silent: move either one and <code>--resume</code>
+    rebuilds a conversation that was never sent, with nothing but a round-trip
+    test to say so. The two-line collapse survives, but only as what
+    <a href="session-compaction.html">compaction</a> makes, later, and only when
+    the size forces it.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>Fold</code>; crates/emma/src/agent.rs — <code>Chapter</code></span>
+
+  <figure>
+    <div class="figwrap">
+      <svg viewBox="0 0 720 400" role="img" aria-label="How the fold places a turn: an assistant record becomes pending and tool_result records accumulate; close_turn asks whether every tool_use has exactly one result, and either pushes the assistant turn and the results into query together, or drops both. close_goal then moves query into history, adding a note when the goal stopped short, and finish concatenates history and query.">
+        <defs>
+          <marker id="sfold-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
+          </marker>
+          <marker id="sfold-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
+          </marker>
+        </defs>
+
+        <rect class="box" x="16" y="20" width="190" height="44" rx="3"/>
+        <text class="sm" x="30" y="40">assistant record</text>
+        <text class="tiny" x="30" y="56">raw_content → pending</text>
+
+        <rect class="box" x="16" y="92" width="190" height="44" rx="3"/>
+        <text class="sm" x="30" y="112">tool_result records</text>
+        <text class="tiny" x="30" y="128">block → results, appended</text>
+
+        <path class="edge" marker-end="url(#sfold-arrow)" d="M206,42 H250"/>
+        <path class="edge" marker-end="url(#sfold-arrow)" d="M206,114 H228 V78 H250"/>
+
+        <rect class="hl" x="250" y="40" width="140" height="56" rx="3"/>
+        <text class="lbl" x="264" y="62">close_turn</text>
+        <text class="tiny" x="264" y="80">on goal, assistant, cleared</text>
+
+        <path class="edge" marker-end="url(#sfold-arrow)" d="M390,68 H430"/>
+
+        <rect class="box" x="430" y="40" width="274" height="56" rx="3"/>
+        <text class="sm" x="444" y="62">answered(content, results)?</text>
+        <text class="tiny" x="444" y="80">every tool_use has exactly one result</text>
+
+        <path class="edge-hl" marker-end="url(#sfold-arrow-hl)" d="M567,96 V136"/>
+        <text class="tiny" x="576" y="120">yes</text>
+
+        <rect class="hl" x="430" y="136" width="274" height="52" rx="3"/>
+        <text class="sm" x="444" y="156">query += assistant turn</text>
+        <text class="tiny" x="444" y="176">query += tool results, unless there are none</text>
+
+        <path class="edge" marker-end="url(#sfold-arrow)" d="M430,68 H410 V250 H364"/>
+        <text class="tiny" x="386" y="238">no</text>
+        <rect class="box" x="180" y="228" width="184" height="44" rx="3"/>
+        <text class="sm" x="194" y="248">both dropped</text>
+        <text class="tiny" x="194" y="264">half a turn is a 400</text>
+
+        <path class="edge-hl" marker-end="url(#sfold-arrow-hl)" d="M567,188 V228"/>
+
+        <rect class="box" x="430" y="228" width="274" height="52" rx="3"/>
+        <text class="sm" x="444" y="248">close_goal: history += query</text>
+        <text class="tiny" x="444" y="268">+ ended_note when the goal stopped short</text>
+
+        <path class="edge-hl" marker-end="url(#sfold-arrow-hl)" d="M567,280 V320"/>
+
+        <rect class="box" x="430" y="320" width="274" height="52" rx="3"/>
+        <text class="sm" x="444" y="340">finish: history, then query</text>
+        <text class="tiny" x="444" y="360">one flat list — the split is not recorded</text>
+
+        <rect class="box" x="16" y="228" width="140" height="52" rx="3" stroke-dasharray="4 4"/>
+        <text class="sm" x="30" y="248">compacted</text>
+        <text class="tiny" x="30" y="266">splices history only</text>
+        <path class="edge-dash" marker-end="url(#sfold-arrow)" d="M156,254 H180"/>
+      </svg>
+    </div>
+    <figcaption>
+      Read off <code>Fold::record</code>, <code>Fold::close_turn</code>,
+      <code>Fold::close_goal</code> and <code>place_turn</code>. The pink path
+      is a turn that survives. The dashed box is the one arm that edits
+      <code>history</code> directly and never touches <code>query</code>,
+      because compaction never touches the goal in flight.
+    </figcaption>
+  </figure>
+
+  <h2 id="arms">The arms, in the order a reader hits them</h2>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs — Fold::record</span>
+match r["kind"].as_str().unwrap_or_default() {
+    "goal" =&gt; {
+        self.close_turn();
+        <span class="c">// A goal record while another goal is open means the previous
+        // one ended — closed here rather than at `goal_finished`
+        // because the loop does the same: after a `goal_finished` the
+        // loop still holds the finished goal's `query` and would send
+        // it again unchanged if nothing else happened, so closing early
+        // would make the fold disagree with the last call of a one-goal
+        // session.</span>
+        self.close_goal();
+        self.in_goal = true;
+        self.query = vec![Message::user(string(r, "opening"))];
+    }
+    "assistant" =&gt; {
+        self.close_turn();
+        <span class="c">// Absent only in logs written before `raw_content` was stored.
+        // The turn is dropped rather than rebuilt from `text`: a
+        // rebuilt thinking block is rejected, so an approximation here
+        // would be a resumed run that dies on its first call with an
+        // error naming a signature nobody in the file mentions.</span>
+        self.pending = r.get("raw_content").and_then(blocks_of);
+    }</code></pre>
+
+  <p>
+    The timing of <code>close_goal</code> is the subtle one. A
+    <code>goal_finished</code> record does not close the goal; the
+    <em>next</em> <code>goal</code> record does. That is not tidiness, it is
+    agreement with the loop: after a goal ends the loop still holds that goal's
+    <code>query</code> and would send it again unchanged if nothing else
+    happened. A fold that closed early would disagree with the last call of a
+    one-goal session, which is the commonest session there is.
+  </p>
+
+  <p>
+    <code>self.query = vec![…]</code> assigns rather than extends, so anything
+    left in <code>query</code> that <code>close_goal</code> did not move is
+    discarded. With <code>in_goal</code> false, <code>close_goal</code> returns
+    early and that discard is real: records before the first <code>goal</code>
+    in a file do not survive.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs — Fold::record, continued</span>
+    "tool_result" =&gt; {
+        <span class="c">// Anything that is not a `tool_result` block is not pushed, and
+        // the turn it was meant to answer is therefore dropped by
+        // `answered` rather than half-restored. A record this cannot
+        // read is a gap, and a gap is the one thing the API will not
+        // take: an unanswered `tool_use` is a 400.</span>
+        if let Some(ContentBlock::ToolResult(result)) =
+            r.get("block").cloned().map(ContentBlock::from_value)
+        {
+            self.results.push(result);
+        }
+    }
+    "kick" =&gt; {
+        <span class="c">// A kick answers a turn that made no tool calls, so there is
+        // nothing to pair. If the turn itself could not be placed the
+        // kick goes with it — a user message with no assistant turn
+        // before it would leave two user turns in a row.</span>
+        if let Some(content) = self.pending.take() {
+            self.query.push(Message::assistant(content));
+            self.query.push(Message::user(string(r, "text")));
+        }
+        self.results.clear();
+    }</code></pre>
+
+  <p>
+    The <code>kick</code> arm pushes the held turn itself rather than calling
+    <code>close_turn</code>, so it bypasses the <code>answered</code> check. It
+    can afford to: a kick is only ever written for a turn that made no tool
+    calls, so <code>content</code> has no <code>tool_use</code> to leave
+    unanswered. The <code>results.clear()</code> afterwards is the guard on
+    that assumption. If results had somehow accumulated, they are dropped
+    rather than left to attach themselves to the next turn.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>Fold::record</code>; crates/emma/src/agent.rs — the <code>kick</code> append</span>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs — Fold::record, continued</span>
+    <span class="c">// Replayed rather than re-decided. The record carries both halves —
+    // how many messages off the front were replaced, and exactly what
+    // replaced them — so a fold cannot summarise differently from the
+    // run that did it. Compaction only ever touches finished goals, so
+    // the count is an index into `history` and never into `query`.</span>
+    "compacted" =&gt; {
+        let drop = r["drop_messages"].as_u64().unwrap_or(0) as usize;
+        let replacement: Vec&lt;Message&gt; =
+            serde_json::from_value(r["messages"].clone()).unwrap_or_default();
+        let drop = drop.min(self.history.len());
+        self.history.splice(..drop, replacement);
+    }</code></pre>
+
+  <div class="note warn">
+    <span class="h">This arm turns a bad record into deletion</span>
+    <p>
+      <code>unwrap_or_default()</code> on the replacement means a
+      <code>messages</code> field that will not deserialise yields an empty
+      vector, and the splice still removes <code>drop_messages</code> messages
+      off the front. A malformed record therefore deletes conversation rather
+      than being ignored. Every neighbouring arm makes the other choice: a
+      <code>tool_result</code> whose block will not read is not pushed and its
+      turn is dropped whole; an <code>assistant</code> without
+      <code>raw_content</code> costs its turn and nothing else; a record with a
+      kind nobody knows is skipped. This one is the exception, and the drop
+      count is not derived from the replacement, so nothing detects the
+      mismatch.
+      <span class="chip cert">certified</span> by reading the arm: two
+      statements, an <code>unwrap_or(0)</code> on the count and an
+      <code>unwrap_or_default()</code> on the messages, with no path that
+      abandons the splice. What it does at runtime is
+      <span class="chip unv">unverified</span>, because nothing writes such a
+      record: settle it by hand-writing a <code>compacted</code> line with
+      <code>"messages": 3</code> beside a real <code>drop_messages</code> and
+      folding the file.
+    </p>
+  </div>
+  <span class="src">crates/emma/src/session.rs — <code>Fold::record</code>, the <code>"compacted"</code> arm</span>
+
+  <p>
+    The <code>drop.min(self.history.len())</code> clamp is the one thing that is
+    defended: a count larger than the history cannot panic the splice. Since
+    compaction only ever touches finished goals, the count is an index into
+    <code>history</code> and never into <code>query</code>, and a
+    <code>compacted</code> record arriving mid-goal splices the finished part
+    while the goal in flight is untouched.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs — Fold::record, continued</span>
+    <span class="c">// `/clear`. Everything before this point left the conversation
+    // while the session was running, so a resume must not put it back.
+    //
+    // **Without this arm `/clear` is a lie**, and a quiet one: the
+    // in-memory chapters would be empty, the next `--resume` would fold
+    // the whole file, and the cleared conversation would walk back in
+    // carrying its tool results. The bytes stay in the file for a human
+    // to read; the fold skips them.
+    //
+    // Both lists go, and `in_goal` with them: `/clear` only ever happens
+    // between goals, so anything still in `query` here is a goal that
+    // finished and has not been moved across yet — which is exactly what
+    // was cleared. `restore_records` needs no arm of its own, because it
+    // already resets every counter at each `goal` record.</span>
+    "cleared" =&gt; {
+        self.close_turn();
+        self.history.clear();
+        self.query.clear();
+        self.in_goal = false;
+        self.finished = None;
+        self.pending = None;
+        self.results.clear();
+    }
+    "goal_finished" =&gt; self.finished = Some(string(r, "ending")),
+    _ =&gt; {}
+}</code></pre>
+
+  <p>
+    <code>close_turn()</code> runs first inside the <code>cleared</code> arm and
+    its effect is thrown away two lines later, which costs nothing and keeps the
+    arm from being the one place a held turn can leak past a state reset. Six
+    fields are reset by name rather than by assigning
+    <code>Self::default()</code>, so a field added later has to be considered
+    here rather than silently surviving a clear.
+  </p>
+
+  <p>
+    <code>goal_finished</code> stores the ending string and nothing else. It is
+    spent by <code>close_goal</code>, once, when the next goal opens.
+  </p>
+
+  <h2 id="place">Placing a turn, or dropping it</h2>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+fn finish(mut self) -&gt; Vec&lt;Message&gt; {
+    self.close_turn();
+    let mut out = self.history;
+    out.extend(self.query);
+    out
+}
+
+<span class="c">/// Place the assistant turn and its results, or drop both. See
+/// [`place_turn`], which is the rule and is shared with the loop.</span>
+fn close_turn(&amp;mut self) {
+    let Some(content) = self.pending.take() else {
+        self.results.clear();
+        return;
+    };
+    let results = std::mem::take(&amp;mut self.results);
+    place_turn(&amp;mut self.query, content, results);
+}</code></pre>
+
+  <p>
+    <code>finish</code> closes the last turn and concatenates. It does not call
+    <code>close_goal</code>, so a session whose last goal never got a successor
+    ends with that goal still in <code>query</code>, which is what the caller
+    wants: the messages come back as one flat list either way, and
+    <a href="session-resume.html">resume</a> puts all of them in
+    <code>query</code> anyway because the split is not recorded in the file.
+  </p>
+
+  <p>
+    <code>close_turn</code> with no held turn clears the results. Results with
+    no turn to answer are exactly as unsendable as a turn with no results.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// Place an assistant turn and the results that answer it, or place neither.
+///
+/// The rule the fold and the loop both turn on: **the API rejects an assistant
+/// turn carrying a `tool_use` that no `tool_result` answers**, and equally a
+/// result answering nothing. A run killed between the model call and the last
+/// of its tools leaves exactly that — in the file, and in the loop's own
+/// in-flight list. Half a turn is not worth a message list that cannot be sent,
+/// so an unmatched turn is dropped whole.
+///
+/// One function rather than one per caller. The loop carries tool traffic
+/// across goals now, so it needs this ruling in the same place the fold does,
+/// and a second copy of it would be a resumed conversation that differs from
+/// the one that was sent in precisely the cases neither is tested on.
+///
+/// Returns whether the turn was placed.</span>
+pub(crate) fn place_turn(
+    out: &amp;mut Vec&lt;Message&gt;,
+    content: Vec&lt;ContentBlock&gt;,
+    results: Vec&lt;ToolResult&gt;,
+) -&gt; bool {
+    if !answered(&amp;content, &amp;results) {
+        return false;
+    }
+    out.push(Message::assistant(content));
+    <span class="c">// A turn that called nothing is answered by nothing, and appending an empty
+    // user turn to say so is a 400 of its own.</span>
+    if !results.is_empty() {
+        out.push(Message::tool_results(results));
+    }
+    true
+}
+
+<span class="c">/// Whether every `tool_use` in an assistant turn has exactly one result, and
+/// every result a call. Both directions, because the API refuses both ways
+/// round. A turn with no calls and no results satisfies it, which is what makes
+/// a plain text turn placeable.</span>
+fn answered(content: &amp;[ContentBlock], results: &amp;[ToolResult]) -&gt; bool {
+    let mut calls: Vec&lt;&amp;str&gt; = content
+        .iter()
+        .filter_map(ContentBlock::tool_use_id)
+        .collect();
+    let mut answers: Vec&lt;&amp;str&gt; = results.iter().map(|r| r.tool_use_id.as_str()).collect();
+    calls.sort_unstable();
+    answers.sort_unstable();
+    calls == answers
+}</code></pre>
+
+  <p>
+    Sorted lists compared for equality, rather than a set comparison, so a
+    duplicate result for one call fails the check as well: two answers to one
+    call is one thing the API refuses in the other direction. Empty against
+    empty is equal, which is what lets a plain text turn through.
+  </p>
+
+  <p>
+    <span class="chip test">tested</span>, and mutation-checked during a
+    previous pass over this chapter: replacing the <code>answered</code> call in
+    <code>place_turn</code> with a constant turned
+    <code>a_partly_answered_turn_is_dropped_whole</code> and
+    <code>a_turn_whose_tool_calls_were_never_answered_is_dropped</code> red, and
+    restoring it returned 477 lib tests to green. That mutation was not re-run
+    for this page, which was not permitted to change source; the test names and
+    the assertions below were read from the file.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>place_turn</code>, <code>answered</code>, and the four fold tests</span>
+
+  <p>
+    Three of those tests fold a hand-built record list and assert the messages
+    that come back. <code>a_turn_whose_tool_calls_were_never_answered_is_dropped</code>
+    is the interrupt case, one call and no result, and expects the goal's
+    opening message alone. <code>a_partly_answered_turn_is_dropped_whole</code>
+    is two calls and one result, and expects the same. The positive control,
+    <code>a_fully_answered_turn_survives</code>, exists so that a fold which
+    dropped everything would not pass the first two.
+  </p>
+
+  <h2 id="close-goal">Closing a goal, and the note that stops a 400</h2>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// Move a finished goal into the conversation, whole.
+///
+/// The one thing added is the note on a goal that stopped mid-turn. A run
+/// killed on its token budget leaves a user turn last — the tool results
+/// nothing answered — and the next goal's opening is also a user turn, so
+/// without something between them the next request is two user turns in a
+/// row, which is a 400. The note is that something, and it is information
+/// rather than padding: without it the model reads an abandoned goal as a
+/// completed one.
+///
+/// It is added when the *next* goal opens rather than when this one ends,
+/// because that is when the loop adds it — and the two lists have to agree
+/// at every point in the record stream, not merely at the end.</span>
+fn close_goal(&amp;mut self) {
+    if !self.in_goal {
+        return;
+    }
+    let mut messages = std::mem::take(&amp;mut self.query);
+    if let Some(ending) = self.finished.take() {
+        if messages.last().map(|m| m.role) == Some(Role::User) {
+            messages.push(Message::assistant_text(crate::agent::ended_note(&amp;ending)));
+        }
+    }
+    self.history.extend(messages);
+    self.in_goal = false;
+}</code></pre>
+
+  <p>
+    Three conditions, all required: a goal was open, a
+    <code>goal_finished</code> record supplied an ending, and the goal's last
+    message is a user turn. The sentence itself comes from
+    <code>crate::agent::ended_note</code>, the same function the loop calls, so
+    the two cannot drift by a character. Two spellings of it would be a resumed
+    conversation differing from the one that was sent by one message, which
+    nothing notices until a cache miss or a rejection.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>Fold::close_goal</code>; crates/emma/src/agent.rs — <code>ended_note</code>, <code>Agent::close_previous_goal</code></span>
+
+  <h2 id="helpers">The three helpers</h2>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// A stored `raw_content` array back into blocks.
+///
+/// `None` rather than an empty turn for anything that is not an array, because
+/// an assistant record whose content cannot be read is a turn that must be
+/// dropped whole — the same ruling `place_turn` makes about a half-answered one,
+/// and for the same reason.</span>
+fn blocks_of(v: &amp;Value) -&gt; Option&lt;Vec&lt;ContentBlock&gt;&gt; {
+    Some(
+        v.as_array()?
+            .iter()
+            .cloned()
+            .map(ContentBlock::from_value)
+            .collect(),
+    )
+}
+
+fn string(r: &amp;Value, key: &amp;str) -&gt; String {
+    r[key].as_str().unwrap_or_default().to_string()
+}</code></pre>
+
+  <p>
+    <code>blocks_of</code> returns <code>None</code> for a non-array and
+    <code>Some(vec![])</code> for an empty array, and those are different
+    outcomes: the first drops the turn, the second holds an assistant turn with
+    no blocks. <code>string</code> turns a missing or non-string field into the
+    empty string, which is why a <code>goal</code> record with no
+    <code>opening</code> yields an empty first user message rather than an
+    error. <code>str_of</code>, the third helper, belongs to
+    <a href="session-resume.html">restore</a> and returns
+    <code>Option&lt;String&gt;</code> instead, because there a missing id has to
+    skip the record rather than match the empty one.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>blocks_of</code>, <code>string</code>, <code>str_of</code></span>
+
+  <h2 id="older">A file written by an older build</h2>
+
+  <p>
+    An <code>assistant</code> record with no <code>raw_content</code> costs its
+    turn, and the kick that answered it goes with it. There is no
+    reconstruction available: rebuilding a turn from <code>text</code> is what
+    invalidates a thinking-block signature, and the symptom would arrive later,
+    as a resumed run dying on its first call with an error naming a signature
+    nobody in the file mentions.
+    <span class="chip test">tested</span>
+    <code>a_record_written_before_raw_content_existed_costs_its_turn_and_no_more</code>
+    folds a goal, a <code>text</code>-only assistant record and a kick, and
+    expects the opening message alone.
+  </p>
+  <span class="src">crates/emma/src/session.rs — the test module</span>
+
+  <p>
+    The corpus still contains such records, so this path is not hypothetical.
+    <span class="chip cert">certified</span>: of 162 <code>assistant</code>
+    records in <code>~/.emma/sessions/</code> at 2026-08-16 20:28 EDT, four
+    carry only <code>kind</code>, <code>at_ms</code>, <code>turn_id</code> and
+    <code>text</code>. They are in
+    <code>sess-1786359974006-49144.jsonl</code> (turn-3) and
+    <code>sess-1786360025848-40224.jsonl</code> (turns 3, 15 and 16). Folding
+    either file today loses those turns. The script is on
+    <a href="session-corpus.html">The corpus</a>.
+  </p>
+
+  <h2 id="coverage">What this page covers</h2>
+
+  <p>
+    From <code>session.rs</code>: <code>fold</code>, <code>fold_records</code>,
+    the <code>Fold</code> type and all four of its methods
+    (<code>record</code>, <code>finish</code>, <code>close_turn</code>,
+    <code>close_goal</code>), <code>place_turn</code>, <code>answered</code>,
+    <code>blocks_of</code> and <code>string</code>. Every arm of
+    <code>Fold::record</code> is quoted. Four of the module's twelve unit tests
+    are named here and the rest are on
+    <a href="session-file.html">The file</a> and
+    <a href="session-continuity.html">Continuity</a>. The end-to-end round trip
+    lives in <code>crates/emma/tests/loop.rs</code>
+    (<code>the_log_folds_back_to_the_conversation_that_was_held</code> and
+    <code>the_fold_carries_a_finished_goal_forward_the_way_the_loop_does</code>),
+    which is where the fold is checked against what a real run sent rather than
+    against a hand-built record list.
+  </p>
+
+  <h2 id="unverified">What is not verified here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> What a malformed
+      <code>compacted</code> record does at runtime. The reading above says it
+      deletes; nothing has run it. Settle it by hand-writing one and folding.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> Whether the mutations named in
+      the <code>place_turn</code> section still fail today. They were run and
+      recorded by an earlier pass over this chapter, not by this one.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> Whether a
+      <code>tool_result</code> block that fails <code>ContentBlock</code>'s
+      conversion is possible in practice. The arm handles it; no record in the
+      corpus triggers it.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> How this page renders. The figure
+      was drawn from the source and its geometry checked by arithmetic. No
+      browser drew it.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    <p>
+      Written against commit <code>62ab9c3</code>. Next:
+      <a href="session-resume.html">Resume, and what is not replayed</a>, which
+      is the second reader of the same records.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

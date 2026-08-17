@@ -90,6 +90,34 @@ the part the argument turns on, long enough to read on its own. Quote it
 exactly, including the comments, because the comments carry the reasoning this
 project puts there deliberately.
 
+**Generate the quotes rather than typing them.** Pull each block out of the file
+by line range with a script, then verify. Hand-typing is where misquotes come
+from, and generating removes the class instead of checking for it afterwards.
+
+Verify with three checks, not one. "Does this line exist somewhere in the
+source" is the weakest of them and passes on a block that has quietly drifted:
+
+1. **Every quoted line appears in the source**, and you can account for each one
+   that does not (captured program output, a shell one-liner, your own citation
+   header).
+2. **Each block reproduces under a single uniform indent offset.** Dedenting
+   line by line before comparing hides per-line drift inside a block that was
+   legitimately dedented as a whole.
+3. **Each block matches a contiguous run in one file**, not merely a set of
+   lines that each exist somewhere. The terminal chapter's stricter pass caught
+   two blocks that had silently welded non-adjacent regions together with no
+   elision mark, and both had passed the per-line check looking perfect. Where
+   you do elide, mark it.
+
+The delegation chapter ran the first check over 1,608 lines; the session chapter
+added the other two after noticing the first would not have caught a reordered
+or re-indented block.
+
+**Name your scratch files after your chapter.** The scratchpad is shared between
+concurrently running agents, not isolated per session. A generic `build.py` has
+already been overwritten mid-task by another agent's generator, and the failure
+presented as a silent no-op build rather than as a collision.
+
 **Cover the file, not the highlights.** The bar is that somebody could rebuild
 the behaviour from the page. Every public item, every branch that changes an
 outcome, every constant that encodes a decision, every error path. Where a
@@ -223,7 +251,7 @@ import re
 s = open('docs/PAGE.html', encoding='utf-8').read()
 for pat in [r'<pre.*?</pre>', r'<!--.*?-->']:
     s = re.sub(pat, '', s, flags=re.S)
-import sys
+s = re.sub(r'<em>&ldquo;.*?&rdquo;</em>', '', s, flags=re.S)   # quoted source comments
 hits = re.findall(r'deliberately|by design|on purpose|load-bearing|is not decoration|not an accident|the right call|precisely the|principled|rigorous', s, re.I)
 print(hits if hits else 'clean')
 "

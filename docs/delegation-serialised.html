@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>One at a time · Delegation · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav here" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<h1>One at a time, and no recursion</h1>
+
+  <nav class="chapter">
+    <a class="up" href="delegation.html">Delegation</a>
+    <a href="delegation-nest.html">The nested run</a>
+    <span class="now">One at a time</span>
+    <a href="delegation-definitions.html">Agent definitions</a>
+    <a href="delegation-tools.html">resolve_tools</a>
+    <a href="delegation-brief.html">The brief</a>
+    <a href="delegation-footer.html">The footer</a>
+    <a href="delegation-budgets.html">Budgets &amp; spend</a>
+    <a href="delegation-agents-cmd.html">emma agents</a>
+  </nav>
+
+  <p class="lede">
+    Two of the three properties the module doc claims are about what cannot
+    happen: two subagents cannot run at once, and a subagent cannot delegate.
+    Neither is enforced by a check inside the loop. One is a one-permit
+    semaphore held across the whole nested run; the other is the order in which
+    two registries are built.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — module doc, Delegate::permit, Delegate::new</span>
+
+<pre><code><span class="c">//! **Three properties, each with the failure it prevents.**</span>
+<span class="c">//!</span>
+<span class="c">//! *One at a time.* A one-permit [`Semaphore`] held for the whole nested run.</span>
+<span class="c">//! Two subagents would mean two approval prompts racing for one stdin:</span>
+<span class="c">//! `decide` calls `prompt_header` and only then `ask`, so two concurrent</span>
+<span class="c">//! approvals interleave as A's header, B's header, A's question, B's question —</span>
+<span class="c">//! a screen showing B's evidence above A's question, with one `y` going to</span>
+<span class="c">//! whichever holds the mutex. That is the defect `LineSource::drain` exists to</span>
+<span class="c">//! prevent, arriving by another route, and `drain` makes it *worse*: the second</span>
+<span class="c">//! prompt discards the line typed in answer to the first. The closest prior art</span>
+<span class="c">//! (goose) resolved the same collision by refusing to run subagents at all</span>
+<span class="c">//! unless approval is switched off, which is the escape hatch Emma's design</span>
+<span class="c">//! rules out. The permit is redundant today — `run_goal` awaits its tool calls</span>
+<span class="c">//! one at a time — and it is what makes a future parallelisation of that loop</span>
+<span class="c">//! fail loudly rather than quietly.</span>
+<span class="c">//!</span>
+<span class="c">//! *No recursion, by construction.* Each agent type's registry is built here,</span>
+<span class="c">//! from tools resolved **before this tool exists**, so there is nothing to</span>
+<span class="c">//! forget at a call site and no depth counter to thread. An inner model asking</span>
+<span class="c">//! for `Delegate` gets the ordinary `no_such_tool` observation and routes around</span>
+<span class="c">//! it.</span>
+<span class="c">//!</span>
+<span class="c">//! *The footer is written from the log.* See [`footer`]. It is the answer to the</span>
+<span class="c">//! one failure delegation manufactures rather than merely risks.</span></code></pre>
+  <span class="src">crates/emma/src/delegate.rs — module doc, the three properties</span>
+
+  <h2 id="permit">The permit, and the screen it protects</h2>
+
+  <p>
+    <code>Delegate</code> holds a <code>Semaphore</code> with one permit. It is
+    acquired after the budget arithmetic and the brief are settled, and the
+    guard lives until <code>invoke</code> returns.
+  </p>
+
+<pre><code>pub struct Delegate {
+    nest: Nest,
+    types: BTreeMap&lt;String, AgentType&gt;,
+    description: String,
+    <span class="c">/// One at a time, process-wide. See the module doc.</span>
+    permit: Semaphore,
+    seq: AtomicU64,
+}</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Delegate</span>
+
+<pre><code>        let budgets = match self.sub_budgets(ty) {
+            Ok(budgets) =&gt; budgets,
+            Err(e) =&gt; return Ok(Err(e)),
+        };
+        let brief = brief(&amp;args);
+
+        <span class="c">// Held for the whole nested run. See the module doc: this is what makes</span>
+        <span class="c">// a second delegation wait rather than race the first for the keyboard.</span>
+        let _permit = self.permit.acquire().await;
+
+        let n = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
+        let sub_id = format!("sub-{}-{n}", ctx.turn_id);
+        let (log, records) = self.nest.log.subagent(&amp;sub_id, &amp;ctx.turn_id, agent);
+        let term = self.nest.term.subordinate();
+        self.nest.term.note(&amp;format!(
+            "delegating to {agent} ({} tools, {} tokens): {}",
+            ty.tools.names().len(),
+            budgets.max_tokens,
+            one_line(args.get("task").and_then(Value::as_str).unwrap_or_default())
+        ));</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::invoke, from the budget check to the opening note</span>
+
+  <p>
+    What it protects is stdin. <code>Approvals::decide</code> calls
+    <code>term.prompt_header</code> and only then <code>ask</code>, so two
+    concurrent approvals interleave as A's header, B's header, A's question, B's
+    question. The screen then shows B's evidence above A's question, and one
+    <code>y</code> goes to whichever holds the mutex. That is the defect
+    <code>LineSource::drain</code> exists to prevent, arriving by another route,
+    and <code>drain</code> makes it worse rather than better: the second prompt
+    discards the line typed in answer to the first.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — Approvals::decide; crates/emma/src/term/input.rs — LineSource::drain</span>
+
+  <p>
+    The closest prior art resolved the same collision by refusing the feature.
+    goose will not run subagents at all unless approval is switched off, which is
+    the escape hatch Emma's design rules out: the gate is a consent interface,
+    and a mode that turns it off to make a feature work turns it off for
+    everything else in the same process.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — module doc; notes/design-subagents-mechanism.md</span>
+
+  <h2 id="redundant">It buys nothing today</h2>
+
+  <p>
+    <code>run_goal</code> awaits its tool calls one at a time, so the parent
+    cannot issue two delegations concurrently in the first place. The permit is
+    there so that a future parallelisation of that loop fails loudly rather than
+    quietly: with it, the second delegation waits; without it, the second
+    delegation and the first fight over one keyboard, and the symptom is a
+    misread approval prompt rather than a stack trace.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — Agent::run_goal; crates/emma/src/delegate.rs — module doc</span>
+
+  <p>
+    The test does not rely on the parent loop for its concurrency. It calls
+    <code>invoke</code> twice directly and joins the two futures, so the
+    serialisation being asserted is the tool's own.
+    <span class="chip test">tested</span>
+  </p>
+
+<pre><code><span class="c">///</span>
+<span class="c">/// Mutation-checked: removing `let _permit = self.permit.acquire().await` makes</span>
+<span class="c">/// this fail.</span>
+#[tokio::test]
+async fn two_delegations_never_overlap() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let harness = Arc::new(Harness::load_selecting(&amp;root, Flavor::Emma, None).unwrap());
+    let live = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let tool: Arc&lt;dyn Tool&gt; = Arc::new(Overlapping {
+        live: live.clone(),
+        peak: peak.clone(),
+    });
+    <span class="c">// Two tool calls at the front of the script, so that *whichever* nested run</span>
+    <span class="c">// reaches the model first, the next one to reach it also gets a tool call</span>
+    <span class="c">// and lands inside `Overlapping` while the first is still there. A script</span>
+    <span class="c">// whose second entry was a text turn would let the second run finish without</span>
+    <span class="c">// ever entering the tool, and the test would pass with the permit removed —</span>
+    <span class="c">// which it did, before this comment was written.</span>
+    let fake = Fake::new(vec![
+        call("Read", json!({ "file_path": "a" })),
+        call("Read", json!({ "file_path": "b" })),</code></pre>
+  <span class="src">crates/emma/tests/delegate.rs::two_delegations_never_overlap, the setup and its comment</span>
+
+  <p>
+    The comment records a false receipt this test issued before it was fixed. An
+    earlier script had one tool call and then a text turn, so whichever nested
+    run reached the model second finished without ever entering the shared tool,
+    the peak counter stayed at 1, and the test passed with
+    <code>acquire()</code> removed. Two tool calls at the front of the script is
+    what makes the assertion mean anything. The current version is
+    mutation-checked in its doc comment: removing <code>let _permit =
+    self.permit.acquire().await</code> makes it fail.
+  </p>
+  <span class="src">crates/emma/tests/delegate.rs::two_delegations_never_overlap — doc comment and inline comment</span>
+
+  <p>
+    <span class="chip unv">unverified</span> The interleaved-prompt failure the
+    permit prevents has never been watched happen. It is an argument from
+    <code>decide</code>'s call order, and the test asserts a counter rather than
+    a terminal. <em>What would settle it:</em> remove the permit, drive two
+    delegations that both hit the approval gate against a real console, and read
+    the scrollback.
+  </p>
+
+  <h2 id="recursion">Recursion, prevented by construction</h2>
+
+  <p>
+    There is no depth counter and no call-site rule to forget. Each agent type's
+    registry is built in <code>Delegate::new</code>, from the
+    <code>available</code> slice <code>main.rs</code> assembles
+    <strong>before</strong> <code>Delegate</code> itself is constructed. A tool
+    that does not exist yet cannot be in a list, so no child registry can contain
+    it. An inner model that asks for <code>Delegate</code> anyway gets the
+    ordinary <code>no_such_tool</code> observation and routes around it.
+  </p>
+  <span class="src">crates/emma/src/main.rs — the construction order; crates/emma/src/delegate.rs — Delegate::new</span>
+
+  <p>
+    The guard is a property of that ordering, which means a future edit that
+    built child registries from the parent's would remove it silently. So there
+    is an assertion whose message says exactly that:
+  </p>
+
+<pre><code>            debug_assert!(
+                !tools.names().contains(&amp;NAME),
+                "the child registry contains {NAME}: recursion is prevented by this registry \
+                 not containing it, so a future edit that builds it from the parent's has \
+                 removed the only guard"
+            );</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::new</span>
+
+  <p>
+    <code>debug_assert!</code> is compiled out of a release build, so it is a
+    developer's tripwire rather than a runtime guarantee. The runtime guarantee
+    is the behavioural test, which asks for the worst case: an agent file that
+    names <code>Delegate</code> in its own <code>tools</code> list.
+    <span class="chip test">tested</span>
+    <code>an_agent_type_cannot_be_given_the_delegate_tool_even_by_name</code>
+    builds such a type and asserts <code>Delegate</code> is absent from
+    <code>tools_of</code>.
+  </p>
+  <span class="src">crates/emma/tests/delegate.rs::an_agent_type_cannot_be_given_the_delegate_tool_even_by_name</span>
+
+  <p>
+    <code>tools_of</code> exists for that test and says so in its own doc. It is
+    one of two small accessors on <code>Delegate</code>; the other,
+    <code>agent_names</code>, is the closed enum that reaches the model's schema
+    and both error messages.
+  </p>
+
+<pre><code>    <span class="c">/// The names a caller may pass, sorted — the closed enum.</span>
+    pub fn agent_names(&amp;self) -&gt; Vec&lt;&amp;str&gt; {
+        self.types.keys().map(String::as_str).collect()
+    }
+
+    <span class="c">/// The tools one agent type may use. For the test that recursion is</span>
+    <span class="c">/// prevented by construction rather than by a check.</span>
+    pub fn tools_of(&amp;self, agent: &amp;str) -&gt; Vec&lt;&amp;'static str&gt; {
+        self.types
+            .get(agent)
+            .map(|t| t.tools.names())
+            .unwrap_or_default()
+    }</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::agent_names, Delegate::tools_of, quoted entire</span>
+
+  <p>
+    <code>tools_of</code> answers <code>Vec::default()</code> for a name that is
+    not a type, which is indistinguishable from a type with no tools. That
+    conflation cannot arise in practice: <code>Delegate::new</code> refuses to
+    register a type whose registry came back empty, so no offered type has zero
+    tools.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::new, Delegate::tools_of</span>
+
+  <h2 id="cost">What serialisation costs</h2>
+
+  <p>
+    There is no fan-out. Ten independent questions are ten delegations end to
+    end, each paying the next one's startup, and the wall clock is their sum. The
+    five-minute per-delegation deadline does not bound that sum: it bounds one
+    delegation, and the parent's own wall clock is checked at the parent's next
+    iteration boundary. A parent that issues four delegations back to back can
+    therefore run twenty minutes past a five-minute cap, which is stated on
+    <a href="delegation-budgets.html">Budgets &amp; spend</a> rather than
+    discovered.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — SUB_WALL_CLOCK, Delegate::sub_budgets</span>
+
+  <h2 id="unsettled">What is not settled here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> The interleaved prompt, as above.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> The claim that
+      <code>main.rs</code> builds <code>available</code> before
+      <code>Delegate</code> is read off the construction order in one function,
+      and nothing asserts it. The <code>debug_assert</code> fires only if the
+      list already contains <code>Delegate</code>, which is a symptom of the
+      ordering having changed rather than a check on it.
+      <em>What would settle it:</em> nothing cheap; the behavioural test covers
+      the outcome, which is what matters.
+    </li>
+    <li>
+      <span class="chip cert">certified</span> The permit is
+      <code>Semaphore::new(1)</code> and is acquired exactly once, in
+      <code>invoke</code>: <code>grep -n "permit" crates/emma/src/delegate.rs</code>
+      returns three lines, the field, the constructor and the acquisition.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · read at commit <code>62ab9c3</code> ·
+    <code>crates/emma/src/delegate.rs</code> ·
+    <code>crates/emma/tests/delegate.rs</code> ·
+    <a href="delegation.html">back to the chapter</a>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

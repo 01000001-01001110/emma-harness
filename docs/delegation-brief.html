@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The brief · Delegation · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav here" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<h1>The brief, the contract and the tool's own surface</h1>
+
+  <nav class="chapter">
+    <a class="up" href="delegation.html">Delegation</a>
+    <a href="delegation-nest.html">The nested run</a>
+    <a href="delegation-serialised.html">One at a time</a>
+    <a href="delegation-definitions.html">Agent definitions</a>
+    <a href="delegation-tools.html">resolve_tools</a>
+    <span class="now">The brief</span>
+    <a href="delegation-footer.html">The footer</a>
+    <a href="delegation-budgets.html">Budgets &amp; spend</a>
+    <a href="delegation-agents-cmd.html">emma agents</a>
+  </nav>
+
+  <p class="lede">
+    Four arguments go in, one of them a closed enum. Out of them come two
+    different texts: the brief the subagent opens on, and a clause appended to
+    the system contract it is held to. They are separate because
+    <code>Goal::opening</code> is the user's words and nothing else, and neither
+    of these is a user's words.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — input_schema, brief, SubagentClaim</span>
+
+  <h2 id="name">Why it is not called Task</h2>
+
+<pre><code><span class="c">//! **Why it is not called `Task`.** `TaskCreate`, `TaskGet`, `TaskList` and</span>
+<span class="c">//! `TaskUpdate` already exist. A fifth `Task` collides three times: in the</span>
+<span class="c">//! model's own tool list, where the nearest-neighbour error costs a whole</span>
+<span class="c">//! subagent rather than a checkbox; in `hooks.rs`, where an operator writing</span>
+<span class="c">//! `Task.*` to guard delegation would quietly also guard every checkbox tick;</span>
+<span class="c">//! and beside `approval::EXEMPT`, which is a `const &amp;[&amp;str]` one careless edit</span>
+<span class="c">//! away from exempting delegation from the gate. Claude Code renamed its own</span>
+<span class="c">//! tool away from `Task` too, so matching the old name buys nothing.</span></code></pre>
+  <span class="src">crates/emma/src/delegate.rs — module doc</span>
+
+  <p>
+    The third collision is the expensive one. <code>approval::EXEMPT</code> is a
+    <code>const &amp;[&amp;str]</code> naming the tools that skip the gate, and
+    the task writers are in it. A fifth tool called <code>Task</code> sitting
+    beside them is one careless edit from exempting delegation itself.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — EXEMPT; docs consent-exempt.html</span>
+
+  <h2 id="schema">The four arguments</h2>
+
+<pre><code>    fn input_schema(&amp;self) -&gt; Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "agent": {
+                    "type": "string",
+                    <span class="c">// The closed enum, and it is the security property — the same</span>
+                    <span class="c">// one `skill.rs` names. A `Delegate` taking a free-text system</span>
+                    <span class="c">// prompt, or a free-text tool list, is a self-modifying-prompt</span>
+                    <span class="c">// tool with a friendly description, and worse than the</span>
+                    <span class="c">// arbitrary-file-read it resembles: the model would be</span>
+                    <span class="c">// granting itself a prompt *and* a tool set.</span>
+                    "enum": self.agent_names(),
+                    "description": "Which kind of agent to hand this to."
+                },
+                "task": {
+                    "type": "string",
+                    "description": "The work, written for someone who has never seen this \
+                                    conversation."
+                },
+                "context": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "One short fact per entry, including what you already \
+                                    tried that did not work. Prefer a path over a paste."
+                },
+                "deliver": {
+                    "type": "string",
+                    "description": "What the answer must contain, concretely."
+                }
+            },
+            "required": ["agent", "task"],
+            "additionalProperties": false
+        })
+    }</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Tool::input_schema, quoted entire</span>
+
+  <p>
+    <code>agent</code> is an enum built from the resolved catalogue, and it is
+    the security property. A <code>Delegate</code> taking a free-text system
+    prompt, or a free-text tool list, would be a self-modifying-prompt tool with
+    a friendly description, and worse than the arbitrary-file-read it resembles:
+    the model would be granting itself a prompt <em>and</em> a tool set.
+    <code>additionalProperties: false</code> closes the object as well.
+  </p>
+
+  <p>
+    The enum is enforced in <code>validate_args</code> as well as declared,
+    because a provider that ignores an enum must not turn this into something
+    that runs a prompt nobody wrote. <code>invoke</code> checks a third time, on
+    the lookup, and answers a <code>BadArguments</code> error rather than
+    panicking on a missing key.
+  </p>
+
+<pre><code>    fn validate_args(&amp;self, args: &amp;Value) -&gt; Result&lt;(), ToolError&gt; {
+        let agent = args.get("agent").and_then(Value::as_str).ok_or_else(|| {
+            ToolError::BadArguments(format!(
+                "{NAME}.agent is required and must be one of: {}",
+                self.agent_names().join(", ")
+            ))
+        })?;
+        <span class="c">// The enum is enforced here as well as declared to the model, for the</span>
+        <span class="c">// reason `Skill` gives: a provider that ignores an enum must not turn</span>
+        <span class="c">// this into something that runs a prompt nobody wrote.</span>
+        if !self.types.contains_key(agent) {
+            return Err(ToolError::BadArguments(format!(
+                "no agent named `{agent}`. Available: {}",
+                self.agent_names().join(", ")
+            )));
+        }
+        match args.get("task").and_then(Value::as_str) {
+            Some(task) if !task.trim().is_empty() =&gt; Ok(()),
+            _ =&gt; Err(ToolError::BadArguments(format!(
+                "{NAME}.task is required: say what the work is, written for someone who has \
+                 never seen this conversation."
+            ))),
+        }
+    }</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Tool::validate_args, quoted entire</span>
+
+  <p>
+    Both failures name the available agents, so a model that guessed a name gets
+    the list back rather than a refusal it has to ask about. An empty or
+    whitespace-only <code>task</code> is rejected with the sentence that says
+    what the field is for. <code>context</code> and <code>deliver</code> are
+    unvalidated; a missing <code>deliver</code> costs the caller a checkable
+    answer and nothing else.
+  </p>
+
+  <h2 id="brief">What the subagent opens on</h2>
+
+<pre><code><span class="c">/// The brief the subagent opens on: the three fields, in the order it should</span>
+<span class="c">/// read them.</span>
+<span class="c">///</span>
+<span class="c">/// Composed here rather than in `Goal::opening`, which is *the user's words and</span>
+<span class="c">/// nothing else* and must stay that way — the note above it records what a</span>
+<span class="c">/// preamble on every input cost. This text is not a user's words: it is a work</span>
+<span class="c">/// order the calling model wrote, and the fields are its own.</span>
+fn brief(args: &amp;Value) -&gt; String {
+    let s = |k: &amp;str| args.get(k).and_then(Value::as_str).unwrap_or_default();
+    let mut out = s("task").trim().to_string();
+    if let Some(context) = args.get("context").and_then(Value::as_array) {
+        let facts: Vec&lt;String&gt; = context
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|f| !f.trim().is_empty())
+            .map(|f| format!("- {}", f.trim()))
+            .collect();
+        if !facts.is_empty() {
+            out.push_str("\n\nWhat the agent that sent you already knows:\n");
+            out.push_str(&amp;facts.join("\n"));
+        }
+    }
+    let deliver = s("deliver").trim();
+    if !deliver.is_empty() {
+        out.push_str(&amp;format!("\n\nYour answer must contain: {deliver}"));
+    }
+    out
+}</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — brief, quoted entire</span>
+
+  <p>
+    Three fields, in the order the sub should read them: the task, then
+    <em>"What the agent that sent you already knows:"</em> and the context as a
+    bullet list, then <em>"Your answer must contain: …"</em>. Empty and
+    whitespace-only context entries are dropped, and a context array of nothing
+    but blanks produces no heading at all rather than a heading over an empty
+    list. Non-string entries are dropped by <code>filter_map</code> without
+    comment, which is the one place a caller can lose an argument silently.
+  </p>
+
+  <p>
+    It is composed here rather than in <code>Goal::opening</code>, and the note
+    above that function records what a preamble on every input cost.
+    <code>Goal::opening</code> is the user's words and must stay that way. This
+    text is not a user's words: it is a work order the calling model wrote, and
+    the fields are its own.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — Goal::opening</span>
+
+  <h2 id="claim">SubagentClaim, the second DoneCheck</h2>
+
+  <p>
+    <code>goal.rs</code> defines <code>DoneCheck</code> as a trait and the loop
+    knows only the trait, so a delegation changes one value in <code>Setup</code>
+    rather than anything in the loop. This is the second implementation, and the
+    seam was left for it.
+  </p>
+
+<pre><code><span class="c">/// [`MarkerClaim`], plus the one thing a subagent has to be told that a parent</span>
+<span class="c">/// does not.</span>
+<span class="c">///</span>
+<span class="c">/// The framing goes in the **contract** — which `standing_contract` puts in the</span>
+<span class="c">/// system prompt, where it is cached — and never on the brief. `Goal::opening`</span>
+<span class="c">/// is the user's words and nothing else; here the "user" is a work order, and</span>
+<span class="c">/// prepending to it would still be an instruction the caller did not write.</span>
+struct SubagentClaim {
+    <span class="c">/// Restated in the contract when the caller asked for something specific.</span>
+    <span class="c">/// This is the field that makes an answer checkable against the footer: a</span>
+    <span class="c">/// `deliver` naming a file and line, or a command's verbatim output, is one</span>
+    <span class="c">/// the parent can hold up against the record underneath it.</span>
+    deliver: Option&lt;String&gt;,
+}
+
+#[async_trait::async_trait]
+impl DoneCheck for SubagentClaim {
+    <span class="c">/// Distinct from `marker_claim`, so a transcript carrying both runs says</span>
+    <span class="c">/// which authority each was held to.</span>
+    fn name(&amp;self) -&gt; &amp;'static str {
+        "subagent_marker_claim"
+    }
+
+    fn contract(&amp;self) -&gt; String {
+        let mut out = MarkerClaim.contract();
+        out.push_str(
+            "\n\nYou are working on behalf of another agent, which cannot see any of this. \
+             Your final message is the only thing that reaches it: no transcript, no tool \
+             output, no file you read. Write it so it stands alone, and name the files you \
+             read and the commands you ran — it will be shown a record of both, and a claim \
+             that disagrees with the record is worse than no claim.",
+        );
+        if let Some(deliver) = &amp;self.deliver {
+            out.push_str(&amp;format!(
+                "\n\nThe agent that sent you asked specifically for: {deliver}"
+            ));
+        }
+        out
+    }
+
+    async fn verdict(&amp;self, goal: &amp;Goal, text: &amp;str) -&gt; Done {
+        <span class="c">// Deliberately the marker and nothing more. A check that also judged the</span>
+        <span class="c">// answer against `deliver` would be a heuristic wearing a mechanism's</span>
+        <span class="c">// clothes — and it is `open_count`'s failure in a new costume: a model</span>
+        <span class="c">// that learns running a command ends the loop will run one. The footer</span>
+        <span class="c">// is where a `deliver` is checked, by the parent, against a record.</span>
+        MarkerClaim.verdict(goal, text).await
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — SubagentClaim and its DoneCheck impl, quoted entire</span>
+
+  <p>
+    <code>name()</code> answers <code>"subagent_marker_claim"</code> rather than
+    <code>MarkerClaim</code>'s own name, so a session file carrying both a parent
+    run and a nested one says which authority each was held to.
+  </p>
+
+  <p>
+    <code>contract()</code> is where the framing goes, and the reason is
+    caching: the contract is part of the system prompt and rides in the cached
+    prefix, while the brief is a user turn and is not. The clause tells the sub
+    the one thing a parent does not need to be told, that its final message is
+    the only thing that reaches the caller, and warns that a claim disagreeing
+    with the record is worse than no claim.
+  </p>
+
+  <p>
+    <code>verdict()</code> is <code>MarkerClaim</code>'s and nothing more. A
+    check that also judged the answer against <code>deliver</code> would be a
+    heuristic in a mechanism's clothes, and it would repeat
+    <code>open_count</code>'s failure in a new costume: a model that learns
+    running a command ends the loop will run one. The place a
+    <code>deliver</code> is checked is
+    <a href="delegation-footer.html">the footer</a>, by the parent, against a
+    record.
+  </p>
+  <span class="src">crates/emma/src/goal.rs — DoneCheck, MarkerClaim, the open_count note</span>
+
+  <div class="note">
+    <span class="h">deliver is said twice: backlog item 6</span>
+    <p>
+      <code>brief()</code> appends <code>deliver</code> to the sub's opening
+      message and <code>SubagentClaim::contract()</code> restates it in the
+      system prompt. The contract is cached; the brief is not. Every delegation
+      therefore pays a cache write for a sentence the sub already has, and the
+      fix recorded in <code>notes/improvements.md</code> item 6 is a deletion of
+      the restatement, costing duplicate emphasis rather than the deliverable.
+    </p>
+    <p>
+      It is open, and blocked on measurement rather than on design. The item
+      wants a clustering number from real sessions, and the session corpus on
+      this machine holds one <code>delegation</code> record in total.
+      <span class="chip cert">certified</span> <code>emma agents</code> reports
+      <code>delegations 1</code> across 100 session files, run today.
+    </p>
+    <span class="src">notes/improvements.md item 6; crates/emma/src/delegate.rs — brief, SubagentClaim::contract</span>
+  </div>
+
+  <h2 id="meta">What the gate is told</h2>
+
+<pre><code>    <span class="c">/// **`read_only: false` unconditionally, including when the agent type's</span>
+    <span class="c">/// tools are entirely read-only.** The tool set is configuration; a `meta()`</span>
+    <span class="c">/// that varied with it would mean the gate's answer depends on a file the</span>
+    <span class="c">/// reviewer is not looking at. This is also the one call in the surface</span>
+    <span class="c">/// where a human most wants to see the brief before it runs: it is about to</span>
+    <span class="c">/// spend a slice of the budget on instructions the *model* composed.</span>
+    <span class="c">///</span>
+    <span class="c">/// `idempotent: false` follows, and the pair is legal — `Registry::register`</span>
+    <span class="c">/// refuses only `read_only: true` with `idempotent: false`.</span>
+    <span class="c">///</span>
+    <span class="c">/// **`reaches_network: false`, and it is the arguable one.** A delegation</span>
+    <span class="c">/// certainly sends bytes off this machine: it calls the model. Three reasons</span>
+    <span class="c">/// it still declares `false`. Its own traffic goes to the provider, on the</span>
+    <span class="c">/// same key and host the parent is already using ungated, and declaring</span>
+    <span class="c">/// `true` would demand a `NetworkTarget` and produce a prompt to approve</span>
+    <span class="c">/// `api.anthropic.com` whose only possible answer is yes — which is how an</span>
+    <span class="c">/// operator learns to answer without reading. Any sub-tool that reaches a</span>
+    <span class="c">/// real host asks the same gate, in the same process, against the same</span>
+    <span class="c">/// `hosts_allowed` set, because `Approvals` is one shared object: egress is</span>
+    <span class="c">/// gated at the leaf, where the host is known, not at the delegation, where</span>
+    <span class="c">/// it is not. And it is `Bash`'s precedent — `Bash` can `curl` and declares</span>
+    <span class="c">/// `false`, because `read_only: false` already puts the thing in front of a</span>
+    <span class="c">/// human, and a truthful destination would require predicting what a model</span>
+    <span class="c">/// will decide to do.</span>
+    <span class="c">///</span>
+    <span class="c">/// If that trade ever looks wrong the fix is not to flip the bit; it is a</span>
+    <span class="c">/// third axis on `ToolMeta` for *delegated* egress.</span>
+    fn meta(&amp;self) -&gt; ToolMeta {
+        ToolMeta {
+            read_only: false,
+            reaches_network: false,
+            idempotent: false,
+        }
+    }</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Tool::meta, quoted entire with its doc</span>
+
+  <p>
+    <code>read_only: false</code> holds even when the agent type's tools are
+    entirely read-only, because the tool set is configuration and a
+    <code>meta()</code> that varied with it would mean the gate's answer depends
+    on a file the reviewer is not looking at. <code>idempotent: false</code>
+    follows, and the pair is legal: <code>Registry::register</code> refuses only
+    <code>read_only: true</code> beside <code>idempotent: false</code>.
+    <span class="chip test">tested</span>
+    <code>delegation_is_gated_and_the_prompt_shows_the_brief</code> asserts the
+    call reaches the prompt and that the brief is in it.
+  </p>
+  <span class="src">crates/emma/tests/delegate.rs::delegation_is_gated_and_the_prompt_shows_the_brief; crates/tool-api/src/lib.rs — Registry::register</span>
+
+  <p>
+    <code>reaches_network: false</code> is the arguable one and the doc says so.
+    A delegation certainly sends bytes off the machine: it calls the model. The
+    traffic goes to the provider on the same key and host the parent is already
+    using ungated, and declaring <code>true</code> would demand a
+    <code>NetworkTarget</code> and produce a prompt to approve
+    <code>api.anthropic.com</code> whose only possible answer is yes, which is how
+    an operator learns to answer without reading. Any sub-tool that reaches a
+    real host asks the same gate, in the same process, against the same
+    <code>hosts_allowed</code> set. If that trade ever looks wrong, the doc names
+    the fix: a third axis on <code>ToolMeta</code> for delegated egress, not a
+    flipped bit.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — Tool::meta; crates/emma/src/approval.rs — Approvals::egress</span>
+
+  <h2 id="description">Half the description is about not calling it</h2>
+
+<pre><code><span class="c">/// The prose half of the description.</span>
+<span class="c">///</span>
+<span class="c">/// Roughly half of it is about when *not* to call this, and that ratio is</span>
+<span class="c">/// deliberate: the measured direction of the effect on code-centric tasks is</span>
+<span class="c">/// negative — 49–54% single-agent against 10% and 3% multi-agent on SWE-bench</span>
+<span class="c">/// Lite, at nine times the spend — and Anthropic's own multi-agent write-up</span>
+<span class="c">/// carves coding out of its own headline result. A feature nobody calls costs a</span>
+<span class="c">/// paragraph of prompt; a feature called for two-file questions costs a multiple</span>
+<span class="c">/// of every goal.</span>
+<span class="c">///</span>
+<span class="c">/// "Read the ending first" is a promise about the footer, and the footer is</span>
+<span class="c">/// built in the same commit. A description advertising something that does not</span>
+<span class="c">/// exist is the highest-traffic lie available in this system.</span>
+const DESCRIPTION: &amp;str = "\
+Hand a self-contained piece of work to a second agent, and get back its \
+conclusion.
+
+It starts with none of this conversation: not what you have read, not what the \
+user said, not what you have already tried. It runs on its own until it is \
+finished, and the only thing that comes back is text — its report, plus a \
+record of what it actually did. Nothing it read enters this conversation.
+
+**Reach for this when the answer is small and the evidence is large.** \"Which \
+of these forty files still calls the old constructor\", \"why does this suite \
+fail on Windows and not on Linux\" — questions where finding out means dozens \
+of reads whose contents you will never need again.
+
+**Do not reach for it otherwise.** A question you can answer with one `Grep` \
+costs one `Grep`; delegating it costs a second agent's whole startup and a \
+brief you have to write. If you already have the file open, answer from it. If \
+the work is a single edit, make the edit. And do not delegate the check that \
+verifies your own work — run that yourself, and read its exit status.
+
+- `agent` is which kind of agent to send this to. Each has its own standing \
+instructions and its own tools; the list is below.
+- `task` is the work, written for someone who has never seen this conversation, \
+because that is exactly who reads it. State the goal and what a finished answer \
+looks like.
+- `context` is what you already know that it would otherwise rediscover — one \
+short fact per entry. Paths worth starting from, the command that failed and \
+what it printed, a decision already made, and anything you already tried that \
+did not work. Prefer a path over a paste: it can read the file itself, and what \
+it reads will be current. Do not paste this conversation.
+- `deliver` is what the answer must contain. Be concrete — \"the file and line \
+where X is decided\", \"the failing assertion, verbatim\" — because you cannot \
+see its work and will have nothing else to judge the answer by. Ask for places \
+to look wherever that will do: a list of paths is something you can check by \
+reading one of them, and an explanation is something you cannot check at all.
+
+What comes back is one message, and under it a record this agent did not write: \
+how it ended, the files it read, the commands it ran and what they exited with, \
+anything it was refused, and what it spent. **Read the ending first.** An agent \
+that ran out of budget still writes a confident final paragraph, and that \
+paragraph is a partial answer wearing the clothes of a complete one.
+
+It works in the same directory as you, under the same approval rules, and \
+spends from the same budget as this goal — so a long delegation can end the \
+goal. One runs at a time.";</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — DESCRIPTION and its doc comment, quoted entire</span>
+
+  <p>
+    The doc's numbers are the argument for that ratio: 49–54% single-agent
+    against 10% and 3% multi-agent on SWE-bench Lite, at nine times the spend,
+    and Anthropic's own multi-agent write-up carves coding out of its own
+    headline result. A feature nobody calls costs a paragraph of prompt; a
+    feature called for two-file questions costs a multiple of every goal.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> Those figures are not cited to a
+    source in the code, and this page has not traced them.
+    <em>What would settle it:</em> the SWE-bench Lite run they came from, named
+    with a date, or the write-up's own paragraph quoted.
+  </p>
+
+  <p>
+    "Read the ending first" is a promise about
+    <a href="delegation-footer.html">the footer</a>, and the footer was built in
+    the same commit. A description advertising something that does not exist is
+    the highest-traffic lie available in this system, since it is in every
+    request the tool is offered in.
+  </p>
+
+  <p>
+    Three of the four argument descriptions in the schema push the same way:
+    write the task for someone who has never seen this conversation, prefer a
+    path over a paste, and ask for places to look wherever that will do. The
+    last is the checkable one. A list of paths is something the parent can verify
+    by reading one of them; an explanation is something it cannot verify at all.
+  </p>
+
+  <h2 id="trivia">The three one-line methods</h2>
+
+  <p>
+    <code>name()</code> answers the <code>NAME</code> constant.
+    <code>description()</code> answers the string <code>describe</code> composed
+    at construction, so the catalogue is built once rather than per call. Neither
+    has a decision in it, and this line is their coverage.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — Tool::name, Tool::description, NAME</span>
+
+  <h2 id="unsettled">What is not settled here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> The benchmark figures, as above.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> No test asserts what
+      <code>brief()</code> produces. Its shape is read off the function, and the
+      contract clause is likewise unasserted. <em>What would settle it:</em> a
+      unit test over <code>brief</code> with all four arguments, one with an
+      empty context array, and one with a non-string context entry.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> Whether a provider ever ignores
+      the <code>enum</code> in practice is the premise for enforcing it twice,
+      and nobody here has seen it happen. The double check costs a string
+      comparison, so the premise has not been worth testing.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · read at commit <code>62ab9c3</code> ·
+    <code>crates/emma/src/delegate.rs</code> ·
+    <code>crates/emma/src/goal.rs</code> ·
+    <a href="delegation.html">back to the chapter</a>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

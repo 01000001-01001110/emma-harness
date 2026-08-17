@@ -1,0 +1,568 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Every file · Configuration · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav here" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/harness/src/lib.rs · hash.rs</p>
+  <h1>Every file Emma reads, and how each one fails</h1>
+
+  <nav class="chapter">
+      <a class="up" href="config.html">Configuration</a>
+      <a href="config-discovery.html">Discovery</a>
+      <span class="now">Every file</span>
+      <a href="config-spine.html">The spine</a>
+      <a href="config-claude.html">Reading <code>.claude/</code></a>
+      <a href="config-skills.html">Skills &amp; commands</a>
+      <a href="config-agents.html">Agents</a>
+      <a href="config-personal.html">Your own files</a>
+      <a href="config-themes.html">Themes</a>
+      <a href="config-notapplied.html">It did not apply</a>
+    </nav>
+
+  <p class="lede">
+    There is no single configuration file and no merged view of one. Three
+    crates read from three scopes, and the reason a reader gets lost is that the
+    <em>project's</em> configuration and the <em>person's</em> are different
+    files, with different names, in different places, failing in different ways.
+    This page is the map: every file, who reads it, what it decides, and what
+    happens when it is wrong.
+  </p>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven, and a reader can repeat it: a file, a command, a count</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+    <div><span class="chip test">tested</span> a test that was shown to fail</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <h2 id="map">Seven kinds of file</h2>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>file</th><th>scope</th><th>read by</th><th>what it decides</th><th>if it is malformed</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>.emma/config.json</code></td>
+        <td>project</td>
+        <td><code>emma-harness</code></td>
+        <td><code>default_persona</code>, <code>personas</code>,
+            <code>hooks</code>, <code>statusLine</code>,
+            <code>permissions</code></td>
+        <td><strong>refuses to start</strong>, naming the file and the key</td>
+      </tr>
+      <tr>
+        <td><code>.claude/settings.json</code></td>
+        <td>project</td>
+        <td><code>emma-harness</code></td>
+        <td><code>hooks</code>, <code>statusLine</code>,
+            <code>permissions</code>. Every other key is ignored</td>
+        <td><strong>refuses to start</strong> if it is not JSON, or if the
+            <code>hooks</code> block is wrong</td>
+      </tr>
+      <tr>
+        <td><code>&lt;harness&gt;/settings.local.json</code></td>
+        <td>project, local</td>
+        <td><code>emma-harness</code></td>
+        <td><code>permissions</code> only. Where a remembered grant is written</td>
+        <td><strong>refuses to start</strong></td>
+      </tr>
+      <tr>
+        <td><code>~/.claude/settings.json</code></td>
+        <td>user</td>
+        <td><code>emma-harness</code></td>
+        <td><code>permissions.deny</code> <em>only</em>: never
+            <code>allow</code>, never <code>ask</code></td>
+        <td>skipped in silence; the run continues with no user-scope rules</td>
+      </tr>
+      <tr>
+        <td><code>~/.emma/settings.json</code></td>
+        <td>user</td>
+        <td><code>emma</code> (the binary)</td>
+        <td><code>provider</code>, <code>models</code>, <code>validated</code>,
+            <code>tools</code>, <code>theme</code></td>
+        <td>read as if empty; every value falls back to its default</td>
+      </tr>
+      <tr>
+        <td><code>~/.emma/credentials.json</code></td>
+        <td>user</td>
+        <td><code>emma-llm</code></td>
+        <td>the API key per provider</td>
+        <td>an error naming the file when a key is needed; a write
+            <strong>refuses</strong> rather than replacing it</td>
+      </tr>
+      <tr>
+        <td><code>~/.emma/themes/&lt;n&gt;.json</code><br><code>&lt;harness&gt;/themes/&lt;n&gt;.json</code></td>
+        <td>user, then project</td>
+        <td><code>emma</code></td>
+        <td>colours, per role</td>
+        <td>a notice above the prompt; the built-in theme is drawn</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/harness/src/lib.rs (<code>load_selecting</code>, <code>read_permissions</code>, <code>user_permissions</code>); crates/emma/src/settings.rs; crates/llm/src/auth.rs; crates/emma/src/term/theme.rs</span>
+
+  <p>
+    Rows one to four belong to the project and rows five to seven belong to the
+    person, and nothing crosses. <code>settings.rs</code>'s module doc gives the
+    reason and it is worth carrying: the project's configuration is shared by
+    everyone who clones the repository, so a personal default written there
+    would be two files answering one question with no rule for disagreeing, and
+    the answer that won would be the repository's, on somebody else's screen.
+    There is no <code>theme</code> key in <code>config.json</code> and no
+    <code>personas</code> key in <code>~/.emma/settings.json</code>, and neither
+    absence is an oversight waiting to be filled in.
+  </p>
+
+  <p>
+    The one exception to "the project's files never touch the person's" runs the
+    other way and is narrow: <code>~/.claude/settings.json</code> contributes
+    <code>deny</code> rules to the project's permission set. That is a
+    restriction crossing a boundary, never a grant. It is
+    <a href="config-claude.html#user">on the compatibility page</a>, because the
+    argument for it is the same argument as the discovery skip.
+  </p>
+
+  <h2 id="boot">Four boot states, and they are closed</h2>
+
+  <p>
+    The crate's module doc states them, and the phrasing matters because it is
+    the rule every refusal on the rest of this chapter is an instance of.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · module doc</p>
+<pre><code>//! **The boot states, and they are not open here:** absent → refuse to start,
+//! naming every path searched; present but empty → boot and answer nothing;
+//! malformed → refuse to start, naming the file and the problem; and, in
+//! `.emma/` only, persona files that nothing selects → refuse, because an empty
+//! harness is a statement and an unselected one is an accident. That last rule
+//! deliberately does not extend to `.claude/agents/`; `select_persona` says why.
+//!
+//! "Absent" is decided in `discover_in`, and a directory existing is not enough
+//! to make it present: in the home directory a `.emma/` holding only credentials
+//! is walked past rather than adopted, because `emma api` creates it and nobody
+//! chose it. There it is the absent case, not the empty one.
+//!
+//! The reasoning, because the edges follow from it: an agent booted with the
+//! wrong prompt does not crash. It acts fluently and confidently, attributed to
+//! an `instructions_hash` nobody reviewed — and in Emma it acts by writing files
+//! and running commands. So any ambiguity about *what the model was told*
+//! resolves to not starting. The empty case is the one that is not ambiguous:
+//! someone made the directory and put nothing in it, so Emma boots with no
+//! standing instructions and needs no special case anywhere in the loop. That
+//! the empty case needs no code is the proof the harness is separable from the
+//! engine.</code></pre>
+  <span class="src">crates/harness/src/lib.rs — module doc</span>
+
+  <p>
+    The empty case is visible in <code>config check</code> as a hash and a byte
+    count, and it says so in words rather than leaving a reader to recognise the
+    SHA-256 of the empty string.
+  </p>
+
+<pre><code><span class="c">$ emma config check      # .claude/ holding only a settings.json</span>
+flavor         claude
+persona        (none)
+instructions   e3b0c44298fc1c14 (0 bytes, empty harness)
+config         fd13f35ed476c2f7</code></pre>
+  <span class="chip cert">certified</span>: release binary at <code>62ab9c3</code>, scratch harness, 2026-08-16. The same four lines with an empty <code>.emma/config.json</code> report <code>44136fa355b3678a</code> for <code>config</code>, which is the hash of <code>{}</code>.
+
+  <h2 id="load">One function reads all of it</h2>
+
+  <p>
+    <code>load_selecting</code> is the whole of loading. It branches on the
+    flavour once, at the top, to get five values out of the spine file, and then
+    every later step is flavour-independent. Reading it is the fastest way to
+    see what order things happen in and which failures are fatal.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>Harness::load_selecting</code>, the flavour branch</p>
+<pre><code>        let (spine, raw, hook_defs, status_block, permission_block) = match flavor {
+            Flavor::Emma =&gt; {
+                let raw = read_if_present(&amp;spine_path)?;
+                let spine: Spine = if raw.trim().is_empty() {
+                    Spine::default()
+                } else {
+                    serde_json::from_str(&amp;raw)
+                        .with_context(|| format!("{} is malformed", spine_path.display()))?
+                };
+                let hooks = spine.hooks.clone();
+                let status = spine.status_line.clone();
+                let permissions = spine.permissions.clone();
+                (spine, raw, hooks, status, permissions)
+            }
+            Flavor::Claude =&gt; {
+                let (mut settings, raw) = claude::Settings::read(&amp;root)?;
+                // Taken before the hooks block is consumed, and separately from
+                // it: a status line that cannot be resolved must not be able to
+                // stop a hook from resolving, or the other way round. The
+                // permissions block is taken on the same rule and for the same
+                // reason — one unreadable key must not cost another.
+                let status = settings.status_line.take();
+                let permissions = std::mem::take(&amp;mut settings.permissions);
+                let hooks = settings.into_hook_defs(&amp;root)?;
+                (Spine::default(), raw, hooks, status, permissions)
+            }
+        };</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>Harness::load_selecting</code></span>
+
+  <p>
+    The three keys are taken apart before any of them is resolved. Ordering it
+    that way is the difference between one bad key costing its own feature and
+    one bad key costing the other two.
+  </p>
+
+  <p>
+    Then the one place in the whole crate that catches an error and keeps going:
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>Harness::load_selecting</code>, the status line</p>
+<pre><code>        // Never `?`. A hook that will not resolve stops the boot because a
+        // policy the operator believes they have is worse than none; the bottom
+        // row of the screen is decoration, and refusing to start over it would
+        // be an outage. The sentence is kept and shown instead.
+        let (status_line, status_line_note) = match StatusLine::resolve(&amp;root, status_block) {
+            Ok(found) =&gt; (found, None),
+            Err(why) =&gt; (
+                None,
+                Some(format!(
+                    "{}: {why}. The built-in status line is being drawn instead.",
+                    spine_path.display()
+                )),
+            ),
+        };</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>Harness::load_selecting</code>; crates/harness/src/statusline.rs — module doc</span>
+
+  <div class="note warn">
+    <span class="h">That sentence is not reachable from <code>emma config check</code></span>
+    <p>
+      <code>config_check</code> prints the hooks, the agents, the commands, the
+      permissions and the notes attached to each. It never calls
+      <code>status_line_note()</code>, and <code>main</code> reaches the call
+      that does roughly 280 lines after the <code>ConfigCheck</code> arm has
+      already returned. So a <code>statusLine</code> Emma refused is invisible to
+      the one command whose stated job is answering why something did not happen.
+    </p>
+    <p>
+      <span class="chip cert">certified</span>: a scratch <code>.claude/</code>
+      whose <code>settings.json</code> asks for
+      <code>{"type":"command","command":"jq -r .model.display_name"}</code>
+      produces a full, ordinary <code>config check</code> report with no mention
+      of the status line at all. Repeat it with any command string containing a
+      space. The note does reach an interactive run through
+      <code>Term::warn</code> at <code>main.rs</code>'s status-line block;
+      <span class="chip unv">unverified</span> that it is legible there, because
+      nothing in this session drew a frame. Settle it by starting Emma in that
+      scratch directory and reading the lines above the first prompt.
+    </p>
+  </div>
+
+  <h2 id="prompt">The prompt is concatenation, and that is a property</h2>
+
+  <p>
+    The standing instructions are assembled from a fixed list of files, in a
+    fixed order, with nothing trimmed, normalised or re-wrapped. With one file
+    present the assembled prompt is that file's bytes. That is what makes a
+    prompt hash comparable across a refactor and therefore worth logging.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>assemble</code>, the doc</p>
+<pre><code>/// Fixed order, shared first, absent files skipped, and **nothing trimmed or
+/// re-wrapped** — so with one file present the assembled text is that file's
+/// bytes. That is what makes a prompt hash comparable across a refactor.
+///
+/// `.emma/`: `_shared/rules.md`, `_shared/business.md`, `&lt;persona&gt;/rules.md`,
+/// `&lt;persona&gt;/soul.md`. A persona file cannot remove a shared rule, because
+/// assembly is plain concatenation — the shared text is still there for a
+/// reviewer to see. Overriding `_shared` is a review on `_shared`. It is a
+/// review discipline, not an enforcement mechanism.
+///
+/// `.claude/`: the project's `CLAUDE.md` (beside the directory, where Claude
+/// Code puts it), then `.claude/CLAUDE.md`, then the selected agent's body.
+/// Same rule, same order-is-fixed property.
+///
+/// Returns the tool allowlist alongside, because in the Claude flavour it is
+/// carried in the same file as the prompt layer and reading that file twice
+/// would be two chances to disagree.</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>assemble</code></span>
+
+  <p>
+    Layers are joined with <code>"\n\n"</code>, and an existing-but-empty file is
+    skipped rather than contributing a blank separator, which is what keeps the
+    single-file case byte-exact.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>read_layer</code>, <code>read_if_present</code></p>
+<pre><code>/// A file that exists but is empty is skipped, so it cannot contribute a stray
+/// blank-line separator to the assembled bytes.
+fn read_layer(path: &amp;Path) -&gt; Result&lt;Option&lt;String&gt;&gt; {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    Ok((!text.is_empty()).then_some(text))
+}</code></pre>
+<pre><code>fn read_if_present(path: &amp;Path) -&gt; Result&lt;String&gt; {
+    if !path.is_file() {
+        return Ok(String::new());
+    }
+    std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))
+}</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>read_layer</code>, <code>read_if_present</code></span>
+
+  <p>
+    Two things outside the prompt do get adjusted, and the module doc names both
+    so that "nothing is trimmed" is not read wider than it is: a skill body is
+    taken from after the frontmatter with leading whitespace stripped, and a
+    command body is trimmed at both ends. Neither is always-on prompt text.
+    A skill body arrives only when the model loads it, and a command body is text
+    a person typed a <code>/name</code> to summon. Both are
+    <a href="config-skills.html">on the skills page</a>.
+  </p>
+
+  <h2 id="hash">What is hashed, and why it is truncated</h2>
+
+  <p>
+    Three digests appear in <code>config check</code> and in the startup log:
+    <code>instructions</code> over the assembled prompt, <code>config</code> over
+    the raw bytes of the spine file, and one per hook and per skill. All of them
+    come from one six-line module.
+  </p>
+
+  <p class="faint">crates/harness/src/hash.rs · the whole file, minus its uses</p>
+<pre><code>//! One digest function, used for every hash the harness reports.
+//!
+//! Kept here rather than pulled from a shared crate because it is six lines and
+//! a shared crate would be a dependency edge bought for six lines. The
+//! truncation to sixteen hex characters is not security — nothing here
+//! authenticates — it is so a digest fits in a log line a human reads.
+//!
+//! `short` is what the rest of the crate calls, and the only caller of
+//! `sha256_hex` in this workspace; the untruncated form is exposed beside it so
+//! that wanting the whole digest never means reaching for a second sha2.
+
+pub fn sha256_hex(input: &amp;str) -&gt; String {
+    let mut h = Sha256::new();
+    h.update(input.as_bytes());
+    format!("{:x}", h.finalize())
+}
+
+/// The short form that appears in snapshots and logs.
+pub fn short(input: &amp;str) -&gt; String {
+    sha256_hex(input)[..16].to_string()
+}</code></pre>
+  <span class="src">crates/harness/src/hash.rs</span>
+
+  <p>
+    <code>config_hash</code> is taken over <code>raw</code>, the file's bytes,
+    rather than over the parsed <code>Spine</code>. Reformatting the JSON changes
+    it and re-ordering two keys changes it, which is the behaviour a reader
+    wants from a line that answers "is this the same configuration file as
+    yesterday".
+    <span class="chip cert">certified</span>: an empty <code>.emma/config.json</code>
+    containing <code>{}</code> reports <code>config 44136fa355b3678a</code>,
+    which is <code>sha256("{}")[..16]</code>; this repository's own
+    <code>config.json</code> reports <code>edd1817c1861d002</code>.
+  </p>
+
+  <h2 id="value">What the loop is given</h2>
+
+  <p>
+    Everything above ends in one struct, and the discipline the crate exists to
+    enforce is what is <em>not</em> on it. The loop never reads a file, never
+    learns which layer a sentence came from, and never branches on
+    configuration.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>Harness</code></p>
+<pre><code>/// What the loop consumes. Everything here is already decided.
+#[derive(Debug)]
+pub struct Harness {
+    pub root: PathBuf,
+    pub flavor: Flavor,
+    /// `None` is the empty-harness boot, not an error.
+    pub persona: Option&lt;String&gt;,
+    /// The assembled system prompt, byte-exact. Empty when there is nothing to
+    /// assemble.
+    pub instructions: String,
+    pub config_hash: String,
+    skills: Vec&lt;SkillDef&gt;,
+    commands: BTreeMap&lt;String, String&gt;,
+    hooks: Vec&lt;ResolvedHook&gt;,
+    tools: Option&lt;Vec&lt;String&gt;&gt;,
+    agents: Vec&lt;AgentDef&gt;,
+    agent_notes: Vec&lt;String&gt;,
+    /// The configured status-line program, when one resolved.
+    status_line: Option&lt;StatusLine&gt;,
+    /// Why there is not one, when configuration asked for something Emma could
+    /// not honour. A sentence rather than a boot failure — see `statusline.rs`.
+    status_line_note: Option&lt;String&gt;,
+    /// Project-scope permission rules, still as strings. See the region above
+    /// for why they are not parsed here.
+    permissions: Vec&lt;PermissionEntry&gt;,
+}</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>Harness</code></span>
+
+  <p>
+    Five fields are public and eight are private behind accessors, and the split
+    tracks whether the loop needs the value or only a view of it. The accessors
+    are one-liners with one exception each way: <code>select_tools</code>
+    consumes a registry and is <a href="config-spine.html#tools">on the spine
+    page</a>, and <code>expand_command</code> does the whole of command
+    expansion and is <a href="config-skills.html#commands">on the skills page</a>.
+    <code>instructions_hash</code>, <code>is_empty</code>, <code>skills</code>,
+    <code>skill</code>, <code>skill_names</code>, <code>tools</code>,
+    <code>agent_types</code>, <code>agent_notes</code>,
+    <code>command_names</code>, <code>status_line</code>,
+    <code>status_line_note</code>, <code>permissions</code> and
+    <code>permissions_file</code> are getters and nothing more.
+    <code>run_hooks</code> and <code>on_user_prompt</code> forward into
+    <code>hooks.rs</code> and are <a href="consent-hooks.html">Consent &amp;
+    permissions</a>.
+  </p>
+
+  <h2 id="snapshot">The snapshot, and the two things it refuses to carry</h2>
+
+  <p>
+    <code>snapshot</code> is what startup logs and what <code>config check</code>
+    prints from. It carries identity and never content.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>Harness::snapshot</code></p>
+<pre><code>    /// What startup logs and a `config check` prints: identity only. A snapshot
+    /// carrying prompt text would be a second copy to drift.
+    pub fn snapshot(&amp;self) -&gt; serde_json::Value {
+        let hooks: Vec&lt;_&gt; = self.hooks.iter().map(ResolvedHook::identity).collect();
+        let skills: Vec&lt;_&gt; = (self.skills.iter())
+            .map(|s| serde_json::json!({ "name": s.name, "hash": s.hash }))
+            .collect();</code></pre>
+<pre><code>            // The rule text and the list it is in, never a resolved verdict: the
+            // question a reader has is "what is written down", and a snapshot
+            // that showed conclusions would be a second copy of the matcher to
+            // drift away from the first.
+            "permissions": self.permissions.iter().map(|p| {
+                serde_json::json!({ "rule": p.rule, "kind": p.kind.word(),
+                                    "source": p.source.display().to_string() })
+            }).collect::&lt;Vec&lt;_&gt;&gt;(),
+            // Identity of the program, never its text — the same rule a hook
+            // follows, and for the same reason: a log that records a name
+            // cannot answer "was this the program that ran".
+            "status_line": self.status_line.as_ref().map(StatusLine::identity),</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>Harness::snapshot</code></span>
+
+  <p>
+    A hook and a status line are recorded as a path plus a hash of the file's
+    contents, so a log line can answer "was this the program that ran" rather
+    than only "what was it called". A permission rule is recorded as the string
+    and the list it was in, never as a verdict, because a verdict in the snapshot
+    would be a second implementation of the matcher.
+  </p>
+
+  <h2 id="notverified">What this page did not settle</h2>
+
+  <ul class="body">
+    <li>
+      <strong>The interactive status-line note.</strong> The defect above is
+      certified only in its negative half: <code>config check</code> prints
+      nothing. Whether <code>Term::warn</code> shows the sentence legibly in a
+      frame, and whether it survives the first repaint, was not looked at.
+      <span class="chip unv">unverified</span>. Settle it by starting Emma in a
+      directory whose <code>settings.json</code> names a shell-string status line
+      and reading the lines above the first prompt.
+    </li>
+    <li>
+      <strong>Prompt assembly under <code>.emma/</code>.</strong> The four-layer
+      order is quoted from <code>assemble</code>'s doc and this repository's own
+      harness has one persona with one file, so the ordering of
+      <code>_shared</code> against a persona's own layers was never exercised
+      here.
+      <span class="chip unv">unverified</span>. Settle it by putting distinct
+      text in all four files and comparing <code>instructions</code>'s byte count
+      and hash against the concatenation.
+    </li>
+    <li>
+      <strong>Startup logging of the snapshot.</strong> This page says
+      <code>snapshot</code> is what startup logs. That is read off its doc
+      comment and off <code>config_check</code>'s use of it; no session JSONL was
+      opened to confirm the shape that lands there.
+      <span class="chip unv">unverified</span>. Settle it by grepping a session
+      log for <code>instructions_hash</code>.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · this page covers <code>Harness</code>,
+    <code>load_selecting</code>, <code>assemble</code>, <code>read_layer</code>,
+    <code>read_if_present</code>, <code>snapshot</code> and the whole of
+    <code>crates/harness/src/hash.rs</code> ·
+    keys are <a href="config-spine.html">the spine</a> ·
+    contract: <code>docs/CONTRACT.md</code>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

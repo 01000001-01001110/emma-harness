@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>resolve_tools · Delegation · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav here" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<h1>resolve_tools, and the default that surprises people</h1>
+
+  <nav class="chapter">
+    <a class="up" href="delegation.html">Delegation</a>
+    <a href="delegation-nest.html">The nested run</a>
+    <a href="delegation-serialised.html">One at a time</a>
+    <a href="delegation-definitions.html">Agent definitions</a>
+    <span class="now">resolve_tools</span>
+    <a href="delegation-brief.html">The brief</a>
+    <a href="delegation-footer.html">The footer</a>
+    <a href="delegation-budgets.html">Budgets &amp; spend</a>
+    <a href="delegation-agents-cmd.html">emma agents</a>
+  </nav>
+
+  <p class="lede">
+    An agent file that names no <code>tools</code> key inherits every candidate
+    tool this build registers, <code>Write</code>, <code>Edit</code> and
+    <code>Bash</code> included. So do <code>tools: []</code> and
+    <code>tools: ""</code>. The design note for this feature specified a fixed
+    read-only child registry instead, and that version never shipped.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — resolve_tools; crates/harness/src/claude.rs — Tools::allowlist</span>
+
+  <h2 id="fn">The function</h2>
+
+<pre><code><span class="c">/// The tools one agent file resolves to, and the names that matched nothing.</span>
+fn resolve_tools(def: &amp;AgentDef, candidates: &amp;[Arc&lt;dyn Tool&gt;]) -&gt; (Registry, Vec&lt;String&gt;) {
+    let mut registry = Registry::new();
+    let Some(wanted) = def.tools.as_deref() else {
+        <span class="c">// Absent — and, deliberately, empty — means inherit. See</span>
+        <span class="c">// `claude::Tools::allowlist`, which is where that ruling is argued.</span>
+        for tool in candidates {
+            registry.register(tool.clone());
+        }
+        return (registry, Vec::new());
+    };
+    let mut dropped = Vec::new();
+    for want in wanted {
+        if !candidates
+            .iter()
+            .any(|t| t.name().eq_ignore_ascii_case(want))
+        {
+            dropped.push(want.clone());
+        }
+    }
+    <span class="c">// Registry order rather than the file's order, for the reason</span>
+    <span class="c">// `select_tools` gives: the tool schema rides in the cached prompt prefix,</span>
+    <span class="c">// so the bytes must not depend on how somebody typed a list.</span>
+    for tool in candidates {
+        if wanted.iter().any(|w| w.eq_ignore_ascii_case(tool.name())) {
+            registry.register(tool.clone());
+        }
+    }
+    (registry, dropped)
+}</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — resolve_tools, quoted entire</span>
+
+  <p>
+    Three behaviours, and each is a decision somebody could have made the other
+    way. <code>None</code> registers every candidate and reports nothing dropped.
+    A present list is walked twice: once to collect the names that matched no
+    candidate, once to register. The registration walk iterates
+    <em>candidates</em> rather than the file's list, so the registry's order
+    wins over the file's, because the tool schema rides in the cached prompt
+    prefix and the bytes must not depend on how somebody typed a list.
+  </p>
+
+  <p>
+    Matching is <code>eq_ignore_ascii_case</code> on both walks.
+    <span class="chip cert">certified</span> 14 of the 90 files in the library on
+    this machine spell their tools <code>read</code>, <code>write</code>,
+    <code>edit</code>; re-counted today by parsing each file's
+    <code>tools:</code> block. Emma's own tool names differ by more than case, so
+    nothing becomes ambiguous under the looser comparison.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — resolve_tools; ~/.claude/agents/</span>
+
+  <h2 id="inherit">Why absent means inherit</h2>
+
+  <p>
+    The ruling is argued one crate away, in <code>Tools::allowlist</code>, and
+    <code>resolve_tools</code> cites it rather than restating it.
+    <code>tools:</code> with no value parses as YAML null and never reaches the
+    function; <code>tools: []</code> and <code>tools: ""</code> do, and under
+    Emma's own rules an empty allowlist means no tools at all. In Claude Code an
+    absent <code>tools</code> means inherit everything, and a present-but-empty
+    one is the same statement written differently: nobody writes
+    <code>tools: []</code> meaning "this agent may do nothing". So all three
+    collapse to <code>None</code>, and <code>None</code> is the caller's signal
+    to inherit.
+  </p>
+  <span class="src">crates/harness/src/claude.rs — Tools::allowlist</span>
+
+  <div class="note warn">
+    <span class="h">The design said read-only. The code went the other way.</span>
+    <p>
+      <code>notes/design-subagents-mechanism.md</code> §5 specifies a fixed,
+      read-only child registry — <code>Read</code>, <code>Glob</code>,
+      <code>Grep</code> and no more — and its closing "what I could not resolve"
+      list recommends that as the default. The interface note took the same
+      position. Neither shipped. The registry is per agent type, built from the
+      file's <code>tools</code> list, and an absent or empty list inherits the
+      writers. That design note carries a dated header saying so, which is what
+      keeps the refuted version legible as refuted rather than inviting it back.
+    </p>
+    <span class="src">notes/design-subagents-mechanism.md — header, §5, "What I could not resolve"</span>
+  </div>
+
+  <h2 id="bounds">What bounds it, and what does not</h2>
+
+  <p>
+    Two things bound the permissive default. The <a href="consent.html">approval
+    gate</a> is shared, so a sub's <code>Write</code> or <code>Bash</code> asks
+    the same question at the same keyboard the parent's would. And the persona's
+    own allowlist is applied to the candidate list <strong>before</strong> any
+    agent type is resolved, so an agent type cannot become a route to a tool the
+    operator excluded from this run.
+  </p>
+
+  <p>
+    What does not bound it: nothing in the file format makes the permissive
+    reading visible. A file with no <code>tools:</code> line looks like a file
+    nobody has configured, and it is a file that can write.
+  </p>
+
+  <h2 id="new">Where the filter is applied</h2>
+
+  <p>
+    <code>Delegate::new</code> is the whole of construction: filter the
+    candidates by persona, resolve each definition, note what was dropped, refuse
+    a type left with nothing, compose the instructions, and build the
+    description. It answers <code>None</code> when nothing survived, which is the
+    same ruling <code>Skill::new</code> makes: offering a capability that cannot
+    work is a trap with a description attached.
+  </p>
+
+<pre><code>    <span class="c">/// Resolve the agent files against this binary's tools, or answer `None`.</span>
+    <span class="c">///</span>
+    <span class="c">/// `None` when nothing survived resolution, and it is the same ruling</span>
+    <span class="c">/// `Skill::new` makes: offering a capability that cannot work is a trap with</span>
+    <span class="c">/// a description attached. The notes say what was dropped and why, because a</span>
+    <span class="c">/// catalogue quietly shorter than the directory is the gap nobody notices</span>
+    <span class="c">/// until the model cannot find an agent that is plainly there.</span>
+    <span class="c">///</span>
+    <span class="c">/// **Unknown tool names are filtered, not fatal, and this diverges from</span>
+    <span class="c">/// `Harness::select_tools` deliberately.** A persona's list is the</span>
+    <span class="c">/// operator's own boot-time choice and a typo in it is worth refusing to</span>
+    <span class="c">/// start over. An agent library is ninety files somebody accumulated for a</span>
+    <span class="c">/// different program: measured against a real one, its files name</span>
+    <span class="c">/// `TodoWrite`, `Task`, `repl`, `artifacts` and `brave_web_search`, none of</span>
+    <span class="c">/// which this binary registers, and bailing would mean Emma does not start</span>
+    <span class="c">/// in that directory at all — a rule that fires on correct configuration is</span>
+    <span class="c">/// an outage, not a safety property.</span>
+    <span class="c">///</span>
+    <span class="c">/// Matching is case-insensitive first, because 14 of those files spell them</span>
+    <span class="c">/// `read`, `write`, `edit`. Emma's tool names differ by more than case, so</span>
+    <span class="c">/// nothing becomes ambiguous.</span>
+    pub fn new(
+        nest: Nest,
+        defs: &amp;[AgentDef],
+        available: &amp;[Arc&lt;dyn Tool&gt;],
+        persona_allowed: Option&lt;&amp;[String]&gt;,
+        provider_for: &amp;ProviderFor,
+    ) -&gt; (Option&lt;Self&gt;, Vec&lt;String&gt;) {
+        let mut notes = Vec::new();
+        <span class="c">// The persona's allowlist applies first and applies to everything: an</span>
+        <span class="c">// agent type must not be a route to a tool the operator excluded from</span>
+        <span class="c">// this run. `select_tools` will apply the same list to the parent's</span>
+        <span class="c">// registry a moment from now; this is the same filter, one level down.</span>
+        let candidates: Vec&lt;Arc&lt;dyn Tool&gt;&gt; = available
+            .iter()
+            .filter(|t| match persona_allowed {
+                Some(allowed) =&gt; allowed.iter().any(|a| a == t.name()),
+                None =&gt; true,
+            })
+            .cloned()
+            .collect();
+
+        let mut types = BTreeMap::new();
+        for def in defs {
+            let (tools, dropped) = resolve_tools(def, &amp;candidates);
+            if !dropped.is_empty() {
+                notes.push(format!(
+                    "agent `{}`: this build has no {} — the rest of its tools were kept",
+                    def.name,
+                    dropped.join(", ")
+                ));
+            }
+            if tools.names().is_empty() {
+                notes.push(format!(
+                    "agent `{}` named no tool this build registers, so it could not do \
+                     anything — not offered",
+                    def.name
+                ));
+                continue;
+            }
+            debug_assert!(
+                !tools.names().contains(&amp;NAME),
+                "the child registry contains {NAME}: recursion is prevented by this registry \
+                 not containing it, so a future edit that builds it from the parent's has \
+                 removed the only guard"
+            );
+            let instructions = match def.instructions.trim().is_empty() {
+                true =&gt; nest.harness.instructions.clone(),
+                false =&gt; format!("{}\n\n{}", nest.harness.instructions, def.instructions)
+                    .trim_start()
+                    .to_string(),
+            };
+            types.insert(
+                def.name.clone(),
+                AgentType {
+                    name: def.name.clone(),
+                    description: def.description.clone(),
+                    instructions,
+                    tools,
+                    provider: provider_for(def.model.as_deref()),
+                    max_iterations: def.max_turns.unwrap_or(SUB_ITERATIONS),
+                    max_tokens: def.max_tokens,
+                },
+            );
+        }
+        if types.is_empty() {
+            return (None, notes);
+        }
+        let description = describe(&amp;types);
+        (
+            Some(Self {
+                nest,
+                types,
+                description,
+                permit: Semaphore::new(1),
+                seq: AtomicU64::new(0),
+            }),
+            notes,
+        )
+    }</code></pre>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::new, quoted entire</span>
+
+  <p>
+    Unknown tool names are filtered rather than fatal, and that diverges from
+    <code>Harness::select_tools</code>, which refuses to start over a name it
+    does not recognise. The difference is who wrote the list. A persona's list is
+    the operator's own boot-time choice. An agent library is ninety files
+    somebody accumulated for a different program: measured against a real one,
+    its files name <code>TodoWrite</code>, <code>Task</code>, <code>repl</code>,
+    <code>artifacts</code> and <code>brave_web_search</code>, none of which this
+    binary registers, and bailing would mean Emma does not start in that
+    directory at all.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::new; crates/harness/src/lib.rs — Harness::select_tools</span>
+
+  <p>
+    Two notes come out of the loop and both name the agent. The first says which
+    tools this build has no answer for and that the rest were kept; the second
+    says a type named nothing this build registers and is not offered at all.
+    They reach the operator through <code>emma config check</code> and the
+    startup banner, which is what stops a catalogue quietly shorter than the
+    directory.
+  </p>
+
+  <h2 id="untested">Neither branch has a test</h2>
+
+  <p>
+    <span class="chip unv">unverified</span> The tests module's own region
+    comment says it covers "how an agent file's tool list resolves against a
+    build that does not have all of it", and no such test is in the file: the ten
+    unit tests are all <code>Facts</code> and <code>exit_status</code>. Every
+    integration test in <code>tests/delegate.rs</code> passes an explicit
+    <code>Some(vec![…])</code> through its <code>agent_type</code> helper, so the
+    inherit branch, the one that hands a subagent <code>Bash</code>, is exercised
+    by nothing at all.
+  </p>
+  <span class="src">crates/emma/src/delegate.rs — the tests region comment; crates/emma/tests/delegate.rs — agent_type</span>
+
+  <p>
+    <em>What would settle it:</em> two unit tests over
+    <code>resolve_tools</code>. One with <code>tools: None</code>, asserting the
+    returned registry names every candidate and <code>dropped</code> is empty.
+    One with a list mixing a known name, a known name in the wrong case and an
+    unknown name, asserting the first two are registered in registry order and
+    the third is the only entry in <code>dropped</code>. Both are pure functions
+    over an <code>AgentDef</code> and a slice, so neither needs a loop, a
+    provider or a temporary directory.
+  </p>
+
+  <p>
+    <span class="chip cert">certified</span> The gap is countable rather than
+    asserted: <code>grep -c "resolve_tools" crates/emma/src/delegate.rs</code>
+    returns 2, the definition and its one call site in
+    <code>Delegate::new</code>, and neither is inside <code>mod tests</code>.
+  </p>
+
+  <h2 id="unsettled">What is not settled here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> Both branches, as above. This is
+      the least-covered code on any page in this chapter, and the untested branch
+      is the one that grants <code>Write</code>, <code>Edit</code> and
+      <code>Bash</code>.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> The claim that the persona filter
+      runs before agent types are resolved is read off the order of statements in
+      <code>Delegate::new</code> and the order of calls in <code>main.rs</code>.
+      No test passes a <code>persona_allowed</code> that excludes a tool an agent
+      file asks for. <em>What would settle it:</em> a
+      <code>Delegate::new</code> call with
+      <code>Some(&amp;["Read".into()])</code> and an agent file naming
+      <code>Bash</code>, asserting <code>Bash</code> is in <code>dropped</code>
+      rather than in the registry.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> The <code>debug_assert</code>
+      guarding recursion is compiled out of release builds, so on a shipped
+      binary the guarantee rests entirely on the construction order and on the
+      behavioural test described in
+      <a href="delegation-serialised.html#recursion">One at a time</a>.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · read at commit <code>62ab9c3</code> ·
+    <code>crates/emma/src/delegate.rs</code> ·
+    <code>crates/harness/src/claude.rs</code> ·
+    <code>notes/design-subagents-mechanism.md</code> ·
+    <a href="delegation.html">back to the chapter</a>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

@@ -53,7 +53,7 @@
 <main>
 <div class="col">
 
-  <p class="eyebrow">Doing work</p>
+<p class="eyebrow">Doing work</p>
   <h1>Delegation</h1>
 
   <p class="lede">
@@ -72,888 +72,123 @@
     <div><span class="chip unv">unverified</span> <span>believed, not checked</span></div>
   </div>
 
-  <h2 id="what">What a subagent is</h2>
+  <h2 id="shape">The shape of it</h2>
 
   <p>
-    <code>Delegate</code> is an ordinary <code>Tool</code>, and the loop does not
+    <code>Delegate</code> is an ordinary <code>Tool</code> and the loop does not
     know it exists. Nothing in <code>agent.rs</code> branches on a tool's name,
     on <code>ToolError::kind</code>, or on exit status, and that holds here too:
-    everything nesting needs (the shared token meter, the namespaced log, the
-    subordinate terminal) is a value passed into <code>Setup</code>, not a
-    branch inside it. It lives in <code>crates/emma/src/</code> rather than
-    <code>tools/</code> because a tool that runs the loop needs
-    <code>Agent</code>, <code>Setup</code>, <code>Approvals</code>,
-    <code>SessionLog</code> and <code>Term</code>, and putting it under
-    <code>tools/</code> inverts the dependency into a cycle Cargo refuses.
+    everything nesting needs, the shared token meter, the namespaced log, the
+    subordinate terminal, is a value passed into <code>Setup</code> rather than
+    a branch inside the loop.
   </p>
   <span class="src">crates/emma/src/delegate.rs — module doc; crates/emma/src/agent.rs</span>
 
   <p>
-    It is not called <code>Task</code>. <code>TaskCreate</code>,
-    <code>TaskGet</code>, <code>TaskList</code> and <code>TaskUpdate</code>
-    already exist, and a fifth <code>Task</code> collides three times: in the
-    model's tool list, where a nearest-neighbour mistake costs a whole subagent
-    rather than a checkbox; in <code>hooks.rs</code>, where a
-    <code>Task.*</code> matcher written to guard delegation would also guard
-    every checkbox tick; and beside <code>approval::EXEMPT</code>, which is a
-    <code>const &amp;[&amp;str]</code> one careless edit from exempting
-    delegation from the gate.
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — module doc; crates/emma/src/approval.rs — EXEMPT</span>
-
-  <h3>What the child borrows, and what it gets of its own</h3>
-
-  <div class="tw">
-  <table>
-    <thead><tr><th>Thing</th><th>Shared or new</th><th>Why</th></tr></thead>
-    <tbody>
-      <tr><td><code>Approvals</code>, with both grant sets</td><td>shared</td><td>a host approved once stays approved, and a sub-approval reaches the same keyboard</td></tr>
-      <tr><td><code>SessionLog</code></td><td>shared file, <code>sub</code> prefix and a stamp of <code>sub_id</code>, <code>parent_turn_id</code>, <code>agent</code></td><td>one <code>grep</code> still answers what this session did</td></tr>
-      <tr><td><code>Interrupt</code></td><td>shared</td><td>one Ctrl-C stops both loops, in the right order</td></tr>
-      <tr><td><code>Harness</code>, <code>cwd</code></td><td>shared</td><td>hooks and the working directory are the project's</td></tr>
-      <tr><td><code>Spend</code></td><td>a child meter that charges the parent's</td><td>one goal, one meter: the same integer, not a convention</td></tr>
-      <tr><td><code>Term</code></td><td><code>subordinate()</code>, which shares the frame and stdin, swallows the four status-meter calls and the assistant prose, and keeps the approval prompt</td><td>a nested run driving the process's meters would re-point them at the sub's caps; a prompt the user cannot see is the same defect as one they cannot evaluate</td></tr>
-      <tr><td>registry, instructions, budgets, <code>DoneCheck</code>, provider</td><td>its own</td><td>they are what an agent type <em>is</em></td></tr>
-    </tbody>
-  </table>
-  </div>
-  <span class="src">crates/emma/src/delegate.rs — Nest; crates/emma/src/session.rs — SessionLog::subagent; crates/emma/src/term.rs — Term::subordinate</span>
-
-  <p>
-    The subordinate terminal is the reason a delegation does not stream. Its
-    <code>Mode</code> is <code>Batch</code>: a delegation reports once at the
-    end, and a subordinate <code>Term</code> swallows prose anyway, so streaming
-    it would be bytes nobody reads. The sub's tool lines, notes and approval
-    prompts still land on the parent's transcript as ordinary lines.
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — invoke; crates/emma/src/term.rs — Term::subordinate</span>
-
-  <h3 id="serialised">One at a time, and what that costs</h3>
-
-  <p>
-    A one-permit <code>Semaphore</code> is acquired before the nested run starts
-    and held for all of it. Two subagents would mean two approval prompts racing
-    for one stdin: <code>decide</code> calls <code>prompt_header</code> and only
-    then <code>ask</code>, so two concurrent approvals interleave as A's header,
-    B's header, A's question, B's question: a screen showing B's evidence above
-    A's question, with one <code>y</code> going to whichever holds the mutex.
-    <code>LineSource::drain</code> makes it worse rather than better: the second
-    prompt discards the line typed in answer to the first.
-    <span class="chip test">tested</span>
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — module doc, Delegate::permit; crates/emma/tests/delegate.rs::two_delegations_never_overlap</span>
-
-  <p>
-    That test launches two <code>invoke</code> calls with <code>tokio::join!</code>
-    and asserts the peak number of subagents inside the tool surface is 1.
-    Removing the <code>acquire()</code> makes it fail. The test's own comment
-    records that an earlier version of it passed with the permit removed, because
-    its script let the second run finish without ever entering the shared tool.
-    The fix was two tool calls at the front of the script rather than one.
-  </p>
-  <span class="src">crates/emma/tests/delegate.rs::two_delegations_never_overlap</span>
-
-  <p>
-    The cost is the obvious one: there is no fan-out. Ten independent questions
-    are ten delegations end to end, each paying the next one's startup, and the
-    wall clock is their sum. The permit buys nothing today: <code>run_goal</code>
-    already awaits its tool calls one at a time, and what it is for is a future
-    parallelisation of that loop failing loudly rather than quietly. The nearest
-    prior art resolved the same collision the other way: goose refuses to run
-    subagents at all unless approval is switched off, which is the escape hatch
-    Emma's design rules out.
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — module doc</span>
-
-  <p>
-    Recursion is prevented by construction rather than by a depth counter. Each
-    agent type's registry is built from tools resolved <strong>before
-    <code>Delegate</code> exists</strong>, so there is nothing to forget at a call
-    site. An inner model that asks for <code>Delegate</code> gets the ordinary
-    <code>no_such_tool</code> observation and routes around it, including when
-    the agent file names <code>Delegate</code> explicitly.
-    <span class="chip test">tested</span>
-  </p>
-  <span class="src">crates/emma/src/main.rs — the construction order; crates/emma/src/delegate.rs — Delegate::new (debug_assert); crates/emma/tests/delegate.rs::an_agent_type_cannot_be_given_the_delegate_tool_even_by_name</span>
-
-  <h2 id="boundary">The boundary, and the two things that cross it</h2>
-
-  <p>
-    The parent sees one message. What makes that message checkable is that a
-    second thing arrives beside it, from a different place: the parent composes
-    the footer itself, out of the records the loop wrote while the child ran, and
-    the child's own words are never an input to it.
-  </p>
-
-  <figure>
-    <div class="figwrap">
-      <svg viewBox="0 0 780 400" role="img"
-           aria-label="The parent-child boundary. Delegate::invoke sends a brief into a nested run that has its own registry, budget and instructions. Two things come back from different places: the sub's final message, written by its model, and the loop's own records of every tool call, result, denial and ending. Facts::from reads only the records and builds the footer. The tool result the parent's model reads is the message with the footer under it.">
-        <defs>
-          <marker id="del-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
-          </marker>
-          <marker id="del-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
-          </marker>
-        </defs>
-
-        <rect class="ghost" x="300" y="14" width="466" height="182" rx="4"/>
-        <text class="tiny" x="312" y="32">the nested run — its own registry, instructions, budgets, DoneCheck, provider</text>
-
-        <rect class="hl" x="14" y="52" width="248" height="40" rx="3"/>
-        <text class="lbl" x="28" y="70">parent loop</text>
-        <text class="sm" x="28" y="86">Delegate::invoke</text>
-
-        <path class="edge" d="M262 72 L326 72" marker-end="url(#del-arrow)"/>
-        <text class="tiny" x="266" y="62">brief()</text>
-
-        <rect class="box" x="326" y="46" width="416" height="36" rx="3"/>
-        <text class="lbl" x="340" y="69">Agent::run_goal — the second loop</text>
-
-        <path class="edge" d="M430 82 L430 108" marker-end="url(#del-arrow)"/>
-        <path class="edge-hl" d="M640 82 L640 108" marker-end="url(#del-arrow-hl)"/>
-
-        <rect class="box" x="326" y="110" width="192" height="66" rx="3"/>
-        <text class="lbl" x="338" y="132">its model writes</text>
-        <text class="sm" x="338" y="150">the final message</text>
-        <text class="tiny" x="338" y="166">outcome.text</text>
-
-        <rect class="hl" x="546" y="110" width="196" height="66" rx="3"/>
-        <text class="lbl" x="558" y="132">the loop writes</text>
-        <text class="sm" x="558" y="150">sub.tool_call · tool_result</text>
-        <text class="sm" x="558" y="164">sub.denied · goal_finished</text>
-
-        <path class="edge" d="M422 176 L422 232 L150 232 L150 268" marker-end="url(#del-arrow)"/>
-        <text class="tiny" x="172" y="226">the agent's own account — carried verbatim, never parsed</text>
-
-        <path class="edge-hl" d="M644 176 L644 300 L568 300" marker-end="url(#del-arrow-hl)"/>
-
-        <rect class="hl" x="304" y="278" width="264" height="44" rx="3"/>
-        <text class="lbl" x="318" y="299">Facts::from(records)</text>
-        <text class="sm" x="318" y="315">→ footer()</text>
-
-        <path class="edge-hl" d="M304 300 L270 300" marker-end="url(#del-arrow-hl)"/>
-
-        <rect class="box" x="14" y="270" width="252" height="60" rx="3"/>
-        <text class="lbl" x="28" y="292">one tool_result</text>
-        <text class="sm" x="28" y="310">the message, then the footer</text>
-        <text class="sm" x="28" y="324">under it</text>
-
-        <path class="edge" d="M140 330 L140 356" marker-end="url(#del-arrow)"/>
-        <text class="tiny" x="14" y="374">the parent's model — which read neither the transcript nor a file the sub opened</text>
-      </svg>
-    </div>
-    <figcaption>
-      Drawn from <code>Delegate::invoke</code>. The pink path is the one that
-      makes the design work: <code>SessionLog::subagent</code> returns a log
-      <em>and</em> a shared <code>Records</code> vector, <code>Facts::from</code>
-      reads that vector and nothing else, and <code>footer()</code> is built from
-      <code>Facts</code>. <code>outcome.text</code> reaches the body by string
-      concatenation and is not an input to any category.
-    </figcaption>
-  </figure>
-
-  <h2 id="definitions">Agent definitions</h2>
-
-  <p>
-    A delegation target is a file: <code>&lt;harness&gt;/agents/&lt;name&gt;.md</code>,
-    in Claude Code's format, unchanged. The same file can also be selected as a
-    persona by a human at startup, and the two uses have opposite selection
-    rules. A persona is chosen by the operator; an <code>AgentDef</code> is
-    chosen by the model from a closed list. So they have separate accessors and
-    no function takes a boolean saying which it is.
-  </p>
-  <span class="src">crates/harness/src/lib.rs — the agent-types region, Harness::agent_types, Harness::persona</span>
-
-  <h3>Frontmatter</h3>
-
-  <div class="tw">
-  <table>
-    <thead><tr><th>Key</th><th>Read as</th><th>Notes</th></tr></thead>
-    <tbody>
-      <tr><td><code>name</code></td><td>checked against the file stem</td><td>the <strong>stem wins</strong>; a disagreement is noted out loud, not resolved quietly</td></tr>
-      <tr><td><code>description</code></td><td>what the calling model reads to choose</td><td>the one field a target cannot do without: no description, not offered</td></tr>
-      <tr><td><code>tools</code></td><td>a YAML list or one comma-separated string</td><td>absent, <code>[]</code> and <code>""</code> all mean <a href="#resolve">inherit</a></td></tr>
-      <tr><td><code>model</code></td><td>a per-agent model id</td><td>honoured; a file saying <code>model:</code> something and running on another model is a lie the user cannot see</td></tr>
-      <tr><td><code>max_turns</code> / <code>maxTurns</code></td><td>model calls for the sub-run</td><td>both spellings; default 20</td></tr>
-      <tr><td><code>max_tokens</code> / <code>maxTokens</code></td><td>a ceiling, clamped further by <a href="#budgets">the share</a></td><td>both spellings</td></tr>
-      <tr><td>anything else</td><td>ignored</td><td><code>AgentFront</code> must never gain <code>deny_unknown_fields</code>, because <code>category</code>, <code>version</code> and <code>color</code> are everywhere in real files</td></tr>
-    </tbody>
-  </table>
-  </div>
-  <span class="src">crates/harness/src/claude.rs — AgentFront, Tools, load_agents</span>
-
-  <p>
-    The file stem is the name because it is the only one of the two guaranteed
-    unique: two files may declare the same <code>name:</code>, and a catalogue
-    keyed on a value that can collide silently drops one of them. Measured
-    against a real 90-file library, twelve files declare a <code>name</code> that
-    disagrees with their stem, and every one of them is reported by
-    <code>emma config check</code> rather than resolved in silence.
-    <span class="chip cert">certified</span>, run below.
-  </p>
-  <span class="src">crates/harness/src/claude.rs — agents, load_agents</span>
-
-  <h3 id="discovery">Where they are found</h3>
-
-  <p>
-    There is no user scope for agent files, and this is the part most likely to
-    surprise someone arriving from Claude Code. <code>discover</code> walks up
-    from the working directory like git looking for <code>.git</code>; the
-    nearest ancestor wins, and within one directory <code>.emma/</code> beats
-    <code>.claude/</code> outright. The loser is ignored, never merged.
-    <strong>At the home directory the rules change: <code>~/.claude/</code> is
-    skipped so completely that it never reaches the list of places searched.</strong>
-    It is another program's user-scope configuration: global permissions, global
-    agents, global skills. Adopting it would hand Emma standing instructions
-    from a directory the user never associated with this project. Only
-    <code>agents/</code> directly under the harness root is read, and only
-    top-level <code>*.md</code>: a real library has subdirectories (23 of them,
-    205 files, on the machine this was measured against) and walking into them
-    would flatten two namespaces into one where a collision is resolved by
-    directory iteration order.
-  </p>
-  <span class="src">crates/harness/src/lib.rs — discover_in; crates/harness/src/claude.rs — agents</span>
-
-  <p>
-    Permission rules are the exception that proves the rule: those <em>are</em>
-    read from <code>~/.claude/settings.json</code>, and only the
-    <code>deny</code> list. See <a href="consent.html#rules">Consent &amp;
-    permissions</a> for why. Nothing else in the user's home reaches a run.
+    One delegation runs at a time, held by a one-permit semaphore, because two
+    approval prompts racing for one stdin is a screen showing the second call's
+    evidence above the first call's question. A subagent cannot delegate, and
+    that is a property of construction order rather than a depth counter: child
+    registries are built from tools resolved before <code>Delegate</code>
+    exists.
   </p>
 
   <p>
-    Nothing here fails the boot. A persona is the operator's own choice at
-    startup and a bad one is their mistake; an agent library is a directory
-    somebody accumulated over months, and refusing to start because one file in
-    ninety has no <code>description</code> is an outage. The dropped files are
-    named instead, at startup and in <code>emma config check</code>.
+    The part that makes any of it checkable is the footer. A subagent's
+    deliverable is by construction a description of work rather than the work,
+    and asking it to cite what it read produces an assertion that looks like a
+    verification. So the parent composes the record itself, out of what the loop
+    wrote while the child ran, and the child's own words are never an input to
+    it. There is a test whose scripted subagent claims in fluent prose to have
+    read two files and run the test suite while calling no tool at all; the
+    footer under that claim says <code>files touched: none</code>.
   </p>
-  <span class="src">crates/harness/src/claude.rs — load_agents</span>
-
-  <div class="note good">
-    <span class="h">What 90 real agent files resolve to</span>
-    <p>
-      The 90-file library on the owner's machine was copied into a scratch
-      harness and <code>emma config check</code> was run against it with
-      <code>EMMA_ROOT</code>. <strong>84 of 90 are offered for delegation.</strong>
-      Four are dropped for having no <code>description</code>
-      (<code>market-trends-analyst</code>, <code>report-index-builder</code>,
-      <code>research-analyst</code>, <code>solution-researcher</code>), and two
-      for frontmatter that will not parse:
-      <code>performance-specialist</code> and <code>understanding-planner</code>,
-      both <em>"mapping values are not allowed in this context"</em>, which is an
-      unquoted colon in a description. Twelve more are offered under their stem
-      with a note that their <code>name:</code> disagrees.
-      <span class="chip cert">certified</span>
-    </p>
-    <span class="src">crates/emma/src/commands.rs — config check; crates/harness/src/claude.rs — load_agents</span>
-  </div>
-
-  <h3 id="crlf">The CRLF defect, and why nothing failed</h3>
+  <span class="src">crates/emma/src/delegate.rs — the footer region; crates/emma/tests/delegate.rs::the_footer_is_the_harnesss_record_and_not_the_subagents_account</span>
 
   <p>
-    <code>split_agent</code> required <code>---\n</code> exactly. Every CRLF
-    agent file therefore fell through to "this file has no frontmatter": its
-    <code>tools</code> was ignored, its <code>description</code> was invisible so
-    it was never offered, and its <code>name:</code>, <code>model:</code> and
-    <code>category:</code> lines were handed to the model as standing
-    instructions. Nothing errored. The file simply did not mean what it said.
+    Roughly half of the tool's own description is about when <em>not</em> to call
+    it. The measured direction of the effect on code-centric tasks is negative,
+    and the description says so in its own words: reach for it when the answer is
+    small and the evidence is large, and never delegate the check that verifies
+    your own work.
   </p>
-  <span class="src">crates/harness/src/claude.rs — split_agent, open_frontmatter</span>
+  <span class="src">crates/emma/src/delegate.rs — DESCRIPTION</span>
 
-  <p>
-    Counted from disk on the machine this was found on: of the 90 files in
-    <code>~/.claude/agents/</code>, <strong>86 contain CRLF and 4 do not</strong>,
-    so under the old opener exactly 4 of 90 parsed, and 86 were silently
-    inert. <span class="chip cert">certified</span> The count was re-run against
-    the real directory while writing this page.
-  </p>
-  <span class="src">crates/harness/src/claude.rs — split_agent (its own doc records 90 out of 90 measured as CRLF; the byte count on that directory today is 86)</span>
+  <h2 id="pages">The pages</h2>
 
-  <p>
-    What kept it invisible was the error handling, not the parser. The YAML
-    result was <code>unwrap_or_default()</code>, so an unreadable frontmatter and
-    an absent one produced the same empty value and neither said anything.
-    <code>split_agent</code> now returns the YAML error as a third element, and
-    <code>load_agents</code> turns it into a note naming the file, which is what
-    surfaced the two malformed files in the run above. A leading byte-order mark
-    is stripped for the same reason: it is the same class of silent miss, arriving
-    from the same editors.
-  </p>
-  <span class="src">crates/harness/src/claude.rs — split_agent, load_agents</span>
-
-  <h2 id="resolve">resolve_tools, and the default that surprises people</h2>
-
-  <p>
-    An agent file that names no <code>tools</code> key <strong>inherits every
-    candidate tool, <code>Write</code>, <code>Edit</code> and <code>Bash</code>
-    included</strong>. So do <code>tools: []</code> and <code>tools: ""</code>:
-    all three collapse to <code>None</code>, and <code>None</code> is the signal
-    to inherit. The argument is in <code>Tools::allowlist</code>: in Claude Code
-    an absent <code>tools</code> means inherit everything, a present-but-empty one
-    is the same statement written differently, and nobody writes
-    <code>tools: []</code> meaning "this agent may do nothing". An agent that
-    really should have no tools is expressed by not registering it.
-  </p>
-  <span class="src">crates/harness/src/claude.rs — Tools::allowlist; crates/emma/src/delegate.rs — resolve_tools</span>
-
-  <div class="note warn">
-    <span class="h">The design said read-only. The code went the other way.</span>
-    <p>
-      <code>notes/design-subagents-mechanism.md</code> §5 specifies a <em>fixed,
-      read-only</em> child registry (<code>Read</code>, <code>Glob</code>,
-      <code>Grep</code> and no more), and its closing "what I could not resolve"
-      list recommends that as the default. The interface note took the same
-      position. Neither shipped. The registry is per
-      agent type, built from the file's <code>tools</code> list, and an absent or
-      empty list inherits the writers. The design note carries a dated header
-      saying so, so the refuted version is legible as refuted.
-    </p>
-    <p>
-      What bounds it: the <a href="consent.html">approval gate</a> is shared, so
-      a sub's <code>Write</code> or <code>Bash</code> asks the same question at
-      the same keyboard the parent's would; and the persona's own allowlist is
-      applied to the candidate list <em>before</em> any agent type is resolved,
-      so an agent type cannot be a route to a tool the operator excluded from
-      this run. What does not bound it: nothing in the file format makes the
-      permissive reading visible. A file with no <code>tools:</code> line looks
-      like a file that has not been configured, and it is a file that can write.
-    </p>
-    <span class="src">notes/design-subagents-mechanism.md — header, §5, "What I could not resolve"; crates/emma/src/delegate.rs — Delegate::new, resolve_tools</span>
-  </div>
-
-  <p>
-    When a file <em>does</em> name tools, unknown names are filtered rather than
-    fatal, which diverges from <code>Harness::select_tools</code>.
-    A persona's list is the operator's own boot-time choice and a typo in it is
-    worth refusing to start over. An agent library is ninety files accumulated
-    for a different program: measured against a real one, its files name
-    <code>TodoWrite</code>, <code>Task</code>, <code>repl</code>,
-    <code>artifacts</code> and <code>brave_web_search</code>, none of which this
-    binary registers, and bailing would mean Emma does not start in that
-    directory at all. What is dropped is said out loud, per agent, in the notes
-    <code>emma config check</code> prints. A type left with no tools at all is not
-    offered.
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — Delegate::new, resolve_tools</span>
-
-  <p>
-    Matching is case-insensitive, because 14 of those 90 files spell the tools
-    <code>read</code>, <code>write</code>, <code>edit</code>; Emma's tool names
-    differ by more than case, so nothing becomes ambiguous. Registration follows
-    <em>registry</em> order rather than the file's, because the tool schema rides
-    in the cached prompt prefix and the bytes must not depend on how somebody
-    typed a list.
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — resolve_tools</span>
-
-  <p>
-    <strong>Neither half of <code>resolve_tools</code> has a test.</strong>
-    <span class="chip unv">unverified</span> The tests module's own region
-    comment says it covers "how an agent file's tool list resolves against a
-    build that does not have all of it", and no such test is in the file: the
-    ten unit tests are all <code>Facts</code> and <code>exit_status</code>. Every
-    integration test passes an explicit <code>Some(vec![…])</code>, so the
-    inherit path, the one that hands a subagent <code>Bash</code>, is exercised
-    by nothing. <em>What would settle it:</em> two unit tests over
-    <code>resolve_tools</code>, one asserting that an <code>AgentDef</code> with
-    <code>tools: None</code> resolves to every candidate by name, one asserting
-    that an unknown name is reported in <code>dropped</code> while the known ones
-    survive.
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — tests region comment; crates/emma/tests/delegate.rs</span>
-
-  <h2 id="brief">The brief, and what the sub is told to deliver</h2>
-
-  <p>
-    The tool takes four arguments: <code>agent</code> (a closed enum of the
-    resolved names), <code>task</code>, <code>context</code> (an array of short
-    facts) and <code>deliver</code>. <code>agent</code> and <code>task</code> are
-    required, and the enum is enforced in <code>validate_args</code> as well as
-    declared to the model, because a provider that ignores an enum must not turn
-    this into something that runs a prompt nobody wrote. A free-text system
-    prompt or
-    a free-text tool list would make <code>Delegate</code> a
-    self-modifying-prompt tool with a friendly description.
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — input_schema, validate_args</span>
-
-  <p>
-    <code>brief()</code> composes the sub's opening message: the task, then
-    <em>"What the agent that sent you already knows:"</em> and the context as a
-    bullet list, then <em>"Your answer must contain: …"</em> from
-    <code>deliver</code>. It is composed here rather than in
-    <code>Goal::opening</code>, which is the user's words and nothing else and
-    has to stay that way. This text is not a user's words: it is a work order
-    the calling model wrote.
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — brief, Goal::opening</span>
-
-  <p>
-    The sub runs under <code>SubagentClaim</code>, the second
-    <code>DoneCheck</code> in the codebase and the seam <code>goal.rs</code> left
-    for it. Its <code>contract()</code> is <code>MarkerClaim</code>'s plus the one
-    thing a subagent has to be told that a parent does not: that its final
-    message is the only thing that reaches the caller, and that it will be shown a
-    record of the files read and commands run, so a claim that disagrees with the
-    record is worse than no claim. Its <code>verdict()</code> is
-    <code>MarkerClaim</code>'s and nothing more: a check that also judged the
-    answer against <code>deliver</code> would be a heuristic in a mechanism's
-    clothes, and a model that learns running a command ends the loop will run one.
-    The place a <code>deliver</code> gets checked is the footer, by the parent.
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — SubagentClaim; crates/emma/src/goal.rs — DoneCheck, MarkerClaim</span>
-
-  <div class="note">
-    <span class="h">deliver is said twice: backlog item 6</span>
-    <p>
-      <code>brief()</code> appends <code>deliver</code> to the sub's opening
-      message, and <code>SubagentClaim::contract()</code> restates it in the
-      system prompt. The contract is cached; the brief is not. Every delegation
-      therefore pays a cache write for a sentence the sub already has, and the
-      fix recorded in <code>notes/improvements.md</code> item 6 is a pure
-      deletion of the restatement, costing duplicate emphasis rather than the
-      deliverable.
-    </p>
-    <p>
-      It is open, and blocked on measurement rather than on design: the item wants
-      a clustering number from real sessions, and <strong>the session corpus holds
-      one <code>delegation</code> record in total.</strong> Delegation is barely
-      used, so "it unblocks itself with use" (the earlier conclusion) was false
-      for the metric this item needs.
-    </p>
-    <span class="src">notes/improvements.md item 6; crates/emma/src/delegate.rs — brief, SubagentClaim::contract</span>
-  </div>
-
-  <h2 id="footer">The footer, which the subagent did not write</h2>
-
-  <p>
-    A subagent's deliverable is a description of work rather than the work. The
-    failure that produces is documented rather than hypothetical, in Claude
-    Code's own tracker: <em>"subagents imply they read file content but
-    demonstrably did not — they infer behavior from filenames, variable names, or
-    comments instead of tracing actual code logic"</em>
-    (anthropics/claude-code#40339, closed as not planned). Requiring the subagent
-    to cite what it read is an improvement and is still an assertion wearing a
-    verification's clothes: a run that hallucinated a conclusion will hallucinate
-    a plausible list of files to go with it.
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — the footer region doc</span>
-
-  <p>
-    So the footer is composed from the records the loop wrote during that run.
-    <code>SessionLog::subagent</code> hands back a log and a shared
-    <code>Records</code> vector; <code>Facts::from</code> takes that vector and
-    takes no text the model produced. Here is one, from a real delegation to a
-    <code>scout</code> agent recorded in the session file on this machine:
-  </p>
-
-  <pre><code>The current stable version of Rust is **1.97.1**, a point release published on
-July 16, 2026, … confirmed via the official Rust Blog announcement at
-blog.rust-lang.org/2026/07/16/Rust-1.97.1/
-
-GOAL COMPLETE
-
-<span class="c">--- what this agent actually did (recorded by the harness, not written by the agent) ---</span>
-ended: done
-files touched: none
-searched for (1):
-  current stable Rust version
-fetched (1):
-  https://blog.rust-lang.org/releases/latest/
-commands run: none
-spent: 3 model calls, 7319 tokens, 12s</code></pre>
-  <span class="src">~/.emma/sessions/sess-1786710409801-39600.jsonl — the <code>tool_result</code> for <code>Delegate</code>, turn-1 <span class="chip cert">certified</span></span>
-
-  <p>
-    Note what the footer discloses that the prose does not. The blog URL the
-    agent cites in its answer is not the URL it fetched: it says
-    <code>/2026/07/16/Rust-1.97.1/</code> and it fetched
-    <code>/releases/latest/</code>. Nothing censors the claim: the sub's account
-    is what the caller asked for, and the record beside it is what makes the
-    difference visible.
-  </p>
-
-  <h3>The ending is the first line</h3>
-
-  <p>
-    <code>Ending::Tokens</code> and <code>Ending::Done</code> leave the same
-    confident final paragraph, and without this line the parent cannot tell a
-    finished run from a truncated one. Anything that is not <code>done</code> or
-    <code>answered</code> also gets a sentence saying to read what follows as
-    partial, and a run with no record of how it stopped says
-    <em>"unknown — no record of how this run stopped"</em> rather than implying
-    success. <span class="chip test">tested</span>
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — Facts::footer; tests::an_ending_that_is_not_done_is_called_out_rather_than_merely_named, tests::a_run_with_no_record_of_its_ending_says_so_rather_than_implying_success</span>
-
-  <h3 id="categories">Every call lands in exactly one category</h3>
-
-  <p>
-    <code>Facts::from</code> probes <em>argument names</em>, not tool names,
-    the same way <code>agent::compact</code> and <code>term::summarise_args</code>
-    already do. This file has no business knowing which tools a build registers,
-    and an agent library names tools that do not exist here at all.
-  </p>
-
-  <div class="tw">
-  <table>
-    <thead><tr><th>Argument seen</th><th>Footer line</th></tr></thead>
-    <tbody>
-      <tr><td><code>file_path</code></td><td><code>files touched</code></td></tr>
-      <tr><td><code>pattern</code></td><td><code>searched for</code></td></tr>
-      <tr><td><code>command</code></td><td><code>commands run</code>, with the exit status from its result</td></tr>
-      <tr><td><code>url</code></td><td><code>fetched</code></td></tr>
-      <tr><td><code>query</code></td><td><code>searched for</code>: a search by another argument name is still a search</td></tr>
-      <tr><td>none of them</td><td><code>other tool calls: Tool ×N</code>, keyed on the tool name the loop recorded</td></tr>
-    </tbody>
-  </table>
-  </div>
-  <span class="src">crates/emma/src/delegate.rs — Facts::from</span>
-
-  <p>
-    The last row is a repair rather than an original property. Keying on argument
-    names means a tool naming its arguments something else falls through every
-    probe, and until the residual existed it fell through into silence. Emma's
-    own <code>WebFetch(url)</code> and <code>WebSearch(query)</code> are among them,
-    which is how five fetches footered as <code>files read: none</code> over
-    <code>5 tool calls</code>: a parent reading a paragraph about five pages, with
-    a record underneath appearing to say nothing was touched. Coarseness is
-    visible and self-correcting: a parent reading <code>other tool calls:
-    Frobnicate ×2</code> knows the record is coarse. Silence is not; it is the
-    footer partly believing the account it exists to check.
-    <span class="chip test">tested</span>
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — the footer region doc; tests::the_arguments_emmas_own_web_tools_use_reach_the_footer, tests::a_call_whose_arguments_match_no_probe_is_named_coarsely_rather_than_dropped</span>
-
-  <p>
-    The invariant is asserted as arithmetic rather than as prose:
-    <code>files + searches + fetched + commands + other == tool_calls</code>,
-    over eight calls with deliberately distinct arguments so that de-duplication
-    cannot hide a missing one. A probe added later that forgets the residual, or a
-    residual that double-counts, breaks it without anybody having to think of the
-    tool it would happen to. A second test asserts the complement: a recognised
-    call is in its own category and <em>not</em> also in the residual, because a
-    parent who reads <code>Read ×3</code> beside three named files learns nothing
-    and doubts both. <span class="chip test">tested</span>
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — tests::every_recorded_call_lands_in_exactly_one_footer_category, tests::a_recognised_call_is_in_its_own_category_and_not_also_in_the_residual</span>
-
-  <p>
-    Lists are capped at 12 items and say so: <code>files touched (30):</code>
-    then <code>… and 18 more</code>, never a cut list presented as a whole one.
-    The residual is the one category that stays quiet when empty: there is nothing
-    to disclose, and <code>other tool calls: none</code> on every footer is noise
-    rather than honesty. <span class="chip test">tested</span>
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — FOOTER_ITEMS, listed; tests::a_long_file_list_is_cut_and_says_it_was</span>
-
-  <h3>Files <em>touched</em>, not files read</h3>
-
-  <p>
-    The word changed because <code>Write</code> and <code>Edit</code> carry
-    <code>file_path</code> too, so a written file has always landed in that list,
-    and under the inherit-everything default above, a subagent with
-    <code>Write</code> is the ordinary case rather than the exotic one. Splitting
-    read from written would need the tool-name knowledge this file has refused;
-    the neutral word costs nothing and stops the over-claim. The JSONL field kept
-    its old name <code>files_read</code>, because <code>emma agents</code> reads
-    these keys and renaming a field to match a rewording breaks a consumer for
-    nothing.
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — Facts::footer, the delegation record</span>
-
-  <h3>An exit status is read only from where Bash puts it</h3>
-
-  <p>
-    <code>Bash</code> writes <code>exit status &lt;n&gt;</code> as the first line
-    of its result content, and <code>exit_status</code> parses that line and
-    nothing else. Prose that merely mentions an exit status, such as
-    <em>"the command exited with status 0"</em> (which is what a model writes),
-    yields <code>None</code>. A footer line reading <code>cargo test → exit
-    101</code> beside a final message reading "the tests pass" is a contradiction
-    the parent can see, and it is the most common lie a coding subagent can tell.
-    <span class="chip test">tested</span>
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — exit_status; tests::an_exit_status_is_read_only_from_where_bash_actually_puts_it, tests::a_commands_exit_status_reaches_the_footer</span>
-
-  <h3 id="mutation">The test the design turns on</h3>
-
-  <p>
-    <code>the_footer_is_the_harnesss_record_and_not_the_subagents_account</code>,
-    in <code>crates/emma/tests/delegate.rs</code>. A scripted subagent is given a
-    <code>Read</code> tool and calls nothing at all, then answers in fluent prose:
-  </p>
-
-  <pre><code>I read src/retry.rs and tests/retry.rs, and ran `cargo test` — exit status 0,
-everything passes.
-
-GOAL COMPLETE</code></pre>
-
-  <p>
-    The test asserts four things. That the sub's tool was called zero times. That
-    the claim reaches the parent <strong>verbatim</strong>: it is not censored,
-    because the subagent's own account is what the caller asked for. That the
-    footer says <code>files touched: none</code> and <code>commands run:
-    none</code>. And that the string <code>cargo test → exit</code> appears
-    nowhere, so the footer has not echoed the model's account of a command back as
-    if it were a record. Compose <code>Facts::from</code> out of
-    <code>outcome.text</code> instead of out of <code>records</code> and it goes
-    red: the two claimed paths appear under <code>files touched</code> and the
-    invented exit status appears under <code>commands run</code>. That is the
-    difference between a record and a claim, and it is the mutation
-    <code>Facts::from</code>'s own doc names.
-    <span class="chip test">tested</span>
-  </p>
-  <span class="src">crates/emma/tests/delegate.rs::the_footer_is_the_harnesss_record_and_not_the_subagents_account; crates/emma/src/delegate.rs — Facts::from</span>
-
-  <div class="note warn">
-    <span class="h">What the footer proves, and what it does not</span>
-    <p>
-      It proves what was looked at, what was run, and how the run ended. It does
-      not prove the conclusion follows from any of it. The worst case of this
-      design is that the footer becomes the thing everyone trusts:
-      <code>done · 14 files · 3 commands</code> reads like verification and is
-      only attendance. It reports counts rather than adjectives for that reason,
-      and nothing anywhere claims the conclusion was checked.
-    </p>
-    <span class="src">crates/emma/src/delegate.rs — the footer region doc</span>
-  </div>
-
-  <h2 id="budgets">Budgets and spend</h2>
-
-  <p>
-    Four constants bound a delegation, and they are constants rather than
-    judgements at the call site because a bound nobody can find is a bound nobody
-    can change.
-  </p>
-
-  <div class="tw">
-  <table>
-    <thead><tr><th>Constant</th><th>Value</th><th>Argument</th></tr></thead>
-    <tbody>
-      <tr><td><code>SUB_ITERATIONS</code></td><td>20</td><td>against the parent's 60. Iterations catch "one cheap tool forever", and an exploration that has not converged in twenty calls is not going to</td></tr>
-      <tr><td><code>SUB_TOKEN_SHARE</code></td><td>2 (half of what remains)</td><td>a subagent that runs away leaves the parent enough to report what happened and finish</td></tr>
-      <tr><td><code>MIN_REMAINING_TOKENS</code></td><td>20,000</td><td>below this a delegation refuses to start, as a <code>tool_result</code> the model can route around: never a missing tool, which would be a capability that silently disappears late in every goal</td></tr>
-      <tr><td><code>SUB_WALL_CLOCK</code></td><td>5 minutes, capped at the parent's</td><td>the parent's clock keeps running and is checked at its next iteration boundary, so a long delegation can overshoot the parent's deadline by up to this</td></tr>
-    </tbody>
-  </table>
-  </div>
-  <span class="src">crates/emma/src/delegate.rs — the bounds region, Delegate::sub_budgets</span>
-
-  <div class="formula">
-    max_tokens = min(file's max_tokens, (parent's cap − spent so far) ÷ 2)
-    <em>and if (parent's cap − spent) &lt; 20,000, the delegation does not start at all</em>
-  </div>
-  <span class="src">crates/emma/src/delegate.rs — Delegate::sub_budgets <span class="chip test">tested</span> — crates/emma/tests/delegate.rs::a_delegation_refuses_to_start_when_the_goal_has_almost_nothing_left</span>
-
-  <p>
-    The sub gets <code>max_kicks: 1</code>. A subagent that has stopped without
-    claiming completion has usually said most of what it found, and the parent
-    gets that text either way. A second and third nudge spends the parent's
-    budget arguing with a run the parent cannot see. <code>max_context</code> is
-    the parent's number: the sub compacts its own chapters independently, against
-    the same numeric cap.
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — Delegate::sub_budgets; notes/design-subagents-mechanism.md — header</span>
-
-  <h3>How the spend charges the parent</h3>
-
-  <p>
-    <code>Spend::child</code> makes a meter of its own that also charges its
-    parent. <code>add</code> walks up the chain: the parent is charged first,
-    then the child's own counter, so the sub's spend appears in both numbers at
-    once. <code>set</code> does not walk: it is the per-goal reset, and it is
-    local. That asymmetry is the whole point. If <code>set</code> propagated, a
-    nested goal starting would zero the process's meter; if <code>add</code> did
-    not, a delegation would be a way to spend past the parent's cap. A
-    100-token parent call, a 7,000-token sub call, a 300-token sub answer and a
-    100-token parent answer come to 7,500 on the parent's meter and 7,500 in the
-    goal's outcome. <span class="chip test">tested</span>
-    <a href="loop.html#budgets">The agent loop</a> covers <code>Spend</code>,
-    the three different token numbers and what a resume restores.
-  </p>
-  <span class="src">crates/emma/src/agent.rs — Spend::child, Spend::add, Spend::set; crates/emma/tests/delegate.rs::a_subagents_spend_charges_the_parents_meter</span>
-
-  <p>
-    A resumed parent adds back what its delegations spent from the
-    <code>cost_tokens</code> field of the parent-level <code>delegation</code>
-    record, since a resume that dropped it would come back with a meter missing
-    everything its subagents spent. <span class="chip test">tested</span>
-  </p>
-  <span class="src">crates/emma/tests/delegate.rs::a_resumed_parent_gets_back_what_its_delegations_spent; crates/emma/src/delegate.rs — the delegation record</span>
-
-  <h3>What the gate sees</h3>
-
-  <p>
-    <code>Delegate</code> declares <code>read_only: false</code>
-    unconditionally, including when the agent type's tools are entirely
-    read-only: the tool set is configuration, and a <code>meta()</code> varying
-    with it would mean the gate's answer depends on a file the reviewer is not
-    looking at. The prompt shows the agent type and the first twelve lines of the
-    brief. <code>reaches_network: false</code> is the arguable one, since a
-    delegation certainly calls the model, and it is <code>Bash</code>'s precedent: egress is
-    gated at the leaf, where the host is known, in the same process against the
-    same <code>hosts_allowed</code> set, not at the delegation, where the host is
-    not known. Declaring <code>true</code> would produce a prompt to approve
-    <code>api.anthropic.com</code> whose only possible answer is yes, which is how
-    an operator learns to answer without reading.
-    <span class="chip test">tested</span>
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — Tool::meta; crates/emma/src/approval.rs — preview, BRIEF_LINES; crates/emma/tests/delegate.rs::delegation_is_gated_and_the_prompt_shows_the_brief</span>
-
-  <h3>How a delegation ends, from the parent's side</h3>
-
-  <div class="tw">
-  <table>
-    <thead><tr><th>Sub's ending</th><th>What the parent gets</th></tr></thead>
-    <tbody>
-      <tr><td><code>Done</code>, <code>Answered</code></td><td>a successful <code>ToolOutcome</code>: the message, the footer, and a one-line <code>display</code></td></tr>
-      <tr><td><code>Provider(e)</code></td><td><code>ToolError::Unavailable</code>: the machinery, not the work</td></tr>
-      <tr><td>anything else</td><td><code>ToolError::Failed</code> <strong>carrying the text and the footer anyway</strong>, plus "re-issuing the same brief will hit the same wall"</td></tr>
-    </tbody>
-  </table>
-  </div>
-  <span class="src">crates/emma/src/delegate.rs — invoke</span>
-
-  <p>
-    The third row is the loop's governing rule applied without exception: a
-    failed delegation is an observation the model routes around, not an abort.
-    Throwing the partial answer away to return a clean error would throw away
-    everything that was paid for. <span class="chip test">tested</span>
-  </p>
-  <span class="src">crates/emma/tests/delegate.rs::a_subagent_that_ran_out_of_budget_is_not_reported_as_a_finished_one</span>
-
-  <h2 id="agents-cmd">emma agents</h2>
-
-  <p>
-    <code>emma agents</code> reads every <code>*.jsonl</code> in the session
-    directory, keeps the <code>delegation</code> records, and prints what each
-    agent type has actually cost. It calls no model, loads no harness and needs
-    no API key: it returns from <code>main</code> before the runtime is even
-    built, which is what lets it answer when the thing being investigated is why a
-    run will not start. <span class="chip cert">certified</span>, run below from
-    a directory with no harness above it.
-  </p>
-  <span class="src">crates/emma/src/main.rs — Command::Agents; crates/emma/src/commands.rs — agents</span>
-
-  <pre><code><span class="c">$ emma agents</span>
-sessions       100
-delegations    1
-
-agent                     runs  finished  tokens/run   s/run   calls   files    cmds  denied
-scout                        1       1/1        7319      12     3.0     0.0     0.0       0
-
-  scout: done 1
-
-most recent
-  sess-1786710409801-39600  scout  done  7319 tokens  12s  Find out what the current stable version of the Rust progra…
-
-Every number here was recorded by the harness from each sub-run's own log, not
-reported by the agent. The full traffic is in the same files, under `sub.*` records.</code></pre>
-  <span class="src">run on this machine, 2026-08-16 <span class="chip cert">certified</span></span>
-
-  <p>
-    The endings are spelled out on their own line rather than left as
-    <code>finished 6/8</code>, because "the other two" being out of budget and
-    "the other two" being interrupted are different problems with different
-    fixes: one is a number to raise and the other is not. Failed commands are
-    counted separately for the same reason: <code>3 of its 9 commands exited
-    non-zero</code> is the sentence that says an agent type is reporting success
-    over red output.
-  </p>
-  <span class="src">crates/emma/src/commands.rs — agents, Tally</span>
-
-  <div class="note warn">
-    <span class="h">Two defects in this table, found while writing this page</span>
-    <p>
-      <strong>The column headed <code>calls</code> prints model calls, not tool
-      calls.</strong> It writes <code>per(t.iterations)</code>, while
-      <code>t.tool_calls</code> is accumulated from the record and then printed
-      nowhere. Certified against the run above: the JSONL record for that
-      delegation reads <code>"tool_calls": 2</code> and
-      <code>"iterations": 3</code>, and the table shows <code>3.0</code> under
-      <code>calls</code>. <span class="chip cert">certified</span>
-    </p>
-    <p>
-      <strong>The table cannot see a search or a fetch.</strong> Its columns are
-      files, commands and denials. The same run made one <code>WebSearch</code>
-      and one <code>WebFetch</code>, visible in the footer, and
-      <code>fetched: 1</code> is in the JSONL record, and the table renders it as
-      <code>files 0.0 cmds 0.0</code>. <code>other_tool_calls</code> is in the
-      record and unread here too, and <em>searches are not in the parent-level
-      record at all</em>, so no amount of reading the record would recover them.
-      This is the silence the footer's residual category was built to end,
-      reappearing one layer up. <span class="chip cert">certified</span>
-    </p>
-    <p>
-      Neither is fixed here. Both are reported to
-      <a href="roadmap.html">Roadmap &amp; defects</a>.
-    </p>
-    <span class="src">crates/emma/src/commands.rs — agents; crates/emma/src/delegate.rs — the delegation record; ~/.emma/sessions/sess-1786710409801-39600.jsonl</span>
-  </div>
-
-  <h2 id="when">When the model is told not to reach for this</h2>
-
-  <p>
-    Roughly half the tool's description is about when <em>not</em> to call it.
-    The measured direction of the effect on code-centric tasks is negative:
-    49–54% single-agent against 10% and 3% multi-agent on SWE-bench Lite, at nine
-    times the spend, and Anthropic's own multi-agent write-up carves coding out
-    of its own headline result. A feature nobody calls costs a paragraph of
-    prompt; a feature called for two-file questions costs a multiple of every
-    goal. The description's own rule: reach for it when the answer is small and
-    the evidence is large, and never delegate the check that verifies your own
-    work. Run that yourself and read its exit status.
-  </p>
-  <span class="src">crates/emma/src/delegate.rs — DESCRIPTION and its doc comment</span>
-
-  <p>
-    That description also promises the reader "read the ending first", and the
-    footer was built in the same commit as the promise. A description advertising
-    something that does not exist is the highest-traffic lie available in this
-    system.
-  </p>
-
-  <h2 id="unverified">What is not verified</h2>
-
-  <ul class="body">
+  <ol class="contents">
     <li>
-      <strong>The inherit-everything default has no test.</strong>
-      <span class="chip unv">unverified</span> Every test passes an explicit tool
-      list. <em>What would settle it:</em> the two <code>resolve_tools</code>
-      unit tests described <a href="#resolve">above</a>.
+      <a href="delegation-nest.html">The nested run</a>
+      <span>What a child borrows from its parent and what it gets of its own,
+      why an agent type that names no model holds no client, and the terminal
+      that swallows four calls but not the approval prompt.</span>
     </li>
     <li>
-      <strong>The 90-file measurements are one library on one machine.</strong>
-      <span class="chip unv">unverified</span> as a general claim. The counts on
-      this page (90 files, 86 with CRLF, 84 offered, 6 dropped, 12 name
-      disagreements) were re-run today against
-      <code>~/.claude/agents/</code>. <code>split_agent</code>'s own doc records
-      90 of 90 as CRLF when it was written and the directory reads 86 today, so
-      one of the two is stale by construction; the byte count is the one that was
-      re-run. <em>What would settle the wider claim:</em> nothing available here,
-      since it is a statement about other people's directories.
+      <a href="delegation-serialised.html">One at a time, and no recursion</a>
+      <span>A one-permit semaphore, the interleaved prompt it prevents, the test
+      that once passed with the permit removed, and why the recursion guard is
+      an ordering rather than a check.</span>
     </li>
     <li>
-      <strong>The semaphore's screen-level failure has never been observed.</strong>
-      <span class="chip unv">unverified</span> The interleaving described in
-      <a href="#serialised">One at a time</a> is an argument from
-      <code>decide</code>'s call order, not something anybody has watched happen;
-      the test asserts a counter, not a terminal. <em>What would settle it:</em>
-      removing the permit and driving two delegations that both hit the approval
-      gate against a real console, and reading the scrollback.
+      <a href="delegation-definitions.html">Agent definitions</a>
+      <span>Four frontmatter keys, two spellings of a tool list, the CRLF defect
+      that left 4 of 90 real files parsing while nothing errored, and where the
+      files are looked for.</span>
     </li>
     <li>
-      <strong>Delegation has one recorded use.</strong> <span class="chip cert">certified</span>
-      One <code>delegation</code> record across 100 session files. Every claim
-      here about how delegation behaves in practice rests on tests and on that
-      one run.
+      <a href="delegation-tools.html">resolve_tools</a>
+      <span>Why an agent file naming no tools inherits <code>Write</code>,
+      <code>Edit</code> and <code>Bash</code>, what the design note specified
+      instead, and the branch that has no test.</span>
     </li>
-  </ul>
-  <span class="src">notes/improvements.md item 6; crates/emma/src/delegate.rs; crates/harness/src/claude.rs</span>
+    <li>
+      <a href="delegation-brief.html">The brief and the contract</a>
+      <span>Four arguments, one closed enum enforced three times, the work order
+      the sub opens on, and the clause appended to the system contract that a
+      parent never sees.</span>
+    </li>
+    <li>
+      <a href="delegation-footer.html">The footer</a>
+      <span>The record the subagent did not write: five argument probes, a
+      residual that makes a call describable coarsely but never invisible, and a
+      real footer that contradicts the answer above it.</span>
+    </li>
+    <li>
+      <a href="delegation-budgets.html">Budgets and spend</a>
+      <span>Four constants, the half-of-what-remains share, the refusal below
+      20,000 tokens, and the meter whose <code>add</code> walks up to the parent
+      while its <code>set</code> stays local.</span>
+    </li>
+    <li>
+      <a href="delegation-agents-cmd.html">emma agents</a>
+      <span>The command that answers whether an agent type is worth using, its
+      live output, and the two columns that report the wrong number or nothing
+      at all.</span>
+    </li>
+  </ol>
+
+  <h2 id="state">Where the evidence stands</h2>
+
+  <p>
+    <span class="chip cert">certified</span> Delegation has one recorded use on
+    this machine: <code>emma agents</code> reports
+    <code>delegations 1</code> across 100 session files. Every claim in this
+    chapter about how delegation behaves in practice rests on tests and on that
+    one run, which is worth knowing before reading any of the numbers as
+    typical.
+  </p>
+  <span class="src">target/release/emma.exe agents, 2026-08-16</span>
+
+  <p>
+    <span class="chip unv">unverified</span> The largest unchecked thing here
+    is
+    <a href="delegation-tools.html#untested">resolve_tools</a>: neither of its
+    two branches has a test, and the untested one is the branch that hands a
+    subagent <code>Write</code>, <code>Edit</code> and <code>Bash</code>. Two
+    defects in <a href="delegation-agents-cmd.html#defects">emma agents</a> and
+    one malformed note string in <code>load_agents</code> are described where
+    they live and reported to <a href="roadmap.html">Roadmap &amp; defects</a>.
+  </p>
 
   <footer class="pg">
     <a href="tools.html">← Tools</a> ·

@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The spine · Configuration · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav here" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/harness/src/lib.rs · hooks.rs · statusline.rs</p>
+  <h1>The spine: <code>.emma/config.json</code>, every key</h1>
+
+  <nav class="chapter">
+      <a class="up" href="config.html">Configuration</a>
+      <a href="config-discovery.html">Discovery</a>
+      <a href="config-files.html">Every file</a>
+      <span class="now">The spine</span>
+      <a href="config-claude.html">Reading <code>.claude/</code></a>
+      <a href="config-skills.html">Skills &amp; commands</a>
+      <a href="config-agents.html">Agents</a>
+      <a href="config-personal.html">Your own files</a>
+      <a href="config-themes.html">Themes</a>
+      <a href="config-notapplied.html">It did not apply</a>
+    </nav>
+
+  <p class="lede">
+    Whichever directory discovery found, exactly one file in it is configuration
+    rather than prompt text. In <code>.emma/</code> that file is
+    <code>config.json</code>, and it is Emma's own format, which is why it is the
+    strictest file in the system: a key Emma does not recognise here can only be
+    a typo, and the typo one attribute buys protection from is a misspelled
+    <code>mathcer</code> that would guard every tool while looking like it
+    worked.
+  </p>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven, and a reader can repeat it: a file, a command, a count</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+    <div><span class="chip test">tested</span> a test that was shown to fail</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <h2 id="keys">Five keys, and a sixth is a load error</h2>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>Spine</code></p>
+<pre><code>/// `deny_unknown_fields` throughout: a typo'd key is a load error, not a
+/// silently ignored setting. A misspelled `mathcer` that quietly matched every
+/// tool is the failure this costs one attribute to prevent.
+///
+/// (`.claude/settings.json` is deliberately *not* strict at its outer level —
+/// it is a foreign format carrying keys Emma has no opinion about. See
+/// `claude.rs`.)
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Spine {
+    #[serde(default)]
+    default_persona: Option&lt;String&gt;,
+    #[serde(default)]
+    personas: BTreeMap&lt;String, PersonaBlock&gt;,
+    #[serde(default)]
+    hooks: BTreeMap&lt;String, HookDef&gt;,
+    /// The same block `.claude/settings.json` spells `statusLine`, so Emma's own
+    /// format can express it too. Deliberately *not* renamed to a prettier
+    /// snake_case spelling: the inner keys are Claude Code's (`type`, `command`,
+    /// `padding`) and a block that had to be re-typed to move between the two
+    /// directories would defeat the reason the feature was implemented.
+    #[serde(default, rename = "statusLine")]
+    status_line: Option&lt;crate::statusline::StatusLineBlock&gt;,
+    /// The same `permissions` block `.claude/settings.json` carries, so a
+    /// project that chose `.emma/` can express standing grants too. Deliberately
+    /// not renamed: the rule strings are Claude Code's and so are the three list
+    /// names, and a block that had to be re-typed to move between the two
+    /// directories would defeat the reason it is read at all.
+    #[serde(default)]
+    permissions: PermissionBlock,
+}</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>Spine</code></span>
+
+  <p>
+    Two of those five keep a foreign spelling. <code>statusLine</code>
+    is camelCase in a file whose other keys are snake_case, and
+    <code>permissions</code> carries Claude Code's three list names and Claude
+    Code's rule strings. Renaming either would mean a block could not be moved
+    between <code>.emma/</code> and <code>.claude/</code> without being re-typed,
+    which is the thing the compatibility work exists to avoid.
+  </p>
+
+  <p>
+    The strictness is visible from a shell, and the error is also the shortest
+    correct answer to "what may go in this file":
+  </p>
+
+<pre><code><span class="c">$ cat .emma/config.json</span>
+{"default_persona":"x","mathcer":"oops"}
+<span class="c">$ emma config check</span>
+Error: …\cfg\t2\.emma\config.json is malformed
+
+Caused by:
+    <span class="w">unknown field `mathcer`, expected one of `default_persona`, `personas`,
+    `hooks`, `statusLine`, `permissions` at line 1 column 32</span></code></pre>
+  <span class="chip cert">certified</span>: release binary at <code>62ab9c3</code>, scratch directory, 2026-08-16, exit code 1, output verbatim apart from eliding the leading path segments.
+
+  <h2 id="personas">Personas</h2>
+
+  <p>
+    A persona is a directory under <code>personas/</code> holding prompt text,
+    and optionally a block in the spine describing it. The block has four fields
+    and one of them decides nothing.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>PersonaBlock</code></p>
+<pre><code>#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersonaBlock {
+    /// Prose for whoever reads the spine. Nothing branches on it.
+    #[serde(default)]
+    #[allow(dead_code)]
+    description: Option&lt;String&gt;,
+    /// A real allowlist. See `Harness::select_tools`.
+    #[serde(default)]
+    tools: Option&lt;Vec&lt;String&gt;&gt;,
+    /// Absent means every skill in the pool; present means exactly these.
+    #[serde(default)]
+    skills: Option&lt;Vec&lt;String&gt;&gt;,
+    #[serde(default)]
+    hooks: Option&lt;Vec&lt;String&gt;&gt;,
+}</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>PersonaBlock</code></span>
+
+  <p>
+    Three of the four are <code>Option</code> of a list, and in each case absent
+    and empty mean different things: absent is "everything", empty is "none". A
+    persona with <code>"hooks": []</code> turns every declared hook off; a
+    persona with no <code>hooks</code> key runs all of them. That reading is the
+    opposite of the one an agent file's <code>tools</code> field gets, which is
+    <a href="config-agents.html#tools">the trap on the agents page</a>, and the
+    difference is that these are Emma's own fields with Emma's own meaning.
+  </p>
+
+  <p>
+    Selection is a human's, at startup, through <code>EMMA_PERSONA</code> or the
+    spine's <code>default_persona</code>. The refusal that follows is the fourth
+    boot state.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>select_persona</code>, the Emma arm</p>
+<pre><code>            available.sort();
+            match chosen {
+                Some(name) if dir.join(&amp;name).is_dir() =&gt; Ok(Some(name)),
+                Some(name) =&gt; bail!(
+                    "{}: persona `{name}` is selected but {} does not exist (have: {})",
+                    spine_path.display(),
+                    dir.join(&amp;name).display(),
+                    available.join(", ")
+                ),
+                // Persona content that nothing selects is the silent-drop case:
+                // the operator wrote a prompt and Emma would have started
+                // without it. An empty harness is deliberate; an unselected one
+                // is an accident.
+                None if !available.is_empty() =&gt; bail!(
+                    "{}: no `default_persona`, but {} contains {}",
+                    spine_path.display(),
+                    dir.display(),
+                    available.join(", ")
+                ),
+                None =&gt; Ok(None),
+            }</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>select_persona</code></span>
+
+<pre><code><span class="c">$ ls .emma/personas          # alpha/, and no default_persona in config.json</span>
+alpha
+<span class="c">$ emma config check</span>
+Error: …\cfg\up\.emma\config.json: no `default_persona`, but …\cfg\up\.emma\personas contains alpha</code></pre>
+  <span class="chip cert">certified</span>: scratch harness, release binary, 2026-08-16. The message names the directory and lists what is in it, which is the whole of what an operator needs to fix it.
+
+  <p>
+    One directory name under <code>personas/</code> is not a persona.
+    <code>_shared</code> is the layer every persona gets first, so it is excluded
+    from the available list and can never be selected: the check is
+    <code>if name != "_shared" &amp;&amp; entry.path().is_dir()</code>, and a
+    file rather than a directory is skipped by the same condition.
+  </p>
+
+  <h2 id="tools">A persona's <code>tools</code> list is a filter</h2>
+
+  <p>
+    This is the third of the four things the crate's module doc lists as not
+    carried over from the design this harness was ported from.
+    There the same field validated that each named tool existed and then removed
+    nothing.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>Harness::select_tools</code></p>
+<pre><code>    /// Apply the allowlist to a registry, consuming it.
+    ///
+    /// **This is a real filter, and in the predecessor it was not.** There the
+    /// same field validated that each named tool existed and then removed nothing —
+    /// four sentences of documentation, three of them warning the reader it was
+    /// not access control. That was survivable because every tool there was a
+    /// read-only search. Emma runs `Bash` and `Write`. An operator who writes
+    /// `"tools": ["Read", "Grep"]` and gets `Bash` anyway has been handed a
+    /// permission boundary that is a comment, at the one place in the system
+    /// where the failure costs them their working tree.
+    ///
+    /// The startup assertion is kept as well: a name the binary does not
+    /// register is a load error here, not a silent narrowing of the allowlist to
+    /// a typo. Both halves matter — filtering without asserting turns `"Bahs"`
+    /// into "no shell for you" with no explanation.
+    ///
+    /// It takes the registry by value so the caller cannot keep the unfiltered
+    /// one around by accident. Getting that wrong is the whole failure this
+    /// method exists to prevent.
+    pub fn select_tools(&amp;self, registry: Registry) -&gt; Result&lt;Registry&gt; {
+        let Some(allowed) = self.tools.as_deref() else {
+            return Ok(registry);
+        };
+        let registered = registry.names();
+        for want in allowed {
+            if !registered.contains(&amp;want.as_str()) {
+                bail!(
+                    "{}: persona names tool `{want}`, which this binary does not \
+                     register (has: {})",
+                    self.root.join(self.flavor.spine_file()).display(),
+                    registered.join(", ")
+                );
+            }
+        }
+        let mut out = Registry::new();
+        // Registry order, not allowlist order: the tool schema rides in the
+        // cached prompt prefix, so the bytes must not depend on how the operator
+        // happened to type the list.
+        for tool in registry.iter() {
+            if allowed.iter().any(|a| a == tool.name()) {
+                out.register(tool.clone());
+            }
+        }
+        Ok(out)
+    }</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>Harness::select_tools</code></span>
+
+  <p>Both halves, from a shell, in the same scratch harness one minute apart:</p>
+
+<pre><code><span class="c">$ cat .emma/config.json</span>
+{"default_persona":"p","personas":{"p":{"tools":["Read","Bahs"]}}}
+<span class="c">$ emma config check</span>
+Error: …\cfg\tl\.emma\config.json: persona names tool `Bahs`, which this binary does not
+register (has: Read, Write, Edit, Glob, Grep, Bash, TaskCreate, TaskGet, TaskList,
+TaskUpdate, FindReferences, GoToDefinition, Hover, DocumentSymbols, WebFetch, WebSearch,
+BrowserOpen, BrowserRead, BrowserAct, BrowserFill, BrowserClose)
+
+<span class="c">$ # …corrected to ["Read","Grep"]:</span>
+<span class="c">$ emma config check | sed -n '7,8p'</span>
+tools          Read, Grep
+tool schema    a9d5576f61f37d0c</code></pre>
+  <span class="chip cert">certified</span>: release binary, 2026-08-16. Twenty-one tools registered, two survive the filter, and the schema hash differs from the unfiltered <code>ce26c5f39467e4f0</code> this repository reports. Line-wrapped for the page; the error is one line.
+
+  <p>
+    The rebuilt registry iterates the original in <em>registry</em> order rather
+    than allowlist order. The tool schema rides in the prompt prefix that the
+    provider caches as an exact byte match, so the order an operator happened to
+    type their list in must not decide the bytes.
+  </p>
+
+  <h2 id="hooks">The <code>hooks</code> block</h2>
+
+  <p>
+    Declaration lives here; running a hook is
+    <a href="consent-hooks.html">Consent &amp; permissions</a>. What the spine
+    accepts is a map of name to five fields, strict like everything else in the
+    file.
+  </p>
+
+  <p class="faint">crates/harness/src/hooks.rs · <code>HookDef</code>, <code>HookEvent</code></p>
+<pre><code>/// `deny_unknown_fields`, like everything in Emma's own spine: a misspelled
+/// `mathcer` that quietly matched every tool is the failure this costs one
+/// attribute to prevent.
+///
+/// `event` is a `String` rather than the enum so that an unimplemented event
+/// name produces our sentence rather than serde's. See `HookEvent::parse`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HookDef {
+    pub(crate) event: String,
+    /// Relative to the root, and must canonicalise to inside `&lt;root&gt;/hooks/`.
+    pub(crate) command: String,
+    #[serde(default)]
+    pub(crate) matcher: Option&lt;String&gt;,
+    #[serde(default)]
+    pub(crate) timeout_ms: Option&lt;u64&gt;,
+    #[serde(default)]
+    pub(crate) text: Option&lt;String&gt;,
+}
+
+/// A closed set with three members. Config attaches commands to dispatch sites;
+/// it can never mint a fourth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum HookEvent {
+    PreToolUse,
+    PostToolUse,
+    /// Once per prompt a person typed, before the goal opens. The only event
+    /// that can add to what the model reads.
+    UserPromptSubmit,
+}</code></pre>
+  <span class="src">crates/harness/src/hooks.rs — <code>HookDef</code>, <code>HookEvent</code></span>
+
+  <p>
+    <code>event</code> is typed as a <code>String</code> and parsed by hand
+    rather than deserialised into the enum, so that a name Emma does not
+    implement produces a sentence about hooks instead of serde's list of three
+    variants.
+  </p>
+
+  <p class="faint">crates/harness/src/hooks.rs · <code>HookEvent::parse</code></p>
+<pre><code>    /// Claude Code implements a larger set — `SessionStart`, `Stop`,
+    /// `PreCompact` and others. Emma implements three, and a config naming one
+    /// of the rest is a **startup error, never a silent skip**: a security hook
+    /// that quietly never runs is worse than no hook, because the operator
+    /// believes they have one. See `notes/claude-code-compatibility.md`.
+    pub fn parse(raw: &amp;str) -&gt; Result&lt;Self&gt; {
+        match raw {
+            "PreToolUse" =&gt; Ok(Self::PreToolUse),
+            "PostToolUse" =&gt; Ok(Self::PostToolUse),
+            "UserPromptSubmit" =&gt; Ok(Self::UserPromptSubmit),
+            other =&gt; bail!(
+                "hook event `{other}` is not implemented by Emma (implemented: {}). \
+                 A hook attached to an event that never fires is a policy the \
+                 operator believes they have; remove it or implement the event",
+                Self::ALL.join(", ")
+            ),
+        }
+    }</code></pre>
+  <span class="src">crates/harness/src/hooks.rs — <code>HookEvent::parse</code>, <code>HookEvent::ALL</code></span>
+
+<pre><code><span class="c">$ cat .claude/settings.json</span>
+{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"hooks/x.sh"}]}]}}
+<span class="c">$ emma config check</span>
+Error: …\cfg\hk\.claude\settings.json: hooks.Stop
+
+Caused by:
+    <span class="w">hook event `Stop` is not implemented by Emma (implemented: PreToolUse, PostToolUse,
+    UserPromptSubmit). A hook attached to an event that never fires is a policy the
+    operator believes they have; remove it or implement the event</span></code></pre>
+  <span class="chip cert">certified</span>: release binary, scratch <code>.claude/</code> with a real executable script in <code>hooks/</code>, 2026-08-16. The refusal happens before the script is looked at.
+
+  <p>
+    Everything else a declared hook must survive happens at load rather than at
+    the moment it is needed, which is what makes the boot the place a broken hook
+    is discovered. <code>resolve</code> checks that a persona did not enable a
+    hook that is not declared, parses the event, containment-checks the path,
+    refuses a matcher on <code>UserPromptSubmit</code>, anchors the matcher
+    regex, hashes the executable, and clamps the timeout.
+  </p>
+
+  <p class="faint">crates/harness/src/hooks.rs · <code>resolve</code>, the matcher rules</p>
+<pre><code>        // A `UserPromptSubmit` hook has no tool name to match, so a matcher on
+        // one is a filter that can never be true. Claude Code ignores the field
+        // here; Emma names it, on the same rule as the unimplemented event — a
+        // hook the operator believes is conditional and which in fact never
+        // fires is worse than one that always does. The empty string is the
+        // exception and is treated as absent: `"matcher": ""` is what a group
+        // written for a tool event looks like when it was copied for this one,
+        // and it asks for nothing.
+        let matcher_text = def.matcher.as_deref().filter(|m| !m.trim().is_empty());</code></pre>
+<pre><code>        let matcher = match &amp;def.matcher {
+            // Only an empty one can have survived the check above, and on this
+            // event it means nothing was asked for.
+            Some(_) if event == HookEvent::UserPromptSubmit =&gt; None,
+            // Anchored: a matcher is matched in full, so `Read` cannot silently
+            // guard `ReadFile` — the near miss that looks like a working policy.
+            Some(m) =&gt; Some(
+                regex::Regex::new(&amp;format!("^(?:{m})$"))
+                    .with_context(|| named(format!("hook `{name}`: `{m}` is not a regex")))?,
+            ),
+            None =&gt; None,
+        };</code></pre>
+  <span class="src">crates/harness/src/hooks.rs — <code>resolve</code></span>
+
+  <p>
+    <code>timeout_ms</code> is what an operator writes and is not what runs. The
+    default is five seconds and config asking for more is silently reduced to ten
+    rather than refused, because the operator asked for a longer gate rather than
+    for a different program.
+  </p>
+
+  <p class="faint">crates/harness/src/hooks.rs · the caps</p>
+<pre><code>const DEFAULT_HOOK_TIMEOUT_MS: u64 = 5_000;
+/// Hook time is spent inside the user's own patience, so the engine caps what
+/// config may ask for. A hook is a gate, not a job runner. Config asking for
+/// more is silently reduced rather than refused: the operator asked for a
+/// longer gate, not for a different program.
+const MAX_HOOK_TIMEOUT_MS: u64 = 10_000;</code></pre>
+  <span class="src">crates/harness/src/hooks.rs — <code>DEFAULT_HOOK_TIMEOUT_MS</code>, <code>MAX_HOOK_TIMEOUT_MS</code>, applied in <code>resolve</code> as <code>.min(MAX_HOOK_TIMEOUT_MS)</code></span>
+
+  <h2 id="contain">Where a configured program may live</h2>
+
+  <p>
+    Both things a spine can point Emma at, a hook and a status line, resolve
+    through the same containment check, and it is the reason <code>command</code>
+    is a relative path rather than anything richer.
+  </p>
+
+  <p class="faint">crates/harness/src/hooks.rs · <code>contain</code></p>
+<pre><code>pub(crate) fn contain(root: &amp;Path, what: &amp;str, command: &amp;str) -&gt; Result&lt;PathBuf, String&gt; {
+    let dir = root
+        .join("hooks")
+        .canonicalize()
+        .map_err(|_| format!("{what} is defined but hooks/ is missing"))?;
+    let path = root
+        .join(command)
+        .canonicalize()
+        .map_err(|_| format!("{what}: no such command `{command}`"))?;
+    if !path.starts_with(&amp;dir) {
+        return Err(format!(
+            "{what} resolves to {}, outside {}",
+            path.display(),
+            dir.display()
+        ));
+    }
+    // Unix only, because there is no executable bit on Windows to consult — a
+    // `.cmd` or `.exe` is runnable by extension.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = std::fs::metadata(&amp;path).map_err(|e| format!("{what}: {e}"))?;
+        if meta.permissions().mode() &amp; 0o111 == 0 {
+            return Err(format!("{what} is not executable"));
+        }
+    }
+    Ok(path)
+}</code></pre>
+  <span class="src">crates/harness/src/hooks.rs — <code>contain</code></span>
+
+  <p>
+    Canonicalising before the prefix test is what makes <code>..</code> useless
+    rather than merely discouraged. The executable-bit check is not the boundary:
+    its own doc says so, and calls it a way of catching the operator who forgot
+    to <code>chmod +x</code> before that surfaces much later as a spawn failure
+    that reads like something else.
+  </p>
+
+  <h2 id="status">The <code>statusLine</code> block</h2>
+
+  <p>
+    Three inner keys, spelled Claude Code's way, and the block itself is
+    permissive where the hooks block beside it is strict.
+  </p>
+
+  <p class="faint">crates/harness/src/statusline.rs · <code>StatusLineBlock</code>, <code>STATUS_TIMEOUT_MS</code></p>
+<pre><code>/// **Permissive, unlike the hooks block, and the difference is the point.** A
+/// misspelled key inside `hooks` silently changes who a policy guards, so that
+/// block is `deny_unknown_fields`. This block carries `refreshInterval`,
+/// `hideVimModeIndicator` and whatever Claude Code adds next; every one of them
+/// is a display preference, and refusing to boot over one would make this
+/// compatibility feature an obstacle. Same ruling as the outer object, one level
+/// down. See `claude.rs`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct StatusLineBlock {
+    #[serde(rename = "type", default)]
+    pub(crate) kind: Option&lt;String&gt;,
+    #[serde(default)]
+    pub(crate) command: Option&lt;String&gt;,
+    /// Extra leading spaces. Claude Code counts it in characters and defaults it
+    /// to zero.
+    #[serde(default)]
+    pub(crate) padding: Option&lt;u16&gt;,
+}
+
+/// How long the program gets before it is killed.
+///
+/// **Not configurable, and that is deliberate: Claude Code has no such field, so
+/// inventing one would be a key that means nothing in the file it was copied
+/// from.** The number is small because of where the value is consumed — a row
+/// that is repainted while somebody is typing. Two seconds is long enough for a
+/// `git status` on a large repository and short enough that a program which will
+/// never answer stops being asked.
+const STATUS_TIMEOUT_MS: u64 = 2_000;</code></pre>
+  <span class="src">crates/harness/src/statusline.rs — <code>StatusLineBlock</code>, <code>STATUS_TIMEOUT_MS</code></span>
+
+  <p>
+    <code>resolve</code> turns the block into a program or into a sentence.
+    Nothing was configured when the block is absent, and nothing was configured
+    when the block has no <code>command</code>; an empty <code>command</code> is
+    a typo worth naming, and a <code>type</code> other than <code>command</code>
+    is a file written for a program with more of them.
+  </p>
+
+  <p class="faint">crates/harness/src/statusline.rs · <code>StatusLine::resolve</code></p>
+<pre><code>        // An absent `command` is the same as an absent block: nothing was asked
+        // for. An empty one is a typo worth naming.
+        let Some(raw) = block.command else {
+            return Ok(None);
+        };
+        if raw.trim().is_empty() {
+            return Err("statusLine has an empty `command`".into());
+        }
+        // Claude Code's only type is `command`. Anything else is a file written
+        // for a program with more of them, and guessing would be worse than
+        // saying so.
+        match block.kind.as_deref() {
+            None | Some("command") =&gt; {}
+            Some(other) =&gt; {
+                return Err(format!(
+                    "statusLine has type `{other}`; Emma runs command status lines only"
+                ))
+            }
+        }
+        // The same translation, refusal and sentence a hook command gets. A
+        // shell string lands here and is turned down by name.
+        let relative = crate::claude::translate_command(root, "statusLine", &amp;raw)
+            .map_err(|e| e.to_string())?;
+        let command = hooks::contain(root, "statusLine", &amp;relative)?;</code></pre>
+  <span class="src">crates/harness/src/statusline.rs — <code>StatusLine::resolve</code></span>
+
+  <p>
+    Each of those refusals has a test that pins the sentence rather than only the
+    failure, and the tests say why: an operator who copied a working Claude Code
+    config is not wrong, only unportable, so the message has to say what to do
+    instead.
+    <span class="chip test">tested</span>:
+    <code>a_status_line_of_a_type_emma_cannot_run_is_named_rather_than_guessed</code>,
+    <code>an_inline_shell_command_is_refused_with_a_sentence_that_says_what_to_do</code>
+    (which asserts the error contains <code>hooks/</code>, with the message "the
+    fix was not stated"),
+    <code>an_absolute_path_is_refused_the_way_a_hook_command_is</code> and
+    <code>no_status_line_configured_is_not_an_error</code>. All four are in
+    <code>statusline.rs</code>'s own <code>mod tests</code>.
+  </p>
+
+  <p>
+    What such a program is <em>told</em>, and the rule that a field Emma cannot
+    measure is absent from the JSON rather than zero in it, is
+    <a href="terminal.html">The terminal</a>; it is a display contract rather
+    than a configuration one.
+  </p>
+
+  <h2 id="permissions">The <code>permissions</code> block, and the local file</h2>
+
+  <p>
+    The harness reads permission rules and does not understand them. Each one
+    comes out tagged with the list it was in and the file it was written in,
+    because the two sentences an operator needs when a rule does not fire are
+    "which file" and "which list".
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>PermissionBlock</code>, <code>PermissionEntry</code></p>
+<pre><code>/// The `permissions` object as it appears on disk.
+///
+/// Permissive on purpose: `defaultMode`, `additionalDirectories`,
+/// `disableBypassPermissionsMode` and whatever Claude Code adds next are keys
+/// Emma has no opinion about, and `deny_unknown_fields` here would refuse to
+/// boot in a working repository.
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct PermissionBlock {
+    #[serde(default)]
+    pub allow: Vec&lt;String&gt;,
+    #[serde(default)]
+    pub deny: Vec&lt;String&gt;,
+    #[serde(default)]
+    pub ask: Vec&lt;String&gt;,
+}</code></pre>
+<pre><code>/// One rule, still a string, with everything needed to talk about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionEntry {
+    pub rule: String,
+    pub kind: PermissionKind,
+    /// The file it was written in. Carried per entry rather than per file
+    /// because rules merge across scopes, so by the time one misfires there is
+    /// no other way back to the document that holds it.
+    pub source: PathBuf,
+}</code></pre>
+  <span class="src">crates/harness/src/lib.rs — the Permission rules region</span>
+
+  <p>
+    <strong>This one block inside the strict file is permissive</strong>, and it
+    has to be: <code>defaultMode</code> and <code>additionalDirectories</code>
+    are real keys in real files that Emma has no opinion about. So a typo inside
+    <code>permissions</code> is silence even in <code>.emma/config.json</code>,
+    while a typo one level up is a load error. That is the one place in Emma's
+    own format where the strictness stops.
+  </p>
+
+  <p>
+    Rules come out in deny, then ask, then allow order, which is the order they
+    are consulted in. Nothing depends on it; it means a debug print reads in
+    precedence order.
+  </p>
+
+  <p>
+    <code>settings.local.json</code> is one filename in both flavours, sitting
+    beside whichever spine loaded, carrying a <code>permissions</code> block and
+    nothing else Emma reads. It is where a grant you ask Emma to remember is
+    written.
+  </p>
+
+  <p class="faint">crates/harness/src/lib.rs · <code>read_permissions</code>, the doc and the read</p>
+<pre><code>/// The project's rules: the spine file's block, then `settings.local.json`.
+///
+/// **A malformed `settings.local.json` fails the boot**, unlike a rule Emma
+/// cannot evaluate — which is only a note. The two are different mistakes. An
+/// unevaluatable rule is a file written correctly for a program with a larger
+/// vocabulary; unparseable JSON is a file that says nothing at all, and booting
+/// past it would mean running with a `deny` list the operator believes is in
+/// force. This is the same ruling the crate makes everywhere else: malformed
+/// configuration refuses to start, naming the file and the problem.
+fn read_permissions(
+    root: &amp;Path,
+    spine: PermissionBlock,
+    spine_path: &amp;Path,
+) -&gt; Result&lt;Vec&lt;PermissionEntry&gt;&gt; {
+    let mut entries = Vec::new();
+    spine.into_entries(spine_path, &amp;mut entries);
+    let local = root.join(LOCAL_SETTINGS_FILE);
+    let raw = read_if_present(&amp;local)?;
+    if !raw.trim().is_empty() {
+        #[derive(Deserialize)]
+        struct Local {
+            #[serde(default)]
+            permissions: PermissionBlock,
+        }
+        let parsed: Local = serde_json::from_str(&amp;raw)
+            .with_context(|| format!("{} is malformed", local.display()))?;
+        parsed.permissions.into_entries(&amp;local, &amp;mut entries);
+    }
+    Ok(entries)
+}</code></pre>
+  <span class="src">crates/harness/src/lib.rs — <code>read_permissions</code>, <code>LOCAL_SETTINGS_FILE</code></span>
+
+<pre><code><span class="c">$ printf '{ not json' &gt; .claude/settings.local.json &amp;&amp; emma config check</span>
+Error: …\cfg\t1\.claude\settings.local.json is malformed
+
+Caused by:
+    key must be a string at line 1 column 3</code></pre>
+  <span class="chip cert">certified</span>: scratch harness, release binary, 2026-08-16.
+
+  <p>
+    The <code>Local</code> struct is declared inside the function and carries no
+    <code>deny_unknown_fields</code>, so a <code>settings.local.json</code>
+    holding other keys parses and contributes only its <code>permissions</code>.
+    What the rule strings <em>mean</em>, which specifiers this build can
+    evaluate, and how <code>deny</code> beats <code>allow</code> at match time
+    are all <a href="consent.html">Consent &amp; permissions</a>. How the scopes
+    compose, and why user scope contributes <code>deny</code> alone, is
+    <a href="config-claude.html#user">on the compatibility page</a>.
+  </p>
+
+  <h2 id="notverified">What this page did not settle</h2>
+
+  <ul class="body">
+    <li>
+      <strong>The timeout clamp.</strong> <code>MAX_HOOK_TIMEOUT_MS</code> is
+      read off the constant and the <code>.min()</code> in <code>resolve</code>.
+      No hook was declared with <code>"timeout_ms": 60000</code> and timed.
+      <span class="chip unv">unverified</span>. Settle it with a hook script that
+      sleeps 20 seconds and a stopwatch; it should be killed at ten.
+    </li>
+    <li>
+      <strong>The executable-bit refusal.</strong> Its <code>cfg(unix)</code>
+      arm cannot fire on the machine this page was written on.
+      <span class="chip unv">unverified</span> on this platform. Settle it on
+      Linux with a non-executable file in <code>hooks/</code>.
+    </li>
+    <li>
+      <strong>A persona's <code>skills</code> and <code>hooks</code>
+      arrays.</strong> The absent-versus-empty reading is quoted from the field
+      docs and from <code>resolve</code>'s
+      <code>enabled.is_some_and(|e| !e.contains(name))</code>. Neither was
+      exercised from a shell here.
+      <span class="chip unv">unverified</span>. Settle it by declaring two hooks
+      and giving a persona <code>"hooks": []</code>; <code>config check</code>
+      should report <code>hooks (none)</code>.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    Emma 0.1.0 · this page covers <code>Spine</code>, <code>PersonaBlock</code>,
+    <code>select_persona</code>, <code>select_tools</code>,
+    <code>PermissionBlock</code>, <code>PermissionKind</code>,
+    <code>PermissionEntry</code>, <code>read_permissions</code>, and the
+    declaration halves of <code>hooks.rs</code> and <code>statusline.rs</code> ·
+    running a hook is <a href="consent-hooks.html">Consent &amp; permissions</a> ·
+    contract: <code>docs/CONTRACT.md</code>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

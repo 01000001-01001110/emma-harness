@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The vocabulary, and the blank row &middot; The terminal &middot; Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav here" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/emma/src/term/{render,spacing,welcome}.rs</p>
+  <h1>The vocabulary, and the blank row</h1>
+
+  <nav class="chapter">
+      <a class="up" href="terminal.html">The terminal</a>
+      <a href="terminal-surface.html">Surface</a>
+      <a href="terminal-frame.html">Frame</a>
+      <a href="terminal-layout.html">Layout</a>
+      <a href="terminal-colour.html">Colour</a>
+      <a href="terminal-themes.html">Themes</a>
+      <span class="now">Vocabulary</span>
+      <a href="terminal-transcript.html">Transcript</a>
+      <a href="terminal-markdown.html">Markdown</a>
+      <a href="terminal-diff.html">Diffs</a>
+      <a href="terminal-status.html">Status</a>
+      <a href="terminal-sidebar.html">Sidebar</a>
+      <a href="terminal-dock.html">Dock</a>
+      <a href="terminal-usertools.html">User tools</a>
+    </nav>
+
+  <p class="lede">
+    <code>render.rs</code> turns an event into styled lines and nothing else: no
+    terminal, no locks, no writes. That is what makes &ldquo;a refused call and
+    a failed call must not look the same&rdquo; a thing a test can assert rather
+    than something somebody has to squint at. Beside it,
+    <code>spacing.rs</code> owns the one rule about blank rows, and
+    <code>welcome.rs</code> composes the block a new user sees once.
+  </p>
+
+  <h2 id="glyphs">Two glyph sets, and why the distinction is made twice</h2>
+
+  <p>
+    Every tool line used to be <code>&#9679;</code>. A call that ran, a call that
+    failed with a <code>ToolError</code>, a call the human declined and a call a
+    <code>PreToolUse</code> hook refused all arrived as the same bullet in the
+    same weight, and the only way to tell them apart was to read the sentence
+    after them. Those are four different things, one of them policy the user
+    cannot override.
+  </p>
+
+  <p>
+    So there are sixteen glyph slots and two sets. <code>UNICODE</code> is
+    <code>&#9654; &#9670; &#10003; &#10007; &#8856; &#8855; &#8635;
+    &#9632;</code> plus the punctuation; <code>ASCII</code> is
+    <code>&gt; * + x o X ~ =</code>. The reason for two is a Windows console
+    whose output code page is not UTF-8, where <code>&#10003;</code> renders as
+    two pieces of mojibake, <em>&ldquo;and a transcript that looks broken reads
+    as a broken program rather than as a stylistic choice.&rdquo;</em>
+  </p>
+
+  <p>
+    Colour is the second half of every distinction, never the first.
+    <em>&ldquo;Colour alone fails on a terminal with sixteen of them, on a
+    terminal with none, and on the substantial minority of readers who cannot
+    distinguish the red from the green. Glyph alone is legible and
+    drab.&rdquo;</em>
+    <span class="chip test">tested</span>:
+    <code>a_started_a_succeeded_a_failed_a_refused_and_a_blocked_call_all_look_different</code>
+    is written as &ldquo;no two of these share a glyph&rdquo; over seven events
+    rather than as seven assertions on seven literals, <em>&ldquo;because the
+    property is the distinctness and a test on the literals would pass a change
+    that made two of them identical.&rdquo;</em> It then asserts separately that
+    refused and blocked differ in <em>colour</em> too, because one of them is a
+    decision the user can revisit and the other is not.
+  </p>
+
+  <h2 id="skin">The Skin's methods, one per thing that can happen</h2>
+
+  <p>
+    Sixteen of them, all returning <code>Vec&lt;Line&gt;</code> rather than
+    writing, so the whole vocabulary is available to a test as data. Eight go
+    through one private helper:
+  </p>
+
+  <p class="faint">crates/emma/src/term/render.rs &middot; <code>Skin::marked</code></p>
+  <pre><code>    <span class="c">/// A marked line: the glyph in its colour, then the text.</span>
+    <span class="c">///</span>
+    <span class="c">/// The glyph carries the weight as well as the colour, because bold is the</span>
+    <span class="c">/// one emphasis a sixteen-colour terminal and a colourless one both have.</span>
+    fn marked(&amp;self, glyph: &amp;str, role: Role, head: Span&lt;'static&gt;, tail: &amp;str) -&gt; Line&lt;'static&gt; {
+        <span class="k">let mut</span> spans = vec![
+            Span::styled(glyph.to_string(), self.palette.bold(role)),
+            Span::raw(" "),
+            head,
+        ];
+        <span class="k">if</span> !tail.is_empty() {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                tail.to_string(),
+                self.palette.style(Role::Text),
+            ));
+        }
+        Line::from(spans)
+    }</code></pre>
+  <span class="src">crates/emma/src/term/render.rs — <code>Skin::marked</code></span>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Method</th><th>Glyph &amp; role</th><th>The decision in it</th></tr></thead>
+      <tbody>
+        <tr><td><code>goal</code></td><td><code>&#9654;</code> Accent</td><td>The user's own words, bold accent.</td></tr>
+        <tr><td><code>tool_started</code></td><td><code>&#9670;</code> Info</td><td>Name in bold, the one interesting argument after it.</td></tr>
+        <tr><td><code>tool_ok</code></td><td>none, Dim</td><td>The body indented and dimmed: evidence, not prose, and the eye should be able to skip it.</td></tr>
+        <tr><td><code>tool_failed</code></td><td><code>&#10007;</code> Err</td><td>A <code>ToolError</code>. Red, and the glyph says so before the words do.</td></tr>
+        <tr><td><code>tool_refused</code></td><td><code>&#8856;</code> Warn</td><td>The human said no. Nothing broke, so yellow, and the sentence says who decided.</td></tr>
+        <tr><td><code>tool_blocked</code></td><td><code>&#8855;</code> Err</td><td>A hook said no. Red, because <em>&ldquo;no answer at the prompt could have allowed it, and a user who reads this as &lsquo;I could have said yes&rsquo; will go looking for a prompt that never comes.&rdquo;</em></td></tr>
+        <tr><td><code>kick</code></td><td><code>&#8635;</code> Warn</td><td>The loop nudging a model that stopped without finishing.</td></tr>
+        <tr><td><code>ending</code></td><td><code>&#9632;</code> Ok or Warn</td><td>Green when it finished, yellow when a limit fired: the one distinction somebody scrolling back is looking for.</td></tr>
+        <tr><td><code>note</code>, <code>warn</code>, <code>banner</code></td><td><code>&middot;</code> / <code>!</code> / <code>!!</code></td><td>Harness commentary at three volumes.</td></tr>
+        <tr><td><code>prose</code></td><td>none</td><td>No glyph, no colour: <em>&ldquo;it is the answer, and decorating it would make it look like commentary about itself.&rdquo;</em></td></tr>
+        <tr><td><code>answered</code></td><td>none</td><td>The question and the answer as one line, so what was approved reads back the way it was asked.</td></tr>
+        <tr><td><code>welcome</code>, <code>status</code></td><td colspan="2">Composed elsewhere: <code>welcome.rs</code> and the status region below.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Two kinds of &ldquo;there is more than this&rdquo;</h3>
+
+  <p>
+    <code>Skin::body</code> caps a tool result at <code>RESULT_LINES = 8</code>
+    and appends <code>&hellip; N more lines</code>. That is the
+    <em>screen</em> leaving something out. <code>tool_ok</code>'s
+    <code>truncated</code> flag is the <em>tool</em> having stopped early, which
+    means the model's copy is short too, and conflating the two <em>&ldquo;would
+    tell a user their output was merely abbreviated when it was actually
+    cut.&rdquo;</em>
+  </p>
+
+  <p>
+    The <code>reason</code> argument is passed through whole rather than
+    summarised, and the comment names the incident behind it:
+    <em>&ldquo;&lsquo;output was truncated by the tool&rsquo; on a page whose
+    text was nowhere near its limit sent a reader looking at the wrong number
+    entirely; the tool's own sentence names the right one.&rdquo;</em> A tool
+    that did not say which cap bound gets <code>&hellip; output was truncated by
+    the tool, which did not say by which limit</code> rather than an implication
+    that the reader has been told.
+    <span class="chip test">tested</span>:
+    <code>a_truncated_tool_and_a_long_result_say_different_things</code> and
+    <code>a_stated_reason_reaches_the_screen_whole</code>.
+  </p>
+
+  <h2 id="exits">The two exits to a stream</h2>
+
+  <p class="faint">crates/emma/src/term/render.rs &middot; <code>for_stream</code></p>
+  <pre><code><span class="c">/// What the fallback path writes for one line.</span>
+<span class="c">///</span>
+<span class="c">/// **The one decision that keeps a redirected stream clean.** A palette at</span>
+<span class="c">/// [`Level::None`] means either `NO_COLOR` or a destination that is not a</span>
+<span class="c">/// terminal, and in both cases the answer is the text and nothing else — not</span>
+<span class="c">/// even a bold. `emma … | tee` produces a file somebody reads, and an escape</span>
+<span class="c">/// byte in it is a defect however tasteful the attribute was.</span>
+<span class="c">///</span>
+<span class="c">/// The viewport does not come through here: ratatui writes styled cells, so</span>
+<span class="c">/// bold and reverse survive there even when colour does not.</span>
+pub fn for_stream(skin: &amp;Skin, line: &amp;Line&lt;'_&gt;) -&gt; String {
+    <span class="k">if</span> skin.palette.level == Level::None {
+        plain(line)
+    } <span class="k">else</span> {
+        sgr(line)
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/term/render.rs — <code>for_stream</code>, <code>plain</code>, <code>sgr</code>, <code>codes</code>, <code>color_code</code></span>
+
+  <p>
+    <code>sgr</code> writes the parameters by hand rather than delegating to
+    crossterm, and the doc gives two reasons: the fallback path has to produce a
+    byte-for-byte predictable line for a test, and this is the only place in
+    Emma that needs it. <code>codes</code> handles bold, dim and reversed;
+    <code>color_code</code> handles the sixteen names, <code>Indexed</code> as
+    <code>38;5;n</code>, <code>Rgb</code> as <code>38;2;r;g;b</code>, and
+    <code>Color::Reset</code> as <em>nothing at all</em>, because the user's own
+    colour is asserted by silence.
+  </p>
+
+  <p>
+    Four modules carry a test named
+    <code>with_no_colour_not_one_escape_byte_is_emitted</code>:
+    <code>render</code>, <code>markdown</code>, <code>diff</code> and
+    <code>statusline</code>. The <code>render</code> one walks twelve event
+    kinds and asserts both that <code>for_stream</code> contains no
+    <code>\x1b</code> and that it equals <code>plain(line)</code>.
+    <span class="chip test">tested</span> And the same claim holds end to end
+    against the built binary, which
+    <a href="terminal-surface.html">the surface page</a> certifies.
+  </p>
+
+  <h2 id="columns">Everything is measured in display columns</h2>
+
+  <p>
+    The region comment is the argument in full, and it names the failure it
+    fixed: <em>&ldquo;Anywhere a budget derived from <code>area.width</code> was
+    compared against <code>chars().count()</code>, a line of CJK overran its box
+    by its own length and the cell after it was somebody else's.&rdquo;</em>
+  </p>
+
+  <p>
+    The measurement is ratatui's own <code>Span::width</code>, which is what
+    <code>Layout</code> and <code>Buffer</code> measure with, rather than a
+    second opinion from a crate imported beside it. Two width tables that
+    disagree is the same class of bug as two crossterm versions that disagree
+    about a <code>KeyEvent</code>, and the manifest already argues that one.
+  </p>
+
+  <p>
+    The limit is stated rather than hidden: unicode-width sums per character, so
+    a ZWJ emoji sequence is measured as the sum of its parts while a terminal
+    draws one glyph. Nothing here can fix that, <em>&ldquo;so at least Emma and
+    its renderer are wrong together, which is the property that keeps a box from
+    being overrun by its own contents.&rdquo;</em>
+  </p>
+
+  <p>
+    Six functions live in that region. <code>cols</code> measures a string;
+    <code>cols_upto</code> is the bridge the input box crosses, because
+    <code>Editor</code> counts a cursor in characters (what Left and Right move
+    by) and the terminal wants a column; <code>char_cols</code> measures one
+    character without allocating; <code>rows_used</code> is
+    <code>ceil(width / columns)</code>, handed to <code>insert_before</code>;
+    <code>wrap_line</code> breaks a <em>styled</em> line at column boundaries;
+    and <code>owned</code> deep-copies a borrowed line, because
+    <code>Line::to_owned</code> would clone the borrow rather than the data.
+  </p>
+
+  <p>
+    <code>wrap_line</code> splits the styled line rather than the plain text,
+    and the reason is concrete: <em>&ldquo;splitting the plain text and
+    re-styling it is how a diff's <code>+</code> ends up green on one row and
+    not on the next.&rdquo;</em> A single character wider than the whole width
+    gets a row to itself rather than an infinite loop.
+    <span class="chip test">tested</span>:
+    <code>a_wrapped_line_keeps_every_character_and_its_styling</code> checks the
+    style of the fragments on either side of a break, and
+    <code>a_wrap_breaks_between_wide_characters_rather_than_through_one</code>
+    puts five CJK glyphs into a five-column window and gets
+    <code>["&#19968;&#20108;", "&#19977;&#22235;", "&#20116;"]</code>.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect: <code>fit</code> can return a string wider than its budget</span>
+    <p>
+      <code>fit</code> computes <code>keep = budget.saturating_sub(cols(ellipsis))</code>
+      and then appends the ellipsis unconditionally. With the ASCII glyph set
+      the ellipsis is <code>...</code>, three columns, so any budget of 1 or 2
+      produces an empty <code>keep</code>, an empty body, and a three-column
+      result. The guarding test,
+      <code>a_cut_never_lands_inside_a_wide_character</code>, hardcodes
+      <code>&hellip;</code> at one column and therefore never reaches it.
+      <span class="chip cert">certified</span>, and by an unusual receipt:
+      <code>sidebar.rs</code> already knows.
+      <code>sidebar::clipped</code> exists solely to make <code>fit</code>
+      total, its doc says <em>&ldquo;<code>fit</code> itself can overrun a budget
+      narrower than its own ellipsis&rdquo;</em>, and
+      <code>a_budget_narrower_than_the_ellipsis_still_never_overruns</code>
+      walks budgets 0 to 10 in both glyph sets against
+      <code>clipped</code> rather than against <code>fit</code>. The five callers
+      that use <code>fit</code> directly (<code>app::hint</code>,
+      <code>app::header</code>, <code>view::render_menu</code>,
+      <code>view::preview_lines</code>, and
+      <code>statusbar::attempt</code>, which guards with
+      <code>ENV_MIN</code>) do not have that protection.
+    </p>
+    <span class="src">crates/emma/src/term/render.rs — <code>fit</code>; crates/emma/src/term/sidebar.rs — <code>clipped</code></span>
+  </div>
+
+  <h2 id="status">The inline status row</h2>
+
+  <p>
+    <code>Skin::status</code> is the <em>inline</em> viewport's bottom row, and
+    the full-screen successor to it is <a href="terminal-status.html">a
+    different module</a>. Its rule is stated as the reason the row is worth
+    having at all: a field whose value is not known is absent, and a line that
+    does not fit drops fields in a stated order rather than being cut
+    mid-number. Every field of <code>Status</code> is an <code>Option</code> for
+    the same reason: <em>&ldquo;a readout that is stale is worse than a readout
+    that is missing.&rdquo;</em>
+  </p>
+
+  <p class="faint">crates/emma/src/term/render.rs &middot; <code>Skin::status</code></p>
+  <pre><code>    pub fn status(&amp;self, width: u16, s: &amp;Status) -&gt; Line&lt;'static&gt; {
+        <span class="k">let</span> live = self.live_fields(s);
+        <span class="k">for</span> attempt in 0..5 {
+            <span class="k">let</span> left = self.identity(s, attempt);
+            <span class="c">// Columns, not characters: a working directory with CJK in its name</span>
+            <span class="c">// is twice as wide as it is long, and the gap computed from its</span>
+            <span class="c">// length pushes the live fields off the end of the row.</span>
+            <span class="k">let</span> used: usize = left.iter().chain(live.iter()).map(|sp| sp.width()).sum();
+            <span class="k">let</span> gap = usize::from(width).saturating_sub(used);
+            <span class="k">if</span> gap &gt;= 1 || attempt == 4 {
+                <span class="k">let mut</span> spans = left;
+                spans.push(Span::raw(" ".repeat(gap.max(1))));
+                spans.extend(live);
+                <span class="k">return</span> Line::from(spans);
+            }
+        }
+        unreachable!("the last attempt always returns")
+    }</code></pre>
+  <span class="src">crates/emma/src/term/render.rs — <code>status</code>, <code>identity</code>, <code>live_fields</code></span>
+
+  <p>
+    The drop order is session id, then the working directory shortened to its
+    last component, then the directory entirely, then the model. The labels
+    themselves carry a small piece of history: the second meter was called
+    <code>spend</code> until the owner read <code>ctx 73k/120k &middot; spend
+    103k/500k</code> and asked whether the two were the wrong way round. They
+    were not, and the doc explains why the question was still the defect:
+    <em>&ldquo;a label that invites the question is the defect, and
+    <code>spend</code> invited it — it reads as a level, like <code>ctx</code>,
+    when it is an accumulation.&rdquo;</em> <code>total</code> is the same five
+    columns, so the drop order is unchanged.
+    <span class="chip test">tested</span>:
+    <code>the_cumulative_meter_is_not_labelled_like_the_snapshot_one</code>
+    asserts against the exact numbers from that screen.
+  </p>
+
+  <div class="note warn">
+    <span class="h">Defect: the live half is never dropped, so the row can be clipped</span>
+    <p>
+      <code>identity</code> sheds four ways as <code>drop</code> rises, but
+      <code>live_fields</code> is computed once, outside the loop, and appended
+      whatever happens. At <code>attempt == 4</code> the function returns
+      unconditionally, with <code>gap.max(1)</code> of padding, even when
+      <code>used</code> already exceeds <code>width</code>. On a narrow enough
+      row that produces exactly the <code>total 34k/50</code> the doc says must
+      never happen: a number that is wrong rather than one that is missing,
+      clipped by <code>set_line</code> where the buffer runs out.
+      <span class="chip unv">unverified</span>: the width tests run at 120, 64
+      and 34, and the CJK test at 60 with only a <code>ctx</code> field. A test
+      at width 20 with all three live fields populated would settle it.
+    </p>
+    <span class="src">crates/emma/src/term/render.rs — <code>status</code>, <code>live_fields</code>, <code>a_narrow_window_drops_fields_from_the_least_useful_end</code></span>
+  </div>
+
+  <p>
+    Three small formatters finish the region. <code>pressure(used, cap)</code>
+    is green with room to spare, yellow past three quarters, red past the cap,
+    and returns <code>Role::Text</code> when the cap is not positive, because a
+    cap of zero is &ldquo;no cap&rdquo; rather than a division by zero.
+    <code>human</code> abbreviates counts (<code>12k</code>,
+    <code>1.5M</code>). <code>clock</code> writes elapsed time in the units a
+    person waiting reads. <code>last_component</code> shortens a path.
+  </p>
+
+  <h2 id="spacing">One rule about blank rows</h2>
+
+  <p>
+    <strong>A blank row is a boundary between two blocks, and it is written only
+    when there is a block on both sides of it.</strong> Nothing emits one of its
+    own. An emitter that has finished a block, or is about to start one, calls
+    <code>separate()</code>, which records that a boundary exists; the blank is
+    materialised later by <code>apply</code>, and only if another block actually
+    arrives.
+  </p>
+
+  <p class="faint">crates/emma/src/term/spacing.rs &middot; <code>Spacing::apply</code></p>
+  <pre><code>    pub fn apply(&amp;<span class="k">mut</span> self, <span class="k">mut</span> lines: Vec&lt;Line&lt;'static&gt;&gt;) -&gt; Vec&lt;Line&lt;'static&gt;&gt; {
+        <span class="k">if</span> lines.is_empty() {
+            <span class="c">// Nothing arrived, so no boundary was crossed. The declaration</span>
+            <span class="c">// stands until something does arrive — an empty batch must not</span>
+            <span class="c">// spend the separator the next real block is owed.</span>
+            <span class="k">return</span> lines;
+        }
+        <span class="k">let</span> owed = std::mem::take(&amp;<span class="k">mut</span> self.pending);
+        <span class="k">if</span> owed &amp;&amp; self.wrote &amp;&amp; !self.last_blank &amp;&amp; !blank(&amp;lines[0]) {
+            lines.insert(0, Line::default());
+        }
+        self.last_blank = lines.last().is_some_and(blank);
+        self.wrote = true;
+        lines
+    }</code></pre>
+  <span class="src">crates/emma/src/term/spacing.rs — <code>Spacing::apply</code>, <code>separate</code>, <code>wrote_text</code>, <code>blank</code></span>
+
+  <p>
+    Three booleans, and each guards a defect that was on the screen the owner
+    photographed. <code>pending</code> makes <code>separate()</code> idempotent,
+    which is what stops two emitters stacking their separators;
+    <code>wrote</code> stops a blank row being the first thing in the
+    transcript, under the shell prompt the user typed <code>emma</code> at,
+    where <em>&ldquo;a gap reads as output that went missing&rdquo;</em>; and
+    <code>last_blank</code>, together with the <code>!blank(&amp;lines[0])</code>
+    check, stops a separator landing beside a blank row the content wrote
+    itself.
+  </p>
+
+  <p>
+    Content blanks are never <em>removed</em>, only allowed to suppress a
+    separator, and the test says why that distinction matters:
+    <code>blank_rows_a_block_wrote_itself_are_left_alone</code> is framed as the
+    assertion that stops &ldquo;collapse blank runs&rdquo; from looking like a
+    reasonable simplification, because a blank line inside a fenced code block
+    is part of what the reader copies out.
+    <span class="chip test">tested</span>, seven tests in 235 lines.
+  </p>
+
+  <p>
+    It is a state machine and not a filter over finished output because the
+    terminal is irreversible: <em>&ldquo;once a row is written it is the
+    terminal's and cannot be taken back, so the decision about a blank row has
+    to be made <em>before</em> it is emitted.&rdquo;</em>
+    <code>wrote_text</code> exists for the one path that bypasses
+    <code>apply</code> entirely, the fallback's raw prose write, so it can say
+    that rows happened.
+  </p>
+
+  <div class="note">
+    <span class="h">Which path it still governs</span>
+    <p>
+      With the full-screen frame as the default, <code>spacing.rs</code> governs
+      the plain path, <code>-p</code>, <code>EMMA_NO_FRAME</code> and the
+      <code>EMMA_UI=inline</code> hatch. In the full-screen frame the transcript
+      buffer separates the blocks it holds and <code>Frame::separate</code> is a
+      no-op, because <em>&ldquo;<code>separate()</code> on the inline path had to
+      be a declaration because the terminal owned the rows; here the buffer owns
+      them and the rule is structural.&rdquo;</em> The module's own doc still
+      describes the pre-2026-08-12 world throughout, which is worth knowing
+      before reading it.
+      <span class="chip cert">certified</span>: <code>spacing.rs</code>'s module
+      doc says <em>&ldquo;Both output paths hold one of these: the viewport, and
+      the plain-lines fallback&rdquo;</em>, and <code>Frame::separate</code>
+      returns without touching it under <code>Ui::Full</code>.
+    </p>
+    <span class="src">crates/emma/src/term/spacing.rs module doc; crates/emma/src/term/frame.rs — <code>Frame::separate</code></span>
+  </div>
+
+  <h2 id="welcome">The block a new user sees once</h2>
+
+  <p>
+    <code>welcome.rs</code> is 211 lines and three functions, and its premise is
+    one sentence: <em>&ldquo;A welcome that lists capabilities the run does not
+    have is worse than no welcome, because the first thing it teaches is that
+    Emma's own account of itself cannot be trusted.&rdquo;</em> So every line of
+    it is read from the run that is actually starting: the harness that loaded,
+    the tools that survived selection, the commands and skills that exist in
+    this project.
+  </p>
+
+  <p>
+    Three things to type, and no more, <em>&ldquo;a list of twenty options is a
+    list nobody reads&rdquo;</em>. A project with no commands and no skills is
+    told so explicitly rather than left with an absence, because <em>&ldquo;a
+    user who has read about commands and skills and sees neither should learn
+    that this project has none, not wonder whether Emma has them.&rdquo;</em>
+    And the last row says <em>why</em> they are seeing it, from
+    <code>Welcome::reason</code>, so a returning user can tell whether something
+    is wrong.
+  </p>
+
+  <p>
+    The block does not pad itself. Its first and last rows are content, and the
+    blanks between its sections are its own layout rather than the gap around
+    it, which is the one exception the <code>Line::default()</code> source test
+    names.
+    <span class="chip test">tested</span>:
+    <code>the_welcome_leaves_the_gap_around_itself_to_whoever_is_placing_it</code>
+    asserts all three of those at once.
+  </p>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    All three files were read in full for this page: <code>render.rs</code>
+    (1,258 lines), <code>spacing.rs</code> (235) and <code>welcome.rs</code>
+    (211).
+  </p>
+
+  <ul class="body">
+    <li>
+      <strong><code>render.rs</code>, 36 of 36 function items named.</strong>
+      Two constructors, fifteen <code>Skin</code> methods (thirteen event
+      renderers plus <code>marked</code> and <code>body</code>), five stream
+      exits, three status methods, four small formatters, and seven column
+      helpers. Its three constants (<code>RESULT_LINES</code>,
+      <code>UNICODE</code>, <code>ASCII</code>) and three types
+      (<code>Glyphs</code>, <code>Skin</code>, <code>Status</code>) are covered.
+      Fourteen of its twenty-five tests are cited.
+    </li>
+    <li>
+      <strong><code>spacing.rs</code>, 5 of 5.</strong> <code>new</code>,
+      <code>separate</code>, <code>apply</code>, <code>wrote_text</code>,
+      <code>blank</code>. All seven tests are accounted for by the three
+      booleans above.
+    </li>
+    <li>
+      <strong><code>welcome.rs</code>, 3 of 3.</strong>
+      <code>Skin::welcome</code>, <code>fact</code>, <code>list</code>. Three
+      tests, all cited or summarised.
+    </li>
+  </ul>
+
+  <p>
+    <strong>Not settled here.</strong> Whether the ASCII glyph set is legible as
+    <em>structure</em> on the consoles it exists for. The tests assert every
+    byte is ASCII; nobody has looked at a 437 console rendering
+    <code>+---+</code> and <code>* Bash</code> and judged it.
+    <span class="chip unv">unverified</span>: run under
+    <code>EMMA_ASCII_FRAME=1</code> in conhost and photograph it.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Next: <a href="terminal-transcript.html">the retained transcript</a>, the
+      largest single piece of code the alternate screen cost. Back to
+      <a href="terminal.html">The terminal</a>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

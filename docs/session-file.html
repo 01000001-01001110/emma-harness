@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>One file, one writer · Sessions &amp; context · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav here" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">Sessions &amp; context</p>
+  <h1>One file, one writer</h1>
+
+  <nav class="chapter">
+    <a class="up" href="session.html">Sessions &amp; context</a>
+    <span class="now">The file</span>
+    <a href="session-records.html">Records</a>
+    <a href="session-fold.html">The fold</a>
+    <a href="session-resume.html">Resume</a>
+    <a href="session-continuity.html">Continuity</a>
+    <a href="session-compaction.html">Compaction</a>
+    <a href="session-corpus.html">The corpus</a>
+  </nav>
+
+  <p class="lede">
+    A session is one JSONL file under <code>~/.emma/sessions/</code>, opened at
+    startup and appended to as the run happens. This page covers the type that
+    owns it: how an id is made, where the file goes, what one append does, and
+    the two ways the writing can stop being reliable without anyone finding out.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>SessionLog</code></span>
+
+  <div class="key">
+    <div><span class="chip cert">certified</span> proven, and repeatable: a file, a command, a count you can redo</div>
+    <div><span class="chip obs">observed</span> seen once, live, not repeatable on demand</div>
+    <div><span class="chip test">tested</span> a test that was shown to fail</div>
+    <div><span class="chip unv">unverified</span> believed, not checked</div>
+  </div>
+
+  <h2 id="id">The id, and why it is not an mtime</h2>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// A session id that sorts by time and cannot collide between two `emma`
+/// processes started in the same millisecond.</span>
+pub fn new_id() -&gt; String {
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("sess-{ms:013}-{}", std::process::id())
+}</code></pre>
+
+  <p>
+    Thirteen digits of unix milliseconds, zero-padded, then the process id.
+    The padding is what makes a plain lexical sort a chronological one, and it
+    is relied on twice: <code>locate</code> walks candidates
+    <code>.rev()</code> after a <code>sort()</code>, and the first-run check
+    reads only the tail of the same ordering. Both name the same reason for
+    preferring the id to the modification time. Copying a file moves its mtime
+    and does not move its id.
+    <span class="chip test">tested</span> <code>ids_sort_by_time</code> takes
+    two ids two milliseconds apart and asserts <code>a &lt; b</code> as strings.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>SessionLog::new_id</code>, <code>locate</code>, <code>first_run</code></span>
+
+  <p>
+    A clock that cannot be read yields <code>0</code> rather than an error, so
+    the id is <code>sess-0000000000000-&lt;pid&gt;</code> and the process id is
+    the only thing keeping two such runs apart. Nothing in the tree exercises
+    that branch.
+    <span class="chip unv">unverified</span>: settle it by making
+    <code>duration_since(UNIX_EPOCH)</code> fail, which needs a system clock set
+    before 1970, and checking that two concurrent runs still get separate files.
+  </p>
+
+  <h2 id="dir">Where the file goes</h2>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// `~/.emma/sessions/`, or `EMMA_SESSION_DIR` when set — which is how a
+/// test writes somewhere other than the developer's real history.</span>
+pub fn default_dir(home: Option&lt;&amp;Path&gt;) -&gt; Option&lt;PathBuf&gt; {
+    if let Some(dir) = std::env::var_os("EMMA_SESSION_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    home.map(|h| h.join(".emma").join("sessions"))
+}</code></pre>
+
+  <p>
+    The environment variable wins over the home directory unconditionally, and
+    <code>--session-dir</code> on the command line wins over both, because
+    <code>main.rs</code> resolves the flag first and only falls back to this.
+    An <code>Option</code> comes back rather than a guess, and the caller that
+    gets <code>None</code> is the one case
+    <a href="#none"><code>SessionLog::none</code></a> exists for.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>SessionLog::default_dir</code>; crates/emma/src/main.rs</span>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+pub fn open(dir: &amp;Path, id: impl Into&lt;String&gt;) -&gt; Result&lt;Self&gt; {
+    let id = id.into();
+    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let path = dir.join(format!("{id}.jsonl"));
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&amp;path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    Ok(Self {
+        id,
+        path,
+        file: Arc::new(Mutex::new(Some(file))),
+        prefix: None,
+        stamp: Vec::new(),
+        tap: None,
+    })
+}</code></pre>
+
+  <p>
+    <code>create(true).append(true)</code> is what makes a resume continue the
+    same file instead of truncating it: <code>main.rs</code> resolves the
+    restore before the log is opened, hands <code>open</code> the restored id,
+    and every record of the second leg lands after the first. It is also why
+    a run that starts and stops without doing anything leaves a zero-byte file
+    behind, which is most of what is in the directory today. See
+    <a href="session-corpus.html">The corpus</a>.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>SessionLog::open</code>; crates/emma/src/main.rs</span>
+
+  <h2 id="none">The log that records nothing</h2>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// Records nothing. For tests that are not about persistence, and for the
+/// case where the home directory cannot be determined — an agent that
+/// refuses to run because it cannot write a transcript would be trading a
+/// working tool for a diary.</span>
+pub fn none() -&gt; Self {
+    Self {
+        id: "sess-none".into(),
+        path: PathBuf::new(),
+        file: Arc::new(Mutex::new(None)),
+        prefix: None,
+        stamp: Vec::new(),
+        tap: None,
+    }
+}</code></pre>
+
+  <p>
+    <code>file</code> is <code>Option&lt;File&gt;</code> so that this variant
+    needs no separate type and no trait: every append walks the same code and
+    returns at the <code>let Some(file) = guard.as_mut() else { return }</code>
+    line. The id is the literal <code>sess-none</code> and the path is empty, so
+    anything that prints the transcript location for a run in this state prints
+    nothing useful. <code>main.rs</code> reaches it two ways: no session
+    directory at all, and an <code>open</code> that failed, where it warns
+    <code>no session transcript: {e}</code> and carries on.
+    <span class="chip test">tested</span>
+    <code>a_log_with_no_file_is_not_an_error</code> appends to one and asserts
+    nothing by not panicking.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>SessionLog::none</code>, <code>append</code>; crates/emma/src/main.rs</span>
+
+  <p>
+    <code>id()</code> and <code>path()</code> are one-line accessors over those
+    two fields, and nothing else on the type is public that is not described on
+    this page or on <a href="session-records.html">Records</a>.
+  </p>
+
+  <h2 id="mutex">A blocking file in an async program</h2>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs — the SessionLog fields</span>
+pub struct SessionLog {
+    id: String,
+    path: PathBuf,
+    <span class="c">/// A plain `std::fs::File` behind a `std::sync::Mutex`, in an async
+    /// program, on purpose: a record is a few hundred bytes and is written
+    /// between a model call and a subprocess. Making it async would buy
+    /// nothing measurable and would make "append the record, *then* do the
+    /// thing" — the ordering the whole file exists for — an await point where
+    /// a cancellation can land.
+    ///
+    /// `Arc` because [`SessionLog::subagent`] hands out a second view of the
+    /// *same* file rather than a second file. One process, one writer, one
+    /// mutex — the module doc's "a second writer" caveat is about a second
+    /// process, not a second logical run inside this one.</span>
+    file: Arc&lt;Mutex&lt;Option&lt;File&gt;&gt;&gt;,</code></pre>
+
+  <p>
+    The ordering that argument protects is the one the whole format is for. A
+    record goes down before the thing it describes happens, so a run killed
+    between the two leaves a claim that a tool was about to run and no claim
+    that it did. Reverse the order and the file would sometimes assert a tool
+    ran when the process died first. An <code>await</code> between the append
+    and the tool call is where a cancelled future would land, and
+    <code>tokio::select!</code> in <code>call_model</code> is a cancellation of
+    exactly that shape, happening elsewhere in the same loop.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>SessionLog::file</code>; crates/emma/src/agent.rs — <code>Agent::call_model</code></span>
+
+  <div class="note">
+    <span class="h">Why not SQLite</span>
+    <p>
+      The module doc argues it rather than assuming it. SQLite pays for itself
+      against concurrent writers and against a crash-recovery fold that has to
+      decide whether a side-effecting tool already ran. Emma has one process,
+      one user, one writer, and no recovery requirement: a crashed run is
+      re-run, because what it was doing is in the working tree where you can
+      see it. A database would add a dependency, a schema, a migration story
+      and a binary file you cannot <code>grep</code>.
+    </p>
+    <p>
+      Three things would reverse it, and the doc says the reversal should
+      happen the same day any of them arrives. A second writer, because
+      <code>O_APPEND</code> survives concurrent small writes on unix and does
+      not on Windows. Exactly-once tool semantics across a crash, which needs a
+      transaction rather than a line. Queries across sessions, which today mean
+      folding every file in the directory. The third already costs something:
+      <code>locate</code> is a directory scan, and its own doc names it as the
+      cost the module doc predicted.
+    </p>
+  </div>
+  <span class="src">crates/emma/src/session.rs — module doc; <code>locate</code></span>
+
+  <h2 id="append">One append</h2>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// Append one record.
+///
+/// Failures are swallowed after the first, deliberately: a full disk must
+/// not be the thing that kills a run halfway through editing someone's
+/// source tree. The caller has already been told once by `open`.</span>
+pub fn append(&amp;self, kind: &amp;str, mut payload: Value) {
+    let kind = match self.prefix {
+        Some(prefix) =&gt; format!("{prefix}.{kind}"),
+        None =&gt; kind.to_string(),
+    };
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("kind".into(), json!(kind));
+        obj.insert(
+            "at_ms".into(),
+            json!(SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0)),
+        );
+        for (key, value) in &amp;self.stamp {
+            obj.insert(key.clone(), value.clone());
+        }
+    }
+    if let Some(tap) = &amp;self.tap {
+        if let Ok(mut seen) = tap.lock() {
+            seen.push(payload.clone());
+        }
+    }
+    let Ok(mut guard) = self.file.lock() else {
+        return;
+    };
+    let Some(file) = guard.as_mut() else { return };
+    let mut line = payload.to_string();
+    line.push('\n');
+    let _ = file.write_all(line.as_bytes());
+    let _ = file.flush();
+}</code></pre>
+
+  <p>
+    Five things happen in a fixed order. The <code>kind</code> gets its prefix,
+    which is <code>None</code> for a session's own records and
+    <code>Some("sub")</code> for a delegation's. <code>kind</code> and
+    <code>at_ms</code> are inserted into the payload, which is why every record
+    in every file carries those two and only those two universally. The stamp
+    is merged, which is how a delegation's records carry
+    <code>sub_id</code>, <code>parent_turn_id</code> and <code>agent</code>.
+    The record goes into the in-memory tap if there is one. Then the line is
+    written and flushed.
+  </p>
+
+  <p>
+    <code>kind</code> is inserted rather than written by the caller, so no call
+    site can forget it or spell it differently. Where it lands in the rendered
+    line is <code>serde_json</code>'s business, which is why a
+    <code>grep</code> for <code>'"kind":"goal"'</code> is a substring search
+    over a whole file rather than a field query. It agrees with a parse today:
+    <code>grep -h -o '"kind":"goal"' *.jsonl | wc -l</code> returns 61 in
+    <code>~/.emma/sessions/</code> and a JSON parse of the same directory finds
+    61 records of that kind, with zero of the matches sitting inside some other
+    record's payload.
+    <span class="chip cert">certified</span>, 2026-08-16 20:28 EDT; the script
+    is on <a href="session-corpus.html">The corpus</a>. The agreement is not
+    structural. A <code>tool_result</code> that carried the text of a session
+    file, or of this page, would put the substring in a record that is not a
+    goal.
+  </p>
+
+  <p>
+    A payload that is not a JSON object skips the whole insert block and is
+    written as it stands, with no <code>kind</code> and no <code>at_ms</code>.
+    Every caller in the tree passes <code>json!({…})</code>, so no such line
+    exists in the corpus, and both readers would treat one as a record whose
+    kind is the empty string and skip it.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>SessionLog::append</code>; crates/emma/src/agent.rs, delegate.rs, main.rs — every call site</span>
+
+  <p>
+    A poisoned mutex returns without writing, permanently, for the rest of the
+    process. That needs a panic while the lock is held, and the only code under
+    the lock is two <code>std::io</code> calls whose results are discarded.
+  </p>
+
+  <div class="note warn">
+    <span class="h">The doc's account of swallowed failures is wrong about who was told</span>
+    <p>
+      <code>append</code> says the caller "has already been told once by
+      <code>open</code>". <code>open</code> reports failures at open time:
+      <code>create_dir_all</code> and the <code>OpenOptions::open</code>. A
+      write that fails afterwards, on a volume that filled up during the run or
+      a mount that went read-only, was never reported by <code>open</code>,
+      because at open time it had not happened. The two
+      <code>let _ =</code> discards are the whole of the handling, so that class
+      of failure is silent everywhere: no warning on screen, no record, and a
+      session file that simply stops.
+      <span class="chip cert">certified</span> by reading the two functions
+      together: <code>open</code>'s only <code>with_context</code> calls are on
+      <code>create_dir_all</code> and <code>open</code>, and
+      <code>append</code> has no error path that reaches a caller. The claim
+      that follows from that, that a mid-run write failure is invisible, is
+      <span class="chip unv">unverified</span>: settle it by filling the volume
+      holding <code>~/.emma/sessions/</code> during a goal, or by making the
+      directory read-only after startup, and reading what Emma says.
+    </p>
+  </div>
+  <span class="src">crates/emma/src/session.rs — <code>SessionLog::append</code>, <code>SessionLog::open</code></span>
+
+  <h2 id="read">Reading it back, and what a crash can do</h2>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs</span>
+<span class="c">/// Every well-formed record in a session file, in order.
+///
+/// A trailing partial line — the one thing a crash mid-write can leave — is
+/// skipped rather than failing the read, which is the property that makes
+/// this format survivable without a transaction.</span>
+pub fn read(path: &amp;Path) -&gt; Result&lt;Vec&lt;Value&gt;&gt; {
+    let raw =
+        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    Ok(raw
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect())
+}</code></pre>
+
+  <p>
+    <code>filter_map(…ok())</code> drops any line that will not parse, not only
+    the last one. That is broader than the doc's claim and it is the right
+    breadth for the format: a reader that failed on one bad line anywhere would
+    turn a single corrupt record into an unresumable session. The cost is that
+    silent loss in the middle of a file looks identical to no loss at all.
+    Nothing counts what it skipped.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>SessionLog::read</code></span>
+
+  <p>
+    <span class="chip cert">certified</span>: no line in the real corpus is
+    currently unparseable. A JSON parse of all 103 files on this machine at
+    2026-08-16 20:28 EDT read 791 records and rejected zero lines, torn or
+    otherwise. Redo it with the script on
+    <a href="session-corpus.html">The corpus</a>.
+  </p>
+
+  <pre><code><span class="c">// crates/emma/src/session.rs — the test module</span>
+#[test]
+fn a_torn_final_line_costs_only_that_line() {
+    <span class="c">// The crash this format is chosen to survive: the process died between
+    // two write syscalls. Everything before it must still read.</span>
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("torn.jsonl");
+    fs::write(
+        &amp;path,
+        "{\"kind\":\"goal\",\"text\":\"a\"}\n{\"kind\":\"assis",
+    )
+    .unwrap();
+    let records = SessionLog::read(&amp;path).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["text"], "a");
+}</code></pre>
+
+  <p>
+    <span class="chip test">tested</span>, and the fixture is written by hand,
+    which is the limit of what it proves. It shows the reader survives a
+    truncated tail. It does not show that a real kill produces one.
+    <span class="chip unv">unverified</span> whether a Windows write of a few
+    hundred bytes through <code>write_all</code> plus <code>flush</code> can be
+    torn mid-line at all: settle it by killing a run during a large
+    <code>tool_result</code> append and reading the last line of the file.
+  </p>
+  <span class="src">crates/emma/src/session.rs — <code>a_torn_final_line_costs_only_that_line</code></span>
+
+  <p>
+    <code>records_round_trip_and_carry_their_kind</code> is the other half:
+    two appends, two records back, the first carrying its
+    <code>kind</code> and its own field, the second carrying an
+    <code>at_ms</code> greater than zero.
+  </p>
+
+  <h2 id="coverage">What this page covers</h2>
+
+  <p>
+    From <code>session.rs</code>: <code>SessionLog</code>'s fields,
+    <code>new_id</code>, <code>default_dir</code>, <code>open</code>,
+    <code>none</code>, <code>id</code>, <code>path</code>,
+    <code>append</code>, <code>read</code>, and the four unit tests over them
+    (<code>records_round_trip_and_carry_their_kind</code>,
+    <code>a_torn_final_line_costs_only_that_line</code>,
+    <code>a_log_with_no_file_is_not_an_error</code>,
+    <code>ids_sort_by_time</code>). <code>SessionLog::subagent</code> and the
+    <code>Records</code> tap are on <a href="session-records.html">Records</a>,
+    because what they do is namespace a <code>kind</code>.
+  </p>
+
+  <h2 id="unverified">What is not verified here</h2>
+
+  <ul class="body">
+    <li>
+      <span class="chip unv">unverified</span> Whether anything at all is said
+      when a write fails after <code>open</code> succeeded. Settle it by
+      filling the volume mid-goal.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> Whether a real
+      <code>kill -9</code> produces the torn line the test hand-writes. Settle
+      it by killing a run mid-append and reading the tail.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> The <code>unwrap_or(0)</code>
+      clock path in <code>new_id</code> and in <code>append</code>'s
+      <code>at_ms</code>. Nothing exercises a pre-1970 clock.
+    </li>
+    <li>
+      <span class="chip unv">unverified</span> How this page renders. The
+      quotes were diffed against <code>session.rs</code> mechanically and the
+      sidebar matches <code>assets/NAV.html</code>, but no browser drew it.
+      Settle it by opening the file from <code>file://</code>.
+    </li>
+  </ul>
+
+  <footer class="pg">
+    <p>
+      Written against commit <code>62ab9c3</code>. Next:
+      <a href="session-records.html">Every record, field by field</a>, which is
+      what goes through <code>append</code>.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>
