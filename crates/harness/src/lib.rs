@@ -1315,6 +1315,12 @@ fn load_skills(
     // A `BTreeMap` keyed on the front-matter name gives the sorted catalogue the
     // prompt prefix needs, whatever order the directory iterated in.
     let mut found: BTreeMap<String, SkillDef> = BTreeMap::new();
+    // Counted, not merely named. Each skip already printed a line, and on a real
+    // corpus that is 116 lines nobody adds up — the one genuine YAML error hides
+    // among 101 line-ending complaints, and a catalogue a third short looks
+    // exactly like a catalogue that is complete. The total is the number that
+    // tells an operator something is wrong.
+    let mut skipped = 0usize;
     if dir.is_dir() {
         for entry in
             std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))?
@@ -1341,6 +1347,7 @@ fn load_skills(
                 // plainly there.
                 (Err(e), Flavor::Claude) => {
                     eprintln!("emma: skipping skill {}: {e:#}", path.display());
+                    skipped += 1;
                     continue;
                 }
             };
@@ -1371,6 +1378,13 @@ fn load_skills(
                 SkillDef::new(front.name, front.description, body),
             );
         }
+    }
+    if skipped > 0 {
+        eprintln!(
+            "emma: {skipped} skill(s) in {} were skipped and are not in the catalogue; \
+             each is named above with its reason.",
+            dir.display()
+        );
     }
     let Some(elected) = elected else {
         return Ok(found.into_values().collect());
@@ -1441,8 +1455,23 @@ fn load_commands(root: &Path) -> Result<BTreeMap<String, String>> {
     if !dir.is_dir() {
         return Ok(out);
     }
+    // Top level only, by design: a command is summoned as `/name`, and a name
+    // taken from a nested path is either ambiguous or ugly. But a subdirectory
+    // full of real commands contributing nothing, with no report, is the same
+    // quiet gap as a skipped skill — 14 such files exist on the owner's machine.
+    let mut nested = 0usize;
     for entry in std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
         let path = entry?.path();
+        if path.is_dir() {
+            nested += std::fs::read_dir(&path)
+                .map(|it| {
+                    it.flatten()
+                        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
+                        .count()
+                })
+                .unwrap_or(0);
+            continue;
+        }
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
             continue;
         }
@@ -1450,6 +1479,14 @@ fn load_commands(root: &Path) -> Result<BTreeMap<String, String>> {
         let body = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
         out.insert(name.into_owned(), body.trim().to_string());
+    }
+    if nested > 0 {
+        eprintln!(
+            "emma: {nested} command file(s) below {} are in subdirectories and were not \
+             loaded — only `commands/*.md` at the top level becomes a `/name`. Move them up \
+             if they are wanted.",
+            dir.display()
+        );
     }
     Ok(out)
 }

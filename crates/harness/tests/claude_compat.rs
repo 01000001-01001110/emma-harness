@@ -337,6 +337,26 @@ fn a_claude_skill_may_carry_keys_emma_does_not_read() {
     assert_eq!(h.skill("adr").expect("found").description, "Write an ADR.");
 }
 
+/// A command in a subdirectory contributes nothing, and that is said out loud.
+///
+/// Top level only is the design — a command is summoned as `/name` and a name
+/// taken from a nested path is ambiguous. But 14 real command files sit in
+/// subdirectories on the owner`s machine contributing nothing, and until this
+/// they did so in silence, which is the same quiet gap as a skipped skill.
+#[test]
+fn commands_in_subdirectories_are_not_loaded_and_the_boot_still_works() {
+    let base = scratch("claude-cmd-nested");
+    let root = base.join(".claude");
+    write(&root.join("commands/top.md"), "at the top level");
+    write(&root.join("commands/group/buried.md"), "in a subdirectory");
+    let h = Harness::load(&root).expect("a nested command must not stop the boot");
+    assert_eq!(
+        h.command_names(),
+        vec!["top"],
+        "only the top-level command becomes a /name"
+    );
+}
+
 /// Two skills declaring one name do not vanish quietly.
 ///
 /// The catalogue is keyed on the frontmatter `name`, so a collision means one
