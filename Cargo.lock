@@ -370,6 +370,7 @@ dependencies = [
  "emma-tools-tasks",
  "emma-tools-web",
  "futures-util",
+ "globset",
  "idna",
  "libc",
  "ratatui",

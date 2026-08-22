@@ -33,6 +33,12 @@ tokio = { workspace = true, features = ["signal", "sync"] }
 # becomes a `tool_result` the model reads rather than the end of the session.
 # The loop's first rule is that every failure class is an observation, and a
 # panic was the only one that was not. Already in the lock file via `tools/web`.
+# Permission path specifiers — `Read(./src/**)`, `Edit(/etc/**)`. The same
+# crate `tools/fs` globs with, so a rule and a `Glob` call agree about what a
+# pattern means; two glob dialects in one program is how a rule starts matching
+# something the user did not write.
+globset.workspace = true
+
 futures-util.workspace = true
 
 emma-harness.workspace = true

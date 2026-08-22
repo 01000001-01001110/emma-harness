@@ -58,6 +58,7 @@
 //! `example.com.attacker.net`, and does not match `sub.example.com`. Those three
 //! are pinned by tests, because each one is a host an attacker can register.
 
+use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -86,7 +87,7 @@ pub struct Rule {
 }
 
 /// What a rule matches within its tool.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Spec {
     /// A bare tool name, or `Tool(*)`. Every call.
     All,
@@ -94,17 +95,52 @@ pub enum Spec {
     /// nothing else — notably **not** the tool's local-damage question. A grant
     /// naming one host cannot also be a grant to write files.
     Domain(DomainPattern),
-    /// A specifier this build parsed and cannot evaluate — `Bash(git log:*)`,
-    /// `Read(./src/**)`. Never matches anything, in any list, and is reported at
-    /// boot so nobody relies on it.
+    /// `Bash(git *)`, `Bash(npm run test:*)`. Matches the `command` argument by
+    /// **prefix**, on whitespace-normalised text, with a trailing `*` or `:*`
+    /// meaning "and anything after".
+    ///
+    /// Prefix rather than glob because that is what the shape means to the
+    /// people who write it: `Bash(git *)` is "any git command", not a pattern
+    /// language. A prefix is also the only reading that is safe to get slightly
+    /// wrong in a deny list — a prefix that matches too little still denies
+    /// something, where a glob that matches too little can silently deny
+    /// nothing.
+    Command(String, String),
+    /// `Read(./src/**)`, `Edit(/etc/**)`. Matches a path-shaped argument
+    /// against a glob.
+    Path(String, globset::GlobMatcher),
+    /// A specifier this build parsed and cannot evaluate. Never matches
+    /// anything, in any list, and is reported at boot so nobody relies on it.
     Unsupported(String),
 }
+
+/// Compared by what was written, not by the compiled matcher.
+///
+/// `globset::GlobMatcher` is not `Eq` — two matchers built from one pattern are
+/// distinct values — so equality is on the pattern text, which is what a reader
+/// means by "the same rule" anyway.
+impl PartialEq for Spec {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Spec::All, Spec::All) => true,
+            (Spec::Domain(a), Spec::Domain(b)) => a == b,
+            (Spec::Command(a, _), Spec::Command(b, _)) => a == b,
+            (Spec::Path(a, _), Spec::Path(b, _)) => a == b,
+            (Spec::Unsupported(a), Spec::Unsupported(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Spec {}
 
 impl fmt::Display for Rule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.spec {
             Spec::All => write!(f, "{}", self.tool),
             Spec::Domain(d) => write!(f, "{}(domain:{})", self.tool, d.raw),
+            Spec::Command(raw, _) => write!(f, "{}({raw})", self.tool),
+            Spec::Path(raw, _) => write!(f, "{}({raw})", self.tool),
             Spec::Unsupported(s) => write!(f, "{}({s})", self.tool),
         }
     }
@@ -181,11 +217,75 @@ impl Rule {
             };
             return Ok(Self { tool, spec });
         }
+        // A path-shaped specifier: anything with a separator or a glob
+        // metacharacter. Tried before the command shape so `Read(./src/**)` is
+        // not read as a command prefix beginning "./src/".
+        if inner.contains('/') || inner.contains('\\') || inner.contains('[') {
+            if let Ok(g) = globset::Glob::new(inner) {
+                return Ok(Self {
+                    tool,
+                    spec: Spec::Path(inner.to_string(), g.compile_matcher()),
+                });
+            }
+        }
+        // A command prefix. `git *`, `npm run test:*`, and the bare `git` form
+        // that people write meaning the same thing.
+        let prefix = inner
+            .strip_suffix(":*")
+            .or_else(|| inner.strip_suffix('*'))
+            .unwrap_or(inner);
+        let prefix = normalise_command(prefix);
+        if !prefix.is_empty() {
+            return Ok(Self {
+                tool,
+                spec: Spec::Command(inner.to_string(), prefix),
+            });
+        }
         Ok(Self {
             tool,
             spec: Spec::Unsupported(inner.to_string()),
         })
     }
+}
+
+/// Collapse runs of whitespace so `git   log` and `git log` are one command.
+///
+/// Not a shell parser, and deliberately not: quoting, substitution and operator
+/// precedence are the shell's business, and a half-parser here would produce
+/// rules whose meaning differs from what the shell does with the same string —
+/// which is a worse failure than a rule that is simply literal.
+/// The command a call would run, if it names one.
+fn command_of(args: &Value) -> Option<String> {
+    args.get("command")
+        .and_then(Value::as_str)
+        .map(normalise_command)
+}
+
+/// The path a call would touch, if it names one.
+///
+/// Both spellings, because the tools use both: `file_path` for the ones that
+/// address a single file, `path` for the ones that address a base.
+fn path_of(args: &Value) -> Option<String> {
+    ["file_path", "path"]
+        .iter()
+        .find_map(|k| args.get(*k).and_then(Value::as_str))
+        .map(str::to_string)
+}
+
+/// Whether a command falls under a prefix rule.
+///
+/// **Word-boundary, not raw string prefix.** `git` must not match `github-cli`,
+/// which a bare `starts_with` would do — and in a deny list that is the
+/// difference between blocking what was written and blocking something the
+/// operator never named. Either the command equals the prefix, or it continues
+/// with a space.
+fn command_matches(prefix: &str, command: &str) -> bool {
+    command == prefix
+        || (command.starts_with(prefix) && command.as_bytes().get(prefix.len()) == Some(&b' '))
+}
+
+fn normalise_command(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn check_tool(name: &str) -> Result<String> {
@@ -624,6 +724,34 @@ impl Rules {
         self.decide(|r| r.tool == tool && r.spec == Spec::All)
     }
 
+    /// What the rules say about **this call**, arguments included.
+    ///
+    /// `for_tool` answers about a tool; this answers about one invocation of
+    /// it, which is the question `Bash(git *)` and `Read(./src/**)` were
+    /// written to ask. Until this existed both shapes parsed, were kept, were
+    /// announced as unevaluable, and matched nothing — so a `deny` list copied
+    /// from a Claude Code project protected only what it named baldly.
+    ///
+    /// A bare rule still counts, because `Bash` means every `Bash` call and a
+    /// narrower rule cannot take that away — the ladder decides which list
+    /// wins, not which rule is more specific.
+    pub fn for_call(&self, tool: &str, args: &Value) -> Option<Decision> {
+        self.decide(|r| {
+            r.tool == tool
+                && match &r.spec {
+                    Spec::All => true,
+                    Spec::Command(_, prefix) => command_of(args)
+                        .map(|c| command_matches(prefix, &c))
+                        .unwrap_or(false),
+                    Spec::Path(_, g) => path_of(args).map(|p| g.is_match(&p)).unwrap_or(false),
+                    // A destination is a different question, answered by
+                    // `for_egress`. A host grant is not permission to run.
+                    Spec::Domain(_) => false,
+                    Spec::Unsupported(_) => false,
+                }
+        })
+    }
+
     /// What the rules say about **the egress question** for one tool reaching
     /// one host. Bare rules for that tool count, and so do its `domain:` rules.
     pub fn for_egress(&self, tool: &str, host: &str) -> Option<Decision> {
@@ -632,6 +760,11 @@ impl Rules {
                 && match &r.spec {
                     Spec::All => true,
                     Spec::Domain(d) => d.matches(host),
+                    // Neither shape says anything about a destination. A
+                    // command prefix is about what runs; a path is about what
+                    // is touched. Reading either as egress permission would let
+                    // a narrow grant answer a question nobody asked it.
+                    Spec::Command(..) | Spec::Path(..) => false,
                     Spec::Unsupported(_) => false,
                 }
         })
@@ -835,8 +968,12 @@ mod tests {
     // Parsing
     // -----------------------------------------------------------------------
 
+    /// Renamed from `the_three_shapes_a_rule_can_have`: there are five now.
+    /// `Bash(git log:*)` and `Read(./src/**)` used to land in `Unsupported`,
+    /// which is what this test asserted — correctly, of the build it was
+    /// written for.
     #[test]
-    fn the_three_shapes_a_rule_can_have() {
+    fn the_shapes_a_rule_can_have() {
         assert_eq!(Rule::parse("WebSearch").unwrap().spec, Spec::All);
         assert_eq!(Rule::parse("WebSearch(*)").unwrap().spec, Spec::All);
         assert_eq!(Rule::parse("WebFetch(domain:*)").unwrap().spec, Spec::All);
@@ -846,8 +983,61 @@ mod tests {
         ));
         assert!(matches!(
             Rule::parse("Bash(git log:*)").unwrap().spec,
-            Spec::Unsupported(_)
+            Spec::Command(..)
         ));
+        assert!(matches!(
+            Rule::parse("Read(./src/**)").unwrap().spec,
+            Spec::Path(..)
+        ));
+    }
+
+    /// A command prefix matches at a word boundary and nowhere else.
+    ///
+    /// `git` must not cover `github-cli`, which a raw `starts_with` would do.
+    /// In a deny list that is the difference between blocking what the operator
+    /// wrote and blocking something they never named.
+    #[test]
+    fn a_command_prefix_stops_at_a_word_boundary() {
+        assert!(command_matches("git", "git"));
+        assert!(command_matches("git", "git log --oneline"));
+        assert!(!command_matches("git", "github-cli release"));
+        assert!(!command_matches("git log", "git"));
+        // Whitespace is normalised on both sides, so a double space is not a
+        // way past a deny rule.
+        assert!(command_matches(
+            "git log",
+            &normalise_command("git   log -n1")
+        ));
+    }
+
+    /// The rules that used to match nothing now bite, in both directions.
+    #[test]
+    fn a_command_and_a_path_rule_actually_match_a_call() {
+        use serde_json::json;
+        let deny = |r: &str| {
+            let mut rules = Rules::default();
+            rules.deny.push(Rule::parse(r).unwrap());
+            rules
+        };
+        let r = deny("Bash(git *)");
+        assert_eq!(
+            r.for_call("Bash", &json!({ "command": "git push" })),
+            Some(Decision::Deny)
+        );
+        assert_eq!(
+            r.for_call("Bash", &json!({ "command": "cargo test" })),
+            None
+        );
+
+        let r = deny("Read(./src/**)");
+        assert_eq!(
+            r.for_call("Read", &json!({ "file_path": "./src/main.rs" })),
+            Some(Decision::Deny)
+        );
+        assert_eq!(
+            r.for_call("Read", &json!({ "file_path": "./docs/index.html" })),
+            None
+        );
     }
 
     #[test]
@@ -908,21 +1098,45 @@ mod tests {
         }
     }
 
+    /// **This test used to assert the defect.** `Bash(rm *)` and
+    /// `Read(./src/**)` were `Unsupported` — parsed, kept, announced as
+    /// matching nothing — so a deny list copied from a Claude Code project
+    /// protected only what it named baldly. Both evaluate now, and the
+    /// assertions here are inverted to say so rather than deleted, because the
+    /// old expectations are the record of what changed.
     #[test]
-    fn an_unsupported_specifier_is_announced_and_the_deny_wording_is_the_loud_one() {
+    fn the_shapes_that_used_to_be_inert_now_evaluate() {
+        use serde_json::json;
         let (rules, notes) = Rules::parse(&[
             entry(PermissionKind::Deny, "Bash(rm *)"),
             entry(PermissionKind::Allow, "Read(./src/**)"),
         ]);
-        // Inert in both lists…
-        assert!(rules.is_empty());
-        assert_eq!(rules.for_tool("Bash"), None);
-        assert_eq!(rules.for_tool("Read"), None);
-        // …and said out loud, with the deny sentence carrying the alarm.
-        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(!rules.is_empty(), "both rules were dropped");
+        assert_eq!(
+            rules.for_call("Bash", &json!({ "command": "rm -rf build" })),
+            Some(Decision::Deny),
+            "a deny rule copied from a Claude Code project still protects nothing"
+        );
+        assert_eq!(
+            rules.for_call("Read", &json!({ "file_path": "./src/main.rs" })),
+            Some(Decision::Allow)
+        );
+        // Nothing to announce any more: an announcement that fires on a rule
+        // which works is how announcements stop being read.
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+
+    /// The announcement itself is unchanged for anything still unevaluable, and
+    /// the deny wording still carries the alarm.
+    #[test]
+    fn a_specifier_that_still_cannot_be_evaluated_is_announced() {
+        let (rules, notes) = Rules::parse(&[entry(PermissionKind::Deny, "Bash(:*)")]);
+        assert!(
+            rules.is_empty(),
+            "an unevaluable rule was kept as if it worked"
+        );
+        assert_eq!(notes.len(), 1, "{notes:?}");
         assert!(notes[0].contains("blocks NOTHING"), "{}", notes[0]);
-        assert!(notes[0].contains("Bash(rm *)"), "{}", notes[0]);
-        assert!(notes[1].contains("still ask"), "{}", notes[1]);
     }
 
     #[test]

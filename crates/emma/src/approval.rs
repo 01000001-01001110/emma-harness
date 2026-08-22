@@ -448,7 +448,12 @@ impl Approvals {
         // Only bare `Tool` rules answer this question; a `Tool(domain:…)` grant
         // is about a destination, and reading it as permission to run the tool
         // would let a narrow grant answer a question nobody asked it.
-        let rule = self.rules.lock().await.for_tool(name);
+        // `for_call`, not `for_tool`: the arguments are what `Bash(git *)` and
+        // `Read(./src/**)` were written to ask about, and until this line
+        // changed they were parsed, kept, announced as unevaluable and matched
+        // nothing — so a deny list copied from a Claude Code project protected
+        // only what it named baldly.
+        let rule = self.rules.lock().await.for_call(name, args);
 
         // A `deny` rule first, above the bypass. See the precedence block at the
         // top of the file: written policy outranks a flag somebody typed.
