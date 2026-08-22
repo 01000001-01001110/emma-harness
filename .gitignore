@@ -21,3 +21,6 @@
 # unauthenticated CDP socket, they are dead the moment the process is, and one
 # was committed by accident once already.
 .browser-miner/
+
+# Loop-harness session state: local to one run, never shared.
+.claude/*.local.md
