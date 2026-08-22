@@ -548,6 +548,61 @@ impl Rules {
         (rules, notes)
     }
 
+    /// Rules that parsed, were kept, and cannot match anything **this run** offers.
+    ///
+    /// Run after the registry exists, which is why it is not part of [`Rules::parse`]:
+    /// the tool surface is chosen later than the rules are read, and neither of the
+    /// two mistakes below can be seen without it.
+    ///
+    /// **Deliberately narrow.** A rule naming a tool a persona filtered out is
+    /// correctly inert and says nothing here — the operator asked for that. Only two
+    /// shapes are reported, and both are unambiguously a mistake rather than a
+    /// choice:
+    ///
+    /// 1. **A tool name that differs from a real one only by case.** Matching is
+    ///    exact, so `deny: ["bash"]` never touches `Bash`. In a deny list that is a
+    ///    protection the operator believes they have.
+    /// 2. **A `domain:` specifier on a tool that never reaches the network.** The
+    ///    egress gate answers `Allow` before consulting rules for anything with
+    ///    `reaches_network: false`, so `Bash(domain:evil.com)` matches nothing — and
+    ///    `Bash` in particular *can* reach the network, by running `curl`, which is
+    ///    exactly what makes the rule look like it is doing something.
+    ///
+    /// The `Unicode` and unbracketed-colon cases are announced at parse time
+    /// already; this covers the two that needed the registry.
+    pub fn unmatchable_here(
+        entries: &[PermissionEntry],
+        known: &[&'static str],
+        reaches_network: &[&'static str],
+    ) -> Vec<String> {
+        let mut notes = Vec::new();
+        for entry in entries {
+            let Ok(rule) = Rule::parse(&entry.rule) else {
+                continue;
+            };
+            let named = rule.tool.as_str();
+            if !known.contains(&named) {
+                if let Some(real) = known.iter().find(|k| k.eq_ignore_ascii_case(named)) {
+                    notes.push(format!(
+                        "{}: `{}` names `{named}`, and the tool is spelled `{real}`. Tool names \
+                     match exactly, so this rule can never fire.",
+                        entry.source.display(),
+                        entry.rule
+                    ));
+                }
+                continue;
+            }
+            if matches!(rule.spec, Spec::Domain(_)) && !reaches_network.contains(&named) {
+                notes.push(format!(
+                "{}: `{}` puts a `domain:` specifier on `{named}`, which does not declare that                  it reaches the network. The egress gate answers before consulting rules for                  such a tool, so this rule matches nothing. If the worry is `{named}` reaching                  out by other means, a bare `{named}` rule is the one that bites.",
+                entry.source.display(),
+                entry.rule
+            ));
+            }
+        }
+        notes
+    }
+
     pub fn is_empty(&self) -> bool {
         self.deny.is_empty() && self.ask.is_empty() && self.allow.is_empty()
     }

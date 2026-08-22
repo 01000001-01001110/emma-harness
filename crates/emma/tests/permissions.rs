@@ -1299,3 +1299,35 @@ async fn live_replay() {
 }
 
 // endregion: Live certification
+
+#[test]
+fn a_miscased_tool_name_and_a_domain_rule_on_a_local_tool_are_both_named() {
+    let entries = vec![
+        PermissionEntry {
+            rule: "bash".into(),
+            kind: PermissionKind::Deny,
+            source: std::path::PathBuf::from("settings.json"),
+        },
+        PermissionEntry {
+            rule: "Bash(domain:evil.com)".into(),
+            kind: PermissionKind::Deny,
+            source: std::path::PathBuf::from("settings.json"),
+        },
+        PermissionEntry {
+            rule: "WebFetch(domain:example.com)".into(),
+            kind: PermissionKind::Allow,
+            source: std::path::PathBuf::from("settings.json"),
+        },
+    ];
+    let notes = Rules::unmatchable_here(&entries, &["Bash", "WebFetch"], &["WebFetch"]);
+    let all = notes.join(
+        "
+",
+    );
+    assert!(all.contains("spelled `Bash`"), "{all}");
+    assert!(all.contains("does not declare"), "{all}");
+    // A domain rule on a tool that really does reach the network is fine
+    // and must not be reported, or the note becomes noise.
+    assert!(!all.contains("WebFetch(domain:"), "{all}");
+    assert_eq!(notes.len(), 2, "{all}");
+}

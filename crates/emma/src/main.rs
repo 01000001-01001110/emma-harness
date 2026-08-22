@@ -409,6 +409,22 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // Consumes the registry: the unfiltered one must not survive the call.
     let tools = harness.select_tools(registry)?;
 
+    // Two mistakes that cannot be seen until the tool surface exists, which is
+    // why they are checked here rather than beside the other rule notes: a rule
+    // whose tool name differs from a real one only by case, and a `domain:`
+    // specifier on a tool that never reaches the network. Both parse, both are
+    // kept, and both match nothing — and in a deny list that is a protection
+    // the operator believes they have.
+    let known = tools.names();
+    let reaching: Vec<&'static str> = tools
+        .iter()
+        .filter(|t| t.meta().reaches_network)
+        .map(|t| t.name())
+        .collect();
+    for note in emma::permissions::Rules::unmatchable_here(&entries, &known, &reaching) {
+        term.warn(&note);
+    }
+
     if let Some(restored) = &restored {
         for line in restored.continuity.differences(
             &harness.instructions_hash(),
