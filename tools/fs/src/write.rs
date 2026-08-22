@@ -203,12 +203,56 @@ impl Write {
         let shown = path::display(&root, &target);
         let lines = content.lines().count();
         let verb = if existed { "replaced" } else { "created" };
+        // **A name Windows cannot easily undo.** Emma's root canonicalises to
+        // the `\\?\` verbatim form, which is why `NUL` here is a real file that
+        // round-trips rather than a write to the null device — the classic data
+        // loss, and Emma does not have it. What it does have is the other side
+        // of the same coin: `cmd`, Explorer and most tooling reach files through
+        // the non-verbatim API and cannot open, move or delete a name like this
+        // at all. Creating one silently leaves somebody a file they cannot get
+        // rid of without knowing the trick.
+        //
+        // Said rather than refused. The write worked, the content is retrievable
+        // through Emma, and refusing a name the filesystem accepted would be
+        // Emma deciding what a user may call a file.
+        let note = awkward_on_windows(&target)
+            .map(|why| {
+                format!(
+                    "\n[note: `{shown}` {why}. Emma can read and overwrite it, but cmd, \
+                     Explorer and most tools cannot — deleting it needs a \\\\?\\ path.]"
+                )
+            })
+            .unwrap_or_default();
         Ok(ToolOutcome::new(format!(
-            "{verb} {shown} ({lines} lines, {} bytes)",
+            "{verb} {shown} ({lines} lines, {} bytes){note}",
             content.len()
         ))
         .with_display(format!("{verb} {shown}")))
     }
+}
+
+/// Why a filename will be awkward for ordinary Windows tooling, if it will be.
+///
+/// `None` everywhere else, and on Windows for every ordinary name. This does not
+/// refuse anything — it exists so a file that is hard to delete does not arrive
+/// silently.
+fn awkward_on_windows(path: &std::path::Path) -> Option<&'static str> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let name = path.file_name()?.to_str()?;
+    let stem = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+    const DEVICES: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    if DEVICES.contains(&stem.as_str()) {
+        return Some("is a reserved device name on Windows");
+    }
+    if name.ends_with('.') || name.ends_with(' ') {
+        return Some("ends with a dot or a space, which Windows normally strips");
+    }
+    None
 }
 
 // endregion: The refusal, and the write

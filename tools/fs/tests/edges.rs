@@ -982,3 +982,44 @@ async fn a_file_over_the_read_limit_is_refused_with_the_cap_and_a_way_round_it()
     // does not exist — the mistake this repository already paid for once.
     assert!(shown.contains("Grep") || shown.contains("Bash"), "{shown}");
 }
+
+/// A file Windows tooling cannot delete is named at the moment it is created.
+///
+/// Emma's root canonicalises to the verbatim form, so `NUL` here is a real file
+/// that round-trips rather than a write to the null device — the classic data
+/// loss, which Emma does not have. The other side of that coin is that `cmd`,
+/// Explorer and most tooling reach files through the non-verbatim API and
+/// cannot open, move or delete such a name at all.
+///
+/// Said, not refused: the write worked and the content is retrievable through
+/// Emma. Refusing a name the filesystem accepted would be Emma deciding what a
+/// user may call a file.
+#[cfg(windows)]
+#[tokio::test]
+async fn a_reserved_device_name_is_written_and_the_awkwardness_is_named() {
+    let fs = Sandbox::new();
+    let out = fs
+        .ok("Write", json!({ "file_path": "NUL", "content": "kept\n" }))
+        .await;
+    let shown = format!("{out:?}");
+    assert!(shown.contains("reserved device name"), "{shown}");
+    assert!(shown.contains("cannot"), "{shown}");
+    // And it really is a file, not a write into the void — read back through
+    // Emma, which is the claim the note actually makes. Reading it with plain
+    // `std::fs` gets the null device and an empty string, which is the whole
+    // reason the note exists: the two APIs disagree about what this name means.
+    let back = fs.ok("Read", json!({ "file_path": "NUL" })).await;
+    assert!(
+        format!("{back:?}").contains("kept"),
+        "Emma could not read back the file it just wrote: {back:?}"
+    );
+
+    // An ordinary name says nothing, or the note becomes noise.
+    let out = fs
+        .ok(
+            "Write",
+            json!({ "file_path": "plain.txt", "content": "x\n" }),
+        )
+        .await;
+    assert!(!format!("{out:?}").contains("note:"), "{out:?}");
+}
