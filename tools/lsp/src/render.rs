@@ -287,7 +287,17 @@ pub fn locations(
     let outcome = ToolOutcome::new(format!("{}\n{body}", header(server, readiness, health)))
         .with_display(format!("{} {what}", inside.len()));
     if capped {
-        outcome.truncated()
+        // `truncated_because`, not the bare `truncated()`. `tool-api` calls the
+        // bare form "the weaker form … never the preferred one for a new tool",
+        // and it was in use here: the flag reached the model with no reason
+        // attached, so `agent.rs` appended its generic "this tool did not say
+        // which limit cut it" fallback. The tool knew the cap and the loss all
+        // along and was not passing them on.
+        outcome.truncated_because(format!(
+            "{MAX_LOCATIONS} of {} {what} shown; the rest are not here. No argument raises that \
+             — ask a narrower question, or Grep for the symbol to see every hit",
+            inside.len()
+        ))
     } else {
         outcome
     }
@@ -395,7 +405,11 @@ pub fn symbols(
     let outcome = ToolOutcome::new(format!("{}\n{body}", header(server, readiness, health)))
         .with_display(format!("{} symbols", lines.len()));
     if capped {
-        outcome.truncated()
+        outcome.truncated_because(format!(
+            "{MAX_SYMBOLS} of {} symbols shown; the rest are not here. No argument raises that \
+             — narrow the query, or Grep the file to see every symbol in it",
+            lines.len()
+        ))
     } else {
         outcome
     }
@@ -655,3 +669,43 @@ mod tests {
 }
 
 // endregion: Tests
+
+#[cfg(test)]
+mod truncation_honesty {
+    //! The class-wide truncation test lives in `tools/fs/tests/truncation.rs`
+    //! and covers the fs tools only. An adversarial review found that gap by
+    //! reading the LSP renderer and noticing it still used the bare
+    //! `ToolOutcome::truncated()` — the form `tool-api` calls "the weaker form
+    //! … never the preferred one for a new tool" — so the flag reached the
+    //! model with no reason and `agent.rs` supplied its generic "this tool did
+    //! not say which limit cut it" fallback. The tool knew the cap and the loss
+    //! the whole time.
+    //!
+    //! This module is the LSP half of that guard, kept beside the code rather
+    //! than in the fs crate's test file, because a cross-crate test would have
+    //! to build a language server to reach these functions.
+
+    /// Neither renderer may go back to the bare form.
+    ///
+    /// A source assertion, and scoped to this file so it cannot pass on an
+    /// unrelated match: `render.rs` is where both call sites live, and the
+    /// whole claim is about which constructor they use.
+    #[test]
+    fn no_renderer_reports_a_cut_without_saying_which_cap_and_what_to_do() {
+        let source = include_str!("render.rs");
+        // The bare call, as it would be written. Split so this assertion does
+        // not match itself — the failure mode that made two tests in this
+        // repository unfalsifiable.
+        let bare = format!("outcome.{}()", "truncated");
+        assert!(
+            !source.contains(&bare),
+            "a renderer reports a cut with no cap, no loss and no remedy"
+        );
+        // And the honest form is actually present, so this cannot pass by the
+        // call sites having been deleted.
+        assert!(
+            source.contains(&format!("truncated_{}", "because")),
+            "the honest form is gone entirely"
+        );
+    }
+}
