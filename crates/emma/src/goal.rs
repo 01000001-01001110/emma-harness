@@ -287,12 +287,32 @@ impl DoneCheck for MarkerClaim {
 /// formatting. Not tolerant about position: the marker must own its line, so a
 /// sentence *about* the marker ("I will print GOAL COMPLETE when the tests
 /// pass") is not a claim.
+///
+/// **And it must be the last thing said.** This used to accept the marker on
+/// any line, which meant a turn reading
+///
+/// ```text
+/// GOAL COMPLETE
+///
+/// Actually wait — the tests still fail.
+/// ```
+///
+/// ended the goal `Done`, with the retraction sitting in the transcript where
+/// nobody would read it because the run was over. The module doc above has
+/// always said "end its final message with the line", and the refusal this
+/// function produces has always said "did not end with the completion line" —
+/// the code was the only one of the three disagreeing.
+///
+/// The cost is a model that signs off after its marker gets a kick instead of
+/// finishing. That is the right side to be wrong on: a kick is one cheap turn
+/// and says what to do, and a false `Done` is a wrong answer nobody sees.
 pub fn claims_done(text: &str) -> bool {
-    text.lines().any(|line| {
-        line.trim()
-            .trim_matches(is_decoration)
-            .eq_ignore_ascii_case(MARKER)
-    })
+    let Some(last) = text.lines().rev().find(|l| !l.trim().is_empty()) else {
+        return false;
+    };
+    last.trim()
+        .trim_matches(is_decoration)
+        .eq_ignore_ascii_case(MARKER)
 }
 
 /// The characters a model decorates a line with, which a claim survives.
@@ -467,6 +487,16 @@ mod tests {
             "I will print GOAL COMPLETE once the tests are green."
         ));
         assert!(!claims_done("still working"));
+
+        // The marker must be the last thing said. A model that prints it and
+        // then takes it back has not finished, and before this the retraction
+        // was ignored and the goal ended `Done`.
+        assert!(
+            !claims_done("GOAL COMPLETE\n\nActually wait — the tests still fail."),
+            "a retracted claim is not a claim"
+        );
+        // Trailing blank lines are not a retraction.
+        assert!(claims_done("done at last.\n\nGOAL COMPLETE\n\n"));
     }
 
     #[tokio::test]
