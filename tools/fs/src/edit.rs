@@ -429,7 +429,7 @@ impl Edit {
             before.replacen(old, new, 1)
         };
 
-        std::fs::write(file, &after)
+        path::write_atomically(file, after.as_bytes())
             .map_err(|e| ToolError::Failed(format!("{raw} could not be written: {e}")))?;
         // Re-stamped so the edit does not read as an outside change, but the
         // completeness carries over: editing one anchor inside a file seen only
@@ -636,7 +636,7 @@ impl Edit {
             )));
         }
 
-        std::fs::write(file, &after)
+        path::write_atomically(file, after.as_bytes())
             .map_err(|e| ToolError::Failed(format!("{raw} could not be written: {e}")))?;
 
         // Completeness carries over exactly as it does for an anchored edit,

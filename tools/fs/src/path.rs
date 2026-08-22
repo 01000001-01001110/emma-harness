@@ -47,6 +47,45 @@ use emma_tool_api::{ToolCtx, ToolError};
 // path and operating on another is how this check becomes decorative.
 // ---------------------------------------------------------------------------
 
+/// Write `bytes` to `file` so a reader never sees a half-written version.
+///
+/// **Why this is not `std::fs::write`.** That truncates the target and then
+/// streams into it, so a crash, a full disk or a kill between the two leaves
+/// the file empty or partial — and the thing being overwritten is somebody's
+/// source. `tools/tasks` has done it this way since it was written; the file
+/// tools, which write far more often and to files nobody has a copy of, did not.
+///
+/// The temp file sits beside the target rather than in the system temp
+/// directory: a rename across filesystems is a copy, and a copy is not atomic.
+/// On failure it is removed, because a stray `.emma-tmp` in somebody's
+/// repository is a bug report.
+///
+/// Windows renames onto an existing path only with `ReplaceFile` semantics,
+/// which `std::fs::rename` provides; where it still refuses — a reader holding
+/// the target open — the error is returned rather than papered over, and the
+/// caller reports it as the write failure it is.
+pub fn write_atomically(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = match file.file_name() {
+        Some(name) => {
+            let mut n = name.to_os_string();
+            n.push(".emma-tmp");
+            file.with_file_name(n)
+        }
+        None => return std::fs::write(file, bytes),
+    };
+    if let Err(e) = std::fs::write(&tmp, bytes) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    match std::fs::rename(&tmp, file) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
+
 /// The canonical root. Canonicalised once per call so that comparisons below
 /// are against the same spelling the OS uses — on Windows that means the
 /// `\\?\` verbatim form, and comparing a verbatim path to a non-verbatim one

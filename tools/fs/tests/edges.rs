@@ -914,3 +914,40 @@ async fn the_read_tracker_does_not_carry_across_sessions() {
 }
 
 // endregion: Shared behaviour
+
+/// A write leaves no temp file behind, and the target is never half-written.
+///
+/// `std::fs::write` truncates and then streams, so a crash, a full disk or a
+/// kill between the two leaves somebody's source empty or partial. `Write` and
+/// both `Edit` paths now rename a complete sibling over the target instead —
+/// the pattern `tools/tasks` has used since it was written, and which the file
+/// tools, which write far more often and to files nobody has a copy of, did
+/// not have.
+///
+/// The stray-file half matters on its own: a `main.rs.emma-tmp` appearing in a
+/// repository is a bug report even when the write succeeded.
+#[tokio::test]
+async fn a_write_leaves_no_temporary_file_beside_the_target() {
+    let fs = Sandbox::new();
+    fs.write_file("keep.txt", "before\n");
+
+    fs.ok("Read", json!({ "file_path": "keep.txt" })).await;
+    fs.ok(
+        "Write",
+        json!({ "file_path": "keep.txt", "content": "after\n" }),
+    )
+    .await;
+
+    assert_eq!(fs.read_file("keep.txt"), "after\n");
+
+    let strays: Vec<String> = std::fs::read_dir(fs.root())
+        .expect("read the sandbox")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains("tmp"))
+        .collect();
+    assert!(
+        strays.is_empty(),
+        "a temporary file survived the write: {strays:?}"
+    );
+}

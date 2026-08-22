@@ -189,7 +189,7 @@ impl Write {
             })?;
         }
 
-        std::fs::write(&target, content)
+        path::write_atomically(&target, content.as_bytes())
             .map_err(|e| ToolError::Failed(format!("{raw} could not be written: {e}")))?;
 
         // The agent authored these bytes, so it has seen them: a follow-up
