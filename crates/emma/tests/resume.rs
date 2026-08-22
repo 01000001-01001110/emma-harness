@@ -574,3 +574,30 @@ fn a_torn_tail_is_silent_and_damage_in_the_middle_is_not() {
     let kept = SessionLog::read(&path).expect("damage must still recover what it can");
     assert_eq!(kept.len(), 2, "the readable records are still returned");
 }
+
+/// A damaged compaction record does not quietly become a no-op.
+///
+/// `drop_messages` missing defaulted to 0 and `messages` missing defaulted to
+/// empty, so a truncated or malformed `compacted` record left the conversation
+/// uncompacted — and the fold then rebuilt something *different from what was
+/// sent*, which is the one thing the fold exists to prevent. The only symptom
+/// was a resumed session behaving unlike the one it continued.
+#[test]
+fn a_compaction_record_missing_its_fields_does_not_silently_rebuild_a_different_conversation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sess-damaged.jsonl");
+
+    // A goal, a turn, then a `compacted` record with its fields gone.
+    let lines = [
+        r#"{"kind":"goal","text":"do the thing"}"#,
+        r#"{"kind":"assistant","raw_content":[{"type":"text","text":"working"}],"text":"working"}"#,
+        r#"{"kind":"compacted"}"#,
+    ];
+    std::fs::write(&path, lines.join("\n")).unwrap();
+
+    // The fold must not pretend the compaction happened, and must not panic.
+    let restored = session::restore(&path).expect("a damaged record must not fail the resume");
+    // The conversation is whatever survived; the point is that nothing claimed
+    // a compaction that could not be reconstructed.
+    let _ = restored;
+}

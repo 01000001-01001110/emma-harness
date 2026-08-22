@@ -455,9 +455,32 @@ impl Fold {
             // run that did it. Compaction only ever touches finished goals, so
             // the count is an index into `history` and never into `query`.
             "compacted" => {
-                let drop = r["drop_messages"].as_u64().unwrap_or(0) as usize;
-                let replacement: Vec<Message> =
-                    serde_json::from_value(r["messages"].clone()).unwrap_or_default();
+                // **A damaged compaction record must not read as a no-op.**
+                // `drop_messages` missing defaulted to 0 and `messages` missing
+                // defaulted to empty, so a truncated or malformed record left
+                // the conversation uncompacted — and the fold then rebuilt
+                // something *different from what was sent*, which is the one
+                // thing this fold exists to prevent. Silent, and visible only as
+                // a resumed session that behaves unlike the one it continues.
+                let drop = match r["drop_messages"].as_u64() {
+                    Some(d) => d as usize,
+                    None => {
+                        eprintln!(
+                            "emma: a `compacted` record is missing `drop_messages`, so the conversation it describes cannot be rebuilt; this resumed conversation will not match the one that was sent."
+                        );
+                        return;
+                    }
+                };
+                let replacement: Vec<Message> = match serde_json::from_value(r["messages"].clone())
+                {
+                    Ok(m) => m,
+                    Err(e) => {
+                        eprintln!(
+                                "emma: a `compacted` record has unreadable replacement messages ({e}), so the conversation it describes cannot be rebuilt; this resumed conversation will not match the one that was sent."
+                            );
+                        return;
+                    }
+                };
                 let drop = drop.min(self.history.len());
                 self.history.splice(..drop, replacement);
             }
