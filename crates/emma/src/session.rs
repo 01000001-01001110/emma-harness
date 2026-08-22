@@ -602,6 +602,7 @@ impl Continuity {
         instructions_hash: &str,
         tool_schema_hash: &str,
         model: &str,
+        cwd: &str,
     ) -> Vec<String> {
         let mut out = Vec::new();
         let mut check = |what: &str, was: &str, now: &str, cost: &str| {
@@ -628,6 +629,18 @@ impl Continuity {
             &self.model,
             model,
             "The turns being handed back were written by a different model.",
+        );
+        // `cwd` was recorded from the beginning and never compared, so the one
+        // hazard `locate` warns about in its own doc — "a conversation about the
+        // wrong repository with write tools attached" — was the only drift that
+        // arrived silently, while three cheaper ones all warned. Resuming a
+        // session by id from another project is exactly how that happens.
+        check(
+            "working directory",
+            &self.cwd,
+            cwd,
+            "This conversation is about a different directory than the one you are in, \
+             and the tools that write files are pointed at this one.",
         );
         out
     }

@@ -414,6 +414,9 @@ async fn run(cli: cli::Cli) -> Result<()> {
             &harness.instructions_hash(),
             &tools.schema_hash(),
             provider.model_id(),
+            &std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
         ) {
             term.warn(&line);
         }

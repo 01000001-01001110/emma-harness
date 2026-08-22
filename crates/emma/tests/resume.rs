@@ -501,11 +501,15 @@ fn resuming_into_a_changed_harness_names_what_changed() {
         instructions_hash: "aaaa".into(),
         tool_schema_hash: "bbbb".into(),
         model: "claude-old".into(),
-        cwd: String::new(),
+        cwd: "/work/alpha".into(),
     };
-    assert!(was.differences("aaaa", "bbbb", "claude-old").is_empty());
+    assert!(was
+        .differences("aaaa", "bbbb", "claude-old", "/work/alpha")
+        .is_empty());
 
-    let lines = was.differences("cccc", "bbbb", "claude-new").join("\n");
+    let lines = was
+        .differences("cccc", "bbbb", "claude-new", "/work/alpha")
+        .join("\n");
     assert!(lines.contains("aaaa") && lines.contains("cccc"), "{lines}");
     assert!(
         lines.contains("claude-old") && lines.contains("claude-new"),
@@ -519,8 +523,27 @@ fn resuming_into_a_changed_harness_names_what_changed() {
     // A session recorded before a field existed cannot be compared, and a
     // warning about an empty string is noise that trains people past warnings.
     assert!(Continuity::default()
-        .differences("cccc", "dddd", "claude-new")
+        .differences("cccc", "dddd", "claude-new", "/work/alpha")
         .is_empty());
+
+    // The hazard `locate` warns about in its own doc and that nothing checked:
+    // resuming a session by id from inside a different repository, with write
+    // tools pointed at the one you are standing in. Every cheaper drift warned;
+    // this one arrived in silence.
+    let elsewhere = was
+        .differences("aaaa", "bbbb", "claude-old", "/work/beta")
+        .join(
+            "
+",
+        );
+    assert!(
+        elsewhere.contains("working directory"),
+        "a cross-project resume must be named: {elsewhere}"
+    );
+    assert!(
+        elsewhere.contains("/work/alpha") && elsewhere.contains("/work/beta"),
+        "both directories must be shown: {elsewhere}"
+    );
 }
 
 // endregion: Which session, and whether it is still the same harness
