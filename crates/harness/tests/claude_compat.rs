@@ -631,6 +631,41 @@ fn a_hook_event_emma_does_not_implement_is_a_loud_startup_error() {
     assert!(msg.contains("PreToolUse"), "{msg}");
 }
 
+/// The opt-in turns a refusal into a named skip, and never a silent one.
+///
+/// **Measured before this existed:** zero of five real hooks in a real
+/// `~/.claude/settings.json` were usable, because the first unimplemented event
+/// refused the boot. Honest, and unusable. "Loud" was never meant to mean
+/// "refuses to start over somebody else's file".
+///
+/// The default does not move — the test above still asserts the refusal — and
+/// the escape is an environment variable rather than a config key **on
+/// purpose**: a repository that could relax its own strictness is the trust
+/// boundary running backwards.
+#[test]
+fn an_unimplemented_hook_event_can_be_skipped_by_explicit_opt_in() {
+    let base = scratch("claude-hook-optin");
+    let root = base.join(".claude");
+    write(
+        &root.join("settings.json"),
+        r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"hooks/x.sh"}]}]}}"#,
+    );
+
+    // Without it: still a refusal.
+    assert!(Harness::load(&root).is_err(), "the strict default moved");
+
+    // With it: the harness loads, and the hook is gone rather than pretended.
+    std::env::set_var("EMMA_CLAUDE_HOOKS", "skip-unknown");
+    let loaded = Harness::load(&root);
+    std::env::remove_var("EMMA_CLAUDE_HOOKS");
+    // The harness loads. That the hook itself is *gone* rather than kept is
+    // enforced structurally rather than asserted here: `into_hook_defs` skips
+    // the whole event before any `HookDef` is built, so there is no path by
+    // which one could survive. There is no public accessor to check it through,
+    // and inventing one for a test would be a worse trade than saying so.
+    loaded.expect("the opt-in must let the harness load");
+}
+
 /// The genuine disagreement between the two systems, and Emma does not blink.
 /// Honouring a shell string would mean dropping containment, the cleared
 /// environment and the argv exec — at the exact point where Emma is deciding

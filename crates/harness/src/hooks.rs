@@ -147,12 +147,40 @@ impl HookEvent {
             "PreToolUse" => Ok(Self::PreToolUse),
             "PostToolUse" => Ok(Self::PostToolUse),
             "UserPromptSubmit" => Ok(Self::UserPromptSubmit),
-            other => bail!(
-                "hook event `{other}` is not implemented by Emma (implemented: {}). \
-                 A hook attached to an event that never fires is a policy the \
-                 operator believes they have; remove it or implement the event",
-                Self::ALL.join(", ")
-            ),
+            other => {
+                // **The opt-out is an environment variable, and that is the
+                // whole of its safety.** A repository must not be able to relax
+                // this: a `.claude/settings.json` that could disable its own
+                // strictness is a config that decides how carefully it is read,
+                // which is the trust boundary running backwards. An environment
+                // variable is set by the person at the keyboard, per run, and no
+                // file in a cloned tree can reach it.
+                //
+                // Measured before adding it: on the machine this was written
+                // against, *zero* of five real hooks in a real
+                // `~/.claude/settings.json` were usable, because the first
+                // unimplemented event refused the boot. That is honest and it is
+                // also unusable, and "loud" was never meant to mean "refuses to
+                // start over somebody else's file".
+                //
+                // The default does not move. Without the variable this is still
+                // a startup error, and the note says the variable exists rather
+                // than making the reader find it.
+                if std::env::var_os("EMMA_CLAUDE_HOOKS").as_deref()
+                    == Some(std::ffi::OsStr::new("skip-unknown"))
+                {
+                    bail!("EMMA_SKIP_HOOK:{other}");
+                }
+                bail!(
+                    "hook event `{other}` is not implemented by Emma (implemented: {}). \
+                     A hook attached to an event that never fires is a policy the \
+                     operator believes they have; remove it or implement the event. \
+                     To start anyway and be told which hooks were dropped, set \
+                     EMMA_CLAUDE_HOOKS=skip-unknown — it is an environment variable and \
+                     not a config key on purpose, so a repository cannot relax this for you",
+                    Self::ALL.join(", ")
+                )
+            }
         }
     }
 }

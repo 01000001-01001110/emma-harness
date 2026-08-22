@@ -153,9 +153,29 @@ impl Settings {
             // The loud failure. Emma implements three events; the rest are real
             // Claude Code events that would silently never fire here, and an
             // operator who wrote a `Stop` guard would believe they had one.
-            HookEvent::parse(&event).with_context(|| {
-                format!("{}: hooks.{event}", root.join("settings.json").display())
-            })?;
+            //
+            // `EMMA_CLAUDE_HOOKS=skip-unknown` turns the refusal into a named
+            // skip — never a silent one. The sentinel is how `HookEvent::parse`
+            // signals that the operator asked for this, rather than a second
+            // copy of the event list living here and drifting from the first.
+            if let Err(e) = HookEvent::parse(&event) {
+                let msg = e.to_string();
+                match msg.strip_prefix("EMMA_SKIP_HOOK:") {
+                    Some(skipped) => {
+                        eprintln!(
+                            "emma: skipping every hook on `{skipped}` — Emma does not implement \
+                             that event, and EMMA_CLAUDE_HOOKS=skip-unknown asked for this run \
+                             to start anyway. Nothing you wrote for `{skipped}` will fire."
+                        );
+                        continue;
+                    }
+                    None => {
+                        return Err(e).with_context(|| {
+                            format!("{}: hooks.{event}", root.join("settings.json").display())
+                        })
+                    }
+                }
+            }
             for (g, group) in groups.into_iter().enumerate() {
                 for (h, entry) in group.hooks.into_iter().enumerate() {
                     let name = format!("{event}[{g}][{h}]");
