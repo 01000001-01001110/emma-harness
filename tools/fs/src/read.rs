@@ -92,6 +92,17 @@ use crate::session::{LineHashes, ReadTracker};
 // other places, and a number written out three times starts disagreeing.
 // ---------------------------------------------------------------------------
 
+/// The largest file `Read` will open, in bytes.
+///
+/// Input-side, unlike `MAX_LINES`, which bounds what is shown. Set well above
+/// any source file and well below the point where opening one is a mistake:
+/// 32 MiB is roughly a hundred times the largest file in this repository.
+///
+/// Deliberately larger than `Grep`'s 8 MiB per-file limit. `Grep` walks a whole
+/// tree and pays that cost once per candidate; `Read` opens exactly the file it
+/// was asked for.
+const MAX_READ_BYTES: u64 = 32 * 1024 * 1024;
+
 const NAME: &str = "Read";
 const KEYS: &[&str] = &["file_path", "offset", "limit"];
 
@@ -207,6 +218,25 @@ impl Read {
             )));
         }
 
+        // **An input-side gate, because every other cap here is output-side.**
+        // `limit` bounds what is *shown*; the whole file was read into memory
+        // first regardless, so `Read` with `limit: 1` on a 1 GB file spent a
+        // gigabyte and several seconds to return one line. That is not a
+        // truncation to report, it is work nobody asked for.
+        //
+        // A refusal rather than a partial read: `offset` and `limit` address
+        // *lines*, and a byte-capped read cannot honestly say which lines it
+        // did not see. Naming the size, the cap and a route that works is the
+        // contract `tool-api` already requires of anything that cuts.
+        if meta.len() > MAX_READ_BYTES {
+            return Err(ToolError::Failed(format!(
+                "{raw} is {} bytes, over Read's {MAX_READ_BYTES}-byte limit, so it was not \
+                 opened — reading it would cost that much memory before any line was chosen. \
+                 No argument raises the limit. Grep searches a file this size without loading \
+                 it, and Bash can reach it by name.",
+                meta.len()
+            )));
+        }
         let bytes = std::fs::read(&file)
             .map_err(|e| ToolError::Failed(format!("{raw} could not be read: {e}")))?;
         // Not `BadArguments`: the path was a perfectly good path and the caller

@@ -951,3 +951,34 @@ async fn a_write_leaves_no_temporary_file_beside_the_target() {
         "a temporary file survived the write: {strays:?}"
     );
 }
+
+/// A file too large to open is refused, with the cap and a route that works.
+///
+/// **The cap used to be output-side only.** `limit` bounds what is shown, and
+/// the whole file was read into memory first regardless — so `Read` with
+/// `limit: 1` on a very large file spent the whole file's worth of memory to
+/// return one line. Not a truncation to report; work nobody asked for.
+///
+/// Refusal rather than a partial read, because `offset` and `limit` address
+/// lines and a byte-capped read cannot honestly say which lines it missed.
+#[tokio::test]
+async fn a_file_over_the_read_limit_is_refused_with_the_cap_and_a_way_round_it() {
+    let fs = Sandbox::new();
+    // Just over 32 MiB, written once.
+    let big = "x".repeat(1024 * 1024);
+    let mut whole = String::new();
+    for _ in 0..33 {
+        whole.push_str(&big);
+    }
+    fs.write_file("huge.bin", &whole);
+
+    let err = fs
+        .err("Read", json!({ "file_path": "huge.bin", "limit": 1 }))
+        .await;
+    let shown = format!("{err:?}");
+    assert!(shown.contains("was not opened"), "{shown}");
+    assert!(shown.contains("No argument raises"), "{shown}");
+    // And it names a route that actually works, rather than an argument that
+    // does not exist — the mistake this repository already paid for once.
+    assert!(shown.contains("Grep") || shown.contains("Bash"), "{shown}");
+}
