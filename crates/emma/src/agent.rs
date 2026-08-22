@@ -780,6 +780,22 @@ impl<'a> Agent<'a> {
         };
         let lower = message.to_ascii_lowercase();
         if !lower.contains("signature") && !lower.contains("thinking") {
+            // **The fragile edge, made loud rather than left silent.** This
+            // recovery keys on the provider's prose because no structured code
+            // distinguishes "your history carries blocks the new model will not
+            // accept" from any other bad request. A wording change upstream
+            // therefore disables the recovery without disabling anything that
+            // reports it — and the symptom is a session that dies on the first
+            // call after `/model` with a message nobody connects to the switch.
+            //
+            // Reaching here means the two facts that matter are both true: the
+            // model changed this turn, and the provider refused the request.
+            // That is worth a sentence even when the wording did not match,
+            // because it is exactly the case where the recovery was supposed to
+            // help.
+            self.s.term.warn(&format!(
+                "the provider refused the first request after the model changed from {was}, and                  the refusal does not read like the stale-signature case this run knows how to                  recover from: {message}. If this is that case in different words, `/compact`                  clears the blocks the old model bound."
+            ));
             return false;
         }
         if !self

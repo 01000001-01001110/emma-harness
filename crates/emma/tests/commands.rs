@@ -595,6 +595,18 @@ async fn an_ordinary_bad_request_is_still_reported_rather_than_compacted_away() 
     let after = format!("{:?}", agent.conversation());
     assert!(after.contains("Fine ran"), "{after}");
     assert!(before.len() <= agent.conversation().len());
+
+    // …and the near-miss is said out loud. The recovery keys on the provider's
+    // prose because no structured code distinguishes the stale-signature case,
+    // so a wording change upstream would disable it silently — and the symptom
+    // would be a session dying on the first call after `/model` with a message
+    // nobody connects to the switch. Both facts that matter are true here: the
+    // model changed, and the provider refused.
+    let said = f.said();
+    assert!(
+        said.contains("does not read like the stale-signature case"),
+        "a refusal right after a model change passed without a word: {said}"
+    );
 }
 
 // endregion: /model
