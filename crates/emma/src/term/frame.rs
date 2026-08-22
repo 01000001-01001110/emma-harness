@@ -1700,10 +1700,25 @@ mod tests {
         // source: the crossterm disable must appear in `restore_terminal`'s
         // reach. Weak as assertions go, and said so; the live pairing is a
         // certification item.
+        // **Scoped to `restore_terminal`'s body, not the whole file.** The
+        // assertion used to search all of `frame.rs`, which the `use` line at
+        // the top satisfies on its own — so deleting the disable from the
+        // restore path left this green. The comment above already called it
+        // weak; it was worse than weak, it could not fail.
         let source = include_str!("frame.rs");
+        let start = source
+            .find("pub fn restore_terminal(")
+            .expect("restore_terminal was renamed; this assertion is now vacuous");
+        let end = source[start..]
+            .find(
+                "
+}",
+            )
+            .expect("restore_terminal was restructured; this assertion is now vacuous")
+            + start;
         assert!(
-            source.contains(&format!("Disable{}", "MouseCapture")),
-            "mouse capture is enabled and never disabled"
+            source[start..end].contains(&format!("Disable{}", "MouseCapture")),
+            "mouse capture is enabled and the restore path never disables it"
         );
         // The three the way out owes regardless of what the way in did: the
         // cursor comes back, a synchronized update in flight is ended, and no
