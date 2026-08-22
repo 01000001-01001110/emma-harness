@@ -1620,10 +1620,46 @@ impl<'a> Agent<'a> {
         // not touched by the tool. A tool that panics mid-write may of course
         // leave its own mess on disk, which is the tool's business and is
         // exactly what the message hands back to the model.
-        let called = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
+        // **Ctrl-C reaches a running tool, not just the gap between two.**
+        // `invoke` used to be awaited outright, and the interrupt flag was read
+        // only at iteration boundaries and around the model call — so a wrong
+        // `Bash` ran to its own timeout, 120 seconds by default and up to 600,
+        // with the keyboard already asking it to stop. In the framed UI raw mode
+        // means the child never sees a console signal either, so nothing else
+        // was going to end it.
+        //
+        // Dropping the `invoke` future is what cancels the work. That is only
+        // safe because the one tool that owns a child process spawns it with
+        // `kill_on_drop(true)` (`tools/fs/src/bash.rs`), so the process dies
+        // with the future rather than outliving it. A tool that acquires
+        // something needing an explicit release must say so the same way.
+        //
+        // The cancellation is reported as an ordinary failed call: the loop's
+        // first rule is that every failure class is an observation, and a
+        // cancelled tool is a failure the model should see rather than a hole
+        // in the transcript.
+        let invoked = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
             tool.invoke(&ctx, call.input.clone()),
-        ))
-        .await;
+        ));
+        let called = tokio::select! {
+            biased;
+            () = self.s.interrupt.wait() => {
+                self.s.log.append(
+                    "tool_cancelled",
+                    json!({ "turn_id": turn_id, "id": call.id, "tool": call.name }),
+                );
+                let detail = format!(
+                    "{} was cancelled part-way through by the user. Anything it had already \
+                     done stands; anything it had not is undone.",
+                    call.name
+                );
+                self.s.term.tool_failed(&call.name, &detail);
+                self.run_post_hooks(turn_id, call, &detail, false, Some("cancelled"))
+                    .await;
+                return fail("cancelled", detail);
+            }
+            r = invoked => r,
+        };
         let called = match called {
             Ok(v) => v,
             Err(panic) => {

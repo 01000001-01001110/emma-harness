@@ -249,6 +249,69 @@ async fn a_turn_cut_off_at_the_output_limit_is_reported() {
     );
 }
 
+/// Ctrl-C reaches a tool that is already running.
+///
+/// **The gap this closes.** `invoke` used to be awaited outright and the
+/// interrupt flag was read only at iteration boundaries and around the model
+/// call — so a wrong `Bash` ran to its own timeout, 120 seconds by default and
+/// up to 600, with the keyboard already asking it to stop. In the framed UI raw
+/// mode means the child never sees a console signal either, so nothing else was
+/// going to end it.
+///
+/// The assertion is on elapsed time, because that is the whole claim: a tool
+/// asked to take ten seconds must not take ten seconds once cancelled.
+#[tokio::test]
+async fn an_interrupt_reaches_a_tool_that_is_already_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let harness = Harness::load_selecting(&root, Flavor::Emma, None).unwrap();
+    let term = Term::silent();
+    let (slow, slow_calls) = TestTool::slow("Slow", 10);
+    let tools = registry(vec![slow]);
+    let approvals = Approvals::new(Gate::Ask, Asker::Scripted(Default::default()));
+    let log = SessionLog::open(dir.path(), "s").unwrap();
+    let fake = Fake::new(vec![
+        call("Slow", json!({})),
+        text("stopped.\n\nGOAL COMPLETE"),
+    ]);
+    let interrupt = Interrupt::new();
+
+    // Trip it shortly after the call starts, from outside the loop.
+    let trip = interrupt.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        trip.trip();
+    });
+
+    let mut agent = Agent::new(Setup {
+        provider: fake.clone(),
+        harness: &harness,
+        instructions: &harness.instructions,
+        tools: &tools,
+        approvals: &approvals,
+        log: &log,
+        term: &term,
+        interrupt: interrupt.clone(),
+        spend: emma::agent::Spend::new(),
+        done: &MarkerClaim,
+        cwd: dir.path().to_path_buf(),
+        session_id: "sess-test".into(),
+        budgets: budgets(),
+        caching: Caching::On,
+        mode: Mode::Batch,
+    });
+
+    let started = std::time::Instant::now();
+    agent.run_goal(&goal()).await;
+    let took = started.elapsed();
+
+    assert_eq!(slow_calls.load(Ordering::SeqCst), 1, "the tool never ran");
+    assert!(
+        took < std::time::Duration::from_secs(5),
+        "the interrupt did not reach the running tool: the goal took {took:?} against a tool          asked to take 10s"
+    );
+}
+
 /// One half of the memo rule. Without it, a model that has found a call it
 /// likes and an argument it does not can spend the entire iteration budget
 /// re-issuing the identical call, and every symptom points at the budget rather

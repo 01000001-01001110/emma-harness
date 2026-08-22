@@ -285,12 +285,30 @@ pub struct TestTool {
     /// Panics instead of returning. The one failure class the loop did not
     /// convert into an observation, so the one a test has to be able to stage.
     panics: bool,
+    /// Sleeps before returning, so a test can interrupt a call in flight.
+    slow: Option<std::time::Duration>,
     calls: Arc<AtomicUsize>,
 }
 
 impl TestTool {
     pub fn ok(name: &'static str, read_only: bool) -> (Arc<dyn Tool>, Arc<AtomicUsize>) {
         Self::build(name, read_only, None, false, None)
+    }
+
+    /// A tool that takes `secs` seconds unless something cancels it first.
+    pub fn slow(name: &'static str, secs: u64) -> (Arc<dyn Tool>, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tool = Self {
+            name,
+            read_only: true,
+            host: None,
+            fails: false,
+            body: None,
+            panics: false,
+            slow: Some(std::time::Duration::from_secs(secs)),
+            calls: calls.clone(),
+        };
+        (Arc::new(tool), calls)
     }
 
     /// A tool that panics rather than returning — an index out of range, an
@@ -304,6 +322,7 @@ impl TestTool {
             fails: false,
             body: None,
             panics: true,
+            slow: None,
             calls: calls.clone(),
         };
         (Arc::new(tool), calls)
@@ -344,6 +363,7 @@ impl TestTool {
                 fails,
                 body,
                 panics: false,
+                slow: None,
                 calls: calls.clone(),
             }),
             calls,
@@ -386,6 +406,11 @@ impl Tool for TestTool {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.panics {
             panic!("{} panicked on purpose", self.name);
+        }
+        if let Some(d) = self.slow {
+            // A tool that takes a long time on purpose, so a test can ask
+            // whether cancelling one actually stops it.
+            tokio::time::sleep(d).await;
         }
         Ok(if self.fails {
             Err(ToolError::Failed(format!("{} broke on purpose", self.name)))
