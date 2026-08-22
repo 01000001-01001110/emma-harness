@@ -128,7 +128,31 @@ impl Level {
     }
 
     /// The same question, asked of the real process.
+    ///
+    /// **On Windows this also proves VT rather than assuming it.** `Level::of`
+    /// is pure and answers from the environment, where an absent `TERM` reads as
+    /// `Ansi16` — correct on unix, and a guess on Windows, where a legacy
+    /// conhost without virtual-terminal processing renders an SGR sequence as
+    /// visible garbage. Only `Frame::install` ever asked the console, so the
+    /// fallback path — the one used when there is no frame, which is exactly
+    /// where an old console is most likely — emitted escapes on faith.
+    ///
+    /// `enable_vt` turns it on where it can and reports whether it stuck, so a
+    /// console that will render colour gets colour and one that will not gets
+    /// text. The side effect is the point: asking and enabling are the same
+    /// call, and doing it here means the fallback path is no longer the only
+    /// one that never asked.
     pub fn detect(color: bool) -> Self {
+        #[cfg(windows)]
+        {
+            if color
+                && std::env::var_os("WT_SESSION").is_none()
+                && std::env::var_os("EMMA_COLORS").is_none()
+                && !super::enable_vt()
+            {
+                return Self::None;
+            }
+        }
         Self::of(
             color,
             std::env::var_os("NO_COLOR").is_some(),
