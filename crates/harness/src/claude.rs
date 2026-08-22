@@ -387,8 +387,20 @@ pub(crate) fn split_agent(text: &str) -> (AgentFront, &str, Option<String>) {
     }
 }
 
-/// `---` on the first line, whatever the file's line endings are.
-fn open_frontmatter(text: &str) -> Option<&str> {
+/// `---` on the first line, whatever the file's line endings are, and
+/// whatever a Windows editor put in front of it.
+///
+/// **Shared, deliberately.** This was written for agent files after 90 of 90
+/// real CRLF ones parsed as nothing, and `split_skill` kept its own
+/// byte-exact opener for months afterwards — so the identical defect stayed
+/// live in the sibling parser, dropping 101 of 323 real skills on the owner's
+/// machine. A fixed defect class recurs one file away unless the fix is a
+/// function both callers reach. Call this; do not inline a second copy.
+pub(crate) fn open_frontmatter(text: &str) -> Option<&str> {
+    // A UTF-8 BOM is invisible in every editor that writes one, and it turns
+    // the first line into something that is not `---`. Same failure as CRLF,
+    // different byte, and the corpus has both.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let rest = text.strip_prefix("---")?;
     let rest = rest.strip_prefix('\r').unwrap_or(rest);
     rest.strip_prefix('\n')

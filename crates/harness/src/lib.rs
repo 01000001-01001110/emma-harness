@@ -1373,8 +1373,11 @@ fn split_skill(text: &str, path: &Path, flavor: Flavor) -> Result<(Front, String
         Flavor::Emma => text,
         Flavor::Claude => after_licence_header(text),
     };
-    let rest = text
-        .strip_prefix("---\n")
+    // `claude::open_frontmatter`, not a local byte-exact opener. The exact
+    // form dropped 101 of 323 real skills on this machine — every one written
+    // by an editor that ends lines with CRLF — while the agent parser one file
+    // away had already been fixed for precisely that. See its doc.
+    let rest = crate::claude::open_frontmatter(text)
         .with_context(|| named("expected YAML frontmatter"))?;
     let end = rest
         .find("\n---")

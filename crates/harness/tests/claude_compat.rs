@@ -337,6 +337,45 @@ fn a_claude_skill_may_carry_keys_emma_does_not_read() {
     assert_eq!(h.skill("adr").expect("found").description, "Write an ADR.");
 }
 
+/// A skill written on Windows loads.
+///
+/// **This is the defect that cost 99 of 324 real skills on the owner's machine.**
+/// `split_skill` demanded a byte-exact `---` + LF opener, so every `SKILL.md`
+/// whose editor ends lines with CRLF parsed as "expected YAML frontmatter" and
+/// was skipped with a stderr line nobody counted. The agent parser one file away
+/// had already been fixed for exactly this after 90 of 90 real agent files
+/// failed; the tolerance was never carried across. Both now call one function.
+///
+/// Break `claude::open_frontmatter` and this goes red — that is the whole point
+/// of it being shared.
+#[test]
+fn a_skill_written_with_windows_line_endings_loads() {
+    let base = scratch("claude-skill-crlf");
+    let root = base.join(".claude");
+    write(
+        &root.join("skills/adr/SKILL.md"),
+        "---\r\nname: adr\r\ndescription: Write an ADR.\r\n---\r\n\r\n# how to write one\r\n",
+    );
+    let h = Harness::load(&root).expect("a CRLF skill must load, not vanish");
+    assert_eq!(h.skill_names(), vec!["adr"], "the CRLF skill was dropped");
+    assert_eq!(h.skill("adr").expect("found").description, "Write an ADR.");
+}
+
+/// The same failure wearing a different byte: a UTF-8 BOM is invisible in the
+/// editor that wrote it and turns the first line into something that is not
+/// `---`. The real corpus carries both spellings.
+#[test]
+fn a_skill_carrying_a_byte_order_mark_loads() {
+    let base = scratch("claude-skill-bom");
+    let root = base.join(".claude");
+    write(
+        &root.join("skills/adr/SKILL.md"),
+        "\u{feff}---\nname: adr\ndescription: Write an ADR.\n---\n\n# how to write one\n",
+    );
+    let h = Harness::load(&root).expect("a BOM must not hide a skill");
+    assert_eq!(h.skill_names(), vec!["adr"], "the BOM skill was dropped");
+}
+
 /// A licence header above the frontmatter is common enough to be worth handling
 /// rather than skipping: the file is well-formed, it just does not open with its
 /// own first line.
