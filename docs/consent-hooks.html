@@ -477,7 +477,7 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
     a <code>kill(-pgid)</code> drop-guard. The plan records it as dead so it is not
     rebuilt.
   </p>
-  <span class="src">notes/plan-process-lifetime.md §1, §7</span>
+  <span class="src">notes/plans/process-lifetime.md §1, §7</span>
 
   <p>
     The defect was never that a grandchild lives. It was that <code>exec</code>
@@ -492,7 +492,7 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
     Reproduced as a rate: <strong>20 of 20 invocations misreported before the fix,
     0 of 20 after, with the daemon surviving 20 of 20 in both.</strong>
     <span class="chip obs">observed</span>: the before/after comparison ran once,
-    on 2026-08-14, logged in <code>notes/plan-process-lifetime.md</code> §6. The
+    on 2026-08-14, logged in <code>notes/plans/process-lifetime.md</code> §6. The
     "before" half needs the reverted code to reproduce, so nobody can run it
     again as it stands. The "after" half is on demand:
     <span class="chip test">tested</span>
@@ -507,7 +507,7 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
     this Windows box. The twenty-trial certification is one of the two skipped. It
     was not executed for this page.
   </p>
-  <span class="src">notes/plan-process-lifetime.md header, §6; crates/harness/tests/exec_lifetime.rs::certify_the_misreport_rate_over_twenty_trials</span>
+  <span class="src">notes/plans/process-lifetime.md header, §6; crates/harness/tests/exec_lifetime.rs::certify_the_misreport_rate_over_twenty_trials</span>
 
   <h2 id="exec">The order in <code>exec</code></h2>
 
@@ -689,7 +689,7 @@ where
     <code>cargo test -p emma-harness --test exec_lifetime</code>, run on
     2026-08-16.
   </p>
-  <span class="src">crates/harness/tests/exec_lifetime.rs; notes/plan-process-lifetime.md §2, §6</span>
+  <span class="src">crates/harness/tests/exec_lifetime.rs; notes/plans/process-lifetime.md §2, §6</span>
 
   <div class="note warn">
     <span class="h">The unix edge</span>
@@ -736,7 +736,7 @@ where
     clause in the transcript telling the operator to look. That is a report, not a
     bound.
   </p>
-  <span class="src">crates/harness/src/hooks.rs — exec; notes/plan-process-lifetime.md §3, §5</span>
+  <span class="src">crates/harness/src/hooks.rs — exec; notes/plans/process-lifetime.md §3, §5</span>
 
   <p>
     <span class="chip unv">unverified</span> One question is open rather than
@@ -746,7 +746,7 @@ where
     per burst. One behaviour for both shipped. <em>What would settle it:</em> the
     owner's ruling on whether the daemonize permission covers the status line.
   </p>
-  <span class="src">notes/plan-process-lifetime.md §4, header</span>
+  <span class="src">notes/plans/process-lifetime.md §4, header</span>
 
   <h2 id="unsettled">What else is not settled here</h2>
 
@@ -758,7 +758,7 @@ where
       <code>run_prompt</code> and was not checked against Claude Code's
       documentation for this page. <em>What would settle it:</em> the paragraph of
       that documentation, quoted with its URL, in
-      <code>notes/claude-code-compatibility.md</code>.
+      <code>notes/design/claude-code-compatibility.md</code>.
     </li>
     <li>
       <span class="chip unv">unverified</span> Nothing on this page was observed

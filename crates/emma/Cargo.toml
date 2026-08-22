@@ -44,7 +44,7 @@ emma-tools-lsp.workspace = true
 # `web_tools`, and the registration in `main.rs` that reports what it left out.
 emma-tools-web.workspace = true
 # The terminal UI. Two interactive frames since 2026-08-12 (stage 2 of
-# notes/design-tui-fullscreen.md): the default is `Viewport::Fullscreen` on the
+# notes/design/tui-fullscreen.md): the default is `Viewport::Fullscreen` on the
 # alternate screen — the owner chose a multi-pane layout that cannot be drawn
 # inline, knowing it costs terminal scrollback and native mouse selection; the
 # design's §2 prices the trade and term/ carries the replacements — and the old

@@ -372,7 +372,7 @@ pub enum HookEvent {
     /// `PreCompact` and others. Emma implements three, and a config naming one
     /// of the rest is a **startup error, never a silent skip**: a security hook
     /// that quietly never runs is worse than no hook, because the operator
-    /// believes they have one. See `notes/claude-code-compatibility.md`.
+    /// believes they have one. See `notes/design/claude-code-compatibility.md`.
     pub fn parse(raw: &amp;str) -&gt; Result&lt;Self&gt; {
         match raw {
             "PreToolUse" =&gt; Ok(Self::PreToolUse),

@@ -41,7 +41,7 @@
 //!   is the argument for the status line reusing that supervisor rather than
 //!   owning one.
 //! - The program answered — its output, and the built-in status is gone. That
-//!   is the deal, and `notes/status-line.md` says so out loud: model, cwd,
+//!   is the deal, and `notes/design/status-line.md` says so out loud: model, cwd,
 //!   elapsed, ctx and spend are Emma's line, and a script that does not print
 //!   them has replaced them with nothing.
 //!

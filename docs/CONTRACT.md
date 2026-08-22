@@ -118,6 +118,25 @@ concurrently running agents, not isolated per session. A generic `build.py` has
 already been overwritten mid-task by another agent's generator, and the failure
 presented as a silent no-op build rather than as a collision.
 
+**Write your output incrementally, and name the moment you first write.** The
+rule is not "save often" — it is that work never sits only in a context window.
+The moment you have the smallest section that stands on its own, put it on disk;
+then append every few units of progress.
+
+Say it that way, with a trigger and a cadence, because the terse version does not
+work. On 2026-08-22 a power cut killed four agents mid-audit and every one had
+been told to write its findings at the end: not a byte survived, and only saved
+transcripts recovered the reading. The instruction was tightened to "as soon as
+you have the method section and your first fifteen rows, write them, then append
+every ten rows" — and four hours later, cancelling five agents mid-flight, the
+two carrying that wording had substantial files on disk. Three others had been
+told only to "append as you go" and had written nothing; all three were still
+verifying citations, which is what that phrasing permits. **"As you go" has no
+answer to "go from when?"** An agent waiting to feel ready is obeying it.
+
+A crash, a cancellation, or a context limit must cost the last increment and
+nothing more.
+
 **Cover the file, not the highlights.** The bar is that somebody could rebuild
 the behaviour from the page. Every public item, every branch that changes an
 outcome, every constant that encodes a decision, every error path. Where a

@@ -459,7 +459,7 @@ fn chars_of(messages: &amp;[Message]) -&gt; usize {
       subagents can be in flight at once.
     </li>
   </ul>
-  <span class="src">notes/research-caching-mechanics.md §"What can and cannot carry a marker", §TTL, §Concurrency</span>
+  <span class="src">notes/research/caching-mechanics.md §"What can and cannot carry a marker", §TTL, §Concurrency</span>
 
   <p>
     One more clause is worth knowing because it is the one Emma is safe on:
@@ -522,7 +522,7 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
       controlled live session and this query.
     </p>
   </div>
-  <span class="src">notes/plan-caching-defects.md §"Stage A — measure, from data already on disk"</span>
+  <span class="src">notes/plans/caching-defects.md §"Stage A — measure, from data already on disk"</span>
 
   <p>
     Two companion views sit alongside it. <em>Cached fraction</em>,
@@ -554,7 +554,7 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
     it is the largest single term in Emma's caching bill, and a reader watching
     the arithmetic go negative should suspect it first.
   </p>
-  <span class="src">notes/audit-caching-emma.md §"Does it invalidate the cached prefix?"</span>
+  <span class="src">notes/audits/caching-emma.md §"Does it invalidate the cached prefix?"</span>
 
   <h2 id="coverage">Coverage</h2>
 

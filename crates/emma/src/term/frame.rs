@@ -8,8 +8,8 @@
 //! a transcript people read after the run. That argument was true and it
 //! lost — the owner chose a multi-pane layout (sidebar, pinned input, status
 //! bar) that structurally cannot be drawn inline, and reopened the decision on
-//! purpose. `notes/design-tui-fullscreen.md` §2 prices every cost;
-//! `notes/eval-tui-fullscreen-kimi.md` adds the four the plan missed. The flip
+//! purpose. `notes/design/tui-fullscreen.md` §2 prices every cost;
+//! `notes/audits/eval-tui-fullscreen-kimi.md` adds the four the plan missed. The flip
 //! is stage 2 of that design, and this is it.
 //!
 //! What replaces what the terminal used to do for free: the retained
@@ -221,7 +221,7 @@ fn erase_frame() -> String {
 ///
 /// Without it, a pasted code block is delivered as the keystrokes it looks
 /// like, and its first newline submits whatever arrived before it as a goal.
-/// The evaluation in `notes/eval-tui-fullscreen-kimi.md` ranks that first on
+/// The evaluation in `notes/audits/eval-tui-fullscreen-kimi.md` ranks that first on
 /// the list of things that would sink the redesign, and it is right that it is
 /// cheap: one sequence each way, plus [`super::input::Editor::paste`], which is
 /// where the guarantee that a paste cannot submit actually lives.
@@ -504,7 +504,7 @@ impl Frame {
             // Mouse capture, for the wheel: on the alternate screen the wheel
             // does nothing at all without it — not "less useful", nothing —
             // and the first instinct of anybody reading a long answer is the
-            // wheel (`notes/eval-tui-fullscreen-kimi.md` §1.5). The cost is
+            // wheel (`notes/audits/eval-tui-fullscreen-kimi.md` §1.5). The cost is
             // that plain drag-selection now needs Shift; the quick-help table
             // says so, because it is the one fact a user cannot guess. Only
             // on the full-screen path: inline, the terminal owns the wheel
@@ -1562,7 +1562,7 @@ mod tests {
     }
 
     /// The manifest's invariants — rewritten, not deleted, on 2026-08-12,
-    /// when stage 2 of `notes/design-tui-fullscreen.md` entered the alternate
+    /// when stage 2 of `notes/design/tui-fullscreen.md` entered the alternate
     /// screen on purpose.
     ///
     /// This test used to assert three things: `scrolling-regions` absent,

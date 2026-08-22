@@ -8,9 +8,9 @@
 //!
 //! # The numbers here were measured off the image, not the prose
 //!
-//! `notes/mockup-tui.png` was re-measured directly for this file (2026-08-13,
+//! `notes/design/mockup-tui.png` was re-measured directly for this file (2026-08-13,
 //! pixel sampling; character pitch 10px, sidebar box x≈17..337 of 1448 —
-//! 22.2%). Where this file and `notes/design-tui-fullscreen.md` §1 disagree,
+//! 22.2%). Where this file and `notes/design/tui-fullscreen.md` §1 disagree,
 //! the image won, twice: the selected row is *accent text on a barely-raised
 //! near-black band* (rgb 25,27,30 on a 13,15,19 ground), nothing like the
 //! approval chip's dark-on-pink; and the `[+]` affordance is accent pink, not

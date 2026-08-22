@@ -110,7 +110,7 @@ impl Editor {
     ///
     /// **Line breaks become spaces, because this editor is one line.** The
     /// multi-line editor that keeps them is stage 0(a) of
-    /// `notes/design-tui-fullscreen.md` and is not built yet; until it is, the
+    /// `notes/design/tui-fullscreen.md` and is not built yet; until it is, the
     /// choice is between flattening the paste and refusing it, and a flattened
     /// stack trace is still the stack trace the user meant to ask about. A run
     /// of breaks collapses to one space so a paste with blank lines in it does

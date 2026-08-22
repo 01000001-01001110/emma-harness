@@ -141,7 +141,7 @@ impl HookEvent {
     /// `PreCompact` and others. Emma implements three, and a config naming one
     /// of the rest is a **startup error, never a silent skip**: a security hook
     /// that quietly never runs is worse than no hook, because the operator
-    /// believes they have one. See `notes/claude-code-compatibility.md`.
+    /// believes they have one. See `notes/design/claude-code-compatibility.md`.
     pub fn parse(raw: &str) -> Result<Self> {
         match raw {
             "PreToolUse" => Ok(Self::PreToolUse),
@@ -756,7 +756,7 @@ const EXEC_DRAIN_GRACE_MS: u64 = 200;
 /// with its output discarded — not because anything was slow, but because the
 /// process it started inherited the write end of the pipe and EOF never came.
 /// Completion is the child's own exit; the pipes are drained around it, never
-/// waited on in front of it. See `notes/plan-process-lifetime.md` §2.
+/// waited on in front of it. See `notes/plans/process-lifetime.md` §2.
 ///
 /// **What Emma claims, and what it does not.** It supervises the direct child it
 /// spawned — its budget, its pipes, its exit code — and claims nothing about

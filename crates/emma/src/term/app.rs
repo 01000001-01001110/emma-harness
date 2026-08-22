@@ -1,7 +1,7 @@
 //! The full-screen frame: the layout that owns the whole window, and the state
 //! that survives between paints.
 //!
-//! This is stage 2 of `notes/design-tui-fullscreen.md` — the point of no
+//! This is stage 2 of `notes/design/tui-fullscreen.md` — the point of no
 //! return. The alternate screen is entered in [`super::frame`]; what happens on
 //! it is decided here. Everything in this file is pure over a [`Buffer`], so a
 //! test can hold the layout still; the terminal, the locks and the entry/leave
@@ -13,7 +13,7 @@
 //! Sidebar on the left (width from [`sidebar::width`], zero when collapsed),
 //! status bar full-width at the bottom, and the main pane between them:
 //! a header, a rule, the transcript, the input dock, and a one-row hint. The
-//! proportions are the mockup's, measured from `notes/mockup-tui.png` itself
+//! proportions are the mockup's, measured from `notes/design/mockup-tui.png` itself
 //! (re-measured 2026-08-13) — the prose description of that image was wrong in
 //! five recorded places, and the design note's §1.1 sampled table, though
 //! pixel-derived, still missed three facts the image shows: the panes do not

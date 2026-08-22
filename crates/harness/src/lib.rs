@@ -63,7 +63,7 @@
 //! **Two directory names.** Emma also recognises `.claude/`, so skills and
 //! commands already written for Claude Code work unchanged. `.emma/` wins
 //! outright where both exist — never merged. See `claude.rs` and
-//! `notes/claude-code-compatibility.md`.
+//! `notes/design/claude-code-compatibility.md`.
 
 mod claude;
 pub mod hash;

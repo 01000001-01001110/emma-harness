@@ -100,7 +100,7 @@
   <p>
     <code>crates/emma/src/term/</code> is seventeen files and 16,542 lines, plus
     the <code>term.rs</code> facade above them and <code>usertools.rs</code>
-    beside them. It is the region <code>notes/map-architecture.md</code> calls
+    beside them. It is the region <code>notes/archive/map-architecture.md</code> calls
     <em>&ldquo;the largest single gap in this document&rdquo;</em>, having read
     <em>&ldquo;almost nothing&rdquo;</em> of it; that note also puts the size at
     <em>&ldquo;16 files, ~13,000 lines&rdquo;</em>, which is low on both counts
@@ -408,7 +408,7 @@
   <h2 id="cost">What the alternate screen cost</h2>
 
   <p>
-    §2 of <code>notes/design-tui-fullscreen.md</code> prices every cost,
+    §2 of <code>notes/design/tui-fullscreen.md</code> prices every cost,
     including the one line where the flip is a gain: the &ldquo;a fragment can
     never be extended&rdquo; streaming constraint disappears, because an owned
     buffer can restyle and reflow the entry being streamed on every frame. Three
@@ -464,7 +464,7 @@
       </tbody>
     </table>
   </div>
-  <span class="src">notes/design-tui-fullscreen.md §2.1; crates/emma/src/term/transcript.rs; crates/emma/src/term.rs — <code>impl Drop for Term</code></span>
+  <span class="src">notes/design/tui-fullscreen.md §2.1; crates/emma/src/term/transcript.rs; crates/emma/src/term.rs — <code>impl Drop for Term</code></span>
 
   <p>
     Four further losses were added to §2.1 on 2026-08-11 from the red-team

@@ -234,7 +234,7 @@ const MIN_CACHEABLE: &amp;[(&amp;str, usize)] = &amp;[
 
   <p>
     The table is also shorter than the documentation it came from.
-    <code>notes/research-caching-mechanics.md</code>'s floor table names four
+    <code>notes/research/caching-mechanics.md</code>'s floor table names four
     ids the shipped rows dropped: <strong>Opus 4.1</strong> at 1,024,
     <strong>Mythos Preview</strong> and <strong>Haiku 3.5</strong> at 2,048,
     and <strong>Opus 4.5</strong> at 4,096. A user who names one of those today
@@ -245,7 +245,7 @@ const MIN_CACHEABLE: &amp;[(&amp;str, usize)] = &amp;[
     in <code>models::TABLE</code> either, so adding them means two measured
     values per model rather than one.
   </p>
-  <span class="src">crates/llm/src/anthropic.rs — <code>MIN_CACHEABLE</code>; notes/research-caching-mechanics.md §1</span>
+  <span class="src">crates/llm/src/anthropic.rs — <code>MIN_CACHEABLE</code>; notes/research/caching-mechanics.md §1</span>
 
   <h2 id="lookup">The lookup, and the fallback that guesses high</h2>
 
@@ -463,8 +463,8 @@ assert!(
 
   <p>
     Whether an ignored marker <em>costs</em> anything directly.
-    <code>notes/plan-caching-defects.md</code> describes it as "+25% on the
-    marked span, forever". <code>notes/research-caching-mechanics.md</code>
+    <code>notes/plans/caching-defects.md</code> describes it as "+25% on the
+    marked span, forever". <code>notes/research/caching-mechanics.md</code>
     says a below-minimum prefix is "cost-<em>neutral</em> (marker ignored), not
     negative", adding that what it really costs is the false belief that
     caching is on. <span class="chip unv">unverified</span> The reconciliation

@@ -55,7 +55,7 @@ $ emma "make the tests pass"
 ```
 
 Already using Claude Code in this repository? Emma reads `.claude/` as it
-stands — you can skip `init`. See **[docs/getting-started.md]** for the full
+stands — you can skip `init`. See **[notes/archive/docs-getting-started.md]** for the full
 walkthrough, including what transfers from `.claude/` and what does not.
 
 ## What it does when you are not watching
@@ -75,7 +75,7 @@ approval is denied and the model is told why.
 `--dangerously-skip-permissions` turns the gate off, announces itself on every
 run, and cannot be set from configuration.
 
-The reasoning behind each of those is in **[docs/approval.md]**.
+The reasoning behind each of those is in **[notes/archive/docs-approval.md]**.
 
 ## Configuration, in one screen
 

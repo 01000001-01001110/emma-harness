@@ -6,7 +6,7 @@
 //! Today the transcript is not Emma's at all. `insert_before` hands each line to
 //! the terminal, the terminal wraps it, keeps tens of thousands of them in
 //! scrollback, scrolls them with the user's own keys and reflows them on resize
-//! — for no code and no memory here. `notes/design-tui-fullscreen.md` §2.1 is
+//! — for no code and no memory here. `notes/design/tui-fullscreen.md` §2.1 is
 //! blunt that this is the single largest thing the alternate screen takes away,
 //! and this module is the whole of the replacement: append, cap, scroll, follow
 //! the tail, re-wrap at a new width.

@@ -154,7 +154,7 @@ impl Goal {
     /// anchors a `cache_control` breakpoint on the system block, so per-turn
     /// bytes there would rewrite the entry on every single turn — paying 1.25×
     /// for the whole prompt each time instead of reading it at 0.1×. See
-    /// `notes/audit-caching-emma.md`.
+    /// `notes/audits/caching-emma.md`.
     ///
     /// *Merged into the user's sentence.* The failure [`opening`](Self::opening)
     /// exists to prevent: a preamble on someone's words is an instruction they

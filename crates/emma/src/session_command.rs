@@ -356,7 +356,7 @@ this directory. /config prints this session's transcript path.";
 //
 // It reports rather than opening a picker, for the reason `commands.rs` gives
 // about `emma model` — a habitual spelling must keep meaning what it meant —
-// and because there is no picker to reuse yet. `design-provider-and-model.md`
+// and because there is no picker to reuse yet. `notes/design/provider-and-model.md`
 // §3.1's `select_model` does not exist in this tree; writing a second selection
 // implementation here is exactly what that note was written to prevent, so
 // `/model` with no argument reports and the picker arrives with `select_model`.

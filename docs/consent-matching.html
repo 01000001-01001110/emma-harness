@@ -318,7 +318,7 @@ fn label_wise(&amp;self, host: &amp;[&amp;str]) -&gt; bool {
       caught nothing on its own, and the shipped code checks each label for a
       <code>*</code> itself before calling <code>idna</code> at all.
     </p>
-    <span class="src">notes/plan-silent-wrong-answers.md · crates/emma/src/permissions.rs — Inert::rewrite</span>
+    <span class="src">notes/plans/silent-wrong-answers.md · crates/emma/src/permissions.rs — Inert::rewrite</span>
   </div>
 
   <h2 id="quiet">Three near-misses that get no warning</h2>
@@ -344,7 +344,7 @@ fn label_wise(&amp;self, host: &amp;[&amp;str]) -&gt; bool {
       and every one of those already warns.
     </li>
   </ul>
-  <span class="src">notes/plan-silent-wrong-answers.md · notes/improvements.md item 5b</span>
+  <span class="src">notes/plans/silent-wrong-answers.md · notes/improvements.md item 5b</span>
 
   <p>
     The floor for "the warning does not fire on ordinary configuration" is a unit
@@ -372,7 +372,7 @@ fn label_wise(&amp;self, host: &amp;[&amp;str]) -&gt; bool {
     <li>
       <span class="chip unv">unverified</span> The <code>idna</code> behaviour
       quoted above, that <code>b*cherü.example</code> converts without error, is
-      recorded in <code>notes/plan-silent-wrong-answers.md</code> and was not
+      recorded in <code>notes/plans/silent-wrong-answers.md</code> and was not
       re-run here. <em>What would settle it:</em> a three-line program calling
       <code>idna::domain_to_ascii</code> on that string and printing the result.
     </li>

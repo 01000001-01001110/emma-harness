@@ -26,8 +26,8 @@
 //! **The transcript is retained, because the alternate screen keeps no
 //! scrollback.** This was the reverse for the whole life of this module —
 //! "scrollback is the terminal's and stays the terminal's" — and the reversal
-//! is deliberate: stage 2 of `notes/design-tui-fullscreen.md`, owner-approved,
-//! priced in that note's §2 and red-teamed in `notes/eval-tui-fullscreen-kimi.md`.
+//! is deliberate: stage 2 of `notes/design/tui-fullscreen.md`, owner-approved,
+//! priced in that note's §2 and red-teamed in `notes/audits/eval-tui-fullscreen-kimi.md`.
 //!
 //! # The design, and the three it replaces
 //!

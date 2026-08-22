@@ -157,7 +157,7 @@ the remedy — or says plainly that no argument raises it.
 ## Constraints that are load-bearing
 
 - **The interactive frame is full-screen, on the alternate screen** — since
-  2026-08-12, stage 2 of `notes/design-tui-fullscreen.md`, reversing the old
+  2026-08-12, stage 2 of `notes/design/tui-fullscreen.md`, reversing the old
   "`Viewport::Inline` only, never the alternate screen" rule on the owner's
   decision. What the reversal cost, per that design's §2: terminal scrollback
   (replaced by the retained `term/transcript.rs` buffer, keys and wheel),
@@ -188,8 +188,11 @@ the remedy — or says plainly that no argument raises it.
 
 ## Where things are written down
 
-- `notes/STATUS.md` — where the work stands right now, dated entries,
-  append-only. Read it first; distrust an entry older than the newest commit.
+- `notes/ACTIVE.md` — what is being worked on **right now**, and what to pick up
+  next. Small, current, rewritten in place rather than appended to. Read it
+  first; `notes/README.md` maps the rest of the directory.
+- `notes/STATUS.md` — where the work stands, dated entries, append-only.
+  Distrust an entry older than the newest commit.
 - `CHANGELOG.md` — what is different for somebody upgrading, and nothing else.
   Add to `## Unreleased` when you change something a user would notice: a
   command, a config shape, a tool's arguments, what the terminal does. Not for
@@ -200,8 +203,13 @@ the remedy — or says plainly that no argument raises it.
 - `notes/improvements.md` — the backlog. Each item says where the idea came
   from and under what licence.
 - `notes/lessons/` — what was learned, one file per lesson.
-- `notes/design-*.md`, `notes/research-*.md`, `notes/survey-*.md` — the
+- `notes/design/`, `notes/research/`, `notes/audits/`, `notes/plans/` — the
   investigations, including the ones that concluded "do not build this".
+  `design/` is how a subsystem works and why; `research/` is external fact and
+  surveys of other harnesses; `audits/` is a dated finding, true of the day it
+  was written; `plans/` is forward work.
+- `notes/archive/` — superseded, kept for the argument it carries. Never cite it
+  as a description of the system now.
 
 Read the relevant one before starting. Several of them exist specifically
 because a plausible idea was refuted, and repeating the refuted idea is the most
