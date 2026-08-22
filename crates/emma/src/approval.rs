@@ -745,8 +745,17 @@ impl Approvals {
                 };
                 if stale > 0 {
                     term.note(&format!(
-                        "ignoring {stale} line(s) typed before this prompt — nothing reads the \
-                         keyboard while a goal runs, so type it again"
+                        // Two situations reach this line and they want
+                        // different advice. Typing ahead while a goal runs
+                        // loses what you typed, and re-typing is the answer. A
+                        // **paste** of several lines is the other: its first
+                        // line already became a goal and was paid for, and the
+                        // rest arrive here. "Type it again" is wrong for that
+                        // case and hides the part that cost money.
+                        "ignoring {stale} line(s) that arrived before this prompt — nothing \
+                         reads the keyboard while a goal runs. If you typed them, type them \
+                         again. If that was a multi-line paste, only its first line ran as a \
+                         goal and the rest are gone."
                     ));
                 }
                 lines.next().await
