@@ -204,7 +204,8 @@ fn the_user_scope_contributes_deny_and_never_allow() {
              "deny":["WebFetch(domain:evil.example)"]},
            "defaultMode":"dontAsk"}"#,
     );
-    let entries = emma_harness::user_permissions(Some(&home)).expect("read user settings");
+    let (entries, _notes) =
+        emma_harness::user_permissions(Some(&home)).expect("read user settings");
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(entries[0].kind, PermissionKind::Deny);
     assert_eq!(entries[0].rule, "WebFetch(domain:evil.example)");
@@ -216,15 +217,58 @@ fn a_missing_or_unreadable_user_settings_file_is_not_a_failure() {
     // The only thing taken from it is restrictions, so failing to read it can
     // only leave Emma asking more often. That is not worth refusing to start
     // over — and the file belongs to another program.
-    assert!(emma_harness::user_permissions(None).unwrap().is_empty());
+    assert!(emma_harness::user_permissions(None).unwrap().0.is_empty());
     let home = scratch("perm-user-none");
-    assert!(emma_harness::user_permissions(Some(&home))
-        .unwrap()
-        .is_empty());
+    let (entries, notes) = emma_harness::user_permissions(Some(&home)).unwrap();
+    assert!(entries.is_empty());
+    assert!(
+        notes.is_empty(),
+        "an absent file is not a problem: {notes:?}"
+    );
+
+    // A file that cannot be parsed still must not refuse the boot — but it must
+    // never be quiet either. Until this assertion existed, one trailing comma
+    // discarded the operator's entire deny list and `config check` reported
+    // "(none)", which reads as "you wrote no rules" rather than "yours could not
+    // be read". The empty-entries half of this test passed throughout.
     write(&home.join(".claude").join("settings.json"), "{ not json");
-    assert!(emma_harness::user_permissions(Some(&home))
-        .unwrap()
-        .is_empty());
+    let (entries, notes) = emma_harness::user_permissions(Some(&home)).unwrap();
+    assert!(entries.is_empty(), "a broken file grants nothing");
+    assert_eq!(notes.len(), 1, "a broken file must be reported: {notes:?}");
+    assert!(
+        notes[0].contains("settings.json") && notes[0].contains("deny"),
+        "the note must name the file and what was lost: {}",
+        notes[0]
+    );
+
+    // The other half of the same rule, and the one an independent review caught
+    // after the parse path was fixed: a settings file that cannot be *read* --
+    // a directory where a file was expected, a bad ACL, an I/O fault -- must
+    // also fail open with a note rather than refusing the boot. Until this
+    // assertion existed the read path still carried a `?`, so an unreadable file
+    // took Emma down over a file belonging to another program entirely.
+    // A directory where the file should be. `read_if_present` asks `is_file()`
+    // first, so this is the *absent* case, not the unreadable one: no entries, no
+    // note, and above all no refusal to start.
+    //
+    // **What this does not cover, stated rather than implied:** a file that
+    // exists and cannot be read — a bad ACL, a locked handle, an I/O fault. That
+    // path now returns a note instead of `?`, and no portable test drives it;
+    // forcing it needs `icacls` on Windows or a `chmod 000` on unix, neither of
+    // which belongs in a cross-platform suite. An earlier draft of this test
+    // asserted `notes.is_empty() || notes[0].contains(..)`, which passes either
+    // way and proves nothing — the false receipt this repository keeps paying
+    // for. It is better to name the gap than to hold a receipt for it.
+    let home = scratch("perm-user-unreadable");
+    let settings = home.join(".claude").join("settings.json");
+    std::fs::create_dir_all(&settings).expect("a directory standing in for the file");
+    let (entries, notes) = emma_harness::user_permissions(Some(&home))
+        .expect("a settings path that is not a file must never refuse the boot");
+    assert!(entries.is_empty(), "an absent file grants nothing");
+    assert!(
+        notes.is_empty(),
+        "a path that is not a file is the absent case, not a problem to report: {notes:?}"
+    );
 }
 
 #[test]

@@ -600,14 +600,32 @@ fn read_permissions(
 /// `discover_in` threads it: a test that reads the real `HOME` either mutates
 /// shared state in a threaded test binary or answers differently on different
 /// machines, and both have happened here.
-pub fn user_permissions(home: Option<&Path>) -> Result<Vec<PermissionEntry>> {
+/// Returns the entries and any notes the caller must show. The notes vector
+/// follows `load_agents`: a configuration problem that is not fatal still has to
+/// reach a human, and the caller owns where it is printed.
+pub fn user_permissions(home: Option<&Path>) -> Result<(Vec<PermissionEntry>, Vec<String>)> {
     let Some(home) = home else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     };
     let file = home.join(CLAUDE_DIR_NAME).join("settings.json");
-    let raw = read_if_present(&file)?;
+    // Not `?`, for the same reason the parse below is not: a file this project
+    // does not own must not decide whether Emma starts. An unreadable one — bad
+    // ACL, a locked file, an I/O fault — is exactly as silent as a malformed one
+    // was, and reaches the operator the same way.
+    let raw = match read_if_present(&file) {
+        Ok(raw) => raw,
+        Err(e) => {
+            return Ok((
+                Vec::new(),
+                vec![format!(
+                    "{} could not be read, so none of its `deny` rules are in force: {e:#}.                      Emma started anyway, but nothing in that file is protecting you.",
+                    file.display()
+                )],
+            ));
+        }
+    };
     if raw.trim().is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     #[derive(Deserialize)]
     struct User {
@@ -618,8 +636,29 @@ pub fn user_permissions(home: Option<&Path>) -> Result<Vec<PermissionEntry>> {
     // this project's to refuse to start over — and the only thing taken from it
     // is restrictions, so failing to read it can only leave Emma asking more
     // often.
-    let Ok(parsed) = serde_json::from_str::<User>(&raw) else {
-        return Ok(Vec::new());
+    //
+    // **But it must never be quiet about it.** That argument covers refusing to
+    // *boot*; it does not license silence. The operator wrote deny rules and
+    // believes they apply, and until this note existed the only report of their
+    // absence was `config check` printing "(none)" — which reads as "you have no
+    // rules", not as "your rules could not be read". One trailing comma was
+    // enough. The sibling case is already loud: `read_permissions` fails the boot
+    // on a malformed *project* settings file, so the quiet path here was
+    // inconsistent with the function above it rather than a considered exception.
+    let parsed = match serde_json::from_str::<User>(&raw) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            return Ok((
+                Vec::new(),
+                vec![format!(
+                    "{} could not be parsed, so none of its `deny` rules are in force: {e}. \
+                     Emma started anyway — a file belonging to another program is not Emma's to \
+                     refuse to start over — but nothing in it is protecting you. Fix the file, \
+                     or delete it if it is no longer wanted.",
+                    file.display()
+                )],
+            ));
+        }
     };
     let mut entries = Vec::new();
     PermissionBlock {
@@ -627,7 +666,7 @@ pub fn user_permissions(home: Option<&Path>) -> Result<Vec<PermissionEntry>> {
         ..Default::default()
     }
     .into_entries(&file, &mut entries);
-    Ok(entries)
+    Ok((entries, Vec::new()))
 }
 
 // endregion: Permission rules

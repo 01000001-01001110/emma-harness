@@ -241,7 +241,14 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // project one that cannot be *parsed* already failed the boot in `Harness`,
     // and a rule this build cannot evaluate becomes a note printed below.
     let mut entries = harness.permissions().to_vec();
-    entries.extend(emma_harness::user_permissions(home.as_deref())?);
+    let (user_entries, user_notes) = emma_harness::user_permissions(home.as_deref())?;
+    entries.extend(user_entries);
+    // A deny list that could not be read is a protection the operator believes
+    // they have. Loud, and before the rule notes below, because it explains why
+    // rules they wrote are missing from that list entirely.
+    for note in &user_notes {
+        term.warn(note);
+    }
     let (rules, rule_notes) = emma::permissions::Rules::parse(&entries);
     for note in &rule_notes {
         // Warnings rather than notes: every one of these is a line somebody

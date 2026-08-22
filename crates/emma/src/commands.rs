@@ -793,7 +793,8 @@ pub fn config_check(
     // grant rests on. A permission the user cannot see is a permission they have
     // forgotten they granted; this command is where they see it.
     let mut entries = harness.permissions().to_vec();
-    entries.extend(emma_harness::user_permissions(home.as_deref())?);
+    let (user_entries, user_notes) = emma_harness::user_permissions(home.as_deref())?;
+    entries.extend(user_entries);
     writeln!(
         out,
         "permissions    {}",
@@ -803,6 +804,13 @@ pub fn config_check(
             format!("{} rule(s)", entries.len())
         }
     )?;
+    // Printed before the rules themselves: without it, an unreadable user
+    // settings file renders as "(none)", which reads as "you wrote no rules"
+    // rather than "yours could not be read". This command exists to answer
+    // "why did my rule not fire", so the answer has to be here.
+    for note in &user_notes {
+        writeln!(out, "               ! {note}")?;
+    }
     for entry in &entries {
         writeln!(
             out,
