@@ -249,7 +249,20 @@ impl Ending {
                 b.max_tokens
             ),
             Self::Deadline => format!("stopped: hit the {}s time limit.", b.wall_clock.as_secs()),
-            Self::Interrupted => "interrupted. The partial turn is in the session log.".into(),
+            // **Not "the partial turn is in the session log".** That sentence
+            // was false in the case people actually hit. An interrupt landing
+            // mid-model-call drops the provider future, so there is no turn to
+            // record and no usage figure to bill: the API never answered. Every
+            // turn that *completed* before the interrupt is in the log, which is
+            // a different and true thing to say.
+            //
+            // The spend of an abandoned call is unrecoverable rather than
+            // unrecorded — the tokens were spent on the provider's side and
+            // nothing local ever learned the number. A resumed session
+            // therefore under-counts by that one call, and saying so is the
+            // only honest option available.
+            Self::Interrupted => "interrupted. Everything that finished before the interrupt                  is in the session log; a model call still in flight was abandoned, so its                  answer and its cost are not recorded anywhere."
+                .into(),
             Self::Provider(e) => format!("stopped: {e}"),
         }
     }
@@ -2092,6 +2105,27 @@ mod tests {
             memo_key(&mk(json!({ "command": "ls" }))),
             memo_key(&mk(json!({ "command": "ls -a" })))
         );
+    }
+
+    /// The interrupted ending does not promise a record that does not exist.
+    ///
+    /// It used to read "The partial turn is in the session log", which is false
+    /// in the case people actually hit: an interrupt landing mid-model-call
+    /// drops the provider future, so there is no turn to record and no usage
+    /// figure to bill. A sentence that sends someone to look for something
+    /// that was never written is worse than saying nothing.
+    #[test]
+    fn the_interrupted_ending_does_not_claim_a_partial_turn_was_saved() {
+        let m = Ending::Interrupted.message(&Budgets::default());
+        assert!(
+            !m.contains("The partial turn is in the session log"),
+            "it still promises a record that is not written: {m}"
+        );
+        assert!(m.contains("abandoned"), "{m}");
+        // And it says the cost is unrecoverable rather than merely missing,
+        // because a resumed session under-counts by that call and nothing local
+        // can ever learn the number.
+        assert!(m.contains("cost"), "{m}");
     }
 
     #[test]
