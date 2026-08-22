@@ -547,3 +547,30 @@ fn resuming_into_a_changed_harness_names_what_changed() {
 }
 
 // endregion: Which session, and whether it is still the same harness
+
+/// A torn last line is survivable; damage in the middle is reported.
+///
+/// `SessionLog::read`s doc has always described one case — the partial line a
+/// crash mid-write leaves — and the code dropped *any* line that would not
+/// parse. So real corruption in the middle of a file, the case where a resumed
+/// conversation is genuinely missing turns, read as a clean success. Recovery
+/// still returns what it can, because refusing outright would make a damaged
+/// session unresumable, which is worse.
+#[test]
+fn a_torn_tail_is_silent_and_damage_in_the_middle_is_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sess-torn.jsonl");
+
+    // Two whole records, then the half-written line a crash leaves behind.
+    let torn = [r#"{"kind":"a"}"#, r#"{"kind":"b"}"#, r#"{"kind":"c"#].join("\n");
+    std::fs::write(&path, torn).unwrap();
+    let kept = SessionLog::read(&path).expect("a torn tail must not fail the read");
+    assert_eq!(kept.len(), 2, "both whole records survive a torn tail");
+
+    // The same damage, in the middle instead of at the end. This is the case
+    // the doc never covered: turns are genuinely missing from what comes back.
+    let damaged = [r#"{"kind":"a"}"#, "NOT JSON AT ALL", r#"{"kind":"c"}"#].join("\n");
+    std::fs::write(&path, damaged).unwrap();
+    let kept = SessionLog::read(&path).expect("damage must still recover what it can");
+    assert_eq!(kept.len(), 2, "the readable records are still returned");
+}

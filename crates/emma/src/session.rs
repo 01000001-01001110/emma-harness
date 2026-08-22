@@ -77,6 +77,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -121,6 +122,14 @@ pub struct SessionLog {
     /// where the log is [`SessionLog::none`], which is exactly where the tests
     /// are.
     tap: Option<Records>,
+    /// Whether this file has already reported that it cannot be written.
+    ///
+    /// `Arc`, and shared with every subagent view, for the same reason `file`
+    /// is: they are one file. A failing write fails on every record, so without
+    /// this the run would bury itself in one complaint per append — and a
+    /// delegation would repeat the complaint about a file its parent already
+    /// reported.
+    write_failed: Arc<AtomicBool>,
 }
 
 impl SessionLog {
@@ -159,6 +168,7 @@ impl SessionLog {
             prefix: None,
             stamp: Vec::new(),
             tap: None,
+            write_failed: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -174,6 +184,7 @@ impl SessionLog {
             prefix: None,
             stamp: Vec::new(),
             tap: None,
+            write_failed: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -219,8 +230,24 @@ impl SessionLog {
         let Some(file) = guard.as_mut() else { return };
         let mut line = payload.to_string();
         line.push('\n');
-        let _ = file.write_all(line.as_bytes());
-        let _ = file.flush();
+        // Not `let _ =`. This file is the only record of the run: resume folds
+        // it, `emma agents` reads it, and the exit line names it as the place
+        // the conversation went. A full disk or a revoked handle used to lose
+        // all of that in silence, for the whole rest of the session, because
+        // every append discarded its own error.
+        //
+        // Reported once and then never again — a failing write fails on every
+        // record, and a warning per record would bury the run in its own
+        // complaint. Still not fatal: losing the transcript is not a reason to
+        // throw away the work the user is in the middle of.
+        if let Err(e) = file.write_all(line.as_bytes()).and_then(|()| file.flush()) {
+            if !self.write_failed.swap(true, Ordering::SeqCst) {
+                eprintln!(
+                    "emma: this session's transcript can no longer be written: {e}. The run \
+                     continues, but it will not be resumable and `emma agents` will not see it."
+                );
+            }
+        }
     }
 
     /// A second view of this same file for one delegation, and the buffer its
@@ -248,6 +275,7 @@ impl SessionLog {
                 id: self.id.clone(),
                 path: self.path.clone(),
                 file: self.file.clone(),
+                write_failed: self.write_failed.clone(),
                 prefix: Some("sub"),
                 stamp: vec![
                     ("sub_id".into(), json!(sub_id)),
@@ -265,13 +293,46 @@ impl SessionLog {
     /// A trailing partial line — the one thing a crash mid-write can leave — is
     /// skipped rather than failing the read, which is the property that makes
     /// this format survivable without a transaction.
+    ///
+    /// **A malformed line anywhere else is not that, and is not silent.** The
+    /// doc above described the tail case and the code dropped *any* line that
+    /// would not parse, so real corruption in the middle of a file — the case
+    /// where a resumed conversation is genuinely missing turns — read as a
+    /// clean success. The read still returns what it could recover, because
+    /// refusing outright would make a damaged session unresumable and that is
+    /// worse; but it says how many records it lost and where.
     pub fn read(path: &Path) -> Result<Vec<Value>> {
         let raw =
             fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        Ok(raw
-            .lines()
-            .filter_map(|l| serde_json::from_str(l).ok())
-            .collect())
+        let lines: Vec<&str> = raw.lines().collect();
+        let last = lines.len().saturating_sub(1);
+        let mut out = Vec::new();
+        let mut lost = Vec::new();
+        for (n, line) in lines.iter().enumerate() {
+            match serde_json::from_str(line) {
+                Ok(v) => out.push(v),
+                // A blank line is not damage, and neither is the torn tail.
+                Err(_) if line.trim().is_empty() || n == last => {}
+                Err(_) => lost.push(n + 1),
+            }
+        }
+        if !lost.is_empty() {
+            let shown: Vec<String> = lost.iter().take(5).map(|n| n.to_string()).collect();
+            eprintln!(
+                "emma: {} record(s) in {} could not be read and are missing from the restored \
+                 conversation (line {}{}). This is damage in the middle of the file, not the \
+                 partial last line a crash leaves behind.",
+                lost.len(),
+                path.display(),
+                shown.join(", "),
+                if lost.len() > shown.len() {
+                    ", …"
+                } else {
+                    ""
+                }
+            );
+        }
+        Ok(out)
     }
 }
 
