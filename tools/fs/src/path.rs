@@ -65,17 +65,45 @@ use emma_tool_api::{ToolCtx, ToolError};
 /// the target open — the error is returned rather than papered over, and the
 /// caller reports it as the write failure it is.
 pub fn write_atomically(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let tmp = match file.file_name() {
-        Some(name) => {
-            let mut n = name.to_os_string();
-            n.push(".emma-tmp");
-            file.with_file_name(n)
-        }
-        None => return std::fs::write(file, bytes),
+    let Some(name) = file.file_name() else {
+        return std::fs::write(file, bytes);
     };
+
+    // **A name nothing else is using.** The first version of this used a fixed
+    // `<name>.emma-tmp`, which an adversarial review took apart in two ways and
+    // both were real: a user who happens to own `config.toml.emma-tmp` had it
+    // truncated and then renamed away by a write to `config.toml` — this
+    // function destroying a file while claiming to protect one — and two
+    // concurrent writes to one target raced through the same temp, so a caller
+    // could be told its content was written when the other call's content
+    // landed.
+    //
+    // Process id and a counter, not randomness: the counter makes two writes in
+    // one process distinct, and the pid makes two processes distinct. Both are
+    // needed and neither is enough alone.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut stem = name.to_os_string();
+    stem.push(format!(".emma-tmp.{}.{seq}", std::process::id()));
+    let tmp = file.with_file_name(stem);
+
     if let Err(e) = std::fs::write(&tmp, bytes) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
+    }
+    // **Carry the target's permissions across.** The temp file is created fresh,
+    // so it takes the process umask — commonly `0644`. Renaming it over a file
+    // that was `0600` therefore *widened* it, turning a private file world
+    // readable as a side effect of editing it. The same review found that, and
+    // it is the sharper of the two: a clobbered temp file is loud eventually,
+    // where a permission that quietly widened is not.
+    #[cfg(unix)]
+    if let Ok(meta) = std::fs::metadata(file) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(
+            &tmp,
+            std::fs::Permissions::from_mode(meta.permissions().mode()),
+        );
     }
     match std::fs::rename(&tmp, file) {
         Ok(()) => Ok(()),

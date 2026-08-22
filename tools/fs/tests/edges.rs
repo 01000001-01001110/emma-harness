@@ -952,6 +952,36 @@ async fn a_write_leaves_no_temporary_file_beside_the_target() {
     );
 }
 
+/// Writing one file does not destroy another that happens to be named like the
+/// temp file.
+///
+/// **This is a defect the atomic-write change introduced and an adversarial
+/// review found.** The first version used a fixed `<name>.emma-tmp`, so a user
+/// who owned `config.toml.emma-tmp` had it truncated and then renamed away by a
+/// write to `config.toml` — this function destroying a file while claiming to
+/// protect one. The temp name now carries the process id and a counter.
+#[tokio::test]
+async fn writing_a_file_does_not_clobber_a_sibling_named_like_the_temp_file() {
+    let fs = Sandbox::new();
+    fs.write_file("config.toml", "before\n");
+    // A real file the user owns, whose name the old scheme would have taken.
+    fs.write_file("config.toml.emma-tmp", "somebody elses file\n");
+
+    fs.ok("Read", json!({ "file_path": "config.toml" })).await;
+    fs.ok(
+        "Write",
+        json!({ "file_path": "config.toml", "content": "after\n" }),
+    )
+    .await;
+
+    assert_eq!(fs.read_file("config.toml"), "after\n");
+    assert_eq!(
+        fs.read_file("config.toml.emma-tmp"),
+        "somebody elses file\n",
+        "writing one file destroyed another"
+    );
+}
+
 /// A file too large to open is refused, with the cap and a route that works.
 ///
 /// **The cap used to be output-side only.** `limit` bounds what is shown, and
