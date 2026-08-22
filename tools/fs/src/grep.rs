@@ -271,6 +271,7 @@ impl Grep {
         // holding no matches. See `readable_text` for why only the size skip is
         // counted and the not-text skip is not.
         let mut skipped_large = 0usize;
+        let mut unreadable = 0usize;
         let mut clipped_lines = 0usize;
 
         for file in &candidates {
@@ -281,6 +282,10 @@ impl Grep {
                     continue;
                 }
                 Readable::NotText => continue,
+                Readable::Unreadable => {
+                    unreadable += 1;
+                    continue;
+                }
             };
             let shown = path::display(&root, file);
             let mut count = 0usize;
@@ -369,6 +374,14 @@ impl Grep {
                  here; no argument raises that limit — Read or Bash can reach such a file by name"
             ));
         }
+        if unreadable > 0 {
+            cuts.push(format!(
+                "{unreadable} file(s) could not be opened -- a permission, a lock, or an I/O \
+                 fault -- so this search did not look inside them and a match there would not \
+                 appear here. This is not the same as finding nothing; Read or Bash can say \
+                 which, by name"
+            ));
+        }
         let truncated = !cuts.is_empty();
         let reason = cuts.join("; also ");
 
@@ -435,11 +448,19 @@ enum Readable {
     Text(String),
     TooLarge,
     NotText,
+    /// The file could not be opened. **Not the same as `NotText`**, and keeping
+    /// them apart is the whole point: `tool-api`'s rule is that "I could not
+    /// look" and "I looked and there was nothing" must never render as the same
+    /// message, because the model can route around a failure and cannot route
+    /// around an answer. Both arms here used to be `.ok()`, so a
+    /// permission-denied file silently became "not text" and vanished from the
+    /// count -- a file containing the pattern reported as `no matches`.
+    Unreadable,
 }
 
 fn readable_text(file: &Path) -> Readable {
     let Ok(meta) = std::fs::metadata(file) else {
-        return Readable::NotText;
+        return Readable::Unreadable;
     };
     if meta.len() > MAX_FILE_BYTES {
         // Which of the two skips this is cannot be decided on size alone, and
@@ -460,9 +481,14 @@ fn readable_text(file: &Path) -> Readable {
             Readable::NotText
         };
     }
-    match std::fs::read(file).ok().map(String::from_utf8) {
-        Some(Ok(text)) => Readable::Text(text),
-        _ => Readable::NotText,
+    // Split deliberately. A read that fails is a failure to look; bytes that are
+    // not UTF-8 are a real answer about the file.
+    match std::fs::read(file) {
+        Err(_) => Readable::Unreadable,
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(text) => Readable::Text(text),
+            Err(_) => Readable::NotText,
+        },
     }
 }
 

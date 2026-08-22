@@ -280,3 +280,77 @@ async fn a_whole_answer_claims_nothing() {
         );
     }
 }
+
+/// Make `path` unreadable by the current user, or return false if this platform
+/// or this account cannot manage it.
+///
+/// Cross-platform on purpose. An earlier draft gated the whole test on
+/// `#[cfg(unix)]`, which on the machine this repository is developed on means a
+/// test that compiles nowhere and runs never — a guarantee with a receipt and no
+/// evidence. The unreadable step is the only platform-specific part, so that is
+/// the only part that branches.
+fn make_unreadable(path: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Running as root defeats mode bits entirely; say so rather than
+        // asserting against a file the test can still read.
+        if std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).is_err() {
+            return false;
+        }
+        std::fs::read(path).is_err()
+    }
+    #[cfg(windows)]
+    {
+        let ok = std::process::Command::new("icacls")
+            .arg(path)
+            .args(["/inheritance:r", "/grant:r", "SYSTEM:(F)"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        ok && std::fs::read(path).is_err()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// A file Grep could not open is reported, never counted as "no matches".
+///
+/// **The defect this pins.** Both read paths in `readable_text` were `.ok()`, so
+/// a permission-denied file collapsed into `NotText` and vanished: a file
+/// *containing* the pattern produced `no matches`, and the model concluded the
+/// symbol was absent from the repository. That is the one rule `tool-api` states
+/// outright — "I could not look" and "I looked and there was nothing" must never
+/// render as the same message, because a model can route around a failure and
+/// cannot route around an answer.
+#[tokio::test]
+async fn a_file_grep_could_not_open_is_reported_not_counted_as_no_matches() {
+    let fs = Sandbox::new();
+    fs.write_file("locked.txt", "the needle is in here\n");
+    fs.write_file("plain.txt", "nothing of interest\n");
+    let locked = fs.root().join("locked.txt");
+
+    if !make_unreadable(&locked) {
+        // Elevated accounts and exotic filesystems can read anything. Skipping is
+        // honest; pretending the assertion held is not.
+        eprintln!("skipped: this account can read a file it was denied");
+        return;
+    }
+
+    let out = fs.ok("Grep", json!({ "pattern": "needle" })).await;
+
+    let reason = out
+        .truncation
+        .expect("a file that could not be opened must be named as a cut, not passed over");
+    assert!(
+        reason.contains("could not be opened"),
+        "the cut must say the file was not looked inside: {reason}"
+    );
+    assert!(
+        out.truncated,
+        "a search that skipped a file it could not read is not a complete search"
+    );
+}
