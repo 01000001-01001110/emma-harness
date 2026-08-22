@@ -684,6 +684,25 @@ impl Assembly {
     }
 
     fn finish(self) -> Result<AssistantTurn, LlmError> {
+        // A stream that closed without ever saying why it stopped did not
+        // finish; it was cut. The API sets `stop_reason` on the `message_delta`
+        // that ends a complete message, so an empty one here means the bytes
+        // ran out first — a dropped connection, a proxy timeout, a truncated
+        // response — and every one of those arrives as a *clean* close.
+        //
+        // This used to return `Ok` with whatever text had arrived. A turn
+        // reading "The tests all pa" was handed to the loop as a finished
+        // answer, with no truncation signal anywhere downstream, and the loop
+        // has no way to tell that from a model that genuinely said that. A
+        // failure is recoverable — `Protocol` is retried like any other — and a
+        // confident half-sentence is not.
+        if self.stop_reason.is_empty() {
+            return Err(LlmError::Protocol(
+                "the response stream ended without a stop reason, so the turn is incomplete — \
+                 the connection closed part-way through the model's answer"
+                    .into(),
+            ));
+        }
         let mut content = Vec::new();
         for (_, block) in self.blocks {
             content.push(match block {
@@ -1769,6 +1788,44 @@ mod tests {
             Err(LlmError::Protocol(m)) => assert!(m.contains("tool arguments"), "{m}"),
             other => panic!("a truncated call was accepted: {other:?}"),
         }
+    }
+
+    /// A stream that closes cleanly part-way through is a cut turn, not an answer.
+    ///
+    /// The API sets `stop_reason` on the `message_delta` that ends a complete
+    /// message. A dropped connection, a proxy timeout or a truncated response
+    /// all arrive as a *clean* close with no such event — and this used to
+    /// return `Ok` carrying whatever text had landed. A turn reading "The tests
+    /// all pa" reached the loop as a finished answer with no truncation signal
+    /// anywhere, and nothing downstream could tell it from a model that
+    /// genuinely said that.
+    ///
+    /// A `Protocol` error is retried like any other; a confident half-sentence
+    /// is not recoverable at all.
+    #[tokio::test]
+    async fn a_stream_that_closes_without_a_stop_reason_is_a_fault() {
+        let truncated = [
+            r#"event: message_start"#,
+            r#"data: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","model":"m","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}"#,
+            "",
+            r#"event: content_block_start"#,
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            "",
+            r#"event: content_block_delta"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"The tests all pa"}}"#,
+            "",
+        ]
+        .join("\n");
+
+        let server = stub(vec![Reply::sse(truncated)]).await;
+        let (result, _) = run(&server, request(), Mode::Stream).await;
+
+        let err = result.expect_err("a truncated stream must not read as a finished turn");
+        let shown = format!("{err}");
+        assert!(
+            shown.contains("stop reason") || shown.contains("incomplete"),
+            "the fault must say the turn was cut: {shown}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
