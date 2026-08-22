@@ -38,6 +38,9 @@ pub struct Say {
     pub text: String,
     pub calls: Vec<(String, Value)>,
     pub tokens: i64,
+    /// Report `max_tokens` — the model was cut off mid-answer rather than
+    /// finishing. The one `stop_reason` the loop must act on.
+    pub truncated: bool,
     /// Answer this call with `LlmError::BadRequest` carrying this message,
     /// rather than with a turn.
     ///
@@ -53,7 +56,16 @@ pub fn text(t: &str) -> Say {
         text: t.into(),
         calls: Vec::new(),
         tokens: 10,
+        truncated: false,
         fail: None,
+    }
+}
+
+/// A turn the model did not finish: `stop_reason: max_tokens`.
+pub fn cut_off(t: &str) -> Say {
+    Say {
+        truncated: true,
+        ..text(t)
     }
 }
 
@@ -62,6 +74,7 @@ pub fn call(tool: &str, args: Value) -> Say {
         text: String::new(),
         calls: vec![(tool.into(), args)],
         tokens: 10,
+        truncated: false,
         fail: None,
     }
 }
@@ -72,6 +85,7 @@ pub fn rejected(message: &str) -> Say {
         text: String::new(),
         calls: Vec::new(),
         tokens: 0,
+        truncated: false,
         fail: Some(message.into()),
     }
 }
@@ -228,7 +242,9 @@ impl Provider for Fake {
             }));
         }
         Ok(AssistantTurn {
-            stop_reason: if say.calls.is_empty() {
+            stop_reason: if say.truncated {
+                "max_tokens".into()
+            } else if say.calls.is_empty() {
                 "end_turn".into()
             } else {
                 "tool_use".into()

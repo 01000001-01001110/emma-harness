@@ -970,6 +970,25 @@ impl<'a> Agent<'a> {
             // `billable_total_tokens` beside them, because the log records what
             // the provider said; `cost_tokens` is the same call weighted by
             // price, and it is the only one the cap is tested against.
+            // **`max_tokens` means the model was cut off mid-sentence.** It was
+            // recorded in the line below and read by nothing: the loop treated a
+            // truncated turn exactly like a finished one, so a half-written
+            // answer could carry the completion marker's absence into a kick, or
+            // — worse — a half-written tool call into a parse failure the model
+            // was then blamed for.
+            //
+            // Said to the user rather than to the model, and once per
+            // occurrence: the model already knows it stopped, and the person
+            // paying for the turn is the one who cannot see it. Not fatal, for
+            // the same reason a tool failure is not: the loop's own budgets are
+            // the only thing that ends a goal.
+            if turn.stop_reason == "max_tokens" {
+                self.s.term.warn(
+                    "the model hit its output limit and this turn is cut off mid-answer — what \
+                     follows is incomplete, and a smaller step or a narrower question is the way \
+                     round it",
+                );
+            }
             let tokens = self.s.spend.add(cost_tokens(&turn.usage));
             self.s.log.append(
                 "model_call",

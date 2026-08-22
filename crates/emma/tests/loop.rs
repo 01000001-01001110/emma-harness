@@ -23,7 +23,7 @@ use emma_llm::{Caching, Mode};
 use emma_tool_api::Registry;
 use serde_json::json;
 
-use support::{call, empty_harness, harness_denying, registry, text, Fake, TestTool};
+use support::{call, cut_off, empty_harness, harness_denying, registry, text, Fake, TestTool};
 
 fn budgets() -> Budgets {
     Budgets {
@@ -198,6 +198,55 @@ async fn a_tool_that_panics_is_an_observation_and_the_goal_continues() {
     assert!(seen.contains("is_error"), "{seen}");
     // And told not to retry it, because no argument of theirs caused it.
     assert!(seen.contains("do not retry"), "{seen}");
+}
+
+/// A turn cut off at the output limit is reported to the person paying for it.
+///
+/// `stop_reason: max_tokens` means the model stopped mid-sentence. It was
+/// recorded in the session log and read by nothing, so the loop treated a
+/// truncated turn exactly like a finished one — and the user, who is the only
+/// party that cannot see the wire, was told nothing.
+///
+/// Built inline rather than through `drive`, because `drive` uses a silent
+/// terminal and the whole assertion is about what reached one.
+#[tokio::test]
+async fn a_turn_cut_off_at_the_output_limit_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let harness = Harness::load_selecting(&root, Flavor::Emma, None).unwrap();
+    let term = Term::recording();
+    let tools = registry(vec![]);
+    let approvals = Approvals::new(Gate::Ask, Asker::Scripted(Default::default()));
+    let log = SessionLog::open(dir.path(), "s").unwrap();
+    let fake = Fake::new(vec![
+        cut_off("I was part way through explaining when"),
+        text("done now.\n\nGOAL COMPLETE"),
+    ]);
+
+    let mut agent = Agent::new(Setup {
+        provider: fake.clone(),
+        harness: &harness,
+        instructions: &harness.instructions,
+        tools: &tools,
+        approvals: &approvals,
+        log: &log,
+        term: &term,
+        interrupt: Interrupt::new(),
+        spend: emma::agent::Spend::new(),
+        done: &MarkerClaim,
+        cwd: dir.path().to_path_buf(),
+        session_id: "sess-test".into(),
+        budgets: budgets(),
+        caching: Caching::On,
+        mode: Mode::Batch,
+    });
+    agent.run_goal(&goal()).await;
+
+    let said = term.recorded().join("\n");
+    assert!(
+        said.contains("cut off"),
+        "a truncated turn was passed off as a finished one: {said}"
+    );
 }
 
 /// One half of the memo rule. Without it, a model that has found a call it
