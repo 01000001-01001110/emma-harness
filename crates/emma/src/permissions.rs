@@ -254,6 +254,35 @@ impl Rule {
 /// precedence are the shell's business, and a half-parser here would produce
 /// rules whose meaning differs from what the shell does with the same string —
 /// which is a worse failure than a rule that is simply literal.
+/// Whether a command is composed of more than one thing, and therefore cannot
+/// be judged by a prefix.
+///
+/// Deliberately over-broad. A false positive costs a question the human answers;
+/// a false negative is a deny rule that did not fire. Those are not the same
+/// size of mistake, and the check is tuned accordingly.
+fn is_composed(command: &str) -> bool {
+    // Chaining and piping.
+    if ["&&", "||", ";", "|", "&"]
+        .iter()
+        .any(|t| command.contains(t))
+    {
+        return true;
+    }
+    // Substitution.
+    if command.contains("$(") || command.contains('`') {
+        return true;
+    }
+    // A leading `VAR=value` or a wrapper that swallows the real command.
+    let first = command.split_whitespace().next().unwrap_or_default();
+    if first.contains('=') {
+        return true;
+    }
+    matches!(
+        first,
+        "env" | "sh" | "bash" | "zsh" | "cmd" | "powershell" | "pwsh" | "nice" | "time" | "xargs"
+    )
+}
+
 /// The command a call would run, if it names one.
 fn command_of(args: &Value) -> Option<String> {
     args.get("command")
@@ -736,6 +765,46 @@ impl Rules {
     /// narrower rule cannot take that away — the ladder decides which list
     /// wins, not which rule is more specific.
     pub fn for_call(&self, tool: &str, args: &Value) -> Option<Decision> {
+        // **A command a prefix rule cannot honestly be tested against does not
+        // get to pass quietly.** `Spec::Command` matches argument text, and
+        // `Bash` runs that text through a shell — so `env git push`,
+        // `cd . && git push` and `GIT_SSH_COMMAND=x git push` all evade
+        // `Bash(git *)` while plainly being git pushes. An adversarial review
+        // found this after the matcher shipped, and it is a real hole rather
+        // than a theoretical one: the whole point of a deny rule is that the
+        // operator wrote down something they did not want run.
+        //
+        // The fix is not a shell parser. Quoting, substitution and operator
+        // precedence are the shell's business, and a half-parser would give
+        // rules a meaning that differs from what the shell actually does, which
+        // is worse than a rule that is literal. What is done instead is
+        // narrower and honest: when a **deny** rule for this tool carries a
+        // command prefix, and the command is *composed* — chained, piped,
+        // substituted, or prefixed with an environment assignment — the match
+        // cannot be trusted either way, so the answer is `Ask` rather than
+        // silence. The human is shown the command and decides.
+        //
+        // Deny rules only. An allow rule that fails to match already falls
+        // through to a question, so there is nothing to protect there, and
+        // widening this to allow rules would turn every `&&` into a prompt.
+        if let Some(command) = command_of(args) {
+            let denies_by_prefix = self
+                .deny
+                .iter()
+                .any(|r| r.tool == tool && matches!(r.spec, Spec::Command(..)));
+            if denies_by_prefix
+                && is_composed(&command)
+                && !self.deny.iter().any(|r| {
+                    r.tool == tool
+                        && match &r.spec {
+                            Spec::Command(_, p) => command_matches(p, &command),
+                            _ => false,
+                        }
+                })
+            {
+                return Some(Decision::Ask);
+            }
+        }
         self.decide(|r| {
             r.tool == tool
                 && match &r.spec {
@@ -1008,6 +1077,58 @@ mod tests {
             "git log",
             &normalise_command("git   log -n1")
         ));
+    }
+
+    /// A command a prefix rule cannot judge does not slip past a deny.
+    ///
+    /// `Spec::Command` matches argument text and `Bash` runs that text through a
+    /// shell, so `env git push` and `cd . && git push` are plainly git pushes
+    /// that a `Bash(git *)` prefix does not match. Found by adversarial review
+    /// after the matcher shipped.
+    ///
+    /// The answer is `Ask`, not `Deny`: the rule genuinely did not match, and
+    /// claiming it did would be its own dishonesty. What is refused is *silence*.
+    #[test]
+    fn a_composed_command_cannot_slip_past_a_deny_prefix() {
+        use serde_json::json;
+        let mut rules = Rules::default();
+        rules.deny.push(Rule::parse("Bash(git *)").unwrap());
+        let ask = |c: &str| rules.for_call("Bash", &json!({ "command": c }));
+
+        // The plain case still denies outright.
+        assert_eq!(ask("git push"), Some(Decision::Deny));
+
+        // The evasions become questions rather than silence.
+        for evasion in [
+            "env git push",
+            "cd . && git push",
+            "GIT_SSH_COMMAND=x git push",
+            "sh -c 'git push'",
+            "echo hi | git push",
+        ] {
+            assert_eq!(
+                ask(evasion),
+                Some(Decision::Ask),
+                "`{evasion}` slipped past a deny rule"
+            );
+        }
+
+        // An ordinary uncomposed command nobody wrote a rule about is still
+        // silent here — turning every call into a question is how a prompt
+        // stops being read.
+        assert_eq!(ask("cargo test"), None);
+    }
+
+    /// With no command-prefix deny rule in force, composition changes nothing.
+    #[test]
+    fn composition_only_matters_when_a_prefix_deny_exists() {
+        use serde_json::json;
+        let rules = Rules::default();
+        assert_eq!(
+            rules.for_call("Bash", &json!({ "command": "cd . && git push" })),
+            None,
+            "composition was treated as suspicious with no rule to protect"
+        );
     }
 
     /// The rules that used to match nothing now bite, in both directions.
