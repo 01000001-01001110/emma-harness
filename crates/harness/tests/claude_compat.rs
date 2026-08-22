@@ -15,7 +15,7 @@
 mod support;
 
 use emma_harness::{Flavor, Harness, HookCall, HookEvent};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use support::*;
 
 // region: Writing a .claude/ directory to disk
@@ -713,3 +713,91 @@ fn an_unknown_key_inside_the_hooks_block_is_still_an_error() {
 }
 
 // endregion: settings.json
+
+// ---------------------------------------------------------------------------
+// The real library
+//
+// The skills analogue of `agent_types.rs`'s corpus test, which existed for
+// agents and never for skills — and the gap was not academic. `split_skill`
+// demanded a byte-exact `---` opener, so on the machine this was written
+// against 116 of 324 real skills loaded as nothing, and every fixture in this
+// file passed throughout. A fixture agrees with its author; 324 files nobody
+// here wrote do not.
+// ---------------------------------------------------------------------------
+
+fn user_skills() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)?;
+    let dir = home.join(".claude").join("skills");
+    dir.is_dir().then_some(dir)
+}
+
+/// Load a real `~/.claude/skills/` library and hold it to the same bar the
+/// agent library is held to: the great majority must end up usable.
+///
+/// Skipped loudly when there is no corpus, rather than silently. A test that
+/// quietly passes on a machine with nothing to read is a receipt for a
+/// guarantee nobody checked — which is the failure this whole file exists to
+/// avoid, and which the agent version of this test has always risked.
+///
+/// Run with `--nocapture` for the breakdown.
+#[test]
+fn a_real_skill_library_loads_and_most_of_it_is_usable() {
+    let Some(source) = user_skills() else {
+        eprintln!("skipped: no ~/.claude/skills on this machine, so there was no real library");
+        return;
+    };
+    let base = scratch("claude-skill-corpus");
+    let root = base.join(".claude");
+    let skills = root.join("skills");
+    std::fs::create_dir_all(&skills).unwrap();
+
+    let mut copied = 0usize;
+    for entry in std::fs::read_dir(&source).unwrap().flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        // `skills/<name>/SKILL.md` only, which is what the loader reads.
+        let Some(file) = std::fs::read_dir(&dir).ok().and_then(|it| {
+            it.flatten().map(|e| e.path()).find(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.eq_ignore_ascii_case("SKILL.md"))
+            })
+        }) else {
+            continue;
+        };
+        let into = skills.join(dir.file_name().unwrap());
+        std::fs::create_dir_all(&into).unwrap();
+        std::fs::copy(&file, into.join("SKILL.md")).unwrap();
+        copied += 1;
+    }
+    if copied == 0 {
+        eprintln!("skipped: ~/.claude/skills has no <name>/SKILL.md files");
+        return;
+    }
+
+    let h = Harness::load(&root).expect("a real skill library must not stop the boot");
+    let loaded = h.skill_names().len();
+    eprintln!("real library: {copied} skills in {}", source.display());
+    eprintln!("  loaded into the catalogue: {loaded}");
+    eprintln!("  skipped: {}", copied.saturating_sub(loaded));
+
+    // The same 80% bar the agent library is held to, and for the same reason: a
+    // parser that kept a third of a real library would be a compatibility layer
+    // in name only. Before the CRLF fix this stood at 207 of 324 — 64% — and
+    // would have failed here.
+    assert!(
+        loaded * 10 >= copied * 8,
+        "only {loaded} of {copied} real skills reached the catalogue"
+    );
+    // Every one of them can actually be chosen: the closed-enum `Skill` tool and
+    // the prompt catalogue are built from the name and the description.
+    for name in h.skill_names() {
+        let skill = h.skill(name).expect("a listed skill must resolve");
+        assert!(!skill.name.trim().is_empty());
+        assert!(!skill.description.trim().is_empty(), "{name}");
+    }
+}
