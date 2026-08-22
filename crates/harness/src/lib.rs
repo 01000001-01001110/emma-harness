@@ -967,14 +967,24 @@ impl Harness {
         let (name, tail) = rest.split_at(end);
         let body = self.commands.get(name)?;
         let tail = tail.trim();
+        // `$ARGUMENTS` where the author put it, appended only when they did not
+        // ask. 37 of the 116 real commands on this machine use the placeholder,
+        // and every one of them was getting its arguments pasted at the end
+        // instead — so a command reading "review the file $ARGUMENTS and report"
+        // sent the model that sentence with the placeholder still in it, and the
+        // filename tacked on two lines below.
+        const PLACEHOLDER: &str = "$ARGUMENTS";
+        let text = if body.contains(PLACEHOLDER) {
+            body.replace(PLACEHOLDER, tail)
+        } else if tail.is_empty() {
+            body.clone()
+        } else {
+            format!("{body}\n\n{tail}")
+        };
         Some(Expansion {
             command: name.to_string(),
             raw: raw.to_string(),
-            text: if tail.is_empty() {
-                body.clone()
-            } else {
-                format!("{body}\n\n{tail}")
-            },
+            text,
         })
     }
 
@@ -1449,6 +1459,23 @@ fn after_licence_header(text: &str) -> &str {
     rest
 }
 
+/// A command file's body, with any frontmatter block removed.
+///
+/// Tolerant in the same direction as everything else that reads a foreign
+/// format: a file with no frontmatter, or with an opener that never closes, is
+/// returned whole rather than refused. A command is prose a person summons, and
+/// losing it over a malformed `---` would be a worse outcome than showing a
+/// stray line.
+fn strip_frontmatter(text: &str) -> &str {
+    let Some(rest) = crate::claude::open_frontmatter(text) else {
+        return text;
+    };
+    match rest.find("\n---") {
+        Some(end) => rest[end + 4..].trim_start_matches(['\r', '\n']),
+        None => text,
+    }
+}
+
 fn load_commands(root: &Path) -> Result<BTreeMap<String, String>> {
     let dir = root.join("commands");
     let mut out = BTreeMap::new();
@@ -1478,7 +1505,18 @@ fn load_commands(root: &Path) -> Result<BTreeMap<String, String>> {
         let name = path.file_stem().unwrap_or_default().to_string_lossy();
         let body = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
-        out.insert(name.into_owned(), body.trim().to_string());
+        // Frontmatter is metadata about the command, not part of it. 59 of the
+        // 116 real commands on the owner's machine carry a `---` block, and all
+        // of it used to be pasted into the model's context as if the operator
+        // had typed `description: ...` at the prompt — including keys Emma does
+        // not act on, which then read as instructions.
+        //
+        // Third caller of `open_frontmatter`, and the point of it being shared:
+        // a command written on Windows has the same CRLF opener a skill does.
+        out.insert(
+            name.into_owned(),
+            strip_frontmatter(&body).trim().to_string(),
+        );
     }
     if nested > 0 {
         eprintln!(

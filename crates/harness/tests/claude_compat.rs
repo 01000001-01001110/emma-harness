@@ -337,6 +337,60 @@ fn a_claude_skill_may_carry_keys_emma_does_not_read() {
     assert_eq!(h.skill("adr").expect("found").description, "Write an ADR.");
 }
 
+/// A command's frontmatter is metadata, not something the model reads.
+///
+/// 59 of the 116 real commands on the owner's machine carry a `---` block, and
+/// all of it used to be pasted into the model's context as though the operator
+/// had typed `description:` at the prompt — including keys Emma does not act
+/// on, which then read as instructions rather than as configuration.
+#[test]
+fn a_command_does_not_send_its_frontmatter_to_the_model() {
+    let base = scratch("claude-cmd-front");
+    let root = base.join(".claude");
+    write(&root.join("commands/review.md"), "---\nallowed-tools: Read, Grep\ndescription: Review a file.\n---\n\nReview it carefully.\n");
+    let h = Harness::load(&root).expect("load");
+    let out = h.expand_command("/review").expect("a known command");
+    assert!(
+        !out.text.contains("allowed-tools"),
+        "frontmatter reached the model: {}",
+        out.text
+    );
+    assert!(out.text.starts_with("Review it carefully."), "{}", out.text);
+}
+
+/// `$ARGUMENTS` is replaced where the author put it.
+///
+/// 37 real commands use the placeholder. Every one of them was getting its
+/// arguments pasted at the end instead, so a command reading "review the file
+/// $ARGUMENTS and report" reached the model with the placeholder still in the
+/// sentence and the filename tacked on two lines below.
+#[test]
+fn a_command_substitutes_its_arguments_where_the_author_asked() {
+    let base = scratch("claude-cmd-args");
+    let root = base.join(".claude");
+    write(
+        &root.join("commands/review.md"),
+        "Review the file $ARGUMENTS and report what is wrong.",
+    );
+    write(
+        &root.join("commands/plain.md"),
+        "Review whatever comes next.",
+    );
+    let h = Harness::load(&root).expect("load");
+
+    let out = h.expand_command("/review src/main.rs").expect("known");
+    assert_eq!(
+        out.text,
+        "Review the file src/main.rs and report what is wrong."
+    );
+    assert!(!out.text.contains("$ARGUMENTS"), "{}", out.text);
+
+    // A command that does not ask still gets its arguments appended, which is
+    // the older behaviour and the only sensible one when there is no slot.
+    let out = h.expand_command("/plain now").expect("known");
+    assert!(out.text.ends_with("now"), "{}", out.text);
+}
+
 /// A command in a subdirectory contributes nothing, and that is said out loud.
 ///
 /// Top level only is the design — a command is summoned as `/name` and a name
