@@ -2,6 +2,7 @@
 //! library beside it, where a scripted `Provider` can drive it without a
 //! network, a terminal or a signal handler.
 
+use std::io::IsTerminal;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -262,8 +263,16 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // `Approvals` would re-ask for a host the user already approved — and could
     // be handed a bypass the parent was not.
     let approvals = Arc::new(
-        Approvals::new(gate, asker)
-            .with_rules(rules, Some(emma::permissions::file_for(&harness.root))),
+        {
+            let a = Approvals::new(gate, asker);
+            // The one place the process is asked. See `Approvals::piped`.
+            if std::io::stdin().is_terminal() {
+                a
+            } else {
+                a.piped()
+            }
+        }
+        .with_rules(rules, Some(emma::permissions::file_for(&harness.root))),
     );
     // The one place a running provider is chosen. An unknown name fails here
     // rather than falling back, so a mis-set provider cannot look like a

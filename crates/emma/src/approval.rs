@@ -310,6 +310,21 @@ pub enum Asker {
 // ---------------------------------------------------------------------------
 
 pub struct Approvals {
+    /// Whether a human could have typed ahead of a prompt.
+    ///
+    /// True for a keyboard, false for a pipe. The drain at the goal prompt
+    /// exists so a stale `y` from an approval cannot become a goal — a real
+    /// property, and one that means nothing on a pipe, where every line was
+    /// supplied deliberately and all of it arrives before anything is read.
+    /// Draining there discarded the input and then explained the loss in terms
+    /// of a keyboard that does not exist, so `echo "goal" | emma` could never
+    /// run its goal.
+    ///
+    /// A value rather than a call to `stdin().is_terminal()` at the point of
+    /// use: under `cargo test` stdin is never a terminal, so reading the
+    /// process there would have silently disabled the drain in every test that
+    /// covers it — which is exactly what it did, and what the suite caught.
+    type_ahead_possible: bool,
     gate: Gate,
     asker: Asker,
     session_allowed: Mutex<HashSet<String>>,
@@ -355,7 +370,22 @@ impl Approvals {
             seen: Mutex::new(Vec::new()),
             rules: Mutex::new(Rules::default()),
             file: None,
+            // Defaults to "a human might be typing", which is the safe side:
+            // the drain protects against a stale answer becoming a goal, and
+            // running it when it was not needed costs a message, while skipping
+            // it when it was needed costs a budget spent on the wrong thing.
+            type_ahead_possible: true,
         }
+    }
+
+    /// Say that nothing can be typed ahead — stdin is a pipe, not a keyboard.
+    ///
+    /// Set by `main` from `stdin().is_terminal()`, once, rather than read at
+    /// each prompt: under `cargo test` stdin is never a terminal, so a check at
+    /// the point of use disables the drain in every test that covers it.
+    pub fn piped(mut self) -> Self {
+        self.type_ahead_possible = false;
+        self
     }
 
     /// The rules this run operates under, and the file a remembered one goes in.
@@ -690,7 +720,24 @@ impl Approvals {
                 // from an approval — or from a turn that aborted before it was
                 // consumed — became a goal on the first real run, and Emma
                 // dutifully spent a budget working on it.
-                let stale = lines.drain();
+                // **Only when a keyboard is what is on the other end.** On a
+                // pipe there is no such thing as "typed before the prompt":
+                // the whole stream was supplied deliberately, all of it
+                // arrives before anything is read, and draining it discarded
+                // the input and then explained the loss in terms of a keyboard
+                // that does not exist. A piped `/exit` printed "ignoring 1
+                // line(s)" and hung to EOF, so `echo "goal" | emma` could
+                // never run its goal at all.
+                //
+                // The property the drain protects is unchanged where it
+                // applies: a human typing ahead of a prompt still loses it,
+                // loudly. A script cannot type ahead — everything it sends is
+                // on purpose.
+                let stale = if self.type_ahead_possible {
+                    lines.drain()
+                } else {
+                    0
+                };
                 if stale > 0 {
                     term.note(&format!(
                         "ignoring {stale} line(s) typed before this prompt — nothing reads the \
@@ -971,6 +1018,35 @@ mod tests {
     /// exists — and this path used to drop it in silence. A user cannot tell a
     /// line that was eaten from a command that does not work, and they will
     /// report the second.
+    #[tokio::test]
+    async fn a_piped_session_keeps_its_input_instead_of_draining_it() {
+        // The other side of the drain. On a pipe there is no such thing as
+        // typing ahead: every line was supplied deliberately and all of it
+        // arrives before anything reads it. Draining discarded the lot and then
+        // explained the loss in terms of a keyboard that does not exist, so
+        // `echo "goal" | emma` could never run its goal — reproduced live by
+        // two independent audits before this existed.
+        let term = Term::recording();
+        let a = Approvals::new(
+            Gate::Ask,
+            Asker::Terminal(crate::term::input::LineSource::scripted(&["/exit", "hello"]).into()),
+        )
+        .piped();
+        assert_eq!(
+            a.read_line(&term).await.as_deref(),
+            Some("/exit"),
+            "a piped line was thrown away"
+        );
+        let said = term.recorded().join(
+            "
+",
+        );
+        assert!(
+            !said.contains("ignoring"),
+            "it explained a loss that did not happen: {said}"
+        );
+    }
+
     #[tokio::test]
     async fn a_line_dropped_at_the_goal_prompt_is_reported_rather_than_vanishing() {
         let term = Term::recording();
