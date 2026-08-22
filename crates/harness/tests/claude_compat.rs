@@ -337,6 +337,35 @@ fn a_claude_skill_may_carry_keys_emma_does_not_read() {
     assert_eq!(h.skill("adr").expect("found").description, "Write an ADR.");
 }
 
+/// Two skills declaring one name do not vanish quietly.
+///
+/// The catalogue is keyed on the frontmatter `name`, so a collision means one
+/// skill silently replaced the other and the winner depended on the order the
+/// filesystem returned the directory in. The owner has a real collision on his
+/// own machine. The sibling agent loader had reported this for months; skills
+/// never got the equivalent.
+#[test]
+fn two_skills_claiming_one_name_are_reported() {
+    let base = scratch("claude-skill-dupe");
+    let root = base.join(".claude");
+    write(
+        &root.join("skills/first/SKILL.md"),
+        "---\nname: adr\ndescription: From the first directory.\n---\n\n# one\n",
+    );
+    write(
+        &root.join("skills/second/SKILL.md"),
+        "---\nname: adr\ndescription: From the second directory.\n---\n\n# two\n",
+    );
+    let h = Harness::load(&root).expect("a collision must not stop the boot");
+    // One name, one entry: that is the collision, and it is why it must be said
+    // out loud rather than left to be discovered.
+    assert_eq!(
+        h.skill_names(),
+        vec!["adr"],
+        "both should collapse to one name"
+    );
+}
+
 /// A skill written on Windows loads.
 ///
 /// **This is the defect that cost 99 of 324 real skills on the owner's machine.**

@@ -1344,6 +1344,28 @@ fn load_skills(
                     continue;
                 }
             };
+            // Two skills may declare the same `name:` from different
+            // directories, and the catalogue is keyed on the name — so one of
+            // them silently replaced the other, with the winner decided by
+            // whatever order the filesystem handed the directory back. On the
+            // owner's own machine two directories both declare `gstack`.
+            //
+            // Reported for the same reason the parse skip above is: a catalogue
+            // quietly one shorter than the directory is the gap nobody notices
+            // until the model cannot find a skill that is plainly there. The
+            // sibling agent loader already does this with a boot note
+            // (`claude.rs`, `load_agents`); skills never got one.
+            if let Some(previous) = found.get(&front.name) {
+                eprintln!(
+                    "emma: two skills both declare the name `{}` — {} is in the catalogue and \
+                     {} replaces it. Only one can be loaded under one name, and which one wins \
+                     depends on the order the filesystem returned the directory in, so it may \
+                     differ between runs. Rename one of them.",
+                    front.name,
+                    previous.name,
+                    path.display()
+                );
+            }
             found.insert(
                 front.name.clone(),
                 SkillDef::new(front.name, front.description, body),

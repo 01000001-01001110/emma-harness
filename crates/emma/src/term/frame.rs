@@ -2100,13 +2100,31 @@ mod tests {
     /// Synchronized output is two constants and a rule about pairing them: the
     /// end is on the restore path, so `Drop`, the panic hook and `process::exit`
     /// all release a terminal that was told to hold its picture.
+    ///
+    /// **This test used to be a false receipt and could not fail.** Its third
+    /// assertion was `include_str!("frame.rs").contains("out.push_str(SYNC_END)")`
+    /// — and that literal occurred exactly once in the file, inside the assertion
+    /// itself, so `include_str!` matched the test's own source. The restore path
+    /// has said `leave_modes()` for as long as the test has existed. Proven by
+    /// mutation: with `SYNC_END` deleted from `leave_modes`, the grep still
+    /// passed while `every_terminal_mode_the_frame_sets_is_unset_on_the_way_out`
+    /// correctly went red.
+    ///
+    /// It now asserts the behaviour instead of the spelling. A source grep can
+    /// only ever pin how something is written; this repository's rule is that a
+    /// test which cannot fail is worse than no test, because it is a receipt for
+    /// a guarantee nobody checked.
     #[test]
     fn a_synchronized_update_is_always_ended_including_on_the_way_out() {
         assert_eq!(SYNC_BEGIN, "\x1b[?2026h");
         assert_eq!(SYNC_END, "\x1b[?2026l");
+        // The pair is an h/l set on the same private mode; a typo in either
+        // number leaves a terminal holding its picture forever.
+        assert_eq!(SYNC_BEGIN.replace('h', "l"), SYNC_END);
         assert!(
-            include_str!("frame.rs").contains("out.push_str(SYNC_END)"),
-            "the restore path no longer ends a synchronized update"
+            leave_modes().contains(SYNC_END),
+            "the restore path no longer ends a synchronized update: {:?}",
+            leave_modes()
         );
     }
 
