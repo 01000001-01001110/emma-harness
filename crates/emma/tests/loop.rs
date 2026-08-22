@@ -157,6 +157,49 @@ async fn a_tool_failure_reaches_the_model_and_the_goal_continues() {
     assert!(seen.contains("is_error"), "{seen}");
 }
 
+/// A tool that panics is an observation too, not the end of the session.
+///
+/// This file's own first rule is that every failure class reaches the model as
+/// a `tool_result` and the turn continues. A panic was the one class that did
+/// not: it unwound through the loop, past the session log and the budget
+/// accounting, and took the run with it. The tool surface is large, several of
+/// its crates parse input written by the model, and one `unwrap` in any of them
+/// ended everything.
+#[tokio::test]
+async fn a_tool_that_panics_is_an_observation_and_the_goal_continues() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let (boom, boom_calls) = TestTool::panicking("Boom");
+    let fake = Fake::new(vec![
+        call("Boom", json!({ "x": "1" })),
+        text("I will take the other route.\n\nGOAL COMPLETE"),
+    ]);
+    let log = SessionLog::open(dir.path(), "s").unwrap();
+
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![boom]),
+        &Approvals::new(Gate::Ask, Asker::Scripted(Default::default())),
+        &fake,
+        budgets(),
+        &goal(),
+        &log,
+    )
+    .await;
+
+    // The panic did not end the goal…
+    assert_eq!(out.ending, Ending::Done, "a tool panic ended the session");
+    assert_eq!(boom_calls.load(Ordering::SeqCst), 1);
+    // …and the model was told what happened, in a block it can route on.
+    let seen = fake.transcript();
+    assert!(seen.contains("tool_panicked"), "{seen}");
+    assert!(seen.contains("panicked on purpose"), "{seen}");
+    assert!(seen.contains("is_error"), "{seen}");
+    // And told not to retry it, because no argument of theirs caused it.
+    assert!(seen.contains("do not retry"), "{seen}");
+}
+
 /// One half of the memo rule. Without it, a model that has found a call it
 /// likes and an argument it does not can spend the entire iteration budget
 /// re-issuing the identical call, and every symptom points at the budget rather

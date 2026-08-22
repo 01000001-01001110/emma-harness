@@ -266,12 +266,31 @@ pub struct TestTool {
     /// enough for a test that only counts calls; a test asserting that a
     /// *result* survived into a later turn needs a body it can search for.
     body: Option<String>,
+    /// Panics instead of returning. The one failure class the loop did not
+    /// convert into an observation, so the one a test has to be able to stage.
+    panics: bool,
     calls: Arc<AtomicUsize>,
 }
 
 impl TestTool {
     pub fn ok(name: &'static str, read_only: bool) -> (Arc<dyn Tool>, Arc<AtomicUsize>) {
         Self::build(name, read_only, None, false, None)
+    }
+
+    /// A tool that panics rather than returning — an index out of range, an
+    /// `unwrap` on `None`, the ordinary way a real tool crate breaks.
+    pub fn panicking(name: &'static str) -> (Arc<dyn Tool>, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tool = Self {
+            name,
+            read_only: true,
+            host: None,
+            fails: false,
+            body: None,
+            panics: true,
+            calls: calls.clone(),
+        };
+        (Arc::new(tool), calls)
     }
 
     pub fn failing(name: &'static str, read_only: bool) -> (Arc<dyn Tool>, Arc<AtomicUsize>) {
@@ -308,6 +327,7 @@ impl TestTool {
                 host,
                 fails,
                 body,
+                panics: false,
                 calls: calls.clone(),
             }),
             calls,
@@ -348,6 +368,9 @@ impl Tool for TestTool {
         _args: Value,
     ) -> anyhow::Result<Result<ToolOutcome, ToolError>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.panics {
+            panic!("{} panicked on purpose", self.name);
+        }
         Ok(if self.fails {
             Err(ToolError::Failed(format!("{} broke on purpose", self.name)))
         } else {

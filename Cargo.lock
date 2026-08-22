@@ -369,6 +369,7 @@ dependencies = [
  "emma-tools-lsp",
  "emma-tools-tasks",
  "emma-tools-web",
+ "futures-util",
  "idna",
  "libc",
  "ratatui",

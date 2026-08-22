@@ -29,6 +29,12 @@ serde_json.workspace = true
 # spawns a process: the tools do that, behind the approval gate.
 tokio = { workspace = true, features = ["signal", "sync"] }
 
+# One method: `FutureExt::catch_unwind`, used in `agent.rs` so a panicking tool
+# becomes a `tool_result` the model reads rather than the end of the session.
+# The loop's first rule is that every failure class is an observation, and a
+# panic was the only one that was not. Already in the lock file via `tools/web`.
+futures-util.workspace = true
+
 emma-harness.workspace = true
 emma-llm.workspace = true
 emma-tool-api.workspace = true

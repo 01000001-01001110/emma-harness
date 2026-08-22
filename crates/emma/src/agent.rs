@@ -1517,7 +1517,53 @@ impl<'a> Agent<'a> {
             session_id: self.s.session_id.clone(),
             turn_id: turn_id.to_string(),
         };
-        let outcome = match tool.invoke(&ctx, call.input.clone()).await {
+        // **A panicking tool is a failed tool, not a failed session.** This
+        // file's own first rule is that every failure class reaches the model as
+        // a `tool_result` and the turn continues — a missing tool, bad
+        // arguments, a `ToolError`, a hook denial, a refused approval. A panic
+        // was the one class that did not: it unwound straight through the loop,
+        // past the session log, past the budget accounting, and took the run
+        // with it. The tool surface here is large, several of its crates parse
+        // input from the model, and an index or an `unwrap` in any of them
+        // ended everything.
+        //
+        // `AssertUnwindSafe` is honest rather than a shrug: what crosses the
+        // boundary is `&ctx` and an owned `Value`, and the loop's own state is
+        // not touched by the tool. A tool that panics mid-write may of course
+        // leave its own mess on disk, which is the tool's business and is
+        // exactly what the message hands back to the model.
+        let called = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
+            tool.invoke(&ctx, call.input.clone()),
+        ))
+        .await;
+        let called = match called {
+            Ok(v) => v,
+            Err(panic) => {
+                let what = panic
+                    .downcast_ref::<&str>()
+                    .map(|s| (*s).to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "a panic with no message".into());
+                self.s.log.append(
+                    "tool_panicked",
+                    json!({ "turn_id": turn_id, "id": call.id, "tool": call.name,
+                            "detail": what }),
+                );
+                self.s.term.tool_failed(&call.name, &what);
+                self.run_post_hooks(turn_id, call, &what, false, Some("tool_panicked"))
+                    .await;
+                return fail(
+                    "tool_panicked",
+                    format!(
+                        "{} panicked and did not finish: {what}. This is a defect in the tool, \
+                         not something your arguments can fix — do not retry the same call. \
+                         Anything it had already written may be half-done.",
+                        call.name
+                    ),
+                );
+            }
+        };
+        let outcome = match called {
             Ok(Ok(outcome)) => outcome,
             Ok(Err(e)) => {
                 // The line this whole design exists for. A typed failure is an
