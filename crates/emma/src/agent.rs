@@ -461,6 +461,24 @@ impl Interrupt {
         self.flag.load(Ordering::SeqCst)
     }
 
+    /// Clear the flag so the next goal starts un-interrupted.
+    ///
+    /// **Without this the flag was one-way**, and three help strings were
+    /// wrong: `cli.rs` and the session's own opening note both say Ctrl-C
+    /// interrupts *a goal*, and it ended the whole session. Worse, a Ctrl-C
+    /// pressed at an idle prompt did nothing visible and then made the *next*
+    /// goal abort instantly, before any model call, with the session exiting
+    /// after it — a keystroke doing its damage to work the user had not typed
+    /// yet.
+    ///
+    /// Called at the top of an interactive turn rather than at the bottom of
+    /// one, so a stray press between goals is discarded rather than banked. A
+    /// press landing in the microsecond between this and the goal starting is
+    /// lost, which is a far smaller wrong than the one it replaces.
+    pub fn reset(&self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+
     pub async fn wait(&self) {
         loop {
             if self.tripped() {
@@ -2014,6 +2032,29 @@ mod tests {
         // did. The generic line has to admit that no limit was named.
         let vague = truncation_note(None);
         assert!(vague.contains("did not say which limit"), "{vague}");
+    }
+
+    /// The interrupt flag clears, so a goal starts un-interrupted.
+    ///
+    /// **It used to be one-way**, and two independent audits found the same
+    /// consequence: `cli.rs` and the session's opening note both promise Ctrl-C
+    /// interrupts *a goal*, and it ended the whole session instead. A press at
+    /// an idle prompt was worse — nothing visible happened, then the next goal
+    /// typed aborted before any model call and the session exited after it.
+    #[test]
+    fn an_interrupt_can_be_cleared_so_the_next_goal_starts_clean() {
+        let i = Interrupt::new();
+        assert!(!i.tripped());
+        i.trip();
+        assert!(i.tripped(), "trip must set it");
+        i.reset();
+        assert!(
+            !i.tripped(),
+            "a goal would start already interrupted, before any model call"
+        );
+        // And it still trips again afterwards: reset is not a disable.
+        i.trip();
+        assert!(i.tripped());
     }
 
     #[test]

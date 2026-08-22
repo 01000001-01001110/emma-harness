@@ -676,6 +676,12 @@ async fn run(cli: cli::Cli) -> Result<()> {
             continue;
         }
 
+        // A goal starts un-interrupted. See `Interrupt::reset`: the flag used
+        // to be one-way, so a Ctrl-C pressed at the prompt — or during the
+        // previous goal — aborted this one before a single model call.
+        if !opts.print {
+            interrupt.reset();
+        }
         let outcome = agent
             .run_goal(&Goal::new(text).with_injected(submitted.context))
             .await;
@@ -706,7 +712,11 @@ async fn run(cli: cli::Cli) -> Result<()> {
                 ));
             }
         }
-        if opts.print || interrupt.tripped() {
+        // `-p` runs one goal and stops. Interactively, Ctrl-C interrupts the
+        // goal and hands the prompt back, which is what `cli.rs` and the
+        // session's opening note have always said it does; `/exit`, `/quit` and
+        // EOF end the session.
+        if opts.print {
             break;
         }
     }
