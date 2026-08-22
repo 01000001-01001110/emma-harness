@@ -1420,7 +1420,7 @@ impl<'a> Agent<'a> {
             // answers only the calls that worked, which the API rejects. The
             // record immediately above this one (`tool_failed`, `denied`,
             // `tool_unknown`, …) is the prose a human reads; this is the wire.
-            self.log_result_block(turn_id, call, &block, None);
+            self.log_result_block(turn_id, call, &block, None, None);
             (block, false, Some(label.clone()))
         };
 
@@ -1573,7 +1573,13 @@ impl<'a> Agent<'a> {
         // block inside a user message. Both sites now say what happened and
         // leave the spelling to the provider.
         let block = ToolResult::ok(&call.id, content);
-        self.log_result_block(turn_id, call, &block, Some(outcome.truncated));
+        self.log_result_block(
+            turn_id,
+            call,
+            &block,
+            Some(outcome.truncated),
+            outcome.exit_code,
+        );
         (block, true, None)
     }
 
@@ -1592,6 +1598,7 @@ impl<'a> Agent<'a> {
         call: &ToolCall,
         block: &ToolResult,
         truncated: Option<bool>,
+        exit_code: Option<i64>,
     ) {
         self.s.log.append(
             "tool_result",
@@ -1600,7 +1607,12 @@ impl<'a> Agent<'a> {
                     // all, because that is the shape the fold reads back and the
                     // shape `restore_records` tests `is_error` on.
                     "block": ContentBlock::ToolResult(block.clone()),
-                    "truncated": truncated }),
+                    "truncated": truncated,
+                    // Beside the block rather than inside it: the block is the
+                    // wire shape and the API has no field for this. The
+                    // delegation footer reads it here instead of parsing the
+                    // prose, which it could never do correctly.
+                    "exit_code": exit_code }),
         );
     }
 

@@ -392,7 +392,20 @@ impl Bash {
         if cut {
             content.push_str(&format!("\n[truncated: {reason}]"));
         }
-        let outcome = ToolOutcome::new(content);
+        // Structural, alongside the sentence in `content`. The footer reads
+        // this; the model reads the prose. Set for every command that ran,
+        // including a successful one, because "exited 0" and "never ran" are
+        // different facts and the footer has to tell them apart.
+        // Structural, alongside the sentence in `content`. The footer reads
+        // this; the model reads the prose. Recorded for every command that ran,
+        // including a successful one, because "exited 0" and "never ran" are
+        // different facts and the footer has to tell them apart. A command
+        // killed by a signal has no numeric code and stays `None` — the same
+        // "no number to report" the field already means.
+        let outcome = match status.code() {
+            Some(c) => ToolOutcome::new(content).with_exit_code(i64::from(c)),
+            None => ToolOutcome::new(content),
+        };
         Ok(if cut {
             outcome.truncated_because(reason)
         } else {

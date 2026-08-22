@@ -924,7 +924,14 @@ impl Facts {
                         continue;
                     };
                     let content = record["block"]["content"].as_str().unwrap_or_default();
-                    let status = exit_status(content);
+                    // The field first. Parsing the prose is the fallback for
+                    // records written before the field existed, and it is the
+                    // reason this feature never worked: `Bash` puts its shell
+                    // banner above the status line, so a parser reading the
+                    // first line found the banner every time.
+                    let status = record["exit_code"]
+                        .as_i64()
+                        .or_else(|| exit_status(content));
                     let command = one_line(&command);
                     if let Some(slot) = facts
                         .commands
@@ -1064,12 +1071,18 @@ fn listed(what: &str, items: &[String]) -> String {
 /// `cargo test → exit 101` beside a final message reading "the tests pass" is a
 /// contradiction the parent can see, and it is the most common lie a coding
 /// subagent can tell.
+/// The exit status stated in a command's prose, for records written before
+/// `exit_code` was a field.
+///
+/// **Scans the opening lines rather than only the first.** `Bash` prepends its
+/// shell banner to every result, so the status has never been on line one, and
+/// a parser that read only line one returned `None` for every command ever run
+/// by a subagent — which is why the footer reported "no result" throughout.
 fn exit_status(content: &str) -> Option<i64> {
     content
         .lines()
-        .next()?
-        .trim()
-        .strip_prefix("exit status ")?
+        .take(4)
+        .find_map(|l| l.trim().strip_prefix("exit status "))?
         .trim()
         .parse()
         .ok()
@@ -1291,13 +1304,31 @@ mod tests {
         assert!(footer.contains("Write"), "{footer}");
     }
 
+    /// **This test used to pass on a fixture the real tool never produces.**
+    /// Every assertion below with no banner passed throughout the life of the
+    /// defect, because `Bash` prepends its shell banner to *every* result and
+    /// the parser read only the first line — so in production it returned
+    /// `None` for every command a subagent ever ran, and the footer said "no
+    /// result" every time. A fixture that agrees with its author is the exact
+    /// failure this repository keeps paying for.
     #[test]
-    fn an_exit_status_is_read_only_from_where_bash_actually_puts_it() {
+    fn an_exit_status_is_read_from_where_bash_actually_puts_it() {
+        // The shape the real tool emits: banner first, status second.
+        assert_eq!(
+            exit_status("shell: posix — /bin/sh\nexit status 101\nerror output"),
+            Some(101),
+            "the banner is above the status on every real Bash result"
+        );
+        // And without one, for records older than the banner.
         assert_eq!(exit_status("exit status 0\nhello"), Some(0));
         assert_eq!(exit_status("exit status 101"), Some(101));
         // Not from prose that merely mentions one, which is what a model writes.
         assert_eq!(exit_status("the command exited with status 0"), None);
         assert_eq!(exit_status(""), None);
+        // Not from far down a long output either: a line reading like a status
+        // in the middle of a log is the command talking, not the harness.
+        let buried = format!("banner\n{}\nexit status 7", "noise\n".repeat(10));
+        assert_eq!(exit_status(&buried), None, "only the opening lines count");
     }
 }
 

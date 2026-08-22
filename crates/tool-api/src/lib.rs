@@ -136,6 +136,19 @@ pub struct ToolOutcome {
     /// because several tools explain their own cut inside `content` instead;
     /// it is never the preferred one for a new tool.
     pub truncation: Option<String>,
+    /// The exit status of a command this tool ran, when it ran one.
+    ///
+    /// **A number, not a sentence.** `Bash` states the status in its content
+    /// too, for the model to read — but the delegation footer used to recover
+    /// it by parsing that prose, and the prose has a shell banner above it, so
+    /// the parse never matched and the footer reported "no result" for every
+    /// command a subagent ran. The lie-detector the footer exists for — a
+    /// subagent claiming the tests pass beside a `cargo test` that exited 101 —
+    /// could not fire.
+    ///
+    /// Reading a field the tool set is not the same as re-parsing text the
+    /// harness formatted. `None` means the tool ran no command.
+    pub exit_code: Option<i64>,
 }
 
 impl ToolOutcome {
@@ -145,7 +158,14 @@ impl ToolOutcome {
             display: None,
             truncated: false,
             truncation: None,
+            exit_code: None,
         }
+    }
+
+    /// Record the exit status of a command this tool ran. See [`Self::exit_code`].
+    pub fn with_exit_code(mut self, code: i64) -> Self {
+        self.exit_code = Some(code);
+        self
     }
 
     pub fn with_display(mut self, display: impl Into<String>) -> Self {
