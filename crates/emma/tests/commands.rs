@@ -66,6 +66,13 @@ fn fixture() -> Fixture {
 
 impl Fixture {
     fn agent<'a>(&'a self, provider: Arc<dyn Provider>) -> Agent<'a> {
+        self.agent_with(provider, Budgets::default())
+    }
+
+    /// The same agent with budgets the caller chose — used to drive the
+    /// *automatic* compaction path, which only runs when a request exceeds
+    /// `max_context`.
+    fn agent_with<'a>(&'a self, provider: Arc<dyn Provider>, budgets: Budgets) -> Agent<'a> {
         Agent::new(Setup {
             provider,
             harness: &self.harness,
@@ -79,7 +86,7 @@ impl Fixture {
             done: &MarkerClaim,
             cwd: self.dir.path().to_path_buf(),
             session_id: "sess-commands".into(),
-            budgets: Budgets::default(),
+            budgets,
             caching: Caching::On,
             mode: Mode::Batch,
         })
@@ -770,3 +777,43 @@ async fn theme_writes_the_selection_only_for_a_name_that_is_really_there() {
 const _: Option<Value> = None;
 
 // endregion
+
+/// Automatic compaction that cannot help says so, once.
+///
+/// **The silent half of a pair.** `/compact` has always explained itself; the
+/// threshold path discarded the same explanation. So a conversation over its
+/// cap with nothing left to summarise grew on every call in silence until the
+/// token budget or a provider 400 ended it, and the user's first sign was the
+/// run stopping. Said once rather than per request, because the condition holds
+/// from then on and a warning per call would bury the run in one sentence.
+#[tokio::test]
+async fn automatic_compaction_that_cannot_help_says_so_once() {
+    let f = fixture();
+    let provider = Fake::new(vec![
+        text("one\n\nGOAL COMPLETE"),
+        text("two\n\nGOAL COMPLETE"),
+        text("three\n\nGOAL COMPLETE"),
+    ]);
+    // A cap of one token: every request is over it, and two four-word goals
+    // cannot be summarised into anything smaller than the note that replaces
+    // them.
+    let budgets = Budgets {
+        max_context: 1,
+        ..Budgets::default()
+    };
+    let mut agent = f.agent_with(provider.clone(), budgets);
+    agent.run_goal(&Goal::new("say one")).await;
+    agent.run_goal(&Goal::new("say two")).await;
+    agent.run_goal(&Goal::new("say three")).await;
+
+    let said = f.said();
+    assert!(
+        said.contains("compaction cannot"),
+        "the automatic path stayed silent about being stuck: {said}"
+    );
+    assert_eq!(
+        said.matches("compaction cannot").count(),
+        1,
+        "said more than once: {said}"
+    );
+}

@@ -563,6 +563,10 @@ pub struct Agent<'a> {
     /// How the last goal ended, until the next one opens. See
     /// [`Agent::close_previous_goal`].
     last_ending: Option<&'static str>,
+    /// Whether the user has already been told that automatic compaction cannot
+    /// help. Said once: the condition holds on every subsequent call, and a
+    /// warning per request would bury the run in one repeated sentence.
+    said_compaction_stuck: bool,
     /// The provider's reported input size for the most recent call, which is
     /// what [`Budgets::max_context`] is tested against. `None` before the first
     /// call of the process, where an estimate stands in.
@@ -595,6 +599,7 @@ impl<'a> Agent<'a> {
             s,
             chapters: Vec::new(),
             last_ending: None,
+            said_compaction_stuck: false,
             last_input: None,
             turn_seq: 0,
             resumed: None,
@@ -1249,7 +1254,24 @@ impl<'a> Agent<'a> {
             remaining -= sizes[take];
             take += 1;
         }
-        self.compact(take, size, why);
+        // **The returned reason used to be dropped here.** `/compact` explains
+        // itself and the threshold path did not, so a conversation over its cap
+        // with nothing left to summarise — one enormous goal, or a history
+        // already reduced to summaries — grew on every single call in silence
+        // until the token budget or a provider 400 ended it. The user's first
+        // sign was the run stopping.
+        if let Compacted::Nothing(reason) = self.compact(take, size, why) {
+            if !self.said_compaction_stuck {
+                self.said_compaction_stuck = true;
+                self.s.term.warn(&format!(
+                    "this conversation is over the context limit and compaction cannot \
+                     shrink it: {reason}. Every request from here is larger than the cap, \
+                     and the run will end on a budget or a provider error rather than on \
+                     the goal. `/clear` starts a fresh conversation; a smaller goal would \
+                     also fit."
+                ));
+            }
+        }
     }
 
     /// Replace the oldest `take` chapters with their summaries.
