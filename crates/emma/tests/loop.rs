@@ -310,6 +310,29 @@ async fn an_interrupt_reaches_a_tool_that_is_already_running() {
         took < std::time::Duration::from_secs(5),
         "the interrupt did not reach the running tool: the goal took {took:?} against a tool          asked to take 10s"
     );
+
+    // **And the conversation is still wire-legal.** An adversarial review
+    // raised the worry that a cancelled call leaves a `tool_use` with no
+    // `tool_result` — the shape the API refuses and the shape that breaks a
+    // resumed conversation. It does not: `session::place_turn` refuses to place
+    // a turn at all unless every call has exactly one result, so the cancelled
+    // result travels with its call or neither travels. Asserted here rather
+    // than argued, because the worry was reasonable and the answer is cheap.
+    let convo = agent.conversation();
+    let calls: usize = convo
+        .iter()
+        .flat_map(|m| m.content.blocks())
+        .filter(|b| matches!(b, emma_llm::ContentBlock::ToolUse(_)))
+        .count();
+    let results: usize = convo
+        .iter()
+        .flat_map(|m| m.content.blocks())
+        .filter(|b| matches!(b, emma_llm::ContentBlock::ToolResult(_)))
+        .count();
+    assert_eq!(
+        calls, results,
+        "a cancelled call left the conversation with {calls} tool_use and {results} tool_result"
+    );
 }
 
 /// One half of the memo rule. Without it, a model that has found a call it
