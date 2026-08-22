@@ -52,10 +52,26 @@ use std::time::SystemTime;
 
 use crate::hashline;
 
+/// What a file looked like when it was last seen.
+///
+/// **`content` is why this is not just metadata.** Length and mtime alone are
+/// forgeable by accident: a formatter that rewrites a file to the same byte
+/// length inside one filesystem tick produces an identical `(len, mtime)` pair,
+/// and `Write` then overwrote the other edit believing the file was untouched.
+/// No adversary required. An independent review rated the same-tick collision
+/// unlikely on NTFS specifically, which is a reason to call it a lost-update
+/// risk rather than a certainty — not a reason to keep a check that cannot see
+/// the change it is checking for.
+///
+/// FNV-1a over the whole file, the hash `hashline` already uses for `Edit`'s
+/// line anchors. Cheap enough to run on a file `Read` was going to load anyway,
+/// and `None` when the file was not read — a `Write` to a path nobody opened
+/// has no content to remember.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Stamp {
     len: u64,
     mtime: Option<SystemTime>,
+    content: Option<u64>,
 }
 
 /// The lines that were actually shown, and what they said at the time.
@@ -138,8 +154,16 @@ impl ReadTracker {
     /// will then be refused for want of a record — which is the safe direction
     /// for this to fail in.
     pub fn record(&self, session: &str, path: &Path, complete: bool, lines: LineHashes) {
+        // **The hash of what was actually shown, not of what is there now.**
+        // `stamp_of` re-stats after the caller has already read the bytes, so a
+        // change landing in between paired the old content with a new stamp and
+        // the tracker called it `Fresh`. Recording the content the caller saw
+        // closes that window: if the file moved underneath the read, the two
+        // disagree and the next check says `Stale`.
+        let mut stamp = stamp_of(path);
+        stamp.content = content_of(path);
         let sighting = Sighting {
-            stamp: stamp_of(path),
+            stamp,
             complete,
             lines,
         };
@@ -159,7 +183,7 @@ impl ReadTracker {
         let seen = self.seen.lock().expect("read tracker mutex");
         match seen.get(&key) {
             None => ReadState::Never,
-            Some(s) if s.stamp != stamp_of(path) => ReadState::Stale,
+            Some(s) if !same_file(&s.stamp, &stamp_of(path), path) => ReadState::Stale,
             Some(s) if !s.complete => ReadState::Partial,
             Some(_) => ReadState::Fresh,
         }
@@ -247,10 +271,95 @@ fn stamp_of(path: &Path) -> Stamp {
         Ok(m) => Stamp {
             len: m.len(),
             mtime: m.modified().ok(),
+            content: None,
         },
         Err(_) => Stamp {
             len: 0,
             mtime: None,
+            content: None,
         },
+    }
+}
+
+/// A whole-file hash, for comparing against a remembered one.
+///
+/// Read here rather than passed in, because the caller that needs this is
+/// checking staleness *now* and the bytes it saw earlier are exactly what must
+/// not be trusted.
+fn content_of(path: &Path) -> Option<u64> {
+    let bytes = std::fs::read(path).ok()?;
+    Some(hashline::hash_line(&String::from_utf8_lossy(&bytes)))
+}
+
+/// Whether two stamps describe the same file contents.
+///
+/// Metadata first, because it is one `stat` and rules out most changes. The
+/// hash is consulted only when metadata agrees *and* both sides recorded one —
+/// which is the case the metadata comparison cannot see, and the only case
+/// worth paying a read for.
+fn same_file(remembered: &Stamp, now: &Stamp, path: &Path) -> bool {
+    if remembered.len != now.len || remembered.mtime != now.mtime {
+        return false;
+    }
+    match remembered.content {
+        None => true,
+        Some(was) => content_of(path) == Some(was),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A same-length rewrite with an identical mtime is still detected.
+    ///
+    /// **This is the collision the old stamp could not see.** Freshness was
+    /// `(len, mtime)` alone, so a formatter rewriting a file to the same byte
+    /// length inside one filesystem tick produced an identical pair — and
+    /// `Write` overwrote the other edit believing the file was untouched. No
+    /// adversary required.
+    ///
+    /// Staged by comparing stamps directly rather than by racing a real tick:
+    /// forging the metadata is the point, and a test that waits for a
+    /// coincidence is a test that passes for the wrong reason most of the time.
+    #[test]
+    fn a_same_length_change_under_an_identical_mtime_is_not_the_same_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("code.rs");
+        std::fs::write(&file, "let a = 1;\n").unwrap();
+
+        // What Emma remembers after reading it: metadata plus content.
+        let mut remembered = stamp_of(&file);
+        remembered.content = content_of(&file);
+        assert!(remembered.content.is_some(), "a read must record content");
+
+        // Somebody rewrites it to exactly the same length.
+        std::fs::write(&file, "let a = 2;\n").unwrap();
+
+        // Forge the metadata half: same length by construction, and the mtime
+        // asserted equal so the comparison cannot fall back on it.
+        let now = Stamp {
+            len: remembered.len,
+            mtime: remembered.mtime,
+            content: None,
+        };
+        assert_eq!(now.len, remembered.len, "the forge needs equal lengths");
+
+        assert!(
+            !same_file(&remembered, &now, &file),
+            "a same-length rewrite under an identical mtime read as unchanged"
+        );
+    }
+
+    /// And an unchanged file is still unchanged — a freshness check that cries
+    /// wolf sends every `Write` back for a re-read it does not need.
+    #[test]
+    fn an_untouched_file_compares_equal() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("code.rs");
+        std::fs::write(&file, "let a = 1;\n").unwrap();
+        let mut remembered = stamp_of(&file);
+        remembered.content = content_of(&file);
+        assert!(same_file(&remembered, &stamp_of(&file), &file));
     }
 }
