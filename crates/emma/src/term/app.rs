@@ -240,9 +240,30 @@ pub fn dock_height(view: &View, room: u16) -> u16 {
 /// viewport never had to: the retained transcript, the sidebar posture, and
 /// the chat pane's last-known size (which is what scrolling pages by and what
 /// new blocks are wrapped to).
+/// What occupies the main region — the space between the sidebar and the
+/// status bar.
+///
+/// **The frame does not change; only this does.** Every mockup for the tool
+/// pages keeps `SESSIONS`, `TOOLS`, `QUICK HELP` and the status row exactly as
+/// the chat view has them, and replaces the middle. So a page is not a window,
+/// not a mode, and not a second `App` — it is one value on this struct, read at
+/// paint time.
+///
+/// `Chat` is not "no page". It is the ordinary occupant, and naming it that way
+/// is what keeps the match exhaustive when a page is added: a new variant is a
+/// compile error at every site that decides what to draw, rather than a silent
+/// fall-through to the transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Pane {
+    #[default]
+    Chat,
+}
+
 #[derive(Debug)]
 pub struct App {
     pub transcript: Transcript,
+    /// What the main region is showing. See [`Pane`].
+    pane: Pane,
     latch: Latch,
     side: sidebar::State,
     /// The column entries are wrapped to: [`chat::message_width`] of the chat
@@ -268,6 +289,7 @@ impl App {
         );
         Self {
             transcript: Transcript::new(Cap::default()),
+            pane: Pane::default(),
             latch,
             side: sidebar::State {
                 sessions: Vec::new(),
@@ -401,6 +423,35 @@ impl App {
                 .border_style(skin.palette.dim())
                 .render(r.main, buf);
         }
+        match self.pane {
+            Pane::Chat => self.chat_view(&r, view, buf),
+        }
+
+        let cursor = match &view.prompt {
+            Some(prompt) => view.render_prompt(prompt, r.dock, buf),
+            None => view.render_input(r.dock, buf),
+        };
+
+        Line::from(Span::styled(
+            fit(
+                &self.hint(view),
+                usize::from(r.hint.width),
+                skin.glyphs.ellipsis,
+            ),
+            skin.palette.dim(),
+        ))
+        .render(r.hint, buf);
+        self.status_row(&r, view, buf, bar, skin);
+        cursor
+    }
+
+    /// The ordinary occupant of the main region: header, rule, transcript.
+    ///
+    /// Extracted from `render` unchanged. It is a method rather than free
+    /// function because it writes `wrap_width` and `chat_height` back onto the
+    /// app — the two numbers a resize turns into a rewrap.
+    fn chat_view(&mut self, r: &Regions, view: &View, buf: &mut Buffer) {
+        let skin = &view.skin;
         self.header(r.header, view, buf);
         if r.rule.height > 0 {
             Line::from(Span::styled(
@@ -419,22 +470,18 @@ impl App {
         self.chat_height = r.chat.height.max(1);
         self.transcript.set_width(skin, self.wrap_width);
         chat::render(r.chat, buf, &self.transcript, skin);
+    }
 
-        let cursor = match &view.prompt {
-            Some(prompt) => view.render_prompt(prompt, r.dock, buf),
-            None => view.render_input(r.dock, buf),
-        };
-
-        Line::from(Span::styled(
-            fit(
-                &self.hint(view),
-                usize::from(r.hint.width),
-                skin.glyphs.ellipsis,
-            ),
-            skin.palette.dim(),
-        ))
-        .render(r.hint, buf);
-
+    /// The status row and its border. Unchanged, extracted so `render` reads as
+    /// the four things it decides rather than as one long paint.
+    fn status_row(
+        &self,
+        r: &Regions,
+        view: &View,
+        buf: &mut Buffer,
+        bar: &statusbar::Bar,
+        skin: &Skin,
+    ) {
         // The bar's border belongs to the shell — `statusbar::render` paints
         // one row of cells into whatever row it is handed, which is what lets
         // the border be shed below `SLIM_STATUS_ROWS` without the widget
@@ -463,7 +510,6 @@ impl App {
             }
             None => statusbar::render(status_row, buf, bar, skin),
         }
-        cursor
     }
 
     /// The row under the input box: the keys nobody can guess. The
@@ -652,6 +698,46 @@ mod tests {
             })
             .collect();
         (rows, cursor)
+    }
+
+    // -----------------------------------------------------------------------
+    // The pane seam
+    // -----------------------------------------------------------------------
+
+    /// The chat view goes through the pane match, and nothing else moved.
+    ///
+    /// **Story 1 of the pane plan is a refactor, and a refactor's whole claim is
+    /// that it changed nothing.** `render` used to paint the main region inline;
+    /// it now matches on `Pane` and calls `chat_view`. This asserts the claim
+    /// rather than trusting the diff: the same input must produce the same
+    /// screen, and the cursor must still come back.
+    ///
+    /// It names each piece of the frame rather than counting rows. A test that
+    /// checked one region only would pass while the header, the rule, the dock
+    /// or the status row had quietly moved — and those are exactly what an
+    /// extraction of this shape puts at risk, because each was a statement in
+    /// the function being split.
+    #[test]
+    fn the_pane_seam_paints_the_chat_view_and_leaves_the_frame_alone() {
+        let v = view();
+        let mut a = App::new((100, 30));
+        let (rows, cursor) = draw(&mut a, &v, 100, 30);
+
+        assert_eq!(a.pane, Pane::Chat, "the default occupant is not the chat");
+        assert!(cursor.is_some(), "the seam swallowed the cursor position");
+
+        // The frame: sidebar on the left, status at the foot. Named rather than
+        // counted, so a failure says which piece went missing.
+        let screen = rows.join("\n");
+        assert!(
+            screen.contains("SESSIONS"),
+            "the sidebar is gone:\n{screen}"
+        );
+        assert!(
+            screen.contains("TOOLS"),
+            "the tools panel is gone:\n{screen}"
+        );
+        assert!(screen.contains("MODE"), "the status bar is gone:\n{screen}");
     }
 
     // -----------------------------------------------------------------------
