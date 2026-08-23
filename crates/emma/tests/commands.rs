@@ -947,10 +947,20 @@ fn config_check_names_the_skills_it_skipped_and_counts_them() {
         "`config check` told the operator nothing about the skill that did not \
          load:\n{text}"
     );
+    // **The count is asserted where it is spoken, not as a loose digit.** This
+    // read `text.contains('1')` until an independent reviewer pointed out that
+    // `config check` prints hex hashes, so a `1` is in the output whether or not
+    // the count is: they removed the count and the test stayed green. Anchoring
+    // it to the phrase the note actually uses is what makes it able to fail --
+    // the same repair, for the same reason, as `DEF-006` and `DEF-013`.
     assert!(
-        text.contains('1'),
+        text.contains("1 skill(s)"),
         "the shortfall was named without a count, which is what HARD-001 was \
          filed over:\n{text}"
+    );
+    assert!(
+        text.contains("were skipped and are not in the catalogue"),
+        "the count was printed without saying what it counts:\n{text}"
     );
     assert!(
         harness.skill_names().contains(&"good"),
