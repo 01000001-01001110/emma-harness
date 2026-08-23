@@ -958,10 +958,14 @@ impl Rules {
             }
             if matches!(rule.spec, Spec::Domain(_)) && !reaches_network.contains(&named) {
                 notes.push(format!(
-                "{}: `{}` puts a `domain:` specifier on `{named}`, which does not declare that                  it reaches the network. The egress gate answers before consulting rules for                  such a tool, so this rule matches nothing. If the worry is `{named}` reaching                  out by other means, a bare `{named}` rule is the one that bites.",
-                entry.source.display(),
-                entry.rule
-            ));
+                    "{}: `{}` puts a `domain:` specifier on `{named}`, which does not declare \
+                 that it reaches the network. The egress gate answers before \
+                 consulting rules for such a tool, so this rule matches nothing. \
+                 If the worry is `{named}` reaching out by other means, a bare \
+                 `{named}` rule is the one that bites.",
+                    entry.source.display(),
+                    entry.rule
+                ));
             }
         }
         notes

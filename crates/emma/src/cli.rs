@@ -585,7 +585,8 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
         Some(Command::Model(_)) => Command::Model(match joined {
             Some(text) if text.contains(' ') => {
                 return Err(format!(
-                    "`model` takes a model id, one word; got `{text}`. If that was the goal,                      say `emma goal {text}`."
+                    "`model` takes a model id, one word; got `{text}`. If that was the goal, \
+                     say `emma goal {text}`."
                 ))
             }
             other => other,
@@ -633,7 +634,8 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
                     _ => "config check",
                 };
                 return Err(format!(
-                    "`{name}` takes no arguments; got `{extra}`. If that was the goal, say                      `emma goal {extra}`."
+                    "`{name}` takes no arguments; got `{extra}`. If that was the goal, say \
+                     `emma goal {extra}`."
                 ));
             }
             None => cmd,

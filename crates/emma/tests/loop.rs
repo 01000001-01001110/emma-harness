@@ -311,7 +311,8 @@ async fn an_interrupt_reaches_a_tool_that_is_already_running() {
     assert_eq!(slow_calls.load(Ordering::SeqCst), 1, "the tool never ran");
     assert!(
         took < std::time::Duration::from_secs(5),
-        "the interrupt did not reach the running tool: the goal took {took:?} against a tool          asked to take 10s"
+        "the interrupt did not reach the running tool: the goal took {took:?} \
+         against a tool asked to take 10s"
     );
 
     // **And the conversation is still wire-legal.** An adversarial review

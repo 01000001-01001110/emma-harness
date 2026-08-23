@@ -517,7 +517,9 @@ impl Fold {
                     Ok(m) => m,
                     Err(e) => {
                         let what = format!(
-                            "a `compacted` record has unreadable replacement messages ({e}), so                              the conversation it describes cannot be rebuilt; this resumed                              conversation will not match the one that was sent."
+                            "a `compacted` record has unreadable replacement messages ({e}), so the \
+                             conversation it describes cannot be rebuilt; this \
+                             resumed conversation will not match the one that was sent."
                         );
                         eprintln!("emma: {what}");
                         self.damage.push(what);

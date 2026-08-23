@@ -643,7 +643,8 @@ pub fn user_permissions(home: Option<&Path>) -> Result<(Vec<PermissionEntry>, Ve
             return Ok((
                 Vec::new(),
                 vec![format!(
-                    "{} could not be read, so none of its `deny` rules are in force: {e:#}.                      Emma started anyway, but nothing in that file is protecting you.",
+                    "{} could not be read, so none of its `deny` rules are in force: {e:#}. \
+                     Emma started anyway, but nothing in that file is protecting you.",
                     file.display()
                 )],
             ));

@@ -406,7 +406,8 @@ pub fn symbols(
         .with_display(format!("{} symbols", lines.len()));
     if capped {
         outcome.truncated_because(format!(
-            "{MAX_SYMBOLS} of {} symbols shown; the rest are not here. No argument raises that              — narrow the query, or Grep the file to see every symbol in it",
+            "{MAX_SYMBOLS} of {} symbols shown; the rest are not here. No argument raises \
+             that — narrow the query, or Grep the file to see every symbol in it",
             lines.len()
         ))
     } else {

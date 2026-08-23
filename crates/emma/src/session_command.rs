@@ -1099,7 +1099,8 @@ fn export_conversation(s: &Session<'_, '_>, path: Option<&str>) {
     // would be undone here by not passing it on.
     if !lost.is_empty() {
         let note = format!(
-            "> **{} record(s) of this session could not be read and are missing below**              (line {}). This export is incomplete.\n\n",
+            "> **{} record(s) of this session could not be read and are missing below** \
+             (line {}). This export is incomplete.\n\n",
             lost.len(),
             lost.iter()
                 .take(5)

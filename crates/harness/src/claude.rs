@@ -255,7 +255,9 @@ impl Settings {
                         Ok(c) => c,
                         Err(e) if skip_unknown() => {
                             eprintln!(
-                                    "emma: skipping hook `{name}` — {e:#}.                                      EMMA_CLAUDE_HOOKS=skip-unknown asked for this run to start                                      anyway, so nothing you wrote for `{name}` will fire."
+                                    "emma: skipping hook `{name}` — {e:#}. EMMA_CLAUDE_HOOKS=skip-unknown asked \
+                                 for this run to start anyway, so nothing you wrote for \
+                                 `{name}` will fire."
                                 );
                             continue;
                         }
@@ -615,7 +617,8 @@ pub(crate) fn load_agents(root: &Path) -> Result<(Vec<crate::AgentDef>, Vec<Stri
         let (front, body, bad_yaml) = split_agent(&raw);
         if let Some(problem) = bad_yaml {
             notes.push(format!(
-                "agent `{name}`: its frontmatter could not be read, so nothing in it applied — \n                 not offered for delegation. {problem}"
+                "agent `{name}`: its frontmatter could not be read, so nothing in it \
+                 applied — not offered for delegation. {problem}"
             ));
             continue;
         }
