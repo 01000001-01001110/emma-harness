@@ -253,10 +253,16 @@ pub fn dock_height(view: &View, room: u16) -> u16 {
 /// is what keeps the match exhaustive when a page is added: a new variant is a
 /// compile error at every site that decides what to draw, rather than a silent
 /// fall-through to the transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Page {
+    Settings,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Pane {
     #[default]
     Chat,
+    Page(Page),
 }
 
 #[derive(Debug)]
@@ -425,6 +431,7 @@ impl App {
         }
         match self.pane {
             Pane::Chat => self.chat_view(&r, view, buf),
+            Pane::Page(Page::Settings) => self.settings_page(&r, view, buf),
         }
 
         let cursor = match &view.prompt {
@@ -443,6 +450,126 @@ impl App {
         .render(r.hint, buf);
         self.status_row(&r, view, buf, bar, skin);
         cursor
+    }
+
+    /// Show a page, or go back to the transcript.
+    ///
+    /// The transcript is not discarded while a page is up — it is simply not
+    /// painted — so returning to it costs nothing and loses no scroll position.
+    pub fn show(&mut self, pane: Pane) {
+        self.pane = pane;
+    }
+
+    pub fn pane(&self) -> Pane {
+        self.pane
+    }
+
+    /// The Settings page.
+    ///
+    /// **Only what is real, which is the owner's ruling.** UI-001 was answered
+    /// "(a), but only for what exists, we will add as we need to". So this draws
+    /// the values Emma actually resolved at boot, each with where it came from,
+    /// and says plainly which of the mockup's eight panels have nothing behind
+    /// them yet rather than drawing a control that would not act.
+    ///
+    /// A settings screen showing a switch that changes nothing is the
+    /// "declaration wearing the costume of a mechanism" this codebase refuses
+    /// everywhere else — and it is worse here than most places, because a
+    /// settings page is where a user goes *expecting* their change to take.
+    fn settings_page(&mut self, r: &Regions, view: &View, buf: &mut Buffer) {
+        let skin = &view.skin;
+        let st = &view.status;
+        Line::from(vec![
+            Span::styled("Settings", skin.palette.bold(Role::Accent)),
+            Span::styled(
+                "   what this run resolved, and where each value came from",
+                skin.palette.dim(),
+            ),
+        ])
+        .render(r.header, buf);
+
+        if r.rule.height > 0 {
+            Line::from(Span::styled(
+                skin.glyphs.rule.repeat(usize::from(r.rule.width)),
+                skin.palette.dim(),
+            ))
+            .render(r.rule, buf);
+        }
+
+        let cap = |v: Option<(i64, i64)>| match v {
+            Some((_, max)) if max > 0 => max.to_string(),
+            _ => "not set".to_string(),
+        };
+        let rows: Vec<(&str, String, &str)> = vec![
+            ("Model", st.model.clone(), "the run's provider settings"),
+            (
+                "Working directory",
+                st.cwd.clone(),
+                "where this session started",
+            ),
+            ("Session log", st.session.clone(), "the record of this run"),
+            (
+                "Context limit",
+                cap(st.context),
+                "compaction happens at this size",
+            ),
+            (
+                "Per-goal budget",
+                cap(st.spend),
+                "a goal ends when it is spent",
+            ),
+        ];
+
+        let mut y = r.chat.y;
+        let end = r.chat.y.saturating_add(r.chat.height);
+        let label_w = rows.iter().map(|(l, _, _)| l.len()).max().unwrap_or(0) + 2;
+        for (label, value, why) in &rows {
+            if y >= end {
+                break;
+            }
+            let line = Line::from(vec![
+                Span::styled(format!("{label:<label_w$}"), skin.palette.style(Role::Text)),
+                Span::styled(value.clone(), skin.palette.bold(Role::Accent)),
+                Span::styled(format!("   {why}"), skin.palette.dim()),
+            ]);
+            line.render(Rect::new(r.chat.x, y, r.chat.width, 1), buf);
+            y = y.saturating_add(1);
+        }
+
+        y = y.saturating_add(1);
+        if y < end {
+            Line::from(Span::styled("Keys", skin.palette.bold(Role::Accent)))
+                .render(Rect::new(r.chat.x, y, r.chat.width, 1), buf);
+            y = y.saturating_add(1);
+        }
+        for (k, what) in keymap() {
+            if y >= end {
+                break;
+            }
+            Line::from(vec![
+                Span::styled(format!("{k:<label_w$}"), skin.palette.dim()),
+                Span::styled(what, skin.palette.style(Role::Text)),
+            ])
+            .render(Rect::new(r.chat.x, y, r.chat.width, 1), buf);
+            y = y.saturating_add(1);
+        }
+
+        y = y.saturating_add(1);
+        for line in [
+            "Not wired yet, and drawn as nothing rather than as a control:",
+            "  temperature, streaming toggle, auto-summarise, memory retention,",
+            "  keybinding editing, per-tool permission switches, telemetry.",
+            "  Each needs a setting to exist before a control can mean anything.",
+            "",
+            "Esc returns to the conversation.",
+        ] {
+            if y >= end {
+                break;
+            }
+            Line::from(Span::styled(line, skin.palette.dim()))
+                .render(Rect::new(r.chat.x, y, r.chat.width, 1), buf);
+            y = y.saturating_add(1);
+        }
     }
 
     /// The ordinary occupant of the main region: header, rule, transcript.
@@ -703,6 +830,69 @@ mod tests {
     // -----------------------------------------------------------------------
     // The pane seam
     // -----------------------------------------------------------------------
+
+    /// The Settings page replaces the transcript and nothing else.
+    ///
+    /// **The frame is the invariant.** Every mockup keeps the sidebar and the
+    /// status bar and swaps only the middle, so a page that took the whole
+    /// screen would be a different product. This checks the frame survived and
+    /// that the transcript did not paint underneath.
+    ///
+    /// It also checks the page says what it cannot do. UI-001 was ruled "only
+    /// for what exists", and a settings screen is the one place a user arrives
+    /// *expecting* a control to take — so a panel with nothing behind it has to
+    /// read as absent rather than as available.
+    #[test]
+    fn the_settings_page_swaps_the_middle_and_keeps_the_frame() {
+        let v = view();
+        let mut a = App::new((120, 40));
+        a.set_tools(vec![sidebar::Row {
+            name: "Shell".into(),
+            trailing: "Alt+s".into(),
+            selected: false,
+        }]);
+        a.show(Pane::Page(Page::Settings));
+        let (rows, _) = draw(&mut a, &v, 120, 40);
+        let screen = rows.join(
+            "
+",
+        );
+
+        assert!(
+            screen.contains("Settings"),
+            "the page did not draw:
+{screen}"
+        );
+        assert!(
+            screen.contains("SESSIONS"),
+            "the sidebar went with it:
+{screen}"
+        );
+        assert!(
+            screen.contains("MODE"),
+            "the status bar went with it:
+{screen}"
+        );
+        assert!(
+            screen.contains("Not wired yet"),
+            "the page does not say which controls have nothing behind them:
+{screen}"
+        );
+
+        // And back, with the transcript intact — a page is a view, not a mode
+        // that discards state.
+        a.show(Pane::Chat);
+        let (rows, _) = draw(&mut a, &v, 120, 40);
+        assert!(
+            !rows
+                .join(
+                    "
+"
+                )
+                .contains("Not wired yet"),
+            "the page kept painting after leaving it"
+        );
+    }
 
     /// The chat view goes through the pane match, and nothing else moved.
     ///

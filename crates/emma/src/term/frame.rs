@@ -991,6 +991,24 @@ impl Frame {
     }
 
     /// Ctrl-B. Latches — see [`super::app::Latch`].
+    /// Return to the conversation, if a page is showing.
+    ///
+    /// Answers whether it did anything, so the reader can tell "I handled this"
+    /// from "pass it on" — an Esc that was swallowed while no page was up would
+    /// take the key away from whatever else wanted it.
+    pub fn leave_page(&self) -> bool {
+        let mut inner = self.lock();
+        let Ui::Full(app) = &mut inner.ui else {
+            return false;
+        };
+        if app.pane() == crate::term::app::Pane::Chat {
+            return false;
+        }
+        app.show(crate::term::app::Pane::Chat);
+        synchronized(|| inner.paint());
+        true
+    }
+
     pub fn toggle_sidebar(&self) {
         let mut inner = self.lock();
         let cols = inner.screen.0;
@@ -1046,6 +1064,22 @@ impl Frame {
         let Some((tool, label)) = picked else {
             return;
         };
+
+        // **Settings is a page now, not a program.** The owner reported three
+        // times that `Alt+,` opening an editor was wrong; UI-001 ruled it should
+        // be an in-app page. The external launch was correct as built — its own
+        // comment says "the tool's promise is edit your settings, not open your
+        // chosen editor" — and it is simply not what was wanted.
+        if tool == crate::usertools::Tool::Settings {
+            let mut inner = self.lock();
+            if let Ui::Full(app) = &mut inner.ui {
+                app.show(crate::term::app::Pane::Page(
+                    crate::term::app::Page::Settings,
+                ));
+                synchronized(|| inner.paint());
+            }
+            return;
+        }
         let frame = Arc::clone(self);
         std::thread::spawn(move || {
             let cwd = {

@@ -485,6 +485,26 @@ impl LineSource {
                         thread_frame.launch_tool(c);
                         continue;
                     }
+                    // **Esc leaves a page, and only after the menu has had it.**
+                    // Ordered below `menu_key` deliberately: while the menu is
+                    // open Esc dismisses the menu, which is what it has always
+                    // done and what a user pressing it expects. A page is the
+                    // outer thing and gives its key up to the inner one.
+                    //
+                    // Reader-local like every other pane key: it is consumed
+                    // here and mutates through the frame, so it never reaches
+                    // the line channel and the drain guarantee is untouched.
+                    if key.kind != KeyEventKind::Release
+                        && key.code == KeyCode::Esc
+                        && !thread_frame.prompt_pending()
+                        && !{
+                            let m = thread_menu.lock().unwrap_or_else(|e| e.into_inner());
+                            m.is_open()
+                        }
+                        && thread_frame.leave_page()
+                    {
+                        continue;
+                    }
                     // The menu takes four keys, and only while it is open. With
                     // it shut this is `None` for everything and the editor
                     // below is reached exactly as it always was.
