@@ -63,7 +63,7 @@ fn tree_with_a_review() -> tempfile::TempDir {
     std::fs::create_dir_all(dir.path().join("r")).unwrap();
     std::fs::write(
         dir.path().join("r").join("def-002.json"),
-        r#"{"kind":"review","result":"pass"}"#,
+        r#"{"kind":"review","result":"pass","tree_fingerprint":"THIS-TREE"}"#,
     )
     .unwrap();
     dir
@@ -78,7 +78,7 @@ fn tree_with_a_review() -> tempfile::TempDir {
 #[test]
 fn only_rows_that_ask_for_a_review_and_lack_one_are_outstanding() {
     let root = tree_with_a_review();
-    let rows = rows_needing_review(&ledger(), &[], root.path()).unwrap();
+    let rows = rows_needing_review(&ledger(), &[], root.path(), "THIS-TREE").unwrap();
     let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
     assert_eq!(
         // DEF-004 says nothing about `review_required`, and is outstanding for
@@ -96,11 +96,43 @@ fn only_rows_that_ask_for_a_review_and_lack_one_are_outstanding() {
     // receipt nothing can open is not evidence: re-reviewing costs a run, and
     // trusting it costs a false close.
     std::fs::remove_file(root.path().join("r").join("def-002.json")).unwrap();
-    let rows = rows_needing_review(&ledger(), &[], root.path()).unwrap();
+    let rows = rows_needing_review(&ledger(), &[], root.path(), "THIS-TREE").unwrap();
     let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
     assert!(
         ids.contains(&"DEF-002"),
         "a row whose only receipt has vanished was treated as reviewed: {ids:?}"
+    );
+}
+
+/// A review of a different tree does not count as a review of this one.
+///
+/// **This is the hole that cost eleven invariants a review.** The fan-out script
+/// beside this command asked only whether a review receipt existed, so sixteen
+/// rows carrying reviews of an older tree were never queued -- and it was found
+/// by going to read one of those reviews and discovering it did not exist.
+/// `already_reviewed` had the identical hole, written the same afternoon by the
+/// same reasoning.
+///
+/// The direction matters. A command that over-reports work wastes a run and is
+/// obvious within minutes; one that under-reports it looks like progress, and
+/// disagrees with the gate about what is finished.
+#[test]
+fn a_review_of_another_tree_leaves_the_row_outstanding() {
+    let root = tree_with_a_review();
+
+    // The fixture's receipt says THIS-TREE, so against THIS-TREE the row is done.
+    let done = rows_needing_review(&ledger(), &[], root.path(), "THIS-TREE").unwrap();
+    assert!(
+        !done.iter().any(|r| r.id == "DEF-002"),
+        "a current review did not close the row"
+    );
+
+    // Against any other tree, the same receipt is evidence about something else.
+    let rows = rows_needing_review(&ledger(), &[], root.path(), "SOME-OTHER-TREE").unwrap();
+    let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+    assert!(
+        ids.contains(&"DEF-002"),
+        "a review taken against a different tree was accepted as a review of this one, which is how a sweep skips the rows that matter most: {ids:?}"
     );
 }
 
@@ -113,7 +145,8 @@ fn only_rows_that_ask_for_a_review_and_lack_one_are_outstanding() {
 #[test]
 fn a_named_row_is_taken_as_named_and_an_unknown_one_is_refused() {
     let root = tree_with_a_review();
-    let rows = rows_needing_review(&ledger(), &["DEF-002".into()], root.path()).unwrap();
+    let rows =
+        rows_needing_review(&ledger(), &["DEF-002".into()], root.path(), "THIS-TREE").unwrap();
     assert_eq!(
         rows.len(),
         1,
@@ -124,6 +157,7 @@ fn a_named_row_is_taken_as_named_and_an_unknown_one_is_refused() {
         &ledger(),
         &["DEF-001".into(), "DEF-999".into()],
         root.path(),
+        "THIS-TREE",
     )
     .expect_err("a row that does not exist was accepted");
     assert!(

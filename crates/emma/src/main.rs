@@ -873,7 +873,10 @@ async fn run_verification(
     )
     .with_context(|| format!("parsing {}", ledger_path.display()))?;
 
-    let outstanding = emma::verify::rows_needing_review(&ledger, rows, cwd)?;
+    // The fingerprint first, so "already reviewed" can mean "reviewed against
+    // this tree" rather than "reviewed once, some time, about something".
+    let fingerprint = emma::verify::tree_fingerprint(cwd)?;
+    let outstanding = emma::verify::rows_needing_review(&ledger, rows, cwd, &fingerprint)?;
     if outstanding.is_empty() {
         term.note("every row already carries an independent review receipt.");
         return Ok(());
@@ -883,7 +886,6 @@ async fn run_verification(
     // every receipt from this run. Taking it per row would date each receipt to
     // a tree that had not changed anyway, and would hide the one thing worth
     // noticing: a production edit made while reviews were in flight.
-    let fingerprint = emma::verify::tree_fingerprint(cwd)?;
     let chosen: Vec<_> = outstanding.iter().take(limit).collect();
     term.note(&format!(
         "{} row(s) want an independent review; reviewing {} of them with {model}. Tree {}.",

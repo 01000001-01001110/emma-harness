@@ -65,11 +65,18 @@ pub struct Row {
 /// every row looked outstanding and the count was wrong by twelve — a silent
 /// wrong answer produced by inventing a schema instead of reading one.
 ///
-/// `root` is where a receipt path is resolved from. A listed receipt that is
-/// missing from disk leaves the row outstanding, deliberately: a receipt
-/// nothing can open is not evidence, and re-reviewing costs a run while
-/// trusting it costs a false close.
-pub fn rows_needing_review(ledger: &Value, only: &[String], root: &Path) -> Result<Vec<Row>> {
+/// `root` is where a receipt path is resolved from, and `tree` is the current
+/// fingerprint. A listed receipt that is missing from disk, or that was taken
+/// against a different tree, leaves the row outstanding -- deliberately in both
+/// cases: a receipt nothing can open is not evidence, one about a tree that no
+/// longer exists is not evidence about this one, and re-reviewing costs a run
+/// while trusting either costs a false close.
+pub fn rows_needing_review(
+    ledger: &Value,
+    only: &[String],
+    root: &Path,
+    tree: &str,
+) -> Result<Vec<Row>> {
     let requirements = ledger
         .get("requirements")
         .and_then(Value::as_array)
@@ -107,7 +114,7 @@ pub fn rows_needing_review(ledger: &Value, only: &[String], root: &Path) -> Resu
             {
                 continue;
             }
-            if already_reviewed(r, root) {
+            if already_reviewed(r, root, tree) {
                 continue;
             }
         }
@@ -143,7 +150,7 @@ pub fn rows_needing_review(ledger: &Value, only: &[String], root: &Path) -> Resu
 /// Opens the file rather than matching its name. A receipt is only evidence if
 /// something can read it and see what kind it is, and this programme has
 /// already been bitten once by a path that looked right and pointed at nothing.
-fn already_reviewed(row: &Value, root: &Path) -> bool {
+fn already_reviewed(row: &Value, root: &Path, tree: &str) -> bool {
     let Some(receipts) = row.get("receipts").and_then(Value::as_array) else {
         return false;
     };
@@ -151,7 +158,24 @@ fn already_reviewed(row: &Value, root: &Path) -> bool {
         std::fs::read_to_string(root.join(rel))
             .ok()
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-            .map(|r| r.get("kind").and_then(Value::as_str) == Some("review"))
+            .map(|r| {
+                r.get("kind").and_then(Value::as_str) == Some("review")
+                    // **And about THIS tree.** Without this clause the answer is
+                    // "somebody reviewed this row once", which is not the
+                    // question. A receipt records what was observed about a
+                    // particular tree and the gate refuses one whose fingerprint
+                    // has moved, so a command that accepted a stale review would
+                    // disagree with the gate about what is finished -- and the
+                    // disagreement runs one way, towards believing there is less
+                    // work than there is.
+                    //
+                    // This is not hypothetical. The fan-out script beside this
+                    // command had the identical hole, and it skipped sixteen
+                    // rows including every one of the eleven invariants. Found
+                    // only by going to read one of those reviews and discovering
+                    // it did not exist.
+                    && r.get("tree_fingerprint").and_then(Value::as_str) == Some(tree)
+            })
             .unwrap_or(false)
     })
 }
