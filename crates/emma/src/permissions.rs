@@ -321,14 +321,36 @@ impl Rule {
 /// size of mistake, and the check is tuned accordingly.
 fn is_composed(command: &str) -> bool {
     // Chaining and piping.
-    if ["&&", "||", ";", "|", "&"]
+    //
+    // **A newline is a command separator and was missing from this list**, and
+    // it was the worst of the three misses found in one review because the
+    // evidence of it was being destroyed before this function ran. `command_of`
+    // calls `normalise_command`, which is `split_whitespace().join(" ")`, so
+    // `echo hi\ngit push` arrived here as `echo hi git push`: first word
+    // `echo`, not composed, and a `Bash(git *)` deny never fired. The call site
+    // now passes the raw argument; the token is here as well, because a
+    // function called `is_composed` must be right about its own input rather
+    // than right about one caller's.
+    if ["&&", "||", ";", "|", "&", "\n", "\r"]
         .iter()
         .any(|t| command.contains(t))
     {
         return true;
     }
-    // Substitution.
-    if command.contains("$(") || command.contains('`') {
+    // Substitution and grouping.
+    //
+    // `(` and `{` join `$(` because `(git push)` and `{ git push; }` are
+    // ordinary shell, and the first word of each is `(git` or `{`, which no
+    // prefix rule reads. The cost is a question on a command containing a
+    // bracket for some other reason -- a `--format` string, a quoted message --
+    // and only when a `deny` prefix rule for this tool already exists. That is
+    // the trade this function's own doc chooses: a false positive costs a
+    // question, a false negative is a deny rule that did not fire.
+    if command.contains("$(")
+        || command.contains('`')
+        || command.contains('(')
+        || command.contains('{')
+    {
         return true;
     }
     // A leading `VAR=value` or a wrapper that swallows the real command.
@@ -345,9 +367,37 @@ fn is_composed(command: &str) -> bool {
     if first.contains('/') || first.contains('\\') {
         return true;
     }
+    // Wrappers that swallow the real command, so the first word is not the
+    // program a rule is written against.
+    //
+    // **`command` was the third miss.** It is a POSIX builtin in exactly the
+    // class of `env` and `xargs` -- `command git push` runs git -- and it was
+    // absent, so a `Bash(git *)` deny did not fire and nothing was said. The
+    // others in the second row are the same shape and were added at the same
+    // time rather than one review at a time.
     matches!(
         first,
-        "env" | "sh" | "bash" | "zsh" | "cmd" | "powershell" | "pwsh" | "nice" | "time" | "xargs"
+        "env"
+            | "sh"
+            | "bash"
+            | "zsh"
+            | "cmd"
+            | "powershell"
+            | "pwsh"
+            | "nice"
+            | "time"
+            | "xargs"
+            | "command"
+            | "exec"
+            | "sudo"
+            | "doas"
+            | "su"
+            | "nohup"
+            | "timeout"
+            | "setsid"
+            | "stdbuf"
+            | "ionice"
+            | "busybox"
     )
 }
 
@@ -1132,12 +1182,18 @@ impl Rules {
             return ladder;
         }
 
-        if let Some(command) = command_of(args) {
+        // **The RAW argument, not the normalised one.** `command_of` collapses
+        // whitespace so a prefix can be compared against it, and that collapse
+        // turns a newline into a space -- destroying the one signal that says
+        // two commands were sent as one. `echo hi\ngit push` reached
+        // `is_composed` as `echo hi git push` and walked past a `Bash(git *)`
+        // deny with no `Deny`, no `Ask` and no boot note.
+        if let Some(raw) = args.get("command").and_then(Value::as_str) {
             let denies_by_prefix = self
                 .deny
                 .iter()
                 .any(|r| r.tool == tool && matches!(r.spec, Spec::Command(..)));
-            if denies_by_prefix && is_composed(&command) {
+            if denies_by_prefix && is_composed(raw) {
                 return Some(Decision::Ask);
             }
         }
@@ -1548,6 +1604,66 @@ mod tests {
             assert!(
                 notes.is_empty(),
                 "`{rule}` fires perfectly well and was announced as inert: {notes:?}"
+            );
+        }
+    }
+
+    /// Three ordinary shell spellings that walked past a deny rule in silence.
+    ///
+    /// **`None` is the finding, not `Ask`.** A deny rule for `Bash(git *)` was
+    /// present, the command ran git, and the gate did not deny it, did not ask,
+    /// and printed no boot note. `is_composed`'s own doc sets the standard this
+    /// fails: *"a false negative is a deny rule that did not fire."*
+    ///
+    /// Found by an independent reviewer driving `Rules` directly. The newline
+    /// case is the one worth understanding, because the evidence was being
+    /// destroyed before the check ran: `command_of` normalises with
+    /// `split_whitespace().join(" ")`, so `echo hi\ngit push` reached
+    /// `is_composed` as `echo hi git push` — one command, first word `echo`.
+    /// Adding the token alone would have fixed nothing; the call site had to
+    /// stop handing over the normalised string.
+    ///
+    /// The answer is `Ask` rather than `Deny` on purpose. The rule genuinely
+    /// does not match these strings, and claiming it did would be the same
+    /// dishonesty pointing the other way. What is not acceptable is silence.
+    #[test]
+    fn an_ordinary_shell_spelling_cannot_walk_past_a_deny_rule() {
+        for command in [
+            // A newline is a command separator.
+            "echo hi\ngit push origin main",
+            "echo hi\r\ngit push origin main",
+            // A bare subshell and a group. `$(` was caught and `(` was not.
+            "(git push origin main)",
+            "{ git push origin main; }",
+            // `command` is a POSIX builtin in the same class as `env`.
+            "command git push origin main",
+            "sudo git push origin main",
+            "nohup git push origin main",
+            "timeout 5 git push origin main",
+        ] {
+            let r = rules(&["Bash(git *)"], &[], &[]);
+            let got = r.for_call("Bash", &serde_json::json!({ "command": command }));
+            assert!(
+                matches!(got, Some(Decision::Deny) | Some(Decision::Ask)),
+                "`{command}` reached the gate with a `Bash(git *)` deny in force and got \
+                 {got:?} — no deny, no question, and nothing said. That is the deny rule \
+                 not firing, which is the failure this check exists to prevent"
+            );
+        }
+
+        // **The control, and it is the half that keeps the widening honest.**
+        // `is_composed` is deliberately over-broad, and over-broad has a floor:
+        // a plain command with a deny rule present that does not name it must
+        // still come back clean, or every `Bash` call in a repository with one
+        // `git` deny becomes a prompt and the operator learns to hit `y`.
+        for command in ["ls -la", "cargo test --workspace", "echo hello"] {
+            let r = rules(&["Bash(git *)"], &[], &[]);
+            assert_eq!(
+                r.for_call("Bash", &serde_json::json!({ "command": command })),
+                None,
+                "`{command}` names no git and contains nothing composed, and was \
+                 questioned anyway — a prompt that fires when it should not is how an \
+                 operator learns to answer without reading"
             );
         }
     }

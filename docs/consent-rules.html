@@ -555,7 +555,49 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
   </p>
 
   <p>
-    <strong>One command evasion is not caught, and cannot be by this shape.</strong>
+    <strong>Three ordinary spellings walked past it in silence until
+    2026-08-23</strong>, and the page said at the time that only one evasion was
+    uncaught. An independent reviewer drove the matcher directly against a
+    <code>Bash(git *)</code> deny and got <code>None</code> &mdash; no deny, no
+    question, no boot note &mdash; for a newline separator, a bare subshell, and
+    the <code>command</code> builtin.
+  </p>
+
+  <p>
+    The newline is the one worth understanding, because the evidence was being
+    destroyed before the check ran. <code>command_of</code> normalises with
+    <code>split_whitespace().join(" ")</code> so a prefix can be compared against
+    the result, and that collapse turns a newline into a space: <code>echo
+    hi\ngit push</code> arrived at <code>is_composed</code> as <code>echo hi git
+    push</code>, one command whose first word is <code>echo</code>. Adding the
+    token alone would have fixed nothing. The call site now passes the raw
+    argument, and the token is in the list as well, because a function called
+    <code>is_composed</code> should be right about its own input rather than
+    right about one caller's.
+    <span class="chip test">tested</span>
+    <code>an_ordinary_shell_spelling_cannot_walk_past_a_deny_rule</code> asserts
+    the <em>decision</em> rather than <code>is_composed</code>, because the bug
+    lived in the seam between the two. Four mutations go red: the call site
+    handing back the normalised string, the newline tokens, the grouping
+    brackets, and the wrapper list.
+  </p>
+
+  <p>
+    <code>(</code> and <code>{</code> now join <code>$(</code>, and the wrapper
+    list gained <code>command</code>, <code>exec</code>, <code>sudo</code>,
+    <code>doas</code>, <code>su</code>, <code>nohup</code>, <code>timeout</code>,
+    <code>setsid</code>, <code>stdbuf</code>, <code>ionice</code> and
+    <code>busybox</code>. The cost is a question on a command containing a
+    bracket for some other reason, and only where a <code>deny</code> prefix rule
+    for that tool already exists &mdash; which is the trade the paragraph above
+    states. The test's control asserts three plain commands stay clean under a
+    live deny rule, because a prompt that fires when it should not is how an
+    operator learns to answer without reading.
+  </p>
+
+  <p>
+    <strong>One command evasion is still not caught, and cannot be by this
+    shape.</strong>
     <code>git -C . push</code> against a rule reading <code>Bash(git push *)</code>
     is an ordinary spelling with nothing suspicious in it &mdash; a genuine prefix
     mismatch. Treating an option sitting between two words a rule names as
