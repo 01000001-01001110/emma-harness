@@ -1435,6 +1435,13 @@ fn load_skills(
             // sibling agent loader already does this with a boot note
             // (`claude.rs`, `load_agents`); skills never got one.
             if let Some(previous) = found.get(&front.name) {
+                // **Counted, not only named.** A collision drops a skill from
+                // the catalogue exactly as a parse failure does, and this arm
+                // did not touch `skipped` — so the total below under-reported
+                // the real shortfall, and an operator reconciling "I have 12
+                // skills and Emma lists 10" was given a number that did not
+                // account for both of them.
+                skipped += 1;
                 notes.push(format!(
                     "two skills both declare the name `{}` — {} is in the catalogue and {} \
                      replaces it; which one wins depends on the order the filesystem returned \

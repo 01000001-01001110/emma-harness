@@ -971,6 +971,11 @@ pub fn config_check(
     for note in harness.agent_notes() {
         writeln!(out, "               {note}")?;
     }
+    // Said here as well as at boot, for the reason the rules block below gives:
+    // this is the command somebody runs *because* something did not appear.
+    for note in harness.skill_notes() {
+        writeln!(out, "               {note}")?;
+    }
     let project = harness.command_names();
     writeln!(
         out,

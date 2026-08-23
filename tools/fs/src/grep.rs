@@ -233,11 +233,11 @@ impl Grep {
         // file and then filtering the set of one is a redundant call, which is
         // why it has not bitten, but it is a real asymmetry rather than a rule.
         let single_file = base_meta.map(|m| m.is_file()).unwrap_or(false);
-        let (candidates, walk_truncated) = if single_file {
-            (vec![base.clone()], false)
+        let (candidates, walk_truncated, walk_unreadable) = if single_file {
+            (vec![base.clone()], false, Vec::new())
         } else {
             let walked = walk::files(&base);
-            (walked.files, walked.truncated)
+            (walked.files, walked.truncated, walked.unreadable)
         };
 
         let mut candidates: Vec<_> = candidates
@@ -359,6 +359,12 @@ impl Grep {
         }
         if walk_truncated {
             cuts.push(walk::ceiling_notice());
+        }
+        // A directory the walk could not open is the same claim as an
+        // unreadable file, about more files. Both go in `cuts`, which is the
+        // list the model is told about.
+        if !walk_unreadable.is_empty() {
+            cuts.push(walk::unreadable_notice(&walk_unreadable));
         }
         if clipped_lines > 0 {
             cuts.push(format!(

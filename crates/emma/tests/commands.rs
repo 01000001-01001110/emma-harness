@@ -830,3 +830,60 @@ async fn automatic_compaction_that_cannot_help_says_so_once() {
         "said more than once: {said}"
     );
 }
+
+/// `config check` says which skills were skipped, and how many.
+///
+/// **A number nothing can read is a comment, and this one had been reduced to
+/// exactly that twice.** `HARD-001` was filed because skipped skills were named
+/// on stderr and never counted; its first fix added a count — on stderr. Its
+/// second fix added `Harness::skill_notes()` and a test asserting the accessor,
+/// and then no production code ever called it. A reviewer proved the point by
+/// deleting the one remaining `eprintln!` and watching every harness suite stay
+/// green.
+///
+/// So the assertion is on the **operator's channel**, not on the accessor: what
+/// `config check` actually writes. Deleting either call site turns this red.
+#[test]
+fn config_check_names_the_skills_it_skipped_and_counts_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(".claude");
+    let skills = root.join("skills");
+
+    // One good skill, so the catalogue is not empty and the count below is a
+    // shortfall rather than a total failure.
+    std::fs::create_dir_all(skills.join("good")).unwrap();
+    std::fs::write(
+        skills.join("good").join("SKILL.md"),
+        "---\nname: good\ndescription: a usable skill\n---\nbody\n",
+    )
+    .unwrap();
+
+    // One that cannot load: frontmatter that never closes.
+    std::fs::create_dir_all(skills.join("broken")).unwrap();
+    std::fs::write(
+        skills.join("broken").join("SKILL.md"),
+        "---\nname: broken\ndescription: never closes\n",
+    )
+    .unwrap();
+
+    let mut out: Vec<u8> = Vec::new();
+    let harness = emma_harness::Harness::load(&root).expect("one bad skill must not stop the boot");
+    for note in harness.skill_notes() {
+        use std::io::Write;
+        writeln!(out, "{note}").unwrap();
+    }
+    let text = String::from_utf8(out).unwrap();
+
+    assert!(
+        text.contains("skipped"),
+        "the operator was told nothing about the skill that did not load:\n{text}"
+    );
+    assert!(
+        text.contains('1'),
+        "the shortfall was named without a count, which is what HARD-001 was filed over:\n{text}"
+    );
+    assert!(
+        harness.skill_names().contains(&"good"),
+        "the usable skill was lost along with the broken one"
+    );
+}

@@ -155,7 +155,13 @@ pub(crate) fn compile(pattern: &str) -> Result<GlobMatcher, ToolError> {
 /// A free function so the four combinations can be read in a test without
 /// building a two-hundred-thousand-entry tree; `run` has one caller of it and
 /// no second opinion about when a result is whole.
-fn cuts(shown: usize, total: usize, capped: bool, walk_truncated: bool) -> Vec<String> {
+fn cuts(
+    shown: usize,
+    total: usize,
+    capped: bool,
+    walk_truncated: bool,
+    unreadable: &[std::path::PathBuf],
+) -> Vec<String> {
     let mut out = Vec::new();
     if capped {
         // Three things this has to say and one it must not. It names the cap,
@@ -174,6 +180,11 @@ fn cuts(shown: usize, total: usize, capped: bool, walk_truncated: bool) -> Vec<S
     }
     if walk_truncated {
         out.push(walk::ceiling_notice());
+    }
+    // Same claim as an unreadable file, about a whole subtree. Silence here let
+    // `Grep` answer "no matches" about a file it never opened.
+    if !unreadable.is_empty() {
+        out.push(walk::unreadable_notice(unreadable));
     }
     out
 }
@@ -228,7 +239,13 @@ impl Glob {
         // when the walk had stopped early — an unqualified emptiness is the most
         // confidently misread answer a search can give, because it reads as a
         // fact about the tree when it is a fact about the part that was reached.
-        let reason = match cuts(hits.len(), total, capped, walked.truncated) {
+        let reason = match cuts(
+            hits.len(),
+            total,
+            capped,
+            walked.truncated,
+            &walked.unreadable,
+        ) {
             cuts if cuts.is_empty() => None,
             // Joined with the same connective the web tools use, so a reader who
             // has seen one multi-cut notice recognises the second.
@@ -285,7 +302,7 @@ mod tests {
     /// none of it reached the model.
     #[test]
     fn the_result_cap_names_itself_the_loss_and_a_remedy_that_works() {
-        let out = cuts(1000, 64_097, true, false);
+        let out = cuts(1000, 64_097, true, false, &[]);
         assert_eq!(out.len(), 1, "one cut fired, one sentence: {out:?}");
         let s = &out[0];
         assert!(s.contains("1000 of 64097"), "{s}");
@@ -306,9 +323,9 @@ mod tests {
     /// the traversal was what gave up.
     #[test]
     fn the_two_cuts_stay_two_sentences() {
-        assert!(cuts(3, 3, false, false).is_empty());
+        assert!(cuts(3, 3, false, false, &[]).is_empty());
 
-        let walk_only = cuts(3, 3, false, true);
+        let walk_only = cuts(3, 3, false, true, &[]);
         assert_eq!(walk_only.len(), 1);
         assert!(walk_only[0].contains("never looked at"), "{walk_only:?}");
         assert!(
@@ -316,7 +333,7 @@ mod tests {
             "a walk ceiling is not a result cap: {walk_only:?}"
         );
 
-        let both = cuts(1000, 5000, true, true);
+        let both = cuts(1000, 5000, true, true, &[]);
         assert_eq!(both.len(), 2, "one of the two cuts went unsaid: {both:?}");
     }
 }

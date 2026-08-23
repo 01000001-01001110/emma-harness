@@ -1166,3 +1166,118 @@ async fn edit_says_it_too() {
 }
 
 // endregion: Hard links
+
+// region: A directory the search could not open
+// ---------------------------------------------------------------------------
+// A directory the search could not open
+//
+// `DEF-002` made an unreadable FILE counted and named. The walk above it still
+// discarded an unreadable DIRECTORY in silence, so `Grep` answered `no matches`
+// about a file it had never opened — certified live by a reviewer who denied
+// read on a subdirectory and watched a matching file disappear from the results
+// with no count and no cut notice.
+// ---------------------------------------------------------------------------
+
+/// Without this, `Grep` goes back to reporting a complete search over a tree it
+/// could not fully read.
+///
+/// **The permission change is the test.** A fixture cannot produce this: the
+/// walk only fails when the operating system refuses, so the only honest way to
+/// exercise it is to make the operating system refuse. Where that cannot be
+/// arranged the test says so and stops, rather than passing on a tree it could
+/// read perfectly well.
+#[tokio::test]
+async fn grep_says_when_a_directory_could_not_be_opened() {
+    let sandbox = Sandbox::new();
+    sandbox.write_file("visible.txt", "NEEDLE here\n");
+    sandbox.write_file("secret/hidden.txt", "NEEDLE hidden\n");
+    let secret = sandbox.root().join("secret");
+
+    if !deny_read(&secret) {
+        eprintln!("SKIPPED: this platform would not make a directory unreadable");
+        return;
+    }
+
+    let out = sandbox.ok("Grep", json!({ "pattern": "NEEDLE" })).await;
+    let _ = allow_read(&secret);
+
+    assert!(
+        out.content.contains("could not be opened"),
+        "the search skipped a directory and reported a complete result: {:?}",
+        out.content
+    );
+    assert!(
+        out.content.contains("NOT searched"),
+        "the notice must say the tree was not searched, not merely that something happened: {:?}",
+        out.content
+    );
+    assert!(
+        out.content.contains("secret"),
+        "a count without the name sends the reader nowhere: {:?}",
+        out.content
+    );
+    // And the part that makes the notice worth having: the search still
+    // returned what it could. An unreadable directory is not a failed call.
+    assert!(
+        out.content.contains("visible.txt"),
+        "one permission bit hid the whole search: {:?}",
+        out.content
+    );
+}
+
+/// Without this, the notice fires on an ordinary tree and becomes noise, which
+/// is the same as not having it.
+#[tokio::test]
+async fn an_ordinary_search_says_nothing_about_unreadable_directories() {
+    let sandbox = Sandbox::new();
+    sandbox.write_file("visible.txt", "NEEDLE here\n");
+    sandbox.write_file("sub/other.txt", "NEEDLE too\n");
+
+    let out = sandbox.ok("Grep", json!({ "pattern": "NEEDLE" })).await;
+    assert!(
+        !out.content.contains("could not be opened"),
+        "a readable tree was reported as partly unreadable: {:?}",
+        out.content
+    );
+}
+
+/// Make a directory unreadable, or say we could not.
+///
+/// Windows only today, through `icacls`. There is no portable way to do this,
+/// and a `#[cfg(unix)]` arm asserted from a Windows box would be the fake this
+/// project keeps filing — the unix arm goes in when a unix box runs the suite.
+fn deny_read(dir: &std::path::Path) -> bool {
+    if !cfg!(windows) {
+        return false;
+    }
+    let user = std::env::var("USERNAME").unwrap_or_default();
+    if user.is_empty() {
+        return false;
+    }
+    std::process::Command::new("icacls")
+        .arg(dir)
+        .arg("/deny")
+        .arg(format!("{user}:(OI)(CI)(RX,RD,GR)"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|st| st.success())
+        .unwrap_or(false)
+        && std::fs::read_dir(dir).is_err()
+}
+
+/// Put the permission back, so the sandbox can be removed.
+fn allow_read(dir: &std::path::Path) -> bool {
+    let user = std::env::var("USERNAME").unwrap_or_default();
+    std::process::Command::new("icacls")
+        .arg(dir)
+        .arg("/remove:d")
+        .arg(&user)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|st| st.success())
+        .unwrap_or(false)
+}
+
+// endregion: A directory the search could not open

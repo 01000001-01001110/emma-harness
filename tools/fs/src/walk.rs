@@ -28,6 +28,56 @@ pub struct Walked {
     pub files: Vec<PathBuf>,
     /// The visit ceiling fired, so the list is incomplete.
     pub truncated: bool,
+    /// Directories the walk could not open, and therefore did not search.
+    ///
+    /// **A skip is correct; a silent skip is a wrong answer.** Refusing the
+    /// whole call because one directory is unreadable would let a single
+    /// permission bit hide a tree of results, so skipping is right and the
+    /// comment below has always said so. What was missing is that nobody was
+    /// told: `Grep` returned `no matches` for a file it never looked at, and a
+    /// reviewer certified it live by denying read on a subdirectory and
+    /// watching a matching file vanish from the results with no count and no
+    /// cut notice.
+    ///
+    /// `DEF-002` fixed exactly this one layer down — an unreadable *file* is
+    /// counted and named — and `tool-api`'s rule is that *"I could not look"*
+    /// and *"I looked and there was nothing"* must never render as the same
+    /// message. A directory is the same sentence about more files.
+    ///
+    /// Paths rather than a bare count, because "3 directories" sends the reader
+    /// nowhere and `secret/` sends them straight to the permission bit.
+    pub unreadable: Vec<PathBuf>,
+}
+
+/// The sentence `Glob` and `Grep` both say when the walk could not open
+/// something, in the same voice as [`ceiling_notice`].
+///
+/// Named, capped and honest about the remedy: there is no argument that makes
+/// an unreadable directory readable, and saying "retry" would send the model to
+/// spend a turn on a knob that does not exist.
+pub fn unreadable_notice(paths: &[PathBuf]) -> String {
+    const SHOWN: usize = 5;
+    let names: Vec<String> = paths
+        .iter()
+        .take(SHOWN)
+        .map(|p| p.display().to_string())
+        .collect();
+    let more = paths.len().saturating_sub(names.len());
+    let tail = if more > 0 {
+        format!(", and {more} more")
+    } else {
+        String::new()
+    };
+    format!(
+        "{} director{} could not be opened and {} NOT searched, so anything inside {} missing \
+         from these results rather than absent: {}{tail}. No argument changes that — the \
+         permission or the lock has to change",
+        paths.len(),
+        if paths.len() == 1 { "y" } else { "ies" },
+        if paths.len() == 1 { "was" } else { "were" },
+        if paths.len() == 1 { "it is" } else { "them is" },
+        names.join(", "),
+    )
 }
 
 /// The one sentence both `Glob` and `Grep` say when the ceiling above fires.
@@ -65,6 +115,7 @@ fn files_within(root: &Path, ceiling: usize) -> Walked {
     let mut files = Vec::new();
     let mut visited = 0usize;
     let mut truncated = false;
+    let mut unreadable: Vec<PathBuf> = Vec::new();
 
     let walker = WalkDir::new(root)
         .follow_links(false)
@@ -90,14 +141,28 @@ fn files_within(root: &Path, ceiling: usize) -> Walked {
         // An unreadable subdirectory is skipped rather than failing the call:
         // "I could not open one directory" is not "the search failed", and
         // turning it into an error would make a single permission bit hide a
-        // whole tree of results.
-        let Ok(entry) = entry else { continue };
+        // whole tree of results. **It is recorded, though.** Skipping silently
+        // made `Grep` answer "no matches" about a file it never opened, which is
+        // the one thing this crate refuses to do.
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                if let Some(p) = e.path() {
+                    unreadable.push(p.to_path_buf());
+                }
+                continue;
+            }
+        };
         if entry.file_type().is_file() {
             files.push(entry.into_path());
         }
     }
 
-    Walked { files, truncated }
+    Walked {
+        files,
+        truncated,
+        unreadable,
+    }
 }
 
 /// Modification time, newest first, path as the tiebreak so the order is

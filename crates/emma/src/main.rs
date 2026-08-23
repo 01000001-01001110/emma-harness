@@ -409,6 +409,16 @@ async fn run(cli: cli::Cli) -> Result<()> {
     for note in harness.agent_notes() {
         term.note(note);
     }
+    // **The other half of the same pattern, and it was missing.** `HARD-001`
+    // was reopened once because the skipped-skill count went to stderr, and its
+    // own text says "the shape to copy was one file away — `load_agents`
+    // already returned notes and `Harness` already exposed `agent_notes`". The
+    // shape was copied halfway: `skill_notes` was added, a test asserted it, and
+    // nothing in production ever read it. A reviewer proved it by deleting the
+    // one remaining `eprintln!` and watching the whole harness suite stay green.
+    for note in harness.skill_notes() {
+        term.note(note);
+    }
     for note in &agent_notes {
         term.note(note);
     }
