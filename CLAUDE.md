@@ -107,12 +107,16 @@ actually completed to the project's Discord channel.** The webhook lives in
 `EMMA_PROGRESS_WEBHOOK` in `.env`, which `.gitignore` covers.
 
 ```bash
-curl -sS -X POST -H 'Content-Type: application/json'   -d "$(python - <<'PY'
-import json, os
-print(json.dumps({"content": "…the round, in Discord markdown…"}))
-PY
-)" "$EMMA_PROGRESS_WEBHOOK"
+python verification/scripts/post_progress.py <<'EOF'
+**Emma** — what actually happened this round, in Discord markdown.
+EOF
 ```
+
+The message goes on stdin so a round's text is never baked into a file, and the
+script reads the credential itself. **A User-Agent is not optional**: without one
+Discord's edge answers `403 error code: 1010`, a browser-signature ban that reads
+as "this webhook is dead" rather than "add a header". That cost a diagnosis
+once; the script carries the header and the reason.
 
 **The URL never goes in a file git tracks, and that includes this one.** A
 webhook is a credential: anyone holding it can post as the project. This
