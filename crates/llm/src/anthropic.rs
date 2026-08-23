@@ -789,6 +789,25 @@ fn turn_from_message(msg: &Value) -> Result<AssistantTurn, LlmError> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    // **The same refusal the streaming path makes, and it was missing here.**
+    // `Assembly::finish` rejects a turn with no stop reason because "a turn
+    // reading 'The tests all pa' was handed to the loop as a finished answer,
+    // with no truncation signal anywhere downstream". The batch decoder took
+    // `unwrap_or_default()` and passed the empty string on -- and batch is the
+    // mode `-p` runs in, so the unattended path was the unguarded one.
+    //
+    // A reviewer drove a stub server with a batch body carrying no stop_reason
+    // and got exactly this row's worked example back, accepted as finished.
+    // There is a second cost: `stop_reason == "max_tokens"` is what DEF-026's
+    // truncation warning keys on, so in batch mode a cut-off turn was silent as
+    // well as unreported.
+    if stop_reason.is_empty() {
+        return Err(LlmError::Protocol(
+            "the response carried no stop reason, so the turn is incomplete — there is no \
+             way to tell a finished answer from one the connection cut short"
+                .into(),
+        ));
+    }
     turn_from_content(content, stop_reason, usage)
 }
 
@@ -1802,6 +1821,76 @@ mod tests {
     ///
     /// A `Protocol` error is retried like any other; a confident half-sentence
     /// is not recoverable at all.
+    /// The same fault on the **batch** path, which is the one `-p` runs.
+    ///
+    /// **`DEF-020` fixed streaming and left this open, and the row's own worked
+    /// example is the payload below.** The batch decoder read `stop_reason`
+    /// with `unwrap_or_default()` and handed the empty string on, so a response
+    /// carrying "The tests all pa" and no stop reason was a finished turn as far
+    /// as the loop could tell. Found by an independent reviewer driving a stub
+    /// server, which is the only way to see it: every fixture in this file
+    /// supplied a stop reason, so the branch had never been exercised.
+    ///
+    /// Batch is the unattended mode. The guarded path was the one with somebody
+    /// watching, and the unguarded path was the one in a script.
+    ///
+    /// There is a second cost, worth stating because it is not obvious from
+    /// here: `stop_reason == "max_tokens"` is what `DEF-026`'s truncation
+    /// warning keys on, so in batch mode a cut-off turn was silent as well as
+    /// unreported.
+    #[tokio::test]
+    async fn a_batch_response_without_a_stop_reason_is_a_fault() {
+        let body = serde_json::json!({
+            "id": "m",
+            "type": "message",
+            "role": "assistant",
+            "model": "m",
+            "content": [{ "type": "text", "text": "The tests all pa" }],
+            "usage": { "input_tokens": 1, "output_tokens": 4 }
+        })
+        .to_string();
+
+        let server = stub(vec![Reply::json(&body)]).await;
+        let (result, _) = run(&server, request(), Mode::Batch).await;
+
+        let err = result.expect_err(
+            "a batch response with no stop reason read as a finished turn, which is \
+             this row's own worked example",
+        );
+        let shown = format!("{err}");
+        assert!(
+            shown.contains("stop reason") || shown.contains("incomplete"),
+            "the fault must say the turn was cut: {shown}"
+        );
+    }
+
+    /// The control: an ordinary batch response still decodes.
+    ///
+    /// Adding a refusal is exactly the change that can start refusing valid
+    /// traffic, and a provider boundary that rejects good responses is worse
+    /// than one that accepts a rare bad one.
+    #[tokio::test]
+    async fn an_ordinary_batch_response_still_decodes() {
+        let body = serde_json::json!({
+            "id": "m",
+            "type": "message",
+            "role": "assistant",
+            "model": "m",
+            "stop_reason": "end_turn",
+            "content": [{ "type": "text", "text": "The tests all passed." }],
+            "usage": { "input_tokens": 1, "output_tokens": 5 }
+        })
+        .to_string();
+
+        let server = stub(vec![Reply::json(&body)]).await;
+        let (result, _) = run(&server, request(), Mode::Batch).await;
+        let turn = result.expect("an ordinary batch response was refused");
+        assert!(
+            format!("{turn:?}").contains("The tests all passed."),
+            "{turn:?}"
+        );
+    }
+
     #[tokio::test]
     async fn a_stream_that_closes_without_a_stop_reason_is_a_fault() {
         let truncated = [
