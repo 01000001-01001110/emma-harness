@@ -122,7 +122,8 @@
       <tr><td><code>WebFetch(domain:*.example.com)</code></td><td><code>Spec::Domain</code></td><td>egress only</td><td>a strict subdomain at any depth, <strong>not</strong> <code>example.com</code> itself</td></tr>
       <tr><td><code>WebFetch(domain:example.*)</code></td><td><code>Spec::Domain</code></td><td>egress only</td><td><code>example.org</code>; the <code>*</code> is one label and cannot cross a dot</td></tr>
       <tr><td><code>Bash(git *)</code>, <code>Bash(git log:*)</code></td><td><code>Spec::Command</code></td><td>the run question</td><td>a <strong>word-boundary prefix</strong> over the <code>command</code> argument; <code>git</code> does not match <code>github-cli</code></td></tr>
-      <tr><td><code>Read(./src/**)</code></td><td><code>Spec::Path</code></td><td>the run question</td><td>a glob over the <code>file_path</code> or <code>path</code> argument, matched after both sides are normalised to one spelling</td></tr>
+      <tr><td><code>Read(./src/**)</code>, <code>Read(Cargo.toml)</code></td><td><code>Spec::Path</code></td><td>the run question</td><td>a glob over the <code>file_path</code> or <code>path</code> argument, matched after both sides are normalised to one spelling</td></tr>
+      <tr><td><code>Read(src/a\*b)</code>, <code>Read(../x)</code></td><td>a parse error</td><td>nothing</td><td>a backslash means two different things on two platforms, and a <code>..</code> cannot be matched before the path is resolved; both are refused with the fix in the message</td></tr>
       <tr><td><em>either row above, before ARCH-002</em></td><td><code>Spec::Unsupported</code></td><td>nothing</td><td>what both shapes used to be: parsed, announced at boot, and matching nothing. 62 of 64 rules in a real settings file were inert this way</td></tr>
       <tr><td><code>*</code>, <code>Web*</code>, <code>mcp__*</code></td><td>a parse error</td><td>nothing</td><td>Claude Code permits globbing the tool name for deny rules; Emma refuses it in all three lists</td></tr>
     </tbody>
@@ -585,14 +586,70 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
   </p>
   <span class="src">crates/emma/src/permissions.rs &mdash; is_composed, normalise_path, path_unjudgeable, Rules::for_call</span>
 
+  <h2 id="shape-by-tool">Which shape a specifier gets, and the seven ways it went wrong</h2>
+
+  <p>
+    <strong>The tool decides, not the punctuation.</strong> Only <code>Bash</code>
+    runs a command, so only <code>Bash(...)</code> is a prefix; every other tool
+    addresses a path, so its specifier is a glob. The first version asked whether
+    the text contained a separator or a glob character instead &mdash; which made
+    <code>Read(Cargo.toml)</code> a <em>command</em> prefix, matched against a
+    <code>command</code> argument that a <code>Read</code> call does not have. It
+    matched nothing at all, silently, on a rule naming one file by name.
+  </p>
+
+  <p>
+    That was one of seven bypasses a cross-model review returned against the
+    first version of the path matcher, all seven with exact inputs. Five were
+    holes; <strong>two were the opposite &mdash; a rule answering where it should
+    have stayed quiet</strong>, which matters as much, because a gate that asks
+    about everything is a gate nobody reads.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Input</th><th>Was</th><th>Is</th><th>Why it was wrong</th></tr></thead>
+    <tbody>
+      <tr><td><code>C:\src\...\permissions.rs</code> vs <code>Read(crates/.../permissions.rs)</code></td><td>no match</td><td>match</td><td>only a leading slash counted as absolute, so a drive-absolute path compared as if it were relative</td></tr>
+      <tr><td><code>CRATES/...</code>, <code>...permissions.rs.</code></td><td>no match</td><td>match on Windows</td><td>Windows folds case and strips trailing dots and spaces before it opens anything; a matcher that does not is one the filesystem disagrees with</td></tr>
+      <tr><td><code>Read</code> + <code>Read(src/**)</code>, reading <code>/tmp/x</code></td><td><code>Ask</code></td><td><code>Deny</code></td><td>the refusal-to-judge preflight ran before the ladder, so a bare deny that plainly matched was downgraded to a question</td></tr>
+      <tr><td><code>Bash(git *)</code> + a call carrying both a command and a path</td><td><code>Ask</code></td><td><code>Deny</code></td><td>the same inversion across the two shapes</td></tr>
+      <tr><td><code>Read(build/../src/main.rs)</code>, reading <code>docs/index.html</code></td><td><code>Ask</code></td><td>no match</td><td>one unjudgeable <em>pattern</em> made every unrelated read a prompt; the question is about the call now, and an unusable rule is refused at parse time</td></tr>
+      <tr><td><code>Read(Cargo.toml)</code></td><td>nothing</td><td><code>Deny</code></td><td>parsed as a command prefix for a tool that has no command</td></tr>
+      <tr><td><code>Read(src/a\*b)</code></td><td>varied by platform</td><td>refused</td><td><code>globset</code> reads a backslash as an escape on unix and a separator on Windows, so one settings file meant two things on two machines</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>
+    <span class="chip test">tested</span>
+    <code>the_respelling_bypasses_a_review_found_are_all_closed</code> keeps each
+    of the seven as the exact input the review gave, rather than a paraphrase of
+    it &mdash; the paraphrase is what the original code was already written
+    against. Five mutations were run against the guards it covers: dropping the
+    drive letter from <code>is_absolute</code>, keeping trailing dots, making the
+    glob case-sensitive, moving the ladder back behind the preflight, and
+    accepting a backslash rule again. Each turned it red; each was restored.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> The Windows arms of this are the only
+    ones exercised: the suite has never run on macOS or Linux, so the unix
+    reading of a backslash and the case-<em>sensitive</em> branch are argued from
+    <code>globset</code>'s documentation rather than observed.
+    <em>What would settle it:</em> running <code>cargo test -p emma --lib
+    permissions</code> on either.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs &mdash; Rule::parse, normalise_path, normalise_pattern, is_absolute, path_unjudgeable, Rules::for_call</span>
+
   <h2 id="unsettled">What is not settled here</h2>
 
   <ul class="body">
     <li>
       <span class="chip cert">certified</span>
-      <code>cargo test -p emma --lib permissions</code> reports 32 passed, 0
-      failed at commit <code>0baff1e</code> plus the path half of DEF-031.
-      Re-runnable.
+      <code>cargo test -p emma --lib permissions</code> reports 33 passed, 0
+      failed after the second review round. The whole workspace: 52 suites,
+      1114 passed, 0 failed. Re-runnable.
     </li>
     <li>
       <span class="chip unv">unverified</span> The mutation results quoted above

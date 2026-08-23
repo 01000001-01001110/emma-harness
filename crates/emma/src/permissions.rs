@@ -217,14 +217,48 @@ impl Rule {
             };
             return Ok(Self { tool, spec });
         }
-        // A path-shaped specifier: anything with a separator or a glob
-        // metacharacter. Tried before the command shape so `Read(./src/**)` is
-        // not read as a command prefix beginning "./src/".
-        if inner.contains('/') || inner.contains('\\') || inner.contains('[') {
+        // **A path-shaped specifier is decided by the tool, not by punctuation.**
+        // The first version asked whether the text held a separator or a glob
+        // character, which made `Read(Cargo.toml)` a *command* prefix — matched
+        // against a `command` argument that a `Read` call does not have, so it
+        // matched nothing at all, silently. A review supplied it as a working
+        // bypass of a deny rule naming one file. Only `Bash` runs a command;
+        // everything else addresses a path, and a rule for it is a glob.
+        if tool != "Bash" || inner.contains('/') || inner.contains('\\') || inner.contains('[') {
+            // **A backslash in a path rule means two different things on two
+            // platforms, so it means nothing here.** `globset` escapes with it
+            // on unix and treats it as a separator on Windows — so
+            // `Read(src/a\*b)` names a literal asterisk on one machine and the
+            // directory `src/a` on the other, from the same settings file. A
+            // cross-model review found the first half of that and reported it
+            // as a plain bug; it is worse than a bug, because either reading is
+            // defensible and the file cannot say which it meant. Refused, with
+            // the fix in the message, rather than resolved by guessing.
+            if inner.contains('\\') {
+                bail!(
+                    "`{raw}` contains a backslash, which means an escape on unix and a separator on Windows — write the path with `/`"
+                );
+            }
+            // A `..` cannot be matched before the path is resolved, and a rule
+            // that can never be evaluated is refused loudly rather than kept as
+            // something that quietly matches nothing.
+            if inner.split(['/', '\\']).any(|seg| seg == "..") {
+                bail!(
+                    "`{raw}` contains `..`, which cannot be matched before the path is resolved — write the path without it"
+                );
+            }
             // The compiled pattern is normalised and the raw text is kept for
             // display, so a rule reads back exactly as written while matching
             // the same file however the call spells it.
-            if let Ok(g) = globset::Glob::new(&normalise_path(inner)) {
+            // Case-insensitive on Windows because the filesystem is: a rule
+            // naming `src/main.rs` and a call naming `SRC/Main.rs` are one file
+            // there, and a case-sensitive matcher is one the operating system
+            // disagrees with. Done in the builder rather than by folding the
+            // pattern, which would rewrite a `[A-Z]` class into a different one.
+            if let Ok(g) = globset::GlobBuilder::new(&normalise_pattern(inner))
+                .case_insensitive(cfg!(windows))
+                .build()
+            {
                 return Ok(Self {
                     tool,
                     spec: Spec::Path(inner.to_string(), g.compile_matcher()),
@@ -308,31 +342,105 @@ fn command_of(args: &Value) -> Option<String> {
 /// `./src/x` and `src/x` to the same file long after the gate has decided, so
 /// until this existed the two were one file to the tool and two strings to the
 /// rule — a deny written one way and a call spelled the other way passed in
-/// silence. Found by an adversarial pass on DEF-031 and left open when the
-/// command half landed.
+/// silence.
 ///
 /// What it does is lexical and small: separators become `/`, repeated
-/// separators collapse, and `./` segments go. What it deliberately does **not**
-/// do is resolve `..`, because `a/link/../b` is `a/b` only when `link` is a
-/// directory, and a matcher that guesses wrong about that gets a deny rule
-/// wrong in whichever direction the guess fell. `..` is handled by refusing to
-/// judge instead — see `path_unjudgeable`.
+/// separators collapse, and `./` segments go. On Windows two more aliases are
+/// folded, because the filesystem itself folds them and a matcher that does not
+/// is a matcher the operating system disagrees with: the trailing dots and
+/// spaces that `CreateFile` strips before it ever reaches the disk. Case is
+/// folded too, but by the glob itself rather than here — lowercasing a
+/// *pattern* would quietly rewrite a `[A-Z]` class into something else.
+/// A cross-model review supplied `crates/emma/src/permissions.rs.` and
+/// `CRATES/emma/...` as working spellings of a file a rule named exactly.
+///
+/// What it deliberately does **not** do is resolve `..`, because `a/link/../b`
+/// is `a/b` only when `link` is a directory, and a matcher that guesses wrong
+/// about that gets a deny rule wrong in whichever direction the guess fell.
+/// `..` is handled by refusing to judge instead — see `path_unjudgeable`.
 fn normalise_path(p: &str) -> String {
     let unified = p.replace('\\', "/");
-    let leading = if unified.starts_with('/') { "/" } else { "" };
-    let body: Vec<&str> = unified
+    let leading = if is_absolute(&unified) { "/" } else { "" };
+    let mut body: Vec<String> = unified
         .split('/')
         .filter(|seg| !seg.is_empty() && *seg != ".")
+        .map(str::to_string)
         .collect();
+    if cfg!(windows) {
+        for seg in &mut body {
+            // Trailing dots and spaces are not part of the name Windows opens.
+            let trimmed = seg.trim_end_matches(['.', ' ']);
+            // ...except when trimming would leave nothing: `..` is a real
+            // component this function must hand on untouched for
+            // `path_unjudgeable` to see.
+            if !trimmed.is_empty() {
+                *seg = trimmed.to_string();
+            }
+        }
+        // A drive letter is part of the root, not a component to be matched.
+        if let Some(first) = body.first() {
+            if is_drive(first) {
+                body.remove(0);
+            }
+        }
+    }
     format!("{leading}{}", body.join("/"))
+}
+
+/// The same folding for a rule's **pattern**, which is a glob rather than a path.
+///
+/// **A pattern has no backslashes to fold**, because `Rule::parse` refuses one:
+/// `globset` reads it as an escape on unix and as a separator on Windows, so
+/// one settings file would mean two different things on two machines. A path
+/// arriving from a call is the opposite case — it comes from the operating
+/// system, where a backslash is unambiguously a separator — which is why
+/// `normalise_path` folds and this does not.
+fn normalise_pattern(pattern: &str) -> String {
+    let leading = if is_absolute(pattern) { "/" } else { "" };
+    let mut body: Vec<String> = pattern
+        .split('/')
+        .filter(|seg| !seg.is_empty() && *seg != ".")
+        .map(str::to_string)
+        .collect();
+    if cfg!(windows) {
+        if let Some(first) = body.first() {
+            if is_drive(first) {
+                body.remove(0);
+            }
+        }
+    }
+    format!("{leading}{}", body.join("/"))
+}
+
+/// Whether a spelling names a root rather than something relative to one.
+///
+/// Three shapes, not one. A leading separator is the unix form; `C:/x` is the
+/// Windows form and was missed by the first version of this check, so an
+/// absolute Windows path compared as if it were relative and matched nothing;
+/// `//server/share` is a UNC root, which has no drive letter at all.
+fn is_absolute(p: &str) -> bool {
+    p.starts_with('/')
+        || p.starts_with("\\")
+        || is_drive(p.split(['/', '\\']).next().unwrap_or_default())
+}
+
+/// `C:` and friends — a drive designator, not a path component.
+fn is_drive(seg: &str) -> bool {
+    let b = seg.as_bytes();
+    b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
 }
 
 /// Whether a rule pattern and a call's path cannot honestly be compared.
 ///
-/// Two cases, both of which make a lexical match meaningless rather than merely
-/// awkward:
+/// Both cases are about the **call**, never about the rule. An earlier version
+/// asked the same question of the pattern, and a review showed what that costs:
+/// one deny rule containing `..` turned every unrelated read into a prompt,
+/// because the pattern was unjudgeable regardless of what was being read. A
+/// gate that asks about everything is a gate nobody reads. A pattern that
+/// cannot be evaluated is refused at parse time and said out loud, which is
+/// where an unusable rule belongs.
 ///
-/// - **A `..` component**, on either side. Resolving it needs to know what is a
+/// - **A `..` component in the path.** Resolving it needs to know what is a
 ///   directory and what is a link, which the gate cannot know before the tool
 ///   runs.
 /// - **Disagreeing absoluteness.** A rule reading `src/**` and a call naming
@@ -340,8 +448,7 @@ fn normalise_path(p: &str) -> String {
 ///   hold the root that would settle it. Comparing them as strings answers a
 ///   question nobody asked.
 fn path_unjudgeable(pattern: &str, path: &str) -> bool {
-    let dotdot = |s: &str| s.split('/').any(|seg| seg == "..");
-    if dotdot(pattern) || dotdot(path) {
+    if path.split('/').any(|seg| seg == "..") {
         return true;
     }
     pattern.starts_with('/') != path.starts_with('/')
@@ -844,21 +951,38 @@ impl Rules {
         // Deny rules only. An allow rule that fails to match already falls
         // through to a question, so there is nothing to protect there, and
         // widening this to allow rules would turn every `&&` into a prompt.
+        // **A deny that matched outranks a refusal to judge.** Both preflights
+        // below answer `Ask`, and `Ask` is weaker than `Deny` — so asking the
+        // question before the ladder has run let a rule that plainly matched be
+        // downgraded to a prompt. Two shapes of that reached a review: a bare
+        // `Read` deny beside a narrow `Read(src/**)`, and a `Bash(git *)` deny
+        // on a call that also carried a `file_path`. The ladder is consulted
+        // first and its `Deny` is final; the preflights only speak when it did
+        // not deny.
+        let ladder = self.decide(|r| {
+            r.tool == tool
+                && match &r.spec {
+                    Spec::All => true,
+                    Spec::Command(_, prefix) => command_of(args)
+                        .map(|c| command_matches(prefix, &c))
+                        .unwrap_or(false),
+                    Spec::Path(_, g) => path_of(args).map(|p| g.is_match(&p)).unwrap_or(false),
+                    // A destination is a different question, answered by
+                    // `for_egress`. A host grant is not permission to run.
+                    Spec::Domain(_) => false,
+                    Spec::Unsupported(_) => false,
+                }
+        });
+        if ladder == Some(Decision::Deny) {
+            return ladder;
+        }
+
         if let Some(command) = command_of(args) {
             let denies_by_prefix = self
                 .deny
                 .iter()
                 .any(|r| r.tool == tool && matches!(r.spec, Spec::Command(..)));
-            if denies_by_prefix
-                && is_composed(&command)
-                && !self.deny.iter().any(|r| {
-                    r.tool == tool
-                        && match &r.spec {
-                            Spec::Command(_, p) => command_matches(p, &command),
-                            _ => false,
-                        }
-                })
-            {
+            if denies_by_prefix && is_composed(&command) {
                 return Some(Decision::Ask);
             }
         }
@@ -882,32 +1006,12 @@ impl Rules {
             if !denies_by_path.is_empty()
                 && denies_by_path
                     .iter()
-                    .any(|raw| path_unjudgeable(&normalise_path(raw), &path))
-                && !self.deny.iter().any(|r| {
-                    r.tool == tool
-                        && match &r.spec {
-                            Spec::Path(_, g) => g.is_match(&path),
-                            _ => false,
-                        }
-                })
+                    .any(|raw| path_unjudgeable(&normalise_pattern(raw), &path))
             {
                 return Some(Decision::Ask);
             }
         }
-        self.decide(|r| {
-            r.tool == tool
-                && match &r.spec {
-                    Spec::All => true,
-                    Spec::Command(_, prefix) => command_of(args)
-                        .map(|c| command_matches(prefix, &c))
-                        .unwrap_or(false),
-                    Spec::Path(_, g) => path_of(args).map(|p| g.is_match(&p)).unwrap_or(false),
-                    // A destination is a different question, answered by
-                    // `for_egress`. A host grant is not permission to run.
-                    Spec::Domain(_) => false,
-                    Spec::Unsupported(_) => false,
-                }
-        })
+        ladder
     }
 
     /// What the rules say about **the egress question** for one tool reaching
@@ -1321,6 +1425,118 @@ mod tests {
         assert_eq!(
             r.for_call("Read", &json!({ "file_path": "docs/index.html" })),
             None
+        );
+    }
+
+    /// Seven bypasses a cross-model review supplied against the first version of
+    /// the path matcher. Each is an exact input it gave, kept as the input
+    /// rather than a paraphrase of it, because the paraphrase is what the
+    /// original code was already written against.
+    ///
+    /// Two of the seven are the *false-positive* direction — a rule answering
+    /// where it should have stayed quiet. Those matter as much: a gate that asks
+    /// about everything is a gate nobody reads.
+    #[test]
+    fn the_respelling_bypasses_a_review_found_are_all_closed() {
+        use serde_json::json;
+        let rules = |raws: &[&str]| {
+            let mut r = Rules::default();
+            for raw in raws {
+                r.deny.push(Rule::parse(raw).unwrap());
+            }
+            r
+        };
+
+        // 1. A backslash in a path rule is refused. The review reported the
+        //    unix reading — `\*` is a literal asterisk, and folding it to a
+        //    separator broke the rule in both directions — and it is right
+        //    there. On Windows globset reads the same byte as a separator, so
+        //    the rule would have meant something else again. One settings file
+        //    cannot mean two things, and neither reading is wrong enough to
+        //    pick over the other.
+        for ambiguous in [r"Read(src/a\*b)", r"Read(.\src\**)"] {
+            let e = Rule::parse(ambiguous).expect_err("a backslash rule was accepted");
+            assert!(
+                e.to_string().contains("write the path with `/`"),
+                "the refusal did not say what to write instead: {e}"
+            );
+        }
+
+        // 2. A drive-absolute Windows path is absolute. Reading only a leading
+        //    slash made it compare as if it were relative.
+        let r = rules(&["Read(crates/emma/src/permissions.rs)"]);
+        for absolute in [
+            r"C:\src\emma\crates\emma\src\permissions.rs",
+            "C:/src/emma/crates/emma/src/permissions.rs",
+            r"\server\share\crates\emma\src\permissions.rs",
+        ] {
+            assert!(
+                r.for_call("Read", &json!({ "file_path": absolute }))
+                    .is_some(),
+                "{absolute} passed a deny rule naming that exact file"
+            );
+        }
+
+        // 3. Windows folds case and strips trailing dots and spaces before it
+        //    opens anything. A matcher that does not is one the filesystem
+        //    disagrees with.
+        if cfg!(windows) {
+            for alias in [
+                "CRATES/emma/src/permissions.rs",
+                "crates/emma/src/permissions.rs.",
+                "crates/emma/src/permissions.rs ",
+            ] {
+                assert_eq!(
+                    r.for_call("Read", &json!({ "file_path": alias })),
+                    Some(Decision::Deny),
+                    "{alias} is the same file to Windows and a different string to the rule"
+                );
+            }
+        }
+
+        // 4. A deny that matched outranks a refusal to judge. `Ask` is weaker
+        //    than `Deny`, so asking before the ladder ran downgraded a rule that
+        //    plainly fired.
+        let r = rules(&["Read", "Read(src/**)"]);
+        assert_eq!(
+            r.for_call("Read", &json!({ "file_path": "/tmp/not-src" })),
+            Some(Decision::Deny),
+            "a bare deny was downgraded to a question by a narrower rule beside it"
+        );
+
+        // 5. ...and the same, across the two shapes: a command deny that
+        //    matched, on a call that also carried a path.
+        let r = rules(&["Bash(git *)", "Bash(src/**)"]);
+        assert_eq!(
+            r.for_call(
+                "Bash",
+                &json!({ "command": "git push", "file_path": "/tmp/not-src" })
+            ),
+            Some(Decision::Deny),
+            "a matching command deny was hidden by the path preflight"
+        );
+
+        // 6. A `..` in a rule cannot be evaluated, so the rule is refused out
+        //    loud at parse time. It used to be kept, and then made every
+        //    unrelated read ask.
+        assert!(
+            Rule::parse("Read(build/../src/main.rs)").is_err(),
+            "a rule that can never be matched was kept rather than refused"
+        );
+
+        // 7. A bare filename is a path, not a command prefix. `Read` has no
+        //    `command` argument, so parsing it as one matched nothing at all.
+        let r = rules(&["Read(Cargo.toml)"]);
+        assert_eq!(
+            r.for_call("Read", &json!({ "file_path": "Cargo.toml" })),
+            Some(Decision::Deny),
+            "a deny naming one file by name protected nothing"
+        );
+        // Bash keeps prefix semantics: that is the tool that runs a command.
+        let r = rules(&["Bash(git)"]);
+        assert_eq!(
+            r.for_call("Bash", &json!({ "command": "git push" })),
+            Some(Decision::Deny)
         );
     }
 
