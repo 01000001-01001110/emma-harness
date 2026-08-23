@@ -675,6 +675,13 @@ pub fn config_check(
         "harness        {}",
         snapshot["root"].as_str().unwrap_or("?")
     )?;
+    // A whole configuration directory passed over is the largest silent skip
+    // this system had, and it sits directly under the line that names the winner
+    // — the one place somebody reading `config check` is already asking "which
+    // harness am I on".
+    if let Some(note) = harness.shadowed_note() {
+        writeln!(out, "               {note}")?;
+    }
     writeln!(
         out,
         "flavor         {}",

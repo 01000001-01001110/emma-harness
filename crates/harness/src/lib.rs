@@ -150,6 +150,31 @@ impl Flavor {
 
 /// Find the harness the way git finds `.git`: walk up from the working
 /// directory. `EMMA_ROOT` overrides it outright.
+/// The harness directory this one shadowed, if it shadowed one.
+///
+/// **Precedence is not the defect; the silence was.** `discover_from`'s doc
+/// states the rule outright — within one directory `.emma/` beats `.claude/`
+/// outright, and the loser is ignored entirely rather than merged — with the
+/// argument that merging is how a configuration system becomes impossible to
+/// reason about. That reasoning stands and this does not touch it.
+///
+/// What it adds is a sentence. Certified against the real binary: a `.emma/`
+/// holding nothing but junk is chosen over a sibling `.claude/` containing a
+/// real skill, and the result is `skills (none)` with nothing said. Every other
+/// loser in this codebase is announced — an unevaluable permission rule, a
+/// skipped skill, a dropped hook, a duplicate name — and a whole ignored
+/// configuration directory is the largest silent skip in the system, taking
+/// skills, agents, commands, hooks and permissions with it at once.
+pub fn shadowed_by(root: &Path) -> Option<PathBuf> {
+    // Only the `.emma/`-over-`.claude/` case exists: those are the two names,
+    // and the other order cannot happen because `.emma/` is tried first.
+    if root.file_name()?.to_str()? != ROOT_DIR_NAME {
+        return None;
+    }
+    let sibling = root.parent()?.join(CLAUDE_DIR_NAME);
+    sibling.is_dir().then_some(sibling)
+}
+
 pub fn discover() -> Result<PathBuf> {
     let cwd = std::env::current_dir().context("reading the working directory")?;
     discover_from(&cwd, std::env::var_os(ROOT_ENV).map(PathBuf::from))
@@ -705,6 +730,9 @@ pub struct Harness {
     /// Why there is not one, when configuration asked for something Emma could
     /// not honour. A sentence rather than a boot failure — see `statusline.rs`.
     status_line_note: Option<String>,
+    /// The harness directory this one shadowed, named so the operator is told
+    /// that a whole configuration was passed over rather than merged.
+    shadowed_note: Option<String>,
     /// Project-scope permission rules, still as strings. See the region above
     /// for why they are not parsed here.
     permissions: Vec<PermissionEntry>,
@@ -834,6 +862,14 @@ impl Harness {
             agent_notes,
             status_line,
             status_line_note,
+            shadowed_note: shadowed_by(&root).map(|other| {
+                format!(
+                    "{} is being used, so {} is ignored entirely — its skills, agents, commands, \
+                     hooks and permissions are all passed over rather than merged",
+                    root.display(),
+                    other.display()
+                )
+            }),
             permissions: read_permissions(&root, permission_block, &spine_path)?,
             flavor,
             root,
@@ -1010,6 +1046,10 @@ impl Harness {
 
     /// Why configuration asked for a status line and did not get one. `None`
     /// when nothing was asked for, or when what was asked for resolved.
+    pub fn shadowed_note(&self) -> Option<&str> {
+        self.shadowed_note.as_deref()
+    }
+
     pub fn status_line_note(&self) -> Option<&str> {
         self.status_line_note.as_deref()
     }

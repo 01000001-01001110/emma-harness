@@ -114,6 +114,29 @@ fn emma_wins_outright_where_both_exist() {
         h.expand_command("/only-here").is_none(),
         "the loser must be ignored entirely, not merged in"
     );
+
+    // **Ignored entirely, and said out loud.** The precedence above is correct
+    // and deliberate — merging is how a configuration system becomes impossible
+    // to reason about — but until this note existed the loser vanished without a
+    // word. Certified on the real binary before it was fixed: a `.emma/` holding
+    // nothing but junk beside a `.claude/` with a real skill in it gave
+    // `skills (none)` and said nothing at all.
+    //
+    // It is the largest silent skip the system had: skills, agents, commands,
+    // hooks and permissions passed over at once, while every smaller loser here
+    // — an unevaluable rule, a skipped skill, a dropped hook — already got a
+    // sentence.
+    let note = h
+        .shadowed_note()
+        .expect("the ignored sibling was not named anywhere");
+    assert!(
+        note.contains(".claude"),
+        "the note does not name what was ignored: {note}"
+    );
+    assert!(
+        note.contains("ignored entirely"),
+        "the note does not say the loser was passed over rather than merged: {note}"
+    );
 }
 
 /// Precedence is per directory: the nearest ancestor still wins overall, and
