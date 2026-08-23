@@ -2421,7 +2421,6 @@ mod tests {
         );
     }
 
-    #[test]
     /// The arrival warning fires when the budget is under four calls' worth,
     /// stays quiet above it, and says what to do about it.
     ///

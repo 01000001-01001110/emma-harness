@@ -1264,6 +1264,70 @@ async fn an_ordinary_search_says_nothing_about_unreadable_directories() {
     );
 }
 
+/// `Glob` says so too, and it had no test saying it did.
+///
+/// **Two call sites, one covered.** `walk::unreadable_notice` is pushed by
+/// `grep.rs` and by `glob.rs`, and only the `Grep` one was defended: an
+/// independent reviewer deleted the `glob.rs` line on paper and found no test
+/// that would notice. The consequence is worse for `Glob` than for `Grep`,
+/// because a file list reads as exhaustive — "no match" and "I could not look"
+/// are the same empty answer unless something says otherwise.
+///
+/// `an_ordinary_search_says_nothing_about_unreadable_directories` above is the
+/// control for the noise half, and asserting absence is exactly what could not
+/// have caught this.
+#[tokio::test]
+async fn glob_says_when_a_directory_could_not_be_opened() {
+    let sandbox = Sandbox::new();
+    sandbox.write_file("visible.rs", "");
+    sandbox.write_file("secret/hidden.rs", "");
+    let secret = sandbox.root().join("secret");
+
+    if !deny_read(&secret) {
+        eprintln!("SKIPPED: this platform would not make a directory unreadable");
+        return;
+    }
+
+    let out = sandbox.ok("Glob", json!({ "pattern": "**/*.rs" })).await;
+    let _ = allow_read(&secret);
+
+    assert!(
+        out.content.contains("could not be opened"),
+        "`Glob` returned a file list with a whole subtree missing from it and \
+         said nothing: {:?}",
+        out.content
+    );
+    assert!(
+        out.content.contains("secret"),
+        "a count without the name sends the reader nowhere: {:?}",
+        out.content
+    );
+    // And the same half that makes the notice worth having rather than an
+    // error: what could be listed was listed.
+    assert!(
+        out.content.contains("visible.rs"),
+        "one permission bit emptied the whole result: {:?}",
+        out.content
+    );
+}
+
+/// The control for the test above: an ordinary tree gets no notice from `Glob`
+/// either. A notice that fires on every call is noise, and noise is the same as
+/// silence.
+#[tokio::test]
+async fn an_ordinary_glob_says_nothing_about_unreadable_directories() {
+    let sandbox = Sandbox::new();
+    sandbox.write_file("visible.rs", "");
+    sandbox.write_file("sub/other.rs", "");
+
+    let out = sandbox.ok("Glob", json!({ "pattern": "**/*.rs" })).await;
+    assert!(
+        !out.content.contains("could not be opened"),
+        "a readable tree was reported as partly unreadable: {:?}",
+        out.content
+    );
+}
+
 /// Make a directory unreadable, or say we could not.
 ///
 /// Windows only today, through `icacls`. There is no portable way to do this,

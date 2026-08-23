@@ -28,6 +28,34 @@ out for themselves.
 
 ## Unreleased
 
+- **BREAKING: `WebFetch` now refuses a page that redirected to another host.**
+  You approve a host — `example.com` — and Chrome then follows whatever
+  redirect that host serves, including a JavaScript one. Until now the page it
+  landed on was read back and handed to the model whatever host it came from,
+  and a saved `WebFetch(domain:example.com)` rule meant that happened with no
+  prompt at all. On a hostile page, the page chose the destination.
+
+  The call now fails with a message naming both hosts, and nothing is read
+  back. To follow the redirect, call `WebFetch` with the destination URL: you
+  will be asked about that host, which is the point.
+
+  A redirect that keeps the host — `http` to `https`, a path change, a trailing
+  slash — is unaffected. A subdomain is a different host, so `example.com`
+  redirecting to `www.example.com` now asks; approve it with
+  `WebFetch(domain:*.example.com)` if you want that permanently. This is only
+  as good as what Chrome reports: a navigation that failed has no destination
+  to check, and this does not catch one it was not told about.
+
+- **A `WebSearch` with no key explains itself again — and now there is a test
+  saying so.** The message naming `BRAVE_SEARCH_API_KEY`, the credentials
+  field, and where to get a key was never executed by any test, so it could
+  have gone missing silently. Unchanged for users; listed because the guidance
+  is the only thing a keyless user has.
+
+- **`Glob` now says when a directory could not be opened.** `Grep` already did.
+  A file list that quietly omits an unreadable subtree reads as complete, and
+  "nothing matched" and "I could not look" were the same empty answer.
+
 - **Pasting into the input box now tells you what it changed.** The box is one
   line, so a pasted block has its newlines turned into spaces, its tabs turned
   into single spaces, and any control bytes dropped. That was already true; it

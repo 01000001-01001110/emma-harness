@@ -60,7 +60,22 @@ impl WebSearch {
     /// a registration would call; see [`crate::credentials`] for the order and
     /// the exclusion.
     pub fn detect() -> Result<Self, String> {
-        match credentials::load_default() {
+        Self::from_resolved(credentials::load_default())
+    }
+
+    /// The branch `detect` makes, taking the resolved key rather than reading
+    /// it — so a test can pin "no key" without depending on whether the machine
+    /// running the suite happens to have one.
+    ///
+    /// **Split out because the branch had no test.** A reviewer found that
+    /// every test builds a `WebSearch` through `with_key`, so nothing ever
+    /// reached the `None` arm: replacing `missing_message()` with any other
+    /// string left the suite green, and the guidance a keyless user depends on
+    /// could have vanished silently. What is left untested here is the one line
+    /// of wiring above, which is as small as this gets without mutating process
+    /// state that every other test shares.
+    fn from_resolved(key: Option<ApiKey>) -> Result<Self, String> {
+        match key {
             Some(key) => Ok(Self::with_key(key)),
             None => Err(credentials::missing_message()),
         }
@@ -352,6 +367,45 @@ fn strip_markup(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A missing key produces the guidance, not an opaque refusal.
+    ///
+    /// **The arm this covers had never been executed by a test.** Every other
+    /// test in this crate builds a `WebSearch` with `with_key`, so nothing
+    /// reached the `None` branch of `detect`; the message could have been
+    /// replaced by anything at all and the suite would have stayed green. That
+    /// matters more here than in most places, because the person who sees this
+    /// string is by definition someone who has not got the thing working yet,
+    /// and this project's own record is of a `web_search` that registered with
+    /// no key and failed on every call with nothing explaining why.
+    #[test]
+    fn a_search_with_no_key_says_how_to_get_one() {
+        // `err()` rather than `expect_err`, because `WebSearch` is not `Debug`
+        // and making it so to satisfy a test would put the API key one
+        // `{:?}` away from a log line.
+        let refusal = WebSearch::from_resolved(None)
+            .err()
+            .expect("a keyless search was constructed anyway");
+        assert!(
+            refusal.contains(credentials::ENV_VAR),
+            "the refusal does not name the variable to set: {refusal}"
+        );
+        assert!(
+            refusal.contains(credentials::FILE_FIELD),
+            "the refusal does not name the credentials field: {refusal}"
+        );
+        assert!(
+            refusal.contains("brave.com"),
+            "the refusal says a key is needed and not where to get one: {refusal}"
+        );
+
+        // And the other arm, so an implementation that always refused would not
+        // pass the above.
+        assert!(
+            WebSearch::from_resolved(Some(ApiKey::new("k"))).is_ok(),
+            "a resolved key was refused"
+        );
+    }
 
     #[test]
     fn an_empty_result_set_is_a_result() {

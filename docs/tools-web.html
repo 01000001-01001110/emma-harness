@@ -428,6 +428,30 @@
 <h3>The cross-origin re-ask</h3>
 
 <p>
+  <strong>The same argument applied to <code>WebFetch</code>, and until
+  2026-08-23 nobody had applied it.</strong> One call, so it cannot re-ask the
+  gate from inside itself &mdash; but Chrome follows redirects, and a persisted
+  <code>WebFetch(domain:example.com)</code> rule answers every later call with no
+  prompt at all. The page that came back could be from anywhere that host chose
+  to send us, and on a hostile page the page chooses. It now compares the
+  digest's <code>final_url</code> with the host the gate was asked about and
+  <em>refuses</em> when they differ, naming both and saying nothing was read
+  back; the way through is to call <code>WebFetch</code> on the destination, so
+  the host being read is the host in the prompt.
+  <span class="chip test">tested</span>
+  <code>a_redirect_to_another_host_is_refused_and_an_ordinary_one_is_not</code>
+  asserts the silent cases first &mdash; a scheme upgrade, a path change, a case
+  difference &mdash; because a guard that fired on those would be switched off
+  within a day. Two mutations go red: the comparison removed, and the comparison
+  weakened to a suffix match.
+  <span class="chip unv">unverified</span> No test drives a real Chrome
+  through a real redirect. What would settle it: a loopback stub serving a 302
+  to a different host, run through <code>WebFetch::run</code> with a browser.
+  The guard is also only as good as what Chrome reports &mdash; a navigation
+  that failed has no destination to check, and that case passes.
+</p>
+
+<p>
   The gate reads a destination from <code>network_target</code> before the call,
   out of its arguments, and a session call's arguments say
   <code>session=abc</code> rather than where <code>abc</code> now points. So

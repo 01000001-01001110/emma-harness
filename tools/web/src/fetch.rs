@@ -274,6 +274,15 @@ impl WebFetch {
             .await
             .map_err(map_error)?;
 
+        // **The host the gate asked about is the one in the argument; the bytes
+        // came from wherever that host redirected to.** See
+        // `crossed_a_host_the_gate_never_saw` for the whole argument.
+        if let Some(refusal) =
+            crossed_a_host_the_gate_never_saw(&url, digest.get("final_url").and_then(Value::as_str))
+        {
+            return Err(ToolError::Failed(refusal));
+        }
+
         // `reading`, so the selectors stay off: this tool cannot click what it
         // finds, and addresses for a thing nothing can address are a thousand
         // tokens of noise. `BrowserRead` is where they come back.
@@ -312,6 +321,54 @@ fn into_outcome(rendered: digest_md::Rendered) -> ToolOutcome {
 // three classes cannot drift apart across call sites.
 // ---------------------------------------------------------------------------
 
+/// Why this call must not return its bytes: navigation ended on a host nobody
+/// approved. `None` when it ended where it was asked to.
+///
+/// **The gate reads `network_target` from the *arguments*, before the call.**
+/// The human is shown `read https://example.com/x` and approves `example.com`;
+/// a persisted `WebFetch(domain:example.com)` rule answers for every future
+/// call without a prompt at all. Chrome then follows any HTTP or JavaScript
+/// redirect it is given, and `chromehand::digest_url` checks its policy once,
+/// against the input URL, before the browser starts. So a grant for one host
+/// silently became a grant for wherever that host chooses to send us — and on a
+/// page that is itself hostile, the page picks the destination.
+///
+/// `notes/design/web-surface.md` §Requirement 2 already makes this argument and
+/// the browser session tools already act on it: they re-derive
+/// `network_target` from the pool's `final_url` so the *next* verb re-asks.
+/// `WebFetch` is one call and cannot re-ask inside itself, so the honest move
+/// is the other one this project keeps making — refuse, and say exactly what
+/// happened, so the model can call `WebFetch` on the real URL and the human
+/// sees a prompt naming the host they are actually being asked about. A tool
+/// failure is an observation, not an abort.
+///
+/// Exact host equality, matched case-insensitively through
+/// [`crate::browser::pool::host_of`] so it is spelled the way the gate spells
+/// it. Not subdomain-tolerant: `Rule::domain` is exact unless the human wrote
+/// `*.`, and being laxer here than the rule the human agreed to is the whole
+/// defect in miniature. A redirect that keeps the host — `http` to `https`, a
+/// path change, a trailing slash — is not a redirect for this purpose and
+/// passes silently.
+///
+/// A `final_url` that is absent or unparseable yields `None`. That is
+/// deliberate and it is the weak spot, stated rather than hidden: a navigation
+/// that failed outright has no final URL to check, and refusing those would
+/// turn every timeout into a scary security message. It means this guard is
+/// evidence-based, not a boundary — it catches a redirect that Chrome reported,
+/// and it cannot catch one it did not.
+fn crossed_a_host_the_gate_never_saw(requested: &str, final_url: Option<&str>) -> Option<String> {
+    let asked = crate::browser::pool::host_of(requested)?;
+    let landed = crate::browser::pool::host_of(final_url?)?;
+    if asked == landed {
+        return None;
+    }
+    Some(format!(
+        "refused to return this page: {asked} redirected to {landed}, and the approval for this \
+         call was for {asked}. Nothing was read back. If {landed} is what you want, call WebFetch \
+         with that URL directly, so the host you are actually reading is the one in the prompt."
+    ))
+}
+
 /// chromehand's failure taxonomy, into Emma's.
 ///
 /// This is the seam the whole tool exists to get right, so it is one function
@@ -349,6 +406,79 @@ mod tests {
 
     fn err(args: Value) -> ToolError {
         WebFetch::new().validate_args(&args).unwrap_err()
+    }
+
+    /// A redirect off the approved host is refused, and an ordinary one is not.
+    ///
+    /// **The silent cases are asserted first, and they are the ones that make
+    /// this worth having rather than a nuisance.** A guard that refused every
+    /// `http` to `https` upgrade, every trailing slash and every failed
+    /// navigation would be turned off within a day, and then the real case
+    /// would not be caught either.
+    #[test]
+    fn a_redirect_to_another_host_is_refused_and_an_ordinary_one_is_not() {
+        // Same host: the scheme, the path and the slash may all change.
+        assert!(
+            crossed_a_host_the_gate_never_saw(
+                "http://example.com/a",
+                Some("https://example.com/a/b/")
+            )
+            .is_none(),
+            "an upgrade and a path change were treated as a cross-host redirect"
+        );
+        // Spelled differently by the server, and the same host all the same.
+        assert!(
+            crossed_a_host_the_gate_never_saw(
+                "https://Example.COM./x",
+                Some("https://example.com/x")
+            )
+            .is_none(),
+            "a case difference was treated as a different host, which would make \
+             the guard fire on ordinary pages"
+        );
+        // No final URL at all — a navigation that failed. Stated in the doc as
+        // the weak spot; asserted here so the weakness is deliberate rather
+        // than discovered later.
+        assert!(crossed_a_host_the_gate_never_saw("https://example.com/x", None).is_none());
+        assert!(
+            crossed_a_host_the_gate_never_saw("https://example.com/x", Some("")).is_none(),
+            "an empty final_url was read as a redirect to nowhere"
+        );
+
+        // And the case the whole thing exists for.
+        let refusal = crossed_a_host_the_gate_never_saw(
+            "https://docs.rs/x",
+            Some("https://evil.example/steal"),
+        )
+        .expect("a cross-host redirect was allowed to return its bytes");
+        assert!(
+            refusal.contains("docs.rs") && refusal.contains("evil.example"),
+            "the refusal names neither the host approved nor the host reached, so \
+             nobody can tell what happened: {refusal}"
+        );
+        assert!(
+            refusal.contains("Nothing was read back"),
+            "the refusal does not say whether the page reached the model, which is \
+             the only question a reader has: {refusal}"
+        );
+        assert!(
+            refusal.contains("call WebFetch"),
+            "the refusal blocks the model without telling it the way through, so \
+             it will retry the same call: {refusal}"
+        );
+
+        // A subdomain is a different host. `Rule::domain` is exact unless the
+        // human wrote `*.`, and being laxer here than the rule they agreed to
+        // is the defect this guard exists to close.
+        assert!(
+            crossed_a_host_the_gate_never_saw(
+                "https://example.com/x",
+                Some("https://www.example.com/x")
+            )
+            .is_some(),
+            "a subdomain redirect passed, which is broader than the grant the \
+             human actually gave"
+        );
     }
 
     #[test]
