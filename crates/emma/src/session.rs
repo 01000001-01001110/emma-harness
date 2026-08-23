@@ -721,7 +721,10 @@ fn string(r: &Value, key: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Everything `--resume` needs out of one session file.
-#[derive(Debug)]
+///
+/// `Default` so a test can build the damage cases without a file on disk. Every
+/// field's empty value is the honest one for "nothing was restored".
+#[derive(Debug, Default)]
 pub struct Restored {
     /// The session id, which is the file stem — a resumed run appends to this
     /// same file rather than starting a new one, so the transcript of a goal
@@ -739,6 +742,61 @@ pub struct Restored {
     /// act on. Empty is the ordinary case, including a torn last line, which is
     /// what a crash leaves and is not damage.
     pub lost_records: Vec<usize>,
+}
+
+/// What to tell somebody resuming a session that came back damaged, or `None`.
+///
+/// **Both halves of this were carried on the value so a caller could act on
+/// them, and no caller did.** `Restored::lost_records` and `Resumed::damage`
+/// each carry a doc saying that printing is a presentation choice and knowing
+/// is not — and an independent reviewer proved neither had a production reader
+/// by deleting the field and building the shipping binary clean, twice. The
+/// only report of fold damage was an `eprintln!`, on the stderr channel that
+/// `DEF-022` itself calls unobservable under the alternate-screen frame.
+///
+/// So the sentence "the caller should have been told" was true of the library
+/// and false of the product: the caller was told, and the caller threw it away.
+///
+/// Returned rather than printed, for the reason everything else in this file is
+/// returned: `main` owns the surface, and a function that printed could not be
+/// tested by anything short of driving the binary.
+///
+/// `None` is the ordinary case, including the torn last line a crash leaves,
+/// which is not damage.
+pub fn resume_damage_note(restored: &Restored) -> Option<String> {
+    let lost = &restored.lost_records;
+    let damage = &restored.resumed.damage;
+    if lost.is_empty() && damage.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if !lost.is_empty() {
+        // The line numbers, capped: a session damaged in fifty places is a
+        // session whose first few are enough to go and look at.
+        let shown: Vec<String> = lost.iter().take(5).map(|n| n.to_string()).collect();
+        let more = if lost.len() > shown.len() {
+            format!(" and {} more", lost.len() - shown.len())
+        } else {
+            String::new()
+        };
+        parts.push(format!(
+            "{} record(s) could not be read (line {}{})",
+            lost.len(),
+            shown.join(", "),
+            more
+        ));
+    }
+    if !damage.is_empty() {
+        parts.push(format!(
+            "{} turn(s) the fold refused to rebuild",
+            damage.len()
+        ));
+    }
+    Some(format!(
+        "this session came back damaged: {}. The conversation restored is known not to \
+         match the one that was sent, so the model is resuming with less than it had.",
+        parts.join(", ")
+    ))
 }
 
 /// What the file says the interrupted run was booted against.
@@ -1287,6 +1345,68 @@ mod tests {
     /// panics while holding it. Its panic message is suppressed, because a test
     /// that prints a backtrace on the happy path teaches the next reader to
     /// ignore backtraces.
+    /// A damaged resume says so, and an undamaged one says nothing.
+    ///
+    /// **The two fields this reads had no production reader at all.** Their
+    /// docs each said a caller should be able to act on the damage rather than
+    /// only see it printed, and an independent reviewer proved neither was read
+    /// by deleting the field and building the shipping binary clean -- twice.
+    /// The only report was an `eprintln!` on the channel `DEF-022` itself calls
+    /// unobservable under the frame.
+    ///
+    /// The quiet case is the load-bearing half, for the reason it always is
+    /// here: a warning on every resume is one nobody reads by the third time,
+    /// and a torn last line -- what a crash leaves -- is not damage.
+    #[test]
+    fn a_damaged_resume_says_so_and_a_clean_one_says_nothing() {
+        let clean = Restored::default();
+        assert!(
+            resume_damage_note(&clean).is_none(),
+            "an undamaged resume warned anyway: {:?}",
+            resume_damage_note(&clean)
+        );
+
+        let torn = Restored {
+            lost_records: vec![12, 40],
+            ..Default::default()
+        };
+        let note = resume_damage_note(&torn).expect("unreadable records were not reported");
+        assert!(note.contains("2 record"), "{note}");
+        assert!(
+            note.contains("12"),
+            "the line numbers are what somebody goes and looks at: {note}"
+        );
+
+        let refused = Restored {
+            resumed: Resumed {
+                damage: vec!["a turn with no result".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let note = resume_damage_note(&refused).expect("refused turns were not reported");
+        assert!(note.contains("1 turn"), "{note}");
+
+        // Both at once, and the sentence still names both rather than the first.
+        let both = Restored {
+            lost_records: vec![7],
+            resumed: Resumed {
+                damage: vec!["a".into(), "b".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let note = resume_damage_note(&both).expect("nothing reported");
+        assert!(note.contains("record") && note.contains("turn"), "{note}");
+
+        // And it says what the damage MEANS, not only how much there was. A
+        // count on its own does not tell a reader whether to resume.
+        assert!(
+            note.contains("known not to match"),
+            "the note counts the damage and never says what it costs: {note}"
+        );
+    }
+
     #[test]
     fn a_poisoned_lock_does_not_silently_stop_the_transcript() {
         let dir = tempfile::tempdir().unwrap();

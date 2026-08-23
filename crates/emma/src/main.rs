@@ -325,6 +325,15 @@ async fn run(cli: cli::Cli) -> Result<()> {
                 r.kicks,
                 b.max_kicks
             ));
+            // **Damage is said out loud, and until 2026-08-23 it was not.**
+            // `lost_records` and `damage` were both carried on the value with
+            // docs saying a caller should act on them, and this caller read
+            // neither. A reviewer proved it by deleting each field and building
+            // clean. The note itself lives in `session` so it can be tested;
+            // what belongs here is only the decision to show it.
+            if let Some(note) = session::resume_damage_note(&restored) {
+                term.warn(&note);
+            }
             // The continuity warnings are emitted further down, once the final
             // tool surface exists: `Delegate` is registered after this point, so
             // a schema hash taken here would be a hash of a surface no request
