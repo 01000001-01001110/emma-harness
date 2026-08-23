@@ -102,9 +102,12 @@ one nobody reads.
 
 ## Report the round to the project channel when the turn is done
 
-**At the end of a full turn — not each commit inside one — post what was
-actually completed to the project's Discord channel.** The webhook lives in
-`EMMA_PROGRESS_WEBHOOK` in `.env`, which `.gitignore` covers.
+**Post to the project's Discord channel every round.** Owner ruling,
+2026-08-23: *"At each of these I want an update in discord"* — each round, not
+only at the end of a long turn, and not each commit inside a round. A round is
+one reply to the owner: whatever was finished between one message and the next.
+The webhook lives in `EMMA_PROGRESS_WEBHOOK` in `.env`, which `.gitignore`
+covers.
 
 ```bash
 python verification/scripts/post_progress.py <<'EOF'
