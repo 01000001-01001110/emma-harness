@@ -227,6 +227,7 @@ pub fn standing_contract(check: &amp;dyn DoneCheck) -&gt; String {
 /// The reason is a `String` because it is shown to three audiences — the model
 /// in the kick, the user on the terminal, the session log — and one
 /// representation means all three are told the same thing.</span>
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Done {
     Yes,
     No(String),
@@ -259,6 +260,10 @@ pub trait DoneCheck: Send + Sync {
 
   <pre><code><span class="c">// crates/emma/src/goal.rs</span>
 pub const MARKER: &amp;str = "GOAL COMPLETE";
+
+<span class="c">// … elided: the two items sit some hundred and seventy lines apart in the
+// file, with `Goal` and the done-detection preamble between them, and each
+// carries a doc comment not repeated here.</span>
 
 pub struct MarkerClaim;
 

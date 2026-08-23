@@ -421,31 +421,81 @@ const SHELL_METACHARACTERS: &amp;[char] = &amp;[
   <p>
     The function is short enough to read whole, and the two things worth
     noticing are that the <code>deny</code> list is moved into a fresh block with
-    the other two defaulted away, and that a parse failure returns an empty
-    vector rather than a <code>?</code>.
+    the other two defaulted away, and that neither an unreadable file nor a parse
+    failure is a <code>?</code>.
+  </p>
+
+  <p>
+    <strong>Both of those used to return an empty vector and nothing else.</strong>
+    The argument for not failing the boot is sound and unchanged &mdash; a
+    personal settings file belonging to another program is not Emma's to refuse
+    to start over, and the only thing taken from it is restrictions, so failing
+    to read it can only leave Emma asking more often. But that argument covers
+    refusing to <em>boot</em>; it does not license silence. The operator wrote
+    deny rules and believes they apply, and the only report of their absence was
+    <code>config check</code> printing <code>(none)</code> &mdash; which reads as
+    "you have no rules", not as "your rules could not be read". One trailing
+    comma was enough.
+  </p>
+
+  <p>
+    The sibling case was already loud: <code>read_permissions</code>, the
+    function directly above this one, fails the boot on a malformed
+    <em>project</em> settings file. So the quiet path here was not a considered
+    exception to a policy, it was an inconsistency with the function next to it
+    &mdash; which is the most common shape of defect in this codebase.
   </p>
 
   <p class="faint">crates/harness/src/lib.rs · <code>user_permissions</code>, the body</p>
-<pre><code>pub fn user_permissions(home: Option&lt;&amp;Path&gt;) -&gt; Result&lt;Vec&lt;PermissionEntry&gt;&gt; {
+<pre><code>pub fn user_permissions(home: Option&lt;&amp;Path&gt;) -&gt; Result&lt;(Vec&lt;PermissionEntry&gt;, Vec&lt;String&gt;)&gt; {
     let Some(home) = home else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     };
     let file = home.join(CLAUDE_DIR_NAME).join("settings.json");
-    let raw = read_if_present(&amp;file)?;
+    <span class="c">// Not `?`, for the same reason the parse below is not: a file this project</span>
+    <span class="c">// does not own must not decide whether Emma starts. An unreadable one — bad</span>
+    <span class="c">// ACL, a locked file, an I/O fault — is exactly as silent as a malformed one</span>
+    <span class="c">// was, and reaches the operator the same way.</span>
+    let raw = match read_if_present(&amp;file) {
+        Ok(raw) =&gt; raw,
+        Err(e) =&gt; {
+            return Ok((Vec::new(), vec![format!(
+                "{} could not be read, so none of its `deny` rules are in force: {e:#}. \
+                 Emma started anyway, but nothing in that file is protecting you.",
+                file.display()
+            )]));
+        }
+    };
     if raw.trim().is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     #[derive(Deserialize)]
     struct User {
         #[serde(default)]
         permissions: PermissionBlock,
     }
-    // Never `?`. A personal settings file belonging to another program is not
-    // this project's to refuse to start over — and the only thing taken from it
-    // is restrictions, so failing to read it can only leave Emma asking more
-    // often.
-    let Ok(parsed) = serde_json::from_str::&lt;User&gt;(&amp;raw) else {
-        return Ok(Vec::new());
+    <span class="c">// Never `?`. A personal settings file belonging to another program is not</span>
+    <span class="c">// this project's to refuse to start over — and the only thing taken from it</span>
+    <span class="c">// is restrictions, so failing to read it can only leave Emma asking more</span>
+    <span class="c">// often.</span>
+    <span class="c">//</span>
+    <span class="c">// **But it must never be quiet about it.** That argument covers refusing to</span>
+    <span class="c">// *boot*; it does not license silence. The operator wrote deny rules and</span>
+    <span class="c">// believes they apply, and until this note existed the only report of their</span>
+    <span class="c">// absence was `config check` printing "(none)" — which reads as "you have no</span>
+    <span class="c">// rules", not as "your rules could not be read". One trailing comma was</span>
+    <span class="c">// enough.</span>
+    let parsed = match serde_json::from_str::&lt;User&gt;(&amp;raw) {
+        Ok(parsed) =&gt; parsed,
+        Err(e) =&gt; {
+            return Ok((Vec::new(), vec![format!(
+                "{} could not be parsed, so none of its `deny` rules are in force: {e}. \
+                 Emma started anyway — a file belonging to another program is not Emma's to \
+                 refuse to start over — but nothing in it is protecting you. Fix the file, \
+                 or delete it if it is no longer wanted.",
+                file.display()
+            )]));
+        }
     };
     let mut entries = Vec::new();
     PermissionBlock {
@@ -453,7 +503,7 @@ const SHELL_METACHARACTERS: &amp;[char] = &amp;[
         ..Default::default()
     }
     .into_entries(&amp;file, &amp;mut entries);
-    Ok(entries)
+    Ok((entries, Vec::new()))
 }</code></pre>
   <span class="src">crates/harness/src/lib.rs — <code>user_permissions</code></span>
 
@@ -477,14 +527,26 @@ const SHELL_METACHARACTERS: &amp;[char] = &amp;[
 {"permissions":{"allow":["Bash(rm:*)"],"deny":["WebFetch(domain:blocked.test)"]}}
 <span class="c">$ HOME=$X emma config check</span>
 permissions    3 rule(s)
-               deny  WebFetch(domain:evil.test)     …\cfg\cc\.claude\settings.json
-               allow Bash(ls:*)                     …\cfg\cc\.claude\settings.json
-               <span class="s">deny  WebFetch(domain:blocked.test)  …\home2\.claude\settings.json</span>
-               <span class="w">! …\cfg\cc\.claude\settings.json: `Bash(ls:*)` is an allow rule Emma cannot
-               evaluate — `ls:*` is not a specifier this build understands, so it
-               approves nothing and those calls will still ask.</span>
-               a remembered grant is written to …\cfg\cc\.claude\settings.local.json</code></pre>
-  <span class="chip cert">certified</span>: release binary at <code>62ab9c3</code>, two scratch trees, 2026-08-16. <code>Bash(rm:*)</code> is in the user file and is absent from the report; the user-scope <code>deny</code> is present and carries its own path. Repeat it by pointing <code>HOME</code> at a directory holding a <code>.claude/settings.json</code> with both lists.
+               deny  WebFetch(domain:evil.test)   …proj2\.claude\settings.json
+               allow Bash(ls:*)   …proj2\.claude\settings.json
+               <span class="s">deny  WebFetch(domain:blocked.test)   …home2\.claude\settings.json</span>
+               a remembered grant is written to …proj2\.claude\settings.local.json</code></pre>
+  <span class="chip cert">certified</span>: release binary rebuilt at
+  <code>ce0dd69</code>, two scratch trees, 2026-08-22, paths elided for width.
+  <code>Bash(rm:*)</code> is in the user file and is absent from the report; the
+  user-scope <code>deny</code> is present and carries its own path. Repeat it by
+  pointing <code>HOME</code> at a directory holding a
+  <code>.claude/settings.json</code> with both lists.
+
+  <p>
+    <strong>An earlier certification of this same block carried a warning line
+    the current binary does not print</strong>, saying <code>Bash(ls:*)</code>
+    was a rule Emma could not evaluate. It was true of its build. The property
+    being demonstrated here &mdash; user scope contributes <code>deny</code> and
+    nothing else &mdash; is unchanged, and it was the incidental line inside the
+    evidence that rotted. That is the more common way a certification goes
+    stale: not the claim, the transcript around it.
+  </p>
 
   <p>
     The same thing against the owner's real file, from this repository, is the

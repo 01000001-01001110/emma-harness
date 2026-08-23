@@ -144,6 +144,9 @@ pub struct Say {
     pub text: String,
     pub calls: Vec&lt;(String, Value)&gt;,
     pub tokens: i64,
+    <span class="c">/// Report `max_tokens` — the model was cut off mid-answer rather than
+    /// finishing. The one `stop_reason` the loop must act on.</span>
+    pub truncated: bool,
     <span class="c">/// Answer this call with `LlmError::BadRequest` carrying this message,
     /// rather than with a turn.
     ///
@@ -153,6 +156,9 @@ pub struct Say {
     /// A fake that could only succeed could not exercise it.</span>
     pub fail: Option&lt;String&gt;,
 }
+
+<span class="c">// … elided: the `text`, `cut_off`, `call` and `rejected` constructors and
+// `Say::costing` sit between these two items in the file.</span>
 
 pub struct Fake {
     script: Mutex&lt;std::collections::VecDeque&lt;Say&gt;&gt;,
@@ -218,6 +224,7 @@ pub struct Fake {
 /// into a sixty-second answer. `notify_one` rather than `notify_waiters` so a
 /// signal that arrives in the gap between two waits still lands — the permit is
 /// held until somebody collects it.</span>
+#[derive(Default)]
 pub struct Interrupt {
     flag: AtomicBool,
     notify: tokio::sync::Notify,
@@ -322,6 +329,7 @@ impl Interrupt {
 /// So there is exactly one cell, written in exactly one place — the `/model`
 /// command, beside the `set_provider` call — and read by the one caller that
 /// resolves late.</span>
+#[derive(Clone)]
 pub struct Running(Arc&lt;std::sync::Mutex&lt;Arc&lt;dyn Provider&gt;&gt;&gt;);</code></pre>
 
   <p>
@@ -363,13 +371,19 @@ pub fn set_provider(&amp;mut self, provider: Arc&lt;dyn Provider&gt;) -&gt; Stri
   <h2 id="recover">The loop's one retry</h2>
 
   <pre><code><span class="c">// crates/emma/src/agent.rs</span>
-<span class="c">/// **Whether one model's signed thinking blocks are accepted by another is
+<span class="c">/// The recovery for a model change that the provider would not accept.
+///
+/// **Whether one model's signed thinking blocks are accepted by another is
 /// not established in this tree**, and it is the one thing that can turn
 /// `/model` from "works" into a 400 on the very next call. So the failure is
 /// handled rather than predicted: a `BadRequest` naming a signature or a
 /// thinking block, on the first call after a change, compacts the whole
 /// conversation to summaries — which are two plain `Message`s carrying no
-/// provider state at all — and the caller retries once.</span>
+/// provider state at all — and the caller retries once.
+///
+/// … elided: three further doc paragraphs, on which of the guards below are
+/// load-bearing and which is a kept redundancy; the prose after this block
+/// carries their argument.</span>
 fn recover_from_a_model_change(&amp;mut self, e: &amp;LlmError) -&gt; bool {
     let Some(was) = self.changed_from.take() else {
         return false;

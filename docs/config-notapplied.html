@@ -161,8 +161,12 @@ no model was called.</code></pre>
               scope contributes <code>deny</code> only, silently</td></tr>
       <tr><td>a hook for <code>SessionStart</code>, <code>Stop</code>, <code>PreCompact</code></td>
           <td>either spine</td>
-          <td>nowhere: Emma has three events, and this is a startup error
-              rather than a skip, so again, if Emma booted, this is not it</td></tr>
+          <td>nowhere: Emma has three events. By default this is a startup
+              error rather than a skip &mdash; so if Emma booted with no
+              <code>EMMA_CLAUDE_HOOKS</code> set, this is not it. With
+              <code>EMMA_CLAUDE_HOOKS=skip-unknown</code> it boots and names each
+              dropped hook, so <strong>the inference needs the variable checked
+              first</strong></td></tr>
       <tr><td>a skill or agent in a subdirectory</td>
           <td><code>agents/&lt;sub&gt;/x.md</code></td>
           <td>top level. <code>agents/</code> and <code>commands/</code> read
@@ -271,13 +275,37 @@ no model was called.</code></pre>
     program with a larger vocabulary is not a broken file.
   </p>
 
-<pre><code>permissions    2 rule(s)
+  <p>
+    <strong>The example this section used to give is no longer one.</strong>
+    <code>Bash(ls:*)</code> was the illustration, and it now evaluates &mdash;
+    along with <code>Read(./src/**)</code> and <code>Bash(git log:*)</code>. Run
+    against a scratch harness carrying all three plus two denies, the current
+    binary loads five rules and has nothing to announce:
+  </p>
+
+<pre><code>permissions    5 rule(s)
                deny  WebFetch(domain:evil.test)   …\.claude\settings.json
-               allow Bash(ls:*)                   …\.claude\settings.json
-               <span class="w">! …\.claude\settings.json: `Bash(ls:*)` is an allow rule Emma cannot
-               evaluate — `ls:*` is not a specifier this build understands, so it
-               approves nothing and those calls will still ask.</span></code></pre>
-  <span class="chip cert">certified</span>: release binary at <code>62ab9c3</code>, scratch <code>.claude/</code> harness, 2026-08-16. Wrapped for the page.
+               deny  Bash(rm *)   …\.claude\settings.json
+               allow Bash(ls:*)   …\.claude\settings.json
+               allow Read(./src/**)   …\.claude\settings.json
+               allow Bash(git log:*)   …\.claude\settings.json
+               a remembered grant is written to …\.claude\settings.local.json</code></pre>
+  <span class="chip cert">certified</span>: release binary rebuilt at
+  <code>ce0dd69</code>, scratch <code>.claude/</code> harness, 2026-08-22. Paths
+  elided for width; nothing else altered. <strong>The previous certification on
+  this block showed a warning line the current binary cannot produce</strong>
+  &mdash; it was honest of its own build and went on looking green for weeks
+  after the behaviour moved, which is the failure mode a dated certification
+  has, and the reason a reader who tries to reproduce one is doing the site a
+  favour.
+
+  <p>
+    So the category still exists and its example had to be replaced.
+    <code>Bash(git log)</code> with no wildcard and no separator is still a
+    command prefix; a specifier this build genuinely cannot parse into any of the
+    four shapes still loads, still gets named, and still approves nothing. What
+    changed is how rarely that happens: <strong>the same measurement that found
+    62 of 64 real rules inert is why this example stopped working</strong>.
 
   <p>
     Four things share that shape: loaded, named, and doing nothing. A configured

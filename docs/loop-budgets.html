@@ -312,6 +312,7 @@ fn estimate(messages: &amp;[Message]) -&gt; i64 {
 /// test sees it on its very next iteration. `set` is the per-goal reset and
 /// stays local: a nested `run_goal` opening its own goal would otherwise zero
 /// the meter of the goal that is paying for it.</span>
+#[derive(Debug, Default)]
 pub struct Spend {
     counted: std::sync::atomic::AtomicI64,
     parent: Option&lt;Arc&lt;Spend&gt;&gt;,

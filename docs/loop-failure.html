@@ -692,6 +692,10 @@ pub(crate) fn label_of(name: &amp;str, input: &amp;Value) -&gt; String {
     format!("{}({})", name, compact(input))
 }
 
+<span class="c">// … elided: `open_query`, `failure_result` and `truncation_note` sit between
+// these two functions in the file; the latter two are quoted in their own
+// sections above.</span>
+
 <span class="c">/// Arguments, short enough to sit inside a kick.</span>
 fn compact(args: &amp;Value) -&gt; String {
     let s = args

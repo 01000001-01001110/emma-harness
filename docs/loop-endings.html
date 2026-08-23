@@ -433,6 +433,8 @@ pub fn message(&amp;self, b: &amp;Budgets) -&gt; String {
 
   <pre><code><span class="c">// crates/emma/src/agent.rs — after the loop breaks</span>
 place(&amp;mut query, &amp;mut pending_turn, Vec::new());
+
+<span class="c">// The clock stops here rather than freezing at whatever it last showed.</span>
 self.s.term.goal_ended();
 
 let outcome = Outcome {

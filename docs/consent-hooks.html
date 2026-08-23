@@ -148,7 +148,12 @@
       implements a larger set including <code>SessionStart</code>,
       <code>Stop</code> and <code>PreCompact</code>. Emma implements three, and a
       config naming any of the rest is a startup error listing the three that
-      work, never a silent skip.</li>
+      work, never a silent skip &mdash; unless
+      <code>EMMA_CLAUDE_HOOKS=skip-unknown</code> is set, which converts the
+      refusal into a boot that <em>names each hook it dropped</em>. Still not a
+      silent skip; that is the property, and it is the one thing the opt-in does
+      not relax. It is an environment variable rather than a config key on
+      purpose, so a repository cannot turn it on for the person cloning it.</li>
     <li><code>contain</code> resolves the command.</li>
     <li>A <code>UserPromptSubmit</code> hook carrying a non-empty matcher fails the
       boot, because there is no tool name to match on that event. Claude Code

@@ -319,9 +319,14 @@
   <p>
     <code>Rules::for_egress(tool, host)</code> matches a bare <code>Tool</code>
     rule for that tool and any of its <code>domain:</code> rules.
-    <code>Rules::for_tool(tool)</code>, which answers the local question, matches
-    bare rules only. A <code>domain:</code> rule therefore never becomes
-    permission to run a tool. Nothing in the surface both writes and names a host
+    <code>Rules::for_call(tool, args)</code>, which answers the local question,
+    matches bare rules plus the command and path shapes &mdash; and its
+    <code>Spec::Domain</code> arm is <code>false</code>, so a
+    <code>domain:</code> rule never becomes permission to run a tool. The
+    separation is the same one it always was; what changed is that the local
+    question now reads the arguments, so <code>Bash(git *)</code> and
+    <code>Read(./src/**)</code> answer it. <code>for_tool</code> still exists and
+    is no longer what the gate consults. Nothing in the surface both writes and names a host
     today; the first tool that did would be the one that paid for getting it
     wrong. <span class="chip test">tested</span>
     <code>a_domain_rule_does_not_become_permission_to_run_the_tool</code>

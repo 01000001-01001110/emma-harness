@@ -549,19 +549,20 @@ fn listed(what: &amp;str, items: &amp;[String]) -&gt; String {
   </p>
   <span class="src">crates/emma/src/delegate.rs — FOOTER_ITEMS, listed; tests::a_long_file_list_is_cut_and_says_it_was</span>
 
-  <h2 id="exit">An exit status, read only from where Bash puts it</h2>
+  <h2 id="exit">An exit status, read from where Bash actually puts it</h2>
 
-<pre><code><span class="c">/// `Bash` carries `exit status &lt;n&gt;` as the first line of its content, and the</span>
-<span class="c">/// loop treats a non-zero exit as an ordinary result. A footer line reading</span>
-<span class="c">/// `cargo test → exit 101` beside a final message reading "the tests pass" is a</span>
-<span class="c">/// contradiction the parent can see, and it is the most common lie a coding</span>
-<span class="c">/// subagent can tell.</span>
+<pre><code><span class="c">/// The exit status stated in a command's prose, for records written before</span>
+<span class="c">/// `exit_code` was a field.</span>
+<span class="c">///</span>
+<span class="c">/// **Scans the opening lines rather than only the first.** `Bash` prepends its</span>
+<span class="c">/// shell banner to every result, so the status has never been on line one, and</span>
+<span class="c">/// a parser that read only line one returned `None` for every command ever run</span>
+<span class="c">/// by a subagent — which is why the footer reported "no result" throughout.</span>
 fn exit_status(content: &amp;str) -&gt; Option&lt;i64&gt; {
     content
         .lines()
-        .next()?
-        .trim()
-        .strip_prefix("exit status ")?
+        .take(4)
+        .find_map(|l| l.trim().strip_prefix("exit status "))?
         .trim()
         .parse()
         .ok()
@@ -583,15 +584,38 @@ fn string(value: &amp;Value, key: &amp;str) -&gt; String {
   <span class="src">crates/emma/src/delegate.rs — exit_status, push_unique, str_of, string, quoted entire</span>
 
   <p>
-    <code>strip_prefix("exit status ")</code> on the first line and nothing else.
-    Prose that merely mentions a status, <em>"the command exited with status
-    0"</em>, which is what a model writes, yields <code>None</code> and the
-    footer line reads <code>→ no result (refused, or the run stopped)</code>. A
-    footer line reading <code>cargo test → exit 101</code> beside a final message
-    reading "the tests pass" is a contradiction the parent can see, and it is the
-    most common lie a coding subagent can tell.
+    <code>strip_prefix("exit status ")</code> on one of the first four lines and
+    nothing else. Prose that merely mentions a status, <em>"the command exited
+    with status 0"</em>, which is what a model writes, yields <code>None</code>
+    and the footer line reads <code>→ no result (refused, or the run
+    stopped)</code>. A footer line reading <code>cargo test → exit 101</code>
+    beside a final message reading "the tests pass" is a contradiction the parent
+    can see, and it is the most common lie a coding subagent can tell.
     <span class="chip test">tested</span>
   </p>
+
+  <div class="note warn">
+    <span class="h">This mechanism had never once fired in production</span>
+    <p>
+      The parser read line one, and <code>Bash</code> prepends its shell banner
+      to every result &mdash; so the status has never been on line one. Every
+      command ever run by a subagent yielded <code>None</code>, and the footer
+      said <code>no result</code> throughout, which reads as
+      <em>"the command did not run"</em> rather than <em>"this parser cannot find
+      the answer"</em>.
+    </p>
+    <p>
+      <strong>What did not catch it.</strong> The tests passed, because their
+      fixtures put the status on line one &mdash; they were written from the
+      doc comment rather than from a real <code>Bash</code> result. The page you
+      are reading described the parser accurately, and the parser was wrong. And
+      the failure looked exactly like the normal case for a subagent that had
+      been refused, so there was nothing anomalous to notice.
+      <strong>A mechanism whose failure mode is indistinguishable from its
+      quiet success has no symptom at all</strong>, and the only thing that finds
+      one is checking it against real output.
+    </p>
+  </div>
   <span class="src">crates/emma/src/delegate.rs — tests::an_exit_status_is_read_from_where_bash_actually_puts_it, tests::a_commands_exit_status_reaches_the_footer</span>
 
   <p>

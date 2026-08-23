@@ -225,11 +225,29 @@
     instead of paraphrasing, among them <code>Approvals::decide</code> and
     <code>Approvals::egress</code> entire, because in both of those the order of
     the statements is the property being described.
-    <span class="chip cert">certified</span> Thirteen of the twenty-one, the whole
+    <span class="chip unv">unverified</span> Thirteen of the twenty-one, the whole
     functions, were diffed against their source ranges at commit
-    <code>a3eba74</code> and match line for line, comments included, once the
-    enclosing <code>impl</code> indentation is removed. The remaining eight are
-    short declarations and one block of <code>emma --help</code> output.
+    <code>a3eba74</code> and matched line for line, comments included. That was a
+    real check and it is <strong>no longer a current one</strong>: at least three
+    of the thirteen have changed since &mdash; <code>Approvals::decide</code>'s
+    opening statement, <code>Rule::parse</code>'s two new branches, and
+    <code>user_permissions</code>'s whole shape &mdash; each found by a docs
+    audit rather than by anything that could fail on its own. The blocks named
+    have been brought back into line one at a time; the <em>claim of
+    byte-identity across all thirteen</em> has not been re-run, so it is amber
+    until it has.
+    <em>What would settle it:</em> re-diffing each quoted block against its
+    source range at the current commit, which is a script nobody has written.
+  </p>
+
+  <p>
+    <strong>The lesson in the chip itself.</strong> A quoted function is a
+    snapshot, and it rots without any signal &mdash; the page keeps its confident
+    <code>src</code> line pointing at a file that has moved underneath it. Twelve
+    of the twenty-five findings in the audit that prompted this were exactly
+    that. Quoting whole functions is still the right call for pages whose subject
+    <em>is</em> the code, and the cost is now written down where it can be
+    weighed.
   </p>
 
   <h2 id="unsettled">What is not settled, across the chapter</h2>
