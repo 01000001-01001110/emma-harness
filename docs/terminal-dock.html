@@ -253,14 +253,45 @@
   </p>
 
   <p>
+    <strong>What it lost is said out loud.</strong> The flattening is defensible
+    and the silence was not: the next thing that happens after a paste is a
+    model call, billed against text the clipboard did not hold.
+    <code>Editor::paste</code> returns a <code>PasteLoss</code> counting joined
+    line-break runs, flattened tabs and dropped control bytes, and the reader
+    thread puts <code>PasteLoss::note</code> on screen through
+    <code>Frame::note_line</code> when there is something to say. A run of
+    breaks counts once, matching the single space that replaces it, so the
+    number is one a reader can check against the clipboard.
+  </p>
+
+  <p>
+    This is half of <code>DEF-028</code>. The other half is keeping the breaks
+    rather than reporting their loss, which needs the multi-line editor named as
+    stage 0(a) of <code>notes/design/tui-fullscreen.md</code> and is not built.
+  </p>
+
+  <p>
     <span class="chip test">tested</span>:
     <code>pasting_a_block_full_of_newlines_never_submits_it</code> pastes fifty
-    lines, asserts <code>Action::Edit</code>, asserts no newline survived, and
-    then asserts it takes an actual Enter to send it.
+    lines, asserts fifty joined breaks, asserts no newline survived, and then
+    asserts it takes an actual Enter to send it. It no longer asserts
+    <code>Action::Edit</code>, because <code>paste</code> returns the loss
+    instead &mdash; a paste cannot submit, so the action was the one thing a
+    caller could already work out.
     <code>control_bytes_in_a_paste_never_reach_the_line</code> pins the exact
     surviving string, <code>safe[31mred text tabbed</code>, which shows the
     <code>[31m</code> was only ever dangerous because of the escape in front of
     it.
+  </p>
+
+  <p>
+    <code>a_paste_that_lost_something_says_what_and_a_clean_one_says_nothing</code>
+    carries the reporting, and the clean case is the load-bearing half of it: a
+    note on every paste is noise, and noise is what gets ignored, which would
+    leave the real notes unread. Four mutations go red on four different
+    assertions &mdash; always silent, always speaking, breaks counted per
+    character instead of per run, and control bytes dropped without being
+    counted.
   </p>
 
   <h2 id="routing">Which key acts on which pane</h2>

@@ -71,6 +71,72 @@ pub enum Action {
     Ignore,
 }
 
+/// What a paste lost on the way into a one-line editor.
+///
+/// **A count rather than a flag, and returned rather than performed silently.**
+/// Flattening a forty-line stack trace to one line is defensible; doing it
+/// without saying so is not, because the user is about to spend a model call on
+/// text that is not the text they copied. `DEF-028` is the row, and the half
+/// this closes is the silence rather than the flattening -- keeping the breaks
+/// needs the multi-line editor of `notes/design/tui-fullscreen.md` stage 0(a),
+/// which is not built.
+///
+/// The same correction `Term::clipboard` and `Interrupt::starting_goal` already
+/// made in this tree: a function that decides something and returns nothing has
+/// made the decision unobservable, to the user and to a test alike.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PasteLoss {
+    /// Runs of line breaks turned into one space each. A run counts once,
+    /// because one run is what the reader sees as one lost gap -- counting
+    /// `\r\n` as two would report a number nobody can match to the clipboard.
+    pub breaks_joined: usize,
+    /// Tabs turned into a single space. Separate from a break because a tab
+    /// surviving as one space is a changed width, not a changed structure, and
+    /// somebody pasting an indented block should be told which happened.
+    pub tabs_flattened: usize,
+    /// Control bytes removed entirely, escape sequences among them.
+    pub controls_dropped: usize,
+}
+
+impl PasteLoss {
+    /// Nothing lost, nothing said.
+    pub fn is_clean(&self) -> bool {
+        self.breaks_joined == 0 && self.tabs_flattened == 0 && self.controls_dropped == 0
+    }
+
+    /// What to tell the user, or `None` when the paste arrived intact.
+    ///
+    /// Names the counts and then the consequence, in that order: a number on
+    /// its own reads as trivia, and the sentence that matters is that the model
+    /// will be asked about text the clipboard did not hold.
+    pub fn note(&self) -> Option<String> {
+        if self.is_clean() {
+            return None;
+        }
+        let mut parts = Vec::new();
+        if self.breaks_joined > 0 {
+            parts.push(format!(
+                "{} line break(s) became spaces",
+                self.breaks_joined
+            ));
+        }
+        if self.tabs_flattened > 0 {
+            parts.push(format!("{} tab(s) became one space", self.tabs_flattened));
+        }
+        if self.controls_dropped > 0 {
+            parts.push(format!(
+                "{} control byte(s) were dropped",
+                self.controls_dropped
+            ));
+        }
+        Some(format!(
+            "pasted with changes: {} — this input box is one line, so what is sent is not \
+             byte-for-byte what was copied",
+            parts.join(", ")
+        ))
+    }
+}
+
 /// The line being typed.
 #[derive(Debug, Default, Clone)]
 pub struct Editor {
@@ -123,26 +189,40 @@ impl Editor {
     /// span is an escape sequence Emma did not author, arriving at the terminal
     /// through a text field. Tabs go too: a tab in a cell is not eight columns,
     /// it is one cell containing a tab.
-    pub fn paste(&mut self, text: &str) -> Action {
+    /// Returns what was lost. The action is always [`Action::Edit`], which is
+    /// why this returns the loss instead: a paste cannot submit, and the only
+    /// thing a caller cannot work out for itself is what the text stopped
+    /// being.
+    pub fn paste(&mut self, text: &str) -> PasteLoss {
+        let mut loss = PasteLoss::default();
         let mut last_was_break = false;
         for c in text.chars() {
             if matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
                 if !last_was_break {
                     self.chars.insert(self.cursor, ' ');
                     self.cursor += 1;
+                    // Counted on the first break of a run, matching the one
+                    // space that replaces it.
+                    loss.breaks_joined += 1;
                 }
                 last_was_break = true;
                 continue;
             }
             last_was_break = false;
-            let c = if c == '\t' { ' ' } else { c };
+            let c = if c == '\t' {
+                loss.tabs_flattened += 1;
+                ' '
+            } else {
+                c
+            };
             if c.is_control() {
+                loss.controls_dropped += 1;
                 continue;
             }
             self.chars.insert(self.cursor, c);
             self.cursor += 1;
         }
-        Action::Edit
+        loss
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Action {
@@ -627,7 +707,14 @@ impl LineSource {
                 Ok(Event::Paste(text)) => {
                     {
                         let mut ed = thread_editor.lock().unwrap_or_else(|e| e.into_inner());
-                        ed.paste(&text);
+                        // **Said, not merely done.** A paste into a one-line box
+                        // loses structure, and the user is about to pay for a
+                        // model call on text the clipboard did not hold. The
+                        // flattening stays until the multi-line editor lands;
+                        // the silence does not have to.
+                        if let Some(note) = ed.paste(&text).note() {
+                            thread_frame.note_line(&note);
+                        }
                         thread_frame.set_input(&ed.text(), ed.cursor());
                         let mut m = thread_menu.lock().unwrap_or_else(|e| e.into_inner());
                         m.sync(&ed.text(), thread_frame.prompt_pending());
@@ -831,6 +918,62 @@ mod tests {
     // in `frame.rs`; the guarantee is here.
     // -----------------------------------------------------------------------
 
+    /// A paste that changed says so, and one that did not stays quiet.
+    ///
+    /// **`DEF-028`, the half that is fixable without the multi-line editor.**
+    /// Flattening a stack trace to one line is defensible; doing it silently is
+    /// not, because the next thing that happens is a model call billed against
+    /// text the clipboard never held. The row's other half -- keeping the
+    /// breaks -- needs stage 0(a) of `notes/design/tui-fullscreen.md` and is
+    /// still open.
+    ///
+    /// **The clean case is the load-bearing half of this test.** A note on
+    /// every paste is noise, and noise is what gets ignored, which would leave
+    /// the real notes unread. Without this assertion an implementation that
+    /// always warned would pass.
+    #[test]
+    fn a_paste_that_lost_something_says_what_and_a_clean_one_says_nothing() {
+        // Clean: no breaks, no tabs, no control bytes.
+        let mut ed = Editor::default();
+        let loss = ed.paste("an ordinary sentence from the clipboard");
+        assert!(loss.is_clean(), "{loss:?}");
+        assert!(
+            loss.note().is_none(),
+            "a paste that lost nothing still warned: {:?}",
+            loss.note()
+        );
+        assert_eq!(ed.text(), "an ordinary sentence from the clipboard");
+
+        // Structure lost: two runs of breaks, one tab, one escape sequence.
+        let mut ed = Editor::default();
+        let loss = ed.paste("first\r\n\r\nsecond\tthird\x1b[31m");
+        assert_eq!(loss.breaks_joined, 1, "a run counts once: {loss:?}");
+        assert_eq!(loss.tabs_flattened, 1, "{loss:?}");
+        // `\x1b` and the rest of the sequence: ESC is the control byte, the
+        // `[31m` are printable and survive as text.
+        assert_eq!(loss.controls_dropped, 1, "{loss:?}");
+
+        let note = loss
+            .note()
+            .expect("a paste that lost structure said nothing");
+        assert!(note.contains("1 line break"), "{note}");
+        assert!(note.contains("1 tab"), "{note}");
+        assert!(note.contains("1 control byte"), "{note}");
+        // The consequence, not just the counts. A number on its own reads as
+        // trivia; what the user needs to know is that the send will not match
+        // the copy.
+        assert!(
+            note.contains("not") && note.contains("copied"),
+            "the note gave counts and never said what they cost: {note}"
+        );
+
+        // Two separated runs are two, so the count tracks the text rather than
+        // being a boolean wearing a number.
+        let mut ed = Editor::default();
+        let loss = ed.paste("a\nb\nc");
+        assert_eq!(loss.breaks_joined, 2, "{loss:?}");
+    }
+
     /// **The sink risk from the evaluation, as an assertion.** A fifty-line
     /// paste produces no `Submit`, whatever is in it.
     #[test]
@@ -839,7 +982,11 @@ mod tests {
         let block: String = (0..50)
             .map(|i| format!("    line {i} of a code block\n"))
             .collect();
-        assert_eq!(ed.paste(&block), Action::Edit);
+        // A paste cannot submit -- that is what bracketed paste buys -- so
+        // there is no `Action` to assert on any more. The loss is the return
+        // value now, and 50 lines is 50 joined breaks.
+        let loss = ed.paste(&block);
+        assert_eq!(loss.breaks_joined, 50, "{loss:?}");
         assert!(!ed.is_empty());
         assert!(
             !ed.text().contains('\n'),
