@@ -47,6 +47,15 @@ USAGE
   emma config check            load .emma/ (or .claude/) and report; no model call
   emma agents                  what each subagent type has cost and produced,
                                across every recorded session; no model call
+  emma verify [--rows <ids>] [--limit <n>] [--dry-run]
+                               send an independent reviewer at each outstanding
+                               row of verification/parity/ledger.json, briefed
+                               to disprove it rather than confirm it, and write
+                               a receipt with its verdict and its whole report.
+                               **This one spends money**: each row is a model
+                               run with tools. --limit defaults to 5; --dry-run
+                               lists what it would review and reaches no model.
+                               --model chooses the reviewer.
   emma --resume [<id>] [<text>]
                                continue the newest session started in this
                                directory, or the one named. Nothing is re-run:
@@ -219,6 +228,14 @@ APPROVAL
 }
 
 /// The whole of `emma --help`.
+/// How many rows one `emma verify` reviews unless told otherwise.
+///
+/// **Low on purpose.** Each row is an independent model run with tools, so a
+/// default that swept the whole ledger would turn a curious first command into
+/// a bill nobody chose. Five is enough to see whether the reviews are any good,
+/// which is the question a first run is really asking.
+pub const DEFAULT_VERIFY_LIMIT: usize = 5;
+
 pub const HELP: &str = concat!(usage_and_options!(), "\n", session_help!());
 
 /// What a running session understands, and what the gate does — the bytes
@@ -272,6 +289,20 @@ pub enum Command {
         goal: Option<String>,
     },
     ConfigCheck,
+    /// Dispatch independent reviewers at the parity ledger's outstanding rows.
+    ///
+    /// **The one command here that spends money on purpose**, which is why
+    /// `limit` defaults low and `dry_run` exists: a fan-out across ninety-odd
+    /// rows is a real bill, and a flag that has to be typed is the difference
+    /// between a decision and an accident.
+    Verify {
+        /// Named rows, or empty for "everything still wanting a review".
+        rows: Vec<String>,
+        /// How many rows to review in this run.
+        limit: usize,
+        /// List what would be reviewed and stop. Reaches no model.
+        dry_run: bool,
+    },
     /// What delegation has actually cost. Reads the session transcripts and
     /// prints; calls no model, exactly as `config check` does not.
     Agents,
@@ -342,6 +373,7 @@ fn near_miss(goal: &str) -> Option<&'static str> {
         "set-model",
         "agents",
         "config",
+        "verify",
     ];
     if goal.split_whitespace().count() != 1 {
         return None;
@@ -511,6 +543,55 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
                 command = Some(Command::SetModel(String::new()))
             }
             "agents" if fresh(&command, &words) => command = Some(Command::Agents),
+            "verify" if fresh(&command, &words) => {
+                command = Some(Command::Verify {
+                    rows: Vec::new(),
+                    limit: DEFAULT_VERIFY_LIMIT,
+                    dry_run: false,
+                })
+            }
+            // These three only mean anything to `verify`, and saying so beats
+            // accepting them anywhere and ignoring them somewhere.
+            other @ ("--rows" | "--limit" | "--dry-run")
+                if !matches!(command, Some(Command::Verify { .. })) =>
+            {
+                return Err(format!(
+                    "`{other}` is an option of `emma verify`. See `emma --help`."
+                ))
+            }
+            "--rows" => {
+                let Some(list) = it.next() else {
+                    return Err("`--rows` needs a comma-separated list of row ids.".into());
+                };
+                if let Some(Command::Verify { rows, .. }) = command.as_mut() {
+                    rows.extend(
+                        list.split(',')
+                            .map(|r| r.trim().to_ascii_uppercase())
+                            .filter(|r| !r.is_empty()),
+                    );
+                }
+            }
+            "--limit" => {
+                let Some(n) = it.next() else {
+                    return Err("`--limit` needs a number.".into());
+                };
+                let Ok(n) = n.parse::<usize>() else {
+                    return Err(format!("`--limit {n}` is not a number."));
+                };
+                if n == 0 {
+                    return Err(
+                        "`--limit 0` would review nothing. Omit it, or use --dry-run.".into(),
+                    );
+                }
+                if let Some(Command::Verify { limit, .. }) = command.as_mut() {
+                    *limit = n;
+                }
+            }
+            "--dry-run" => {
+                if let Some(Command::Verify { dry_run, .. }) = command.as_mut() {
+                    *dry_run = true;
+                }
+            }
             "config" if fresh(&command, &words) => match it.next().as_deref() {
                 Some("check") => command = Some(Command::ConfigCheck),
                 Some(other) => {

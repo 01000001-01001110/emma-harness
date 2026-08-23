@@ -64,6 +64,7 @@ pub mod settings;
 pub mod skill;
 pub mod term;
 pub mod usertools;
+pub mod verify;
 
 pub use agent::{Agent, Budgets, Ending, Interrupt, Outcome, Resumed, Setup, Spend};
 pub use approval::{Answer, Approvals, Asker, Gate, Verdict};

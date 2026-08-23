@@ -286,6 +286,31 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // `agent::Running`.
     let running = emma::agent::Running::new(provider.clone());
 
+    // **Reviewing is a run of its own, and it stops here rather than falling
+    // into the session loop.** It needs the provider and the tools and none of
+    // the rest — no session file to append to, no goal, no resume. Its own
+    // function so that `main` stays wiring; see `emma::verify`.
+    if let Command::Verify {
+        rows,
+        limit,
+        dry_run,
+    } = &cli.command
+    {
+        let tools = harness.select_tools(registry)?;
+        return run_verification(
+            &cwd,
+            rows,
+            *limit,
+            *dry_run,
+            provider.clone(),
+            &resolved.model,
+            &harness,
+            &tools,
+            &term,
+        )
+        .await;
+    }
+
     let session_dir = opts
         .session_dir
         .clone()
@@ -811,4 +836,202 @@ async fn run(cli: cli::Cli) -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Run the independent reviewers, one row at a time.
+///
+/// **Sequential on purpose, for now.** Each reviewer is a full agent run with
+/// tools, and the terminal is one terminal: interleaving several would make the
+/// transcript unreadable and any approval prompt ambiguous. A parallel version
+/// is worth having and is a different piece of work — this one has to be right
+/// first, because a review nobody can follow is a receipt nobody believes.
+///
+/// Every reviewer is a **fresh agent**: no session file, no memory of the last
+/// row, and a goal that is only the brief. That is what independence means
+/// here, and it is why this cannot be a loop inside an existing run.
+#[allow(clippy::too_many_arguments)]
+async fn run_verification(
+    cwd: &std::path::Path,
+    rows: &[String],
+    limit: usize,
+    dry_run: bool,
+    provider: Arc<dyn Provider>,
+    model: &str,
+    harness: &Arc<Harness>,
+    tools: &Registry,
+    term: &Arc<Term>,
+) -> Result<()> {
+    let ledger_path = cwd.join("verification").join("parity").join("ledger.json");
+    let ledger: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&ledger_path)
+            .with_context(|| format!("reading {}", ledger_path.display()))?,
+    )
+    .with_context(|| format!("parsing {}", ledger_path.display()))?;
+
+    let outstanding = emma::verify::rows_needing_review(&ledger, rows)?;
+    if outstanding.is_empty() {
+        term.note("every row already carries an independent review receipt.");
+        return Ok(());
+    }
+
+    // The fingerprint is taken **once, before any review runs**, and stamped on
+    // every receipt from this run. Taking it per row would date each receipt to
+    // a tree that had not changed anyway, and would hide the one thing worth
+    // noticing: a production edit made while reviews were in flight.
+    let fingerprint = emma::verify::tree_fingerprint(cwd)?;
+    let chosen: Vec<_> = outstanding.iter().take(limit).collect();
+    term.note(&format!(
+        "{} row(s) want an independent review; reviewing {} of them with {model}. Tree {}.",
+        outstanding.len(),
+        chosen.len(),
+        &fingerprint[..16]
+    ));
+    if outstanding.len() > chosen.len() {
+        term.note(&format!(
+            "{} not reviewed in this run — raise it with `--limit`, and note that each row is a \
+             billed model call with tools.",
+            outstanding.len() - chosen.len()
+        ));
+    }
+
+    if dry_run {
+        for row in &chosen {
+            term.note(&format!("would review {}: {}", row.id, row.title));
+        }
+        return Ok(());
+    }
+
+    let approvals = Approvals::unattended();
+    let mut upheld = 0usize;
+    let mut against = 0usize;
+    let mut unusable = 0usize;
+
+    for row in chosen {
+        term.note(&format!("reviewing {} — {}", row.id, row.title));
+        // A fresh agent per row. `SessionLog::none()` because a review is not a
+        // session: nothing resumes it, and one file per row in the session
+        // directory would bury real work.
+        let log = SessionLog::none();
+        let mut agent = Agent::new(Setup {
+            background: Default::default(),
+            provider: provider.clone(),
+            harness,
+            instructions: &harness.instructions,
+            tools,
+            approvals: &approvals,
+            log: &log,
+            term,
+            interrupt: Interrupt::new(),
+            spend: Spend::new(),
+            done: &MarkerClaim,
+            cwd: cwd.to_path_buf(),
+            session_id: format!("review-{}", row.id.to_ascii_lowercase()),
+            budgets: Default::default(),
+            caching: emma_llm::Caching::On,
+            mode: Mode::Batch,
+        });
+        let outcome = agent.run_goal(&Goal::new(emma::verify::brief(row))).await;
+        let report = outcome.text.clone();
+        let verdict = emma::verify::verdict_of(&report);
+
+        let (receipt_path, report_path) = emma::verify::receipt_paths(cwd, &row.id, model);
+        for dir in [report_path.parent(), receipt_path.parent()]
+            .into_iter()
+            .flatten()
+        {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(&report_path, &report)
+            .with_context(|| format!("writing {}", report_path.display()))?;
+        let relative = report_path
+            .strip_prefix(cwd)
+            .unwrap_or(&report_path)
+            .display()
+            .to_string()
+            .replace('\\', "/");
+        let receipt = emma::verify::receipt(
+            &row.id,
+            model,
+            verdict,
+            &relative,
+            &fingerprint,
+            &now_iso8601(),
+            &format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+        );
+        std::fs::write(
+            &receipt_path,
+            format!("{}\n", serde_json::to_string_pretty(&receipt)?),
+        )
+        .with_context(|| format!("writing {}", receipt_path.display()))?;
+
+        match verdict {
+            Some(v) if v.passes() => {
+                upheld += 1;
+                term.note(&format!("{}: {} — {}", row.id, v.as_str(), relative));
+            }
+            Some(v) => {
+                against += 1;
+                // Louder than the pass, deliberately: a reviewer disagreeing is
+                // the outcome this whole command exists to be able to produce,
+                // and a run that scrolls past it has wasted the money.
+                term.warn(&format!(
+                    "{}: {} — the row does not close. Read {}",
+                    row.id,
+                    v.as_str(),
+                    relative
+                ));
+            }
+            None => {
+                unusable += 1;
+                term.warn(&format!(
+                    "{}: the reviewer ended without a verdict line, so this is not a receipt. The \
+                     run ended `{}`. Read {}",
+                    row.id,
+                    outcome.ending.as_str(),
+                    relative
+                ));
+            }
+        }
+    }
+
+    // The tally says what happened, including the parts that did not work. A
+    // summary that reads as uniformly successful is the one nobody believes
+    // twice.
+    term.note(&format!(
+        "{upheld} upheld, {against} not upheld, {unusable} without a verdict. Receipts are in \
+         verification/receipts/ and the reports beside them in verification/reviews/. A receipt is \
+         one model's reading and not a fact — the report is there so you can disagree with it."
+    ));
+    Ok(())
+}
+
+/// The timestamp a receipt carries, to the second, in UTC.
+///
+/// Hand-rolled rather than pulling a date crate in for one line. The
+/// epoch-to-civil arithmetic is Howard Hinnant's `civil_from_days`, which is
+/// exact for every date this will ever see and is a good deal easier to get
+/// right than it looks.
+fn now_iso8601() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
 }
