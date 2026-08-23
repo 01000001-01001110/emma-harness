@@ -250,6 +250,23 @@ impl SessionLog {
         }
     }
 
+    /// Whether this session's transcript has stopped being writable.
+    ///
+    /// **Returned, not only printed, which is the same correction
+    /// `read_reporting` already made one screen away.** That function was
+    /// deliberately changed to hand its losses back because *"a guarantee
+    /// nothing can observe is not a guarantee"*; `append` kept only an
+    /// `eprintln!`, so the one warning this row exists to produce went to
+    /// stderr — under a full-screen alternate-screen frame, where its
+    /// visibility is itself unestablished — and nothing else could see it.
+    ///
+    /// A reviewer found the consequence: `write_failed` appeared nowhere but
+    /// this file, no test constructed a failing write, and deleting the whole
+    /// error arm left the suite green.
+    pub fn transcript_failed(&self) -> bool {
+        self.write_failed.load(Ordering::SeqCst)
+    }
+
     /// A second view of this same file for one delegation, and the buffer its
     /// records also land in.
     ///
@@ -1172,6 +1189,69 @@ mod tests {
 
     fn opened() -> Value {
         json!({ "kind": "goal", "text": "g", "opening": "work on g" })
+    }
+
+    /// A transcript that cannot be written says so, once, and the session
+    /// continues.
+    ///
+    /// **Nothing tested this until a reviewer pointed out that nothing did.**
+    /// `write_failed` appeared in one file and no test constructed a failing
+    /// write, so deleting the whole error arm left the suite green — the
+    /// "guarantee nothing can observe" shape this file corrected for
+    /// `read_reporting` one screen away and not for `append`.
+    ///
+    /// The failure is produced rather than mocked: the handle is opened
+    /// read-only, so `write_all` really fails the way a revoked handle or a full
+    /// disk fails. Constructing the struct directly is the only way in — `open`
+    /// hands back a writable handle by construction, which is exactly why this
+    /// path had never been reached.
+    #[test]
+    fn a_transcript_that_cannot_be_written_is_reported_once_and_the_run_goes_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path, "").unwrap();
+        // Read-only: every write through this handle fails.
+        let handle = OpenOptions::new().read(true).open(&path).unwrap();
+
+        let log = SessionLog {
+            id: "s".into(),
+            path: path.clone(),
+            file: Arc::new(Mutex::new(Some(handle))),
+            prefix: None,
+            stamp: Vec::new(),
+            tap: None,
+            write_failed: Arc::new(AtomicBool::new(false)),
+        };
+
+        assert!(
+            !log.transcript_failed(),
+            "a fresh log reported itself dead before anything was written"
+        );
+
+        log.append("goal", json!({ "text": "one" }));
+        assert!(
+            log.transcript_failed(),
+            "the write failed and nothing recorded it — which is the silence this row exists to end"
+        );
+
+        // The second append must not re-report. A failing write fails on every
+        // record, and a warning per record buries the run in its own complaint.
+        // The flag having latched is what makes that true, and it is the only
+        // part observable from here.
+        log.append("goal", json!({ "text": "two" }));
+        assert!(
+            log.transcript_failed(),
+            "the flag was cleared by a later write"
+        );
+
+        // And the run goes on: losing the transcript is not a reason to throw
+        // away the work the user is in the middle of. `append` returns `()` and
+        // must not panic.
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "",
+            "a read-only handle somehow wrote, so this test proves nothing"
+        );
     }
 
     #[test]
