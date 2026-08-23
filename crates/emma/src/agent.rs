@@ -2248,18 +2248,51 @@ mod tests {
 
     #[test]
     fn every_ending_says_which_limit_fired() {
-        let b = Budgets::default();
-        for ending in [
-            Ending::KicksExhausted,
-            Ending::Iterations,
-            Ending::Tokens,
-            Ending::Deadline,
+        // **The old assertion was `m.chars().any(is_ascii_digit)` and it could
+        // not fail.** A reviewer replaced the deadline message with
+        // `"stopped: it ran out of time (see rule 7)."` — a sentence naming no
+        // limit at all — and it stayed green, because the cross-reference
+        // carried a digit. `HARD-003` listed this as still open in its own
+        // notes; that mutation is the receipt.
+        //
+        // What the guarantee actually is: **the number in the message is the
+        // budget that fired.** So the budgets are given values nothing else on
+        // the line could produce, and each message must contain its own. Any
+        // digit anywhere is not evidence; this digit, here, is.
+        let b = Budgets {
+            max_kicks: 4_242,
+            max_iterations: 5_353,
+            max_tokens: 6_464,
+            wall_clock: std::time::Duration::from_secs(7_575),
+            ..Budgets::default()
+        };
+        for (ending, expected) in [
+            (Ending::KicksExhausted, "4242"),
+            (Ending::Iterations, "5353"),
+            (Ending::Tokens, "6464"),
+            (Ending::Deadline, "7575"),
         ] {
             let m = ending.message(&b);
             assert!(
-                m.chars().any(|c| c.is_ascii_digit()),
-                "{ending:?} does not name its limit: {m}"
+                m.contains(expected),
+                "{ending:?} must name its own limit {expected}, and says: {m}"
             );
+            // And it must not name somebody else's, which is the failure a
+            // copy-pasted arm produces and which the digit test could not see
+            // either.
+            for (other, wrong) in [
+                (Ending::KicksExhausted, "4242"),
+                (Ending::Iterations, "5353"),
+                (Ending::Tokens, "6464"),
+                (Ending::Deadline, "7575"),
+            ] {
+                if format!("{other:?}") != format!("{ending:?}") {
+                    assert!(
+                        !m.contains(wrong),
+                        "{ending:?} names {other:?}'s limit {wrong}: {m}"
+                    );
+                }
+            }
         }
     }
 

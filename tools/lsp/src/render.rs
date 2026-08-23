@@ -406,8 +406,7 @@ pub fn symbols(
         .with_display(format!("{} symbols", lines.len()));
     if capped {
         outcome.truncated_because(format!(
-            "{MAX_SYMBOLS} of {} symbols shown; the rest are not here. No argument raises that \
-             — narrow the query, or Grep the file to see every symbol in it",
+            "{MAX_SYMBOLS} of {} symbols shown; the rest are not here. No argument raises that              — narrow the query, or Grep the file to see every symbol in it",
             lines.len()
         ))
     } else {
@@ -685,27 +684,91 @@ mod truncation_honesty {
     //! than in the fs crate's test file, because a cross-crate test would have
     //! to build a language server to reach these functions.
 
-    /// Neither renderer may go back to the bare form.
+    use super::*;
+
+    /// Neither renderer may report a cut without saying which cap and what to
+    /// do — asserted on the **outcome**, not on the source text.
     ///
-    /// A source assertion, and scoped to this file so it cannot pass on an
-    /// unrelated match: `render.rs` is where both call sites live, and the
-    /// whole claim is about which constructor they use.
+    /// **The source grep this replaces could not fail for the mutation that
+    /// matters.** It asserted `!source.contains("outcome.truncated()")`, one
+    /// literal spelling. An adversarial reviewer wrote the same removal as
+    /// `ToolOutcome::truncated(outcome)` — UFCS, which `cargo fmt` leaves
+    /// alone — and `fmt`, `clippy` and this test were all green while a symbols
+    /// response reached the model marked truncated with no cap, no loss and no
+    /// remedy. (An earlier attempt spelled `outcome\n.truncated()` and *was*
+    /// caught, by `fmt` collapsing the chain, which is luck rather than a
+    /// guard.) It was also scoped to `include_str!("render.rs")`, so a third
+    /// renderer in any other file of this crate was outside it entirely.
+    ///
+    /// This is the `DEF-018` scar — a source assertion standing in for a
+    /// behavioural one — repeated one file from where `DEF-018` fixed it.
+    ///
+    /// Building the capped outcome and reading `truncation` costs no more and
+    /// survives every spelling, every refactor, and a renderer that has not
+    /// been written yet, as long as it is called here.
     #[test]
-    fn no_renderer_reports_a_cut_without_saying_which_cap_and_what_to_do() {
-        let source = include_str!("render.rs");
-        // The bare call, as it would be written. Split so this assertion does
-        // not match itself — the failure mode that made two tests in this
-        // repository unfalsifiable.
-        let bare = format!("outcome.{}()", "truncated");
-        assert!(
-            !source.contains(&bare),
-            "a renderer reports a cut with no cap, no loss and no remedy"
+    fn neither_renderer_reports_a_cut_without_naming_the_cap_and_the_remedy() {
+        fn assert_honest(out: &ToolOutcome, which: &str) {
+            assert!(out.truncated, "{which}: the cut was not flagged at all");
+            let reason = out
+                .truncation
+                .as_deref()
+                .unwrap_or_else(|| panic!("{which}: flagged truncated with no reason at all"));
+            assert!(
+                reason.chars().any(|c| c.is_ascii_digit()),
+                "{which}: the reason names no cap: {reason}"
+            );
+            // The remedy. `tool-api`'s rule is that a cut names the cap, the
+            // loss AND what to do — or says plainly that nothing raises it.
+            assert!(
+                reason.contains("No argument raises"),
+                "{which}: the reason offers no remedy and does not say there is none: {reason}"
+            );
+        }
+
+        // The same shape the sibling tests use; duplicated rather than made
+        // public, because a fixture escaping its test module is a wider change
+        // than this test is worth.
+        let server = Server {
+            path: std::path::PathBuf::from("/usr/bin/rust-analyzer"),
+            version: "rust-analyzer 0.3.0".into(),
+            source: crate::server::Source::Path,
+        };
+        let readiness = Readiness::Ready;
+
+        // Symbols, over the cap.
+        let items: Vec<Value> = (0..MAX_SYMBOLS + 25)
+            .map(|i| serde_json::json!({ "name": format!("sym{i}"), "kind": 12 }))
+            .collect();
+        let out = symbols(&server, readiness, None, &Value::Array(items));
+        assert_honest(&out, "symbols");
+
+        // Locations, over the cap. They are contained against a root, so the
+        // paths have to be inside one that exists.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let found: Vec<Location> = (0..MAX_LOCATIONS + 25)
+            .map(|i| Location {
+                path: root.join(format!("f{i}.rs")),
+                line: 1,
+                character: 1,
+            })
+            .collect();
+        let out = locations(&root, &server, readiness, None, "references", found);
+        assert_honest(&out, "locations");
+
+        // The positive control, and it is doing real work: a renderer that
+        // flagged everything truncated would satisfy every assertion above.
+        let out = symbols(
+            &server,
+            readiness,
+            None,
+            &serde_json::json!([{ "name": "only", "kind": 12 }]),
         );
-        // And the honest form is actually present, so this cannot pass by the
-        // call sites having been deleted.
         assert!(
-            source.contains(&format!("truncated_{}", "because")),
-            "the honest form is gone entirely"
+            !out.truncated,
+            "a result that fitted was reported as cut: {:?}",
+            out.truncation
         );
     }
 }

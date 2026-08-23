@@ -356,12 +356,29 @@ fn near_miss(goal: &str) -> Option<&'static str> {
         .find(|c| edit_distance_at_most_one(&g, c))
 }
 
-/// Whether two strings are within one insertion, deletion or substitution.
+/// Whether two strings are within one insertion, deletion, substitution — or
+/// one transposition of adjacent characters.
 ///
 /// Written out rather than pulling a crate: this is the whole of what is needed,
 /// and a dependency for eight comparisons of short strings is a dependency to
 /// audit, update and explain.
+///
+/// **The transposition arm is not a refinement; it is the common case.** This
+/// was Levenshtein-only, under a doc that said "one edit" — and an adjacent
+/// swap is Levenshtein distance *two*, so every transposed subcommand walked
+/// straight past the guard and started a paid session. A reviewer certified
+/// four on the release binary: `emma inti`, `emma modle`, `emma agnets`,
+/// `emma confgi`.
+///
+/// `inti` is the transposition of `init`, which is the exact word whose misread
+/// cost the run this guard was built after. The row's framing — "one word, one
+/// edit" — concealed *which* edits, and the one it left out is the one fingers
+/// actually make.
 fn edit_distance_at_most_one(a: &str, b: &str) -> bool {
+    if is_transposition(a, b) {
+        return true;
+    }
+
     let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
     let (long, short) = if a.len() >= b.len() {
         (&a, &b)
@@ -393,6 +410,22 @@ fn edit_distance_at_most_one(a: &str, b: &str) -> bool {
     }
     // Whatever is left over must fit in the slack that is still unspent.
     slack >= (long.len() - i) + (short.len() - j)
+}
+
+/// Whether two strings differ by swapping one adjacent pair and nothing else.
+///
+/// Same length, exactly two differing positions, and those positions adjacent
+/// and crossed. Deliberately narrow: `ab` vs `ba` yes, `abc` vs `cba` no. A
+/// guard that refuses too much makes a legitimate one-word goal impossible to
+/// type, and the whole point of this path is that it is cheap to be wrong in
+/// only one direction.
+fn is_transposition(a: &str, b: &str) -> bool {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    if a.len() != b.len() {
+        return false;
+    }
+    let diff: Vec<usize> = (0..a.len()).filter(|&i| a[i] != b[i]).collect();
+    matches!(diff[..], [i, j] if j == i + 1 && a[i] == b[j] && a[j] == b[i])
 }
 
 pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
@@ -1018,6 +1051,16 @@ mod tests {
             ("confg", "config"),
             ("set-mode", "set-model"),
             ("Agents", "agents"),
+            // **Transpositions, the commonest typing error and the class this
+            // guard shipped without.** Levenshtein counts an adjacent swap as
+            // TWO edits, so a doc saying "one edit" quietly excluded them and a
+            // reviewer certified four of these starting real sessions on the
+            // release binary. `inti` is the transposition of the exact word
+            // whose misread cost the 580,000-token run this guard exists for.
+            ("inti", "init"),
+            ("modle", "model"),
+            ("agnets", "agents"),
+            ("confgi", "config"),
         ] {
             let e = p(&[typo]).expect_err("a near miss was accepted as a goal");
             assert!(
@@ -1027,6 +1070,25 @@ mod tests {
             assert!(
                 e.contains("emma goal"),
                 "the refusal does not offer the escape hatch: {e}"
+            );
+        }
+    }
+
+    /// A goal that merely *rhymes* with a command still runs.
+    ///
+    /// The positive control, and it is the one that keeps this guard usable: a
+    /// refusal that fires too widely makes a legitimate one-word goal
+    /// impossible to type, and the transposition arm above widened the net. The
+    /// test is `is_transposition`'s narrowness — `abc` vs `cba` is two swaps and
+    /// must not match, or every three-letter goal becomes unreachable.
+    #[test]
+    fn a_word_that_is_not_a_near_miss_is_still_a_goal() {
+        for word in ["deploy", "tinker", "cba", "tsting", "refactor"] {
+            let parsed = p(&[word]);
+            assert!(
+                parsed.is_ok(),
+                "`{word}` is not within one edit of any command and was refused anyway: {:?}",
+                parsed.err()
             );
         }
     }
