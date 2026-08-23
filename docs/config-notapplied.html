@@ -101,14 +101,15 @@
 <pre><code><span class="c">$ emma config check          # in C:\src\emma</span>
 cwd            C:\src\emma
 harness        C:\src\emma\.emma
+               C:\src\emma\.emma is being used, so C:\src\emma\.claude is ignored entirely — its skills, agents, commands, hooks and permissions are all passed over rather than merged
 flavor         emma
 persona        emma
 instructions   b6dd1dabd7468355 (800 bytes)
 config         edd1817c1861d002
-tools          Read, Write, Edit, Glob, Grep, Bash, TaskCreate, TaskGet, TaskList, TaskUpdate,
-               FindReferences, GoToDefinition, Hover, DocumentSymbols, WebFetch, WebSearch,
-               BrowserOpen, BrowserRead, BrowserAct, BrowserFill, BrowserClose
-tool schema    ce26c5f39467e4f0
+tools          Read, Write, Edit, Glob, Grep, Bash, BashOutput, KillShell, TaskCreate, TaskGet,
+               TaskList, TaskUpdate, FindReferences, GoToDefinition, Hover, DocumentSymbols,
+               WebFetch, WebSearch, BrowserOpen, BrowserRead, BrowserAct, BrowserFill, BrowserClose
+tool schema    42a842bc85513719
 skills         (none)
 agents         (none)
 commands       (none)
@@ -120,8 +121,28 @@ model          claude-sonnet-5  (settings.json)
 api key        found (stored file)
 
 no model was called.</code></pre>
-  <span class="chip cert">certified</span>: release binary at commit <code>62ab9c3</code>, this repository, 2026-08-16. Verbatim apart from wrapping the tools line, which the binary prints on one line.
-  <span class="src">crates/emma/src/commands.rs — <code>config_check</code>, <code>configured</code>, <code>shadowed</code></span>
+  <span class="chip cert">certified</span>: release binary rebuilt from this tree,
+  2026-08-23. Verbatim apart from wrapping the tools line, which the binary
+  prints on one line.
+
+<div class="note warn">
+  <span class="h">This block was wrong in three ways at once, under a green chip</span>
+  <p>
+    Until 2026-08-23 it showed 21 tool names rather than 23 — missing
+    <code>BashOutput</code> and <code>KillShell</code>, which
+    <code>ARCH-001</code> registered — a <code>tool schema</code> hash of
+    <code>ce26c5f39467e4f0</code> where the binary prints
+    <code>42a842bc85513719</code>, and no shadowed-harness line at all, which
+    <code>HARD-006</code> added directly under <code>harness</code>.
+  </p>
+  <p>
+    All three arrived the same way: a row landed, and the page that pastes this
+    command's output was not re-run. <strong>A pasted transcript is the most
+    perishable thing on this site</strong> — it is a claim about every line of a
+    program's output, and any row that adds one line invalidates it. Found by a
+    reviewer running the command, which is the only thing that ever finds this.
+  </p>
+</div>
 
   <h2 id="one">1 · A different directory was loaded than the one you edited</h2>
 

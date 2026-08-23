@@ -203,8 +203,13 @@
 <pre><code><span class="c">$ emma config check | head -3</span>
 cwd            C:\src\emma
 harness        C:\src\emma\.emma
-flavor         emma</code></pre>
-  <span class="chip cert">certified</span>: release binary at commit <code>62ab9c3</code>, this repository, 2026-08-16.
+               C:\src\emma\.emma is being used, so C:\src\emma\.claude is ignored entirely — its skills, agents, commands, hooks and permissions are all passed over rather than merged</code></pre>
+  <span class="chip cert">certified</span>: release binary rebuilt from this tree, 2026-08-23. <strong>Line
+  three used to be <code>flavor</code></strong> — <code>HARD-006</code> added the
+  shadowed-harness sentence directly under <code>harness</code>, and this block
+  went on showing the older three lines under a green chip until a reviewer ran
+  the command. A <code>certified</code> chip on a fixed number of lines is a
+  claim that ages every time anything is inserted above them.
 
   <footer class="pg">
     Emma 0.1.0 · this chapter covers <code>crates/harness/</code>,

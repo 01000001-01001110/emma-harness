@@ -289,7 +289,8 @@ fn a_real_agent_library_loads_and_most_of_it_is_usable() {
     }
     if vanished > 0 {
         eprintln!(
-            "{vanished} agent file(s) changed under the copy and were left out;              the bar below is applied to the {copied} that were read"
+            "{vanished} agent file(s) changed under the copy and were left out; \
+             the bar below is applied to the {copied} that were read"
         );
     }
     if copied == 0 {

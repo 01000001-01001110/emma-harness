@@ -175,9 +175,9 @@
         };
         return Ok(Self { tool, spec });
     }
-    <span class="c">// **A path-shaped specifier is decided by the tool, not by punctuation.**</span>
+    <span class="c">// **A path-shaped specifier is decided by the tool, and by nothing else.**</span>
     <span class="c">// Only `Bash` runs a command; everything else addresses a path.</span>
-    if tool != "Bash" || inner.contains('/') || inner.contains('\\') || inner.contains('[') {
+    if tool != "Bash" {
         if inner.contains('\\') {
             bail!("`{raw}` contains a backslash, which means an escape on unix and a separator on Windows — write the path with `/`");
         }
@@ -667,6 +667,33 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     permissions</code> on either.
   </p>
   <span class="src">crates/emma/src/permissions.rs &mdash; Rule::parse, normalise_path, normalise_pattern, is_absolute, path_unjudgeable, Rules::for_call</span>
+
+  <div class="note warn">
+    <span class="h">This page quoted the defective condition for half a day</span>
+    <p>
+      The <code>Rule::parse</code> block above read
+      <code>if tool != "Bash" || inner.contains('/') || &hellip;</code> until
+      2026-08-23. That disjunct was the fix for the <em>previous</em> defect —
+      shape chosen by punctuation, which made <code>Read(Cargo.toml)</code> a
+      command prefix that matched nothing — and it rebuilt the identical defect
+      facing the other way: every <code>Bash</code> rule containing a separator
+      compiled to a path glob, and a <code>Bash</code> call carries
+      <code>command</code> rather than <code>file_path</code>, so the rule could
+      never fire. <strong>Measured on the owner's real
+      <code>settings.json</code>: 24 of 53 <code>Bash</code> rules silently
+      inert</strong>, deny rules among them, and worse than the state it
+      replaced because <code>Spec::Unsupported</code> is announced at boot and
+      <code>Spec::Path</code> is not.
+    </p>
+    <p>
+      Two independent reviewers found the code defect on the same afternoon; a
+      third found that this page was still quoting the broken condition
+      <em>after</em> the code was fixed, on the page a reader consults about
+      security, with nothing marking it as historical. Both halves are the same
+      lesson: a row is not done when its code lands, and a page that quotes code
+      is a claim about the code that has to be re-checked when the code moves.
+    </p>
+  </div>
 
   <h2 id="unsettled">What is not settled here</h2>
 

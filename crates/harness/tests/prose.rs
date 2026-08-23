@@ -18,21 +18,50 @@
 //! usage at 30 columns of indent. `DOC-001` had recorded this class as fixed —
 //! its guard covers `Ending` variants only, so the class was alive in six other
 //! files, including in code the rows under review had just added.
+//!
+//! **KNOWN GAP: this only sees the flattened, single-line spelling.**
+//! `run_of_spaces` needs two quotes on one line, so a literal genuinely wrapped
+//! across two source lines -- one quote on each -- is skipped before the space
+//! scan runs. All ten instances found so far were flattened, which is why
+//! nobody noticed; `cargo fmt` does not join string literals, so the two-line
+//! spelling is stable and permanently invisible here. A reviewer found this by
+//! reading the scanner against this doc.
+//!
+//! Four attempts at a cross-line scan were made and abandoned: a per-line
+//! odd-quote test reports every *closing* line of a correctly continued literal
+//! (40 false positives), and carrying the state properly means most of a Rust
+//! lexer -- raw strings, char literals, comments, escapes -- inside a test. A
+//! guard that cries wolf is worse than a stated gap, so the gap is stated. The
+//! reviewer's own crude cross-line scan found 19 candidates and judged every one
+//! a false positive, so this is a coverage hole rather than a second live
+//! defect. *What would settle it:* a real lint (`clippy` lint or a `syn`-based
+//! check) rather than a string scan in a test.
 
 use std::path::{Path, PathBuf};
 
 /// Deliberate column alignment, which is not this defect.
 ///
-/// Test fixtures that draw a table on purpose, and the page renderers that
-/// align a label column. Listed by path rather than detected, because "did the
-/// author mean this" is exactly the judgement a heuristic gets wrong, and a
-/// silent allowance is worse than a named one.
+/// Test fixtures that draw a table on purpose. Listed by path rather than
+/// detected, because "did the author mean this" is exactly the judgement a
+/// heuristic gets wrong, and a silent allowance is worse than a named one.
+///
+/// **This list hid a defect within hours of being written, which is the
+/// standing argument against escape hatches.** `agent_types.rs` was allowed here
+/// under the reason "fixtures that stand in for a real store". One line in it
+/// was not a fixture: an operator-facing `eprintln!` carrying a 14-space run,
+/// added by `HARD-007` in the same review cycle that produced this guard, while
+/// its sibling one file over was written correctly. A reviewer reimplemented the
+/// scan, ran it over the three allowed files, and found exactly one reportable
+/// run -- in the file whose whole justification was that it had none. The file
+/// is no longer allowed and the line is fixed.
+///
+/// **A path goes in here only when every run in it has been looked at.** An
+/// allowance whose author has not read the thing being allowed is a hole with a
+/// comment on it.
 const ALIGNED_ON_PURPOSE: &[&str] = &[
     // Sample reports for the tool pages: they are transcripts of a writer's
     // column layout, and the alignment is the content.
     "crates/emma/src/term/app.rs",
-    // The same, one layer down: fixtures that stand in for a real store.
-    "crates/harness/tests/agent_types.rs",
     // Not production: a probe kept as evidence for DEF-005.
     "verification/evidence/nulprobe.rs",
 ];

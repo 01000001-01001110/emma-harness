@@ -833,16 +833,20 @@ async fn automatic_compaction_that_cannot_help_says_so_once() {
 
 /// `config check` says which skills were skipped, and how many.
 ///
-/// **A number nothing can read is a comment, and this one had been reduced to
-/// exactly that twice.** `HARD-001` was filed because skipped skills were named
-/// on stderr and never counted; its first fix added a count — on stderr. Its
-/// second fix added `Harness::skill_notes()` and a test asserting the accessor,
-/// and then no production code ever called it. A reviewer proved the point by
-/// deleting the one remaining `eprintln!` and watching every harness suite stay
-/// green.
+/// **A number nothing can read is a comment, and this row had been reduced to
+/// exactly that three times.** `HARD-001` was filed because skipped skills were
+/// named on stderr and never counted; its first fix added a count — on stderr.
+/// Its second added `Harness::skill_notes()` and a test asserting the accessor,
+/// and no production code called it.
 ///
-/// So the assertion is on the **operator's channel**, not on the accessor: what
-/// `config check` actually writes. Deleting either call site turns this red.
+/// **The third was this test, and it was mine.** It carried a doc comment
+/// saying the assertion was on `config check`'s output and that deleting either
+/// call site would turn it red. It did neither: it iterated `skill_notes()`
+/// into a local buffer, which is the accessor again, one layer of prose away
+/// from the same mistake. A reviewer read the doc against the body and said so.
+///
+/// So it drives `config_check` and reads what that function actually writes.
+/// Delete the loop at `commands.rs`'s skill-notes call site and this goes red.
 #[test]
 fn config_check_names_the_skills_it_skipped_and_counts_them() {
     let dir = tempfile::tempdir().unwrap();
@@ -866,21 +870,23 @@ fn config_check_names_the_skills_it_skipped_and_counts_them() {
     )
     .unwrap();
 
-    let mut out: Vec<u8> = Vec::new();
     let harness = emma_harness::Harness::load(&root).expect("one bad skill must not stop the boot");
-    for note in harness.skill_notes() {
-        use std::io::Write;
-        writeln!(out, "{note}").unwrap();
-    }
+    let tools = emma_tool_api::Registry::default();
+
+    let mut out: Vec<u8> = Vec::new();
+    emma::commands::config_check(&harness, &tools, dir.path(), &[], None, &mut out)
+        .expect("config check must not fail on a harness with one bad skill");
     let text = String::from_utf8(out).unwrap();
 
     assert!(
         text.contains("skipped"),
-        "the operator was told nothing about the skill that did not load:\n{text}"
+        "`config check` told the operator nothing about the skill that did not \
+         load:\n{text}"
     );
     assert!(
         text.contains('1'),
-        "the shortfall was named without a count, which is what HARD-001 was filed over:\n{text}"
+        "the shortfall was named without a count, which is what HARD-001 was \
+         filed over:\n{text}"
     );
     assert!(
         harness.skill_names().contains(&"good"),
