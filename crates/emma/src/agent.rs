@@ -1366,8 +1366,11 @@ impl<'a> Agent<'a> {
         // reporting a saving on every single call.
         //
         // **Two different situations reach this line and a user needs to be
-        // told which.** Automatic compaction is silent either way; `/compact` is
-        // not, and the first live run of it said "already summarised" about two
+        // told which.** Automatic compaction is no longer silent either way —
+        // DEF-009 gave the threshold path a one-shot warning naming `/clear`,
+        // because a session pinned against a cap it cannot compact below was
+        // otherwise a loop that just kept costing money. `/compact` was always
+        // loud, and the first live run of it said "already summarised" about two
         // goals that plainly were not — because those goals were four words
         // long and `COMPACTED_NOTE` is three hundred characters, so the
         // replacement was *larger* than what it replaced. The sentence was true

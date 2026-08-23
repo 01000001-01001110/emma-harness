@@ -69,8 +69,9 @@
   </nav>
 
   <p class="lede">
-    Nothing a tool does ends a goal. Seven different things can go wrong inside
-    <code>run_tool_call</code> and all seven come back as a
+    Nothing a tool does ends a goal. Nine different things can go wrong inside
+    <code>run_tool_call</code> — a panicking tool and a Ctrl-C mid-tool now
+    among them — and all nine come back as a
     <code>tool_result</code> with <code>is_error</code> set, which the model
     reads and works from. The loop's own budgets stay the only things that stop
     a run.
@@ -85,7 +86,7 @@
   </p>
   <span class="src">crates/emma/src/agent.rs — module doc</span>
 
-  <h2 id="fail">One closure, seven callers</h2>
+  <h2 id="fail">One closure, nine callers</h2>
 
   <p>
     The guarantee is checkable rather than merely asserted because every failure
@@ -129,7 +130,7 @@ async fn run_tool_call(
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 700 420" role="img" aria-label="Seven failure classes — unknown tool, invalid arguments, the memo refusal, a hook denial, a refused approval, a typed ToolError and an outer tool fault — all converge on one fail closure, which builds a tool_result with is_error set, logs it under the tool_result kind, and returns it to the loop, which pushes it into the results and continues.">
+      <svg viewBox="0 0 700 420" role="img" aria-label="Nine failure classes — unknown tool, invalid arguments, the memo refusal, a hook denial, a refused approval, a Ctrl-C cancellation mid-tool, a panicking tool, a typed ToolError and an outer tool fault — all converge on one fail closure, which builds a tool_result with is_error set, logs it under the tool_result kind, and returns it to the loop, which pushes it into the results and continues.">
         <rect class="box" x="16" y="14" width="240" height="26" rx="3" />
         <text class="sm" x="26" y="31">no_such_tool · registry.get miss</text>
         <rect class="box" x="16" y="48" width="240" height="26" rx="3" />
@@ -141,9 +142,13 @@ async fn run_tool_call(
         <rect class="box" x="16" y="150" width="240" height="26" rx="3" />
         <text class="sm" x="26" y="167">not_approved · the gate</text>
         <rect class="box" x="16" y="184" width="240" height="26" rx="3" />
-        <text class="sm" x="26" y="201">ToolError · e.kind(), e.detail()</text>
+        <text class="sm" x="26" y="201">cancelled · Ctrl-C mid-tool</text>
         <rect class="box" x="16" y="218" width="240" height="26" rx="3" />
-        <text class="sm" x="26" y="235">tool_fault · the outer Err</text>
+        <text class="sm" x="26" y="235">tool_panicked · catch_unwind</text>
+        <rect class="box" x="16" y="252" width="240" height="26" rx="3" />
+        <text class="sm" x="26" y="269">ToolError · e.kind(), e.detail()</text>
+        <rect class="box" x="16" y="286" width="240" height="26" rx="3" />
+        <text class="sm" x="26" y="303">tool_fault · the outer Err</text>
 
         <path class="edge" d="M256 27 H292 V116" />
         <path class="edge" d="M256 61 H292" />
@@ -151,7 +156,9 @@ async fn run_tool_call(
         <path class="edge" d="M256 129 H292" />
         <path class="edge" d="M256 163 H292" />
         <path class="edge" d="M256 197 H292" />
-        <path class="edge" d="M256 231 H292 V129" />
+        <path class="edge" d="M256 231 H292" />
+        <path class="edge" d="M256 265 H292" />
+        <path class="edge" d="M256 299 H292 V129" />
         <path class="edge-hl" d="M292 129 H336" marker-end="url(#fl-arrow-hl)" />
 
         <rect class="hl" x="336" y="104" width="130" height="50" rx="4" />
@@ -170,10 +177,10 @@ async fn run_tool_call(
         <text class="lbl" x="346" y="322">results.push(block) · the goal continues</text>
         <text class="tiny" x="346" y="339">no failure class returns early from run_goal</text>
 
-        <path class="edge-dash" d="M400 300 H150 V272" marker-end="url(#fl-arrow)" />
-        <rect class="box" x="16" y="272" width="268" height="46" rx="4" />
-        <text class="sm" x="26" y="292">failed_now.insert(memo_key(call))</text>
-        <text class="tiny" x="26" y="309">failed_ever.push(label), capped at 20</text>
+        <path class="edge-dash" d="M400 348 V371 H284" marker-end="url(#fl-arrow)" />
+        <rect class="box" x="16" y="348" width="268" height="46" rx="4" />
+        <text class="sm" x="26" y="368">failed_now.insert(memo_key(call))</text>
+        <text class="tiny" x="26" y="385">failed_ever.push(label), capped at 20</text>
 
         <defs>
           <marker id="fl-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -189,7 +196,7 @@ async fn run_tool_call(
       Every failure class in <code>run_tool_call</code> reaching the same
       closure. The convergence is what makes the guarantee reviewable: one
       function to check for the <code>is_error</code> flag and one call site for
-      the log record, rather than seven independent claims a regression could
+      the log record, rather than nine independent claims a regression could
       break one at a time.
     </figcaption>
   </figure>
@@ -197,7 +204,7 @@ async fn run_tool_call(
   <h2 id="order">The order of the checks, and what each one costs</h2>
 
   <p>
-    The seven are not interchangeable. Each sits where it does because of what
+    The nine are not interchangeable. Each sits where it does because of what
     the checks above it have already ruled out, and because of what it would
     cost to run later.
   </p>
@@ -328,7 +335,30 @@ match self.s.approvals.request(tool.as_ref(), &amp;call.input, self.s.term).awai
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code>; crates/emma/tests/loop.rs</span>
 
-  <h2 id="invoke">Two errors, one of which is the tool giving up on the session</h2>
+  <h2 id="invoke">Four ways the call itself goes wrong, two of them newer than this page's first draft</h2>
+
+  <p>
+    This section used to be titled "Two errors", and the match below had
+    exactly two error arms. Two failure classes existed that neither arm
+    caught, and both ended more than the call. A panicking tool unwound
+    straight through the loop, past the session log and the budget accounting,
+    and took the run with it — the one failure class that did not reach the
+    model as an observation, on a tool surface where several crates parse
+    input the model wrote. And a Ctrl-C during a tool did nothing until the
+    tool finished on its own: <code>invoke</code> was awaited outright, the
+    flag was read only at iteration boundaries and around the model call, so a
+    wrong <code>Bash</code> ran to its own timeout — 120 seconds by default —
+    with the keyboard already asking it to stop, and in the framed UI raw mode
+    means the child never sees a console signal either. Both are now ordinary
+    failed calls: the future is wrapped in <code>catch_unwind</code> and raced
+    against the interrupt, and the model reads <code>tool_panicked</code> or
+    <code>cancelled</code> and continues.
+    <span class="chip test">tested</span>
+    <code>a_tool_that_panics_is_an_observation_and_the_goal_continues</code>
+    and <code>an_interrupt_reaches_a_tool_that_is_already_running</code>, both
+    in <code>tests/loop.rs</code>.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code>; crates/emma/tests/loop.rs</span>
 
   <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::run_tool_call</span>
 let ctx = ToolCtx {
@@ -336,7 +366,89 @@ let ctx = ToolCtx {
     session_id: self.s.session_id.clone(),
     turn_id: turn_id.to_string(),
 };
-let outcome = match tool.invoke(&amp;ctx, call.input.clone()).await {
+<span class="c">// **A panicking tool is a failed tool, not a failed session.** This
+// file's own first rule is that every failure class reaches the model as
+// a `tool_result` and the turn continues — a missing tool, bad
+// arguments, a `ToolError`, a hook denial, a refused approval. A panic
+// was the one class that did not: it unwound straight through the loop,
+// past the session log, past the budget accounting, and took the run
+// with it. The tool surface here is large, several of its crates parse
+// input from the model, and an index or an `unwrap` in any of them
+// ended everything.
+//
+// `AssertUnwindSafe` is honest rather than a shrug: what crosses the
+// boundary is `&amp;ctx` and an owned `Value`, and the loop's own state is
+// not touched by the tool. A tool that panics mid-write may of course
+// leave its own mess on disk, which is the tool's business and is
+// exactly what the message hands back to the model.
+// **Ctrl-C reaches a running tool, not just the gap between two.**
+// `invoke` used to be awaited outright, and the interrupt flag was read
+// only at iteration boundaries and around the model call — so a wrong
+// `Bash` ran to its own timeout, 120 seconds by default and up to 600,
+// with the keyboard already asking it to stop. In the framed UI raw mode
+// means the child never sees a console signal either, so nothing else
+// was going to end it.
+//
+// Dropping the `invoke` future is what cancels the work. That is only
+// safe because the one tool that owns a child process spawns it with
+// `kill_on_drop(true)` (`tools/fs/src/bash.rs`), so the process dies
+// with the future rather than outliving it. A tool that acquires
+// something needing an explicit release must say so the same way.
+//
+// The cancellation is reported as an ordinary failed call: the loop's
+// first rule is that every failure class is an observation, and a
+// cancelled tool is a failure the model should see rather than a hole
+// in the transcript.</span>
+let invoked = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
+    tool.invoke(&amp;ctx, call.input.clone()),
+));
+let called = tokio::select! {
+    biased;
+    () = self.s.interrupt.wait() =&gt; {
+        self.s.log.append(
+            "tool_cancelled",
+            json!({ "turn_id": turn_id, "id": call.id, "tool": call.name }),
+        );
+        let detail = format!(
+            "{} was cancelled part-way through by the user. Anything it had already \
+             done stands; anything it had not is undone.",
+            call.name
+        );
+        self.s.term.tool_failed(&amp;call.name, &amp;detail);
+        self.run_post_hooks(turn_id, call, &amp;detail, false, Some("cancelled"))
+            .await;
+        return fail("cancelled", detail);
+    }
+    r = invoked =&gt; r,
+};
+let called = match called {
+    Ok(v) =&gt; v,
+    Err(panic) =&gt; {
+        let what = panic
+            .downcast_ref::&lt;&amp;str&gt;()
+            .map(|s| (*s).to_string())
+            .or_else(|| panic.downcast_ref::&lt;String&gt;().cloned())
+            .unwrap_or_else(|| "a panic with no message".into());
+        self.s.log.append(
+            "tool_panicked",
+            json!({ "turn_id": turn_id, "id": call.id, "tool": call.name,
+                    "detail": what }),
+        );
+        self.s.term.tool_failed(&amp;call.name, &amp;what);
+        self.run_post_hooks(turn_id, call, &amp;what, false, Some("tool_panicked"))
+            .await;
+        return fail(
+            "tool_panicked",
+            format!(
+                "{} panicked and did not finish: {what}. This is a defect in the tool, \
+                 not something your arguments can fix — do not retry the same call. \
+                 Anything it had already written may be half-done.",
+                call.name
+            ),
+        );
+    }
+};
+let outcome = match called {
     Ok(Ok(outcome)) =&gt; outcome,
     Ok(Err(e)) =&gt; {
         <span class="c">// The line this whole design exists for. A typed failure is an
@@ -367,15 +479,24 @@ let outcome = match tool.invoke(&amp;ctx, call.input.clone()).await {
 };</code></pre>
 
   <p>
-    <code>invoke</code> returns
+    Reading it inside out: <code>invoke</code> returns
     <code>Result&lt;Result&lt;Outcome, ToolError&gt;&gt;</code>. The inner error
     is an ordinary failed call and keeps its own <code>kind</code>, which is
     passed straight through to <code>fail</code> rather than being flattened to
     a single "tool failed" string. The outer error is the tool saying the
-    session cannot continue, and it becomes a result too. Neither returns early
-    from <code>run_goal</code>.
+    session cannot continue, and it becomes a result too.
+    <code>catch_unwind</code> wraps another <code>Result</code> around both,
+    whose <code>Err</code> is a panic payload, and the <code>select!</code> can
+    preempt the whole stack when the interrupt trips —
+    <code>biased</code>, so a pending Ctrl-C wins the race against a completed
+    tool. Four error shapes, one closure; none returns early from
+    <code>run_goal</code>. The cancellation is safe to do by dropping the
+    future only because the one tool that owns a child process spawns it with
+    <code>kill_on_drop(true)</code>, which the comment above names as an
+    obligation on any future tool holding something that needs an explicit
+    release.
   </p>
-  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code></span>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code>; tools/fs/src/bash.rs</span>
 
   <div class="note warn">
     <span class="h">Post-hooks fire on a <code>ToolError</code> and not on a fault</span>
@@ -647,8 +768,9 @@ fn log_hooks(&amp;self, turn_id: &amp;str, runs: &amp;[emma_harness::HookRun]) {
   <p>
     <span class="chip cert">certified</span> <strong>The session fold's reliance
     on a convention.</strong> Reading both files: the fold has no arm for
-    <code>denied</code>, <code>tool_failed</code>, <code>tool_fault</code> or
-    <code>tool_unknown</code>, and needs none, because each of those paths also
+    <code>denied</code>, <code>tool_failed</code>, <code>tool_fault</code>,
+    <code>tool_unknown</code>, <code>tool_cancelled</code> or
+    <code>tool_panicked</code>, and needs none, because each of those paths also
     writes a <code>tool_result</code> record. That is correct today because all
     of them go through <code>fail()</code>, which calls
     <code>log_result_block</code>. It is a convention held by one closure rather

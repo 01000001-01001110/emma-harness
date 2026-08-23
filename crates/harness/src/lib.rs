@@ -1446,8 +1446,11 @@ fn split_skill(text: &str, path: &Path, flavor: Flavor) -> Result<(Front, String
 /// a file whose frontmatter is somewhere in the middle, and guessing at that is
 /// how a parser starts reading text nobody meant as configuration.
 ///
-/// Not covered: a `---\r\n` opener, or a byte-order mark. Both would still be
-/// skipped-with-a-warning rather than fatal, which is the property that mattered.
+/// A `---\r\n` opener and a byte-order mark **are** covered, by
+/// `claude::open_frontmatter`, which every caller now reaches. This comment used
+/// to say they were not, and it was written when that was true: the byte-exact
+/// `---\n` opener silently dropped 101 of 323 real skill files on a machine whose
+/// editor writes CRLF.
 fn after_licence_header(text: &str) -> &str {
     let mut rest = text.trim_start();
     while let Some(body) = rest.strip_prefix("<!--") {

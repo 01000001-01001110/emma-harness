@@ -305,7 +305,7 @@ let mut worked = resuming_a_goal_in_flight;</code></pre>
       <tr><td><code>Iterations</code></td><td><code>iterations</code></td><td>Tested before the call: a run never makes more than <code>max_iterations</code>.</td></tr>
       <tr><td><code>Tokens</code></td><td><code>tokens</code></td><td>Tested after the call, so the call that crossed the line is paid for.</td></tr>
       <tr><td><code>Deadline</code></td><td><code>deadline</code></td><td>Tested at the top of an iteration against <code>wall_clock</code>.</td></tr>
-      <tr><td><code>Interrupted</code></td><td><code>interrupted</code></td><td>Ctrl-C, either at the top of an iteration or during a model call.</td></tr>
+      <tr><td><code>Interrupted</code></td><td><code>interrupted</code></td><td>Ctrl-C: at the top of an iteration, during a model call, or during a tool call — the tool comes back <code>cancelled</code> and the next iteration's flag check ends the goal.</td></tr>
       <tr><td><code>Provider(String)</code></td><td><code>provider_error</code></td><td>The provider failed in a way retrying will not fix.</td></tr>
     </tbody>
   </table>
@@ -360,7 +360,20 @@ pub fn message(&amp;self, b: &amp;Budgets) -&gt; String {
             b.max_tokens
         ),
         Self::Deadline =&gt; format!("stopped: hit the {}s time limit.", b.wall_clock.as_secs()),
-        Self::Interrupted =&gt; "interrupted. The partial turn is in the session log.".into(),
+        <span class="c">// **Not "the partial turn is in the session log".** That sentence
+        // was false in the case people actually hit. An interrupt landing
+        // mid-model-call drops the provider future, so there is no turn to
+        // record and no usage figure to bill: the API never answered. Every
+        // turn that *completed* before the interrupt is in the log, which is
+        // a different and true thing to say.
+        //
+        // The spend of an abandoned call is unrecoverable rather than
+        // unrecorded — the tokens were spent on the provider's side and
+        // nothing local ever learned the number. A resumed session
+        // therefore under-counts by that one call, and saying so is the
+        // only honest option available.</span>
+        Self::Interrupted =&gt; "interrupted. Everything that finished before the interrupt                  is in the session log; a model call still in flight was abandoned, so its                  answer and its cost are not recorded anywhere."
+            .into(),
         Self::Provider(e) =&gt; format!("stopped: {e}"),
     }
 }</code></pre>
@@ -394,6 +407,27 @@ pub fn message(&amp;self, b: &amp;Budgets) -&gt; String {
     stop. Nothing went wrong, nothing was abandoned, and the answer is already
     on the screen above the line.
   </p>
+
+  <p>
+    <code>Interrupted</code> used to say "The partial turn is in the session
+    log", and this page quoted it without comment. The sentence was false in
+    the case people actually hit: an interrupt landing mid-model-call drops
+    the provider future, so there is no turn to record and no usage figure to
+    bill — the API never answered, and a reader sent to the log to find the
+    partial turn finds nothing. What is true, and what the message now says,
+    is that everything that <em>finished</em> before the interrupt is in the
+    log, and that the abandoned call's answer and cost are recorded nowhere.
+    The cost half matters as much as the answer half: the tokens were spent on
+    the provider's side and nothing local ever learned the number, so a
+    resumed session under-counts by exactly that call.
+    <span class="chip test">tested</span>
+    <code>the_interrupted_ending_does_not_claim_a_partial_turn_was_saved</code>
+    asserts the old sentence is gone and that "abandoned" and "cost" are both
+    said. The string in the source is one long literal with runs of spaces
+    embedded mid-sentence, and what prints carries them; the quote above
+    reproduces it as it is.
+  </p>
+  <span class="src">crates/emma/src/agent.rs — <code>Ending::message</code> and its unit test</span>
 
   <h2 id="outcome">What the caller gets, and what the file records</h2>
 

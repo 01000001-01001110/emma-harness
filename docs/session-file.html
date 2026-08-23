@@ -71,7 +71,9 @@
     A session is one JSONL file under <code>~/.emma/sessions/</code>, opened at
     startup and appended to as the run happens. This page covers the type that
     owns it: how an id is made, where the file goes, what one append does, and
-    the two ways the writing can stop being reliable without anyone finding out.
+    the two ways the writing can go wrong — a write that starts failing
+    mid-run, and a line that will not parse coming back. Both used to be
+    silent; both now say so once.
   </p>
   <span class="src">crates/emma/src/session.rs — <code>SessionLog</code></span>
 
@@ -157,6 +159,7 @@ pub fn open(dir: &amp;Path, id: impl Into&lt;String&gt;) -&gt; Result&lt;Self&gt
         prefix: None,
         stamp: Vec::new(),
         tap: None,
+        write_failed: Arc::new(AtomicBool::new(false)),
     })
 }</code></pre>
 
@@ -186,6 +189,7 @@ pub fn none() -&gt; Self {
         prefix: None,
         stamp: Vec::new(),
         tap: None,
+        write_failed: Arc::new(AtomicBool::new(false)),
     }
 }</code></pre>
 
@@ -302,8 +306,24 @@ pub fn append(&amp;self, kind: &amp;str, mut payload: Value) {
     let Some(file) = guard.as_mut() else { return };
     let mut line = payload.to_string();
     line.push('\n');
-    let _ = file.write_all(line.as_bytes());
-    let _ = file.flush();
+    <span class="c">// Not `let _ =`. This file is the only record of the run: resume folds
+    // it, `emma agents` reads it, and the exit line names it as the place
+    // the conversation went. A full disk or a revoked handle used to lose
+    // all of that in silence, for the whole rest of the session, because
+    // every append discarded its own error.
+    //
+    // Reported once and then never again — a failing write fails on every
+    // record, and a warning per record would bury the run in its own
+    // complaint. Still not fatal: losing the transcript is not a reason to
+    // throw away the work the user is in the middle of.</span>
+    if let Err(e) = file.write_all(line.as_bytes()).and_then(|()| file.flush()) {
+        if !self.write_failed.swap(true, Ordering::SeqCst) {
+            eprintln!(
+                "emma: this session's transcript can no longer be written: {e}. The run \
+                 continues, but it will not be resumable and `emma agents` will not see it."
+            );
+        }
+    }
 }</code></pre>
 
   <p>
@@ -315,7 +335,13 @@ pub fn append(&amp;self, kind: &amp;str, mut payload: Value) {
     is merged, which is how a delegation's records carry
     <code>sub_id</code>, <code>parent_turn_id</code> and <code>agent</code>.
     The record goes into the in-memory tap if there is one. Then the line is
-    written and flushed.
+    written and flushed, and the first write that fails is reported on stderr;
+    every one after it is swallowed, because a failing write fails on every
+    record and a warning per record would bury the run in its own complaint.
+    <code>write_failed</code> is an <code>Arc&lt;AtomicBool&gt;</code> shared
+    with every <a href="session-records.html">subagent view</a>, so a
+    delegation does not repeat a complaint about a file its parent already
+    reported.
   </p>
 
   <p>
@@ -346,30 +372,34 @@ pub fn append(&amp;self, kind: &amp;str, mut payload: Value) {
 
   <p>
     A poisoned mutex returns without writing, permanently, for the rest of the
-    process. That needs a panic while the lock is held, and the only code under
-    the lock is two <code>std::io</code> calls whose results are discarded.
+    process. That needs a panic while the lock is held, and the code under the
+    lock is the two <code>std::io</code> calls and the once-only report of
+    their failure.
   </p>
 
-  <div class="note warn">
-    <span class="h">The doc's account of swallowed failures is wrong about who was told</span>
+  <div class="note">
+    <span class="h">Mid-run write failures used to be silent, and this page said so</span>
     <p>
-      <code>append</code> says the caller "has already been told once by
-      <code>open</code>". <code>open</code> reports failures at open time:
-      <code>create_dir_all</code> and the <code>OpenOptions::open</code>. A
-      write that fails afterwards, on a volume that filled up during the run or
-      a mount that went read-only, was never reported by <code>open</code>,
-      because at open time it had not happened. The two
-      <code>let _ =</code> discards are the whole of the handling, so that class
-      of failure is silent everywhere: no warning on screen, no record, and a
-      session file that simply stops.
-      <span class="chip cert">certified</span> by reading the two functions
-      together: <code>open</code>'s only <code>with_context</code> calls are on
-      <code>create_dir_all</code> and <code>open</code>, and
-      <code>append</code> has no error path that reaches a caller. The claim
-      that follows from that, that a mid-run write failure is invisible, is
+      An earlier version of <code>append</code> ended in two
+      <code>let _ =</code> discards, and its doc claimed the caller "has
+      already been told once by <code>open</code>" — which covers a directory
+      that cannot be created or a file that cannot be opened, and says nothing
+      about a volume that fills up or a mount that goes read-only during the
+      run. That class of failure was silent everywhere: no warning, no record,
+      and a session file that simply stops while resume, <code>emma agents</code>
+      and the exit line all keep pointing at it. The warn box that used to sit
+      here made that argument, and the code now agrees with it: the first
+      failed write prints one line on stderr saying the transcript can no
+      longer be written, and every later failure is swallowed on the
+      <code>write_failed</code> flag.
+      <span class="chip cert">certified</span> by reading <code>append</code>:
+      the <code>if let Err(e)</code> around <code>write_all</code> and
+      <code>flush</code> is quoted above and greppable. Whether that line is
+      actually seen — a full volume has not been staged, and in the framed UI
+      stderr lands on the alternate screen — is
       <span class="chip unv">unverified</span>: settle it by filling the volume
-      holding <code>~/.emma/sessions/</code> during a goal, or by making the
-      directory read-only after startup, and reading what Emma says.
+      holding <code>~/.emma/sessions/</code> during a goal and reading what
+      appears.
     </p>
   </div>
   <span class="src">crates/emma/src/session.rs — <code>SessionLog::append</code>, <code>SessionLog::open</code></span>
@@ -381,25 +411,54 @@ pub fn append(&amp;self, kind: &amp;str, mut payload: Value) {
 ///
 /// A trailing partial line — the one thing a crash mid-write can leave — is
 /// skipped rather than failing the read, which is the property that makes
-/// this format survivable without a transaction.</span>
+/// this format survivable without a transaction.
+///
+/// **A malformed line anywhere else is not that, and is not silent.** The
+/// doc above described the tail case and the code dropped *any* line that
+/// would not parse, so real corruption in the middle of a file — the case
+/// where a resumed conversation is genuinely missing turns — read as a
+/// clean success. The read still returns what it could recover, because
+/// refusing outright would make a damaged session unresumable and that is
+/// worse; but it says how many records it lost and where.</span>
 pub fn read(path: &amp;Path) -&gt; Result&lt;Vec&lt;Value&gt;&gt; {
     let raw =
         fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    Ok(raw
-        .lines()
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect())
+    let lines: Vec&lt;&amp;str&gt; = raw.lines().collect();
+    let last = lines.len().saturating_sub(1);
+    let mut out = Vec::new();
+    let mut lost = Vec::new();
+    for (n, line) in lines.iter().enumerate() {
+        match serde_json::from_str(line) {
+            Ok(v) =&gt; out.push(v),
+            <span class="c">// A blank line is not damage, and neither is the torn tail.</span>
+            Err(_) if line.trim().is_empty() || n == last =&gt; {}
+            Err(_) =&gt; lost.push(n + 1),
+        }
+    }
+    if !lost.is_empty() {
+        <span class="c">// … prints one stderr line naming the count, the file, and up to
+        // five of the lost line numbers. Quoted in full in the source.</span>
+    }
+    Ok(out)
 }</code></pre>
 
   <p>
-    <code>filter_map(…ok())</code> drops any line that will not parse, not only
-    the last one. That is broader than the doc's claim and it is the right
-    breadth for the format: a reader that failed on one bad line anywhere would
-    turn a single corrupt record into an unresumable session. The cost is that
-    silent loss in the middle of a file looks identical to no loss at all.
-    Nothing counts what it skipped.
+    This used to be a one-line <code>filter_map(…ok())</code>, which dropped
+    any line that would not parse — not only the torn tail the doc described —
+    and counted nothing. Silent loss in the middle of a file looked identical
+    to no loss at all, and this page said so. The shape of the fix keeps the
+    property that mattered and adds the one that was missing: a bad line
+    anywhere still costs only itself, because a reader that failed outright
+    would turn one corrupt record into an unresumable session, but a bad line
+    that is neither blank nor last is now counted and named on stderr as
+    damage, "not the partial last line a crash leaves behind."
+    <span class="chip test">tested</span>
+    <code>a_torn_tail_is_silent_and_damage_in_the_middle_is_not</code> in
+    <code>tests/resume.rs</code> feeds it both shapes and asserts both recover;
+    the stderr line itself is asserted by nothing, and only reading the
+    <code>eprintln!</code> says it fires.
   </p>
-  <span class="src">crates/emma/src/session.rs — <code>SessionLog::read</code></span>
+  <span class="src">crates/emma/src/session.rs — <code>SessionLog::read</code>; crates/emma/tests/resume.rs</span>
 
   <p>
     <span class="chip cert">certified</span>: no line in the real corpus is
@@ -454,7 +513,9 @@ fn a_torn_final_line_costs_only_that_line() {
     (<code>records_round_trip_and_carry_their_kind</code>,
     <code>a_torn_final_line_costs_only_that_line</code>,
     <code>a_log_with_no_file_is_not_an_error</code>,
-    <code>ids_sort_by_time</code>). <code>SessionLog::subagent</code> and the
+    <code>ids_sort_by_time</code>). The test that separates a torn tail from
+    mid-file damage lives in <code>tests/resume.rs</code>, not here.
+    <code>SessionLog::subagent</code> and the
     <code>Records</code> tap are on <a href="session-records.html">Records</a>,
     because what they do is namespace a <code>kind</code>.
   </p>
@@ -463,9 +524,11 @@ fn a_torn_final_line_costs_only_that_line() {
 
   <ul class="body">
     <li>
-      <span class="chip unv">unverified</span> Whether anything at all is said
-      when a write fails after <code>open</code> succeeded. Settle it by
-      filling the volume mid-goal.
+      <span class="chip unv">unverified</span> Whether the once-only warning a
+      failed write now prints is actually visible when it happens: no test
+      asserts it, no real volume has been filled to provoke it, and in the
+      framed UI stderr lands on the alternate screen. Settle it by filling the
+      volume mid-goal and reading what appears.
     </li>
     <li>
       <span class="chip unv">unverified</span> Whether a real

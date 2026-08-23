@@ -32,15 +32,22 @@
 //! | `WebFetch(domain:apnews.com)` | egress to exactly that host |
 //! | `WebFetch(domain:*.example.com)` | any subdomain at any depth, **not** `example.com` itself |
 //! | `WebFetch(domain:example.*)` | `example.org`; the `*` is one label and cannot cross a dot |
-//! | `Bash(git log:*)` | parsed, **never matches**, and said out loud at boot |
+//! | `Bash(git *)` | a word-boundary prefix over the `command` argument |
+//! | `Read(./src/**)`, `Read(Cargo.toml)` | a glob over the path argument, both sides normalised |
+//! | `Read(src/a\*b)`, `Read(../x)` | a parse error: ambiguous across platforms, or unmatchable |
 //!
-//! The last row is the important one. Emma does not match `Bash` specifiers, and
-//! a `Bash(rm *)` in a `deny` list that silently matched nothing would be a
-//! protection the operator believes they have. So a specifier this build cannot
-//! evaluate is *inert and announced*, never inert and quiet — and a rule that is
-//! not even well-formed (`WebFetch(`, `(domain:x)`, `WebFetch(domain:)`) is a
-//! parse error carrying the file it came from. Neither is ever resolved by
-//! guessing.
+//! **The last three rows used to read "parsed, never matches, said out loud at
+//! boot", and that was the whole of it.** `Bash` and path specifiers were inert:
+//! announced, and then matching nothing in any list, including `deny`. Measured
+//! against a real settings file, **62 of its 64 rules were inert**. That is the
+//! defect ARCH-002 closed, and the announcement was doing the job a matcher
+//! should have been doing.
+//!
+//! What survives from that design is the rule about silence. A specifier this
+//! build genuinely cannot evaluate is *inert and announced*, never inert and
+//! quiet — and one that is not even well-formed (`WebFetch(`, `(domain:x)`,
+//! `WebFetch(domain:)`) is a parse error carrying the file it came from. Neither
+//! is ever resolved by guessing. What changed is how rarely that applies.
 //!
 //! **Two `domain:` spellings are inert for a subtler reason and get the same
 //! treatment**: `WebFetch(domain:bücher.example)` and `WebFetch(domain:::1)`.
@@ -1648,9 +1655,31 @@ mod tests {
         // `Bash(rm *)` would one day start matching every call to `Bash`.
         //
         // `adopt` is the other way in, so it is the way in used here.
+        //
+        // **The specifier had to change, and the reason is the point.** This
+        // test used to adopt `Bash(git log:*)`, which parsed to
+        // `Spec::Unsupported` when it was written. ARCH-002 gave that spelling a
+        // real matcher, so the test went on passing while no longer constructing
+        // the variant it exists to guard — flipping the arm to `true` would not
+        // have reddened it. A false receipt, and it took a docs audit rather
+        // than the suite to notice, because a test that stops reaching its
+        // subject looks exactly like a test that passes.
+        //
+        // So the shape is asserted first. If a later change gives *this*
+        // spelling a matcher too, this line fails and says why, rather than the
+        // guard quietly stopping being guarded again.
+        let rule = Rule::parse("Bash(:*)").unwrap();
+        assert!(
+            matches!(rule.spec, Spec::Unsupported(_)),
+            "this test no longer constructs the arm it guards: {rule}"
+        );
         let mut r = Rules::default();
-        r.adopt(Rule::parse("Bash(git log:*)").unwrap());
+        r.adopt(rule);
         assert_eq!(r.for_tool("Bash"), None);
+        assert_eq!(
+            r.for_call("Bash", &serde_json::json!({ "command": "rm -rf /" })),
+            None
+        );
         assert_eq!(r.for_egress("Bash", "docs.rs"), None);
         assert_eq!(r.for_egress("Bash", "anything.at.all"), None);
     }

@@ -88,7 +88,12 @@
     <span class="c">// Only bare `Tool` rules answer this question; a `Tool(domain:…)` grant</span>
     <span class="c">// is about a destination, and reading it as permission to run the tool</span>
     <span class="c">// would let a narrow grant answer a question nobody asked it.</span>
-    let rule = self.rules.lock().await.for_tool(name);
+    <span class="c">// `for_call`, not `for_tool`: the arguments are what `Bash(git *)` and</span>
+    <span class="c">// `Read(./src/**)` were written to ask about, and until this line</span>
+    <span class="c">// changed they were parsed, kept, announced as unevaluable and matched</span>
+    <span class="c">// nothing — so a deny list copied from a Claude Code project protected</span>
+    <span class="c">// only what it named baldly.</span>
+    let rule = self.rules.lock().await.for_call(name, args);
 
     <span class="c">// A `deny` rule first, above the bypass. See the precedence block at the</span>
     <span class="c">// top of the file: written policy outranks a flag somebody typed.</span>
@@ -384,14 +389,36 @@
   </p>
 
   <p>
-    That is a narrower-than-bypass unattended mode, and nothing announces it. It
-    is tool-wide only: the narrowing somebody would reach for,
-    <code>Bash(git log:*)</code>, parses into <code>Spec::Unsupported</code>,
-    matches nothing in any list, and is announced at boot as a rule that does
-    nothing. The choice available to a script today is the whole tool unprompted,
-    or nothing.
+    That is a narrower-than-bypass unattended mode, and nothing announces it.
+    <strong>It is no longer tool-wide only.</strong> The narrowing somebody would
+    reach for &mdash; <code>Bash(git log:*)</code>, or
+    <code>"allow": ["Bash(cargo test *)"]</code> in a <code>-p</code> run &mdash;
+    matches, because <code>decide</code> asks <code>for_call</code> and the
+    specifier is a word-boundary prefix over the <code>command</code> argument.
   </p>
-  <span class="src">crates/emma/src/approval.rs — Approvals::decide; crates/emma/src/permissions.rs — Spec::Unsupported</span>
+
+  <p>
+    <strong>This paragraph used to say the opposite, and it was right when it was
+    written.</strong> Every <code>Bash(...)</code> and <code>Read(...)</code>
+    specifier parsed to <code>Spec::Unsupported</code>: announced at boot, and
+    then matching nothing in any list &mdash; <code>deny</code> included.
+    Measured against a real settings file, <strong>62 of its 64 rules were
+    inert</strong>. So a reader who acted on the old sentence would have believed
+    two wrong things at once: that a narrow allow was impossible, and that a
+    narrow deny was harmless. The second is the one that costs something.
+  </p>
+
+  <p>
+    What a prefix and a glob still cannot see is on
+    <a href="consent-rules.html#boundary">the rules page</a>, and it is a real
+    boundary rather than a to-do: a command-prefix deny narrows to the spellings
+    it names, and what it cannot judge it asks about rather than passing quietly.
+    <span class="chip test">tested</span>
+    <code>the_shapes_that_used_to_be_inert_now_evaluate</code> parses a
+    Claude-Code-shaped deny list and asserts a <code>rm</code> call is denied and
+    a <code>./src</code> read allowed, with no boot note left to make.
+  </p>
+  <span class="src">crates/emma/src/approval.rs — Approvals::decide; crates/emma/src/permissions.rs — Rules::for_call</span>
 
   <p>
     <span class="chip unv">unverified</span> The block's position above the

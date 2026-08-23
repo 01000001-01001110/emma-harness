@@ -233,6 +233,24 @@ impl Interrupt {
 
     pub fn tripped(&amp;self) -&gt; bool { self.flag.load(Ordering::SeqCst) }
 
+    <span class="c">/// Clear the flag so the next goal starts un-interrupted.
+    ///
+    /// **Without this the flag was one-way**, and three help strings were
+    /// wrong: `cli.rs` and the session's own opening note both say Ctrl-C
+    /// interrupts *a goal*, and it ended the whole session. Worse, a Ctrl-C
+    /// pressed at an idle prompt did nothing visible and then made the *next*
+    /// goal abort instantly, before any model call, with the session exiting
+    /// after it — a keystroke doing its damage to work the user had not typed
+    /// yet.
+    ///
+    /// Called at the top of an interactive turn rather than at the bottom of
+    /// one, so a stray press between goals is discarded rather than banked. A
+    /// press landing in the microsecond between this and the goal starting is
+    /// lost, which is a far smaller wrong than the one it replaces.</span>
+    pub fn reset(&amp;self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+
     pub async fn wait(&amp;self) {
         loop {
             if self.tripped() {
@@ -267,11 +285,20 @@ impl Interrupt {
 
   <p>
     <code>install</code> is separate from <code>new</code> so a test never
-    installs a process-wide handler. It spawns a task that trips the flag once,
-    and the flag is never reset, so a goal cannot be un-interrupted. A second
-    Ctrl-C is what the process's own handling deals with, not this type.
+    installs a process-wide handler. It spawns a task that trips the flag once.
+    The flag used to be one-way — an earlier version of this page said "a goal
+    cannot be un-interrupted", and it was describing the code accurately —
+    which meant Ctrl-C ended the <em>session</em>, against three help strings
+    that promised it interrupts a goal. <code>reset</code> is the reversal:
+    <code>main.rs</code> calls it at the top of each interactive turn, so a
+    press between goals is discarded rather than banked against work the user
+    has not typed yet. A second Ctrl-C during a goal is what the process's own
+    handling deals with, not this type.
+    <span class="chip test">tested</span>
+    <code>an_interrupt_can_be_cleared_so_the_next_goal_starts_clean</code>
+    trips, resets, and asserts the flag still trips again afterwards.
   </p>
-  <span class="src">crates/emma/src/agent.rs — <code>Interrupt::install</code></span>
+  <span class="src">crates/emma/src/agent.rs — <code>Interrupt::install</code>, <code>Interrupt::reset</code>; crates/emma/src/main.rs</span>
 
   <h2 id="model">Changing model mid-session</h2>
 
@@ -348,6 +375,22 @@ fn recover_from_a_model_change(&amp;mut self, e: &amp;LlmError) -&gt; bool {
     };
     let lower = message.to_ascii_lowercase();
     if !lower.contains("signature") &amp;&amp; !lower.contains("thinking") {
+        <span class="c">// **The fragile edge, made loud rather than left silent.** This
+        // recovery keys on the provider's prose because no structured code
+        // distinguishes "your history carries blocks the new model will not
+        // accept" from any other bad request. A wording change upstream
+        // therefore disables the recovery without disabling anything that
+        // reports it — and the symptom is a session that dies on the first
+        // call after `/model` with a message nobody connects to the switch.
+        //
+        // Reaching here means the two facts that matter are both true: the
+        // model changed this turn, and the provider refused the request.
+        // That is worth a sentence even when the wording did not match,
+        // because it is exactly the case where the recovery was supposed to
+        // help.</span>
+        self.s.term.warn(&amp;format!(
+            "the provider refused the first request after the model changed from {was}, and                  the refusal does not read like the stale-signature case this run knows how to                  recover from: {message}. If this is that case in different words, `/compact`                  clears the blocks the old model bound."
+        ));
         return false;
     }
     if !self
@@ -390,6 +433,26 @@ fn recover_from_a_model_change(&amp;mut self, e: &amp;LlmError) -&gt; bool {
     mutations; not a mutation watched during this write-up, since this task did
     not change source.
   </p>
+
+  <p>
+    The wording guard used to fail in silence — a bare
+    <code>return false;</code> — and that was the fragile edge left unlit. The
+    recovery keys on the provider's prose because no structured code
+    distinguishes the stale-signature case from any other bad request, so a
+    wording change upstream disables it without disabling anything that
+    reports it, and the symptom is a session dying on the first call after
+    <code>/model</code> with a message nobody connects to the switch. The
+    branch now warns, naming the model change and pointing at
+    <code>/compact</code> as the manual version of what the recovery would
+    have done.
+    <span class="chip test">tested</span>
+    <code>an_ordinary_bad_request_is_still_reported_rather_than_compacted_away</code>
+    in <code>tests/commands.rs</code> asserts both that nothing is summarised
+    and that the near-miss is said out loud. One honest wart: the warning
+    string in the source is a single long literal with runs of spaces embedded
+    where line continuations were meant to go, so what prints carries those
+    gaps. The quote above reproduces it as it is.
+  </p>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::recover_from_a_model_change</code></span>
 
   <p>
@@ -406,7 +469,8 @@ fn recover_from_a_model_change(&amp;mut self, e: &amp;LlmError) -&gt; bool {
     <code>Setup</code> and its fifteen fields, <code>Running</code> with
     <code>new</code>, <code>get</code> and <code>set</code>,
     <code>Interrupt</code> with <code>new</code>, <code>trip</code>,
-    <code>tripped</code>, <code>wait</code> and <code>install</code>,
+    <code>tripped</code>, <code>reset</code>, <code>wait</code> and
+    <code>install</code>,
     <code>Agent::set_provider</code>,
     <code>Agent::recover_from_a_model_change</code>, and the fake provider in
     <code>tests/support/mod.rs</code>.

@@ -157,7 +157,12 @@
     The catalogue is keyed and sorted by the <em>frontmatter</em> name rather
     than by the directory name, and never by directory iteration order, because
     the catalogue rides in the prompt prefix that the provider caches as an exact
-    byte match. Two skills declaring the same <code>name</code> collapse to one,
+    byte match. Two skills declaring the same <code>name</code> still collapse to one &mdash;
+    but the collapse is reported now, naming both files and saying that which one
+    wins depends on the order the filesystem returned the directory in, so it may
+    differ between runs. It used to happen in silence, while the sibling agent
+    loader had been printing exactly that note for months. Two skills declaring
+    the same <code>name</code> collapse to one,
     with the later iteration winning.
   </p>
 
@@ -251,8 +256,11 @@ skills         demo, licenced</code></pre>
         Flavor::Emma =&gt; text,
         Flavor::Claude =&gt; after_licence_header(text),
     };
-    let rest = text
-        .strip_prefix("---\n")
+    <span class="c">// `claude::open_frontmatter`, not a local byte-exact opener. The exact</span>
+    <span class="c">// form dropped 101 of 323 real skills on this machine — every one written</span>
+    <span class="c">// by an editor that ends lines with CRLF — while the agent parser one file</span>
+    <span class="c">// away had already been fixed for precisely that. See its doc.</span>
+    let rest = crate::claude::open_frontmatter(text)
         .with_context(|| named("expected YAML frontmatter"))?;
     let end = rest
         .find("\n---")
@@ -267,11 +275,25 @@ skills         demo, licenced</code></pre>
   <span class="src">crates/harness/src/lib.rs — <code>split_skill</code></span>
 
   <p>
-    The opener is <code>"---\n"</code> byte for byte. A skill file written with
-    CRLF endings does not match it and is refused, or under
-    <code>.claude/</code> skipped. That is the same shape as the defect the agent
-    parser was fixed for, and it has not been fixed here. The
-    <code>after_licence_header</code> doc names it and the one beside it:
+    The opener goes through <code>claude::open_frontmatter</code>, which tolerates
+    <code>---\r\n</code> and a leading byte-order mark. <strong>It used to be
+    <code>"---\n"</code> byte for byte, and this page used to describe that as
+    the design.</strong> It was not a design; it was the same defect the agent
+    parser had already been fixed for, sitting one file away and unvisited
+    because nobody was holding both files at once. Measured against the owner's
+    real library: <strong>101 of 323 skills silently missing</strong>, every one
+    written by an editor that ends lines with CRLF.
+    <span class="chip cert">certified</span> on that corpus &mdash; 207 of 324
+    loaded before, 306 of 324 after.
+  </p>
+
+  <p>
+    The lesson filed with the fix is the general one:
+    <em>when you fix a parser, grep for its siblings before you finish</em>, and
+    make both callers reach one function rather than copying it. This defect
+    recurred once precisely because the first fix was a local edit instead of a
+    shared function. <code>open_frontmatter</code> now has three callers and its
+    doc asks the next person not to inline a copy.
   </p>
 
   <p class="faint">crates/harness/src/lib.rs · <code>after_licence_header</code></p>
@@ -285,8 +307,11 @@ skills         demo, licenced</code></pre>
 /// a file whose frontmatter is somewhere in the middle, and guessing at that is
 /// how a parser starts reading text nobody meant as configuration.
 ///
-/// Not covered: a `---\r\n` opener, or a byte-order mark. Both would still be
-/// skipped-with-a-warning rather than fatal, which is the property that mattered.
+/// A `---\r\n` opener and a byte-order mark **are** covered, by
+/// `claude::open_frontmatter`, which every caller now reaches. This comment used
+/// to say they were not, and it was written when that was true: the byte-exact
+/// `---\n` opener silently dropped 101 of 323 real skill files on a machine whose
+/// editor writes CRLF.
 fn after_licence_header(text: &amp;str) -&gt; &amp;str {
     let mut rest = text.trim_start();
     while let Some(body) = rest.strip_prefix("&lt;!--") {
@@ -309,23 +334,23 @@ fn after_licence_header(text: &amp;str) -&gt; &amp;str {
     <code>---</code> loads and appears in the catalogue as <code>licenced</code>.
   </p>
 
-  <div class="note warn">
-    <span class="h">CRLF is a live gap here, and it is fixed one file away</span>
+  <div class="note">
+    <span class="h">What the CRLF fix cost to find, kept because the shape recurs</span>
     <p>
-      <code>split_agent</code> in <code>claude.rs</code> tolerates
-      <code>---\r\n</code> and a byte-order mark, because requiring
-      <code>---\n</code> exactly had made 90 out of 90 agent files in a real
-      library parse as having no frontmatter at all. <code>split_skill</code>
-      still requires <code>---\n</code>. Its consequence is milder, because a
-      skill that will not split is refused or skipped rather than silently
-      meaning something else, and the doc says that is the property that
-      mattered. It is still a file written on Windows failing for a reason its
-      author cannot see from the file.
-      <span class="chip unv">unverified</span> as a live failure: no CRLF
-      <code>SKILL.md</code> was fed to the binary here. Settle it by saving a
-      working <code>SKILL.md</code> with CRLF endings and re-running
-      <code>emma config check</code>; the expected result is
-      <code>expected YAML frontmatter</code>.
+      <code>split_agent</code> in <code>claude.rs</code> had already been fixed
+      for this: requiring <code>---\n</code> exactly made <strong>90 out of 90</strong>
+      agent files in a real library parse as having no frontmatter at all.
+      <code>split_skill</code>, two hundred lines away, still required it.
+      <strong>The fixtures were the reason nobody saw it.</strong> They were
+      written by the same author as the parser, in the same editor, with the same
+      line endings &mdash; so the suite was green while a third of a real corpus
+      was being dropped. That is why this repository certifies against a real
+      library rather than a fixture directory, and why a green suite is not
+      evidence.
+      <span class="chip test">tested</span>
+      <code>a_skill_written_with_windows_line_endings_loads</code>
+      (<code>crates/harness/tests/claude_compat.rs:455</code>); removing the
+      tolerance turns it red.
     </p>
   </div>
 

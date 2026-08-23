@@ -303,13 +303,33 @@ impl DoneCheck for MarkerClaim {
 /// same thing, and treating that as a non-claim would spend a kick on
 /// formatting. Not tolerant about position: the marker must own its line, so a
 /// sentence *about* the marker ("I will print GOAL COMPLETE when the tests
-/// pass") is not a claim.</span>
+/// pass") is not a claim.
+///
+/// **And it must be the last thing said.** This used to accept the marker on
+/// any line, which meant a turn reading
+///
+/// ```text
+/// GOAL COMPLETE
+///
+/// Actually wait — the tests still fail.
+/// ```
+///
+/// ended the goal `Done`, with the retraction sitting in the transcript where
+/// nobody would read it because the run was over. The module doc above has
+/// always said "end its final message with the line", and the refusal this
+/// function produces has always said "did not end with the completion line" —
+/// the code was the only one of the three disagreeing.
+///
+/// The cost is a model that signs off after its marker gets a kick instead of
+/// finishing. That is the right side to be wrong on: a kick is one cheap turn
+/// and says what to do, and a false `Done` is a wrong answer nobody sees.</span>
 pub fn claims_done(text: &amp;str) -&gt; bool {
-    text.lines().any(|line| {
-        line.trim()
-            .trim_matches(is_decoration)
-            .eq_ignore_ascii_case(MARKER)
-    })
+    let Some(last) = text.lines().rev().find(|l| !l.trim().is_empty()) else {
+        return false;
+    };
+    last.trim()
+        .trim_matches(is_decoration)
+        .eq_ignore_ascii_case(MARKER)
 }
 
 <span class="c">/// The characters a model decorates a line with, which a claim survives.</span>
@@ -318,15 +338,24 @@ fn is_decoration(c: char) -&gt; bool {
 }</code></pre>
 
   <p>
-    <code>any</code> over lines rather than a check on the last one, so a model
-    that adds a trailing blank line or a stray footer still gets its claim read.
-    <code>eq_ignore_ascii_case</code> means <code>goal complete</code> counts.
-    Five decoration characters are stripped from both ends: asterisk, backtick,
-    hash, underscore, space.
+    Only the last non-blank line counts, and this is a reversal. The function
+    used to be <code>any</code> over lines, and an earlier version of this page
+    argued for that: a model that adds a trailing blank line or a stray footer
+    after its marker still gets its claim read. The generosity was cheap in
+    that case and expensive in the one nobody had written down — a marker
+    followed by its own retraction, "Actually wait — the tests still fail",
+    ended the goal <code>Done</code> with the correction sitting where nobody
+    would read it. The half of the old argument worth keeping survives in the
+    detail: trailing <em>blank</em> lines still do not cost the claim, because
+    the scan walks back to the last line with anything on it. A footer after
+    the marker now does cost it, and buys a kick rather than a wrong answer.
+    <code>eq_ignore_ascii_case</code> means <code>goal complete</code> counts,
+    and five decoration characters are stripped from both ends: asterisk,
+    backtick, hash, underscore, space.
     <span class="chip test">tested</span>
     <code>a_marker_on_its_own_line_is_a_claim_and_a_mention_is_not</code> covers
     the plain form, the bolded form, the backticked lowercase form, the sentence
-    that mentions it, and unrelated prose.
+    that mentions it, the retracted claim, and the trailing blank lines.
   </p>
   <span class="src">crates/emma/src/goal.rs — <code>claims_done</code>, <code>is_decoration</code></span>
 
