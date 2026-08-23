@@ -106,6 +106,15 @@ struct BarGlyphs {
     /// gauge rather than as punctuation; the block glyphs need no frame.
     open: &'static str,
     close: &'static str,
+    /// The mockup's `MODE ◇ ASSIST` marker, sitting between the label and the
+    /// posture. It is the one piece of the bar that was measured off the image
+    /// and then not drawn.
+    ///
+    /// `<>` in ASCII rather than `*`: the diamond is a bracket around a value,
+    /// and a lone asterisk reads as a footnote marker or a wildcard. Two
+    /// columns instead of one is a fair price for not being ambiguous, and the
+    /// mode cell is the first thing shed when the row runs out of room.
+    diamond: &'static str,
 }
 
 fn bar_glyphs(skin: &Skin) -> BarGlyphs {
@@ -118,6 +127,7 @@ fn bar_glyphs(skin: &Skin) -> BarGlyphs {
             empty: "-",
             open: "[",
             close: "]",
+            diamond: "<>",
         }
     } else {
         BarGlyphs {
@@ -135,8 +145,9 @@ fn bar_glyphs(skin: &Skin) -> BarGlyphs {
             // *shape*, not colour alone, or the meter dies at `Level::None` —
             // the mock was never run on a colourless terminal. The ASCII `#`
             // needs no such treatment; discrete glyphs never fuse.
-            full: "\u{258A}",  // ▊
-            empty: "\u{2591}", // ░
+            full: "\u{258A}",    // ▊
+            empty: "\u{2591}",   // ░
+            diamond: "\u{25C7}", // ◇
             open: "",
             close: "",
         }
@@ -203,7 +214,7 @@ fn attempt(step: u8, width: u16, bar: &Bar, skin: &Skin) -> Option<Line<'static>
     let g = bar_glyphs(skin);
     let mut cells: Vec<Vec<Span<'static>>> = Vec::new();
     if step < 8 {
-        if let Some(c) = mode_cell(bar, skin) {
+        if let Some(c) = mode_cell(bar, skin, &g) {
             cells.push(c);
         }
     }
@@ -382,10 +393,14 @@ fn label(text: &str, skin: &Skin) -> Span<'static> {
 /// The run posture, and the clock beside it. The clock lives here because a
 /// duration belongs to the working state it measures; when the mode cell is
 /// shed, the clock goes with it — whole, like every field.
-fn mode_cell(bar: &Bar, skin: &Skin) -> Option<Vec<Span<'static>>> {
+fn mode_cell(bar: &Bar, skin: &Skin, g: &BarGlyphs) -> Option<Vec<Span<'static>>> {
     let mut spans = Vec::new();
     if !bar.mode.is_empty() {
         spans.push(label("MODE", skin));
+        // Dim, like every other separator in this bar: the marker is chrome
+        // around the posture, and a marker as bright as the value it brackets
+        // competes with it.
+        spans.push(Span::styled(format!("{} ", g.diamond), skin.palette.dim()));
         spans.push(Span::styled(
             bar.mode.clone(),
             skin.palette.style(Role::Text),
@@ -691,7 +706,7 @@ mod tests {
         // ceil(6.8) = 7 of 10 segments; ▊ then ░, contiguous in the plain text.
         let meter = format!("{}{}", "\u{258A}".repeat(7), "\u{2591}".repeat(3));
         for expected in [
-            "MODE  ASSIST",
+            "MODE  ◇ ASSIST",
             "1m12s",
             "TOKENS  12,842/500,000",
             // The parenthetical, exactly as the image spaces it: arrow, one
@@ -822,7 +837,7 @@ mod tests {
         b.elapsed = None;
         let out = text(200, &b, &skin());
         assert!(!out.contains("1m12s"), "{out}");
-        assert!(out.contains("MODE  ASSIST"), "{out}");
+        assert!(out.contains("MODE  ◇ ASSIST"), "{out}");
     }
 
     /// An empty value drops its whole cell, label included: a label over
