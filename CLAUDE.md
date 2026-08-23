@@ -100,6 +100,33 @@ only person who can write any of it is whoever just hit it.
 Report both as well as writing them — a lesson or a status nobody relays is
 one nobody reads.
 
+## Install the binary you changed, or the change is not delivered
+
+**The owner runs `emma` from `~/.cargo/bin`, not from `target/`.** A fix that is
+committed, tested and never installed is a fix he does not have. Owner
+instruction, 2026-08-23: *"make sure that file is replaced regularly."*
+
+```bash
+cargo install --path crates/emma --force
+```
+
+Run it after any round that changes what the binary does. It is a release build,
+so it is slow — around ninety seconds — which is the reason to do it on a round
+boundary rather than on every commit.
+
+**This has already cost a bug report.** The owner reported that the `Alt` chords
+did not open the tool pages, twice, using the word "still". The chords were
+fine. His installed binary was ten hours behind `HEAD`, from before the pages
+were wired. The whole exchange — his report, the investigation, the reading of
+`tool_key` and `launch_tool` — was spent on a defect that did not exist, and it
+ended with *"That did it."* after a reinstall.
+
+The general form is worth keeping, because it is not really about `cargo
+install`: **what the owner runs is the artefact, and the repository is not the
+artefact.** A green suite over source he is not executing says nothing about
+what is in front of him, and a report from him is always about the binary he
+has. Ask which one that is before reading any code.
+
 ## Report the round to the project channel when the turn is done
 
 **Post to the project's Discord channel every round.** Owner ruling,
