@@ -28,6 +28,31 @@ out for themselves.
 
 ## Unreleased
 
+- **Pasting into the input box now tells you what it changed.** The box is one
+  line, so a pasted block has its newlines turned into spaces, its tabs turned
+  into single spaces, and any control bytes dropped. That was already true; it
+  now says so, naming the counts, because the next thing that happens is a
+  request billed against text that is not what you copied.
+
+  The flattening itself is unchanged and needs a multi-line editor, which does
+  not exist yet.
+
+- **A browser profile Emma cannot delete is now reported.** When a goal ends,
+  Emma kills the browsers it opened and removes their profile directories. On
+  Windows those files can stay locked until the process actually exits, so the
+  removal retries for about three seconds and then gives up. It used to give up
+  silently. It now warns and names the directory, because that directory holds
+  the session's cookies and may hold a login.
+
+  Emma still clears it at its next start, as it always did.
+
+- **`/copy` refuses more reliably.** It writes to the clipboard with an escape
+  sequence, so it has always been refused when Emma is piped, run with `-p`,
+  run under `EMMA_NO_FRAME`, or run with no console. That refusal now lives in
+  the function that emits the bytes rather than only at the one place that calls
+  it, and `/copy` reports what was actually sent rather than what it attempted.
+  No change if you were not hitting the refusal.
+
 - **A write that breaks a hard link now says so.** Emma writes files by
   building a complete copy and renaming it over the target, so a crash cannot
   leave your source half-written. That rename replaces the directory entry
