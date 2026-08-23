@@ -628,6 +628,22 @@ second body
         notes.iter().any(|n| n.contains("may differ between runs")),
         "the note does not say the winner is filesystem-order dependent: {notes:?}"
     );
+
+    // **The collision is COUNTED, not only named, and that arm had no test.**
+    // The source comment beside `skipped += 1` says why it exists: a collision
+    // drops a skill from the catalogue exactly as a parse failure does, and the
+    // arm used to leave the total short -- so an operator reconciling "I have
+    // twelve skills and Emma lists ten" got a number that did not account for
+    // both. A reviewer deleted that one line and the whole workspace stayed
+    // green; on the owner's real library it turns an honest "17 skipped" into
+    // "16" against a real shortfall of 17.
+    //
+    // Two directories, one name, one survivor: the shortfall is exactly one.
+    assert!(
+        notes.iter().any(|n| n.contains("1 skill(s)")),
+        "the collision was named but not counted, so the total under-reports \
+         the shortfall it exists to explain: {notes:?}"
+    );
 }
 
 /// The other side of permissive, and the reason it is a skip rather than a

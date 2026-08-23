@@ -1002,9 +1002,17 @@ fn config_check_names_the_command_files_it_passed_over() {
         "`config check` said nothing about the command file it passed over:
 {text}"
     );
+    // **`text.contains('1')` was the assertion here, and it could not fail.**
+    // `config check` prints paths, rule counts and a skills total, so some
+    // digit is always somewhere in the output. A reviewer hardcoded the note to
+    // say "0 command file(s)" -- a flat lie about a fixture with exactly one
+    // nested command -- and this test stayed green.
+    //
+    // The count is now read out of the note itself, so a wrong number fails
+    // rather than a wrong character class passing.
     assert!(
-        text.contains('1'),
-        "the shortfall was named without a count:
+        text.contains("1 command file(s)"),
+        "the shortfall was named without the count, or with the wrong one:
 {text}"
     );
     assert!(
