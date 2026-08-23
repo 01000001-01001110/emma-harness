@@ -24,6 +24,7 @@ impl Project {
             cwd: dir.path().to_path_buf(),
             session_id: "test-session".into(),
             turn_id: "turn-1".into(),
+            background: Default::default(),
         };
         Self {
             dir,

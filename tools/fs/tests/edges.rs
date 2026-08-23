@@ -903,6 +903,7 @@ async fn the_read_tracker_does_not_carry_across_sessions() {
         cwd: sandbox.root().to_path_buf(),
         session_id: "a-later-session".into(),
         turn_id: "t".into(),
+        background: Default::default(),
     };
     let error = sandbox
         .tool("Write")

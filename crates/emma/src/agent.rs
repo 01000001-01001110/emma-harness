@@ -561,6 +561,14 @@ pub struct Setup<'a> {
     pub done: &'a dyn DoneCheck,
     pub cwd: PathBuf,
     pub session_id: String,
+    /// Background work started by this session, held here so it outlives the
+    /// tool call that spawned it and can still be found, read and killed.
+    ///
+    /// Defaulted rather than required, so every existing construction of
+    /// `Setup` — including every test — keeps compiling and simply has no
+    /// background work. A required field would have made this change touch
+    /// dozens of call sites to say the same nothing at each one.
+    pub background: emma_tool_api::background::Registry,
     pub budgets: Budgets,
     pub caching: Caching,
     pub mode: Mode,
@@ -1612,6 +1620,7 @@ impl<'a> Agent<'a> {
             cwd: self.s.cwd.clone(),
             session_id: self.s.session_id.clone(),
             turn_id: turn_id.to_string(),
+            background: self.s.background.clone(),
         };
         // **A panicking tool is a failed tool, not a failed session.** This
         // file's own first rule is that every failure class reaches the model as

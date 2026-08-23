@@ -74,6 +74,7 @@ impl Fixture {
     /// `max_context`.
     fn agent_with<'a>(&'a self, provider: Arc<dyn Provider>, budgets: Budgets) -> Agent<'a> {
         Agent::new(Setup {
+            background: Default::default(),
             provider,
             harness: &self.harness,
             instructions: &self.harness.instructions,

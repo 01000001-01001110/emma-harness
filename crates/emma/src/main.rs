@@ -522,7 +522,17 @@ async fn run(cli: cli::Cli) -> Result<()> {
         }
     }
 
+    // Declared here rather than inside `Setup` so the exit path below can still
+    // reach it after the agent is gone: a session that ends leaving children
+    // running is a leak, and one that kills them silently is a surprise.
+    let background = emma_tool_api::background::Registry::new();
+
     let agent = Agent::new(Setup {
+        // One registry for the whole interactive session, so a task started in
+        // one goal is still findable in the next. Scoping it per goal would make
+        // "run the build in the background, then ask me about it" impossible,
+        // which is the case background execution exists for.
+        background: background.clone(),
         provider: provider.clone(),
         harness: &harness,
         instructions: &harness.instructions,

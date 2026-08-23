@@ -108,6 +108,7 @@ async fn run(
     let term = Term::silent();
     let log = SessionLog::none();
     let mut agent = Agent::new(Setup {
+        background: Default::default(),
         provider: fake.clone(),
         harness: &harness,
         instructions: &harness.instructions,
@@ -352,6 +353,7 @@ async fn a_hook_denial_outranks_an_allow_rule_that_covers_the_call() {
     ]);
     let tools = registry(vec![runner]);
     let mut agent = Agent::new(Setup {
+        background: Default::default(),
         provider: fake.clone(),
         harness: &harness,
         instructions: &harness.instructions,

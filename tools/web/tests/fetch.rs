@@ -20,6 +20,7 @@ fn ctx() -> ToolCtx {
         cwd: std::env::temp_dir(),
         session_id: "test-session".into(),
         turn_id: "turn-1".into(),
+        background: Default::default(),
     }
 }
 

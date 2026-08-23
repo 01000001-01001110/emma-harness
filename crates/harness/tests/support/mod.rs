@@ -31,6 +31,25 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 pub fn scratch(tag: &str) -> PathBuf {
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("emma-{tag}-{}-{n}", std::process::id()));
+    // **Empty it first, because this name is not unique across runs.** The pid
+    // and the counter make it unique among *live* processes, and nothing here
+    // ever deletes it — so the operating system recycling a pid hands a later
+    // run a directory a previous run left files in.
+    //
+    // That is not hypothetical. `a_missing_or_unreadable_user_settings_file_is_not_a_failure`
+    // asserts that an absent settings file produces no notes, and then, further
+    // down the same test, writes an unparseable one into the same directory. On
+    // a pid collision the first assertion sees the second's leftovers and fails
+    // with "an absent file is not a problem" — a message that reads like the
+    // absent-file path being broken, which is the one thing it is not. The
+    // machine this was found on had 30,920 of these directories in its temp,
+    // including the exact one named in the failure, with the bad settings file
+    // still in it.
+    //
+    // Removing rather than uniquifying the name: a unique name per run leaks
+    // just as fast and only hides the collision. This also puts a ceiling on the
+    // mess, since each run reclaims its own.
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("scratch dir");
     dir
 }

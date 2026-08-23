@@ -620,6 +620,13 @@ impl Tool for Delegate {
         };
         let outcome: Outcome = {
             let mut sub = Agent::new(Setup {
+                // **A subagent gets its own registry, not the parent's.** Its
+                // session id is its own, so sharing one would let a child read
+                // and kill work the parent started, and the ids are short and
+                // sequential enough to hit by accident. A subagent's background
+                // work also ends with the subagent, which a separate registry
+                // makes structural rather than a rule somebody has to remember.
+                background: Default::default(),
                 provider: ty
                     .provider
                     .clone()

@@ -84,6 +84,9 @@ pub fn open_count(root: &Path) -> Result<usize, ToolError> {
         cwd: root.to_path_buf(),
         session_id: String::new(),
         turn_id: String::new(),
+        // Nothing here spawns background work; an empty registry is the honest
+        // value rather than a shared one this call has no business holding.
+        background: Default::default(),
     };
     let file = store::tasks_path(&ctx)?;
     let (doc, _) = store::load(&file)?;

@@ -110,6 +110,7 @@ async fn delegating(
     ]);
 
     let mut agent = Agent::new(Setup {
+        background: Default::default(),
         provider: provider.clone(),
         harness: &harness,
         instructions: &harness.instructions,
@@ -527,6 +528,7 @@ async fn two_delegations_never_overlap() {
         cwd: dir.path().to_path_buf(),
         session_id: "sess-test".into(),
         turn_id: "turn-1".into(),
+        background: Default::default(),
     };
     let one = delegate.invoke(&ctx, json!({ "agent": "explorer", "task": "a" }));
     let two = delegate.invoke(&ctx, json!({ "agent": "explorer", "task": "b" }));
@@ -565,6 +567,7 @@ async fn constructing_an_agent_never_moves_the_status_meters() {
     let fake = Fake::new(Vec::new());
     let log = SessionLog::none();
     let _agent = Agent::new(Setup {
+        background: Default::default(),
         provider: fake.clone(),
         harness: &harness,
         instructions: &harness.instructions,

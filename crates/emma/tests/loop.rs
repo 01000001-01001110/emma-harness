@@ -85,6 +85,7 @@ async fn drive_goals(
     let harness = Harness::load_selecting(root, Flavor::Emma, None).unwrap();
     let term = Term::silent();
     let mut agent = Agent::new(Setup {
+        background: Default::default(),
         provider: provider.clone(),
         harness: &harness,
         instructions: &harness.instructions,
@@ -224,6 +225,7 @@ async fn a_turn_cut_off_at_the_output_limit_is_reported() {
     ]);
 
     let mut agent = Agent::new(Setup {
+        background: Default::default(),
         provider: fake.clone(),
         harness: &harness,
         instructions: &harness.instructions,
@@ -284,6 +286,7 @@ async fn an_interrupt_reaches_a_tool_that_is_already_running() {
     });
 
     let mut agent = Agent::new(Setup {
+        background: Default::default(),
         provider: fake.clone(),
         harness: &harness,
         instructions: &harness.instructions,

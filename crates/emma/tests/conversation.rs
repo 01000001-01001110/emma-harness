@@ -53,6 +53,7 @@ async fn drive_goals(
     let approvals = Approvals::unattended();
     let term = Term::silent();
     let mut agent = Agent::new(Setup {
+        background: Default::default(),
         provider: provider.clone(),
         harness: &harness,
         instructions: &harness.instructions,

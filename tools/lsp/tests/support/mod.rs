@@ -250,6 +250,7 @@ impl Sandbox {
             cwd: dir.path().to_path_buf(),
             session_id: "test".into(),
             turn_id: "test".into(),
+            background: Default::default(),
         };
         Self { dir, ctx }
     }

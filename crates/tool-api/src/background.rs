@@ -84,6 +84,11 @@ struct Shared {
     read_to: usize,
 }
 
+/// How to stop one task. Boxed because the caller owns the mechanism — a
+/// `tokio` child handle, an abort handle, or in a test a flag — and this module
+/// deliberately knows none of them.
+type Killer = Box<dyn FnOnce() + Send>;
+
 /// A handle on one background task. Cloning is cheap and shares the state.
 #[derive(Clone)]
 pub struct Task {
@@ -93,7 +98,7 @@ pub struct Task {
     pub label: String,
     pub session_id: String,
     shared: Arc<Mutex<Shared>>,
-    killer: Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>,
+    killer: Arc<Mutex<Option<Killer>>>,
 }
 
 /// What a reader gets back, and everything it needs to be honest about it.

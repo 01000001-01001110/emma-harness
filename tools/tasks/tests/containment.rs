@@ -59,6 +59,7 @@ async fn an_unresolvable_working_directory_is_unavailable_not_bad_arguments() {
         cwd: dir.path().join("no-such-subdirectory"),
         session_id: "s".into(),
         turn_id: "t".into(),
+        background: Default::default(),
     };
     let error = emma_tools_tasks::task_tools()
         .iter()
