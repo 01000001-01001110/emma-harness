@@ -425,6 +425,13 @@ impl Spend {
 /// every ordinary run: an empty conversation and every counter at zero.
 #[derive(Debug, Default, Clone)]
 pub struct Resumed {
+    /// Records the fold refused to rebuild, one sentence each.
+    ///
+    /// Non-empty means the conversation that came back is **known** not to match
+    /// the one that was sent. The refusals themselves were always correct; they
+    /// were simply invisible past the stderr they printed to, which made the
+    /// test guarding them assert nothing more than "it did not panic".
+    pub damage: Vec<String>,
     /// The message list the interrupted run last sent, in order. Placed whole
     /// into `query` — see `Agent::run_goal`.
     pub messages: Vec<Message>,

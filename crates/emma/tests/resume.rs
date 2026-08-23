@@ -564,7 +564,7 @@ fn a_torn_tail_is_silent_and_damage_in_the_middle_is_not() {
 
     // Two whole records, then the half-written line a crash leaves behind.
     let torn = [r#"{"kind":"a"}"#, r#"{"kind":"b"}"#, r#"{"kind":"c"#].join("\n");
-    std::fs::write(&path, torn).unwrap();
+    std::fs::write(&path, &torn).unwrap();
     let kept = SessionLog::read(&path).expect("a torn tail must not fail the read");
     assert_eq!(kept.len(), 2, "both whole records survive a torn tail");
 
@@ -572,8 +572,27 @@ fn a_torn_tail_is_silent_and_damage_in_the_middle_is_not() {
     // the doc never covered: turns are genuinely missing from what comes back.
     let damaged = [r#"{"kind":"a"}"#, "NOT JSON AT ALL", r#"{"kind":"c"}"#].join("\n");
     std::fs::write(&path, damaged).unwrap();
-    let kept = SessionLog::read(&path).expect("damage must still recover what it can");
+    let (kept, lost) =
+        SessionLog::read_reporting(&path).expect("damage must still recover what it can");
     assert_eq!(kept.len(), 2, "the readable records are still returned");
+
+    // **The half this test is named for and did not check.** Until the loss was
+    // returned rather than only printed to stderr, the assertion above was the
+    // whole test -- and it holds whether or not the damage is noticed at all.
+    // An adversarial reviewer deleted the counting outright and this stayed
+    // green across the entire crate.
+    assert_eq!(lost, vec![2], "damage in the middle was not reported");
+
+    // The other half of the name, and the reason the counting cannot simply be
+    // "any line that failed to parse": a crash leaves a half-written last line,
+    // and calling that corruption would make every interrupted session look
+    // broken.
+    std::fs::write(&path, &torn).unwrap();
+    let (_, lost) = SessionLog::read_reporting(&path).unwrap();
+    assert!(
+        lost.is_empty(),
+        "a torn tail was reported as damage: {lost:?}"
+    );
 }
 
 /// A damaged compaction record does not quietly become a no-op.
@@ -598,7 +617,22 @@ fn a_compaction_record_missing_its_fields_does_not_silently_rebuild_a_different_
 
     // The fold must not pretend the compaction happened, and must not panic.
     let restored = session::restore(&path).expect("a damaged record must not fail the resume");
-    // The conversation is whatever survived; the point is that nothing claimed
-    // a compaction that could not be reconstructed.
-    let _ = restored;
+    // **The assertion this test did not have.** Its only check was
+    // `let _ = restored;` — that nothing panicked — so an adversarial reviewer
+    // restoring the exact historical defect the doc-comment above describes left
+    // it green across the whole crate. The refusal was real and unobservable.
+    assert_eq!(
+        restored.resumed.damage.len(),
+        1,
+        "a damaged compaction record was rebuilt without saying so: {:?}",
+        restored.resumed.damage
+    );
+    assert!(
+        restored.resumed.damage[0].contains("drop_messages"),
+        "the damage does not name which field was missing: {:?}",
+        restored.resumed.damage
+    );
+    // The conversation is still whatever survived; refusing outright would make
+    // a damaged session unresumable, which is worse than resuming a short one.
+    assert!(!restored.resumed.messages.is_empty());
 }

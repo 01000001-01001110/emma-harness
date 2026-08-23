@@ -302,6 +302,22 @@ impl SessionLog {
     /// refusing outright would make a damaged session unresumable and that is
     /// worse; but it says how many records it lost and where.
     pub fn read(path: &Path) -> Result<Vec<Value>> {
+        Self::read_reporting(path).map(|(records, _lost)| records)
+    }
+
+    /// The same read, with the damage handed back rather than only printed.
+    ///
+    /// **A guarantee nothing can observe is not a guarantee.** The loss used to
+    /// reach an `eprintln!` and nowhere else, so the test named
+    /// `a_torn_tail_is_silent_and_damage_in_the_middle_is_not` asserted only
+    /// that the readable records came back — which is true whether or not the
+    /// damage was noticed. An adversarial reviewer removed the counting
+    /// entirely and the test stayed green across the whole crate.
+    ///
+    /// That is the false-receipt shape this repository is most often bitten by,
+    /// and the fix is not a better assertion on stderr: it is that the caller
+    /// should have been told. Printing is a presentation choice; knowing is not.
+    pub fn read_reporting(path: &Path) -> Result<(Vec<Value>, Vec<usize>)> {
         let raw =
             fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let lines: Vec<&str> = raw.lines().collect();
@@ -318,6 +334,9 @@ impl SessionLog {
         }
         if !lost.is_empty() {
             let shown: Vec<String> = lost.iter().take(5).map(|n| n.to_string()).collect();
+            // Printed here and returned below. The print is for the human at the
+            // terminal; the return is what makes the loss testable, and what
+            // lets a caller decide rather than only be told.
             eprintln!(
                 "emma: {} record(s) in {} could not be read and are missing from the restored \
                  conversation (line {}{}). This is damage in the middle of the file, not the \
@@ -332,7 +351,7 @@ impl SessionLog {
                 }
             );
         }
-        Ok(out)
+        Ok((out, lost))
     }
 }
 
@@ -364,11 +383,17 @@ pub fn fold(path: &Path) -> Result<Vec<Message>> {
 /// [`fold`] over records already read — the testable half, and the one a caller
 /// that has the records for another reason should use.
 pub fn fold_records(records: &[Value]) -> Vec<Message> {
+    fold_records_reporting(records).0
+}
+
+/// The fold, with what it refused to rebuild handed back.
+pub fn fold_records_reporting(records: &[Value]) -> (Vec<Message>, Vec<String>) {
     let mut fold = Fold::default();
     for record in records {
         fold.record(record);
     }
-    fold.finish()
+    let damage = std::mem::take(&mut fold.damage);
+    (fold.finish(), damage)
 }
 
 /// The state a walk over the records needs.
@@ -388,6 +413,20 @@ pub fn fold_records(records: &[Value]) -> Vec<Message> {
 /// record, so this reads it rather than re-deriving it.
 #[derive(Default)]
 struct Fold {
+    /// Records this fold refused to act on because they were damaged.
+    ///
+    /// **The refusals were correct and unobservable.** Each printed to stderr
+    /// and returned, which is the right behaviour — a damaged `compacted`
+    /// record must not read as a no-op — but nothing downstream could tell it
+    /// had happened, so the test guarding it asserted only that the fold did
+    /// not panic. An adversarial reviewer restored the exact historical defect
+    /// the test's own doc-comment describes and the test stayed green across
+    /// the whole crate.
+    ///
+    /// Collected here so a resumed run can say the conversation it rebuilt is
+    /// known not to match the one that was sent, which is the fact that
+    /// matters and the one that was being thrown away.
+    damage: Vec<String>,
     history: Vec<Message>,
     query: Vec<Message>,
     in_goal: bool,
@@ -465,9 +504,11 @@ impl Fold {
                 let drop = match r["drop_messages"].as_u64() {
                     Some(d) => d as usize,
                     None => {
-                        eprintln!(
-                            "emma: a `compacted` record is missing `drop_messages`, so the conversation it describes cannot be rebuilt; this resumed conversation will not match the one that was sent."
-                        );
+                        let what = "a `compacted` record is missing `drop_messages`, so the \
+                             conversation it describes cannot be rebuilt; this resumed \
+                             conversation will not match the one that was sent.";
+                        eprintln!("emma: {what}");
+                        self.damage.push(what.to_string());
                         return;
                     }
                 };
@@ -475,9 +516,11 @@ impl Fold {
                 {
                     Ok(m) => m,
                     Err(e) => {
-                        eprintln!(
-                                "emma: a `compacted` record has unreadable replacement messages ({e}), so the conversation it describes cannot be rebuilt; this resumed conversation will not match the one that was sent."
-                            );
+                        let what = format!(
+                            "a `compacted` record has unreadable replacement messages ({e}), so                              the conversation it describes cannot be rebuilt; this resumed                              conversation will not match the one that was sent."
+                        );
+                        eprintln!("emma: {what}");
+                        self.damage.push(what);
                         return;
                     }
                 };
@@ -655,6 +698,15 @@ pub struct Restored {
     pub path: PathBuf,
     pub resumed: Resumed,
     pub continuity: Continuity,
+    /// Line numbers of records that could not be read, so the conversation that
+    /// comes back is missing turns.
+    ///
+    /// **Carried on the value rather than only printed**, because a resume that
+    /// silently dropped turns is the failure this whole path exists to make
+    /// loud, and a warning on stderr is not something a caller — or a test — can
+    /// act on. Empty is the ordinary case, including a torn last line, which is
+    /// what a crash leaves and is not damage.
+    pub lost_records: Vec<usize>,
 }
 
 /// What the file says the interrupted run was booted against.
@@ -732,7 +784,7 @@ impl Continuity {
 
 /// Read one session file into everything a resumed run needs.
 pub fn restore(path: &Path) -> Result<Restored> {
-    let records = SessionLog::read(path)?;
+    let (records, lost) = SessionLog::read_reporting(path)?;
     if !records.iter().any(|r| r["kind"] == "goal") {
         bail!(
             "{} records no goal, so there is nothing to resume",
@@ -747,6 +799,7 @@ pub fn restore(path: &Path) -> Result<Restored> {
         path: path.to_path_buf(),
         resumed: restore_records(&records),
         continuity: continuity_of(&records),
+        lost_records: lost,
     })
 }
 
@@ -761,8 +814,10 @@ pub fn restore(path: &Path) -> Result<Restored> {
 /// answer the case the file exists for, which is a run that was killed and
 /// never wrote one.
 pub fn restore_records(records: &[Value]) -> Resumed {
+    let (messages, damage) = fold_records_reporting(records);
     let mut r = Resumed {
-        messages: fold_records(records),
+        damage,
+        messages,
         ..Default::default()
     };
     // `tool_call` carries the arguments and `tool_result` carries the verdict,
