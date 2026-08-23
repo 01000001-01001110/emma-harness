@@ -355,16 +355,32 @@ impl Term {
     /// the writing, which is why this works identically over SSH and needs no
     /// platform clipboard API. Windows Terminal has supported it since 2020.
     ///
-    /// **Callers must check [`Term::framed`] first.** This emits escape bytes,
-    /// and `INV-001` promises none of those on `-p`, on a pipe, under
-    /// `EMMA_NO_FRAME` or with no console. The guard is at the call site rather
-    /// than here so the caller can say something useful instead — a clipboard
-    /// write that silently does nothing is the failure this whole area is about.
+    /// **Callers check [`Term::framed`] first so they can say something useful,
+    /// and this refuses anyway.** This emits escape bytes, and `INV-001`
+    /// promises none of those on `-p`, on a pipe, under `EMMA_NO_FRAME` or with
+    /// no console. The call-site guard stays because a clipboard write that
+    /// silently does nothing is the failure this whole area is about — the
+    /// caller has a message to give, and this function does not.
+    ///
+    /// **But "callers must" was the whole of the enforcement, and a reviewer
+    /// found nothing tested it.** No test in the workspace named `Copy`, so
+    /// deleting the single `if !s.term.framed()` at the call site emitted OSC 52
+    /// on a pipe with the entire suite green. An invariant held up by a sentence
+    /// in a doc comment is held up by nothing; the refusal belongs at the one
+    /// place that can emit the bytes, and the message belongs where there is
+    /// somebody to read it.
+    ///
+    /// Returns whether it wrote, so the guarantee is observable rather than
+    /// merely performed — the same correction `read_reporting` and
+    /// `SessionLog::transcript_failed` already made elsewhere in this tree.
     ///
     /// **There is no acknowledgement.** The terminal honours the sequence or
     /// ignores it, with no reply and no error, so nothing downstream can report
     /// success as a fact. Callers say what was sent, never what arrived.
-    pub fn clipboard(&self, text: &str) {
+    pub fn clipboard(&self, text: &str) -> bool {
+        if !self.framed() {
+            return false;
+        }
         // Straight to stdout rather than through `write_out`, which routes prose
         // into the frame retained transcript. This is a control sequence, not
         // content: a buffer that held it would replay somebody clipboard write
@@ -378,6 +394,7 @@ impl Term {
         let seq = format!("\x1b]52;c;{}\x07", base64(text.as_bytes()));
         let _ = out.write_all(seq.as_bytes());
         let _ = out.flush();
+        true
     }
 
     /// How much colour this run has, as `Level::of` decided it.
@@ -1566,6 +1583,39 @@ mod tests {
 #[cfg(test)]
 mod clipboard_tests {
     use super::base64;
+
+    /// `INV-001` for the one function in this file that emits escape bytes.
+    ///
+    /// **A reviewer found that no test in the workspace named `Copy`.** The
+    /// promise that piped and `-p` output carries no escape bytes rested, for
+    /// this path, on a single `if !s.term.framed()` at the `/copy` call site and
+    /// on a sentence in a doc comment asking callers to write it. Deleting that
+    /// one line put OSC 52 into a pipe with the whole suite green.
+    ///
+    /// So the refusal moved to the function that writes the bytes, and this
+    /// asserts it there: every constructor that yields an unframed terminal
+    /// refuses, and says so by returning `false` rather than by doing nothing
+    /// visible. `recording` and `subordinate` are included because a nested run
+    /// borrows its parent decision -- a sub-agent must not be the hole.
+    #[test]
+    fn an_unframed_terminal_refuses_to_write_the_clipboard() {
+        use super::{theme, Term};
+
+        let unframed: Vec<(&str, Term)> = vec![
+            ("silent", Term::silent()),
+            ("printing", Term::printing(theme::BUILTIN)),
+            ("recording", Term::recording()),
+            ("subordinate", Term::silent().subordinate()),
+        ];
+
+        for (name, term) in unframed {
+            assert!(!term.framed(), "{name} unexpectedly has a frame");
+            assert!(
+                !term.clipboard("anything at all"),
+                "{name} wrote OSC 52 on a run that must emit no escape bytes"
+            );
+        }
+    }
 
     /// The RFC 4648 vectors, plus the payload shape OSC 52 actually carries.
     ///

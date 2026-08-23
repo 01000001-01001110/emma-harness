@@ -1150,6 +1150,11 @@ fn export_conversation(s: &Session<'_, '_>, path: Option<&str>) {
 /// did. The terminal either honours the sequence or ignores it, silently, with
 /// no reply; there is no acknowledgement in the protocol to wait for. Reporting
 /// "copied" as a fact would be a claim about somebody else's program.
+/// What is said when the clipboard write is refused rather than merely
+/// unexplained. Shared by both arms so the two cannot drift apart.
+const NO_ESCAPE_BYTES_HERE: &str =
+    "/copy: nothing was sent — this run emits no escape bytes at all. Use `/export` instead.";
+
 fn copy_last_answer(s: &Session<'_, '_>) {
     if !s.term.framed() {
         s.term.warn(
@@ -1185,7 +1190,15 @@ fn copy_last_answer(s: &Session<'_, '_>) {
         return;
     };
 
-    s.term.clipboard(&text);
+    // The report follows the return value rather than the call, so it cannot
+    // say "sent" about bytes that were never written. `clipboard` refuses on an
+    // unframed run for `INV-001`; the guard at the top of this function exists
+    // to explain that where there is somebody to read it, and this arm is what
+    // remains if that guard is ever deleted.
+    if !s.term.clipboard(&text) {
+        s.term.warn(NO_ESCAPE_BYTES_HERE);
+        return;
+    }
     let lines = text.lines().count();
     let chars = text.chars().count();
     s.term.note(&format!(

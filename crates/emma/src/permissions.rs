@@ -995,7 +995,15 @@ impl Rules {
             if let Spec::Command(raw, prefix) = &rule.spec {
                 let star_is_a_wildcard =
                     raw.ends_with(":*") || raw.ends_with(" *") || !raw.ends_with('*');
-                if !star_is_a_wildcard && !prefix.is_empty() {
+                // **And the same rule with no star at all.** A reviewer
+                // pointed out the check only fired on a stripped `*`, so
+                // `Bash(curl https://)` -- identically inert, for identically
+                // the reason -- said nothing. A prefix ending in `/`, `:`, `=`
+                // or `-` is one whose author plainly meant "and then more of
+                // this word", which is the one thing a word-boundary matcher
+                // cannot do.
+                let ends_mid_token = prefix.ends_with(['/', ':', '=', '-']);
+                if (!star_is_a_wildcard || ends_mid_token) && !prefix.is_empty() {
                     notes.push(format!(
                         "{}: `{}` ends its prefix inside a word, so it can never match. \
                      Commands match at a word boundary — `{prefix}` would have to be \
@@ -1463,6 +1471,10 @@ mod tests {
             ("Bahs(rm)", "not a tool in this run"),
             // A prefix ending mid-word. Previously silent.
             ("Bash(curl https://*)", "inside a word"),
+            // The same shape with no star at all, found by review: identically
+            // inert, and it used to say nothing because the check only fired
+            // on a stripped `*`.
+            ("Bash(curl https://)", "inside a word"),
             // The two that already spoke, kept so this cannot pass by the
             // older branches having been deleted.
             ("bash(rm)", "spelled `Bash`"),

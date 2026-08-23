@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Copying out &middot; The terminal &middot; Emma</title>
+    <link rel="stylesheet" href="assets/docs.css" />
+  </head>
+  <body>
+    <div class="shell">
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav here" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+      <main>
+        <div class="col">
+          <h1>Getting text out of the frame</h1>
+
+  <nav class="chapter">
+      <a class="up" href="terminal.html">The terminal</a>
+      <a href="terminal-surface.html">Surface</a>
+      <a href="terminal-frame.html">Frame</a>
+      <a href="terminal-layout.html">Layout</a>
+      <a href="terminal-colour.html">Colour</a>
+      <a href="terminal-themes.html">Themes</a>
+      <a href="terminal-skin.html">Vocabulary</a>
+      <a href="terminal-transcript.html">Transcript</a>
+      <a href="terminal-markdown.html">Markdown</a>
+      <a href="terminal-diff.html">Diffs</a>
+      <a href="terminal-status.html">Status</a>
+      <a href="terminal-sidebar.html">Sidebar</a>
+      <a href="terminal-dock.html">Dock</a>
+      <a href="terminal-usertools.html">User tools</a>
+      <a href="terminal-pages.html">Pages</a>
+      <span class="now">Copying out</span>
+    </nav>
+
+
+  <p class="lede">
+    The full-screen frame took the terminal's own copy-paste away, and gave
+    back three routes instead of one. <code>Shift+drag</code> is the
+    terminal's selection, still there and still whole-row.
+    <code>/copy</code> puts the last answer on the clipboard with an escape
+    sequence. <code>/export</code> writes the conversation to a file and is the
+    only one of the three that works when Emma is being piped. None of them is
+    the plain drag that worked before 2026-08-12, and the page says why that is
+    gone rather than pretending it was replaced.
+  </p>
+
+  <h2 id="capture">The wheel cost the drag</h2>
+
+  <p>
+    On the alternate screen the mouse wheel does nothing at all without mouse
+    capture. Not less useful: nothing. The frame turns capture on for that
+    reason, and capture is all-or-nothing, so plain drag-selection goes with
+    it.
+  </p>
+
+  <p class="src">crates/emma/src/term/frame.rs, <code>Frame::start</code></p>
+
+  <pre><code>if !inline {
+    // Mouse capture, for the wheel: on the alternate screen the wheel
+    // does nothing at all without it — not &quot;less useful&quot;, nothing —
+    // and the first instinct of anybody reading a long answer is the
+    // wheel (`notes/audits/eval-tui-fullscreen-kimi.md` §1.5). The cost is
+    // that plain drag-selection now needs Shift; the quick-help table
+    // says so, because it is the one fact a user cannot guess. Only
+    // on the full-screen path: inline, the terminal owns the wheel
+    // and taking it would break scrollback that still works.
+    if execute!(std::io::stdout(), EnableMouseCapture).is_ok() {
+        MOUSE_ON.store(true, Ordering::SeqCst);
+    }
+}</code></pre>
+
+  <p>
+    Two facts close off the obvious fix. Crossterm's
+    <code>EnableMouseCapture</code> is the widest tracking mode and has no
+    narrower option, so "capture only the wheel" is not something the
+    dependency offers. And on Windows the enable is a console-mode bit rather
+    than escape bytes, which is why the leave path goes back through crossterm
+    instead of writing the <code>?100x</code> lows itself.
+    <span class="chip cert">certified</span> Grep
+    <code>EnableMouseCapture</code> across <code>crates/emma/src</code>: two
+    hits, both in <code>frame.rs</code>, one enable and one disable.
+  </p>
+
+  <p class="src">crates/emma/src/term/frame.rs, the leave path</p>
+
+  <pre><code>if MOUSE_ON.swap(false, Ordering::SeqCst) {
+    // Through crossterm rather than a string on purpose: on Windows the
+    // enable was a console-mode change, and only the matching command
+    // undoes it. On unix this writes the `?100x` lows.
+    let _ = execute!(std::io::stdout(), DisableMouseCapture);</code></pre>
+
+  <h2 id="shift">Shift+drag, and the arm that refuses to bid for it</h2>
+
+  <p>
+    With capture on, the terminal still performs its own selection when the
+    drag is Shift-modified. That is the one copy route on the alternate screen
+    that involves no Emma code at all, so the input handler's job is to stay
+    out of its way. Exactly one click is routed, a plain left press with no
+    Shift; drags, releases and every other button fall through untouched.
+  </p>
+
+  <p class="src">crates/emma/src/term/input.rs, the reader thread</p>
+
+  <pre><code>// The wheel, which mouse capture exists for: without capture,
+// on the alternate screen, it does nothing at all. Beyond the
+// wheel, exactly one click is routed: a plain left *press*,
+// to the frame&#x27;s single click target (the sidebar&#x27;s collapse
+// affordance — the route the owner actually tried when the
+// toggle &quot;did not work&quot;). Drags, releases and every other
+// button fall through untouched, and anything Shift-modified
+// is refused even where a terminal forwards it: Shift-drag is
+// the terminal&#x27;s own selection — the one copy route left on
+// the alternate screen — and this arm must never bid for it.
+// A click mutates view state through the frame and never
+// enters the line channel, same as the wheel.
+Ok(Event::Mouse(mouse)) =&gt; match mouse.kind {
+    MouseEventKind::ScrollUp =&gt; thread_frame.scroll_rows(true, WHEEL_ROWS),
+    MouseEventKind::ScrollDown =&gt; thread_frame.scroll_rows(false, WHEEL_ROWS),
+    MouseEventKind::Down(MouseButton::Left)
+        if !mouse.modifiers.contains(KeyModifiers::SHIFT) =&gt;
+    {
+        thread_frame.click(mouse.column, mouse.row);
+    }
+    _ =&gt; {}
+},</code></pre>
+
+  <p>
+    <code>Shift+drag</code> appears in the QUICK HELP table for the reason the
+    table's own doc comment gives: mouse capture taking plain drag away is the
+    one fact a user cannot guess.
+    <span class="chip cert">certified</span>
+    <code>keymap()</code> in <code>crates/emma/src/term/app.rs</code> lists
+    eleven rows and <code>("Shift+drag", "select text")</code> is the last.
+  </p>
+
+  <p>
+    What Shift+drag gives back is a whole-row selection, which is not what a
+    reader wants from a framed layout. Every line comes with the sidebar's
+    columns, the borders and the gutter welded onto it. Collapsing the sidebar
+    with <code>Ctrl+B</code> narrows the damage and does not remove it.
+    <span class="chip unv">unverified</span> Nobody has recorded what a
+    Shift+drag selection actually contains on a real Windows Terminal with the
+    sidebar open. Settling it takes a person, a console and a paste into an
+    editor; the byte-capture harness cannot see it, because the terminal's
+    selection never passes through Emma.
+  </p>
+
+  <h2 id="copy">/copy, and where INV-001 is enforced</h2>
+
+  <p>
+    <code>/copy</code> sidesteps the whole contest by not copying the screen.
+    It reads the session log, finds the last assistant turn that said something
+    rather than only calling tools, and sends that markdown source to the
+    terminal with OSC 52: <code>ESC ] 52 ; c ; &lt;base64&gt; BEL</code>. The
+    terminal does the clipboard write, which is why this works the same way
+    locally and over SSH and needs no platform API.
+  </p>
+
+  <p>
+    It is an escape sequence, so it is refused wherever escape sequences are.
+    <code>INV-001</code> promises zero escape bytes on <code>-p</code>, on a
+    pipe, under <code>EMMA_NO_FRAME</code> and with no console.
+  </p>
+
+  <p class="src">crates/emma/src/term.rs, <code>Term::clipboard</code></p>
+
+  <pre><code>/// platform clipboard API. Windows Terminal has supported it since 2020.
+///
+/// **Callers check [`Term::framed`] first so they can say something useful,
+/// and this refuses anyway.** This emits escape bytes, and `INV-001`
+/// promises none of those on `-p`, on a pipe, under `EMMA_NO_FRAME` or with
+/// no console. The call-site guard stays because a clipboard write that
+/// silently does nothing is the failure this whole area is about — the
+/// caller has a message to give, and this function does not.
+///
+/// **But &quot;callers must&quot; was the whole of the enforcement, and a reviewer
+/// found nothing tested it.** No test in the workspace named `Copy`, so
+/// deleting the single `if !s.term.framed()` at the call site emitted OSC 52
+/// on a pipe with the entire suite green. An invariant held up by a sentence
+/// in a doc comment is held up by nothing; the refusal belongs at the one
+/// place that can emit the bytes, and the message belongs where there is
+/// somebody to read it.
+///
+/// Returns whether it wrote, so the guarantee is observable rather than
+/// merely performed — the same correction `read_reporting` and
+/// `SessionLog::transcript_failed` already made elsewhere in this tree.
+///
+/// **There is no acknowledgement.** The terminal honours the sequence or
+/// ignores it, with no reply and no error, so nothing downstream can report
+/// success as a fact. Callers say what was sent, never what arrived.
+pub fn clipboard(&amp;self, text: &amp;str) -&gt; bool {
+    if !self.framed() {
+        return false;
+    }
+    // Straight to stdout rather than through `write_out`, which routes prose
+    // into the frame retained transcript. This is a control sequence, not
+    // content: a buffer that held it would replay somebody clipboard write
+    // on every redraw.
+    //
+    // Writing under the frame is safe because OSC 52 draws nothing - it
+    // moves no cursor and paints no cell, so it cannot disturb a frame
+    // mid-paint the way an unsolicited line would.
+    use std::io::Write as _;
+    let mut out = std::io::stdout();
+    let seq = format!(&quot;\x1b]52;c;{}\x07&quot;, base64(text.as_bytes()));
+    let _ = out.write_all(seq.as_bytes());
+    let _ = out.flush();
+    true
+}</code></pre>
+
+  <p>
+    The refusal sits in the function that writes the bytes, and it did not
+    always. Until 2026-08-23 the doc comment asked callers to check
+    <code>framed()</code> first and the single call site did, which meant the
+    invariant rested on one <code>if</code> and a sentence. An adversarial
+    reviewer found that no test in the workspace named <code>Copy</code>:
+    deleting that line emitted OSC 52 into a pipe with the whole suite green.
+    <span class="chip test">tested</span>
+    <code>an_unframed_terminal_refuses_to_write_the_clipboard</code> in
+    <code>term.rs</code> covers all four unframed constructors. Removing the
+    guard turns it red, and the harness stdout then carries
+    <code>]52;c;YW55dGhpbmcgYXQgYWxs</code>, the forbidden sequence in a pipe,
+    visible.
+  </p>
+
+  <p>
+    Both guards remain, and they do different jobs. The one at the call site
+    has an operator to explain the refusal to. The one in
+    <code>clipboard</code> has the bytes. What connects them is the return
+    value: the report follows what was written rather than what was called, so
+    it cannot say "sent" about bytes that never left.
+  </p>
+
+  <p class="src">crates/emma/src/session_command.rs, <code>copy_last_answer</code></p>
+
+  <pre><code>        s.term
+            .note(&quot;/copy: nothing to copy — this session has no answer yet.&quot;);
+        return;
+    };
+
+    // The report follows the return value rather than the call, so it cannot
+    // say &quot;sent&quot; about bytes that were never written. `clipboard` refuses on an
+    // unframed run for `INV-001`; the guard at the top of this function exists
+    // to explain that where there is somebody to read it, and this arm is what
+    // remains if that guard is ever deleted.
+    if !s.term.clipboard(&amp;text) {
+        s.term.warn(NO_ESCAPE_BYTES_HERE);
+        return;
+    }
+    let lines = text.lines().count();
+    let chars = text.chars().count();
+    s.term.note(&amp;format!(
+        &quot;/copy: sent {chars} characters ({lines} line(s)) to the clipboard. Emma cannot see \
+         whether the terminal accepted it — if nothing arrives, this terminal does not do OSC 52.&quot;
+    ));
+}
+
+fn say(term: &amp;Term, text: &amp;str) {</code></pre>
+
+  <p>
+    Emma never claims the clipboard received anything. OSC 52 has no
+    acknowledgement in the protocol, so there is no reply to wait for and
+    nothing downstream can report success as a fact. The note says how many
+    characters were sent and that a terminal without OSC 52 will silently drop
+    them.
+    <span class="chip unv">unverified</span> Whether the sequence reaches the
+    clipboard in the owner's Windows Terminal has not been observed. The PTY
+    harness can prove the bytes go out and never that they arrived; settling it
+    needs a person to press <code>/copy</code> and then <code>Ctrl+V</code>.
+  </p>
+
+  <p>
+    The base64 encoder is written out rather than pulled in as a dependency,
+    and it is checked against the RFC 4648 vectors rather than against itself.
+    A hand-written encoder is the thing to check against somebody else's
+    numbers.
+    <span class="chip test">tested</span>
+    <code>the_encoder_matches_the_published_vectors</code> and
+    <code>utf8_round_trips_through_the_encoder</code> in
+    <code>crates/emma/src/term.rs</code>.
+  </p>
+
+  <h2 id="export">/export, the route that survives a pipe</h2>
+
+  <p>
+    <code>/export</code> writes goals and assistant turns to a markdown file.
+    With no argument it lands beside the session log, named after it, because
+    the session id is the name somebody would reach for and the working
+    directory is usually a repository the user is editing. It reads the same
+    session log <code>/copy</code> does and writes a file rather than an escape
+    sequence, so it is the one route that works on <code>-p</code>, on a pipe
+    and with no console.
+  </p>
+
+  <p>
+    A session log with records that cannot be parsed produces an incomplete
+    export, and the file says so in its first line.
+  </p>
+
+  <p class="src">crates/emma/src/session_command.rs, <code>export_conversation</code></p>
+
+  <pre><code>// **A damaged log is said out loud, in the file and on screen.** `read_reporting`
+// returns the lines it could not parse, and an export that quietly omitted
+// them would produce a transcript that reads as complete. That is the exact
+// failure the session log&#x27;s own loss counting exists to prevent, and it
+// would be undone here by not passing it on.
+if !lost.is_empty() {
+    let note = format!(
+        &quot;&gt; **{} record(s) of this session could not be read and are missing below** \
+         (line {}). This export is incomplete.\n\n&quot;,
+        lost.len(),
+        lost.iter()
+            .take(5)
+            .map(|n| n.to_string())
+            .collect::&lt;Vec&lt;_&gt;&gt;()
+            .join(&quot;, &quot;)
+    );
+    out.insert_str(0, &amp;note);
+}</code></pre>
+
+  <p>
+    <code>export</code> is ordered after <code>exit</code> in the builtin list.
+    Both answer the prefix <code>/ex</code>, the menu highlights the first
+    match, and muscle memory of <code>/ex</code> then Enter would otherwise
+    have written a file where the user meant to end the session. A new command
+    does not get to take an established prefix.
+    <span class="chip test">tested</span>
+    <code>export_takes_a_path_or_nothing</code>, and the ordering is visible in
+    <code>BUILTINS</code>.
+  </p>
+
+  <h2 id="gone">What the frame does not give back</h2>
+
+  <p>
+    Terminal scrollback is gone on the alternate screen and the retained
+    transcript buffer replaces it, reachable by keys and the wheel rather than
+    by the terminal's own history. Re-reading the styled run after exit is gone
+    outright: the session JSONL named in the exit line is the record.
+    <code>notes/design/tui-fullscreen.md</code> §2 lists what the reversal
+    cost, and <code>/export</code> is the half of the answer that landed.
+  </p>
+
+  <p>
+    In-app drag-selection with copy-on-release has not been built. The original
+    design named it as the eventual target, so building it would not revive a
+    rejected approach. Claude Code's own fullscreen renderer captures the mouse
+    exactly as Emma does and rebuilt selection in-app for the same reason,
+    which corroborates the capture decision rather than arguing with it.
+    <span class="chip unv">unverified</span> That reading of Claude Code's
+    renderer comes from the parity investigation recorded on <code>UI-006</code>
+    and has not been re-checked against a current build.
+  </p>
+
+  <h2 id="coverage">Coverage</h2>
+
+  <p>
+    This page covers <code>Term::clipboard</code> and <code>base64</code> in
+    <code>crates/emma/src/term.rs</code>, <code>copy_last_answer</code> and
+    <code>export_conversation</code> in
+    <code>crates/emma/src/session_command.rs</code>, the mouse-capture enable
+    and disable in <code>crates/emma/src/term/frame.rs</code>, and the mouse
+    arm of the reader thread in <code>crates/emma/src/term/input.rs</code>.
+  </p>
+
+  <p>
+    It does not cover the session log's own record format, which is
+    <a href="session-records.html">Records</a>, nor the retained transcript
+    buffer that replaced scrollback, which is
+    <a href="terminal-transcript.html">Transcript</a>. The frame's enter and
+    leave sequences beyond mouse capture are
+    <a href="terminal-frame.html">Frame</a>.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Back to <a href="terminal.html">The terminal</a>, or on to
+      <a href="terminal-transcript.html">the buffer that replaced scrollback</a>,
+      which is what there is to copy out of.
+    </p>
+  </footer>
+
+        </div>
+      </main>
+    </div>
+  </body>
+</html>
