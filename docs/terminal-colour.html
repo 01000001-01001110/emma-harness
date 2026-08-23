@@ -170,10 +170,40 @@
     }</code></pre>
   <span class="src">crates/emma/src/term/palette.rs — <code>Level::of</code>, <code>Level::detect</code></span>
 
+  <h3>The Windows console that says yes and means no</h3>
+
+  <p>
+    Before the ladder runs, <code>detect</code> asks a Windows-only question: if
+    output looks colour-capable, but there is no <code>WT_SESSION</code>, no
+    <code>EMMA_COLORS</code>, and <code>enable_vt()</code> returns false, the
+    answer is <code>Level::None</code> regardless of what the environment claims.
+  </p>
+
+  <p>
+    That console exists. It is a terminal, it is not redirected, and it does not
+    process escape sequences &mdash; so every SGR byte Emma wrote landed on the
+    screen as literal text. The ladder could not catch it, because every input
+    the ladder reads was truthfully saying "this is a terminal". The only signal
+    that distinguishes the case is whether virtual-terminal processing could
+    actually be turned on, which is a syscall rather than a variable.
+  </p>
+
+  <p>
+    <code>EMMA_COLORS</code> still wins, deliberately: someone who sets it is
+    looking at a terminal Emma guessed wrong about, and that is as true in this
+    direction as the other.
+    <span class="chip unv">unverified</span> against a real VT-less console: this
+    is reasoned from <code>enable_vt</code>'s contract and exercised with the
+    syscall stubbed, not observed on a console that genuinely refuses VT.
+    <em>What would settle it:</em> a run under a Windows console host with
+    virtual-terminal processing disabled, checking stdout for escape bytes.
+  </p>
+
   <p>
     The environment is an argument rather than a global, which is what makes the
-    whole ladder testable; <code>Level::detect</code> is the one line that reads
-    the real process. The order is <em>&ldquo;so the honest signals beat the
+    whole ladder testable; <code>Level::detect</code> is the one place that reads
+    the real process &mdash; and on Windows it does one thing before the ladder,
+    described below. The order is <em>&ldquo;so the honest signals beat the
     hopeful ones&rdquo;</em>: an explicit override first, since the person
     setting <code>EMMA_COLORS</code> is looking at a terminal Emma guessed wrong
     about; then <code>NO_COLOR</code> and &ldquo;this is not a terminal at

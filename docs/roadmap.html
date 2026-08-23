@@ -135,9 +135,13 @@
 
   <ul class="body">
     <li>
-      <code>Fold</code>'s compacted arm turns an unreadable record into deletion.
-      Every neighbouring arm drops a turn whole on bad data. Nothing writes such
-      a record today, which is why no test catches it.
+      <s><code>Fold</code>'s compacted arm turns an unreadable record into
+      deletion.</s> <strong>Fixed.</strong> Both damaged shapes now refuse
+      loudly and leave the conversation alone, rather than rebuilding a
+      different one from defaults. The line that made it worth doing before
+      anything wrote such a record: this arm is the only defaulting that changes
+      what was <em>sent</em>, and a conversation quietly missing turns is not a
+      failure anybody can see.
     </li>
     <li>
       <code>ToolCtx</code> has no session slot, so constructing tools

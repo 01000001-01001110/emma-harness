@@ -292,6 +292,22 @@ self.s.log.append(
         <td><code>id</code>, <code>tool</code>, <code>detail</code></td>
       </tr>
       <tr>
+        <td><code>tool_cancelled</code></td>
+        <td>Ctrl-C reached a tool that was already running. The call is not
+            abandoned silently: it comes back as a result the model reads, so the
+            conversation stays wire-legal &mdash; every <code>tool_use</code> has
+            exactly one result &mdash; and the model is told the work stopped
+            rather than being left to infer it from silence</td>
+        <td><code>id</code>, <code>tool</code>, <code>detail</code></td>
+      </tr>
+      <tr>
+        <td><code>tool_panicked</code></td>
+        <td>the tool panicked. <code>catch_unwind</code> turns it into an
+            observation like any other failure, because a panicking tool used to
+            take the whole loop with it</td>
+        <td><code>id</code>, <code>tool</code>, <code>detail</code></td>
+      </tr>
+      <tr>
         <td><code>tool_result</code></td>
         <td>always, success or failure, once per <code>tool_use</code></td>
         <td><code>id</code>, <code>tool</code>, <code>block</code> (the whole
@@ -345,8 +361,9 @@ self.s.log.append(
     <span class="h">A failure writes two records, and sometimes only one</span>
     <p>
       Every failure gets the prose record naming what went wrong
-      (<code>tool_unknown</code>, <code>denied</code>, <code>tool_failed</code>
-      or <code>tool_fault</code>) and then the <code>tool_result</code> that was
+      (<code>tool_unknown</code>, <code>denied</code>, <code>tool_failed</code>,
+      <code>tool_fault</code>, <code>tool_cancelled</code> or
+      <code>tool_panicked</code>) and then the <code>tool_result</code> that was
       actually sent, under the same kind a success uses. The fold rebuilds the
       user turn from those blocks, and a fold that skipped failures would
       reconstruct a turn answering only the calls that worked, which the API

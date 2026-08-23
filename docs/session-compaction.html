@@ -227,7 +227,24 @@ fn compact_if_needed(&amp;mut self, measured: Option&lt;i64&gt;, why: &amp;str) 
         remaining -= sizes[take];
         take += 1;
     }
-    self.compact(take, size, why);
+    <span class="c">// **The returned reason used to be dropped here.** `/compact` explains
+    // itself and the threshold path did not, so a conversation over its cap
+    // with nothing left to summarise — one enormous goal, or a history
+    // already reduced to summaries — grew on every single call in silence
+    // until the token budget or a provider 400 ended it. The user's first
+    // sign was the run stopping.</span>
+    if let Compacted::Nothing(reason) = self.compact(take, size, why) {
+        if !self.said_compaction_stuck {
+            self.said_compaction_stuck = true;
+            self.s.term.warn(&amp;format!(
+                "this conversation is over the context limit and compaction cannot \
+                 shrink it: {reason}. Every request from here is larger than the cap, \
+                 and the run will end on a budget or a provider error rather than on \
+                 the goal. `/clear` starts a fresh conversation; a smaller goal would \
+                 also fit."
+            ));
+        }
+    }
 }</code></pre>
 
   <p>
@@ -257,6 +274,25 @@ fn compact_if_needed(&amp;mut self, measured: Option&lt;i64&gt;, why: &amp;str) 
     inside the loop would be quadratic in a list whose elements are file
     contents, which is the kind of cost that is invisible until a session gets
     large enough to need compaction in the first place.
+  </p>
+
+  <p>
+    The tail of the function used to be a bare
+    <code>self.compact(take, size, why);</code>, dropping the returned
+    <code>Compacted</code> on the floor. That mattered in exactly one case: a
+    conversation over its cap with nothing left to summarise — one enormous
+    goal, or a history already reduced to summaries — where
+    <code>compact</code> answers <code>Compacted::Nothing</code> with a reason
+    and the threshold path said none of it. Such a session grew on every call
+    in silence until the token budget or a provider 400 ended it, and the
+    user's first sign was the run stopping. The reason is now caught and said
+    once per session, on the <code>said_compaction_stuck</code> flag, with
+    <code>/clear</code> named as the way out; once rather than per call,
+    because the condition holds on every subsequent request and a warning per
+    request is a run burying itself in its own complaint.
+    <span class="chip test">tested</span>
+    <code>automatic_compaction_that_cannot_help_says_so_once</code> in
+    <code>crates/emma/tests/commands.rs</code>.
   </p>
 
   <h2 id="compact">Replacing them</h2>
@@ -349,8 +385,11 @@ const COMPACTED_NOTE: &amp;str = "[Summarised to save context. The tool calls fr
 // reporting a saving on every single call.
 //
 // **Two different situations reach this line and a user needs to be
-// told which.** Automatic compaction is silent either way; `/compact` is
-// not, and the first live run of it said "already summarised" about two
+// told which.** Automatic compaction is no longer silent either way —
+// DEF-009 gave the threshold path a one-shot warning naming `/clear`,
+// because a session pinned against a cap it cannot compact below was
+// otherwise a loop that just kept costing money. `/compact` was always
+// loud, and the first live run of it said "already summarised" about two
 // goals that plainly were not — because those goals were four words
 // long and `COMPACTED_NOTE` is three hundred characters, so the
 // replacement was *larger* than what it replaced. The sentence was true

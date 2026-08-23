@@ -103,11 +103,16 @@ pub struct Continuity {
     Strings rather than <code>Option</code>s, with the empty string carrying the
     "not recorded" meaning, and the check below skipping any field that is
     empty. It comes to the same thing and it makes the missing case the default
-    for a struct that derives <code>Default</code>. <code>cwd</code> is on the
-    type and is not compared by <code>differences</code>: the working directory
-    is what <code>locate</code> and <code>first_run</code> match on, and
-    resuming a session into a different tree is a request the user made
-    explicitly by naming it.
+    for a struct that derives <code>Default</code>. <code>cwd</code> sat on the
+    type from the beginning and, for a while, was the one field
+    <code>differences</code> did not compare — an earlier version of this page
+    explained the gap as intentional, on the argument that resuming into a
+    different tree is a request the user made explicitly by naming the
+    session. That argument covered <code>--resume &lt;id&gt;</code> and nothing
+    else, and the hazard <code>locate</code> names in its own doc — "a
+    conversation about the wrong repository with write tools attached" — was
+    the only drift that arrived silently while three cheaper ones all warned.
+    It is compared now, same as the rest.
   </p>
   <span class="src">crates/emma/src/session.rs — <code>Continuity</code>, <code>locate</code></span>
 
@@ -160,6 +165,7 @@ pub fn differences(
     instructions_hash: &amp;str,
     tool_schema_hash: &amp;str,
     model: &amp;str,
+    cwd: &amp;str,
 ) -&gt; Vec&lt;String&gt; {
     let mut out = Vec::new();
     let mut check = |what: &amp;str, was: &amp;str, now: &amp;str, cost: &amp;str| {
@@ -187,6 +193,18 @@ pub fn differences(
         model,
         "The turns being handed back were written by a different model.",
     );
+    <span class="c">// `cwd` was recorded from the beginning and never compared, so the one
+    // hazard `locate` warns about in its own doc — "a conversation about the
+    // wrong repository with write tools attached" — was the only drift that
+    // arrived silently, while three cheaper ones all warned. Resuming a
+    // session by id from another project is exactly how that happens.</span>
+    check(
+        "working directory",
+        &amp;self.cwd,
+        cwd,
+        "This conversation is about a different directory than the one you are in, \
+         and the tools that write files are pointed at this one.",
+    );
     out
 }</code></pre>
 
@@ -198,18 +216,23 @@ pub fn differences(
     file from before a field existed is silent rather than noisy.
     <span class="chip test">tested</span>
     <code>resuming_into_a_changed_harness_names_what_changed</code> in
-    <code>crates/emma/tests/resume.rs</code>.
+    <code>crates/emma/tests/resume.rs</code>, which now also asserts that a
+    cross-project resume names both directories.
   </p>
   <span class="src">crates/emma/src/session.rs — <code>Continuity::differences</code></span>
 
   <p>
-    The three warnings are emitted late in startup rather than beside the
+    The four warnings are emitted late in startup rather than beside the
     resume line, because <code>Delegate</code> is registered after the resume is
     resolved and a schema hash taken earlier would hash a tool surface no
     request will carry. <code>main.rs</code> calls
     <code>differences</code> after <code>harness.select_tools(registry)</code>
     has consumed the registry, and prints each line through
-    <code>term.warn</code>.
+    <code>term.warn</code>. The current directory is read at the call site,
+    and one that cannot be read becomes the empty string. The empty-skip in
+    <code>check</code> is on the recorded value, not the current one, so a
+    file that recorded a directory still gets its warning in that case — with
+    nothing after the arrow.
   </p>
 
   <pre><code><span class="c">// crates/emma/src/main.rs</span>
@@ -218,6 +241,9 @@ if let Some(restored) = &amp;restored {
         &amp;harness.instructions_hash(),
         &amp;tools.schema_hash(),
         provider.model_id(),
+        &amp;std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
     ) {
         term.warn(&amp;line);
     }

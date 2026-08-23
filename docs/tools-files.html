@@ -299,7 +299,28 @@
 <span class="src">tools/fs/src/session.rs — <code>ReadState</code>, <code>ReadTracker::state</code></span>
 
 <p>
-  The stamp is length and mtime. A missing file stamps as zero-length with no
+  The stamp is length, mtime, <strong>and a hash of the content</strong>.
+  <code>content</code> is the one that makes this a check rather than a
+  formality: length and mtime alone are forgeable by accident, because a
+  formatter that rewrites a file to the same byte length inside one filesystem
+  tick produces an identical <code>(len, mtime)</code> pair, and <code>Write</code>
+  then overwrote the other edit believing the file was untouched. No adversary
+  required. It is FNV-1a over the whole file &mdash; the hash <code>hashline</code>
+  already uses for <code>Edit</code>'s line anchors, cheap enough to run on a
+  file <code>Read</code> was going to load anyway &mdash; and <code>None</code>
+  when the file was never read, because a <code>Write</code> to a path nobody
+  opened has no content to remember.
+</p>
+
+<p>
+  An independent review rated the same-tick collision unlikely on NTFS
+  specifically, where mtime resolution is 100ns. That is a reason to call this a
+  lost-update <em>risk</em> rather than a certainty, and it is not a reason to
+  keep a check that cannot see the change it is checking for.
+</p>
+
+<p>
+  A missing file stamps as zero-length with no
   mtime, which is deliberate: two consecutive stats of a file that does not
   exist agree, so "read a file that is not there, then create it" is not
   reported as a stale clobber. <code>forget</code> exists and nothing calls it,
@@ -351,6 +372,53 @@
             }
         }</code></pre>
 <span class="src">tools/fs/src/write.rs — <code>Write::run</code></span>
+
+<h3>The write itself is a rename, and the temp name is not guessable</h3>
+
+<p>
+  <code>Write</code> and both <code>Edit</code> paths used
+  <code>std::fs::write</code>, which truncates and then streams &mdash; so a
+  crash mid-write left somebody's source empty or partial. They now build a
+  complete sibling and rename it over the target, which is the pattern
+  <code>tools/tasks</code> had used since it was written, one crate away.
+</p>
+
+<div class="note warn">
+  <span class="h">The first version of this fix lost data in a new way</span>
+  <p>
+    The sibling was named <code>&lt;target&gt;.emma-tmp</code>, deterministically.
+    So a user who happened to own <code>config.toml.emma-tmp</code> had it
+    truncated and then renamed away by a write to <code>config.toml</code> &mdash;
+    a function whose entire purpose is not losing a file, losing one. Two more in
+    the same twenty lines: concurrent writes to one target raced through the same
+    temp path, so a caller could be told its content was written when the other
+    call's content landed; and the temp file took the process umask, so renaming
+    it over a <code>0600</code> file <strong>widened it to <code>0644</code></strong>.
+  </p>
+  <p>
+    The name now carries the process id and a counter &mdash; the counter makes
+    two writes in one process distinct, the pid makes two processes distinct, and
+    neither is enough alone &mdash; and on unix the target's permissions are
+    copied onto the temp before the rename. None of the three was found by the
+    commit message, the test, the mutation, or reading it again; all three came
+    from a second reader told to attack rather than confirm.
+    <span class="chip cert">certified</span> against the real filesystem for the
+    reserved-name case below;
+    <span class="chip unv">unverified</span> for the permission arm, which is
+    <code>#[cfg(unix)]</code> and has never run here.
+    <em>What would settle it:</em> the suite on any unix host.
+  </p>
+</div>
+
+<p>
+  A Windows reserved device name (<code>NUL</code>, <code>CON</code>, <code>COM1</code>)
+  or a name ending in a dot or a space gets a warning note on the outcome. Emma's
+  root is a verbatim path, which is what makes those real files here rather than
+  the devices they would otherwise be &mdash; a blind audit refuted the
+  data-loss claim originally filed against this, and the warning is what survived
+  it: the file is real, and it is a file most other tools on the system will not
+  be able to open.
+</p>
 
 <p>
   Creating a file that does not exist needs no prior read; there is nothing to
@@ -499,7 +567,7 @@
   deterministic, for the same cached-prefix reason.
 </p>
 
-<h3>Four independent cuts</h3>
+<h3>Five independent cuts</h3>
 
 <div class="tw">
   <table>
@@ -509,6 +577,7 @@
       <tr><td>walk ceiling</td><td><code>MAX_VISITED</code> 200,000 visited</td><td>the shared <code>walk::ceiling_notice</code>: counts here are a floor rather than a total</td></tr>
       <tr><td>match line length</td><td><code>MAX_MATCH_CHARS</code> 400</td><td>how many lines were clipped; <code>Read</code> the file at the line number shown</td></tr>
       <tr><td>files not opened</td><td><code>MAX_FILE_BYTES</code> 8 MiB</td><td>how many text files were skipped; <code>Read</code> or <code>Bash</code> can reach one by name</td></tr>
+      <tr><td>files that could not be opened</td><td>no limit &mdash; any I/O error</td><td>how many files could not be read at all. <strong>This one was silent</strong>: the open error went through <code>.ok()</code> and the file became "not text", so a file containing the pattern was reported as <code>no matches</code></td></tr>
     </tbody>
   </table>
 </div>
@@ -521,7 +590,7 @@
   like a complete one.
 </p>
 
-<h3>Two skips, and only one is an admission</h3>
+<h3>Three skips, and two of them are admissions</h3>
 
 <pre><code><span class="c">/// The two skips were one `None` until it became clear they are not the same</span>
 <span class="c">/// admission. **A file that is not text is a file with no lines** — a JPEG</span>
@@ -534,6 +603,14 @@
     Text(String),
     TooLarge,
     NotText,
+    <span class="c">/// The file could not be opened. **Not the same as `NotText`**, and keeping</span>
+    <span class="c">/// them apart is the whole point: `tool-api`'s rule is that "I could not</span>
+    <span class="c">/// look" and "I looked and there was nothing" must never render as the same</span>
+    <span class="c">/// message, because the model can route around a failure and cannot route</span>
+    <span class="c">/// around an answer. Both arms here used to be `.ok()`, so a</span>
+    <span class="c">/// permission-denied file silently became "not text" and vanished from the</span>
+    <span class="c">/// count -- a file containing the pattern reported as `no matches`.</span>
+    Unreadable,
 }</code></pre>
 <span class="src">tools/fs/src/grep.rs — <code>Readable</code>, <code>readable_text</code></span>
 

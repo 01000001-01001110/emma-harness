@@ -224,14 +224,18 @@ pub struct Interrupt {
 }
 
 impl Interrupt {
-    pub fn new() -&gt; Arc&lt;Self&gt; { Arc::new(Self::default()) }
+    pub fn new() -&gt; Arc&lt;Self&gt; {
+        Arc::new(Self::default())
+    }
 
     pub fn trip(&amp;self) {
         self.flag.store(true, Ordering::SeqCst);
         self.notify.notify_one();
     }
 
-    pub fn tripped(&amp;self) -&gt; bool { self.flag.load(Ordering::SeqCst) }
+    pub fn tripped(&amp;self) -&gt; bool {
+        self.flag.load(Ordering::SeqCst)
+    }
 
     <span class="c">/// Clear the flag so the next goal starts un-interrupted.
     ///

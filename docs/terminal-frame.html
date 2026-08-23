@@ -219,7 +219,22 @@ const ALT_LEAVE: &amp;str = "\x1b[?1049l";</code></pre>
 
   <p class="faint">crates/emma/src/term/frame.rs &middot; <code>restore_terminal</code></p>
   <pre><code>pub fn restore_terminal() {
-    <span class="k">if</span> !FRAME_ON.swap(false, Ordering::SeqCst) {
+    <span class="c">// **Each latch answers for itself.** This used to return early unless</span>
+    <span class="c">// `FRAME_ON` was set — and `FRAME_ON` is set *last*, after raw mode, the</span>
+    <span class="c">// alternate screen and mouse capture are already on. So a panic anywhere in</span>
+    <span class="c">// that window left every one of them enabled with the only thing that turns</span>
+    <span class="c">// them off refusing to run: a shell with no echo, on a screen that is not</span>
+    <span class="c">// the user's, which is the failure `CLAUDE.md` says people uninstall over.</span>
+    <span class="c">//</span>
+    <span class="c">// The comment at the install site claimed the `ALT_ON` latch prevented</span>
+    <span class="c">// exactly this. It could not, because it never reached the code that reads</span>
+    <span class="c">// it.</span>
+    <span class="k">let</span> was_frame = FRAME_ON.swap(false, Ordering::SeqCst);
+    <span class="k">if</span> !was_frame
+        &amp;&amp; !RAW_ON.load(Ordering::SeqCst)
+        &amp;&amp; !ALT_ON.load(Ordering::SeqCst)
+        &amp;&amp; !MOUSE_ON.load(Ordering::SeqCst)
+    {
         <span class="k">return</span>;
     }
     <span class="k">if</span> RAW_ON.swap(false, Ordering::SeqCst) {
@@ -446,12 +461,22 @@ const ALT_LEAVE: &amp;str = "\x1b[?1049l";</code></pre>
     step of it can refuse. In order: <code>fallback_reason</code>;
     <code>enable_vt</code> on Windows; the <code>EMMA_UI</code> read; a
     <code>\r\n</code> to stdout so the viewport is not drawn over the shell
-    prompt; <code>enable_raw_mode</code>; the alternate-screen enter when not
-    inline; <code>open_viewport</code> or <code>open_fullscreen</code>; the
-    panic hook; <code>FRAME_ON</code>; <code>enter_modes</code>; mouse capture
-    when not inline; the user-tool catalogue; and finally the
-    <code>Arc&lt;Frame&gt;</code>, a first <code>draw</code>, and a clock
-    thread.
+    prompt; <strong>the panic hook</strong>; <code>enable_raw_mode</code>; the
+    alternate-screen enter when not inline; <code>open_viewport</code> or
+    <code>open_fullscreen</code>; <code>FRAME_ON</code>;
+    <code>enter_modes</code>; mouse capture when not inline; the user-tool
+    catalogue; and finally the <code>Arc&lt;Frame&gt;</code>, a first
+    <code>draw</code>, and a clock thread.
+  </p>
+
+  <p>
+    <strong>The hook moved, and where it sits is the whole of the property.</strong>
+    It used to go on after the modes were enabled &mdash; and a hook installed
+    afterwards cannot answer for a panic in between, which is several fallible
+    writes long. Combined with the old <code>FRAME_ON</code>-only restore guard,
+    a panic in that window stranded raw mode and the alternate screen with
+    nothing willing to undo them. Each failing step now unwinds the latches it
+    set, so a refusal partway through leaves the terminal as it found it.
   </p>
 
   <p>
@@ -506,8 +531,16 @@ const ALT_LEAVE: &amp;str = "\x1b[?1049l";</code></pre>
     also on the restore path.
     <span class="chip test">tested</span>:
     <code>a_synchronized_update_is_always_ended_including_on_the_way_out</code>
-    pins both constants and then asserts on this file's own source that
-    <code>out.push_str(SYNC_END)</code> still appears in the restore.
+    pins both constants and then asserts that
+    <code>leave_modes()</code> actually contains <code>SYNC_END</code>.
+  </p>
+
+  <p>
+    <strong>It used to assert on this file's own source text</strong> &mdash;
+    that the string <code>out.push_str(SYNC_END)</code> still appeared &mdash;
+    and that is a false receipt of the exact kind this repository has a name
+    for: the grep matched a literal that also existed inside the assertion
+    itself, so the test could not fail. Behaviour is checked now, not spelling.
   </p>
 
   <h2 id="anchoring">Anchoring, which is now only the resize path</h2>

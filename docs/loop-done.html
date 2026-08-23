@@ -264,7 +264,9 @@ pub struct MarkerClaim;
 
 #[async_trait::async_trait]
 impl DoneCheck for MarkerClaim {
-    fn name(&amp;self) -&gt; &amp;'static str { "marker_claim" }
+    fn name(&amp;self) -&gt; &amp;'static str {
+        "marker_claim"
+    }
 
     fn contract(&amp;self) -&gt; String {
         format!(
@@ -426,7 +428,11 @@ impl MarkerFilter {
     pub fn finish(&amp;mut self) -&gt; String {
         self.passing = false;
         let held = std::mem::take(&amp;mut self.held);
-        if claims_done(&amp;held) { String::new() } else { held }
+        if claims_done(&amp;held) {
+            String::new()
+        } else {
+            held
+        }
     }
 
     <span class="c">/// Everything, filtered, for a caller that has the whole text already.</span>

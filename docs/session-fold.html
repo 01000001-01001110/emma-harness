@@ -327,38 +327,63 @@ match r["kind"].as_str().unwrap_or_default() {
     // run that did it. Compaction only ever touches finished goals, so
     // the count is an index into `history` and never into `query`.</span>
     "compacted" =&gt; {
-        let drop = r["drop_messages"].as_u64().unwrap_or(0) as usize;
-        let replacement: Vec&lt;Message&gt; =
-            serde_json::from_value(r["messages"].clone()).unwrap_or_default();
+        <span class="c">// **A damaged compaction record must not read as a no-op.**
+        // `drop_messages` missing defaulted to 0 and `messages` missing
+        // defaulted to empty, so a truncated or malformed record left
+        // the conversation uncompacted — and the fold then rebuilt
+        // something *different from what was sent*, which is the one
+        // thing this fold exists to prevent. Silent, and visible only as
+        // a resumed session that behaves unlike the one it continues.</span>
+        let drop = match r["drop_messages"].as_u64() {
+            Some(d) =&gt; d as usize,
+            None =&gt; {
+                eprintln!(
+                    "emma: a `compacted` record is missing `drop_messages`, so the conversation it describes cannot be rebuilt; this resumed conversation will not match the one that was sent."
+                );
+                return;
+            }
+        };
+        let replacement: Vec&lt;Message&gt; = match serde_json::from_value(r["messages"].clone())
+        {
+            Ok(m) =&gt; m,
+            Err(e) =&gt; {
+                eprintln!(
+                        "emma: a `compacted` record has unreadable replacement messages ({e}), so the conversation it describes cannot be rebuilt; this resumed conversation will not match the one that was sent."
+                    );
+                return;
+            }
+        };
         let drop = drop.min(self.history.len());
         self.history.splice(..drop, replacement);
     }</code></pre>
 
-  <div class="note warn">
-    <span class="h">This arm turns a bad record into deletion</span>
+  <div class="note">
+    <span class="h">This arm used to turn a bad record into deletion</span>
     <p>
-      <code>unwrap_or_default()</code> on the replacement means a
-      <code>messages</code> field that will not deserialise yields an empty
-      vector, and the splice still removes <code>drop_messages</code> messages
-      off the front. A malformed record therefore deletes conversation rather
-      than being ignored. Every neighbouring arm makes the other choice: a
-      <code>tool_result</code> whose block will not read is not pushed and its
-      turn is dropped whole; an <code>assistant</code> without
-      <code>raw_content</code> costs its turn and nothing else; a record with a
-      kind nobody knows is skipped. This one is the exception, and the drop
-      count is not derived from the replacement, so nothing detects the
-      mismatch.
-      <span class="chip cert">certified</span> by reading the arm: two
-      statements, an <code>unwrap_or(0)</code> on the count and an
-      <code>unwrap_or_default()</code> on the messages, with no path that
-      abandons the splice. What it does at runtime is
-      <span class="chip unv">unverified</span>, because nothing writes such a
-      record: settle it by hand-writing a <code>compacted</code> line with
-      <code>"messages": 3</code> beside a real <code>drop_messages</code> and
-      folding the file.
+      The warn box that stood here carried a <code>certified</code> chip on a
+      different arm: two statements, an <code>unwrap_or(0)</code> on the count
+      and an <code>unwrap_or_default()</code> on the messages, with no path
+      that abandoned the splice. A <code>messages</code> field that would not
+      deserialise yielded an empty vector and the splice still removed
+      <code>drop_messages</code> messages off the front, so a malformed record
+      deleted conversation rather than being ignored — the one arm whose
+      damage mode was deletion while every neighbour dropped the bad record
+      and no more. Both defaults are gone. A missing count and an unreadable
+      replacement now each refuse the whole arm, say so on stderr, and leave
+      the conversation alone — which is still not a silent no-op, because the
+      refusal names the consequence: the rebuilt conversation will not match
+      the one that was sent.
+      <span class="chip test">tested</span>
+      <code>a_compaction_record_missing_its_fields_does_not_silently_rebuild_a_different_conversation</code>
+      in <code>tests/resume.rs</code> folds a file whose <code>compacted</code>
+      record has no fields, though what it asserts is only that the restore
+      neither fails nor panics; the stderr line and the untouched history are
+      established by reading the two <code>match</code> arms above, and a
+      hand-written damaged record has still not been folded while watching
+      what prints. That last step would settle it.
     </p>
   </div>
-  <span class="src">crates/emma/src/session.rs — <code>Fold::record</code>, the <code>"compacted"</code> arm</span>
+  <span class="src">crates/emma/src/session.rs — <code>Fold::record</code>, the <code>"compacted"</code> arm; crates/emma/tests/resume.rs</span>
 
   <p>
     The <code>drop.min(self.history.len())</code> clamp is the one thing that is
@@ -653,8 +678,10 @@ fn string(r: &amp;Value, key: &amp;str) -&gt; String {
   <ul class="body">
     <li>
       <span class="chip unv">unverified</span> What a malformed
-      <code>compacted</code> record does at runtime. The reading above says it
-      deletes; nothing has run it. Settle it by hand-writing one and folding.
+      <code>compacted</code> record prints at runtime. The refusal arms are in
+      the source and the test folds a fieldless record without failing, but
+      nobody has watched the stderr lines appear. Settle it by hand-writing
+      one, folding, and reading what prints.
     </li>
     <li>
       <span class="chip unv">unverified</span> Whether the mutations named in

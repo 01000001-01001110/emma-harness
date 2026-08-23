@@ -232,19 +232,29 @@
   it, which is worth knowing: the test guards the constructors, not the struct.
 </p>
 
-<h2 id="weak">The weaker form, and who still uses it</h2>
+<h2 id="weak">The weaker form, and who used to use it</h2>
 
 <p>
-  <code>truncated()</code> without a reason is described in its own doc as
-  never the preferred choice for a new tool. It survives because several tools
-  explain their cut inside <code>content</code> instead, and the model reads the
-  content. What it costs is the terminal line and the runtime's own note, which
-  then have nothing specific to say.
+  <code>truncated()</code> without a reason is described in its own doc as never
+  the preferred choice for a new tool. <strong>It now has no production callers
+  at all.</strong> The two that remained were both in the LSP renderer, and they
+  were the reason the invariant on this page &mdash; a cut names its cap, its
+  loss and its remedy, or admits it cannot &mdash; was not actually held.
+</p>
+
+<p>
+  What it cost is worth keeping, because it is the argument for the strong form
+  rather than a preference for it. Both LSP renderers explained their cut in
+  prose inside <code>content</code>, so the <em>model</em> was not left guessing.
+  The human watching the terminal was, and so was the runtime's own note, which
+  fell back to a generic sentence naming no cap. A truncation that is legible to
+  one reader and opaque to the other is the shape this invariant exists to catch,
+  and it survived a class-wide test that covered the fs tools only.
 </p>
 
 <div class="tw">
   <table>
-    <thead><tr><th>Caller of the bare <code>truncated()</code></th><th>What it says instead</th></tr></thead>
+    <thead><tr><th>Former caller of the bare <code>truncated()</code></th><th>What it used to say, in <code>content</code> only</th></tr></thead>
     <tbody>
       <tr>
         <td><code>tools/lsp/src/render.rs</code>, <code>locations</code></td>
@@ -259,15 +269,22 @@
 </div>
 
 <p>
-  <span class="chip cert">certified</span> Those are the only two production
-  callers in the workspace. <code>grep -rn '\.truncated()' tools/ crates/
-  --include=*.rs</code> at commit <code>a3eba74</code> returns eight lines:
-  these two, one <code>tool-api</code> test, one prose mention in a doc comment
-  in <code>tools/web/src/fetch.rs</code>, and four calls to a different method
-  of the same name on <code>digest_md::Rendered</code>. Both of the LSP crate's
-  caps explain themselves in prose, so the model is
-  not left guessing; the human watching the terminal is. Flagged on
-  <a href="tools-lsp.html">the LSP page</a> rather than fixed here.
+  <span class="chip cert">certified</span> There are no production callers left.
+  <code>grep -rn '\.truncated()' tools/ crates/ --include=*.rs</code> run for
+  this page returns six lines: one <code>tool-api</code> test, one prose mention
+  in a doc comment in <code>tools/web/src/fetch.rs</code>, and four calls to a
+  different method of the same name on <code>digest_md::Rendered</code>. Both
+  LSP renderers now call <code>truncated_because</code>
+  (<code>tools/lsp/src/render.rs:296</code> and <code>:408</code>).
+</p>
+
+<p>
+  <strong>The chip above used to certify the opposite</strong>, and it was
+  honest of its own commit &mdash; the grep really did return eight lines then.
+  That is the failure mode a dated certification has: it goes on looking green
+  long after the thing it measured has moved, and this page's whole credibility
+  rests on the green ones meaning something. It was found by a docs audit rather
+  than by anything that could fail on its own.
 </p>
 
 <p>

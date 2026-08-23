@@ -455,21 +455,32 @@
   summarises badly.
 </p>
 
-<div class="note warn">
-  <span class="h">Gap: this crate uses the weaker truncation form</span>
+<div class="note">
+  <span class="h">This crate used the weaker truncation form, and it was the last one that did</span>
   <p>
-    <code>render.rs</code> calls the bare <code>ToolOutcome::truncated()</code>
-    in both <code>locations</code> and <code>symbols</code>, and puts its
-    explanation in <code>content</code> only, so <code>truncation</code> is
-    <code>None</code>. The model still reads a specific sentence. The terminal
-    line gets the runtime's vague fallback, and the model gets that fallback
-    appended <em>as well as</em> the specific note. The API's own doc calls this
-    form "never the preferred one for a new tool", and both of these caps
-    explain themselves, so there is nothing stopping the stronger form being
-    used. Flagged, not fixed.
+    <code>render.rs</code> called the bare <code>ToolOutcome::truncated()</code>
+    in both <code>locations</code> and <code>symbols</code>, putting its
+    explanation in <code>content</code> only, so <code>truncation</code> was
+    <code>None</code>. Both now call <code>truncated_because</code> with the cap,
+    the loss and the remedy
+    (<code>render.rs:296</code>, <code>render.rs:408</code>).
+  </p>
+  <p>
+    <strong>Why it was worth fixing rather than leaving flagged.</strong> The
+    model was never the reader being failed &mdash; it read a specific sentence
+    either way, and then got the runtime's generic fallback appended to it as
+    well, which is its own small confusion. The reader left with nothing was the
+    human watching the terminal, who saw a line naming no cap. A cut that is
+    legible to one reader and opaque to the other is exactly what the truncation
+    invariant is for, and it sat here for weeks with a warning box on it because
+    the class-wide test that guards the invariant covers the fs tools only.
+    <strong>A flag is not a fix, and a page that says "flagged, not fixed" is a
+    defect with a receipt attached.</strong>
+    <span class="chip test">tested</span> the <code>truncation_honesty</code>
+    module in <code>render.rs</code>.
   </p>
 </div>
-<span class="src">tools/lsp/src/render.rs; crates/tool-api/src/lib.rs — <code>ToolOutcome::truncation</code></span>
+<span class="src">tools/lsp/src/render.rs — locations, symbols, tests::truncation_honesty; crates/tool-api/src/lib.rs — <code>ToolOutcome::truncated_because</code></span>
 
 <h2 id="readonly">What makes <code>read_only</code> and <code>reaches_network</code> true</h2>
 

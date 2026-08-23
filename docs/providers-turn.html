@@ -262,8 +262,28 @@ fn turn_from_message(msg: &amp;Value) -&gt; Result&lt;AssistantTurn, LlmError&gt
     protocol error. A <code>usage</code> object that will not deserialize is a
     protocol error naming the field; a <code>usage</code> that is absent
     entirely defaults to four zeros. A missing <code>stop_reason</code> becomes
-    the empty string rather than an error, which means a truncated response can
-    reach the loop with no stop reason at all.
+    the empty string rather than an error here.
+  </p>
+
+  <p>
+    <strong>That last one is true of this batch path and no longer true of the
+    streaming path, which is the one that carries real traffic.</strong>
+    <code>Assembly::finish</code> now refuses an empty <code>stop_reason</code>
+    with a <code>Protocol</code> error, because a stream that closed without ever
+    saying why it stopped did not finish &mdash; it was cut. A dropped
+    connection, a proxy timeout and a truncated response all arrive as a
+    <em>clean</em> close, and the code used to return <code>Ok</code> with
+    whatever text had turned up.
+  </p>
+
+  <p>
+    A turn reading <em>"The tests all pa"</em> was handed to the loop as a
+    finished answer, with no truncation signal anywhere downstream and no way to
+    tell it apart from a model that genuinely said that. A failure is
+    recoverable &mdash; <code>Protocol</code> is retried like any other &mdash;
+    and a confident half-sentence is not. That asymmetry is the whole argument
+    for erroring rather than defaulting, and it is the same one this project
+    applies to a truncated tool result.
   </p>
 
   <p class="faint">crates/llm/src/anthropic.rs · <code>turn_from_content</code></p>

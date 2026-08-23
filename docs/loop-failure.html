@@ -115,7 +115,7 @@ async fn run_tool_call(
         // answers only the calls that worked, which the API rejects. The
         // record immediately above this one (`tool_failed`, `denied`,
         // `tool_unknown`, …) is the prose a human reads; this is the wire.</span>
-        self.log_result_block(turn_id, call, &amp;block, None);
+        self.log_result_block(turn_id, call, &amp;block, None, None);
         (block, false, Some(label.clone()))
     };</code></pre>
 
@@ -289,7 +289,11 @@ let hook_call = HookCall {
     turn_id,
     result: None,
 };
-let pre = self.s.harness.run_hooks(HookEvent::PreToolUse, &amp;hook_call).await;
+let pre = self
+    .s
+    .harness
+    .run_hooks(HookEvent::PreToolUse, &amp;hook_call)
+    .await;
 self.log_hooks(turn_id, &amp;pre.runs);
 if let Some(reason) = pre.denied {
     <span class="c">// Its own treatment on screen, and not a warning: no answer at the
@@ -306,7 +310,12 @@ if let Some(reason) = pre.denied {
     );
 }
 
-match self.s.approvals.request(tool.as_ref(), &amp;call.input, self.s.term).await {
+match self
+    .s
+    .approvals
+    .request(tool.as_ref(), &amp;call.input, self.s.term)
+    .await
+{
     Verdict::Allow =&gt; {}
     Verdict::Deny(reason) =&gt; {
         <span class="c">// Said on screen as well as in the log. A call that vanishes
@@ -543,7 +552,13 @@ self.s.term.tool_result(
 // block inside a user message. Both sites now say what happened and
 // leave the spelling to the provider.</span>
 let block = ToolResult::ok(&amp;call.id, content);
-self.log_result_block(turn_id, call, &amp;block, Some(outcome.truncated));
+self.log_result_block(
+    turn_id,
+    call,
+    &amp;block,
+    Some(outcome.truncated),
+    outcome.exit_code,
+);
 (block, true, None)</code></pre>
 
   <p>
@@ -593,6 +608,7 @@ fn log_result_block(
     call: &amp;ToolCall,
     block: &amp;ToolResult,
     truncated: Option&lt;bool&gt;,
+    exit_code: Option&lt;i64&gt;,
 ) {
     self.s.log.append(
         "tool_result",
@@ -601,7 +617,12 @@ fn log_result_block(
                 // all, because that is the shape the fold reads back and the
                 // shape `restore_records` tests `is_error` on.</span>
                 "block": ContentBlock::ToolResult(block.clone()),
-                "truncated": truncated }),
+                "truncated": truncated,
+                <span class="c">// Beside the block rather than inside it: the block is the
+                // wire shape and the API has no field for this. The
+                // delegation footer reads it here instead of parsing the
+                // prose, which it could never do correctly.</span>
+                "exit_code": exit_code }),
     );
 }</code></pre>
 
@@ -720,16 +741,26 @@ async fn run_post_hooks(
         args: &amp;call.input,
         session_id: &amp;self.s.session_id,
         turn_id,
-        result: Some(HookResult { content, truncated, error }),
+        result: Some(HookResult {
+            content,
+            truncated,
+            error,
+        }),
     };
-    let verdict = self.s.harness.run_hooks(HookEvent::PostToolUse, &amp;hook_call).await;
+    let verdict = self
+        .s
+        .harness
+        .run_hooks(HookEvent::PostToolUse, &amp;hook_call)
+        .await;
     self.log_hooks(turn_id, &amp;verdict.runs);
     verdict.context
 }
 
 fn log_hooks(&amp;self, turn_id: &amp;str, runs: &amp;[emma_harness::HookRun]) {
     for run in runs {
-        self.s.log.append("hook", json!({ "turn_id": turn_id, "run": run }));
+        self.s
+            .log
+            .append("hook", json!({ "turn_id": turn_id, "run": run }));
     }
 }</code></pre>
 
