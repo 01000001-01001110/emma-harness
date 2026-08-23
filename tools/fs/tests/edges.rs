@@ -1623,3 +1623,59 @@ async fn an_ordinary_nested_path_is_not_caught_by_the_stream_refusal() {
         "x\n"
     );
 }
+
+/// `path` naming one file and `glob` together finds the match.
+///
+/// **This returned "no matches in 0 files" about a file containing the
+/// needle.** The glob filter matches the path relative to `base`, and when
+/// `base` is the file itself that relative path is the empty string, which
+/// matches no pattern. The comment in `grep.rs` said the combination was
+/// redundant and had not bitten; a reviewer ran it and it had.
+///
+/// Silence is the worst available answer here. A search that reports nothing is
+/// read as having looked.
+#[tokio::test]
+async fn naming_one_file_and_a_glob_together_still_searches_it() {
+    let sandbox = Sandbox::new();
+    sandbox.write_file("hit.rs", "NEEDLE here\n");
+
+    let out = sandbox
+        .ok(
+            "Grep",
+            json!({ "pattern": "NEEDLE", "path": "hit.rs", "glob": "**/*.rs" }),
+        )
+        .await;
+    assert!(
+        out.content.contains("hit.rs"),
+        "a file that contains the pattern was reported as no match: {:?}",
+        out.content
+    );
+
+    // The bare `*.rs` spelling too, which is what a person types about one file.
+    let out = sandbox
+        .ok(
+            "Grep",
+            json!({ "pattern": "NEEDLE", "path": "hit.rs", "glob": "*.rs" }),
+        )
+        .await;
+    assert!(
+        out.content.contains("hit.rs"),
+        "`*.rs` against a named file found nothing: {:?}",
+        out.content
+    );
+
+    // And the glob still filters: a pattern that genuinely excludes the named
+    // file must still exclude it, or this fix has simply switched the filter
+    // off for single files.
+    let out = sandbox
+        .ok(
+            "Grep",
+            json!({ "pattern": "NEEDLE", "path": "hit.rs", "glob": "*.py" }),
+        )
+        .await;
+    assert!(
+        !out.content.contains("NEEDLE here"),
+        "the glob stopped filtering a named file altogether: {:?}",
+        out.content
+    );
+}

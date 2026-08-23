@@ -436,3 +436,64 @@ async fn a_path_that_resolves_somewhere_else_inside_the_root_is_refused_too() {
 }
 
 // endregion: The re-check immediately before a write
+
+// region: The hole, certified rather than asserted
+// ---------------------------------------------------------------------------
+// The hole, certified rather than asserted
+//
+// `path.rs`'s module doc has always said a hard link inside the root pointing
+// at a file outside it is not detectable, and said it was verified rather than
+// assumed. `docs/tools-containment.html` carried an amber chip disagreeing:
+// the claim was repeated from the module doc, which does not say when or on
+// what, and nothing in the suite exercised it. It named the experiment that
+// would settle it. This is that experiment.
+//
+// It asserts the LIMITATION, not a fix. There is no fix available at this
+// layer: both names are equally the file, there is no "real" path to
+// canonicalise towards, and `canonicalize` returns the inside one. A test that
+// pretended otherwise would be the false receipt this project keeps filing.
+// What the test buys is that the limitation cannot quietly change — if a future
+// resolver ever does catch this, this test goes red and somebody has to come
+// and rewrite the doc rather than leaving it saying the opposite.
+// ---------------------------------------------------------------------------
+
+/// A hard link inside the root reads a file outside it, and that is documented.
+///
+/// **Read this as the boundary being a boundary against paths, not against an
+/// operator who has already placed a link inside the tree.** `Bash` is a wider
+/// hole than this and is documented as one; the approval gate is a consent
+/// interface and not a sandbox. What would be indefensible is the claim going
+/// unchecked, which is what the amber chip was for.
+///
+/// Certified on Windows, where `std::fs::hard_link` needs no privilege. The
+/// skip is real and reported: a platform or filesystem that refuses a hard link
+/// leaves nothing to certify, and pretending otherwise is worse than saying so.
+#[tokio::test]
+async fn a_hard_link_inside_the_root_reads_a_file_outside_it() {
+    let sandbox = Sandbox::new();
+    let outside = sandbox.root().parent().unwrap().join("outside-secret.txt");
+    std::fs::write(&outside, "outside-secret\n").unwrap();
+
+    let inside = sandbox.root().join("inside-link.txt");
+    if std::fs::hard_link(&outside, &inside).is_err() {
+        let _ = std::fs::remove_file(&outside);
+        eprintln!("SKIPPED: this platform or filesystem would not create a hard link");
+        return;
+    }
+
+    let out = sandbox
+        .ok("Read", json!({ "file_path": "inside-link.txt" }))
+        .await;
+    let _ = std::fs::remove_file(&outside);
+
+    assert!(
+        out.content.contains("outside-secret"),
+        "the hard-link hole appears to have closed. That is good news and this \
+         test is now wrong: `tools/fs/src/path.rs`'s module doc and \
+         `docs/tools-containment.html` both say it is open, and they are what \
+         has to change. Content was: {:?}",
+        out.content
+    );
+}
+
+// endregion: The hole, certified rather than asserted

@@ -245,7 +245,14 @@ impl Grep {
             .filter(|f| match &filter {
                 None => true,
                 Some(m) => {
-                    let rel = f.strip_prefix(&base).unwrap_or(f);
+                    // For a named single file `base` IS the file, so the path
+                    // relative to it is empty and matches nothing. Its name is
+                    // the only thing a pattern can be about.
+                    let rel = if single_file {
+                        Path::new(f.file_name().unwrap_or_default())
+                    } else {
+                        f.strip_prefix(&base).unwrap_or(f)
+                    };
                     m.is_match(rel.to_string_lossy().replace('\\', "/").as_str())
                 }
             })

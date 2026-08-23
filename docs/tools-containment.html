@@ -569,11 +569,23 @@ for component in lexical_normalize(&amp;joined).components() {
 </p>
 
 <p>
-  <span class="chip unv">unverified</span> The hard-link claim is repeated from
-  the module doc, which says it was verified rather than assumed but does not
-  say when or on what. Nothing in the test suite exercises a hard link. Settled
-  by <code>mklink /H</code> inside a sandbox root pointing at a file outside it
-  and watching <code>Read</code> return the contents.
+  <span class="chip cert">certified</span> Settled on 2026-08-23, by exactly the
+  experiment this paragraph used to ask for. An independent reviewer ran it live
+  on Windows; <code>a_hard_link_inside_the_root_reads_a_file_outside_it</code>
+  in <code>tools/fs/tests/containment.rs</code> now runs it in the suite: a hard
+  link created inside a sandbox root pointing at a file outside it, and
+  <code>Read</code> returns <code>outside-secret</code>.
+</p>
+
+<p>
+  The test asserts the <em>limitation</em> and not a fix, because there is no
+  fix at this layer &mdash; both names are equally the file, there is no real
+  path to canonicalise towards, and <code>canonicalize</code> returns the inside
+  one. What it buys is that the hole cannot quietly change: if a future resolver
+  ever does catch this, the test goes red and somebody has to come and rewrite
+  this page rather than leaving it saying the opposite. Its failure message says
+  so. The skip is real and reported &mdash; a filesystem that refuses a hard
+  link leaves nothing to certify, and this box refused nothing.
 </p>
 </div>
 </main>
