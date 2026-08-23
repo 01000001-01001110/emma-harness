@@ -1031,7 +1031,19 @@ mod tests {
         // places the ASCII `sep` glyph is also `|` — the env value's join
         // and `/help | /exit`.
         assert_eq!(out.matches('|').count(), 6, "{out}");
-        for unicode_only in ['\u{258A}', '\u{2591}', '\u{2191}', '\u{2193}', '\u{2502}'] {
+        // The mode diamond, and it was the one glyph missing from this list.
+        // UI-005 added `\u{25C7}` with an ASCII fallback of `<>`, and a reviewer
+        // noticed the enumeration below had never been extended — so leaving
+        // the diamond unfolded in ASCII passed. The positive assertion is here
+        // as well as the negative one, because "no diamond" is also true of a
+        // mode cell that renders nothing at all.
+        assert!(
+            out.contains("<> ASSIST"),
+            "the ASCII mode marker is missing: {out}"
+        );
+        for unicode_only in [
+            '\u{258A}', '\u{2591}', '\u{2191}', '\u{2193}', '\u{2502}', '\u{25C7}',
+        ] {
             assert!(
                 !out.contains(unicode_only),
                 "{unicode_only} in ASCII: {out}"

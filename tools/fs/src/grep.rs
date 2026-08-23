@@ -481,10 +481,12 @@ fn readable_text(file: &Path) -> Readable {
         // prefix: is this text? A 20 MB log still says it was skipped, because
         // it might hold the answer. A 30 MB object file says nothing, because
         // it holds no lines either way.
-        return if looks_like_text(file) {
-            Readable::TooLarge
-        } else {
-            Readable::NotText
+        return match looks_like_text(file) {
+            Some(true) => Readable::TooLarge,
+            Some(false) => Readable::NotText,
+            // Could not open it to ask. Counted and named, not silently
+            // filed under "holds no lines either way".
+            None => Readable::Unreadable,
         };
     }
     // Split deliberately. A read that fails is a failure to look; bytes that are
@@ -510,27 +512,38 @@ fn readable_text(file: &Path) -> Readable {
 /// incomplete sequence at the very end is accepted rather than counted against
 /// the file — otherwise one multi-byte character straddling the boundary would
 /// reclassify a whole log as binary.
-fn looks_like_text(file: &Path) -> bool {
+fn looks_like_text(file: &Path) -> Option<bool> {
     use std::io::Read;
 
     const PREFIX: usize = 8 * 1024;
+    // **`None` is "could not look", and it used to be `false`.** Returning
+    // `false` on a failed open collapsed an unreadable file into `NotText` —
+    // the one arm of `Readable` that is deliberately *not* counted — so an
+    // 8 MiB log that could not be opened vanished from the results and from
+    // the cut list. That is the same defect the enum one screen up was written
+    // to prevent, reached through the size gate instead of the read.
+    //
+    // Found by a reviewer while `DEF-041` was being fixed one branch away, and
+    // listed as still open on that row until now.
     let Ok(mut handle) = std::fs::File::open(file) else {
-        return false;
+        return None;
     };
     let mut buf = vec![0u8; PREFIX];
     let Ok(read) = handle.read(&mut buf) else {
-        return false;
+        return None;
     };
     buf.truncate(read);
     // A NUL byte is the one cheap tell that is not a UTF-8 question: it is
     // valid UTF-8 and appears in essentially no text file, which is why `grep`
     // itself has used it as the binary test for decades.
     if buf.contains(&0) {
-        return false;
+        return Some(false);
     }
+    // Real answers about the bytes, so `Some`: a truncated final character at
+    // the 8 KiB boundary is not evidence of binary content.
     match std::str::from_utf8(&buf) {
-        Ok(_) => true,
-        Err(e) => e.error_len().is_none(),
+        Ok(_) => Some(true),
+        Err(e) => Some(e.error_len().is_none()),
     }
 }
 

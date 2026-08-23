@@ -1419,3 +1419,45 @@ async fn a_refused_stream_write_leaves_the_directory_empty() {
 // to prevent. Different facts, different answers — and the existing test is the
 // one that reads the file back the way Emma wrote it, which a duplicate written
 // here got wrong.
+
+/// A large file that could not be opened is reported, not filed under "binary".
+///
+/// **The size gate reached the same defect from the other side.** `DEF-041`
+/// fixed the read path so an unreadable file is counted; the over-cap branch
+/// probes the first 8 KiB instead, and its probe returned `false` on a failed
+/// open — collapsing "could not look" into `NotText`, the one arm of `Readable`
+/// deliberately *not* counted. So a locked 8 MiB log vanished from the results
+/// and from the cut list, which is the exact sentence `DEF-002` was filed over.
+///
+/// Found by a reviewer while the neighbouring branch was being fixed, and
+/// listed as still open on that row until now.
+#[tokio::test]
+async fn a_large_file_that_cannot_be_opened_is_reported_not_called_binary() {
+    let sandbox = Sandbox::new();
+    sandbox.write_file("visible.txt", "NEEDLE here\n");
+
+    // Over the 8 MiB per-file cap, so the size gate takes it.
+    let big = sandbox.root().join("big.log");
+    std::fs::write(&big, vec![b'a'; 9 * 1024 * 1024]).unwrap();
+
+    let Some(_lock) = lock_exclusive(&big) else {
+        eprintln!("SKIPPED: this platform will not open a file without sharing");
+        return;
+    };
+
+    let out = sandbox.ok("Grep", json!({ "pattern": "NEEDLE" })).await;
+
+    assert!(
+        out.content.contains("could not be opened"),
+        "a large file that could not be opened was filed under `NotText` and \
+         vanished from the cut list: {:?}",
+        out.content
+    );
+    // And the rest of the search still came back. One unreadable file is not a
+    // failed search.
+    assert!(
+        out.content.contains("visible.txt"),
+        "one locked file hid the whole search: {:?}",
+        out.content
+    );
+}
