@@ -224,14 +224,29 @@ impl Rule {
             };
             return Ok(Self { tool, spec });
         }
-        // **A path-shaped specifier is decided by the tool, not by punctuation.**
-        // The first version asked whether the text held a separator or a glob
-        // character, which made `Read(Cargo.toml)` a *command* prefix — matched
-        // against a `command` argument that a `Read` call does not have, so it
-        // matched nothing at all, silently. A review supplied it as a working
-        // bypass of a deny rule naming one file. Only `Bash` runs a command;
-        // everything else addresses a path, and a rule for it is a glob.
-        if tool != "Bash" || inner.contains('/') || inner.contains('\\') || inner.contains('[') {
+        // **A path-shaped specifier is decided by the tool, and by nothing
+        // else.** The first version asked whether the text held a separator or
+        // a glob character, which made `Read(Cargo.toml)` a *command* prefix —
+        // matched against a `command` argument that a `Read` call does not
+        // have, so it matched nothing at all, silently. A review supplied it as
+        // a working bypass of a deny rule naming one file.
+        //
+        // **The fix for that kept the punctuation test as an extra disjunct for
+        // `Bash`, and thereby rebuilt the same defect facing the other way.**
+        // `Bash(rm -rf /)`, `Bash(curl https://*)`, `Bash(./deploy.sh)` — every
+        // one contains a separator, so every one compiled to a `Spec::Path`
+        // glob, and a `Bash` call carries `command` rather than `file_path`, so
+        // `path_of` returned `None` and the rule could never fire. Two
+        // independent reviewers found it on the same afternoon; one measured the
+        // owner's real `settings.json` and reported **24 of 53 `Bash` rules
+        // silently inert**, deny rules among them. It was worse than the state
+        // it replaced: `Spec::Unsupported` is announced at boot, `Spec::Path` is
+        // not, so the rules went from loud-and-inert to silent-and-inert.
+        //
+        // Claude Code has no path form for `Bash` — the inner text is a command,
+        // always. So the tool decides alone, with no punctuation clause to grow
+        // an exception back into.
+        if tool != "Bash" {
             // **A backslash in a path rule means two different things on two
             // platforms, so it means nothing here.** `globset` escapes with it
             // on unix and treats it as a separator on Windows — so
@@ -1241,6 +1256,59 @@ mod tests {
     /// `Bash(git log:*)` and `Read(./src/**)` used to land in `Unsupported`,
     /// which is what this test asserted — correctly, of the build it was
     /// written for.
+    /// A `Bash` deny that contains a slash must actually deny.
+    ///
+    /// **This is the test that was missing, and its absence cost a silent
+    /// deny-list hole twice in one direction and once in the other.** Round
+    /// one: shape was chosen by punctuation, so `Read(Cargo.toml)` became a
+    /// command prefix and matched nothing. Round two: the fix kept the
+    /// punctuation test as an extra disjunct for `Bash`, so every `Bash` rule
+    /// containing `/` became a path glob and matched nothing — measured at 24
+    /// of 53 rules in the owner's real `settings.json`, deny rules among them.
+    ///
+    /// Both rounds passed every test in this file. What neither had was a case
+    /// asserting that a rule of each shape **fires on a call of its own tool**.
+    /// A rule that parses is not a rule that matches, and every test here was
+    /// about parsing.
+    ///
+    /// The commands below are the ordinary spellings a deny list is written
+    /// with. Each contains a separator; none is a path.
+    #[test]
+    fn a_bash_deny_containing_a_slash_still_denies() {
+        for (rule, command) in [
+            ("Bash(rm -rf /)", "rm -rf /"),
+            ("Bash(curl:*)", "curl https://evil.example/x"),
+            ("Bash(./deploy.sh)", "./deploy.sh --prod"),
+            ("Bash(node scripts/x.js)", "node scripts/x.js --flag"),
+        ] {
+            let r = rules(&[rule], &[], &[]);
+            assert_eq!(
+                r.for_call("Bash", &serde_json::json!({ "command": command })),
+                Some(Decision::Deny),
+                "`{rule}` did not fire on `{command}` — an inert deny rule is a \
+                 protection the operator believes they have"
+            );
+        }
+
+        // And the converse, so this cannot be satisfied by denying everything:
+        // a command the rule does not name is not denied by it.
+        let r = rules(&["Bash(rm -rf /)"], &[], &[]);
+        assert_eq!(
+            r.for_call("Bash", &serde_json::json!({ "command": "ls -la" })),
+            None,
+            "the rule denied a command it does not name"
+        );
+
+        // The other half of the same bug, kept beside it: a non-Bash tool's
+        // specifier is a path however it is punctuated.
+        let r = rules(&["Read(Cargo.toml)"], &[], &[]);
+        assert_eq!(
+            r.for_call("Read", &serde_json::json!({ "file_path": "Cargo.toml" })),
+            Some(Decision::Deny),
+            "a bare filename stopped being a path again"
+        );
+    }
+
     #[test]
     fn the_shapes_a_rule_can_have() {
         assert_eq!(Rule::parse("WebSearch").unwrap().spec, Spec::All);
@@ -1512,7 +1580,10 @@ mod tests {
         );
 
         // 5. ...and the same, across the two shapes: a command deny that
-        //    matched, on a call that also carried a path.
+        //    matched, on a call that also carried a path. `Bash(src/**)` is a
+        //    *command* prefix — `Bash` has no path form — so it is simply a
+        //    second rule that does not match, which is the condition this case
+        //    needs.
         let r = rules(&["Bash(git *)", "Bash(src/**)"]);
         assert_eq!(
             r.for_call(

@@ -780,11 +780,70 @@ async fn a_settings_json_hook_resolves_and_fires() {
 /// A mutex rather than a redesign, because the variable being process-global is
 /// the point of it — a config key could be set by the repository being opened,
 /// and that is the trust boundary running backwards.
+///
+/// **The set this guards grew, and the guard did not.** When it was written,
+/// `EMMA_CLAUDE_HOOKS=skip-unknown` flipped exactly one load-refusal: an
+/// unimplemented event. The 2026-08-23 change that made an unhonourable
+/// *command* skippable widened it to four, and the three tests that assert
+/// those refusals were left outside the lock — so the original defect came
+/// straight back, in three new places, with the same expensive failure text
+/// (`absolute paths escape containment` reads as containment having been
+/// removed). An adversarial reviewer reproduced all three by simply exporting
+/// the variable.
+///
+/// **Every test that asserts a refusal this variable can turn off takes this
+/// lock.** That rule is easier to hold than a list, which is what the list
+/// being out of date already cost.
 static HOOK_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Hold the lock **and** guarantee `EMMA_CLAUDE_HOOKS` is unset, restoring
+/// whatever was there on the way out.
+///
+/// **The mutex alone was not enough, and believing it was is the whole lesson
+/// here.** It serialises test against test, which is what the original race
+/// needed. It does nothing about the variable arriving from *outside* the
+/// process: an adversarial reviewer ran the suite with `EMMA_CLAUDE_HOOKS`
+/// exported and turned three refusal tests red, each failing with the words of
+/// a real defect — `absolute paths escape containment` reads as containment
+/// having been removed. A suite whose result depends on the shell it was
+/// launched from is not evidence.
+///
+/// It also fixes the quieter half. The opt-in tests used to finish with a bare
+/// `remove_var`, so running the suite with the variable legitimately set
+/// **destroyed it** for everything after. Save, clear, restore is the only
+/// shape that is honest in both directions.
+struct StrictHooks {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl StrictHooks {
+    fn take() -> Self {
+        let guard = HOOK_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os("EMMA_CLAUDE_HOOKS");
+        std::env::remove_var("EMMA_CLAUDE_HOOKS");
+        Self {
+            _guard: guard,
+            previous,
+        }
+    }
+}
+
+impl Drop for StrictHooks {
+    fn drop(&mut self) {
+        // Restored on the panicking path too, which is the reason this is a
+        // `Drop` and not two lines at the end of each test: the tests that use
+        // it are the ones most likely to fail.
+        match self.previous.take() {
+            Some(v) => std::env::set_var("EMMA_CLAUDE_HOOKS", v),
+            None => std::env::remove_var("EMMA_CLAUDE_HOOKS"),
+        }
+    }
+}
 
 #[test]
 fn a_hook_event_emma_does_not_implement_is_a_loud_startup_error() {
-    let _guard = HOOK_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let _strict = StrictHooks::take();
     let base = scratch("claude-bad-event");
     let root = base.join(".claude");
     write(
@@ -810,7 +869,7 @@ fn a_hook_event_emma_does_not_implement_is_a_loud_startup_error() {
 /// boundary running backwards.
 #[test]
 fn an_unimplemented_hook_event_can_be_skipped_by_explicit_opt_in() {
-    let _guard = HOOK_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let _strict = StrictHooks::take();
     let base = scratch("claude-hook-optin");
     let root = base.join(".claude");
     write(
@@ -822,6 +881,8 @@ fn an_unimplemented_hook_event_can_be_skipped_by_explicit_opt_in() {
     assert!(Harness::load(&root).is_err(), "the strict default moved");
 
     // With it: the harness loads, and the hook is gone rather than pretended.
+    // Set deliberately; `StrictHooks` puts the ambient value back on drop,
+    // including on the panicking path.
     std::env::set_var("EMMA_CLAUDE_HOOKS", "skip-unknown");
     let loaded = Harness::load(&root);
     std::env::remove_var("EMMA_CLAUDE_HOOKS");
@@ -846,7 +907,7 @@ fn an_unimplemented_hook_event_can_be_skipped_by_explicit_opt_in() {
 /// reason INV-009 gives. What changed is the blast radius of refusing it.
 #[test]
 fn an_unhonourable_hook_command_is_skipped_by_the_same_opt_in() {
-    let _guard = HOOK_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let _strict = StrictHooks::take();
     let base = scratch("claude-hook-shellstring");
     let root = base.join(".claude");
     write(
@@ -860,6 +921,8 @@ fn an_unhonourable_hook_command_is_skipped_by_the_same_opt_in() {
         "a shell string must still refuse the boot by default"
     );
 
+    // Set deliberately; `StrictHooks` puts the ambient value back on drop,
+    // including on the panicking path.
     std::env::set_var("EMMA_CLAUDE_HOOKS", "skip-unknown");
     let loaded = Harness::load(&root);
     std::env::remove_var("EMMA_CLAUDE_HOOKS");
@@ -887,6 +950,7 @@ fn an_unhonourable_hook_command_is_skipped_by_the_same_opt_in() {
 /// whether to let a model run `Bash`.
 #[test]
 fn a_shell_string_command_is_refused_rather_than_quietly_run() {
+    let _strict = StrictHooks::take();
     let base = scratch("claude-shell");
     let root = base.join(".claude");
     std::fs::create_dir_all(root.join("hooks")).expect("mkdir");
@@ -909,6 +973,7 @@ fn a_shell_string_command_is_refused_rather_than_quietly_run() {
 /// the wrong sentence. Whitespace is whitespace.
 #[test]
 fn a_tab_separated_command_is_a_shell_string_too() {
+    let _strict = StrictHooks::take();
     let base = scratch("claude-tab");
     let root = base.join(".claude");
     std::fs::create_dir_all(root.join("hooks")).expect("mkdir");
@@ -932,6 +997,7 @@ fn a_tab_separated_command_is_a_shell_string_too() {
 /// the platform, and this is the test that keeps it doing so.
 #[test]
 fn an_absolute_hook_command_is_refused() {
+    let _strict = StrictHooks::take();
     let base = scratch("claude-abs");
     let root = base.join(".claude");
     std::fs::create_dir_all(root.join("hooks")).expect("mkdir");

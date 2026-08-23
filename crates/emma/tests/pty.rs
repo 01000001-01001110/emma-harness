@@ -69,6 +69,16 @@ fn run_in_pty(args: &[&str], env: &[(&str, &str)], keys: &[&str], settle: Durati
         cmd.arg(a);
     }
     cmd.cwd(std::env::temp_dir());
+    // **Cleared before the caller's env is applied, not after.** A PTY test
+    // exists to measure what the frame does on a real terminal, and both of
+    // these variables take the frame away. Inherited from whoever ran `cargo
+    // test`, either one would silently turn every frame assertion below into a
+    // measurement of the plain path — and the shape those assertions have,
+    // "find the enter sequence or return", would report that as a pass.
+    // A test that quietly measures the opposite thing is the failure this file
+    // was built to avoid.
+    cmd.env_remove("EMMA_NO_FRAME");
+    cmd.env_remove("EMMA_UI");
     for (k, v) in env {
         cmd.env(k, v);
     }

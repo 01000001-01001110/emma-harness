@@ -574,10 +574,16 @@ impl App {
 
         let mut y = r.chat.y;
         let end = r.chat.y.saturating_add(r.chat.height);
+        // What the page would draw with room enough, so a shortfall can be
+        // stated rather than left as an absence. The `+ 1` is the blank row
+        // between the report and the footer.
+        let wanted = self.page_text.len() + 1 + footer.len();
+        let mut drawn = 0usize;
         for line in &self.page_text {
             if y >= end {
                 break;
             }
+            drawn += 1;
             // Headings are the unindented, non-empty lines the writer emits;
             // everything else is data. Styling from shape rather than from a
             // parallel list, so the two cannot drift.
@@ -586,20 +592,31 @@ impl App {
             } else {
                 skin.palette.bold(Role::Accent)
             };
-            Line::from(Span::styled(line.clone(), style))
-                .render(Rect::new(r.chat.x, y, r.chat.width, 1), buf);
+            fit_spans(
+                vec![Span::styled(line.clone(), style)],
+                r.chat.width,
+                skin.glyphs.ellipsis,
+            )
+            .render(Rect::new(r.chat.x, y, r.chat.width, 1), buf);
             y = y.saturating_add(1);
         }
 
         y = y.saturating_add(1);
+        drawn += 1;
         for line in footer {
             if y >= end {
                 break;
             }
-            Line::from(Span::styled(line.to_string(), skin.palette.dim()))
-                .render(Rect::new(r.chat.x, y, r.chat.width, 1), buf);
+            drawn += 1;
+            fit_spans(
+                vec![Span::styled(line.to_string(), skin.palette.dim())],
+                r.chat.width,
+                skin.glyphs.ellipsis,
+            )
+            .render(Rect::new(r.chat.x, y, r.chat.width, 1), buf);
             y = y.saturating_add(1);
         }
+        note_cut(r, skin, buf, drawn as u16, wanted);
     }
 
     /// The Settings page.
@@ -660,22 +677,35 @@ impl App {
 
         let mut y = r.chat.y;
         let end = r.chat.y.saturating_add(r.chat.height);
+        // Counted the same way `text_page` counts, and for the same reason:
+        // this page's whole argument is that an absent panel must read as
+        // absent, and at 80x24 the panel that says so was itself off-screen.
+        const SETTINGS_FOOTER: usize = 6;
+        let wanted = rows.len() + 2 + keymap().len() + 1 + SETTINGS_FOOTER;
+        let mut drawn = 0usize;
         let label_w = rows.iter().map(|(l, _, _)| l.len()).max().unwrap_or(0) + 2;
         for (label, value, why) in &rows {
             if y >= end {
                 break;
             }
-            let line = Line::from(vec![
-                Span::styled(format!("{label:<label_w$}"), skin.palette.style(Role::Text)),
-                Span::styled(value.clone(), skin.palette.bold(Role::Accent)),
-                Span::styled(format!("   {why}"), skin.palette.dim()),
-            ]);
+            drawn += 1;
+            let line = fit_spans(
+                vec![
+                    Span::styled(format!("{label:<label_w$}"), skin.palette.style(Role::Text)),
+                    Span::styled(value.clone(), skin.palette.bold(Role::Accent)),
+                    Span::styled(format!("   {why}"), skin.palette.dim()),
+                ],
+                r.chat.width,
+                skin.glyphs.ellipsis,
+            );
             line.render(Rect::new(r.chat.x, y, r.chat.width, 1), buf);
             y = y.saturating_add(1);
         }
 
         y = y.saturating_add(1);
+        drawn += 1;
         if y < end {
+            drawn += 1;
             Line::from(Span::styled("Keys", skin.palette.bold(Role::Accent)))
                 .render(Rect::new(r.chat.x, y, r.chat.width, 1), buf);
             y = y.saturating_add(1);
@@ -684,15 +714,21 @@ impl App {
             if y >= end {
                 break;
             }
-            Line::from(vec![
-                Span::styled(format!("{k:<label_w$}"), skin.palette.dim()),
-                Span::styled(what, skin.palette.style(Role::Text)),
-            ])
+            drawn += 1;
+            fit_spans(
+                vec![
+                    Span::styled(format!("{k:<label_w$}"), skin.palette.dim()),
+                    Span::styled(what, skin.palette.style(Role::Text)),
+                ],
+                r.chat.width,
+                skin.glyphs.ellipsis,
+            )
             .render(Rect::new(r.chat.x, y, r.chat.width, 1), buf);
             y = y.saturating_add(1);
         }
 
         y = y.saturating_add(1);
+        drawn += 1;
         for line in [
             "Not wired yet, and drawn as nothing rather than as a control:",
             "  temperature, streaming toggle, auto-summarise, memory retention,",
@@ -704,10 +740,16 @@ impl App {
             if y >= end {
                 break;
             }
-            Line::from(Span::styled(line, skin.palette.dim()))
-                .render(Rect::new(r.chat.x, y, r.chat.width, 1), buf);
+            drawn += 1;
+            fit_spans(
+                vec![Span::styled(line.to_string(), skin.palette.dim())],
+                r.chat.width,
+                skin.glyphs.ellipsis,
+            )
+            .render(Rect::new(r.chat.x, y, r.chat.width, 1), buf);
             y = y.saturating_add(1);
         }
+        note_cut(r, skin, buf, drawn as u16, wanted);
     }
 
     /// The ordinary occupant of the main region: header, rule, transcript.
@@ -864,6 +906,79 @@ fn builtin_rows() -> Vec<sidebar::Row> {
 /// because a rendered key that does nothing is the exact defect the design's
 /// §6 forbids ("do not show keys that do nothing"). `Entry::detail` has no
 /// cell to land in and is dropped, named here rather than silently.
+/// Cut a composed line to the width it has, with the ellipsis the skin uses.
+///
+/// **The pages hard-truncated mid-token while the hint row one line below them
+/// ellipsised correctly**, so two widgets on one screen disagreed about whether
+/// a cut is announced. At 80 columns a Settings row read
+/// `Session log  C:/…/sess.jsonl   the recor`, and in the Data Explorer a
+/// record count could be cut *inside the number* — a truncated figure that
+/// reads as a smaller figure, which is the "no silent wrong answers" rule
+/// broken in the place it is cheapest to break it.
+///
+/// `render::fit` already exists and is the house convention; it takes a string,
+/// and these lines are several styled spans. So the budget is spent span by
+/// span: each gets what is left, and the one that runs out carries the
+/// ellipsis. Spans past the edge are dropped rather than rendered empty.
+fn fit_spans(spans: Vec<Span<'static>>, width: u16, ellipsis: &str) -> Line<'static> {
+    let budget = usize::from(width);
+    let mut out: Vec<Span<'static>> = Vec::with_capacity(spans.len());
+    let mut used = 0usize;
+    for span in spans {
+        if used >= budget {
+            break;
+        }
+        let left = budget - used;
+        let text = span.content.as_ref();
+        if crate::term::render::cols(text) <= left {
+            used += crate::term::render::cols(text);
+            out.push(span);
+        } else {
+            let cut = crate::term::render::fit(text, left, ellipsis);
+            used = budget;
+            out.push(Span::styled(cut, span.style));
+        }
+    }
+    Line::from(out)
+}
+
+/// Say that a page ran out of room, on the last row it has.
+///
+/// **A page that silently stops is the defect these pages exist to avoid,
+/// pointed inward.** Every one of them argues that an absent panel must read as
+/// absent rather than as available — and at 80x24, the ordinary default, the
+/// Settings page stopped after `PgUp/PgDn scroll` and the whole
+/// "Not wired yet, and drawn as nothing rather than as a control" block was
+/// off-screen, unreachable by any key, with nothing saying it existed. The Data
+/// Explorer lost its entire "Not drawn" footer the same way. The three tests
+/// that assert those blocks all render at 120x40, which is the smallest size at
+/// which they fit; an adversarial reviewer rendered one at 80x24 and the
+/// assertions were simply false there.
+///
+/// There is no scroll offset on these pages, so the remedy named is the only
+/// one that exists today: a taller window. Saying that is worth more than
+/// saying nothing, and much more than a page that looks complete.
+///
+/// Returns whether it drew, so a caller can tell "cut" from "fitted".
+fn note_cut(r: &Regions, skin: &Skin, buf: &mut Buffer, drawn: u16, wanted: usize) -> bool {
+    let end = r.chat.y.saturating_add(r.chat.height);
+    if usize::from(drawn) >= wanted || r.chat.height == 0 {
+        return false;
+    }
+    let hidden = wanted.saturating_sub(usize::from(drawn));
+    let row = end.saturating_sub(1);
+    fit_spans(
+        vec![Span::styled(
+            format!("[{hidden} more line(s) below the window; this page does not scroll — make the window taller]"),
+            skin.palette.bold(Role::Warn),
+        )],
+        r.chat.width,
+        skin.glyphs.ellipsis,
+    )
+    .render(Rect::new(r.chat.x, row, r.chat.width, 1), buf);
+    true
+}
+
 pub fn tool_rows(entries: &[crate::usertools::Entry]) -> Vec<sidebar::Row> {
     entries
         .iter()
@@ -931,6 +1046,15 @@ mod tests {
         let mut v = View::new(skin());
         v.status.model = "claude-opus-4".into();
         v.status.cwd = "C:\\src\\emma".into();
+        // **The same numbers the status-bar fixture carries.** They were unset
+        // here and set there, so `show_the_pages` printed a Settings panel
+        // saying "Per-goal budget  not set" three rows above a status bar
+        // saying "TOKENS 0/500,000". A person asked to judge whether a page
+        // reads well was shown a screen contradicting itself, from fixture
+        // drift rather than from anything the product does.
+        v.status.session = "C:/Users/you/.emma/sessions/2026-08-23T11-02-55.jsonl".into();
+        v.status.context = Some((0, 120_000));
+        v.status.spend = Some((0, 500_000));
         v
     }
 
@@ -1008,7 +1132,7 @@ mod tests {
             "  2026-08-23T11-02-55             206 records       74 KiB\n",
         );
         let memory_sample = concat!(
-            "project        C:\\\\src\\\\emma\n",
+            "project        C:\\src\\emma\n",
             "sessions here  3\n",
             "goals asked    3\n",
             "compactions    1 - a summary replaced older turns this many times\n",
@@ -1038,6 +1162,63 @@ mod tests {
                 println!("{}", r.trim_end());
             }
         }
+    }
+
+    /// A page too small to hold its own honesty says so.
+    ///
+    /// **The three page tests all render at 120x40, which is the smallest size
+    /// at which the disclosure fits.** At 80x24 — an ordinary default — the
+    /// Settings page stopped after `PgUp/PgDn scroll`, and the whole
+    /// "Not wired yet, and drawn as nothing rather than as a control" block was
+    /// off-screen, unreachable by any key, with nothing on screen saying it
+    /// existed. The Data Explorer lost its "Not drawn" footer the same way. An
+    /// adversarial reviewer rendered them and the assertions the rows cite were
+    /// simply false there.
+    ///
+    /// That is this project's own rule turned inward: a panel that is absent
+    /// must read as absent. A page whose honesty is the part that got cut is
+    /// the worst possible thing to cut silently.
+    #[test]
+    fn a_page_that_runs_out_of_room_says_how_much_is_missing() {
+        let v = view();
+        for (name, pane) in [
+            ("Settings", Pane::Page(Page::Settings)),
+            ("Data Explorer", Pane::Page(Page::DataExplorer)),
+        ] {
+            let mut a = App::new((80, 24));
+            match pane {
+                Pane::Page(Page::DataExplorer) => a.show_explorer(
+                    "source         C:/x\nsessions       3 file(s)\n\nkinds\n  goal   3\n",
+                ),
+                other => a.show(other),
+            }
+            let (rows, _) = draw(&mut a, &v, 80, 24);
+            let screen = rows.join("\n");
+            assert!(
+                screen.contains("more line(s) below the window"),
+                "{name} at 80x24 dropped content and said nothing:\n{screen}"
+            );
+            assert!(
+                screen.contains("does not scroll"),
+                "the notice must name the remedy, not just the loss:\n{screen}"
+            );
+        }
+
+        // The positive control, and it is load-bearing: a notice that fired at
+        // every size would be noise, and would also make the assertion above
+        // pass for the wrong reason.
+        let mut a = App::new((120, 40));
+        a.show(Pane::Page(Page::Settings));
+        let (rows, _) = draw(&mut a, &v, 120, 40);
+        let screen = rows.join("\n");
+        assert!(
+            !screen.contains("more line(s) below the window"),
+            "a page that fitted claimed it had been cut:\n{screen}"
+        );
+        assert!(
+            screen.contains("Not wired yet"),
+            "the disclosure that must survive did not:\n{screen}"
+        );
     }
 
     #[test]
