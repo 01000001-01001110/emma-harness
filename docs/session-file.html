@@ -271,21 +271,15 @@ pub struct SessionLog {
 
   <h2 id="append">One append</h2>
 
-  <pre><code><span class="c">// crates/emma/src/session.rs</span>
-<span class="c">/// Append one record.
-///
-/// Failures are swallowed after the first, deliberately: a full disk must
-/// not be the thing that kills a run halfway through editing someone's
-/// source tree. The caller has already been told once by `open`.</span>
-pub fn append(&amp;self, kind: &amp;str, mut payload: Value) {
+  <pre><code>pub fn append(&amp;self, kind: &amp;str, mut payload: Value) {
     let kind = match self.prefix {
-        Some(prefix) =&gt; format!("{prefix}.{kind}"),
+        Some(prefix) =&gt; format!(&quot;{prefix}.{kind}&quot;),
         None =&gt; kind.to_string(),
     };
     if let Some(obj) = payload.as_object_mut() {
-        obj.insert("kind".into(), json!(kind));
+        obj.insert(&quot;kind&quot;.into(), json!(kind));
         obj.insert(
-            "at_ms".into(),
+            &quot;at_ms&quot;.into(),
             json!(SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
@@ -300,13 +294,26 @@ pub fn append(&amp;self, kind: &amp;str, mut payload: Value) {
             seen.push(payload.clone());
         }
     }
-    let Ok(mut guard) = self.file.lock() else {
-        return;
-    };
+    <span class=\"c\">// **A poisoned lock is recovered, not treated as a reason to stop
+    // writing.** The lock is poisoned when some thread panicked while
+    // holding it, which says nothing about whether the file is still
+    // writable -- and this returned instead, silently dropping every record
+    // from that moment on. Worse than the silence: `write_failed` was never
+    // set on this path, so `transcript_failed` went on reporting that the
+    // transcript was fine while the session stopped being recorded. The one
+    // observable that exists to make this visible said the opposite.
+    //
+    // Recovering is what the rest of this tree does -- twenty-five
+    // `unwrap_or_else(|e| e.into_inner())` sites across `term`, `agent` and
+    // `input` -- and this file was the outlier. The data inside is a `File`
+    // handle, which a panic elsewhere cannot leave torn.</span>
+    let mut guard = self.file.lock().unwrap_or_else(|e| e.into_inner());
+    <span class=\"c\">// `None` is the no-log constructor and is the one silence here that is
+    // correct: a run with no session directory has nothing to append to.</span>
     let Some(file) = guard.as_mut() else { return };
     let mut line = payload.to_string();
-    line.push('\n');
-    <span class="c">// Not `let _ =`. This file is the only record of the run: resume folds
+    line.push(&#x27;\n&#x27;);
+    <span class=\"c\">// Not `let _ =`. This file is the only record of the run: resume folds
     // it, `emma agents` reads it, and the exit line names it as the place
     // the conversation went. A full disk or a revoked handle used to lose
     // all of that in silence, for the whole rest of the session, because
@@ -319,8 +326,8 @@ pub fn append(&amp;self, kind: &amp;str, mut payload: Value) {
     if let Err(e) = file.write_all(line.as_bytes()).and_then(|()| file.flush()) {
         if !self.write_failed.swap(true, Ordering::SeqCst) {
             eprintln!(
-                "emma: this session's transcript can no longer be written: {e}. The run \
-                 continues, but it will not be resumable and `emma agents` will not see it."
+                &quot;emma: this session&#x27;s transcript can no longer be written: {e}. The run \
+                 continues, but it will not be resumable and `emma agents` will not see it.&quot;
             );
         }
     }
@@ -371,10 +378,34 @@ pub fn append(&amp;self, kind: &amp;str, mut payload: Value) {
   <span class="src">crates/emma/src/session.rs — <code>SessionLog::append</code>; crates/emma/src/agent.rs, delegate.rs, main.rs — every call site</span>
 
   <p>
-    A poisoned mutex returns without writing, permanently, for the rest of the
-    process. That needs a panic while the lock is held, and the code under the
-    lock is the two <code>std::io</code> calls and the once-only report of
-    their failure.
+    <strong>A poisoned mutex is recovered rather than treated as the end of the
+    transcript</strong>, and until 2026-08-23 it was not. The lock is poisoned
+    when some thread panics while holding it, which says nothing about whether
+    the file is still writable. <code>append</code> returned early instead, so
+    every record from that moment was discarded for the rest of the process.
+  </p>
+
+  <p>
+    The silence was the smaller half. <code>write_failed</code> was never set on
+    that path, so <code>transcript_failed</code> went on reporting that the
+    transcript was fine while the session stopped being recorded &mdash; the one
+    observable built to make this visible said the opposite of what had
+    happened. Recovering with <code>unwrap_or_else(|e| e.into_inner())</code> is
+    what the rest of the tree does at twenty-five other sites, and the data
+    behind this lock is a <code>File</code> handle, which somebody else's panic
+    cannot leave half-updated.
+    <span class="chip test">tested</span>
+    <code>a_poisoned_lock_does_not_silently_stop_the_transcript</code> poisons
+    the lock for real, by joining a thread that panics while holding it, and
+    asserts the lock <em>is</em> poisoned before appending so the case cannot
+    pass without testing anything. Restoring the early return turns it red with
+    only the first record on disk.
+  </p>
+
+  <p>
+    The remaining early return is the one silence here that is correct:
+    <code>guard.as_mut()</code> is <code>None</code> for the no-log
+    constructor, and a run with no session directory has nothing to append to.
   </p>
 
   <div class="note">

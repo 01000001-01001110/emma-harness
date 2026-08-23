@@ -224,9 +224,22 @@ impl SessionLog {
                 seen.push(payload.clone());
             }
         }
-        let Ok(mut guard) = self.file.lock() else {
-            return;
-        };
+        // **A poisoned lock is recovered, not treated as a reason to stop
+        // writing.** The lock is poisoned when some thread panicked while
+        // holding it, which says nothing about whether the file is still
+        // writable -- and this returned instead, silently dropping every record
+        // from that moment on. Worse than the silence: `write_failed` was never
+        // set on this path, so `transcript_failed` went on reporting that the
+        // transcript was fine while the session stopped being recorded. The one
+        // observable that exists to make this visible said the opposite.
+        //
+        // Recovering is what the rest of this tree does -- twenty-five
+        // `unwrap_or_else(|e| e.into_inner())` sites across `term`, `agent` and
+        // `input` -- and this file was the outlier. The data inside is a `File`
+        // handle, which a panic elsewhere cannot leave torn.
+        let mut guard = self.file.lock().unwrap_or_else(|e| e.into_inner());
+        // `None` is the no-log constructor and is the one silence here that is
+        // correct: a run with no session directory has nothing to append to.
         let Some(file) = guard.as_mut() else { return };
         let mut line = payload.to_string();
         line.push('\n');
@@ -1251,6 +1264,84 @@ mod tests {
             std::fs::read_to_string(&path).unwrap(),
             "",
             "a read-only handle somehow wrote, so this test proves nothing"
+        );
+    }
+
+    /// A panic elsewhere must not stop the session being recorded.
+    ///
+    /// **The lock was the second silent drop in this function and the worse
+    /// one.** `append` reports a failed *write*, once, and `transcript_failed`
+    /// makes that observable. A poisoned lock reached neither: it returned
+    /// early, so every record from that moment was discarded, and
+    /// `transcript_failed` went on saying the transcript was fine. The one
+    /// observable built to make this visible reported the opposite of what had
+    /// happened.
+    ///
+    /// A lock is poisoned when a thread panics while holding it, which says
+    /// nothing about whether the file is writable — and the data behind it is a
+    /// `File` handle, which cannot be left half-updated by somebody else's
+    /// panic. Recovering is what the rest of this tree does at twenty-five
+    /// other sites.
+    ///
+    /// The poisoning is real rather than simulated: a thread takes the lock and
+    /// panics while holding it. Its panic message is suppressed, because a test
+    /// that prints a backtrace on the happy path teaches the next reader to
+    /// ignore backtraces.
+    #[test]
+    fn a_poisoned_lock_does_not_silently_stop_the_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let handle = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+
+        let log = SessionLog {
+            id: "s".into(),
+            path: path.clone(),
+            file: Arc::new(Mutex::new(Some(handle))),
+            prefix: None,
+            stamp: Vec::new(),
+            tap: None,
+            write_failed: Arc::new(AtomicBool::new(false)),
+        };
+
+        log.append("goal", json!({ "text": "before" }));
+
+        // Poison it for real.
+        let file = log.file.clone();
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let panicked = std::thread::spawn(move || {
+            let _held = file.lock().unwrap();
+            panic!("a thread died holding the transcript lock");
+        })
+        .join();
+        std::panic::set_hook(hook);
+        assert!(panicked.is_err(), "the fixture thread did not panic");
+        assert!(
+            log.file.lock().is_err(),
+            "the lock is not poisoned, so this test would pass without testing anything"
+        );
+
+        log.append("goal", json!({ "text": "after" }));
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            written.contains("before"),
+            "the first record never landed: {written:?}"
+        );
+        assert!(
+            written.contains("after"),
+            "a poisoned lock silently swallowed every record after it, and \
+             transcript_failed still reported the transcript was fine: {written:?}"
+        );
+        // The write itself succeeded, so the failure flag must NOT be set —
+        // reporting a write failure that did not happen would be its own lie.
+        assert!(
+            !log.transcript_failed(),
+            "recovering a poisoned lock was reported as a transcript failure"
         );
     }
 
