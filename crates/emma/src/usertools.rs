@@ -97,6 +97,25 @@ impl Tool {
         matches!(self, Tool::Search | Tool::Memory)
     }
 
+    /// Whether the frame *actually* routes this tool's key today.
+    ///
+    /// **`in_app` was being read as if it meant this, and it does not.** Its
+    /// doc says "the shell routes their keys itself", and for `Search` that is
+    /// true — `/` opens the command menu. For `Memory` nothing routes anything:
+    /// `launch_tool` sends every tool to `launch`, which refuses an in-app tool
+    /// with "the frame owns the 'm' key". The frame owns no such key. So the
+    /// sidebar advertised `Alt+M`, pressing it produced a warning, and
+    /// `tool_rows`' own doc calls that "the exact defect the design's §6
+    /// forbids" — a rendered key that does nothing.
+    ///
+    /// Reported by the owner as "memory ... do not open to their sub TUI
+    /// pages", which is exactly right: there is no page. Splitting the two
+    /// questions — *does it run inside Emma* and *is it wired up* — is what
+    /// lets the sidebar stop claiming otherwise until one is built.
+    pub fn routed(self) -> bool {
+        matches!(self, Tool::Search)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Tool::Shell => "Shell",
@@ -683,17 +702,30 @@ fn stem(p: &Path) -> String {
 }
 
 fn in_app_note(tool: Tool) -> String {
+    if tool.routed() {
+        return format!(
+            "{} runs inside Emma, not as a program; the frame owns the '{}' key",
+            tool.label(),
+            tool.key()
+        );
+    }
+    // **Says what is true, which is that it is not built.** The sentence above
+    // was returned for `Memory` too, and it asserted that a key was owned by
+    // something that had never claimed it — so the one message a user got when
+    // pressing the advertised chord told them the feature worked.
     format!(
-        "{} runs inside Emma, not as a program; the frame owns the '{}' key",
-        tool.label(),
-        tool.key()
+        "{} is meant to run inside Emma and has no page yet, so there is nothing to open",
+        tool.label()
     )
 }
 
 fn in_app_detail(tool: Tool) -> String {
     match tool {
         Tool::Search => "search this project, inside Emma".to_string(),
-        Tool::Memory => "this project's memory, inside Emma".to_string(),
+        Tool::Memory => {
+            "this project's memory, inside Emma — no page is built yet, so no key is offered"
+                .to_string()
+        }
         // Unreachable by construction; a wrong caller gets words, not a panic.
         other => in_app_note(other),
     }
@@ -703,7 +735,11 @@ fn catalogue_on(cwd: &Path, m: &dyn Machine) -> Vec<Entry> {
     ALL.iter()
         .map(|&tool| {
             let (detail, available) = if tool.in_app() {
-                (in_app_detail(tool), true)
+                // Available only when something actually takes the key. An
+                // in-app tool with no route is listed, so the operator can see
+                // it is intended, and shows `n/a` rather than a chord that
+                // warns.
+                (in_app_detail(tool), tool.routed())
             } else {
                 match plan(tool, cwd, m) {
                     Ok(l) => (l.what, true),
@@ -1152,13 +1188,31 @@ mod tests {
         );
         assert!(entries.iter().all(|e| !e.label.is_empty()));
         assert!(entries.iter().all(|e| !e.detail.is_empty()));
-        // The in-app pair is available (their keys are live in the frame) and
-        // says where it runs; a probe failure must never mark them dead.
+        // Both in-app tools say where they run, and a probe failure must never
+        // mark them dead — that part was always right.
         for t in [Tool::Search, Tool::Memory] {
             let e = entries.iter().find(|e| e.tool == t).unwrap();
-            assert!(e.available, "{t:?}");
             assert!(e.detail.contains("inside Emma"), "{}", e.detail);
         }
+
+        // **This assertion used to say both were available, "because their keys
+        // are live in the frame".** Search's is: `/` opens the command menu.
+        // Memory's never was — nothing routes it, and `launch_tool` sent it to
+        // `launch`, which answered "the frame owns the 'm' key" about a key the
+        // frame had never claimed. So the sidebar advertised `Alt+M` and
+        // pressing it produced a warning, which is the one thing `tool_rows`'
+        // own doc forbids: a rendered key that does nothing.
+        //
+        // The test asserted the claim rather than the behaviour, so it held the
+        // defect in place. Inverted rather than deleted, because the day a
+        // Memory page exists this line is what says to flip it back.
+        let search = entries.iter().find(|e| e.tool == Tool::Search).unwrap();
+        assert!(search.available, "Search's `/` is live and must stay so");
+        let memory = entries.iter().find(|e| e.tool == Tool::Memory).unwrap();
+        assert!(
+            !memory.available,
+            "Memory has no page and no route; offering a key for it advertises a chord that warns"
+        );
     }
 
     #[test]

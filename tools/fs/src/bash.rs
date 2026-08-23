@@ -1453,17 +1453,30 @@ mod background_tests {
             "the call must return before the sleep ends for this to prove anything"
         );
 
+        // **Wait for the content, not for the file.** `>` creates the file the
+        // instant the shell opens it and `echo` writes a moment later, so
+        // polling `exists()` and then reading raced that gap: the file was
+        // there, the bytes were not, and the assertion below failed with `""`.
+        // It passed alone and failed in the full workspace run, which is the
+        // signature of a race rather than a slow machine — the gap is
+        // microseconds wide and only ever loses under contention.
+        //
+        // The condition the test actually cares about is that the child's
+        // *work* outlived the call, and the work is the bytes.
         let marker = dir.path().join("marker.txt");
         let deadline = Instant::now() + Duration::from_secs(60);
-        while !marker.exists() {
+        loop {
+            if let Ok(content) = std::fs::read_to_string(&marker) {
+                if content.contains("done") {
+                    break;
+                }
+            }
             assert!(
                 Instant::now() < deadline,
                 "the marker never appeared — the child did not survive the call returning"
             );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        let content = std::fs::read_to_string(&marker).expect("marker readable");
-        assert!(content.contains("done"), "{content:?}");
     }
 
     /// The refusal that keeps `timeout_ms` honest: a background task has no
