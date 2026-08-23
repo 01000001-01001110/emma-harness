@@ -754,15 +754,13 @@ async fn run(cli: cli::Cli) -> Result<()> {
             // `sweep_stale_profiles` clears it at the next start, which is a
             // backstop rather than a reason for the user not to know it is
             // there now.
-            let leaked = pool.leaked_profiles();
-            if !leaked.is_empty() {
-                term.warn(&format!(
-                    "{} browser profile director(ies) could not be removed and are still on \
-                     disk with this session's cookies in them; Emma clears them at its next \
-                     start. First: {}",
-                    leaked.len(),
-                    leaked[0].display()
-                ));
+            // The text lives with the pool, not here, because here it could not
+            // be tested: reaching this line needs a real browser and a really
+            // stranded profile. See `pool::leaked_profile_warning`.
+            if let Some(warning) =
+                emma_tools_web::browser::pool::leaked_profile_warning(&pool.leaked_profiles())
+            {
+                term.warn(&warning);
             }
         }
         // `-p` runs one goal and stops. Interactively, Ctrl-C interrupts the

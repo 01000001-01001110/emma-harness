@@ -151,6 +151,30 @@ impl Session {
     }
 }
 
+/// What to tell the operator about profiles the teardown could not remove, or
+/// `None` when there is nothing to say.
+///
+/// **This lives here rather than at the call site because the call site could
+/// not be tested.** The text was assembled inline in `main.rs` at the end of a
+/// goal, which meant the only way to reach it was to run a real browser, strand
+/// a real profile and read a real terminal — so nothing reached it, and the
+/// two tests that covered [`BrowserPool::leaked_profiles`] proved the *decision*
+/// while the *delivery* had no test at all. An independent reviewer found the
+/// gap. It is the third time this repository has hit that exact shape.
+///
+/// Returning `Option<String>` rather than printing keeps the silence testable
+/// too: the ordinary run leaks nothing, and a teardown that warned every time
+/// would train the operator to skip the line.
+pub fn leaked_profile_warning(leaked: &[PathBuf]) -> Option<String> {
+    let first = leaked.first()?;
+    Some(format!(
+        "{} browser profile director(ies) could not be removed and are still on disk with \
+         this session's cookies in them; Emma clears them at its next start. First: {}",
+        leaked.len(),
+        first.display()
+    ))
+}
+
 // endregion: What the pool knows about one browser
 
 // region: The pool
@@ -883,6 +907,134 @@ mod tests {
             "the same directory was recorded twice, which would make the count a \
              measure of how often teardown ran rather than of what is on disk"
         );
+    }
+
+    /// A session whose profile cannot be removed is reported **through the
+    /// teardown**, not through `note_leak` called by hand.
+    ///
+    /// The two tests above prove the decision and the recording. Neither calls
+    /// `close` or `kill_all_now`, so both call sites could be deleted with the
+    /// suite green — a reviewer checked, and they could. That is the shape this
+    /// programme keeps paying for: decision tested, delivery not.
+    ///
+    /// This drives `kill_all_now`, the synchronous teardown `Drop` and the
+    /// interrupt handler use, with a file parked where the profile directory
+    /// should be so `remove_dir_all` fails for a reason the filesystem supplies.
+    /// `pid` 0 is nothing to kill.
+    #[test]
+    fn kill_all_now_reports_a_profile_it_could_not_remove() {
+        let pool = BrowserPool::new(None);
+        let id = format!("emma-killall-probe-{}", std::process::id());
+        let s = fake_session(&id);
+        let dir = s.profile_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::write(&dir, b"not a directory").unwrap();
+        pool.sessions.lock().unwrap().insert(id.clone(), s.clone());
+
+        pool.kill_all_now();
+
+        assert_eq!(
+            pool.leaked_profiles(),
+            vec![dir.clone()],
+            "the synchronous teardown removed nothing and said nothing"
+        );
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    /// The same, through the async `close` — the other call site.
+    ///
+    /// `Browser::connect` fails on a port nothing is listening on, which is the
+    /// ordinary path when the browser is already gone, and `close` is documented
+    /// to carry on and kill regardless.
+    #[tokio::test]
+    async fn close_reports_a_profile_it_could_not_remove() {
+        let pool = BrowserPool::new(None);
+        let id = format!("emma-close-probe-{}", std::process::id());
+        let s = fake_session(&id);
+        let dir = s.profile_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::write(&dir, b"not a directory").unwrap();
+        pool.sessions.lock().unwrap().insert(id.clone(), s.clone());
+
+        assert!(pool.close(&id).await.is_some(), "close forgot the session");
+        assert_eq!(
+            pool.leaked_profiles(),
+            vec![dir.clone()],
+            "the async teardown removed nothing and said nothing"
+        );
+        let _ = std::fs::remove_file(&dir);
+    }
+
+    /// A clean teardown says nothing at all.
+    ///
+    /// The control for both of the above, and for the warning below. A pool that
+    /// recorded a leak on every close would pass both failure tests and then warn
+    /// about cookies on disk after every single goal.
+    #[test]
+    fn a_teardown_that_removed_its_profile_reports_nothing() {
+        let pool = BrowserPool::new(None);
+        let id = format!("emma-clean-probe-{}", std::process::id());
+        let s = fake_session(&id);
+        let dir = s.profile_dir();
+        std::fs::create_dir_all(dir.join("Default")).unwrap();
+        std::fs::write(dir.join("Default").join("Cookies"), b"x").unwrap();
+        pool.sessions.lock().unwrap().insert(id.clone(), s);
+
+        pool.kill_all_now();
+
+        assert!(!dir.exists(), "the directory survived a clean teardown");
+        assert!(
+            pool.leaked_profiles().is_empty(),
+            "a removed profile was reported as leaked, which would put a cookie \
+             warning at the end of every goal"
+        );
+    }
+
+    /// The warning names the count and the first directory, and is silent when
+    /// there is nothing to say.
+    ///
+    /// This text used to be assembled inline in `main.rs`, where no test could
+    /// reach it. The row claimed the operator would be told; nothing checked it.
+    #[test]
+    fn the_leak_warning_says_how_many_and_which() {
+        assert!(
+            leaked_profile_warning(&[]).is_none(),
+            "an ordinary run would have printed a cookie warning"
+        );
+
+        let one = PathBuf::from("/tmp/browser-miner-session-abc");
+        let two = PathBuf::from("/tmp/browser-miner-session-def");
+        let text = leaked_profile_warning(&[one.clone(), two]).expect("two leaks, no warning");
+        assert!(text.contains('2'), "the count is missing: {text:?}");
+        assert!(
+            text.contains("browser-miner-session-abc"),
+            "the first directory is not named, so nobody can find it: {text:?}"
+        );
+        assert!(
+            text.contains("cookies"),
+            "the warning does not say what is in the directory, which is the \
+             whole reason it is worth printing: {text:?}"
+        );
+    }
+
+    /// A session with no browser behind it, for the teardown tests.
+    ///
+    /// `pid` 0 because `kill_pid` and `wait_for_exit` both treat it as nothing
+    /// to wait for; `ws_url` a port nothing listens on so `Browser::connect`
+    /// fails fast rather than hanging the suite.
+    fn fake_session(id: &str) -> Session {
+        Session {
+            id: id.to_string(),
+            pid: 0,
+            ws_url: "ws://127.0.0.1:1/devtools/browser/none".to_string(),
+            target_id: "none".to_string(),
+            headful: false,
+            url: "about:blank".to_string(),
+            host: String::new(),
+            opened_at: Instant::now(),
+            last_used: Instant::now(),
+            delta_baseline: None,
+        }
     }
 
     #[test]

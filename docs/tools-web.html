@@ -570,6 +570,29 @@
 </p>
 
 <p>
+  <strong>That test proved the decision and not the delivery, and a reviewer
+  found the gap the same day.</strong> Neither it nor the recording test called
+  <code>close</code> or <code>kill_all_now</code>, so both call sites that turn a
+  failed removal into a recorded one could be deleted with the suite green
+  &mdash; and the warning itself was assembled inline in <code>main.rs</code>,
+  where reaching it needed a real browser, a really stranded profile and a real
+  terminal. Nothing reached it. The text now lives in
+  <code>pool::leaked_profile_warning</code>, which returns
+  <code>Option&lt;String&gt;</code> so the silence of an ordinary run is testable
+  too.
+  <span class="chip test">tested</span>
+  <code>close_reports_a_profile_it_could_not_remove</code> and
+  <code>kill_all_now_reports_a_profile_it_could_not_remove</code> drive the two
+  teardowns end to end with a file parked where the profile should be;
+  <code>a_teardown_that_removed_its_profile_reports_nothing</code> is the
+  control. Deleting either <code>note_leak</code> call, or making the warning
+  return <code>None</code>, turns a different one of the three red
+  (<code>verification/mutations/def056-leak-delivery.json</code>).
+  This is the third instance of the shape in this repository: a decision tested
+  in the library, a delivery nothing exercises.
+</p>
+
+<p>
   <code>kill_all_now</code> is the second mechanism exposed as a public
   synchronous call, for an interrupt handler that must not <code>await</code>,
   and it is idempotent. chromehand's own 30-minute idle TTL is kept as a second
