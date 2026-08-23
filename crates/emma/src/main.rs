@@ -870,7 +870,7 @@ async fn run_verification(
     )
     .with_context(|| format!("parsing {}", ledger_path.display()))?;
 
-    let outstanding = emma::verify::rows_needing_review(&ledger, rows)?;
+    let outstanding = emma::verify::rows_needing_review(&ledger, rows, cwd)?;
     if outstanding.is_empty() {
         term.note("every row already carries an independent review receipt.");
         return Ok(());

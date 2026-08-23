@@ -23,7 +23,7 @@ fn ledger() -> serde_json::Value {
                 "statement": "the thing holds",
                 "implementation_evidence": ["a test exists"],
                 "review_required": true,
-                "review_evidence": []
+                "receipts": []
             },
             {
                 "id": "DEF-002",
@@ -31,7 +31,7 @@ fn ledger() -> serde_json::Value {
                 "statement": "also holds",
                 "implementation_evidence": [],
                 "review_required": true,
-                "review_evidence": ["review-def-002.json"]
+                "receipts": ["r/def-002.json"]
             },
             {
                 "id": "DEF-003",
@@ -39,16 +39,34 @@ fn ledger() -> serde_json::Value {
                 "statement": "holds anyway",
                 "implementation_evidence": [],
                 "review_required": false,
-                "review_evidence": []
+                "receipts": []
             },
             {
                 "id": "DEF-004",
-                "title": "no review key at all",
+                "title": "silent about review, so it wants one",
                 "statement": "holds",
                 "implementation_evidence": []
             }
         ]
     })
+}
+
+/// A tree holding one real review receipt, for the row that claims one.
+///
+/// **The receipt is written to disk rather than mocked**, because the rule
+/// under test is "a listed receipt that can be opened and says `review`". A
+/// fixture that only listed a path would pass a version of the code that never
+/// opened it, which is the same shape as an assertion the world already
+/// satisfies.
+fn tree_with_a_review() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("r")).unwrap();
+    std::fs::write(
+        dir.path().join("r").join("def-002.json"),
+        r#"{"kind":"review","result":"pass"}"#,
+    )
+    .unwrap();
+    dir
 }
 
 /// Outstanding means "asks for a review and has none", and nothing else.
@@ -59,15 +77,31 @@ fn ledger() -> serde_json::Value {
 /// are the ones that would each have cost money.
 #[test]
 fn only_rows_that_ask_for_a_review_and_lack_one_are_outstanding() {
-    let rows = rows_needing_review(&ledger(), &[]).unwrap();
+    let root = tree_with_a_review();
+    let rows = rows_needing_review(&ledger(), &[], root.path()).unwrap();
     let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
     assert_eq!(
+        // DEF-004 says nothing about `review_required`, and is outstanding for
+        // that reason: **the verifier defaults it to true**, so a row silent about
+        // review still wants one. Erring the other way would quietly excuse every
+        // row that forgot the key, which is the direction that must not fail.
         ids,
-        vec!["DEF-001"],
-        "a row that is reviewed, does not want review, or says nothing about it \
-         was queued for a billed run"
+        vec!["DEF-001", "DEF-004"],
+        "a row that is already reviewed, or that opted out, was queued for a billed \
+         run -- or a row silent about review was excused from one"
     );
     assert_eq!(rows[0].evidence, vec!["a test exists".to_string()]);
+
+    // **A listed receipt that is not on disk leaves the row outstanding.** A
+    // receipt nothing can open is not evidence: re-reviewing costs a run, and
+    // trusting it costs a false close.
+    std::fs::remove_file(root.path().join("r").join("def-002.json")).unwrap();
+    let rows = rows_needing_review(&ledger(), &[], root.path()).unwrap();
+    let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+    assert!(
+        ids.contains(&"DEF-002"),
+        "a row whose only receipt has vanished was treated as reviewed: {ids:?}"
+    );
 }
 
 /// Naming rows takes them whatever their evidence, and a typo is an error.
@@ -78,15 +112,20 @@ fn only_rows_that_ask_for_a_review_and_lack_one_are_outstanding() {
 /// otherwise.
 #[test]
 fn a_named_row_is_taken_as_named_and_an_unknown_one_is_refused() {
-    let rows = rows_needing_review(&ledger(), &["DEF-002".into()]).unwrap();
+    let root = tree_with_a_review();
+    let rows = rows_needing_review(&ledger(), &["DEF-002".into()], root.path()).unwrap();
     assert_eq!(
         rows.len(),
         1,
         "a row named explicitly was skipped because it already had a receipt"
     );
 
-    let err = rows_needing_review(&ledger(), &["DEF-001".into(), "DEF-999".into()])
-        .expect_err("a row that does not exist was accepted");
+    let err = rows_needing_review(
+        &ledger(),
+        &["DEF-001".into(), "DEF-999".into()],
+        root.path(),
+    )
+    .expect_err("a row that does not exist was accepted");
     assert!(
         err.to_string().contains("DEF-999"),
         "the refusal does not name the id that was wrong: {err}"
@@ -191,14 +230,16 @@ fn the_brief_asks_a_reviewer_to_disprove_rather_than_confirm() {
     );
 }
 
-/// A receipt records the verdict, the model that gave it, and where to read it.
+/// A receipt is in the shape the verifier reads, and says who judged.
 ///
-/// **`pass` follows the verdict and never the run.** A reviewer that finished
-/// cleanly and said REFUTED is a successful run and a failed row, and a receipt
-/// that confused the two would close rows on the strength of the model having
-/// replied.
+/// **The first version of this invented its own field names.** It wrote
+/// `pass: true` where the verifier looks for `result: "pass"`, and every
+/// receipt it produced would have been read as "not pass" and closed nothing.
+/// Nothing in this crate could have caught that -- the schema lives in the
+/// verifier -- so these assertions are pinned to the field names the authority
+/// actually reads, and they are the reason a change to them cannot pass here.
 #[test]
-fn a_receipt_records_who_said_what_and_does_not_pass_on_a_refusal() {
+fn a_receipt_is_shaped_the_way_the_verifier_reads_it() {
     let r = receipt(
         "DEF-009",
         "claude-opus-5",
@@ -208,31 +249,55 @@ fn a_receipt_records_who_said_what_and_does_not_pass_on_a_refusal() {
         "2026-08-23T12:00:00Z",
         "windows x86_64",
     );
+    // The names the verifier reads. Asserted by name, not by shape.
+    assert_eq!(r["schema_version"], 1);
     assert_eq!(r["kind"], "review");
     assert_eq!(r["requirement_ids"][0], "DEF-009");
-    assert_eq!(
-        r["producer"], "claude-opus-5",
-        "the receipt does not name the model, so two reviews cannot be weighed \
-         against each other"
-    );
-    assert_eq!(r["pass"], false);
     assert_eq!(r["tree_fingerprint"], "abc123");
-    assert!(r["observed"].as_str().unwrap().contains("REFUTED"));
+    assert_eq!(r["created_at"], "2026-08-23T12:00:00Z");
+    assert!(r["receipt_id"].is_string());
+    assert!(r["command_or_scenario"].is_string());
+    assert!(
+        r["environment"]["os"].is_string(),
+        "environment is an object"
+    );
 
+    // `result` is the whole decision, and a completed review that judged
+    // against the row is a successful run and a failed row.
+    assert_eq!(r["result"], "fail");
     assert_eq!(
-        receipt("DEF-009", "m", Some(Verdict::Upheld), "p", "f", "t", "e")["pass"],
-        true
+        receipt("DEF-009", "m", Some(Verdict::Upheld), "p", "f", "t", "e")["result"],
+        "pass"
     );
 
     // A reviewer that never produced a verdict is recorded as exactly that,
     // rather than smoothed into a failure: "said the row is wrong" and "did not
     // answer" are different things to whoever reads this next.
     let none = receipt("DEF-009", "m", None, "p", "f", "t", "e");
-    assert_eq!(none["pass"], false);
+    assert_eq!(none["result"], "fail");
     assert!(
-        none["observed"].as_str().unwrap().contains("no verdict"),
+        none["observed"]
+            .as_str()
+            .unwrap()
+            .contains("without a verdict"),
         "an unusable report was recorded as though the reviewer had judged it"
     );
+
+    // **The producer must not be one the verifier rejects.** It refuses an
+    // empty producer, `primary` and `script`, folded for case, because an
+    // independent review is not one the implementer wrote.
+    let producer = r["producer"].as_str().unwrap().to_ascii_lowercase();
+    assert!(
+        producer.contains("claude-opus-5"),
+        "the receipt does not name the model, so two reviews cannot be weighed against each other: {producer}"
+    );
+    for rejected in ["", "primary", "script"] {
+        assert_ne!(
+            producer.trim(),
+            rejected,
+            "the producer is one the verifier refuses outright"
+        );
+    }
 }
 
 /// Receipt and report land beside their neighbours, under names a filesystem

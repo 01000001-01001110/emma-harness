@@ -58,7 +58,18 @@ pub struct Row {
 /// for. An id that is not in the ledger is an error rather than a silent no-op,
 /// because a typo that quietly reviews nothing looks exactly like a run that
 /// had nothing to do.
-pub fn rows_needing_review(ledger: &Value, only: &[String]) -> Result<Vec<Row>> {
+///
+/// **A row is done when one of the receipts it lists is a review**, which is
+/// the rule the verifier applies. The first version of this read a
+/// `review_evidence` field that does not exist in this ledger and never has, so
+/// every row looked outstanding and the count was wrong by twelve — a silent
+/// wrong answer produced by inventing a schema instead of reading one.
+///
+/// `root` is where a receipt path is resolved from. A listed receipt that is
+/// missing from disk leaves the row outstanding, deliberately: a receipt
+/// nothing can open is not evidence, and re-reviewing costs a run while
+/// trusting it costs a false close.
+pub fn rows_needing_review(ledger: &Value, only: &[String], root: &Path) -> Result<Vec<Row>> {
     let requirements = ledger
         .get("requirements")
         .and_then(Value::as_array)
@@ -87,18 +98,16 @@ pub fn rows_needing_review(ledger: &Value, only: &[String]) -> Result<Vec<Row>> 
                 continue;
             }
         } else {
-            // An absent key and an empty array mean the same thing, and a row
-            // that does not ask for review is not outstanding.
-            let required = r
+            // The verifier's own default: a row asks for a review unless it
+            // says otherwise.
+            if !r
                 .get("review_required")
                 .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let have = r
-                .get("review_evidence")
-                .and_then(Value::as_array)
-                .map(|a| !a.is_empty())
-                .unwrap_or(false);
-            if !required || have {
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            if already_reviewed(r, root) {
                 continue;
             }
         }
@@ -127,6 +136,24 @@ pub fn rows_needing_review(ledger: &Value, only: &[String]) -> Result<Vec<Row>> 
         });
     }
     Ok(out)
+}
+
+/// Whether one of a row's receipts is a review that can be read.
+///
+/// Opens the file rather than matching its name. A receipt is only evidence if
+/// something can read it and see what kind it is, and this programme has
+/// already been bitten once by a path that looked right and pointed at nothing.
+fn already_reviewed(row: &Value, root: &Path) -> bool {
+    let Some(receipts) = row.get("receipts").and_then(Value::as_array) else {
+        return false;
+    };
+    receipts.iter().filter_map(Value::as_str).any(|rel| {
+        std::fs::read_to_string(root.join(rel))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .map(|r| r.get("kind").and_then(Value::as_str) == Some("review"))
+            .unwrap_or(false)
+    })
 }
 
 // endregion: Which rows are outstanding
@@ -307,7 +334,21 @@ fn slug(id: &str, model: &str) -> String {
     format!("review-{}-{}", id.to_ascii_lowercase(), model)
 }
 
-/// The receipt for one review.
+/// The receipt for one review, in the shape the verifier actually reads.
+///
+/// **The first version of this invented its own field names and would have been
+/// rejected by every gate it was written for.** It carried `pass: true` where
+/// the verifier looks for `result: "pass"`, `id` for `receipt_id`, `command`
+/// for `command_or_scenario`, `timestamp` for `created_at`, and a bare string
+/// for `environment`, which is an object. Every one of those receipts would
+/// have read as "not pass" and closed nothing. Nothing in this crate could have
+/// caught it: the schema lives in the verifier, and the only way to know was to
+/// go and read the verifier. Certify against the real thing, again.
+///
+/// `producer` is the model, and it matters more here than the field name
+/// suggests: the verifier rejects a review receipt whose producer is empty,
+/// `primary` or `script`, folded for case, because an independent review is not
+/// one the implementer wrote.
 pub fn receipt(
     id: &str,
     model: &str,
@@ -315,28 +356,40 @@ pub fn receipt(
     report_path: &str,
     fingerprint: &str,
     when: &str,
-    environment: &str,
+    os: &str,
 ) -> Value {
     json!({
-        "id": slug(id, model),
-        "kind": "review",
+        "schema_version": 1,
+        "receipt_id": slug(id, model),
         "requirement_ids": [id],
-        // The model, named. A receipt whose producer is "an independent
-        // reviewer" cannot be weighed against another one later.
-        "producer": model,
-        "command": format!("emma verify --rows {id} --model {model}"),
+        "kind": "review",
+        // The verifier reads this string and nothing else to decide whether a
+        // receipt closes anything. A verdict that is not UPHELD is a completed
+        // review and a failed row, and it is recorded as `fail` for exactly
+        // that reason.
+        "result": if verdict.map(Verdict::passes).unwrap_or(false) { "pass" } else { "fail" },
+        // Named, and never `primary` or `script`: the verifier folds case and
+        // rejects those, because an independent review is not one the
+        // implementer wrote.
+        "producer": format!("subagent:{model} (independent reviewer, emma verify)"),
+        "created_at": when,
+        "tree_fingerprint": fingerprint,
+        "environment": {
+            "os": os,
+            "terminal": "emma verify, read-only tools, no session"
+        },
+        "command_or_scenario": format!(
+            "emma verify --rows {id} --model {model} -- a fresh agent with the read tools, \
+             briefed to disprove the row rather than confirm it"
+        ),
         "observed": match verdict {
             Some(v) => format!("VERDICT: {}", v.as_str()),
             // Recorded as the fact it is rather than smoothed into a failure:
-            // "the reviewer said this row is wrong" and "the reviewer did not
+            // "the reviewer said the row is wrong" and "the reviewer did not
             // answer" are different things to whoever reads this next.
-            None => "no verdict line in the report".to_string(),
+            None => "the reviewer ended without a verdict line; this is not a review".to_string(),
         },
-        "pass": verdict.map(Verdict::passes).unwrap_or(false),
-        "tree_fingerprint": fingerprint,
         "evidence_files": [report_path],
-        "environment": environment,
-        "timestamp": when,
     })
 }
 
