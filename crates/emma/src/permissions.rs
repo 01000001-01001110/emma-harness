@@ -495,8 +495,57 @@ fn path_of(args: &Value) -> Option<String> {
 /// operator never named. Either the command equals the prefix, or it continues
 /// with a space.
 fn command_matches(prefix: &str, command: &str) -> bool {
+    let prefix = normalise_program(prefix);
+    let command = normalise_program(command);
     command == prefix
-        || (command.starts_with(prefix) && command.as_bytes().get(prefix.len()) == Some(&b' '))
+        || (command.starts_with(&prefix) && command.as_bytes().get(prefix.len()) == Some(&b' '))
+}
+
+/// Fold the spellings of a program name that name one program.
+///
+/// **Three ordinary Windows spellings walked past a `Bash(git *)` deny, and
+/// none of them was listed as a known residual.** A reviewer measured them:
+/// `git push` denied; `git.exe push`, `GIT push` and `"git" push` all
+/// unmatched, with no `Ask` and no boot note. `is_composed`'s own doc says
+/// *"a false negative is a deny rule that did not fire"*, and these are three.
+///
+/// - **`.exe` is the spelling on this platform.** A model writing the full
+///   filename is writing the ordinary thing, not evading anything.
+/// - **Case.** Windows program lookup is case-insensitive, so `GIT push` runs.
+///   The *path* matcher was made `case_insensitive(cfg!(windows))` for exactly
+///   this reason and the command matcher was left alone — one file, two
+///   answers to the same question about the same operating system.
+/// - **A leading quote** is ordinary shell quoting, and `is_composed` does not
+///   consider it, so it reached here as part of the program name.
+///
+/// Only the first token is touched. Everything after it is the command's
+/// arguments, where folding case would make `git commit -m Fix` and
+/// `git commit -m fix` the same rule — which they are not.
+fn normalise_program(command: &str) -> String {
+    let (head, rest) = match command.split_once(' ') {
+        Some((h, r)) => (h, Some(r)),
+        None => (command, None),
+    };
+    let head = head.trim_matches(['"', '\'']);
+    // Windows only. On unix `git` and `GIT` are two programs and folding them
+    // would be inventing a match the operating system does not make.
+    let mut head = if cfg!(windows) {
+        head.to_ascii_lowercase()
+    } else {
+        head.to_string()
+    };
+    if cfg!(windows) {
+        for ext in [".exe", ".cmd", ".bat", ".com"] {
+            if let Some(stem) = head.strip_suffix(ext) {
+                head = stem.to_string();
+                break;
+            }
+        }
+    }
+    match rest {
+        Some(r) => format!("{head} {r}"),
+        None => head,
+    }
 }
 
 fn normalise_command(s: &str) -> String {
@@ -1273,6 +1322,56 @@ mod tests {
     ///
     /// The commands below are the ordinary spellings a deny list is written
     /// with. Each contains a separator; none is a path.
+    /// The ordinary spellings of one program are one program.
+    ///
+    /// **Three of these ran past a `Bash(git *)` deny with no `Ask` and no
+    /// note**, and none was listed among the residual bypasses the row
+    /// enumerates. `.exe` is *the* spelling on Windows; case is how Windows
+    /// looks programs up; a leading quote is ordinary shell quoting. The path
+    /// matcher was already case-insensitive on Windows for exactly this reason,
+    /// so the file held two answers to one question about one operating system.
+    #[test]
+    fn the_ordinary_spellings_of_a_program_do_not_evade_a_deny() {
+        let r = rules(&["Bash(git *)"], &[], &[]);
+        for command in ["git push", "git.exe push", "\"git\" push", "git.cmd push"] {
+            let expected = if cfg!(windows) || command == "git push" {
+                Some(Decision::Deny)
+            } else {
+                // On unix `.exe` is not a program-name suffix and case is
+                // meaningful, so only the plain spelling is the same program.
+                // Folding there would invent a match the OS does not make.
+                if command == "\"git\" push" {
+                    Some(Decision::Deny)
+                } else {
+                    None
+                }
+            };
+            assert_eq!(
+                r.for_call("Bash", &serde_json::json!({ "command": command })),
+                expected,
+                "`{command}` against deny Bash(git *)"
+            );
+        }
+
+        // Case, Windows only and asserted only there, because on unix `GIT` is
+        // a different program and pretending otherwise is its own defect.
+        if cfg!(windows) {
+            assert_eq!(
+                r.for_call("Bash", &serde_json::json!({ "command": "GIT push" })),
+                Some(Decision::Deny),
+                "Windows program lookup is case-insensitive, so `GIT push` runs"
+            );
+        }
+
+        // The boundary the fold must not cross: arguments are not folded, and a
+        // different program is still a different program.
+        assert_eq!(
+            r.for_call("Bash", &serde_json::json!({ "command": "github-cli push" })),
+            None,
+            "the word boundary was lost — `git` must not match `github-cli`"
+        );
+    }
+
     #[test]
     fn a_bash_deny_containing_a_slash_still_denies() {
         for (rule, command) in [

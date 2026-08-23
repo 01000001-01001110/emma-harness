@@ -187,7 +187,28 @@ pub fn severed_link_note(file: &Path) -> Option<String> {
              directory entry, so the other {} keeps the old content and the link is broken",
             if n == 2 { "name" } else { "names" }
         )),
-        _ => None,
+        Some(_) => None,
+        // **`None` is not `Some(1)`, and collapsing the two was this function
+        // breaking the contract its own dependency states.** [`hard_links`]
+        // says in terms that `None` means *could not be told*, never *one
+        // name*, and that a caller must not print 1 for it. This arm was `_ =>
+        // None`, which printed nothing — the same output as a file with one
+        // name — so a write went ahead and severed a link in the silence the
+        // row was filed to end.
+        //
+        // Reached in practice: on Windows the count comes from an open handle,
+        // and a file held with no sharing — which is what an ordinary editor
+        // does — fails the open and answers `None`. A reviewer measured exactly
+        // that: `Some(2)` unlocked, `None` while locked, and no note either way.
+        //
+        // Said only when the file exists, because "could not be told" about a
+        // file that is not there yet is noise on every `Write` that creates one.
+        None if file.exists() => Some(
+            "how many names this file has on disk could not be read, so whether writing it \
+             breaks a hard link is unknown — it is not a guarantee that it does not"
+                .to_string(),
+        ),
+        None => None,
     }
 }
 

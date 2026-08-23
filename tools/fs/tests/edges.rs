@@ -1281,3 +1281,79 @@ fn allow_read(dir: &std::path::Path) -> bool {
 }
 
 // endregion: A directory the search could not open
+
+/// "Could not be told" must not render as "one name".
+///
+/// **`hard_links`'s own doc states the contract and its only caller broke it.**
+/// `None` means the count could not be read; the caller's `_ => None` arm
+/// printed nothing for it, which is the same output as a file with one name. A
+/// write would then sever a link in exactly the silence `DEF-039` was filed to
+/// end.
+///
+/// **Addressed to the function, not through `Write`, and the reason is worth
+/// recording.** The obvious test — lock the file, then call `Write` — cannot
+/// reach the note: the freshness stamp reads the file's content to compare it,
+/// that read fails under the lock, and `ReadState::Stale` refuses the write
+/// first. That refusal is correct, so the scenario is unreachable end to end and
+/// the unit is where the guarantee lives.
+///
+/// The `None` is produced the way a reviewer produced it: hold the file open
+/// with no sharing, which is what an ordinary Windows editor does.
+#[test]
+fn the_link_count_says_when_it_could_not_be_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("held.txt");
+    std::fs::write(
+        &path,
+        "original
+",
+    )
+    .unwrap();
+
+    // Readable: one name, and nothing to say.
+    assert_eq!(
+        emma_tools_fs::path::hard_links(&path),
+        Some(1),
+        "a plain new file should have exactly one name"
+    );
+    assert!(
+        emma_tools_fs::path::severed_link_note(&path).is_none(),
+        "a file with one name was warned about"
+    );
+
+    let Some(_lock) = lock_exclusive(&path) else {
+        eprintln!("SKIPPED: this platform will not open a file without sharing");
+        return;
+    };
+
+    assert_eq!(
+        emma_tools_fs::path::hard_links(&path),
+        None,
+        "the count was readable through an exclusive lock, so this test proves nothing"
+    );
+    let note = emma_tools_fs::path::severed_link_note(&path)
+        .expect("an unreadable count was reported as no link at all");
+    assert!(
+        note.contains("could not be read"),
+        "the note must say the count was unavailable: {note}"
+    );
+    assert!(
+        note.contains("not a guarantee"),
+        "the note must refuse to imply the link is safe: {note}"
+    );
+}
+
+#[cfg(windows)]
+fn lock_exclusive(path: &std::path::Path) -> Option<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(path)
+        .ok()
+}
+
+#[cfg(not(windows))]
+fn lock_exclusive(_path: &std::path::Path) -> Option<std::fs::File> {
+    None
+}
