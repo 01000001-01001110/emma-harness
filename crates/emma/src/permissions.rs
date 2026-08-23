@@ -277,6 +277,15 @@ fn is_composed(command: &str) -> bool {
     if first.contains('=') {
         return true;
     }
+    // A path-qualified binary. `/usr/bin/git push` and `.\tools\git.exe push`
+    // are plainly git, and a prefix rule reading `git` does not match either —
+    // found by a second adversarial pass, and an ordinary spelling rather than
+    // an exotic one. The same reasoning as the wrappers below: the first word
+    // is not the command name the rule is written against, so a prefix cannot
+    // judge it.
+    if first.contains('/') || first.contains('\\') {
+        return true;
+    }
     matches!(
         first,
         "env" | "sh" | "bash" | "zsh" | "cmd" | "powershell" | "pwsh" | "nice" | "time" | "xargs"
@@ -1105,6 +1114,10 @@ mod tests {
             "GIT_SSH_COMMAND=x git push",
             "sh -c 'git push'",
             "echo hi | git push",
+            // Path-qualified, found by a second adversarial pass. Plainly git,
+            // and `git` as a prefix does not match either spelling.
+            "/usr/bin/git push origin main",
+            r".\\tools\\git.exe push",
         ] {
             assert_eq!(
                 ask(evasion),
