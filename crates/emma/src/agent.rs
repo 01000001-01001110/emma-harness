@@ -1324,17 +1324,11 @@ impl<'a> Agent<'a> {
     /// simply stops with a number they cannot connect to anything. Compaction
     /// bounds the size; this says what the size means in calls.
     fn warn_if_the_budget_is_nearly_spent_on_arrival(&self) {
-        let carried = estimate(&self.conversation());
-        if carried <= 0 || carried * 4 < self.s.budgets.max_tokens {
-            return;
+        if let Some(warning) =
+            arrival_budget_warning(estimate(&self.conversation()), self.s.budgets.max_tokens)
+        {
+            self.s.term.warn(&warning);
         }
-        self.s.term.warn(&format!(
-            "this goal opens with roughly {carried} tokens of conversation behind it, so the \
-             {} token budget is about {} model calls at that size. Raise it with --max-tokens, \
-             lower --max-context, or start a new session.",
-            self.s.budgets.max_tokens,
-            (self.s.budgets.max_tokens / carried.max(1)).max(1)
-        ));
     }
 
     /// Shorten the conversation when a request has grown past
@@ -2033,6 +2027,36 @@ fn estimate(messages: &[Message]) -> i64 {
     (chars / 4) as i64
 }
 
+/// What to say before the first call of a goal that opens with a lot behind it,
+/// or `None` when the budget is comfortable.
+///
+/// **This was inside `warn_if_the_budget_is_nearly_spent_on_arrival` until
+/// 2026-08-23, and had no test of any kind** — not of the threshold, not of the
+/// wording, not of the silence. An independent reviewer found it by looking for
+/// functions with exactly one call site, which is the third shape of this kind
+/// this repository has closed this week. It is the worst of the three: the other
+/// two at least had the decision tested.
+///
+/// The threshold is four calls' worth. Under that, a cap somebody set is
+/// effectively unreachable and the run stops with a number they cannot connect
+/// to anything, which is the silent failure worth refusing. Returning
+/// `Option<String>` rather than printing keeps the comfortable case testable
+/// too — a warning on every goal is one nobody reads.
+fn arrival_budget_warning(carried: i64, max_tokens: i64) -> Option<String> {
+    // `carried * 4` on an i64 that came from a character count cannot overflow
+    // in practice, but `saturating_mul` costs nothing and the alternative is a
+    // panic in release-mode arithmetic somebody would have to reproduce.
+    if carried <= 0 || carried.saturating_mul(4) < max_tokens {
+        return None;
+    }
+    Some(format!(
+        "this goal opens with roughly {carried} tokens of conversation behind it, so the \
+         {max_tokens} token budget is about {} model calls at that size. Raise it with \
+         --max-tokens, lower --max-context, or start a new session.",
+        (max_tokens / carried.max(1)).max(1)
+    ))
+}
+
 /// Tokens weighted by what they cost, which is what a budget should count.
 ///
 /// The multipliers are the provider's: a cache read is billed at 0.1× and a
@@ -2394,6 +2418,61 @@ mod tests {
             m.contains("If the interrupt landed"),
             "the sentence asserts an abandoned call for endings that never had one; \
              it must state the condition: {m}"
+        );
+    }
+
+    #[test]
+    /// The arrival warning fires when the budget is under four calls' worth,
+    /// stays quiet above it, and says what to do about it.
+    ///
+    /// **Written because the function had no test at all** — not the threshold,
+    /// not the wording, not the silence. A reviewer found it by listing
+    /// functions with exactly one call site. Everything below would have passed
+    /// against a body that did nothing except the silent case, which is why the
+    /// silent case is asserted first and separately.
+    #[test]
+    fn the_arrival_warning_fires_only_when_the_budget_is_nearly_gone() {
+        // Comfortable: 10k carried against a 500k budget is fifty calls.
+        assert!(
+            arrival_budget_warning(10_000, 500_000).is_none(),
+            "an ordinary goal would open with a budget warning, and a warning on \
+             every goal is one nobody reads"
+        );
+        // Nothing carried at all — the first goal of a session.
+        assert!(
+            arrival_budget_warning(0, 500_000).is_none(),
+            "a fresh session warned about a conversation it does not have"
+        );
+        // A negative estimate cannot happen, and must not divide.
+        assert!(arrival_budget_warning(-1, 500_000).is_none());
+
+        // Exactly four calls' worth is the boundary, and it is inclusive: at
+        // this point the cap is close enough to be worth saying.
+        assert!(
+            arrival_budget_warning(125_000, 500_000).is_some(),
+            "the boundary case was silent, so the warning fires later than its \
+             own doc says"
+        );
+        assert!(
+            arrival_budget_warning(124_999, 500_000).is_none(),
+            "one token below the boundary warned, so the threshold is not where \
+             it is documented"
+        );
+
+        // And the text: the numbers a reader needs, and the way out.
+        let w = arrival_budget_warning(250_000, 500_000).expect("two calls' worth was silent");
+        assert!(
+            w.contains("250000") && w.contains("500000"),
+            "the warning names neither the conversation nor the budget, so a \
+             reader cannot tell which to change: {w}"
+        );
+        assert!(
+            w.contains("2 model calls"),
+            "the count of remaining calls is the whole point of the warning: {w}"
+        );
+        assert!(
+            w.contains("--max-tokens"),
+            "the warning says there is a problem and not what to do: {w}"
         );
     }
 
