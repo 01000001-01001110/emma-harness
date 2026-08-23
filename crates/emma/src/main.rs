@@ -301,7 +301,14 @@ async fn run(cli: cli::Cli) -> Result<()> {
                 "no session directory: the home directory could not be determined. Name one \
                  with --session-dir.",
             )?;
-            let path = session::locate(&dir, session.as_deref(), &cwd)?;
+            // Reported before the resume note, because it changes what that
+            // note means: bare `--resume` claims to be continuing the session
+            // you were last running here, and a newer file that would not read
+            // makes that quietly untrue. See `session::skipped_sessions_note`.
+            let (path, skipped) = session::locate_reporting(&dir, session.as_deref(), &cwd)?;
+            if let Some(note) = session::skipped_sessions_note(&skipped) {
+                term.warn(&note);
+            }
             let restored = session::restore(&path)?;
             // The spend is shown against the caps rather than on its own,
             // because the number that matters to somebody deciding whether to

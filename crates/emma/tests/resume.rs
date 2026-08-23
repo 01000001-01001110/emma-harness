@@ -720,3 +720,94 @@ async fn a_question_after_a_finished_goal_is_answered_and_not_nudged() {
 }
 
 // endregion: A finished goal is not a goal in flight
+
+/// An unreadable newer session is passed over **and said out loud**.
+///
+/// **Bare `--resume` means "the one I was last running here", and this is where
+/// that quietly stopped being true.** The walk goes newest-first and skips a
+/// file it cannot read, so a corrupt newest file resumed an *older*
+/// conversation — the user got a resume, which is what they asked for, about
+/// the wrong work. Skipping remains right: refusing to resume anything because
+/// one file in a shared directory is broken would be worse, and the file may
+/// belong to another project. Being unable to say so was the defect.
+///
+/// A reviewer found it by noting that changing the `continue` to a `break` left
+/// every test green, every fixture being clean UTF-8. This one is not: the
+/// newest file here holds bytes that are not UTF-8 at all.
+#[test]
+fn an_unreadable_newer_session_is_named_rather_than_silently_skipped() {
+    let home = tempfile::tempdir().unwrap();
+    let sessions = home.path().join("sessions");
+    let here = tempfile::tempdir().unwrap();
+
+    for id in ["sess-0000000000001-1", "sess-0000000000002-1"] {
+        let log = SessionLog::open(&sessions, id).unwrap();
+        log.append(
+            "goal",
+            json!({ "text": "g", "opening": "work on g", "cwd": here.path().display().to_string() }),
+        );
+    }
+    // The newest file, and not text at all. A lone 0xFF is invalid UTF-8 in
+    // every encoding of it, so `read_to_string` fails for a reason the standard
+    // library supplies rather than one this test arranged.
+    let broken = sessions.join("sess-0000000000003-1.jsonl");
+    std::fs::write(&broken, [0xFFu8, 0xFE, 0xFD]).unwrap();
+
+    let (chosen, skipped) = session::locate_reporting(&sessions, None, here.path()).unwrap();
+    assert_eq!(
+        chosen.file_stem().unwrap().to_string_lossy(),
+        "sess-0000000000002-1",
+        "the readable newest session was not the one chosen"
+    );
+    assert_eq!(
+        skipped,
+        vec!["sess-0000000000003-1.jsonl".to_string()],
+        "the file that could not be read was passed over in silence"
+    );
+
+    let note = session::skipped_sessions_note(&skipped).expect("nothing was said about it");
+    assert!(
+        note.contains("sess-0000000000003-1"),
+        "the note does not name the file, so nobody can go and look at it: {note}"
+    );
+    assert!(
+        note.contains("--resume"),
+        "the note says the wrong session may have been chosen and not how to \
+         choose the right one: {note}"
+    );
+
+    // The control, and it is the half that keeps this worth reading: an
+    // ordinary resume says nothing. A file belonging to another directory is
+    // the rule working, not damage, and naming every other project's sessions
+    // on every resume is how a warning gets ignored.
+    //
+    // A separate directory, deliberately. Reusing the one above would prove
+    // nothing: the walk stops at the first match, so a newest file belonging to
+    // the directory being asked about returns before the broken one is ever
+    // reached, and the silence would be an accident of ordering rather than the
+    // rule under test.
+    let clean = home.path().join("clean");
+    let elsewhere = tempfile::tempdir().unwrap();
+    for (id, cwd) in [
+        ("sess-0000000000001-1", elsewhere.path()),
+        ("sess-0000000000002-1", here.path()),
+        ("sess-0000000000003-1", elsewhere.path()),
+    ] {
+        let log = SessionLog::open(&clean, id).unwrap();
+        log.append(
+            "goal",
+            json!({ "text": "g", "opening": "g", "cwd": cwd.display().to_string() }),
+        );
+    }
+    // Asked about `here`, so the walk really does pass over two of another
+    // directory's sessions on its way to the answer.
+    let (chosen, skipped) = session::locate_reporting(&clean, None, here.path()).unwrap();
+    assert_eq!(
+        chosen.file_stem().unwrap().to_string_lossy(),
+        "sess-0000000000002-1"
+    );
+    assert!(
+        session::skipped_sessions_note(&skipped).is_none(),
+        "a resume that passed over another directory's sessions warned about them, which would put a warning on almost every resume: {skipped:?}"
+    );
+}

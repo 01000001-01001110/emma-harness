@@ -727,8 +727,21 @@ pub fn agents(session_dir: Option<&Path>, out: &mut dyn Write) -> Result<()> {
 
     let mut by_agent: std::collections::BTreeMap<String, Tally> = Default::default();
     let mut recent: Vec<(String, String, String, i64, u64, String)> = Vec::new();
+    // Files that could not be read at all. **Counted rather than skipped in
+    // silence**, because this command's whole output is totals: a session that
+    // was not read contributes nothing and the numbers still look like an
+    // answer. A reviewer found the `continue` on its own and pointed out that
+    // changing it to `break` would leave every test green, the fixtures all
+    // being clean UTF-8.
+    let mut unreadable: Vec<String> = Vec::new();
     for path in &files {
         let Ok(records) = crate::session::SessionLog::read(path) else {
+            unreadable.push(
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+            );
             continue;
         };
         let session = path
@@ -771,6 +784,15 @@ pub fn agents(session_dir: Option<&Path>, out: &mut dyn Write) -> Result<()> {
     }
 
     writeln!(out, "sessions       {}", files.len())?;
+    // Said before the totals, not after, because it changes what they mean.
+    if !unreadable.is_empty() {
+        writeln!(
+            out,
+            " {} of them could not be read, so these totals are short by whatever was in: {}",
+            unreadable.len(),
+            unreadable.join(", ")
+        )?;
+    }
     writeln!(
         out,
         "delegations    {}",

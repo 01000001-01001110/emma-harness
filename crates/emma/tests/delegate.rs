@@ -852,6 +852,30 @@ async fn what_a_delegation_cost_can_be_read_back_across_sessions() {
     // parent's total: 2,300 for its two calls.
     assert!(report.contains("2300"), "{report}");
     assert!(report.contains("where is retry decided?"), "{report}");
+
+    // **And a session file that cannot be read is counted, not skipped in
+    // silence.** This command's whole output is totals: a session nobody could
+    // read contributes nothing to them and the numbers still look like an
+    // answer. A reviewer found the bare `continue` and pointed out that turning
+    // it into a `break` left every test green, the fixtures all being clean
+    // UTF-8. These bytes are not.
+    std::fs::write(sessions.join("sess-0000000000002-1.jsonl"), [0xFFu8, 0xFE]).unwrap();
+    let mut out = Vec::new();
+    emma::commands::agents(Some(&sessions), &mut out).unwrap();
+    let report = String::from_utf8(out).unwrap();
+    assert!(
+        report.contains("could not be read"),
+        "a session file was passed over and the totals were printed as though          they were complete:
+{report}"
+    );
+    assert!(
+        report.contains("sess-0000000000002-1"),
+        "the unreadable file is not named, so nobody can go and look at it:
+{report}"
+    );
+    // The totals still come out. An unreadable file is a gap in the answer, not
+    // a reason to refuse one.
+    assert!(report.contains("explorer"), "{report}");
 }
 
 #[test]

@@ -772,6 +772,25 @@ pub struct Restored {
     pub lost_records: Vec<usize>,
 }
 
+/// What to tell somebody whose `--resume` passed over files it could not read,
+/// or `None` when it read everything it looked at.
+///
+/// Separate from [`resume_damage_note`] because the two answer different
+/// questions: that one says the conversation that came back is missing turns,
+/// this one says a *different session* may have been chosen. Bare `--resume`
+/// means "the one I was last running here", and an unreadable newer file makes
+/// that quietly untrue.
+pub fn skipped_sessions_note(unreadable: &[String]) -> Option<String> {
+    if unreadable.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{} newer session file(s) could not be read and were passed over, so this may not be the session you meant: {}. Name one with `emma --resume <id>`.",
+        unreadable.len(),
+        unreadable.join(", ")
+    ))
+}
+
 /// What to tell somebody resuming a session that came back damaged, or `None`.
 ///
 /// **Both halves of this were carried on the value so a caller could act on
@@ -1080,13 +1099,39 @@ fn continuity_of(records: &[Value]) -> Continuity {
 /// sessions" cost the module doc names as a thing that would change the format
 /// if it ever mattered at scale.
 pub fn locate(dir: &Path, id: Option<&str>, cwd: &Path) -> Result<PathBuf> {
+    locate_reporting(dir, id, cwd).map(|(path, _)| path)
+}
+
+/// [`locate`], with the files it could not read handed back.
+///
+/// **A file that will not read is passed over, and until 2026-08-23 nobody was
+/// told.** The walk goes newest-first and stops at the first session belonging
+/// to this directory, so an unreadable newest file means bare `--resume` --
+/// which means "the one I was last running here" -- silently continues an
+/// *older* conversation instead. The user gets a resume, which is what they
+/// asked for, about the wrong work.
+///
+/// Skipping is still right: refusing to resume anything because one file in a
+/// shared directory is corrupt would be worse, and the file may well belong to
+/// another project. Being unable to say so was the defect. Found by an
+/// independent reviewer, who also observed that changing the `continue` below
+/// to a `break` left every test green, the fixtures all being clean UTF-8.
+///
+/// A file belonging to a different directory is **not** reported: that is the
+/// rule working, not damage, and a note naming every other project's sessions
+/// would be noise on every resume.
+pub fn locate_reporting(
+    dir: &Path,
+    id: Option<&str>,
+    cwd: &Path,
+) -> Result<(PathBuf, Vec<String>)> {
     if let Some(id) = id {
         // Accept what `emma` prints at startup, which is a path ending in
         // `.jsonl`, as well as the bare id.
         let id = id.strip_suffix(".jsonl").unwrap_or(id);
         let path = dir.join(format!("{id}.jsonl"));
         if path.is_file() {
-            return Ok(path);
+            return Ok((path, Vec::new()));
         }
         bail!("no session `{id}` in {}", dir.display());
     }
@@ -1101,15 +1146,22 @@ pub fn locate(dir: &Path, id: Option<&str>, cwd: &Path) -> Result<PathBuf> {
         }
     }
     candidates.sort();
+    let mut unreadable: Vec<String> = Vec::new();
     for path in candidates.iter().rev() {
         let Ok(records) = SessionLog::read(path) else {
+            unreadable.push(
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+            );
             continue;
         };
         if records
             .iter()
             .any(|r| r["kind"] == "goal" && same_dir(&string(r, "cwd"), cwd))
         {
-            return Ok(path.clone());
+            return Ok((path.clone(), unreadable));
         }
     }
     bail!(

@@ -28,6 +28,16 @@ out for themselves.
 
 ## Unreleased
 
+- **`--resume` now tells you when it passed over a session file it could not
+  read.** Bare `--resume` means "the one I was last running here". If the newest
+  file was corrupt it was skipped in silence and an *older* conversation was
+  resumed instead — you got a resume, about the wrong work. It still skips,
+  which is right; it now names the file and points at `emma --resume <id>`.
+
+- **`emma agents` says when a session file could not be read.** Its output is
+  all totals, and a session nobody could read contributed nothing to them while
+  the numbers still looked complete.
+
 - **Resuming a finished session and asking a plain question no longer reports a
   failure.** A conversational turn — one needing no tool and claiming no
   completion — was treated as a stall, nudged twice more, and ended as
