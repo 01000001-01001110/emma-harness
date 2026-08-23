@@ -380,11 +380,19 @@ Error: no `.emma/` or `.claude/` found. Searched, nearest first:
   …\home2\sub\.claude
   …\home2\<span class="s">.emma (present, but holds no config.json or personas/, so it is not a harness)</span>
 
-<span class="c">$ echo '{}' &gt; $X/.emma/config.json &amp;&amp; HOME=$X emma config check | head -3</span>
+<span class="c">$ echo '{}' &gt; $X/.emma/config.json &amp;&amp; HOME=$X emma config check | head -4</span>
 cwd            …\home2\sub
 harness        …\home2\.emma
+               <span class="s">…\home2\.emma is being used, so …\home2\.claude is ignored entirely — its skills, agents, commands, hooks and permissions are all passed over rather than merged</span>
 flavor         emma</code></pre>
-  <span class="chip cert">certified</span>: same binary, same day. Three lines of search for a directory holding two candidate harnesses, and <code>.claude</code> is not one of them. Adding <code>config.json</code> by hand is what makes the other one a harness.
+  <span class="chip cert">certified</span>: re-run against a release binary built from this tree on
+  2026-08-23 and re-pasted. <strong>It was stale, under this green chip, and a reviewer found
+  it.</strong> The paste was <code>head -3</code> taken before <code>HARD-006</code> added the
+  shadow sentence, so it ended at <code>flavor</code> and showed no sign that a whole
+  <code>.claude</code> beside the winner had been passed over — which is the one thing this
+  example exists to demonstrate. A stale <span class="chip cert">certified</span> is worse than an
+  honest <span class="chip unv">unverified</span>, because the credibility of every green chip on
+  this site rests on them meaning something. Three lines of search for a directory holding two candidate harnesses, and <code>.claude</code> is not one of them. Adding <code>config.json</code> by hand is what makes the other one a harness.
 
   <div class="note warn">
     <span class="h">Both home rules key off <code>$HOME</code>, and only off <code>$HOME</code></span>
@@ -540,12 +548,13 @@ pub const PERSONA_ENV: &amp;str = "EMMA_PERSONA";</code></pre>
   </p>
 
 <pre><code><span class="c">$ ls -a           # .emma/config.json, .claude/, CLAUDE.md all present</span>
-<span class="c">$ emma config check | head -4</span>
+<span class="c">$ emma config check | head -5</span>
 cwd            …\scratchpad\cfg\both
 harness        …\scratchpad\cfg\both\.emma
+               <span class="s">…\cfg\both\.emma is being used, so …\cfg\both\.claude is ignored entirely — its skills, agents, commands, hooks and permissions are all passed over rather than merged</span>
 flavor         emma
 persona        (none)</code></pre>
-  <span class="chip cert">certified</span>: scratch tree built 2026-08-16, release binary. <code>instructions</code> on the next line reported the empty-harness hash, so the sibling <code>CLAUDE.md</code> was not read.
+  <span class="chip cert">certified</span>: re-run against a release binary built from this tree on 2026-08-23 and re-pasted. <strong>Stale under a green chip until a reviewer found it</strong>, for the same reason as the block above: the paste predates <code>HARD-006</code>, so a <code>head -4</code> ended at <code>flavor</code> and the shadow sentence — the entire point of a tree holding both — was missing. Originally certified against a scratch tree built 2026-08-16. <code>instructions</code> on the next line reported the empty-harness hash, so the sibling <code>CLAUDE.md</code> was not read.
 
   <h2 id="notverified">What this page did not settle</h2>
 
