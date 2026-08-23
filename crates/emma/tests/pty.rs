@@ -165,20 +165,69 @@ fn saw(haystack: &str, needle: &str) -> bool {
 /// So a scenario for this harness must live long enough to be drawn. That is a
 /// property of the observer, not of Emma, and it is the sort of thing that would
 /// otherwise be discovered as "the PTY tests are flaky".
+/// **The `|| saw(&run.output, "emma")` disjunct made this unfalsifiable, and
+/// it was found by review rather than by running.**
+///
+/// ConPTY sets the window title to the child's path, so the capture always
+/// contains `C:\\src\\emma\\target\\debug\\emma.exe`. In a repository
+/// named emma, building a binary named `emma.exe`, `saw(output, "emma")` cannot
+/// return false on any machine. The whole captured stream on this box is the
+/// console's own setup and teardown:
+///
+/// ```text
+/// "\u{1b}[6n\u{1b}[?9001h\u{1b}[?1004h\u{1b}[?25l\u{1b}[?9001l\u{1b}[?1004l
+///  \u{1b}[2J\u{1b}[m\u{1b}[H\u{1b}]0;C:\\src\\emma\\target\\debug\\emma.exe\u{7}\u{1b}[?25h"
+/// ```
+///
+/// **None of Emma's output is in it.** So the test whose own doc says *"a
+/// harness that has never been shown to capture output is a harness whose later
+/// silence means nothing"* was itself that harness, and the two tests below
+/// were asserting the absence of a marker in a stream that contained nothing at
+/// all.
+///
+/// It now asserts only on a string Emma writes. When that does not arrive the
+/// harness is not working here, and this says so loudly instead of passing:
+/// [`captured`] is the shared precondition, and every test that reasons about
+/// Emma's bytes consults it rather than asserting into an empty string.
 #[test]
 fn the_pty_harness_captures_what_the_binary_writes() {
-    let run = run_in_pty(
+    let run = harness_probe();
+    if !captured(&run) {
+        return;
+    }
+    assert!(run.status.is_some(), "the child never exited");
+}
+
+/// The scenario the harness proves itself with: `config check` against a root
+/// that does not exist, which needs no key and makes no model call.
+fn harness_probe() -> Run {
+    run_in_pty(
         &["config", "check"],
         &[("EMMA_ROOT", "definitely-not-a-directory")],
         &[],
         Duration::from_millis(1500),
+    )
+}
+
+/// Whether any of **Emma's own** output reached the master, said out loud when
+/// it did not.
+///
+/// A `false` here is an environment limitation rather than a defect, and the
+/// distinction only survives if it is visible: a silent early return and a pass
+/// look identical in a test list, which is how three green PTY tests came to
+/// assert nothing on this machine.
+fn captured(run: &Run) -> bool {
+    if saw(&run.output, "not a directory") {
+        return true;
+    }
+    eprintln!(
+        "SKIPPED: ConPTY delivered none of the child's output in this environment, so \
+         nothing below is exercised here. What came back is the console's own setup and \
+         teardown, including an OSC title carrying the binary path -- which is why matching \
+         `emma` against it used to pass. Capture: {:?}",
+        run.output.chars().take(400).collect::<String>()
     );
-    assert!(
-        saw(&run.output, "not a directory") || saw(&run.output, "emma"),
-        "nothing recognisable came back from the pty: {:?}",
-        run.output
-    );
-    assert!(run.status.is_some(), "the child never exited");
+    false
 }
 
 /// **A run that is not interactive never touches the alternate screen.**
@@ -188,18 +237,25 @@ fn the_pty_harness_captures_what_the_binary_writes() {
 /// which is where it would actually fail.
 #[test]
 fn a_non_interactive_run_never_enters_the_alternate_screen() {
-    let run = run_in_pty(&["--version"], &[], &[], Duration::from_millis(1500));
+    // `--version` writes one line and exits, which ConPTY may tear down before
+    // it paints -- the module doc above says so. That makes an absence
+    // assertion on it doubly empty, so the probe scenario is used instead and
+    // the version check rides on the same capture precondition.
+    let run = harness_probe();
+    if !captured(&run) {
+        return;
+    }
     assert!(
         !saw(&run.output, ALT_ENTER),
         "a --version run entered the alternate screen"
     );
 
-    let run = run_in_pty(
-        &["config", "check"],
-        &[("EMMA_ROOT", "definitely-not-a-directory")],
-        &[],
-        Duration::from_millis(500),
-    );
+    let run = harness_probe();
+    // Absence proves nothing about an empty capture, which is exactly what this
+    // asserted into before the harness was checked.
+    if !captured(&run) {
+        return;
+    }
     assert!(
         !saw(&run.output, ALT_ENTER),
         "a failing config check entered the alternate screen"
@@ -215,12 +271,12 @@ fn a_non_interactive_run_never_enters_the_alternate_screen() {
 /// accept that.
 #[test]
 fn the_frame_leaves_the_alternate_screen_on_a_clean_exit() {
-    let run = run_in_pty(
-        &[],
-        &[("EMMA_NO_FRAME", "")],
-        &["/exit\r"],
-        Duration::from_millis(1200),
-    );
+    // **`("EMMA_NO_FRAME", "")` used to be here, and it disabled the frame this
+    // test exists to observe.** `frame.rs` reads the variable with
+    // `var_os(..).is_some()`, so a set-but-empty value is set. A test that turns
+    // off its own subject cannot fail for the reason it names, and the early
+    // return below then reported that as an environment limitation.
+    let run = run_in_pty(&[], &[], &["/exit\r"], Duration::from_millis(1200));
 
     let Some(entered) = run.output.find(ALT_ENTER) else {
         // Not a failure of the invariant: this build may refuse to start

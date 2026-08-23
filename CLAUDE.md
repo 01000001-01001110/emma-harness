@@ -213,7 +213,17 @@ the remedy — or says plainly that no argument raises it.
   feature is ever declared. (Stripped because the manifest names the feature
   in a comment to explain why it is off — naming it is fine, enabling it is
   not.)
-- **Piped and `-p` output contains zero escape bytes.** There is a test. Keep it.
+- **Redirected output contains zero escape bytes.** A pipe or a file, on any
+  path, including `-p`. There is a test now — `crates/emma/tests/no_escape_bytes.rs`,
+  which runs the binary with both streams piped. Keep it.
+
+  Two corrections, both from an independent review on 2026-08-23, and both
+  about this sentence rather than about the code. It used to say *"piped and
+  `-p` output"*, and `-p` with a **terminal** on stderr does colour that
+  stderr — correctly, because a terminal is not somebody's pipeline. And it
+  used to say "there is a test" when there was not one: what existed were
+  component-level assertions inside `term/`, none of which ran the binary.
+  The test's own doc records the one path it still cannot reach.
 - **A tool failure is an observation, not an abort.** It comes back as a
   `tool_result` with `is_error` and the loop continues.
 - **The approval gate is a consent interface, not a sandbox.** It enforces
