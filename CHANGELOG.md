@@ -28,6 +28,20 @@ out for themselves.
 
 ## Unreleased
 
+- **New: `emma verify`.** Sends an independent reviewer at each outstanding row
+  of the parity ledger — a fresh model with the read tools, briefed to disprove
+  the row rather than confirm it — and writes a receipt with its verdict and its
+  whole report.
+
+  ```
+  emma verify [--rows <ids>] [--limit <n>] [--dry-run] --model <id>
+  ```
+
+  It spends money: each row is a model run with tools. `--limit` defaults to 5
+  and `--dry-run` reaches no model. Only a verdict of `UPHELD` closes a row.
+  `--max-tokens` applies; without it a review gets four times the usual goal
+  budget, because reviews read far more than goals do.
+
 - **`--resume` now tells you when it passed over a session file it could not
   read.** Bare `--resume` means "the one I was last running here". If the newest
   file was corrupt it was skipped in silence and an *older* conversation was
