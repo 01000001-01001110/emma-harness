@@ -1003,8 +1003,28 @@ fn a_real_skill_library_loads_and_most_of_it_is_usable() {
     let skills = root.join("skills");
     std::fs::create_dir_all(&skills).unwrap();
 
+    // **Nothing here may `unwrap` on the source, and that is not tidiness.**
+    // `~/.claude/skills` is a live directory outside this repository: Claude
+    // Code installs plugins into it, and a skill can appear, vanish or be held
+    // open between the `read_dir` above and the `copy` below. The first version
+    // unwrapped both, so an unrelated write on the machine failed this test —
+    // once, in one run out of seven, with the same tree passing every other
+    // time. A test that fails for a reason outside the thing it measures makes
+    // every green run of the whole suite unreadable, because a green result
+    // then cannot be told from a lucky one.
+    //
+    // Vanished files are *counted and printed*, never silently dropped: if the
+    // library ever stops being copyable at all, that must look different from a
+    // library that copied cleanly. The corpus bar below is then applied to what
+    // was actually copied, which is the only number this test can honestly
+    // reason about.
     let mut copied = 0usize;
-    for entry in std::fs::read_dir(&source).unwrap().flatten() {
+    let mut vanished = 0usize;
+    let Ok(listing) = std::fs::read_dir(&source) else {
+        eprintln!("skipped: {} could not be listed", source.display());
+        return;
+    };
+    for entry in listing.flatten() {
         let dir = entry.path();
         if !dir.is_dir() {
             continue;
@@ -1019,10 +1039,28 @@ fn a_real_skill_library_loads_and_most_of_it_is_usable() {
         }) else {
             continue;
         };
-        let into = skills.join(dir.file_name().unwrap());
-        std::fs::create_dir_all(&into).unwrap();
-        std::fs::copy(&file, into.join("SKILL.md")).unwrap();
+        let Some(name) = dir.file_name() else {
+            continue;
+        };
+        let into = skills.join(name);
+        if std::fs::create_dir_all(&into).is_err() {
+            vanished += 1;
+            continue;
+        }
+        if std::fs::copy(&file, into.join("SKILL.md")).is_err() {
+            // Removed, renamed or locked since the listing. Take the directory
+            // back out so it cannot present as an empty skill to the loader.
+            let _ = std::fs::remove_dir_all(&into);
+            vanished += 1;
+            continue;
+        }
         copied += 1;
+    }
+    if vanished > 0 {
+        eprintln!(
+            "{vanished} skill(s) changed under the copy and were left out; \
+             the corpus bar below is applied to the {copied} that were read"
+        );
     }
     if copied == 0 {
         eprintln!("skipped: ~/.claude/skills has no <name>/SKILL.md files");

@@ -257,17 +257,40 @@ fn a_real_agent_library_loads_and_most_of_it_is_usable() {
     let root = support::scratch(TAG).join(".claude");
     let agents = root.join("agents");
     std::fs::create_dir_all(&agents).unwrap();
+    // **No `unwrap` on the source.** `~/.claude/agents` is a live directory
+    // outside this repository and a file can vanish between the listing and the
+    // copy; the same race is written up at length beside the skill corpus in
+    // `claude_compat.rs`. Counted and printed rather than dropped, so a library
+    // that stops being copyable altogether cannot look like one that copied
+    // cleanly.
     let mut copied = 0usize;
-    for entry in std::fs::read_dir(&source).unwrap() {
-        let path = entry.unwrap().path();
+    let mut vanished = 0usize;
+    let Ok(listing) = std::fs::read_dir(&source) else {
+        eprintln!("skipped: {} could not be listed", source.display());
+        return;
+    };
+    for entry in listing.flatten() {
+        let path = entry.path();
         // Top-level `*.md` only, which is what the loader reads. A real library
         // has subdirectories under `agents/`; walking into them would flatten
         // two namespaces into one where a collision is resolved by directory
         // iteration order.
-        if path.extension().and_then(|e| e.to_str()) == Some("md") {
-            std::fs::copy(&path, agents.join(path.file_name().unwrap())).unwrap();
-            copied += 1;
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
         }
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        if std::fs::copy(&path, agents.join(name)).is_err() {
+            vanished += 1;
+            continue;
+        }
+        copied += 1;
+    }
+    if vanished > 0 {
+        eprintln!(
+            "{vanished} agent file(s) changed under the copy and were left out;              the bar below is applied to the {copied} that were read"
+        );
     }
     if copied == 0 {
         eprintln!("skipped: ~/.claude/agents has no top-level .md files");
