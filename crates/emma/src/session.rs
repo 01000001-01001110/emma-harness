@@ -1069,6 +1069,16 @@ pub fn first_run(dir: Option<&Path>, cwd: &Path) -> Option<FirstRun> {
 /// gives: case, a trailing separator, a short name and a symlinked path are all
 /// ways two spellings name one directory. An empty recording — a session from
 /// before the field existed — matches nothing rather than everything.
+/// Whether a record's `cwd` names this directory.
+///
+/// Public so the Memory page can ask the same question `locate` asks, rather
+/// than comparing path strings itself — canonicalisation is the whole of the
+/// answer here, and a second comparison that skipped it would disagree about
+/// the same session on a machine with a symlinked home or an 8.3 short name.
+pub fn recorded_in(r: &Value, cwd: &Path) -> bool {
+    same_dir(&string(r, "cwd"), cwd)
+}
+
 fn same_dir(recorded: &str, cwd: &Path) -> bool {
     if recorded.is_empty() {
         return false;

@@ -482,6 +482,119 @@ struct Tally {
 /// `delegation` records the `Delegate` tool writes from each sub-run's own log —
 /// the same records the footer is built from — so this answers what happened
 /// rather than what was reported.
+/// What Emma remembers about this project — the Memory page's data.
+///
+/// **Emma's own, explicitly not the owner's vault.** UI-003 was ruled with the
+/// words *"Emma's session memory is not my vault, she can have her own separate
+/// memory"*, so this reads the session store and nothing else.
+///
+/// **The mockup's retrieval block cannot be true and is not attempted here.**
+/// `Total memories: 342`, `Embedding model: all-MiniLM-L6-v2`, `Retrieval
+/// latency: 42ms`, `Index coverage 92%` — Emma has no embeddings, no vector
+/// index and no retrieval. What she has is a record of what was asked and what
+/// happened, which is a real thing to show and a different one.
+pub fn memory(session_dir: Option<&Path>, cwd: &Path, out: &mut dyn Write) -> Result<()> {
+    let Some(dir) = session_dir else {
+        bail!(
+            "no session directory: the home directory could not be determined, so there is \
+             nothing remembered to read. Name one with --session-dir."
+        );
+    };
+    writeln!(out, "project        {}", cwd.display())?;
+    if !dir.is_dir() {
+        writeln!(out, "               (nothing remembered here yet)")?;
+        return Ok(());
+    }
+
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let path = entry?.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            files.push(path);
+        }
+    }
+    files.sort();
+
+    let mut goals: Vec<(String, String)> = Vec::new();
+    let mut here = 0usize;
+    let mut compactions = 0usize;
+    let mut clears = 0usize;
+    for path in &files {
+        let Ok((records, _lost)) = crate::session::SessionLog::read_reporting(path) else {
+            continue;
+        };
+        // Only this project's sessions. A memory page that showed every goal
+        // from every directory would be a log, not a memory of *here*.
+        let mine = records
+            .iter()
+            .any(|r| r["kind"] == "goal" && crate::session::recorded_in(r, cwd));
+        if !mine {
+            continue;
+        }
+        here += 1;
+        let id = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        for r in &records {
+            match r["kind"].as_str().unwrap_or_default() {
+                "goal" => {
+                    let t = r["text"].as_str().unwrap_or_default().trim();
+                    if !t.is_empty() {
+                        goals.push((id.clone(), t.to_string()));
+                    }
+                }
+                "compacted" => compactions += 1,
+                "cleared" => clears += 1,
+                _ => {}
+            }
+        }
+    }
+
+    writeln!(out, "sessions here  {here}")?;
+    writeln!(out, "goals asked    {}", goals.len())?;
+    writeln!(
+        out,
+        "compactions    {compactions} — a summary replaced older turns this many times"
+    )?;
+    writeln!(out, "clears         {clears}")?;
+    writeln!(out)?;
+
+    writeln!(out, "what was asked here, newest last")?;
+    if goals.is_empty() {
+        writeln!(out, "  (nothing yet)")?;
+    }
+    for (id, text) in goals.iter().rev().take(15).rev() {
+        // One line each: a goal can be a paragraph, and a memory page that
+        // reprinted them whole would be the transcript with a different title.
+        let line: String = text
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .take(90)
+            .collect();
+        writeln!(out, "  {id:<30} {line}")?;
+    }
+    writeln!(out)?;
+    writeln!(
+        out,
+        "Emma remembers by keeping what happened, not by indexing it: there is no"
+    )?;
+    writeln!(
+        out,
+        "embedding model and no retrieval, so no similarity score is shown."
+    )?;
+    Ok(())
+}
+
+/// [`memory`] into a string, for the page.
+pub fn capture_memory(session_dir: Option<&Path>, cwd: &Path) -> Result<String> {
+    let mut buf: Vec<u8> = Vec::new();
+    memory(session_dir, cwd, &mut buf)?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
 /// [`sessions`] into a string, for the surface that paints rather than prints.
 ///
 /// The capture lives here rather than in the terminal so both callers reach the

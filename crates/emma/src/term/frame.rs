@@ -1070,6 +1070,33 @@ impl Frame {
         // be an in-app page. The external launch was correct as built — its own
         // comment says "the tool's promise is edit your settings, not open your
         // chosen editor" — and it is simply not what was wanted.
+        // **Memory is a page now.** `Tool::Memory` has declared `in_app` since
+        // the tools were written, and nothing routed it: pressing the chord
+        // produced a warning saying "the frame owns the 'm' key" about a key the
+        // frame had never claimed. DEF-037 stopped it advertising a chord that
+        // only warned; this is the other half — the frame claims the key.
+        if tool == crate::usertools::Tool::Memory {
+            let (dir, cwd) = {
+                let inner = self.lock();
+                (
+                    std::path::PathBuf::from(&inner.view.status.session)
+                        .parent()
+                        .map(|p| p.to_path_buf()),
+                    std::path::PathBuf::from(&inner.view.status.cwd),
+                )
+            };
+            let text = match crate::commands::capture_memory(dir.as_deref(), &cwd) {
+                Ok(t) => t,
+                Err(e) => format!("nothing could be read: {e:#}"),
+            };
+            let mut inner = self.lock();
+            if let Ui::Full(app) = &mut inner.ui {
+                app.show_memory(&text);
+                synchronized(|| inner.paint());
+            }
+            return;
+        }
+
         // **The Data Explorer reads the session store, so the scan happens
         // here and the page is handed a snapshot.** The directory is the one
         // holding this run's log — the frame already knows that path because the

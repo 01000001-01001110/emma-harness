@@ -113,7 +113,7 @@ impl Tool {
     /// questions — *does it run inside Emma* and *is it wired up* — is what
     /// lets the sidebar stop claiming otherwise until one is built.
     pub fn routed(self) -> bool {
-        matches!(self, Tool::Search)
+        matches!(self, Tool::Search | Tool::Memory)
     }
 
     pub fn label(self) -> &'static str {
@@ -722,10 +722,7 @@ fn in_app_note(tool: Tool) -> String {
 fn in_app_detail(tool: Tool) -> String {
     match tool {
         Tool::Search => "search this project, inside Emma".to_string(),
-        Tool::Memory => {
-            "this project's memory, inside Emma — no page is built yet, so no key is offered"
-                .to_string()
-        }
+        Tool::Memory => "what Emma remembers about this project, inside Emma".to_string(),
         // Unreachable by construction; a wrong caller gets words, not a panic.
         other => in_app_note(other),
     }
@@ -1195,24 +1192,25 @@ mod tests {
             assert!(e.detail.contains("inside Emma"), "{}", e.detail);
         }
 
-        // **This assertion used to say both were available, "because their keys
-        // are live in the frame".** Search's is: `/` opens the command menu.
-        // Memory's never was — nothing routes it, and `launch_tool` sent it to
-        // `launch`, which answered "the frame owns the 'm' key" about a key the
-        // frame had never claimed. So the sidebar advertised `Alt+M` and
-        // pressing it produced a warning, which is the one thing `tool_rows`'
-        // own doc forbids: a rendered key that does nothing.
+        // **This assertion has been all three states, and the record is the
+        // point.** It first claimed both in-app tools were available "because
+        // their keys are live in the frame" — the claim rather than the
+        // behaviour, which held a defect in place: nothing routed Memory, so
+        // `Alt+M` produced a warning saying "the frame owns the 'm' key" about a
+        // key the frame had never claimed.
         //
-        // The test asserted the claim rather than the behaviour, so it held the
-        // defect in place. Inverted rather than deleted, because the day a
-        // Memory page exists this line is what says to flip it back.
-        let search = entries.iter().find(|e| e.tool == Tool::Search).unwrap();
-        assert!(search.available, "Search's `/` is live and must stay so");
-        let memory = entries.iter().find(|e| e.tool == Tool::Memory).unwrap();
-        assert!(
-            !memory.available,
-            "Memory has no page and no route; offering a key for it advertises a chord that warns"
-        );
+        // It was then inverted, with a note saying the day a Memory page existed
+        // this line was what would say to flip it back. That day arrived: the
+        // frame claims the key now and opens the page. So it is flipped, and the
+        // test did exactly the job it was left to do rather than being
+        // rediscovered by somebody wondering why the sidebar lied.
+        for t in [Tool::Search, Tool::Memory] {
+            let e = entries.iter().find(|e| e.tool == t).unwrap();
+            assert!(
+                e.available,
+                "{t:?} is routed by the frame and must offer its key"
+            );
+        }
     }
 
     #[test]

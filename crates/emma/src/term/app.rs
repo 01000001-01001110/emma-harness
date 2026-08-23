@@ -257,6 +257,7 @@ pub fn dock_height(view: &View, room: u16) -> u16 {
 pub enum Page {
     Settings,
     DataExplorer,
+    Memory,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -445,6 +446,21 @@ impl App {
             Pane::Chat => self.chat_view(&r, view, buf),
             Pane::Page(Page::Settings) => self.settings_page(&r, view, buf),
             Pane::Page(Page::DataExplorer) => self.explorer_page(&r, view, buf),
+            Pane::Page(Page::Memory) => self.text_page(
+                &r,
+                view,
+                buf,
+                "Memory",
+                "what Emma remembers about this project",
+                &[
+                    "Emma has no embedding index and no retrieval, so the mockup's",
+                    "  similarity scores and latency are not drawn. What she keeps is a",
+                    "  record of what was asked and what happened, which is a real thing",
+                    "  to show and a different one.",
+                    "",
+                    "Esc returns to the conversation.",
+                ],
+            ),
         }
 
         let cursor = match &view.prompt {
@@ -487,6 +503,12 @@ impl App {
         self.pane = Pane::Page(Page::DataExplorer);
     }
 
+    /// The Memory page's snapshot, taken on open for the same reason.
+    pub fn show_memory(&mut self, text: &str) {
+        self.explorer = text.lines().map(str::to_string).collect();
+        self.pane = Pane::Page(Page::Memory);
+    }
+
     /// The Data Explorer.
     ///
     /// **The mockup wanted SQL over `notes.db`, and Emma has no database.**
@@ -499,13 +521,43 @@ impl App {
     /// over a store with no query engine would be the most convincing thing on
     /// the page and the least real.
     fn explorer_page(&mut self, r: &Regions, view: &View, buf: &mut Buffer) {
+        self.text_page(
+            r,
+            view,
+            buf,
+            "Data Explorer",
+            "what the session store holds, as of opening this page",
+            &[
+                "Not drawn, because nothing is behind it yet: the query box, typed",
+                "  columns, elapsed time, and the chart. A query surface over a store",
+                "  with no query engine would be the most convincing thing here and",
+                "  the least real.",
+                "",
+                "Esc returns to the conversation.",
+            ],
+        );
+    }
+
+    /// A page that is a captured report plus a footer saying what it omits.
+    ///
+    /// **Both pages that read the session store have the same shape**, and the
+    /// second one arriving is when that stops being a coincidence. The text is
+    /// produced by a `commands::*` writer, so the page and the equivalent
+    /// command cannot disagree; the footer is per page, because what each one
+    /// deliberately does not draw is the part a reader most needs told.
+    fn text_page(
+        &mut self,
+        r: &Regions,
+        view: &View,
+        buf: &mut Buffer,
+        title: &str,
+        subtitle: &str,
+        footer: &[&str],
+    ) {
         let skin = &view.skin;
         Line::from(vec![
-            Span::styled("Data Explorer", skin.palette.bold(Role::Accent)),
-            Span::styled(
-                "   what the session store holds, as of opening this page",
-                skin.palette.dim(),
-            ),
+            Span::styled(title.to_string(), skin.palette.bold(Role::Accent)),
+            Span::styled(format!("   {subtitle}"), skin.palette.dim()),
         ])
         .render(r.header, buf);
 
@@ -537,18 +589,11 @@ impl App {
         }
 
         y = y.saturating_add(1);
-        for line in [
-            "Not drawn, because nothing is behind it yet: the query box, typed",
-            "  columns, elapsed time, and the chart. A query surface over a store",
-            "  with no query engine would be the most convincing thing here and",
-            "  the least real.",
-            "",
-            "Esc returns to the conversation.",
-        ] {
+        for line in footer {
             if y >= end {
                 break;
             }
-            Line::from(Span::styled(line, skin.palette.dim()))
+            Line::from(Span::styled(line.to_string(), skin.palette.dim()))
                 .render(Rect::new(r.chat.x, y, r.chat.width, 1), buf);
             y = y.saturating_add(1);
         }
@@ -1034,6 +1079,53 @@ sessions       2 file(s), 9 record(s)",
         assert!(
             screen.contains("Not drawn"),
             "the page does not say what it is leaving out:
+{screen}"
+        );
+    }
+
+    /// Memory draws what Emma keeps, and refuses the mockup's retrieval block.
+    ///
+    /// `Total memories: 342`, `Embedding model: all-MiniLM-L6-v2`,
+    /// `Retrieval latency: 42ms` — none of those has a source in this
+    /// repository. The ruling put this page on Emma's own session memory, which
+    /// is a real thing and a different one, and the page has to say which.
+    #[test]
+    fn the_memory_page_says_it_has_no_index_rather_than_inventing_one() {
+        let v = view();
+        let mut a = App::new((120, 40));
+        a.set_tools(vec![sidebar::Row {
+            name: "Shell".into(),
+            trailing: "Alt+s".into(),
+            selected: false,
+        }]);
+        a.show_memory(
+            "project        C:/src/emma
+goals asked    12",
+        );
+        let (rows, _) = draw(&mut a, &v, 120, 40);
+        let screen = rows.join(
+            "
+",
+        );
+
+        assert!(
+            screen.contains("Memory"),
+            "the page did not draw:
+{screen}"
+        );
+        assert!(
+            screen.contains("goals asked"),
+            "the snapshot is missing:
+{screen}"
+        );
+        assert!(
+            screen.contains("SESSIONS"),
+            "the sidebar went with it:
+{screen}"
+        );
+        assert!(
+            screen.contains("no embedding index"),
+            "the page does not say it has no retrieval, which invites the reader to              assume the mockup's numbers are somewhere:
 {screen}"
         );
     }
