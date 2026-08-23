@@ -85,11 +85,22 @@
 //! moves `tool_schema_hash` — deliberately, once, to wording true on every
 //! platform, which is what keeps the hash a property of the tool surface rather
 //! than of the box it happened to run on.
+//!
+//! **Background mode.** `run_in_background: true` spawns the same child the
+//! foreground path would — same shell resolution, same rebuilt environment,
+//! same contained `cwd` — and returns at once with a task id instead of
+//! waiting. The child's lifetime, output and exit move to
+//! `ToolCtx::background`, where `BashOutput` and `KillShell` find them. The
+//! reasoning about what the two paths must share and where they must differ is
+//! on [`command_for`] and in the background region below.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
+use emma_tool_api::background::{Task, TaskState};
 use emma_tool_api::{Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
 use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
@@ -107,7 +118,7 @@ use crate::path;
 // ---------------------------------------------------------------------------
 
 const NAME: &str = "Bash";
-const KEYS: &[&str] = &["command", "timeout_ms", "cwd"];
+const KEYS: &[&str] = &["command", "timeout_ms", "cwd", "run_in_background"];
 
 pub const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 pub const MAX_TIMEOUT_MS: u64 = 600_000;
@@ -167,6 +178,10 @@ impl Tool for Bash {
                 "cwd": {
                     "type": "string",
                     "description": "Directory to start in. Must be inside the working directory. Defaults to it."
+                },
+                "run_in_background": {
+                    "type": "boolean",
+                    "description": "Run the command without waiting for it. The result names a task id; the command has NOT finished when the call returns and no output or exit status is included. Read output later with BashOutput; stop it with KillShell. timeout_ms is refused alongside this — a background command runs until it exits or is killed."
                 }
             },
             "required": ["command"],
@@ -201,6 +216,23 @@ impl Tool for Bash {
         if let Some(0) = args::opt_u64(args_v, NAME, "timeout_ms")? {
             return Err(ToolError::BadArguments(
                 "Bash.timeout_ms must be at least 1".into(),
+            ));
+        }
+        // Refused rather than accepted-and-ignored. A background call has no
+        // wait for a timeout to bound, so honouring the argument is impossible,
+        // and swallowing it would leave the caller believing a fuse is lit
+        // when nothing is armed — the configuration-that-lies class this
+        // repository has been bitten by twice. `deny_unknown` above already
+        // refuses a key that does nothing; this is the same rule applied to a
+        // known key that does nothing in this combination.
+        if args::opt_bool(args_v, NAME, "run_in_background")?.unwrap_or(false)
+            && args_v.get("timeout_ms").is_some()
+        {
+            return Err(ToolError::BadArguments(
+                "Bash.timeout_ms has no effect on a background task, so the pair is \
+                 refused rather than half-honoured: a background command runs until it \
+                 exits or KillShell stops it. Drop timeout_ms, or drop run_in_background."
+                    .into(),
             ));
         }
         Ok(())
@@ -252,23 +284,18 @@ impl Bash {
         };
 
         let shell = resolve_shell()?;
-        let mut cmd = tokio::process::Command::new(&shell.path);
-        cmd.args(shell.args())
-            .arg(command)
-            .current_dir(&cwd)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            // Without this a timed-out command keeps running after Emma has
-            // given up on it, and the next call sees a machine still busy with
-            // work nobody is waiting for.
-            .kill_on_drop(true)
-            .env_clear();
-        for key in ENV_ALLOWLIST {
-            if let Ok(value) = std::env::var(key) {
-                cmd.env(key, value);
-            }
+        let mut cmd = command_for(&shell, command, &cwd);
+
+        if args::opt_bool(&args_v, NAME, "run_in_background")?.unwrap_or(false) {
+            return run_background(ctx, cmd, &shell, command);
         }
+
+        // Without this a timed-out command keeps running after Emma has given
+        // up on it, and the next call sees a machine still busy with work
+        // nobody is waiting for. Set here rather than in `command_for` because
+        // it is the one setting on which the two paths need opposite answers —
+        // a background child's whole point is outliving the call.
+        cmd.kill_on_drop(true);
 
         let mut child = cmd.spawn().map_err(|e| {
             ToolError::Unavailable(format!(
@@ -414,7 +441,182 @@ impl Bash {
     }
 }
 
+/// One construction of the child for both the foreground and background paths.
+///
+/// Factored so the two call sites cannot drift, because the parts a review
+/// would not notice missing from one of them — `env_clear` plus the rebuilt
+/// allowlist, the resolved and contained `cwd`, the null stdin — are exactly
+/// the parts carrying the security story. A background path that quietly
+/// inherited the parent environment would hand every child the API key and
+/// pass every foreground test while doing it.
+///
+/// What is deliberately *not* here is `kill_on_drop`: it is the one setting on
+/// which the paths need opposite answers, so each states its own at its own
+/// call site rather than one inheriting the other's by default.
+fn command_for(shell: &Shell, command: &str, cwd: &Path) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(&shell.path);
+    cmd.args(shell.args())
+        .arg(command)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env_clear();
+    for key in ENV_ALLOWLIST {
+        if let Ok(value) = std::env::var(key) {
+            cmd.env(key, value);
+        }
+    }
+    cmd
+}
+
 // endregion: Running the command
+
+// region: Running in the background
+// ---------------------------------------------------------------------------
+// Running in the background
+//
+// Spawn, register, return. The call ends immediately; the child, its output
+// and its exit live in `ToolCtx::background` from then on, where `BashOutput`
+// and `KillShell` find them by the id this returns.
+// ---------------------------------------------------------------------------
+
+/// How often the background waiter checks whether `KillShell` fired.
+///
+/// A poll rather than a channel because `Child::start_kill` needs the child,
+/// which lives inside the detached task, and this crate's tokio carries no
+/// `sync` feature to send a message into it with. A tenth of a second of kill
+/// latency is imperceptible next to the teardown it triggers, and the timer
+/// only ticks while a background task is running.
+const KILL_POLL: Duration = Duration::from_millis(100);
+
+/// How long the final state waits for the pipes to reach EOF after the exit.
+///
+/// The same 5s bound the foreground path puts on the same race, for the same
+/// grandchild-holds-the-pipe reason — with a gentler failure: past the bound
+/// the pumps keep draining into the registry, so a late tail still arrives for
+/// whoever reads next, and only the state stops waiting for it.
+const PUMP_GRACE: Duration = Duration::from_secs(5);
+
+/// The background half of `run`. Returns as soon as the child exists.
+fn run_background(
+    ctx: &ToolCtx,
+    mut cmd: tokio::process::Command,
+    shell: &Shell,
+    command: &str,
+) -> Result<ToolOutcome, ToolError> {
+    // `kill_on_drop` stays off — the whole feature hangs on that. The
+    // foreground sets it so a timed-out command cannot outlive the call;
+    // here outliving the call is the point, and with it on, any drop of the
+    // child handle short of a completed wait — the runtime tearing down, the
+    // waiter task aborted — would silently take the command with it while the
+    // registry went on saying `Running` about a process that no longer exists.
+    let mut child = cmd.spawn().map_err(|e| {
+        ToolError::Unavailable(format!(
+            "{} could not be started: {e}",
+            shell.path.display()
+        ))
+    })?;
+    let stdout = child.stdout.take().expect("stdout piped");
+    let stderr = child.stderr.take().expect("stderr piped");
+
+    // Registered only after the spawn succeeded: an entry for a child that
+    // never existed would be a task forever `Running` that nothing can finish
+    // or kill. A failed spawn is a `ToolError` like the foreground's — an
+    // observation the loop continues past, not an abort.
+    let task = ctx.background.spawn(&ctx.session_id, command);
+
+    let kill = Arc::new(AtomicBool::new(false));
+    {
+        let kill = kill.clone();
+        task.on_kill(move || kill.store(true, Ordering::SeqCst));
+    }
+
+    let watcher = task.clone();
+    let id = task.id.clone();
+    tokio::spawn(async move {
+        // Both pipes are pumped from the moment of spawn, and the pump never
+        // stops reading: the cap on what is *kept* lives in `Task::push`,
+        // which drops the oldest bytes, so the reader's only job is keeping
+        // the pipe empty. A reader that stopped would fill the pipe buffer
+        // and block the child forever on a write nobody consumes — the same
+        // deadlock the foreground `drain` documents, one layer over.
+        let out_pump = tokio::spawn(pump(stdout, watcher.clone()));
+        let err_pump = tokio::spawn(pump(stderr, watcher.clone()));
+
+        let status = loop {
+            tokio::select! {
+                s = child.wait() => break s,
+                _ = tokio::time::sleep(KILL_POLL) => {
+                    if kill.load(Ordering::SeqCst) {
+                        // The shell, not its descendants. Emma does not reap
+                        // process trees — the owner ruled a deliberately
+                        // daemonizing child is a supported use — and
+                        // `Task::kill` is honest about that blast radius.
+                        let _ = child.start_kill();
+                    }
+                }
+            }
+        };
+
+        // The final state waits for the pipes, bounded. Unwaited, the state
+        // could land before the last buffered bytes and a poller that stops
+        // at `finished()` would miss the tail it was promised — `read_new`
+        // couples state and output under one lock for exactly that reader.
+        // Unbounded, a grandchild holding the pipe open would keep a command
+        // that exited hours ago `Running` forever.
+        let _ = tokio::time::timeout(PUMP_GRACE, async {
+            let _ = out_pump.await;
+            let _ = err_pump.await;
+        })
+        .await;
+
+        // `Task::kill` records `Killed` itself; writing `Exited` over it
+        // would report a command the user stopped as one that finished.
+        if kill.load(Ordering::SeqCst) {
+            return;
+        }
+        match status {
+            Ok(st) => watcher.set_state(TaskState::Exited(st.code())),
+            Err(e) => watcher.set_state(TaskState::Failed(format!(
+                "the wait on the child failed: {e}"
+            ))),
+        }
+    });
+
+    // The outcome deliberately over-explains that nothing has finished. A
+    // model that reads a background spawn as a completed command reports
+    // success for work that has not happened, so the wording denies it every
+    // handle that conclusion could hang on: no exit code is recorded on the
+    // outcome, and the content says what has and has not occurred.
+    Ok(ToolOutcome::new(format!(
+        "{}\nstarted in the background as task {id}. The command has not finished: \
+         nothing has been waited for, no exit status exists yet, and any output it has \
+         produced so far is not shown here. Call BashOutput with this task id to read \
+         its output and, once it exits, its status; call KillShell with the same id to \
+         stop it.",
+        shell.banner()
+    )))
+}
+
+/// Feed one pipe into the task's buffer until EOF.
+///
+/// No cap parameter, on purpose: `Task::push` retains at most the registry's
+/// cap and reports what it dropped, so this loop reads unconditionally. The
+/// foreground `drain` keeps the head because its call returns once and the
+/// first error is the real one; a polled task wants the newest bytes, and the
+/// registry's oldest-first eviction already chooses that.
+async fn pump<R: tokio::io::AsyncRead + Unpin>(mut reader: R, task: Task) {
+    let mut chunk = [0u8; 8192];
+    loop {
+        match reader.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => task.push(&chunk[..n]),
+        }
+    }
+}
+
+// endregion: Running in the background
 
 // region: Output
 // ---------------------------------------------------------------------------
@@ -1086,3 +1288,202 @@ mod shell_tests {
 }
 
 // endregion: Resolution tests
+
+// region: Background tests
+// ---------------------------------------------------------------------------
+// Background tests
+//
+// These spawn real children through the real shell, because the thing under
+// test is lifetime: a call that returns while the child runs, output that
+// arrives after the call is gone, a state carrying the exit nobody waited for
+// in the call. A scripted child would prove none of that. They live here
+// rather than in `tests/` so the file that owns the background path also owns
+// the proof it works.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod background_tests {
+    use super::*;
+    use serde_json::json;
+    use std::time::Instant;
+
+    fn ctx_in(dir: &Path) -> ToolCtx {
+        ToolCtx {
+            cwd: dir.to_path_buf(),
+            session_id: "bg-test".into(),
+            turn_id: "t".into(),
+            background: Default::default(),
+        }
+    }
+
+    async fn call(ctx: &ToolCtx, args: serde_json::Value) -> Result<ToolOutcome, ToolError> {
+        Bash::new().invoke(ctx, args).await.expect("no fault")
+    }
+
+    /// Poll until the task reports a finished state, accumulating output.
+    /// Bounded so a background path that never sets a final state fails as a
+    /// named timeout rather than hanging the suite.
+    async fn read_to_end(task: &Task) -> (TaskState, String) {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut seen = String::new();
+        loop {
+            let read = task.read_new();
+            seen.push_str(&read.new_output);
+            if read.state.finished() {
+                return (read.state, seen);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the task never reached a final state; saw so far: {seen:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    /// The core claim: the call returns while the child is still running. The
+    /// elapsed bound is what makes it a claim at all — `sleep 5` under the
+    /// foreground path returns in five seconds and would pass every other
+    /// assertion here. The `Running` state right after the call is the second
+    /// witness, and the missing exit code is the third: an outcome carrying a
+    /// code is an outcome a model may read as a finished command.
+    #[tokio::test]
+    async fn a_background_command_returns_before_the_command_finishes() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_in(dir.path());
+        let started = Instant::now();
+        let outcome = call(
+            &ctx,
+            json!({ "command": "sleep 5", "run_in_background": true }),
+        )
+        .await
+        .expect("background spawn");
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "the call waited for the child: {:?}",
+            started.elapsed()
+        );
+        assert!(outcome.content.contains("bash_1"), "{outcome:?}");
+        assert!(
+            outcome.content.contains("has not finished"),
+            "the outcome must be unreadable as a completion: {outcome:?}"
+        );
+        assert_eq!(
+            outcome.exit_code, None,
+            "an exit code on a background spawn claims a wait that never happened"
+        );
+
+        let task = ctx
+            .background
+            .get(&ctx.session_id, "bash_1")
+            .expect("the task was not registered");
+        assert_eq!(
+            task.state(),
+            TaskState::Running,
+            "already finished — the call must have waited after all"
+        );
+        // `on_kill` was wired at spawn, or this returns false — and the sleep
+        // is stopped rather than left to hold the pipes at runtime shutdown.
+        assert!(task.kill(), "no killer was registered at spawn");
+    }
+
+    /// Output produced after the call returned still lands in the registry,
+    /// and the final state is the real exit. The stderr assertion is not
+    /// decoration: a background path that pumped only stdout would pass every
+    /// other line of this test and silently lose every compiler diagnostic.
+    #[tokio::test]
+    async fn background_output_reaches_the_registry_with_the_real_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_in(dir.path());
+        call(
+            &ctx,
+            json!({
+                "command": "echo bg_marker_out; echo bg_marker_err >&2",
+                "run_in_background": true
+            }),
+        )
+        .await
+        .expect("background spawn");
+
+        let task = ctx.background.get(&ctx.session_id, "bash_1").expect("task");
+        let (state, seen) = read_to_end(&task).await;
+        assert!(seen.contains("bg_marker_out"), "stdout lost: {seen:?}");
+        assert!(seen.contains("bg_marker_err"), "stderr lost: {seen:?}");
+        assert_eq!(state, TaskState::Exited(Some(0)));
+    }
+
+    /// Non-zero specifically, because `Exited(Some(0))` is what a hardcoded
+    /// success would report and a model acting on a background build needs
+    /// the number, not a rounding of it.
+    #[tokio::test]
+    async fn a_background_exit_code_is_the_childs_not_a_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_in(dir.path());
+        call(&ctx, json!({ "command": "exit 7", "run_in_background": true }))
+            .await
+            .expect("background spawn");
+        let task = ctx.background.get(&ctx.session_id, "bash_1").expect("task");
+        let (state, _) = read_to_end(&task).await;
+        assert_eq!(state, TaskState::Exited(Some(7)));
+    }
+
+    /// The child survives `invoke` returning — the guarantee `kill_on_drop`
+    /// would silently destroy. The proof is work completed *after* the call
+    /// was over: the marker file can only exist if the child outlived the
+    /// return, so a path that reaps its child on return fails here and
+    /// nowhere else.
+    #[tokio::test]
+    async fn the_child_outlives_the_call_that_spawned_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_in(dir.path());
+        let started = Instant::now();
+        call(
+            &ctx,
+            json!({
+                "command": "sleep 1 && echo done > marker.txt",
+                "run_in_background": true
+            }),
+        )
+        .await
+        .expect("background spawn");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the call must return before the sleep ends for this to prove anything"
+        );
+
+        let marker = dir.path().join("marker.txt");
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !marker.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "the marker never appeared — the child did not survive the call returning"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let content = std::fs::read_to_string(&marker).expect("marker readable");
+        assert!(content.contains("done"), "{content:?}");
+    }
+
+    /// The refusal that keeps `timeout_ms` honest: a background task has no
+    /// wait to bound, and accepting-then-ignoring the argument would tell the
+    /// caller a fuse is lit when nothing is armed. `bad_arguments`, not
+    /// `tool_failed` — the caller mis-spoke and can retry in one move.
+    #[tokio::test]
+    async fn a_timeout_on_a_background_task_is_refused_not_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ctx_in(dir.path());
+        let error = call(
+            &ctx,
+            json!({ "command": "echo hi", "run_in_background": true, "timeout_ms": 5000 }),
+        )
+        .await
+        .expect_err("the pair must be refused");
+        assert_eq!(error.kind(), "bad_arguments");
+        assert!(error.detail().contains("timeout_ms"), "{error}");
+        assert!(
+            ctx.background.list(&ctx.session_id).is_empty(),
+            "a refused call must not leave a task behind"
+        );
+    }
+}
+
+// endregion: Background tests
