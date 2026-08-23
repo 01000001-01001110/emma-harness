@@ -156,6 +156,55 @@
             <code>ps -o state=</code> for the pid.</td>
       </tr>
       <tr>
+        <td><strong>Whether <code>/copy</code> reaches the clipboard.</strong>
+            It writes OSC 52, and the protocol has no acknowledgement: the
+            terminal honours the sequence or ignores it, with no reply. The PTY
+            harness can prove the bytes leave Emma and can never prove they
+            arrived. See <a href="terminal-copying.html">Copying out</a>.</td>
+        <td>Press <code>/copy</code> in a real Windows Terminal and then
+            <code>Ctrl+V</code> somewhere. Ten seconds, and only a person can
+            do it.</td>
+      </tr>
+      <tr>
+        <td><strong>What a <code>Shift+drag</code> selection actually
+            contains.</strong> Mouse capture takes plain drag-selection, and
+            Shift gives back the terminal's own, which takes whole rows &mdash;
+            sidebar columns, borders and gutter interleaved into every line. How
+            bad that is with the sidebar open has never been recorded.</td>
+        <td>Drag with Shift on a real console and paste into an editor. The
+            selection never passes through Emma, so no harness can see it.</td>
+      </tr>
+      <tr>
+        <td><strong>Symlinks in the completion gate's tree
+            fingerprint.</strong> The fingerprint hashes path and bytes, so a
+            symlink's target is not represented. Two reviewers tried to build a
+            fixture: git normalises a hand-written <code>120000</code> entry on
+            refresh, and <code>os.symlink</code> needs a privilege this account
+            does not hold (<code>WinError 1314</code>).</td>
+        <td>A Linux checkout, or Developer Mode enabled here. The exec bit and
+            submodule cases were settled this way and both turned out to be
+            demonstrated collisions rather than theoretical ones.</td>
+      </tr>
+      <tr>
+        <td><strong>Whether a non-NTFS Windows volume treats <code>:</code> as
+            an ordinary character.</strong> The alternate-data-stream refusal is
+            <code>#[cfg(windows)]</code> and unconditional. If some filesystem
+            Emma might run on allows a colon in a name, that name is refused when
+            it would have worked. See
+            <a href="tools-containment.html#streams">Containment</a>.</td>
+        <td>Run the same probe on a FAT32 or exFAT volume &mdash; a USB stick
+            will do.</td>
+      </tr>
+      <tr>
+        <td><strong>Whether the leaked-profile warning fires on a real
+            leak.</strong> The test produces a removal failure by putting a file
+            where the directory should be. The failure it was written for is a
+            killed Chrome still holding its files open, which was 8 of 66 closes
+            when somebody last instrumented it.</td>
+        <td>Open six live browser sessions, end a goal, and check whether the
+            warning fires and whether the directories it names are on disk.</td>
+      </tr>
+      <tr>
         <td><strong>Whether a daemonized hook outlives Emma's own process.</strong>
             The environment it was tested in confounds the result: a plain
             unrelated parent behaved the same way, so nothing there is
