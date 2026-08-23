@@ -99,4 +99,16 @@ libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# A real pseudo-terminal, so the full-screen frame can be driven without a
+# human. `CLAUDE.md` says a cell buffer is not a console, and this repository
+# has shipped a fully-tested scrollback defect twice on the strength of one;
+# every terminal claim in this program so far has been read from source rather
+# than observed. This is the seam that changes that.
+#
+# Licence checked at the source rather than the badge, per the house rule:
+# wezterm's `pty` crate is plain MIT (LICENSE.md, Wez Furlong), grepped for the
+# non-standard clauses `notes/improvements.md` warns about and clean.
+#
+# A dev-dependency on purpose: it must never reach the shipped binary.
+portable-pty = "0.9"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

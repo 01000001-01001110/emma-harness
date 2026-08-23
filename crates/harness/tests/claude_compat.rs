@@ -833,6 +833,54 @@ fn an_unimplemented_hook_event_can_be_skipped_by_explicit_opt_in() {
     loaded.expect("the opt-in must let the harness load");
 }
 
+/// A hook Emma cannot honour costs that hook, not the session.
+///
+/// **Owner ruling 2026-08-23, on a measurement rather than a preference.** The
+/// owner's real `~/.claude/settings.json` holds five hooks; one shell string
+/// refused the entire boot, so the hooks Emma *could* have run never got the
+/// chance. An unknown *event* was already skippable by name while an
+/// unhonourable *command* was fatal — and that inconsistency was the defect,
+/// not the strictness.
+///
+/// Containment is untouched: the shell string is still never executed, for the
+/// reason INV-009 gives. What changed is the blast radius of refusing it.
+#[test]
+fn an_unhonourable_hook_command_is_skipped_by_the_same_opt_in() {
+    let _guard = HOOK_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let base = scratch("claude-hook-shellstring");
+    let root = base.join(".claude");
+    write(
+        &root.join("settings.json"),
+        r#"{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"cmd /c echo hi"}]}]}}"#,
+    );
+
+    // The strict default is unmoved: without the opt-in this still refuses.
+    assert!(
+        Harness::load(&root).is_err(),
+        "a shell string must still refuse the boot by default"
+    );
+
+    std::env::set_var("EMMA_CLAUDE_HOOKS", "skip-unknown");
+    let loaded = Harness::load(&root);
+    std::env::remove_var("EMMA_CLAUDE_HOOKS");
+
+    let h = loaded.expect("the opt-in must let the harness load past an unusable hook");
+
+    // Skipped, not smuggled in. There is no public accessor for the hook
+    // registry, and inventing one for a test would be a worse trade than
+    // asserting the observable consequence: the hook does not fire. A
+    // `UserPromptSubmit` hook that reached the registry would run here.
+    let args = serde_json::json!({});
+    let verdict = tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(async { h.run_hooks(HookEvent::UserPromptSubmit, &call(&args)).await });
+    assert!(
+        verdict.runs.is_empty(),
+        "an unhonourable hook reached the registry and ran: {:?}",
+        verdict.runs
+    );
+}
+
 /// The genuine disagreement between the two systems, and Emma does not blink.
 /// Honouring a shell string would mean dropping containment, the cleared
 /// environment and the argv exec — at the exact point where Emma is deciding

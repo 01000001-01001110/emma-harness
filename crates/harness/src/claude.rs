@@ -186,15 +186,47 @@ impl Settings {
                             entry.kind
                         );
                     }
+                    // **A command Emma cannot honour is a skip under the same
+                    // opt-in, not a fatal.** Owner ruling 2026-08-23, on a
+                    // measurement rather than a preference: the owner's real
+                    // `~/.claude/settings.json` holds 5 hooks — 2 on events Emma
+                    // implements, 3 shell strings — and one shell string refused
+                    // the entire boot, so the two hooks Emma *could* run never
+                    // got the chance. The number stayed 0 of 5 after the event
+                    // opt-in landed, for a different reason than before.
+                    //
+                    // The inconsistency was the defect, not the strictness: an
+                    // unknown *event* was already skippable by name while an
+                    // unhonourable *command* was fatal. Containment is untouched
+                    // — a shell string is still never executed, and INV-009 is
+                    // the reason. What changes is that refusing one hook now
+                    // costs that hook rather than the session.
+                    //
+                    // Still never silent, and the message says what will not
+                    // fire rather than merely that something was dropped.
+                    let translated = match translate_command(
+                        root,
+                        &format!("hook `{name}`"),
+                        &entry.command,
+                    ) {
+                        Ok(c) => c,
+                        Err(e) if skip_unknown() => {
+                            eprintln!(
+                                    "emma: skipping hook `{name}` — {e:#}.                                      EMMA_CLAUDE_HOOKS=skip-unknown asked for this run to start                                      anyway, so nothing you wrote for `{name}` will fire."
+                                );
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(e).with_context(|| {
+                                format!("{}: hooks.{event}", root.join("settings.json").display())
+                            })
+                        }
+                    };
                     out.insert(
                         name.clone(),
                         HookDef {
                             event: event.clone(),
-                            command: translate_command(
-                                root,
-                                &format!("hook `{name}`"),
-                                &entry.command,
-                            )?,
+                            command: translated,
                             matcher: group.matcher.clone(),
                             // Seconds there, milliseconds here.
                             timeout_ms: entry.timeout.map(|s| s.saturating_mul(1_000)),
@@ -206,6 +238,17 @@ impl Settings {
         }
         Ok(out)
     }
+}
+
+/// Whether the operator asked for a run that starts despite unusable hooks.
+///
+/// **One reader, because there are now two skip paths** — an unimplemented event
+/// and an unhonourable command — and two copies of an environment check are two
+/// things that drift. An environment variable rather than a config key, for the
+/// reason `hooks.rs` gives where it refuses the event: a repository that could
+/// relax its own strictness is the trust boundary running backwards.
+fn skip_unknown() -> bool {
+    std::env::var_os("EMMA_CLAUDE_HOOKS").as_deref() == Some(std::ffi::OsStr::new("skip-unknown"))
 }
 
 /// Turn a Claude Code command string into a path Emma can exec, or refuse.
