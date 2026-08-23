@@ -294,6 +294,7 @@ async fn run(cli: cli::Cli) -> Result<()> {
         rows,
         limit,
         dry_run,
+        print_brief,
     } = &cli.command
     {
         let tools = harness.select_tools(registry)?;
@@ -308,6 +309,7 @@ async fn run(cli: cli::Cli) -> Result<()> {
             &tools,
             &term,
             review_budgets(&opts.budgets),
+            *print_brief,
         )
         .await;
     }
@@ -862,6 +864,7 @@ async fn run_verification(
     tools: &Registry,
     term: &Arc<Term>,
     budgets: emma::agent::Budgets,
+    print_brief: bool,
 ) -> Result<()> {
     let ledger_path = cwd.join("verification").join("parity").join("ledger.json");
     let ledger: serde_json::Value = serde_json::from_str(
@@ -899,6 +902,22 @@ async fn run_verification(
     if dry_run {
         for row in &chosen {
             term.note(&format!("would review {}: {}", row.id, row.title));
+        }
+        return Ok(());
+    }
+
+    // **The brief, and no model.** So a reviewer that is not this binary can do
+    // the reading -- Claude Code, say, which is already paid for and has its own
+    // file tools. Printed to stdout rather than through `Term` because it is
+    // data for another program, and the delimiter is a line nothing in a brief
+    // can produce.
+    if print_brief {
+        use std::io::Write as _;
+        let mut out = std::io::stdout().lock();
+        for row in &chosen {
+            writeln!(out, "===EMMA-BRIEF {}===", row.id)?;
+            writeln!(out, "{}", emma::verify::brief(row))?;
+            writeln!(out, "===END {}===", row.id)?;
         }
         return Ok(());
     }

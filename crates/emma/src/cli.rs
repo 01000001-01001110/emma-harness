@@ -302,6 +302,14 @@ pub enum Command {
         limit: usize,
         /// List what would be reviewed and stop. Reaches no model.
         dry_run: bool,
+        /// Print each selected row's brief and stop. Reaches no model.
+        ///
+        /// **So the reviewer can be something other than this binary.** The
+        /// brief is the whole product of this command and it must have one
+        /// source; a second copy in a shell script is how the fan-out and the
+        /// gate came to disagree about what "reviewed" means. Print it, and let
+        /// whoever is cheaper to run do the reading.
+        print_brief: bool,
     },
     /// What delegation has actually cost. Reads the session transcripts and
     /// prints; calls no model, exactly as `config check` does not.
@@ -548,11 +556,12 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
                     rows: Vec::new(),
                     limit: DEFAULT_VERIFY_LIMIT,
                     dry_run: false,
+                    print_brief: false,
                 })
             }
             // These three only mean anything to `verify`, and saying so beats
             // accepting them anywhere and ignoring them somewhere.
-            other @ ("--rows" | "--limit" | "--dry-run")
+            other @ ("--rows" | "--limit" | "--dry-run" | "--print-brief")
                 if !matches!(command, Some(Command::Verify { .. })) =>
             {
                 return Err(format!(
@@ -590,6 +599,11 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
             "--dry-run" => {
                 if let Some(Command::Verify { dry_run, .. }) = command.as_mut() {
                     *dry_run = true;
+                }
+            }
+            "--print-brief" => {
+                if let Some(Command::Verify { print_brief, .. }) = command.as_mut() {
+                    *print_brief = true;
                 }
             }
             "config" if fresh(&command, &words) => match it.next().as_deref() {
