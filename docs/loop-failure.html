@@ -367,6 +367,45 @@ match self
     and <code>an_interrupt_reaches_a_tool_that_is_already_running</code>, both
     in <code>tests/loop.rs</code>.
   </p>
+
+  <div class="note warn">
+    <span class="h">The guard was one function too late, and the test that
+      should have caught it panicked in the wrong place</span>
+    <p>
+      Until 2026-08-23 the <code>catch_unwind</code> wrapped
+      <code>Tool::invoke</code> and nothing else. The argument quoted above is
+      that <em>&ldquo;several of its crates parse input from the model, and an
+      index or an <code>unwrap</code> in any of them ended everything&rdquo;</em>
+      &mdash; and the first function on the call path to see that input is
+      <code>Tool::validate_args</code>, which sat outside the guard. So did
+      <code>network_target</code> and <code>meta</code>, both of which the
+      approval gate calls on the tool&rsquo;s own code before anything runs.
+      There are nineteen-odd real <code>validate_args</code> implementations
+      across <code>tools/fs</code>, <code>tools/lsp</code>,
+      <code>tools/tasks</code> and <code>tools/web</code>, each parsing a JSON
+      blob the model wrote.
+    </p>
+    <p>
+      <strong>The positive control could not have caught it.</strong>
+      <code>TestTool::panicking</code> panics inside <code>invoke</code> &mdash;
+      the half the guard already covered. An independent reviewer staged a panic
+      in a test tool&rsquo;s <code>validate_args</code> and the session died
+      exactly the way this page said it no longer could.
+    </p>
+    <p>
+      Both are wrapped now, and a panic in either is an ordinary failed call. A
+      tool that panics when asked <em>where it would connect</em> is denied
+      rather than run: nothing about a call can be approved on the word of a
+      tool that cannot answer the question.
+      <span class="chip test">tested</span>
+      <code>a_tool_that_panics_before_it_runs_is_an_observation_too</code> uses
+      a fixture that panics <em>before</em> <code>invoke</code>, and asserts the
+      goal completes, the model is told, <em>and that <code>invoke</code> was
+      never reached</em>. That last assertion is what stops the test drifting
+      back to measuring the arm that was already guarded, which is how the old
+      control ended up where it was.
+    </p>
+  </div>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code>; crates/emma/tests/loop.rs</span>
 
   <pre><code><span class="c">// crates/emma/src/agent.rs — Agent::run_tool_call</span>

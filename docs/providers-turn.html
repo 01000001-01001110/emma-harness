@@ -229,51 +229,98 @@ pub fn tool_calls(&amp;self) -&gt; Vec&lt;&amp;ToolCall&gt; { … }</code></pre>
   <p class="faint">crates/llm/src/anthropic.rs · <code>turn_from_message</code></p>
   <pre><code>/// Batch mode: the whole message arrived at once.
 fn turn_from_message(msg: &amp;Value) -&gt; Result&lt;AssistantTurn, LlmError&gt; {
-    if msg.get("type").and_then(Value::as_str) == Some("error") {
+    if msg.get(&quot;type&quot;).and_then(Value::as_str) == Some(&quot;error&quot;) {
         return Err(LlmError::Api {
             status: 200,
             message: api_message(&amp;msg.to_string()),
         });
     }
     let content = msg
-        .get("content")
+        .get(&quot;content&quot;)
         .cloned()
-        .ok_or_else(|| LlmError::Protocol("the response carried no content array".into()))?;
+        .ok_or_else(|| LlmError::Protocol(&quot;the response carried no content array&quot;.into()))?;
     let usage: Usage = msg
-        .get("usage")
+        .get(&quot;usage&quot;)
         .cloned()
         .map(serde_json::from_value)
         .transpose()
-        .map_err(|e| LlmError::Protocol(format!("usage: {e}")))?
+        .map_err(|e| LlmError::Protocol(format!(&quot;usage: {e}&quot;)))?
         .unwrap_or_default();
     let stop_reason = msg
-        .get("stop_reason")
+        .get(&quot;stop_reason&quot;)
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    // **The same refusal the streaming path makes, and it was missing here.**
+    // `Assembly::finish` rejects a turn with no stop reason because &quot;a turn
+    // reading &#x27;The tests all pa&#x27; was handed to the loop as a finished answer,
+    // with no truncation signal anywhere downstream&quot;. The batch decoder took
+    // `unwrap_or_default()` and passed the empty string on -- and batch is the
+    // mode `-p` runs in, so the unattended path was the unguarded one.
+    //
+    // A reviewer drove a stub server with a batch body carrying no stop_reason
+    // and got exactly this row&#x27;s worked example back, accepted as finished.
+    // There is a second cost: `stop_reason == &quot;max_tokens&quot;` is what DEF-026&#x27;s
+    // truncation warning keys on, so in batch mode a cut-off turn was silent as
+    // well as unreported.
+    if stop_reason.is_empty() {
+        return Err(LlmError::Protocol(
+            &quot;the response carried no stop reason, so the turn is incomplete — there is no \
+             way to tell a finished answer from one the connection cut short&quot;
+                .into(),
+        ));
+    }
     turn_from_content(content, stop_reason, usage)
 }</code></pre>
   <span class="src">crates/llm/src/anthropic.rs — <code>turn_from_message</code></span>
 
   <p>
-    Four outcomes live in that function. An error-shaped body arrives with HTTP
+    Five outcomes live in that function. An error-shaped body arrives with HTTP
     200 and never reaches <code>classify</code>, so it is turned into
     <code>Api { status: 200 }</code> here. A missing <code>content</code> is a
     protocol error. A <code>usage</code> object that will not deserialize is a
     protocol error naming the field; a <code>usage</code> that is absent
-    entirely defaults to four zeros. A missing <code>stop_reason</code> becomes
-    the empty string rather than an error here.
+    entirely defaults to four zeros. And a missing <code>stop_reason</code> is a
+    protocol error, the same refusal <code>Assembly::finish</code> makes on the
+    streaming path.
   </p>
 
   <p>
-    <strong>That last one is true of this batch path and no longer true of the
-    streaming path, which is the one that carries real traffic.</strong>
-    <code>Assembly::finish</code> now refuses an empty <code>stop_reason</code>
-    with a <code>Protocol</code> error, because a stream that closed without ever
-    saying why it stopped did not finish &mdash; it was cut. A dropped
-    connection, a proxy timeout and a truncated response all arrive as a
-    <em>clean</em> close, and the code used to return <code>Ok</code> with
-    whatever text had turned up.
+    <strong>That last one was true of streaming and not of batch until
+    2026-08-23, and batch is the mode <code>-p</code> runs in.</strong> The
+    streaming path had refused an empty <code>stop_reason</code> since
+    <code>DEF-020</code>; this decoder read it with
+    <code>unwrap_or_default()</code> and passed the empty string on. So the
+    guarded path was the one with somebody watching, and the unguarded one was
+    the path in a script.
+  </p>
+
+  <p>
+    An independent reviewer drove a stub server with a batch body carrying no
+    <code>stop_reason</code> and got back exactly the worked example below,
+    accepted as a finished turn. No fixture had caught it because every batch
+    fixture in the file supplies a stop reason, so the branch had never been
+    exercised.
+    <span class="chip test">tested</span>
+    <code>a_batch_response_without_a_stop_reason_is_a_fault</code>, with
+    <code>an_ordinary_batch_response_still_decodes</code> as its control &mdash;
+    adding a refusal at a provider boundary is exactly the change that starts
+    rejecting valid traffic, and a boundary that rejects good responses is worse
+    than one that accepts a rare bad one.
+  </p>
+
+  <p>
+    There is a second cost, and it is not obvious from here:
+    <code>stop_reason == "max_tokens"</code> is what the loop&rsquo;s truncation
+    warning keys on, so in batch mode a turn cut off at the output limit was
+    silent as well as unreported.
+  </p>
+
+  <p>
+    A stream that closed without ever saying why it stopped did not finish
+    &mdash; it was cut. A dropped connection, a proxy timeout and a truncated
+    response all arrive as a <em>clean</em> close, and the code used to return
+    <code>Ok</code> with whatever text had turned up.
   </p>
 
   <p>
