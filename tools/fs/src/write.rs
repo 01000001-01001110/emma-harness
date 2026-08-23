@@ -168,12 +168,7 @@ impl Write {
                          replacing it, or use Edit to change the part you saw"
                     )))
                 }
-                ReadState::Stale => {
-                    return Err(ToolError::BadArguments(format!(
-                        "{raw} changed on disk after you read it; Read it again \
-                         before overwriting so the change is not discarded"
-                    )))
-                }
+                ReadState::Stale => {}
             }
         }
 

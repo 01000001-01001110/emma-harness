@@ -34,6 +34,8 @@
 
 use std::sync::Arc;
 
+pub mod background;
+
 // region: The failure channel
 // ---------------------------------------------------------------------------
 // The failure channel
@@ -337,6 +339,14 @@ pub struct ToolCtx {
     pub cwd: std::path::PathBuf,
     pub session_id: String,
     pub turn_id: String,
+    /// Where work that outlives this call is kept.
+    ///
+    /// Passed here rather than reached for through a global, which would have
+    /// been fewer lines and is the shape this codebase has been bitten by
+    /// before: ambient state a test cannot isolate and a second session cannot
+    /// avoid. `Registry` is an `Arc` inside, so this clone is cheap and every
+    /// holder shares one registry.
+    pub background: background::Registry,
 }
 
 // endregion: What the runtime knows before it runs anything
