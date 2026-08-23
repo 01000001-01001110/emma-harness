@@ -143,6 +143,73 @@ impl PasteLoss {
     }
 }
 
+/// The parts of the frame the reader thread pushes state into.
+///
+/// **`ARCH-003`'s pilot, and the reason it is a trait rather than a function.**
+/// The reader thread cannot be started from a test — it owns a real terminal —
+/// so every line inside it is untested by construction. A reviewer proved the
+/// consequence for the paste arm: neutering
+/// `if let Some(note) = ed.paste(&text).note()` left the whole workspace green,
+/// which is the same shape as `DEF-017`'s `starting_goal` call and `UI-003`'s
+/// `Alt+m` dispatch. One defect with three instances.
+///
+/// Extracting the *decision* does not help, because the decision was already
+/// tested; what is untestable is the **effect**, and an effect on `Frame` needs
+/// a `Frame`. So the arm takes this instead, `Frame` implements it, and a test
+/// hands it a recorder.
+///
+/// Deliberately narrow: exactly the five methods the paste arm uses. A trait
+/// that mirrored `Frame` would be a second interface to keep true, and the next
+/// arm extracted should widen this by what it needs rather than by what it
+/// might.
+pub trait Surface {
+    fn note_line(&self, text: &str);
+    fn set_input(&self, text: &str, cursor: usize);
+    fn prompt_pending(&self) -> bool;
+    fn set_menu(&self, menu: Option<super::menu::MenuView>);
+    fn draw(&self);
+}
+
+impl Surface for super::frame::Frame {
+    fn note_line(&self, text: &str) {
+        super::frame::Frame::note_line(self, text)
+    }
+    fn set_input(&self, text: &str, cursor: usize) {
+        super::frame::Frame::set_input(self, text, cursor)
+    }
+    fn prompt_pending(&self) -> bool {
+        super::frame::Frame::prompt_pending(self)
+    }
+    fn set_menu(&self, menu: Option<super::menu::MenuView>) {
+        super::frame::Frame::set_menu(self, menu)
+    }
+    fn draw(&self) {
+        super::frame::Frame::draw(self)
+    }
+}
+
+/// A whole clipboard arriving at once: flatten it, say what that cost, and push
+/// the result at the surface.
+///
+/// The body of the reader thread's `Event::Paste` arm, lifted out so it can be
+/// driven. What is worth testing here is not that `paste` flattens — that has
+/// its own test — but that the note actually **reaches** the surface, which is
+/// the line that was deletable.
+pub fn on_paste(ed: &mut Editor, menu: &mut super::menu::Menu, surface: &dyn Surface, text: &str) {
+    // **Said, not merely done.** A paste into a one-line box loses structure,
+    // and the user is about to pay for a model call on text the clipboard did
+    // not hold. The flattening stays until the multi-line editor lands; the
+    // silence does not have to.
+    if let Some(note) = ed.paste(text).note() {
+        surface.note_line(&note);
+    }
+    surface.set_input(&ed.text(), ed.cursor());
+    // A paste beginning `/` is a typed `/` as far as the menu is concerned.
+    menu.sync(&ed.text(), surface.prompt_pending());
+    surface.set_menu(menu.view());
+    surface.draw();
+}
+
 /// The line being typed.
 #[derive(Debug, Default, Clone)]
 pub struct Editor {
@@ -711,22 +778,9 @@ impl LineSource {
                 // afterwards for the same reason typing syncs it — a paste
                 // beginning `/` is a typed `/` as far as the menu is concerned.
                 Ok(Event::Paste(text)) => {
-                    {
-                        let mut ed = thread_editor.lock().unwrap_or_else(|e| e.into_inner());
-                        // **Said, not merely done.** A paste into a one-line box
-                        // loses structure, and the user is about to pay for a
-                        // model call on text the clipboard did not hold. The
-                        // flattening stays until the multi-line editor lands;
-                        // the silence does not have to.
-                        if let Some(note) = ed.paste(&text).note() {
-                            thread_frame.note_line(&note);
-                        }
-                        thread_frame.set_input(&ed.text(), ed.cursor());
-                        let mut m = thread_menu.lock().unwrap_or_else(|e| e.into_inner());
-                        m.sync(&ed.text(), thread_frame.prompt_pending());
-                        thread_frame.set_menu(m.view());
-                    }
-                    thread_frame.draw();
+                    let mut ed = thread_editor.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut m = thread_menu.lock().unwrap_or_else(|e| e.into_inner());
+                    on_paste(&mut ed, &mut m, thread_frame.as_ref(), &text);
                 }
                 // A resize is a redraw and nothing else: ratatui re-measures on
                 // every draw, so there is no state here to update.
@@ -923,6 +977,85 @@ mod tests {
     // Enter, and half a code block is submitted as a goal. The mode is enabled
     // in `frame.rs`; the guarantee is here.
     // -----------------------------------------------------------------------
+
+    /// A recording [`Surface`], so the reader thread's effects can be asserted.
+    ///
+    /// The whole point of `ARCH-003`'s pilot: there was no way to observe what
+    /// the paste arm *did*, only what `paste` decided, so the line carrying the
+    /// decision to the screen could be deleted with the suite green.
+    #[derive(Default)]
+    struct Recorder {
+        notes: std::sync::Mutex<Vec<String>>,
+        input: std::sync::Mutex<Vec<(String, usize)>>,
+        draws: std::sync::atomic::AtomicUsize,
+        pending: bool,
+    }
+
+    impl Surface for Recorder {
+        fn note_line(&self, text: &str) {
+            self.notes.lock().unwrap().push(text.to_string());
+        }
+        fn set_input(&self, text: &str, cursor: usize) {
+            self.input.lock().unwrap().push((text.to_string(), cursor));
+        }
+        fn prompt_pending(&self) -> bool {
+            self.pending
+        }
+        fn set_menu(&self, _menu: Option<super::super::menu::MenuView>) {}
+        fn draw(&self) {
+            self.draws.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// The note reaches the screen, and a clean paste puts nothing there.
+    ///
+    /// **This is the assertion that could not be written before.** A reviewer
+    /// neutered `if let Some(note) = ed.paste(&text).note()` inside the reader
+    /// thread and the entire workspace stayed green — `DEF-028`'s decision was
+    /// covered and its *effect* was not, which is `ARCH-003`'s shape and the
+    /// same one `DEF-017` and `UI-003` have.
+    ///
+    /// The clean case is here for the reason it is everywhere in this area: a
+    /// note on every paste is noise, and noise is what gets ignored.
+    #[test]
+    fn a_paste_puts_its_note_on_the_surface_and_a_clean_one_puts_nothing() {
+        let surface = Recorder::default();
+        let mut ed = Editor::default();
+        let mut menu = super::super::menu::Menu::default();
+
+        on_paste(&mut ed, &mut menu, &surface, "one line, nothing lost");
+        assert!(
+            surface.notes.lock().unwrap().is_empty(),
+            "a clean paste put a note on the screen: {:?}",
+            surface.notes.lock().unwrap()
+        );
+        assert_eq!(
+            surface.input.lock().unwrap().last().unwrap().0,
+            "one line, nothing lost",
+            "the paste never reached the input box"
+        );
+
+        let surface = Recorder::default();
+        let mut ed = Editor::default();
+        on_paste(&mut ed, &mut menu, &surface, "first\nsecond\tthird");
+        let notes = surface.notes.lock().unwrap().clone();
+        assert_eq!(
+            notes.len(),
+            1,
+            "a paste that lost structure said {} thing(s) on screen",
+            notes.len()
+        );
+        assert!(notes[0].contains("line break"), "{}", notes[0]);
+        assert!(notes[0].contains("tab"), "{}", notes[0]);
+
+        // And the arm still does its other work, so a future edit cannot make
+        // this pass by doing nothing at all.
+        assert_eq!(
+            surface.input.lock().unwrap().last().unwrap().0,
+            "first second third"
+        );
+        assert!(surface.draws.load(std::sync::atomic::Ordering::SeqCst) >= 1);
+    }
 
     /// A paste that changed says so, and one that did not stays quiet.
     ///
