@@ -256,6 +256,7 @@ pub fn dock_height(view: &View, room: u16) -> u16 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     Settings,
+    DataExplorer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -270,6 +271,16 @@ pub struct App {
     pub transcript: Transcript,
     /// What the main region is showing. See [`Pane`].
     pane: Pane,
+    /// The Data Explorer's rendered text, captured when the page was opened.
+    ///
+    /// **Scanned once, on open, rather than on every paint.** The store is a
+    /// directory of files and reading it is real I/O; a frame repaints on every
+    /// keystroke, every stream chunk and every resize, and a page that rescanned
+    /// each time would put a directory walk on the render path. The snapshot is
+    /// also the honest thing to show: a table that silently changed under the
+    /// reader between two repaints would be worse than one that is plainly as of
+    /// when it was opened.
+    explorer: Vec<String>,
     latch: Latch,
     side: sidebar::State,
     /// The column entries are wrapped to: [`chat::message_width`] of the chat
@@ -296,6 +307,7 @@ impl App {
         Self {
             transcript: Transcript::new(Cap::default()),
             pane: Pane::default(),
+            explorer: Vec::new(),
             latch,
             side: sidebar::State {
                 sessions: Vec::new(),
@@ -432,6 +444,7 @@ impl App {
         match self.pane {
             Pane::Chat => self.chat_view(&r, view, buf),
             Pane::Page(Page::Settings) => self.settings_page(&r, view, buf),
+            Pane::Page(Page::DataExplorer) => self.explorer_page(&r, view, buf),
         }
 
         let cursor = match &view.prompt {
@@ -462,6 +475,83 @@ impl App {
 
     pub fn pane(&self) -> Pane {
         self.pane
+    }
+
+    /// Hand the Data Explorer its snapshot and show it.
+    ///
+    /// The text is produced by `commands::sessions`, the same writer a command
+    /// would print through — one implementation behind two surfaces, so the page
+    /// and the command cannot come to disagree about what the store holds.
+    pub fn show_explorer(&mut self, text: &str) {
+        self.explorer = text.lines().map(str::to_string).collect();
+        self.pane = Pane::Page(Page::DataExplorer);
+    }
+
+    /// The Data Explorer.
+    ///
+    /// **The mockup wanted SQL over `notes.db`, and Emma has no database.**
+    /// UI-002 was ruled to point this at Emma's own session logs, which is the
+    /// only source where every figure on the page can be true on the day it
+    /// ships. What is drawn here is a real count of real files.
+    ///
+    /// The mockup's query box, typed columns, `Elapsed: 12ms` and chart are not
+    /// drawn, because none of them has anything behind it yet. A query surface
+    /// over a store with no query engine would be the most convincing thing on
+    /// the page and the least real.
+    fn explorer_page(&mut self, r: &Regions, view: &View, buf: &mut Buffer) {
+        let skin = &view.skin;
+        Line::from(vec![
+            Span::styled("Data Explorer", skin.palette.bold(Role::Accent)),
+            Span::styled(
+                "   what the session store holds, as of opening this page",
+                skin.palette.dim(),
+            ),
+        ])
+        .render(r.header, buf);
+
+        if r.rule.height > 0 {
+            Line::from(Span::styled(
+                skin.glyphs.rule.repeat(usize::from(r.rule.width)),
+                skin.palette.dim(),
+            ))
+            .render(r.rule, buf);
+        }
+
+        let mut y = r.chat.y;
+        let end = r.chat.y.saturating_add(r.chat.height);
+        for line in &self.explorer {
+            if y >= end {
+                break;
+            }
+            // Headings are the unindented, non-empty lines the writer emits;
+            // everything else is data. Styling from shape rather than from a
+            // parallel list, so the two cannot drift.
+            let style = if line.starts_with(' ') || line.is_empty() {
+                skin.palette.style(Role::Text)
+            } else {
+                skin.palette.bold(Role::Accent)
+            };
+            Line::from(Span::styled(line.clone(), style))
+                .render(Rect::new(r.chat.x, y, r.chat.width, 1), buf);
+            y = y.saturating_add(1);
+        }
+
+        y = y.saturating_add(1);
+        for line in [
+            "Not drawn, because nothing is behind it yet: the query box, typed",
+            "  columns, elapsed time, and the chart. A query surface over a store",
+            "  with no query engine would be the most convincing thing here and",
+            "  the least real.",
+            "",
+            "Esc returns to the conversation.",
+        ] {
+            if y >= end {
+                break;
+            }
+            Line::from(Span::styled(line, skin.palette.dim()))
+                .render(Rect::new(r.chat.x, y, r.chat.width, 1), buf);
+            y = y.saturating_add(1);
+        }
     }
 
     /// The Settings page.
@@ -891,6 +981,60 @@ mod tests {
                 )
                 .contains("Not wired yet"),
             "the page kept painting after leaving it"
+        );
+    }
+
+    /// The Data Explorer draws its snapshot, and says what it will not draw.
+    ///
+    /// **The mockup's query box and `Elapsed: 12ms` are absent on purpose.**
+    /// UI-002 pointed this page at the session logs because that is the only
+    /// source where its figures can be true; a query surface over a store with
+    /// no query engine would be the most convincing thing on the page and the
+    /// least real. This asserts the absence, because "we left it out honestly"
+    /// and "we forgot" look identical in a screenshot.
+    #[test]
+    fn the_explorer_page_draws_its_snapshot_and_names_what_it_omits() {
+        let v = view();
+        let mut a = App::new((120, 40));
+        a.set_tools(vec![sidebar::Row {
+            name: "Shell".into(),
+            trailing: "Alt+s".into(),
+            selected: false,
+        }]);
+        a.show_explorer(
+            "source         C:/store
+sessions       2 file(s), 9 record(s)",
+        );
+        let (rows, _) = draw(&mut a, &v, 120, 40);
+        let screen = rows.join(
+            "
+",
+        );
+
+        assert!(
+            screen.contains("Data Explorer"),
+            "the page did not draw:
+{screen}"
+        );
+        assert!(
+            screen.contains("C:/store"),
+            "the snapshot is missing:
+{screen}"
+        );
+        assert!(
+            screen.contains("9 record(s)"),
+            "the counts are missing:
+{screen}"
+        );
+        assert!(
+            screen.contains("SESSIONS"),
+            "the sidebar went with it:
+{screen}"
+        );
+        assert!(
+            screen.contains("Not drawn"),
+            "the page does not say what it is leaving out:
+{screen}"
         );
     }
 

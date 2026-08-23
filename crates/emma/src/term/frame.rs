@@ -1070,6 +1070,30 @@ impl Frame {
         // be an in-app page. The external launch was correct as built — its own
         // comment says "the tool's promise is edit your settings, not open your
         // chosen editor" — and it is simply not what was wanted.
+        // **The Data Explorer reads the session store, so the scan happens
+        // here and the page is handed a snapshot.** The directory is the one
+        // holding this run's log — the frame already knows that path because the
+        // status row shows it — and scanning on open rather than on paint keeps
+        // a directory walk off the render path.
+        if tool == crate::usertools::Tool::DataExplorer {
+            let dir = {
+                let inner = self.lock();
+                std::path::PathBuf::from(&inner.view.status.session)
+                    .parent()
+                    .map(|p| p.to_path_buf())
+            };
+            let text = match crate::commands::capture_sessions(dir.as_deref()) {
+                Ok(t) => t,
+                Err(e) => format!("the session store could not be read: {e:#}"),
+            };
+            let mut inner = self.lock();
+            if let Ui::Full(app) = &mut inner.ui {
+                app.show_explorer(&text);
+                synchronized(|| inner.paint());
+            }
+            return;
+        }
+
         if tool == crate::usertools::Tool::Settings {
             let mut inner = self.lock();
             if let Ui::Full(app) = &mut inner.ui {

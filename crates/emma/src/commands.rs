@@ -482,6 +482,116 @@ struct Tally {
 /// `delegation` records the `Delegate` tool writes from each sub-run's own log —
 /// the same records the footer is built from — so this answers what happened
 /// rather than what was reported.
+/// [`sessions`] into a string, for the surface that paints rather than prints.
+///
+/// The capture lives here rather than in the terminal so both callers reach the
+/// same writer: a page that formatted the store itself would be a second
+/// implementation of the same question.
+pub fn capture_sessions(session_dir: Option<&Path>) -> Result<String> {
+    let mut buf: Vec<u8> = Vec::new();
+    sessions(session_dir, &mut buf)?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// What the session store actually holds — the Data Explorer's data.
+///
+/// **The mockup asked for `notes.db › notes` and Emma has no database.** UI-002
+/// was ruled to point this at Emma's own session logs instead, which is the only
+/// source where every number on the page can be true on the day it ships. A row
+/// count over a table nobody has is a screen that looks like it works.
+///
+/// Writer-shaped like `agents`, so the page renders it by capturing the same
+/// text a command would print — one implementation, two surfaces, and no chance
+/// of them disagreeing about what is in the store.
+pub fn sessions(session_dir: Option<&Path>, out: &mut dyn Write) -> Result<()> {
+    let Some(dir) = session_dir else {
+        bail!(
+            "no session directory: the home directory could not be determined, so there is \
+             nothing recorded to read. Name one with --session-dir."
+        );
+    };
+    writeln!(out, "source         {}", dir.display())?;
+    if !dir.is_dir() {
+        writeln!(out, "               (nothing recorded here yet)")?;
+        return Ok(());
+    }
+
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let path = entry?.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            files.push(path);
+        }
+    }
+    files.sort();
+
+    let mut total_records = 0usize;
+    let mut total_lost = 0usize;
+    let mut kinds: std::collections::BTreeMap<String, usize> = Default::default();
+    let mut rows: Vec<(String, usize, usize, u64)> = Vec::new();
+    for path in &files {
+        let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        // `read_reporting`, not `read`: a session with unreadable records is a
+        // fact about the store, and an explorer that counted only what parsed
+        // would report a clean library over a damaged one.
+        let (records, lost) = match crate::session::SessionLog::read_reporting(path) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        for r in &records {
+            *kinds
+                .entry(r["kind"].as_str().unwrap_or("(none)").to_string())
+                .or_default() += 1;
+        }
+        total_records += records.len();
+        total_lost += lost.len();
+        rows.push((
+            path.file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            records.len(),
+            lost.len(),
+            bytes,
+        ));
+    }
+
+    writeln!(
+        out,
+        "sessions       {} file(s), {total_records} record(s)",
+        rows.len()
+    )?;
+    if total_lost > 0 {
+        writeln!(
+            out,
+            "               {total_lost} record(s) could not be read and are missing from these counts"
+        )?;
+    }
+    writeln!(out)?;
+
+    writeln!(out, "kinds")?;
+    for (kind, n) in &kinds {
+        writeln!(out, "  {kind:<16} {n}")?;
+    }
+    writeln!(out)?;
+
+    writeln!(out, "sessions, newest last")?;
+    // Newest last, matching the id ordering `session::locate` relies on; the
+    // tail is what somebody came to look at.
+    for (name, n, lost, bytes) in rows.iter().rev().take(12).rev() {
+        let damaged = if *lost > 0 {
+            format!("  ({lost} unreadable)")
+        } else {
+            String::new()
+        };
+        writeln!(
+            out,
+            "  {name:<34} {n:>5} records  {:>7} KiB{damaged}",
+            bytes / 1024
+        )?;
+    }
+    Ok(())
+}
+
 pub fn agents(session_dir: Option<&Path>, out: &mut dyn Write) -> Result<()> {
     let Some(dir) = session_dir else {
         bail!(
