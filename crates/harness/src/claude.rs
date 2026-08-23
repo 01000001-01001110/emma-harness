@@ -100,6 +100,28 @@ struct Entry {
     /// Claude Code counts this in **seconds**. Emma's spine counts milliseconds.
     #[serde(default)]
     timeout: Option<u64>,
+    /// Claude Code's argv form: `command` is the program and these are its
+    /// arguments, with — in its own documentation's words — "no shell".
+    ///
+    /// **Emma refused a file carrying this, and called it malformed.** A
+    /// `settings.json` that is valid for the program it was written for came
+    /// back as `unknown field \`args\``, which blames the operator's file for a
+    /// vocabulary Emma had not learned. That is the compatibility defect; the
+    /// shape itself needs nothing relaxed.
+    ///
+    /// It is *already* what INV-009 asks for. A contained path plus arguments is
+    /// an argv exec with no shell — the same spawn, the same `env_clear`, the
+    /// same containment — so honouring it costs no invariant and requires no
+    /// ruling. The interpreter question (`node script.js` as one string) is a
+    /// separate argument and is not settled here.
+    #[serde(default)]
+    args: Option<Vec<String>>,
+    /// Claude Code's opt-in to a shell. Parsed so the file is *readable*, and
+    /// then refused with a sentence, which is the difference between "Emma does
+    /// not understand your config" and "Emma understands it and will not do
+    /// that". Only the second is honest.
+    #[serde(default)]
+    shell: Option<bool>,
 }
 
 /// Anything in a command string that means a shell would have to interpret it.
@@ -186,6 +208,27 @@ impl Settings {
                             entry.kind
                         );
                     }
+                    // A shell was asked for by name. Refused rather than
+                    // ignored: silently running it without a shell would give a
+                    // command written for one different semantics — glob
+                    // expansion, `&&`, quoting — and the failure would look like
+                    // the hook misbehaving rather than like Emma disregarding a
+                    // field it read.
+                    if entry.shell == Some(true) {
+                        let why = format!(
+                            "hook `{name}` sets `shell: true`. Emma execs a contained argv with a \
+                             cleared environment and has no shell to offer; the command would run \
+                             with different semantics than it was written for. Use `args` for \
+                             arguments, or move a script into {}/hooks/ and name it directly",
+                            root.display()
+                        );
+                        if skip_unknown() {
+                            eprintln!("emma: skipping hook `{name}` — {why}");
+                            continue;
+                        }
+                        bail!("{}: {why}", root.join("settings.json").display());
+                    }
+
                     // **A command Emma cannot honour is a skip under the same
                     // opt-in, not a fatal.** Owner ruling 2026-08-23, on a
                     // measurement rather than a preference: the owner's real
@@ -227,6 +270,7 @@ impl Settings {
                         HookDef {
                             event: event.clone(),
                             command: translated,
+                            args: entry.args.clone().unwrap_or_default(),
                             matcher: group.matcher.clone(),
                             // Seconds there, milliseconds here.
                             timeout_ms: entry.timeout.map(|s| s.saturating_mul(1_000)),

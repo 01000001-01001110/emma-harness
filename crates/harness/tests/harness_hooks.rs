@@ -103,6 +103,51 @@ const DENY: (&str, &str) = (
 // allow, and it takes all five to pin the behaviour down.
 // ---------------------------------------------------------------------------
 
+/// Arguments reach the child as a real argv, and nothing is joined into a string.
+///
+/// **Claude Code documents an `args` field — "There is no shell" — and Emma
+/// refused a file carrying it as *malformed*.** A `settings.json` that is valid
+/// for the program it was written for came back as `unknown field \`args\``,
+/// which blames the operator's file for a vocabulary Emma had not learned.
+///
+/// The shape needs nothing relaxed. A contained path plus arguments *is* an argv
+/// exec with no shell — same spawn, same `env_clear`, same containment — so
+/// honouring it costs no invariant. The separate and unsettled question is the
+/// interpreter form (`node script.js` as one string); this is not that.
+///
+/// The script echoes its first argument, so a value that arrived joined,
+/// re-split, or shell-interpreted would come back different. `a b` is the one
+/// that matters: it survives as **one** argument only if nothing ever made it
+/// into a string.
+#[tokio::test]
+async fn hook_arguments_arrive_as_a_real_argv() {
+    let root = scratch("hook-args").join(".emma");
+    let cmd = script(
+        &root.join("hooks"),
+        "echoarg",
+        r#"printf '{"decision":"deny","reason":"[%s]"}' "$1""#,
+        r#"echo {"decision":"deny","reason":"[%~1]"}"#,
+    );
+    write(
+        &root.join("config.json"),
+        &format!(
+            r#"{{"hooks":{{"h":{{"event":"PreToolUse","command":"{cmd}","args":["a b"]}}}}}}"#
+        ),
+    );
+
+    let h = Harness::load(&root).expect("a hook with args must load");
+    let args = serde_json::json!({});
+    let v = h.run_hooks(HookEvent::PreToolUse, &call(&args)).await;
+
+    assert_eq!(v.runs.len(), 1, "the hook did not run: {:?}", v.runs);
+    let reason = v.denied.as_deref().unwrap_or_default();
+    assert_eq!(
+        reason, "[a b]",
+        "the argument did not arrive whole — a value that was joined into a \
+         string and re-split would differ here: {reason:?}"
+    );
+}
+
 /// The base case the other four vary. A hook that says `deny` must produce a
 /// verdict the loop cannot mistake for an allow, and it must carry the hook's own
 /// reason — a denial the model is told nothing about is one it will retry.

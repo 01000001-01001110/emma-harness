@@ -115,6 +115,10 @@ pub struct HookDef {
     pub(crate) event: String,
     /// Relative to the root, and must canonicalise to inside `<root>/hooks/`.
     pub(crate) command: String,
+    /// Arguments passed to that program, as a real argv — never joined into a
+    /// string, never interpreted. Empty is the ordinary case.
+    #[serde(default)]
+    pub(crate) args: Vec<String>,
     #[serde(default)]
     pub(crate) matcher: Option<String>,
     #[serde(default)]
@@ -190,6 +194,7 @@ pub(crate) struct ResolvedHook {
     name: String,
     event: HookEvent,
     command: PathBuf,
+    args: Vec<String>,
     command_hash: String,
     matcher: Option<regex::Regex>,
     timeout: Duration,
@@ -625,6 +630,11 @@ impl ResolvedHook {
         };
 
         let mut cmd = contained_command(&self.command);
+        // Arguments go through `Command::arg`, one element each. They are never
+        // joined into a string and never reach a shell, so nothing here can be
+        // interpolated into anything — which is what keeps INV-009 true with
+        // arguments present.
+        cmd.args(&self.args);
         let finished = tokio::time::timeout(self.timeout, exec(&mut cmd, body)).await;
         run.duration_ms = started.elapsed().as_millis() as u64;
         let (code, stdout, stderr) = match finished {
@@ -1000,6 +1010,7 @@ pub(crate) fn resolve(
             event,
             command_hash: hash::short(&String::from_utf8_lossy(&std::fs::read(&command)?)),
             command,
+            args: def.args.clone(),
             matcher,
             timeout: Duration::from_millis(
                 (def.timeout_ms.unwrap_or(DEFAULT_HOOK_TIMEOUT_MS)).min(MAX_HOOK_TIMEOUT_MS),
