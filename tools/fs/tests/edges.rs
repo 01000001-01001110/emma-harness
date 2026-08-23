@@ -916,17 +916,32 @@ async fn the_read_tracker_does_not_carry_across_sessions() {
 
 // endregion: Shared behaviour
 
-/// A write leaves no temp file behind, and the target is never half-written.
+/// A write leaves no temp file behind.
+///
+/// **This does NOT prove the write is atomic, and its title used to say it
+/// did.** Replace `write_atomically` with `std::fs::write` and this test still
+/// passes: there is no stray temp file, because a plain write never makes one.
+/// The assertion cannot fail in the direction the guarantee points. An
+/// independent reviewer found it by making exactly that substitution.
+///
+/// What it does prove is worth keeping on its own. A `main.rs.emma-tmp`
+/// appearing in a repository is a bug report even when the write succeeded, and
+/// the unique-name and size-gate tests nearby are real.
+///
+/// **The atomicity guarantee is defended by
+/// [`write_says_when_it_has_just_broken_a_hard_link`] and [`edit_says_it_too`]**,
+/// which is not obvious from their names, so it is written here. Temp-and-rename
+/// replaces the *directory entry*; a plain write goes through the inode. With
+/// two names pointing at one file that difference is visible: rename leaves the
+/// other name holding the old bytes, a write-through changes both. Both tests
+/// assert exactly that, and both go red under the substitution above.
 ///
 /// `std::fs::write` truncates and then streams, so a crash, a full disk or a
 /// kill between the two leaves somebody's source empty or partial. `Write` and
-/// both `Edit` paths now rename a complete sibling over the target instead —
-/// the pattern `tools/tasks` has used since it was written, and which the file
+/// both `Edit` paths rename a complete sibling over the target instead — the
+/// pattern `tools/tasks` has used since it was written, and which the file
 /// tools, which write far more often and to files nobody has a copy of, did
 /// not have.
-///
-/// The stray-file half matters on its own: a `main.rs.emma-tmp` appearing in a
-/// repository is a bug report even when the write succeeded.
 #[tokio::test]
 async fn a_write_leaves_no_temporary_file_beside_the_target() {
     let fs = Sandbox::new();
@@ -1068,6 +1083,14 @@ async fn a_reserved_device_name_is_written_and_the_awkwardness_is_named() {
 // ---------------------------------------------------------------------------
 
 /// Without this, `Write` goes back to breaking a hard link in silence.
+///
+/// **It is also the atomicity guard, which its name does not say.** The
+/// divergence asserted below — this name rewritten, the other still holding the
+/// old bytes — is the observable signature of temp-and-rename. A write that went
+/// through the inode would change both. Replace `write_atomically` with
+/// `std::fs::write` and this test goes red, which is why
+/// `a_write_leaves_no_temporary_file_beside_the_target` cannot: that one asserts
+/// the absence of a temp file, and a plain write never makes one.
 ///
 /// **The severance is asserted as well as the sentence**, because a note that
 /// described something the write did not do would be its own defect, and a note
