@@ -1049,6 +1049,28 @@ pub fn config_check(
     for note in &user_notes {
         writeln!(out, "               ! {note}")?;
     }
+    // **A rule that can never fire, said here as well as at boot.**
+    //
+    // `main` has warned about these since `DEF-015`, and this command had not —
+    // which is the wrong way round. Somebody runs `config check` *because* a
+    // deny rule did not bite; the boot warning has long since scrolled away, or
+    // was never seen because the session was started before the rule was
+    // written. An independent reviewer put it plainly: the command an operator
+    // reaches for when a protection failed was silent about the protection
+    // being impossible.
+    //
+    // It also makes the announcement testable. The only other delivery is a
+    // `term.warn` in `main`, which no test can drive, so the row's fix was
+    // deletable with the whole workspace green — the same shape as `ARCH-003`.
+    let known = tools.names();
+    let reaching: Vec<&'static str> = tools
+        .iter()
+        .filter(|t| t.meta().reaches_network)
+        .map(|t| t.name())
+        .collect();
+    for note in crate::permissions::Rules::unmatchable_here(&entries, &known, &reaching) {
+        writeln!(out, "               ! {note}")?;
+    }
     for entry in &entries {
         writeln!(
             out,

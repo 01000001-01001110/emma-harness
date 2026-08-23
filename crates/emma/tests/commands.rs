@@ -847,6 +847,70 @@ async fn automatic_compaction_that_cannot_help_says_so_once() {
 ///
 /// So it drives `config_check` and reads what that function actually writes.
 /// Delete the loop at `commands.rs`'s skill-notes call site and this goes red.
+/// `config check` names a deny rule that can never fire.
+///
+/// **The announcement had exactly one delivery site and no test could reach
+/// it.** `main` warns about inert rules at boot; that is a `term.warn` no test
+/// can drive, so an independent reviewer replaced the whole call with a discard
+/// and the entire workspace stayed green. The row's title is literally that
+/// such rules "are NOT announced", and the only assertion was on the accessor.
+///
+/// It is also the wrong command to be silent. Somebody runs `config check`
+/// *because* a deny rule did not bite — the boot warning has scrolled away, or
+/// the rule was written after the session started. The reviewer's words: the
+/// command an operator reaches for when a protection failed said nothing about
+/// the protection being impossible.
+///
+/// So the delivery moved somewhere a test can read it, which is the same shape
+/// as `ARCH-003`'s pilot: the decision was already covered, the effect was not.
+#[test]
+fn config_check_names_a_deny_rule_that_can_never_fire() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(".claude");
+    std::fs::create_dir_all(&root).unwrap();
+
+    // `Bash(curl https://*)` strips to a prefix ending mid-word, and
+    // `command_matches` is a word-boundary test — so it matches nothing however
+    // it is spelled. The operator wrote a deny and has no protection.
+    //
+    // The second rule is the control: an ordinary deny that fires perfectly
+    // well and must NOT be announced. A note on every rule is noise, and would
+    // also make the assertion above pass for the wrong reason.
+    std::fs::write(
+        root.join("settings.json"),
+        r#"{"permissions":{"deny":["Bash(curl https://*)","Bash(rm -rf /)"]}}"#,
+    )
+    .unwrap();
+
+    let harness = emma_harness::Harness::load(&root).expect("load");
+    // **`Bash` has to be a real tool in this run.** With an empty registry both
+    // rules get the *other* inert note -- "names `Bash`, which is not a tool in
+    // this run" -- which is correct for that fixture and not what is being
+    // tested. A registry that does not hold the tool the rule names cannot
+    // exercise the word-boundary branch at all.
+    let (bash, _calls) = TestTool::returning("Bash", "ran");
+    let tools = registry(vec![bash]);
+
+    let mut out: Vec<u8> = Vec::new();
+    emma::commands::config_check(&harness, &tools, dir.path(), &[], None, &mut out)
+        .expect("config check");
+    let text = String::from_utf8(out).expect("utf8");
+
+    assert!(
+        text.contains("! ") && text.contains("curl https://"),
+        "config check did not name the rule that cannot fire: {text}"
+    );
+    assert!(
+        text.contains("inside a word"),
+        "config check named the rule without saying why it cannot match: {text}"
+    );
+    assert!(
+        !text.contains("`Bash(rm -rf /)` ends its prefix"),
+        "an exact-match rule that fires was announced as dead, which is how a \
+         live protection gets deleted: {text}"
+    );
+}
+
 #[test]
 fn config_check_names_the_skills_it_skipped_and_counts_them() {
     let dir = tempfile::tempdir().unwrap();
