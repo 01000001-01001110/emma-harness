@@ -253,6 +253,13 @@ pub fn brief(row: &Row) -> String {
          costs a day. Report negative results too - what you checked and found solid is part of \
          the receipt.\n\
          \n\
+         YOUR BUDGET IS FINITE AND READING WILL EXHAUST IT. The first review ever run here spent \
+         its entire budget opening files and stopped before writing anything, which cost real \
+         money and produced no receipt at all. Read what you need and then STOP and write. A \
+         short report ending in a verdict is worth more than a thorough investigation nobody \
+         can read. Aim for well under a page, and write the verdict line even if you are less \
+         certain than you would like - say so in the report instead.\n\
+         \n\
          End your report with exactly one line, on its own:\n\
          VERDICT: UPHELD | OVERSTATED | REFUTED\n\
          \n\

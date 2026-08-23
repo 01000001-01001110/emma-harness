@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>emma verify · Records · Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav here" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+<h1><code>emma verify</code>, and why the author cannot write these receipts</h1>
+
+  <nav class="chapter">
+    <a class="up" href="records.html">Records &amp; house rules</a>
+    <span class="now">emma verify</span>
+  </nav>
+
+  <p class="lede">
+    Every required row of the parity ledger wants an independent review, and the
+    implementer writing their own is the self-certification the whole scheme
+    exists to refuse. This command fetches somebody else: a fresh model, given
+    one row and the tree, briefed to disprove it.
+  </p>
+  <span class="src">crates/emma/src/verify.rs, and run_verification in crates/emma/src/main.rs</span>
+
+  <h2 id="why">Why a command rather than a person</h2>
+
+  <p>
+    On 2026-08-23 nine defects were found in this codebase in one day. Every one
+    came from an independent reviewer and none from the author &mdash; a host
+    grant that silently covered wherever a page redirected to, a resume that
+    reported correct answers as failures, three assertions that could not fail,
+    and a configuration key that did nothing with no way to discover it. That is
+    not a comment on the author&rsquo;s care. It is what it costs to check your
+    own work: you re-read the argument you already made.
+  </p>
+
+  <p>
+    So the reviewer has to be someone else, and there are roughly a hundred rows
+    to get through. A command is the only shape that scales.
+  </p>
+
+  <h2 id="brief">The brief is the product</h2>
+
+  <p>
+    <strong>A reviewer told to check a row agrees with it.</strong> The brief
+    instead says to assume the implementer believes the row is finished and to
+    find evidence that it is not, and then asks the questions that have actually
+    found things here &mdash; first among them: take each test the row names, and
+    say what <em>one line</em> changed in the production code would leave it
+    green. Three false receipts were found by that question in a single day. It
+    also asks for <code>file:line</code> on every claim, and says an answer
+    without any is unusable.
+    <span class="chip test">tested</span>
+    <code>the_brief_asks_a_reviewer_to_disprove_rather_than_confirm</code>
+    asserts on the text, because here the text <em>is</em> the mechanism.
+  </p>
+
+  <h2 id="verdict">What a verdict is allowed to mean</h2>
+
+  <p>
+    Three answers, and only one of them closes a row.
+  </p>
+
+  <table>
+    <thead><tr><th>Verdict</th><th>Means</th><th>Closes the row</th></tr></thead>
+    <tbody>
+      <tr><td><code>UPHELD</code></td><td>the claim holds and the evidence named really defends it</td><td>yes</td></tr>
+      <tr><td><code>OVERSTATED</code></td><td>the claim is true and the evidence named does not defend it</td><td><strong>no</strong></td></tr>
+      <tr><td><code>REFUTED</code></td><td>the claim itself is wrong</td><td>no</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    <code>OVERSTATED</code> not closing a row is the decision worth arguing with,
+    because the behaviour it describes may be perfectly correct. It stays open
+    anyway: a row whose evidence does not defend it is a false receipt, and a
+    gate that accepted those would be measuring paperwork rather than the tree.
+  </p>
+
+  <p>
+    <strong>The verdict is the last one in the report, not the first.</strong> A
+    model that reasons out loud names several on its way to one, and reading the
+    first turns a thought into a conclusion &mdash; in the closing direction.
+    <span class="chip test">tested</span>
+    <code>the_last_verdict_wins_and_a_missing_one_is_not_a_pass</code>, which
+    also pins the third case: a reviewer that ends with no verdict line at all is
+    recorded as exactly that, rather than smoothed into a failure. Saying the row
+    is wrong and not answering are different things to whoever reads the receipt
+    next.
+  </p>
+
+  <h2 id="fingerprint">The fingerprint is certified, not believed</h2>
+
+  <p>
+    A receipt is dated by a hash of the production tree, and this command needed
+    its own implementation of one. That function&rsquo;s history is a list of
+    subtle wrong answers: it once hashed HEAD&rsquo;s sha, so writing a receipt
+    invalidated every receipt; then HEAD-plus-diff, so a receipt went stale at
+    the moment it was committed; and it once missed a staged file entirely,
+    fingerprinting a tree with an extra production module in it identically to a
+    clean one.
+  </p>
+
+  <p>
+    A second implementation reasoned about rather than compared would be the next
+    entry on that list.
+    <span class="chip cert">certified</span>
+    <code>the_rust_fingerprint_agrees_with_the_python_authority</code> runs the
+    real script against this repository and compares the two values. They agree.
+    If they ever stop, the Python one is the authority and the Rust one is what
+    changes &mdash; the failure message says so. The skip is real and reported:
+    the script is a user-level skill, so a checkout elsewhere has nothing to
+    compare against, and saying so beats passing in silence.
+  </p>
+
+  <h2 id="cost">It spends money on purpose</h2>
+
+  <p>
+    Each row is a full agent run with tools, so a default that swept the ledger
+    would turn a curious first command into a bill nobody chose.
+    <code>--limit</code> defaults to five, <code>--dry-run</code> lists what
+    would be reviewed and reaches no model, and the run says how many rows it is
+    leaving behind rather than quietly stopping at the cap.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> How good these reviews are. One live
+    run against <code>claude-opus-5</code> read the module, the tests, the
+    mutation spec and the receipt before answering, which is the behaviour the
+    brief asks for &mdash; but one run is not a measurement, and nothing yet
+    compares a model&rsquo;s verdict against a review a human already trusted.
+    What would settle it: run this over the rows whose defects were found by hand
+    today, and see whether it finds them too.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> Reviews are sequential. Running
+    several at once is the obvious next thing and is not done: the terminal is
+    one terminal, and interleaved transcripts would make a review nobody can
+    follow, which is a receipt nobody believes.
+  </p>
+
+</div>
+</main>
+</div>
+</body>
+</html>

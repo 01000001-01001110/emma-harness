@@ -169,6 +169,13 @@ fn the_brief_asks_a_reviewer_to_disprove_rather_than_confirm() {
         text.contains("VERDICT: UPHELD | OVERSTATED | REFUTED"),
         "the reviewer is not told how to end, so its report cannot be parsed: {text}"
     );
+    // Learned from the first live run, which spent its whole budget reading and
+    // wrote sixty-nine bytes. A review that never reaches its verdict line costs
+    // the same as one that does and is worth nothing.
+    assert!(
+        text.contains("BUDGET IS FINITE") && text.contains("STOP and write"),
+        "nothing tells the reviewer to stop reading and answer: {text}"
+    );
 
     // A row with no evidence still produces a usable brief, and says so rather
     // than leaving a blank where the claims should be.

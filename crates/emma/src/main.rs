@@ -307,6 +307,7 @@ async fn run(cli: cli::Cli) -> Result<()> {
             &harness,
             &tools,
             &term,
+            review_budgets(&opts.budgets),
         )
         .await;
     }
@@ -860,6 +861,7 @@ async fn run_verification(
     harness: &Arc<Harness>,
     tools: &Registry,
     term: &Arc<Term>,
+    budgets: emma::agent::Budgets,
 ) -> Result<()> {
     let ledger_path = cwd.join("verification").join("parity").join("ledger.json");
     let ledger: serde_json::Value = serde_json::from_str(
@@ -926,7 +928,7 @@ async fn run_verification(
             done: &MarkerClaim,
             cwd: cwd.to_path_buf(),
             session_id: format!("review-{}", row.id.to_ascii_lowercase()),
-            budgets: Default::default(),
+            budgets,
             caching: emma_llm::Caching::On,
             mode: Mode::Batch,
         });
@@ -1034,4 +1036,67 @@ fn now_iso8601() -> String {
         (rem % 3600) / 60,
         rem % 60
     )
+}
+
+/// The budget a review runs under.
+///
+/// **The first live review spent 500,000 tokens and produced sixty-nine bytes.**
+/// It read the module, the tests, the mutation spec, the receipt and two audits,
+/// hit `Ending::Tokens`, and stopped before writing a verdict line — so the run
+/// cost real money and the receipt recorded, correctly, that there was nothing
+/// to record. That is the ordinary shape of this work rather than an accident:
+/// a review is read-heavy in a way a normal goal is not, and the default budget
+/// is sized for a goal.
+///
+/// So a review gets four times the goal budget **unless the caller said
+/// otherwise**. The comparison against the library default is what distinguishes
+/// "nobody chose" from "somebody chose 500,000", and getting that backwards
+/// would override a deliberate cap — which is the direction that must not fail.
+fn review_budgets(from: &emma::agent::Budgets) -> emma::agent::Budgets {
+    let mut b = *from;
+    if b.max_tokens == emma::agent::Budgets::default().max_tokens {
+        b.max_tokens *= 4;
+    }
+    b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::review_budgets;
+    use emma::agent::Budgets;
+
+    /// A review gets more room, and a cap somebody chose is left alone.
+    ///
+    /// **The second half is the one that matters.** Raising a budget the user
+    /// set would spend money they had explicitly declined to spend, and it is
+    /// the failure direction a test has to pin because the other one only
+    /// wastes a run.
+    #[test]
+    fn a_review_gets_more_room_unless_somebody_asked_for_less() {
+        let untouched = review_budgets(&Budgets::default());
+        assert!(
+            untouched.max_tokens > Budgets::default().max_tokens,
+            "a review runs on a goal-sized budget, which the first live run exhausted before writing a verdict"
+        );
+
+        let chosen = Budgets {
+            max_tokens: 12_345,
+            ..Budgets::default()
+        };
+        assert_eq!(
+            review_budgets(&chosen).max_tokens,
+            12_345,
+            "a cap the user chose was raised underneath them"
+        );
+        // And a deliberate cap that happens to be larger is equally untouched.
+        let big = Budgets {
+            max_tokens: 9_000_000,
+            ..Budgets::default()
+        };
+        assert_eq!(review_budgets(&big).max_tokens, 9_000_000);
+
+        // Everything else about the budget is the caller's.
+        assert_eq!(untouched.max_iterations, Budgets::default().max_iterations);
+        assert_eq!(untouched.wall_clock, Budgets::default().wall_clock);
+    }
 }
