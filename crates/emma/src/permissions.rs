@@ -526,7 +526,15 @@ fn normalise_program(command: &str) -> String {
         Some((h, r)) => (h, Some(r)),
         None => (command, None),
     };
-    let head = head.trim_matches(['"', '\'']);
+    // **Every quote, not just the ones at the ends.** `trim_matches` stripped a
+    // leading and trailing quote, so `"git" push` folded and `gi"t" push` did
+    // not — and the second is equally ordinary shell, equally runs `git`, and
+    // reached `command_matches` as the literal program name `gi"t`. A reviewer
+    // measured it evading `deny Bash(git *)` with no Deny and no Ask, because
+    // `is_composed` has no quote branch either. Removing them all is what the
+    // shell does to a program name before the OS ever sees it.
+    let head: String = head.chars().filter(|c| *c != '"' && *c != '\'').collect();
+    let head = head.as_str();
     // Windows only. On unix `git` and `GIT` are two programs and folding them
     // would be inventing a match the operating system does not make.
     let mut head = if cfg!(windows) {
@@ -1379,7 +1387,21 @@ mod tests {
     #[test]
     fn the_ordinary_spellings_of_a_program_do_not_evade_a_deny() {
         let r = rules(&["Bash(git *)"], &[], &[]);
-        for command in ["git push", "git.exe push", "\"git\" push", "git.cmd push"] {
+        for command in [
+            "git push",
+            "git.exe push",
+            "\"git\" push",
+            "git.cmd push",
+            // Interior quoting, found by review: `trim_matches` stripped the
+            // ends only, so this reached the matcher as the program name
+            // `gi"t` and evaded the deny with no Deny and no Ask.
+            "gi\"t\" push",
+            // Declared in the strip list and previously untested, which a
+            // reviewer pointed out is its own gap: dropping them from
+            // `normalise_program` used to leave this green.
+            "git.bat push",
+            "git.com push",
+        ] {
             let expected = if cfg!(windows) || command == "git push" {
                 Some(Decision::Deny)
             } else {
