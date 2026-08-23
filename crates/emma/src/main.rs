@@ -708,12 +708,11 @@ async fn run(cli: cli::Cli) -> Result<()> {
             continue;
         }
 
-        // A goal starts un-interrupted. See `Interrupt::reset`: the flag used
-        // to be one-way, so a Ctrl-C pressed at the prompt — or during the
-        // previous goal — aborted this one before a single model call.
-        if !opts.print {
-            interrupt.reset();
-        }
+        // A goal starts un-interrupted, unless this run has only the one goal.
+        // The rule and its reasoning are `Interrupt::starting_goal`, in the
+        // library, where a test can reach both halves of it; it used to be the
+        // `if` here, and the `-p` half was asserted nowhere.
+        interrupt.starting_goal(opts.print);
         let outcome = agent
             .run_goal(&Goal::new(text).with_injected(submitted.context))
             .await;

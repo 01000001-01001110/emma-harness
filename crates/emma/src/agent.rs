@@ -501,6 +501,39 @@ impl Interrupt {
         self.flag.store(false, Ordering::SeqCst);
     }
 
+    /// Clear the flag if this run gets more than one goal, and say whether it
+    /// did.
+    ///
+    /// **The decision, not just the store.** `reset` is unconditional; the rule
+    /// is that an *interactive* goal starts un-interrupted and a `-p` run does
+    /// not, because `-p` has exactly one goal and a Ctrl-C pressed before it
+    /// starts is a person cancelling the thing they just typed. Interactively
+    /// the same press is a stray keystroke at an idle prompt, and banking it
+    /// would abort the next goal before a single model call.
+    ///
+    /// That rule lived in `main.rs` as `if !opts.print`, which put a decision
+    /// in the binary where no scripted `Provider` can reach it and left the
+    /// `-p` half with no test at all -- the unit test below covered `reset`,
+    /// which is the store rather than the choice. `CLAUDE.md` asks for
+    /// decisions in the library for exactly this reason.
+    ///
+    /// Returning the answer rather than performing it silently is what makes
+    /// both branches observable. See the lesson filed on `Term::clipboard`: a
+    /// function that decides something and returns nothing has made the
+    /// decision untestable.
+    ///
+    /// **What this still does not cover** is that `main` calls it. The goal
+    /// loop is in `main.rs`, so deleting the call leaves the workspace green;
+    /// that gap is `ARCH-003` and the fix is moving the loop, not another test
+    /// here.
+    pub fn starting_goal(&self, one_shot: bool) -> bool {
+        if one_shot {
+            return false;
+        }
+        self.reset();
+        true
+    }
+
     pub async fn wait(&self) {
         loop {
             if self.tripped() {
@@ -2163,6 +2196,43 @@ mod tests {
         // And it still trips again afterwards: reset is not a disable.
         i.trip();
         assert!(i.tripped());
+    }
+
+    /// The choice above the store: which runs start clean, and which do not.
+    ///
+    /// **`reset` had a test and the rule using it did not.** The rule lived in
+    /// `main.rs` as `if !opts.print`, so the `-p` half -- a press before a
+    /// one-shot run is a cancellation and must survive -- was asserted
+    /// nowhere. Inverting either branch turns this red.
+    #[test]
+    fn a_one_shot_run_keeps_an_interrupt_and_an_interactive_one_discards_it() {
+        // Interactive: a stray press at an idle prompt is discarded, or it
+        // aborts a goal the user has not typed yet.
+        let i = Interrupt::new();
+        i.trip();
+        assert!(
+            i.starting_goal(false),
+            "an interactive goal must start clean"
+        );
+        assert!(
+            !i.tripped(),
+            "the stray press was banked against the next goal"
+        );
+
+        // `-p`: exactly one goal, and a press before it starts is the person
+        // cancelling what they just typed. Discarding it would run the goal
+        // they had just asked not to run.
+        let i = Interrupt::new();
+        i.trip();
+        assert!(!i.starting_goal(true), "a one-shot run must not clear it");
+        assert!(i.tripped(), "the cancellation was thrown away");
+
+        // Nothing tripped: neither shape invents an interrupt.
+        let i = Interrupt::new();
+        i.starting_goal(false);
+        assert!(!i.tripped());
+        i.starting_goal(true);
+        assert!(!i.tripped());
     }
 
     #[test]
