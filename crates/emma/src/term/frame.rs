@@ -1957,6 +1957,64 @@ mod tests {
 
     /// `install` restores the screen of blank rows the owner photographed, and
     /// every other test in this file passes with it there.
+    /// The panic hook goes on **before** the first mode it has to undo.
+    ///
+    /// **A reviewer moved it back after `enable_raw_mode()` — the exact
+    /// regression — and the whole workspace stayed green.** `restore_terminal`
+    /// acting per-latch is separately mutation-proven and does not cover this:
+    /// a panic in the window before the hook exists is not restored by any
+    /// amount of forgiveness in the teardown, because nothing runs.
+    ///
+    /// The window is real rather than theoretical. Between `enable_raw_mode`
+    /// and `FRAME_ON` there are several fallible writes, and a panic in there
+    /// leaves a terminal that is not echoing what the user types — the state
+    /// people reach for a fresh shell to escape.
+    ///
+    /// **This asserts on source order, which this file treats as a last
+    /// resort.** `DEF-018`'s scar is a source-grep test that passed while the
+    /// thing it guarded was disabled; the defence against that here is the same
+    /// as its neighbour above — the slice is bounded by markers that must stay
+    /// inside `install`, and every `expect` says plainly that a rename has made
+    /// the assertion vacuous rather than letting it quietly match nothing. What
+    /// makes it defensible at all is that the property genuinely is an ordering
+    /// of two statements in one function, with no runtime moment at which it
+    /// can be observed from outside: by the time a panic proves the hook was
+    /// missing, the process is going down.
+    #[test]
+    fn the_panic_hook_is_installed_before_the_first_mode_it_undoes() {
+        let source = include_str!("frame.rs");
+        let start = source
+            .find("pub fn install(")
+            .expect("install was renamed; this assertion is now vacuous");
+        let end = source[start..]
+            .find("FRAME_ON.store(true")
+            .expect("install was restructured; this assertion is now vacuous")
+            + start;
+        let body = &source[start..end];
+
+        let hook = body
+            .find("install_panic_hook();")
+            .expect("install no longer installs the panic hook at all");
+        let raw = body
+            .find("enable_raw_mode()")
+            .expect("install no longer enables raw mode; this assertion is now vacuous");
+        assert!(
+            hook < raw,
+            "the panic hook is installed after raw mode is enabled. A panic in the window \
+             between them has no hook to restore the terminal, and the user is left in a \
+             shell that does not echo"
+        );
+
+        // And before the alternate screen, which is the mode whose stranding
+        // people uninstall over.
+        if let Some(alt) = body.find("ALT_ON.store(true") {
+            assert!(
+                hook < alt,
+                "the panic hook is installed after the alternate screen is entered"
+            );
+        }
+    }
+
     #[test]
     fn install_hands_the_terminal_to_ratatui_without_moving_the_cursor_first() {
         let source = include_str!("frame.rs");
