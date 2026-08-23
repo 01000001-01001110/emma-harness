@@ -617,8 +617,28 @@ async fn a_settings_json_hook_resolves_and_fires() {
 
 /// The firm rule. Claude Code implements events Emma does not, and a security
 /// hook that quietly never runs is worse than no hook.
+/// **`EMMA_CLAUDE_HOOKS` is process-global and these two tests disagree about
+/// it, so they may not run at the same time.**
+///
+/// `cargo test` runs a binary's tests on several threads. One of the two below
+/// sets the variable and clears it again; the other asserts the boot refuses
+/// *because* it is unset. Nothing stopped them overlapping, and on the sixth
+/// full-suite run of one afternoon they did: the strict-default test loaded a
+/// harness successfully and failed with `an unimplemented event must never be
+/// skipped`, which reads exactly like the guarantee having been removed rather
+/// than like a neighbouring test holding the door open.
+///
+/// That is the expensive shape of a flaky test: it fails with the words of a
+/// real defect. Somebody would have gone looking in `hooks.rs`.
+///
+/// A mutex rather than a redesign, because the variable being process-global is
+/// the point of it — a config key could be set by the repository being opened,
+/// and that is the trust boundary running backwards.
+static HOOK_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn a_hook_event_emma_does_not_implement_is_a_loud_startup_error() {
+    let _guard = HOOK_ENV.lock().unwrap_or_else(|e| e.into_inner());
     let base = scratch("claude-bad-event");
     let root = base.join(".claude");
     write(
@@ -644,6 +664,7 @@ fn a_hook_event_emma_does_not_implement_is_a_loud_startup_error() {
 /// boundary running backwards.
 #[test]
 fn an_unimplemented_hook_event_can_be_skipped_by_explicit_opt_in() {
+    let _guard = HOOK_ENV.lock().unwrap_or_else(|e| e.into_inner());
     let base = scratch("claude-hook-optin");
     let root = base.join(".claude");
     write(

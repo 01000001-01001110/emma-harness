@@ -261,7 +261,9 @@ impl Ending {
             // nothing local ever learned the number. A resumed session
             // therefore under-counts by that one call, and saying so is the
             // only honest option available.
-            Self::Interrupted => "interrupted. Everything that finished before the interrupt                  is in the session log; a model call still in flight was abandoned, so its                  answer and its cost are not recorded anywhere."
+            Self::Interrupted => "interrupted. Everything that finished before the interrupt \
+                 is in the session log; a model call still in flight was abandoned, so its \
+                 answer and its cost are not recorded anywhere."
                 .into(),
             Self::Provider(e) => format!("stopped: {e}"),
         }
@@ -794,7 +796,10 @@ impl<'a> Agent<'a> {
             // because it is exactly the case where the recovery was supposed to
             // help.
             self.s.term.warn(&format!(
-                "the provider refused the first request after the model changed from {was}, and                  the refusal does not read like the stale-signature case this run knows how to                  recover from: {message}. If this is that case in different words, `/compact`                  clears the blocks the old model bound."
+                "the provider refused the first request after the model changed from {was}, and \
+                 the refusal does not read like the stale-signature case this run knows how to \
+                 recover from: {message}. If this is that case in different words, `/compact` \
+                 clears the blocks the old model bound."
             ));
             return false;
         }
@@ -2162,6 +2167,48 @@ mod tests {
         );
     }
 
+    /// **No message a user reads carries a run of spaces.**
+    ///
+    /// Two did. A multi-line Rust string literal keeps every byte between the
+    /// quotes, including the indentation of the continuation lines, so a
+    /// literal wrapped across three lines *without* a trailing backslash renders
+    /// with eighteen spaces in the middle of a sentence. Both were strings this
+    /// project had rewritten carefully for tone — the interrupted ending and the
+    /// model-change warning — and the care went into wording that then reached
+    /// the terminal mangled.
+    ///
+    /// Their own tests could not see it: each asserts on a *substring* that sits
+    /// entirely on one side of the gap. That is the trap. A test written against
+    /// the part of a string you are thinking about will not notice the part you
+    /// are not.
+    ///
+    /// This asserts on the rendered message rather than on the source text. A
+    /// source grep for a backslash would be the false-receipt shape this
+    /// repository already has a name for, and it would also pass on a string
+    /// that was never wrapped at all.
+    #[test]
+    fn no_ending_message_carries_a_run_of_spaces() {
+        let endings = [
+            Ending::Done,
+            Ending::KicksExhausted,
+            Ending::Stalled,
+            Ending::Answered,
+            Ending::Iterations,
+            Ending::Tokens,
+            Ending::Deadline,
+            Ending::Interrupted,
+            Ending::Provider("the provider said no".into()),
+        ];
+        for ending in endings {
+            let message = ending.message(&Budgets::default());
+            assert!(
+                !message.contains("  "),
+                "{ending:?} renders with a run of spaces, which is a wrapped string \
+                 literal missing its continuation backslash: {message:?}"
+            );
+            assert!(!message.is_empty(), "{ending:?} renders as nothing at all");
+        }
+    }
     /// The interrupted ending does not promise a record that does not exist.
     ///
     /// It used to read "The partial turn is in the session log", which is false
