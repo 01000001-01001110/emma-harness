@@ -696,6 +696,88 @@ mod tests {
         assert!(usage.billable_input_tokens() > usage.input_tokens * 100);
     }
 
+    /// **No formatting of `LlmError` contains an API key — every variant, both
+    /// formatters.**
+    ///
+    /// The type's own doc makes that claim, and until 2026-08-23 the tests
+    /// under it did not. What was covered was `redact` and `scrub_secrets`, the
+    /// helpers, plus one variant through `Display` over in `auth.rs`. The
+    /// guarantee is about the *type*: nine variants, two impls, eighteen ways
+    /// out.
+    ///
+    /// The distinction is the one `DEF-007` was filed over in another file — a
+    /// guard that is correct one layer away from where the untrusted thing
+    /// actually arrives. Here the guard is in the right place; what was missing
+    /// was anything that would notice if it moved.
+    ///
+    /// `Debug` matters as much as `Display` and is the easier one to lose: it
+    /// is what `{:?}`, `unwrap()` and a panic message all reach for, and a
+    /// derived `Debug` would print the struct fields raw. That is one
+    /// `#[derive(Debug)]` away at any time.
+    #[test]
+    fn no_variant_of_llm_error_can_print_an_api_key() {
+        const KEY: &str = "sk-ant-api03-THISMUSTNEVERAPPEARINOUTPUT";
+        remember_secret(KEY);
+
+        let payload = format!("the provider echoed {KEY} back in its error body");
+        let variants = vec![
+            LlmError::Unauthorized {
+                message: payload.clone(),
+            },
+            LlmError::Forbidden {
+                message: payload.clone(),
+            },
+            LlmError::RateLimited {
+                retry_after: None,
+                retry_hint: payload.clone(),
+                message: payload.clone(),
+            },
+            LlmError::BadRequest {
+                message: payload.clone(),
+            },
+            LlmError::Unavailable {
+                status: 503,
+                message: payload.clone(),
+            },
+            LlmError::Api {
+                status: 500,
+                message: payload.clone(),
+            },
+            LlmError::Transport(payload.clone()),
+            LlmError::Protocol(payload.clone()),
+        ];
+
+        for e in &variants {
+            let shown = format!("{e}");
+            assert!(
+                !shown.contains(KEY),
+                "Display leaked the key for {}: {shown}",
+                e.variant()
+            );
+            let debugged = format!("{e:?}");
+            assert!(
+                !debugged.contains(KEY),
+                "Debug leaked the key for {}: {debugged}",
+                e.variant()
+            );
+        }
+
+        // **The anti-vacuity half.** Every assertion above is satisfied by an
+        // empty string, and by a formatter that prints nothing at all. The
+        // scrub must remove the key and keep the sentence.
+        let shown = format!("{}", LlmError::Protocol(payload.clone()));
+        assert!(
+            shown.contains("echoed") && shown.contains("back in its error body"),
+            "the scrub removed the message along with the key, which would make \
+             every assertion above pass for the wrong reason: {shown}"
+        );
+        assert!(
+            shown.contains("[redacted]") || shown.contains("redacted"),
+            "the key vanished without a mark, so a reader cannot tell the \
+             message was altered: {shown}"
+        );
+    }
+
     #[test]
     fn redaction_is_exhaustive_not_first_match() {
         let key = "sk-ant-api03-AAAABBBBCCCC";
