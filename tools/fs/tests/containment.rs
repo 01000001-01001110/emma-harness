@@ -471,7 +471,20 @@ async fn a_path_that_resolves_somewhere_else_inside_the_root_is_refused_too() {
 #[tokio::test]
 async fn a_hard_link_inside_the_root_reads_a_file_outside_it() {
     let sandbox = Sandbox::new();
-    let outside = sandbox.root().parent().unwrap().join("outside-secret.txt");
+
+    // **A name nothing else can collide with.** The first version of this used
+    // `outside-secret.txt` in `root().parent()` -- which is the *shared* system
+    // temp directory, and which `dot_dot_cannot_climb_out` above writes and
+    // deletes under exactly that name. The two run in parallel by default, so
+    // its `remove_file` landing between the write and the link here turned this
+    // test into a silent skip, and the reverse order made it fail while blaming
+    // the resolver. Found by an independent reviewer reading the file.
+    let outside = sandbox.root().parent().unwrap().join(format!(
+        "emma-hardlink-probe-{}-{}.txt",
+        std::process::id(),
+        line!()
+    ));
+    let _ = std::fs::remove_file(&outside);
     std::fs::write(&outside, "outside-secret\n").unwrap();
 
     let inside = sandbox.root().join("inside-link.txt");
@@ -481,18 +494,40 @@ async fn a_hard_link_inside_the_root_reads_a_file_outside_it() {
         return;
     }
 
+    // **The control, and it is not optional.** Without it a `resolve` that
+    // returned its argument unchecked would pass this test and still back the
+    // certified chip: the test would never have shown that containment was
+    // active in this sandbox at all. The same reviewer named that one-line
+    // change. So: an ordinary climb out is refused here, in this sandbox, in
+    // this run, before the interesting half is believed.
+    let refused = sandbox
+        .err("Read", json!({ "file_path": "../does-not-matter.txt" }))
+        .await;
+    assert_refused(refused, "../does-not-matter.txt");
+
+    // `call` rather than `ok`, because `ok` panics on refusal with its own
+    // message and would swallow the one below. If the hole ever closes, `Read`
+    // refuses -- and this test has to be the thing that says so, not a generic
+    // "failed unexpectedly".
     let out = sandbox
-        .ok("Read", json!({ "file_path": "inside-link.txt" }))
+        .call("Read", json!({ "file_path": "inside-link.txt" }))
         .await;
     let _ = std::fs::remove_file(&outside);
 
+    let content = match out {
+        Ok(outcome) => outcome.content,
+        Err(e) => panic!(
+            "the hard-link hole appears to have closed: Read refused the link \
+             rather than following it ({e}). That is good news and this test is \
+             now wrong -- `tools/fs/src/path.rs`'s module doc and \
+             `docs/tools-containment.html` both say the hole is open, and they \
+             are what has to change."
+        ),
+    };
     assert!(
-        out.content.contains("outside-secret"),
-        "the hard-link hole appears to have closed. That is good news and this \
-         test is now wrong: `tools/fs/src/path.rs`'s module doc and \
-         `docs/tools-containment.html` both say it is open, and they are what \
-         has to change. Content was: {:?}",
-        out.content
+        content.contains("outside-secret"),
+        "Read followed the link and returned something else, so this test no \
+         longer demonstrates what it claims: {content:?}"
     );
 }
 

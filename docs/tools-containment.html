@@ -570,7 +570,16 @@ for component in lexical_normalize(&amp;joined).components() {
 
 <p>
   <span class="chip cert">certified</span> Settled on 2026-08-23, by exactly the
-  experiment this paragraph used to ask for. An independent reviewer ran it live
+  experiment this paragraph used to ask for, and then taken apart by a reviewer
+  the same evening &mdash; the first row <a href="records-verify.html"><code>emma
+  verify</code></a> ever judged, returned <code>OVERSTATED</code>. The test used
+  a fixed filename in the shared temp directory that a neighbouring test also
+  writes and deletes, so a parallel run could turn it into a silent skip; its
+  crafted failure message sat in the branch a closed hole would not take; and it
+  had no positive control, so a <code>resolve</code> returning its argument
+  unchecked would have passed it and still backed this chip. All three are
+  fixed, and the control is what makes the test mutable at all
+  (<code>verification/mutations/hardlink-certification.json</code>). An independent reviewer ran it live
   on Windows; <code>a_hard_link_inside_the_root_reads_a_file_outside_it</code>
   in <code>tools/fs/tests/containment.rs</code> now runs it in the suite: a hard
   link created inside a sandbox root pointing at a file outside it, and
