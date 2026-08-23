@@ -28,6 +28,14 @@ out for themselves.
 
 ## Unreleased
 
+- **Resuming no longer warns that your working directory changed when it did
+  not.** The check compared the recorded path with the current one as raw text,
+  so one directory spelled two ways — a trailing separator, forward slashes
+  instead of back — was reported as a different project, with the alarming and
+  untrue line that the write tools were pointed somewhere else. It compares them
+  the way the rest of the resume path does now. A genuinely different directory
+  still warns.
+
 - **`config check` no longer tells you a working deny rule can never fire.** A
   rule like `Bash(sudo*)` was announced as "ends its prefix inside a word, so it
   can never match". It matches: the `*` is consumed as part of the prefix, and a

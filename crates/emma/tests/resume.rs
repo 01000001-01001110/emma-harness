@@ -545,6 +545,71 @@ fn resuming_into_a_changed_harness_names_what_changed() {
         elsewhere.contains("/work/alpha") && elsewhere.contains("/work/beta"),
         "both directories must be shown: {elsewhere}"
     );
+
+    // **And in that order.** Both-strings-appear is satisfied by a message that
+    // has them the wrong way round, which is exactly what swapping the two
+    // arguments produces: "now → was", a sentence that tells the reader they
+    // moved in the opposite direction. A reviewer named that one-line change as
+    // one the suite could not see.
+    let arrow = elsewhere
+        .lines()
+        .find(|l| l.contains("working directory"))
+        .expect("the working-directory line");
+    let was = arrow.find("/work/alpha").expect("the recorded directory");
+    let now = arrow.find("/work/beta").expect("the current directory");
+    assert!(
+        was < now,
+        "the message reads `now → was`, so it tells the reader they moved the \
+         other way: {arrow}"
+    );
+}
+
+/// One directory spelled two ways is not a change, and must not warn.
+///
+/// **`differences` compared cwd with raw string inequality until 2026-08-23**,
+/// while `same_dir` -- which `locate` uses to decide which session belongs to
+/// this directory -- canonicalises both sides. So the resume *choice* and the
+/// resume *warning* disagreed about what "the same directory" means, and a
+/// trailing separator was enough to be told the conversation was about
+/// somewhere else and the write tools were pointed at it.
+///
+/// A real directory, because the fix rests on `canonicalize`, which needs the
+/// path to exist. The variant spellings below are the ones a person or a script
+/// actually produces.
+#[test]
+fn one_directory_spelled_two_ways_is_not_a_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().to_string_lossy().into_owned();
+
+    let continuity = Continuity {
+        instructions_hash: "h".into(),
+        tool_schema_hash: "t".into(),
+        model: "m".into(),
+        cwd: real.clone(),
+    };
+
+    for spelling in [
+        real.clone(),
+        format!("{real}{}", std::path::MAIN_SEPARATOR),
+        real.replace('\\', "/"),
+    ] {
+        let notes = continuity.differences("h", "t", "m", &spelling);
+        assert!(
+            notes.is_empty(),
+            "`{spelling}` is the same directory as `{real}` and was reported as a \
+             change. A warning that fires on a trailing separator is one nobody \
+             reads on the day it is right: {notes:?}"
+        );
+    }
+
+    // The control: a genuinely different directory still warns, or the fix has
+    // simply switched the check off.
+    let other = tempfile::tempdir().unwrap();
+    let notes = continuity.differences("h", "t", "m", &other.path().to_string_lossy());
+    assert!(
+        notes.iter().any(|n| n.contains("working directory")),
+        "a real change of directory stopped being reported: {notes:?}"
+    );
 }
 
 // endregion: Which session, and whether it is still the same harness

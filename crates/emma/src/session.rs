@@ -908,13 +908,28 @@ impl Continuity {
         // wrong repository with write tools attached" — was the only drift that
         // arrived silently, while three cheaper ones all warned. Resuming a
         // session by id from another project is exactly how that happens.
-        check(
-            "working directory",
-            &self.cwd,
-            cwd,
-            "This conversation is about a different directory than the one you are in, \
-             and the tools that write files are pointed at this one.",
-        );
+        // **Compared the way the rest of this module compares a directory,
+        // which is not how it was compared until now.** `check` above is raw
+        // string inequality, which is right for a hash and for a model id and
+        // wrong for a path: `C:\\x` and `C:\\x\\` and `c:\\x` are one
+        // directory spelled three ways, and any of them raised a warning that
+        // the conversation was about somewhere else. `same_dir` canonicalises
+        // both sides and is what `locate` already uses to decide which session
+        // belongs to this directory -- so the resume warning and the resume
+        // *choice* disagreed about what "the same directory" means.
+        //
+        // A false warning here is not free. Its own text says the write tools
+        // are pointed somewhere else, which is alarming and, in this case,
+        // untrue; and a warning that cries wolf on a trailing separator is one
+        // nobody reads on the day it is right.
+        if !self.cwd.is_empty() && !same_dir(&self.cwd, Path::new(cwd)) {
+            out.push(format!(
+                "working directory changed since this session ran: {} → {cwd}. \
+                 This conversation is about a different directory than the one you are in, \
+                 and the tools that write files are pointed at this one.",
+                self.cwd
+            ));
+        }
         out
     }
 }
