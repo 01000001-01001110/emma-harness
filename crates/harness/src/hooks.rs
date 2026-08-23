@@ -170,9 +170,7 @@ impl HookEvent {
                 // The default does not move. Without the variable this is still
                 // a startup error, and the note says the variable exists rather
                 // than making the reader find it.
-                if std::env::var_os("EMMA_CLAUDE_HOOKS").as_deref()
-                    == Some(std::ffi::OsStr::new("skip-unknown"))
-                {
+                if skip_unknown_events() {
                     bail!("EMMA_SKIP_HOOK:{other}");
                 }
                 bail!(
@@ -186,6 +184,63 @@ impl HookEvent {
                 )
             }
         }
+    }
+}
+
+/// The one reader of `EMMA_CLAUDE_HOOKS=skip-unknown`.
+///
+/// **It was two, and the doc of the other one said it was one.** `claude.rs`
+/// carried a private copy whose comment claimed the sentinel existed so that a
+/// second copy of the event list would not "drift from the first" — while the
+/// variable check itself was duplicated a few lines away. A reviewer counted
+/// them.
+pub(crate) fn skip_unknown_events() -> bool {
+    std::env::var_os("EMMA_CLAUDE_HOOKS").as_deref() == Some(std::ffi::OsStr::new("skip-unknown"))
+}
+
+/// What an event name in a config file turns out to be.
+///
+/// **This exists because the sentinel leaked to an operator.** `HookEvent::parse`
+/// signals "the operator opted into skipping this" by returning an error whose
+/// *message* is `EMMA_SKIP_HOOK:<event>`, and one of its two callers knew to
+/// strip that prefix. The other propagated it, so a hook in `.emma/config.json`
+/// on an unimplemented event produced, as the entire diagnosis:
+///
+/// ```text
+/// Error: …\.emma\config.json: hook `h`
+/// Caused by:
+///     EMMA_SKIP_HOOK:SessionStart
+/// ```
+///
+/// Certified on the real binary. It is reachable by following Emma's own
+/// advice: the strict message tells the operator to set the variable, and doing
+/// so replaces a sentence naming the implemented events and the remedy with an
+/// internal token.
+///
+/// A sentinel smuggled through an error string is the root cause rather than
+/// the bug. It can only work if every caller remembers, and forgetting is
+/// invisible — the string is well formed, the error propagates, and nothing
+/// anywhere is the wrong type. So the answer is typed and there is nothing left
+/// to strip.
+pub(crate) enum EventOutcome {
+    /// Emma implements it.
+    Known(HookEvent),
+    /// Emma does not, and the operator asked for the run to start anyway.
+    /// Carries the event name so the skip can be named rather than silent.
+    Skip(String),
+    /// Emma does not, and nobody asked. The error is the operator-facing
+    /// sentence, not a token.
+    Refuse(anyhow::Error),
+}
+
+/// Classify one event name from a config file.
+pub(crate) fn classify_event(name: &str) -> EventOutcome {
+    match HookEvent::parse(name) {
+        Ok(e) => EventOutcome::Known(e),
+        Err(e) => match e.to_string().strip_prefix("EMMA_SKIP_HOOK:") {
+            Some(skipped) => EventOutcome::Skip(skipped.to_string()),
+            None => EventOutcome::Refuse(e),
+        },
     }
 }
 
@@ -971,8 +1026,26 @@ pub(crate) fn resolve(
         if enabled.is_some_and(|e| !e.contains(name)) {
             continue;
         }
-        let event =
-            HookEvent::parse(&def.event).with_context(|| named(format!("hook `{name}`")))?;
+        // **The path that leaked the sentinel.** It called `parse` and used `?`,
+        // so an operator who followed Emma's own advice and set
+        // `EMMA_CLAUDE_HOOKS=skip-unknown` got `EMMA_SKIP_HOOK:SessionStart` as
+        // the whole diagnosis. The `.claude` path had always handled it; this
+        // one had never needed to, which is exactly how a stringly-typed
+        // signal fails.
+        let event = match classify_event(&def.event) {
+            EventOutcome::Known(e) => e,
+            EventOutcome::Skip(skipped) => {
+                eprintln!(
+                    "emma: skipping hook `{name}` — Emma does not implement `{skipped}`, and \
+                     EMMA_CLAUDE_HOOKS=skip-unknown asked for this run to start anyway. \
+                     Nothing you wrote for it will fire."
+                );
+                continue;
+            }
+            EventOutcome::Refuse(e) => {
+                return Err(e).with_context(|| named(format!("hook `{name}`")))
+            }
+        };
         let command = contain(root, &format!("hook `{name}`"), &def.command)
             .map_err(|e| anyhow!(named(e)))?;
         // A `UserPromptSubmit` hook has no tool name to match, so a matcher on

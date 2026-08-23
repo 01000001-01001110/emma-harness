@@ -908,10 +908,64 @@ async fn the_engine_caps_the_timeout_config_asks_for() {
     );
 }
 
+/// The `EMMA_CLAUDE_HOOKS` variable, taken away for the duration and put back.
+///
+/// **`DEF-033`'s fix reached one test binary and this is the other.** A reviewer
+/// exported the variable and ran the suite:
+///
+/// ```text
+/// $ EMMA_CLAUDE_HOOKS=skip-unknown cargo test -p emma-harness
+/// test a_hook_event_emma_does_not_implement_is_a_startup_error ... FAILED
+/// ```
+///
+/// The suite still depended on the shell it was launched from, which the other
+/// binary's own comment calls not-evidence. Each integration test is its own
+/// process, so a guard living in `claude_compat.rs` cannot serialise anything
+/// here — this is a second copy on purpose, not drift.
+static HOOK_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+struct StrictHooks {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl StrictHooks {
+    fn take() -> Self {
+        let guard = HOOK_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os("EMMA_CLAUDE_HOOKS");
+        std::env::remove_var("EMMA_CLAUDE_HOOKS");
+        Self {
+            _guard: guard,
+            previous,
+        }
+    }
+
+    /// The same lock, with the opt-in turned on rather than off.
+    fn skipping() -> Self {
+        let me = Self::take();
+        std::env::set_var("EMMA_CLAUDE_HOOKS", "skip-unknown");
+        me
+    }
+}
+
+impl Drop for StrictHooks {
+    fn drop(&mut self) {
+        // Restored on the panicking path too: the tests that use it are the
+        // ones most likely to fail.
+        match self.previous.take() {
+            Some(v) => std::env::set_var("EMMA_CLAUDE_HOOKS", v),
+            None => std::env::remove_var("EMMA_CLAUDE_HOOKS"),
+        }
+    }
+}
+
 /// The loud failure the compatibility note requires. A hook attached to an event
 /// Emma does not implement is a policy the operator believes they have.
 #[tokio::test]
 async fn a_hook_event_emma_does_not_implement_is_a_startup_error() {
+    // Without this the test asserts a property of the shell it was launched
+    // from. See `StrictHooks`.
+    let _strict = StrictHooks::take();
     let root = scratch("unknown-event").join(".emma");
     std::fs::create_dir_all(root.join("hooks")).expect("mkdir");
     let cmd = script(&root.join("hooks"), "x", "exit 0", "exit /b 0");
@@ -965,3 +1019,62 @@ async fn a_persona_enabling_an_undeclared_hook_fails_the_load() {
 }
 
 // endregion: Load-time containment
+
+/// The opt-in names the hook it skipped, and does not hand over a sentinel.
+///
+/// **An internal token reached the operator as the entire diagnosis.**
+/// `HookEvent::parse` signalled "the operator opted into skipping this" by
+/// returning an error whose *message* was `EMMA_SKIP_HOOK:<event>`, and only
+/// the `.claude` caller knew to strip it. The `.emma` caller used `?`, so a
+/// hook here produced:
+///
+/// ```text
+/// Error: …\.emma\config.json: hook `h`
+/// Caused by:
+///     EMMA_SKIP_HOOK:SessionStart
+/// ```
+///
+/// Certified on the real binary before the fix, and reachable by following
+/// Emma's own advice: the strict message tells the operator to set the
+/// variable, and setting it replaced a sentence naming the implemented events
+/// and the remedy with a token.
+///
+/// The sentinel is gone rather than handled in a second place — the answer is
+/// typed now, so there is nothing left for a third caller to forget.
+#[tokio::test]
+async fn the_skip_opt_in_names_the_hook_rather_than_leaking_a_sentinel() {
+    let _strict = StrictHooks::skipping();
+    let root = scratch("skip-sentinel").join(".emma");
+    std::fs::create_dir_all(root.join("hooks")).expect("mkdir");
+    let cmd = script(&root.join("hooks"), "x", "exit 0", "exit /b 0");
+    write(
+        &root.join("config.json"),
+        &format!(r#"{{"hooks":{{"h":{{"event":"SessionStart","command":"{cmd}"}}}}}}"#),
+    );
+
+    let ok = script(&root.join("hooks"), "ok", "exit 0", "exit /b 0");
+    write(
+        &root.join("config.json"),
+        &format!(
+            r#"{{"hooks":{{"bad":{{"event":"SessionStart","command":"{cmd}"}},"good":{{"event":"PreToolUse","command":"{ok}"}}}}}}"#
+        ),
+    );
+
+    // Before the fix this returned Err carrying `EMMA_SKIP_HOOK:SessionStart`
+    // as the whole message.
+    let h = Harness::load(&root).expect("the opt-in must let the run start");
+
+    // And it dropped only the unknown one. Asserting the load succeeded would
+    // pass just as well if the skip had thrown every hook away, which is the
+    // failure worth guarding against: a run that starts and silently enforces
+    // nothing is the shape this whole area exists to prevent.
+    let v = h
+        .run_hooks(HookEvent::PreToolUse, &call(&serde_json::json!({})))
+        .await;
+    assert_eq!(
+        v.runs.len(),
+        1,
+        "the implemented hook was dropped along with the unimplemented one: {:?}",
+        v.runs
+    );
+}

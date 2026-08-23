@@ -41,7 +41,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::hooks::{HookDef, HookEvent};
+use crate::hooks::HookDef;
 
 // region: settings.json, and translating a hook command
 // ---------------------------------------------------------------------------
@@ -177,25 +177,25 @@ impl Settings {
             // operator who wrote a `Stop` guard would believe they had one.
             //
             // `EMMA_CLAUDE_HOOKS=skip-unknown` turns the refusal into a named
-            // skip — never a silent one. The sentinel is how `HookEvent::parse`
-            // signals that the operator asked for this, rather than a second
-            // copy of the event list living here and drifting from the first.
-            if let Err(e) = HookEvent::parse(&event) {
-                let msg = e.to_string();
-                match msg.strip_prefix("EMMA_SKIP_HOOK:") {
-                    Some(skipped) => {
-                        eprintln!(
-                            "emma: skipping every hook on `{skipped}` — Emma does not implement \
+            // skip — never a silent one. `classify_event` is where that choice
+            // is made, so the event list lives in one place and both config
+            // flavours get the same answer. It used to be signalled by an error
+            // whose *message* was a sentinel, and the other caller propagated
+            // it raw to an operator; see `hooks::EventOutcome`.
+            match super::hooks::classify_event(&event) {
+                super::hooks::EventOutcome::Known(_) => {}
+                super::hooks::EventOutcome::Skip(skipped) => {
+                    eprintln!(
+                        "emma: skipping every hook on `{skipped}` — Emma does not implement \
                              that event, and EMMA_CLAUDE_HOOKS=skip-unknown asked for this run \
                              to start anyway. Nothing you wrote for `{skipped}` will fire."
-                        );
-                        continue;
-                    }
-                    None => {
-                        return Err(e).with_context(|| {
-                            format!("{}: hooks.{event}", root.join("settings.json").display())
-                        })
-                    }
+                    );
+                    continue;
+                }
+                super::hooks::EventOutcome::Refuse(e) => {
+                    return Err(e).with_context(|| {
+                        format!("{}: hooks.{event}", root.join("settings.json").display())
+                    })
                 }
             }
             for (g, group) in groups.into_iter().enumerate() {
@@ -294,7 +294,7 @@ impl Settings {
 /// reason `hooks.rs` gives where it refuses the event: a repository that could
 /// relax its own strictness is the trust boundary running backwards.
 fn skip_unknown() -> bool {
-    std::env::var_os("EMMA_CLAUDE_HOOKS").as_deref() == Some(std::ffi::OsStr::new("skip-unknown"))
+    super::hooks::skip_unknown_events()
 }
 
 /// Turn a Claude Code command string into a path Emma can exec, or refuse.
