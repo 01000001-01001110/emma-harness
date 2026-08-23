@@ -121,7 +121,13 @@ impl PasteLoss {
             ));
         }
         if self.tabs_flattened > 0 {
-            parts.push(format!("{} tab(s) became one space", self.tabs_flattened));
+            // "became one space" was wrong and a reviewer counted it: three tabs
+            // produce three spaces, not one. The whole premise of this note is
+            // that the number matches what the reader can see in the box.
+            parts.push(format!(
+                "{} tab(s) each became a space",
+                self.tabs_flattened
+            ));
         }
         if self.controls_dropped > 0 {
             parts.push(format!(
@@ -958,6 +964,12 @@ mod tests {
             .expect("a paste that lost structure said nothing");
         assert!(note.contains("1 line break"), "{note}");
         assert!(note.contains("1 tab"), "{note}");
+        // Not "became one space": N tabs become N spaces, and a reviewer counted
+        // three against a note that said one.
+        assert!(
+            !note.contains("became one space"),
+            "the note claims N tabs collapse to a single space: {note}"
+        );
         assert!(note.contains("1 control byte"), "{note}");
         // The consequence, not just the counts. A number on its own reads as
         // trivia; what the user needs to know is that the send will not match

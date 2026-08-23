@@ -114,6 +114,11 @@ pub struct Setup&lt;'a&gt; {
     pub done: &amp;'a dyn DoneCheck,
     pub cwd: PathBuf,
     pub session_id: String,
+
+<span class="c">// … elided: `background`, the tool-api registry that holds work started by
+// this session so it outlives the call that spawned it, with the eight-line
+// argument for why it is defaulted rather than required.</span>
+
     pub budgets: Budgets,
     pub caching: Caching,
     pub mode: Mode,
