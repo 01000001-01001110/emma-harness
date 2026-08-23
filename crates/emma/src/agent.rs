@@ -1583,7 +1583,38 @@ impl<'a> Agent<'a> {
             );
         };
 
-        if let Err(e) = tool.validate_args(&call.input) {
+        // **The unwind guard has to cover everything the tool runs, and for a
+        // while it covered only `invoke`.** `DEF-007`'s own argument is that
+        // *"several of its crates parse input written by the model, and one
+        // `unwrap` in any of them ended everything"* -- and `validate_args` is
+        // the first function on that path to see that input. There are
+        // nineteen-odd implementations across `tools/fs`, `tools/lsp`,
+        // `tools/tasks` and `tools/web`, every one of them parsing a JSON blob
+        // the model wrote.
+        //
+        // A reviewer staged a panic in a test tool's `validate_args` and the
+        // session died exactly the way this row says it no longer can. The
+        // existing panicking fixture panics inside `invoke`, so it is a
+        // positive control for the wrong half.
+        let validated = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tool.validate_args(&call.input)
+        }));
+        let validated = match validated {
+            Ok(r) => r,
+            // An observation, not an abort -- `INV-004`. The model is told the
+            // tool broke rather than the run ending under it.
+            Err(_) => {
+                return fail(
+                    "panicked",
+                    format!(
+                        "{} panicked while checking its arguments, so it was not run. That is a \
+                         bug in the tool rather than in the call; a different route may work.",
+                        call.name
+                    ),
+                );
+            }
+        };
+        if let Err(e) = validated {
             return fail(e.kind(), e.detail().to_string());
         }
 

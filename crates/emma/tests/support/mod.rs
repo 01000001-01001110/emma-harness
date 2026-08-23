@@ -285,6 +285,16 @@ pub struct TestTool {
     /// Panics instead of returning. The one failure class the loop did not
     /// convert into an observation, so the one a test has to be able to stage.
     panics: bool,
+    /// Panic in `validate_args` rather than in `invoke`.
+    ///
+    /// **A separate flag because it is a separate half of the guarantee, and
+    /// the old fixture controlled for the wrong one.** `DEF-007` wraps a tool
+    /// so a panic in it is an observation rather than the end of the session,
+    /// and `panicking` panics inside `invoke` -- which the guard covered. The
+    /// call path reaches `validate_args`, `network_target` and `meta` first,
+    /// all of them the tool's own code reading model-written JSON, and none of
+    /// them was inside the guard. A reviewer found it by staging exactly this.
+    panics_early: bool,
     /// Sleeps before returning, so a test can interrupt a call in flight.
     slow: Option<std::time::Duration>,
     calls: Arc<AtomicUsize>,
@@ -305,7 +315,29 @@ impl TestTool {
             fails: false,
             body: None,
             panics: false,
+            panics_early: false,
             slow: Some(std::time::Duration::from_secs(secs)),
+            calls: calls.clone(),
+        };
+        (Arc::new(tool), calls)
+    }
+
+    /// A tool that panics **before** `invoke`, in the argument check.
+    ///
+    /// The half `panicking` cannot reach. `validate_args` is the first function
+    /// on the call path to see the model's JSON, and there are nineteen-odd
+    /// real implementations of it parsing exactly that.
+    pub fn panicking_early(name: &'static str) -> (Arc<dyn Tool>, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tool = Self {
+            name,
+            read_only: true,
+            host: None,
+            fails: false,
+            body: None,
+            panics: false,
+            panics_early: true,
+            slow: None,
             calls: calls.clone(),
         };
         (Arc::new(tool), calls)
@@ -322,6 +354,7 @@ impl TestTool {
             fails: false,
             body: None,
             panics: true,
+            panics_early: false,
             slow: None,
             calls: calls.clone(),
         };
@@ -363,6 +396,7 @@ impl TestTool {
                 fails,
                 body,
                 panics: false,
+                panics_early: false,
                 slow: None,
                 calls: calls.clone(),
             }),
@@ -391,6 +425,15 @@ impl Tool for TestTool {
             reaches_network: self.host.is_some(),
             idempotent: true,
         }
+    }
+
+    fn validate_args(&self, _args: &Value) -> Result<(), ToolError> {
+        // The first function on the call path to see the model's JSON, and the
+        // half the unwind guard did not cover until 2026-08-23.
+        if self.panics_early {
+            panic!("{} panicked in validate_args", self.name);
+        }
+        Ok(())
     }
 
     fn network_target(&self, _args: &Value) -> Option<NetworkTarget> {

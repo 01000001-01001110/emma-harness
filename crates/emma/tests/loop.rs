@@ -158,6 +158,67 @@ async fn a_tool_failure_reaches_the_model_and_the_goal_continues() {
     assert!(seen.contains("is_error"), "{seen}");
 }
 
+/// A tool that panics **before** `invoke` is an observation too.
+///
+/// **The guard was one function too late, and the fixture controlled for the
+/// wrong half.** `DEF-007` wraps `Tool::invoke` in `catch_unwind`, and the
+/// argument in its own doc is that *"several of its crates parse input written
+/// by the model, and one `unwrap` in any of them ended everything"*. The first
+/// function on the call path to see that input is `validate_args`, which was
+/// outside the guard — as were `network_target` and `meta`, both of which the
+/// approval gate calls on the tool's own code.
+///
+/// There are nineteen-odd real `validate_args` implementations across
+/// `tools/fs`, `tools/lsp`, `tools/tasks` and `tools/web`. An independent
+/// reviewer staged a panic in one and the session died exactly the way the row
+/// said it no longer could. `TestTool::panicking` panics inside `invoke`, so it
+/// could never have caught this: a positive control for the other half.
+#[tokio::test]
+async fn a_tool_that_panics_before_it_runs_is_an_observation_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let (boom, boom_calls) = TestTool::panicking_early("Boom");
+    let fake = Fake::new(vec![
+        call("Boom", json!({ "x": "1" })),
+        text("I will take the other route.\n\nGOAL COMPLETE"),
+    ]);
+    let log = SessionLog::open(dir.path(), "s").unwrap();
+
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![boom]),
+        &Approvals::new(Gate::Ask, Asker::Scripted(Default::default())),
+        &fake,
+        budgets(),
+        &goal(),
+        &log,
+    )
+    .await;
+
+    assert_eq!(
+        out.ending,
+        Ending::Done,
+        "a panic in validate_args ended the session"
+    );
+    // `invoke` was never reached, which is the point: the panic happened before
+    // it. A non-zero count here would mean the fixture panicked in the wrong
+    // place and this test is measuring the arm that was already covered.
+    assert_eq!(
+        boom_calls.load(Ordering::SeqCst),
+        0,
+        "the tool ran; this fixture is supposed to die before invoke, so the \
+         test is exercising the half that was already guarded"
+    );
+
+    let seen = fake.transcript();
+    assert!(
+        seen.contains("panicked"),
+        "the model was not told the tool broke: {seen}"
+    );
+    assert!(seen.contains("is_error"), "{seen}");
+}
+
 /// A tool that panics is an observation too, not the end of the session.
 ///
 /// This file's own first rule is that every failure class reaches the model as

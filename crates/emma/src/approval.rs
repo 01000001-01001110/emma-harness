@@ -493,7 +493,23 @@ impl Approvals {
     /// point: this file knows that *some* tools reach *some* host, and knows
     /// nothing about how any of them spell it.
     pub async fn request(&self, tool: &dyn Tool, args: &Value, term: &Term) -> Verdict {
-        let target = tool.network_target(args);
+        // **Guarded for the same reason `validate_args` is**: this is a tool's
+        // own code reading model-written JSON, and a panic here took the
+        // session down while `DEF-007` claimed the class was closed. Denying is
+        // the safe answer -- a tool that cannot say where it would connect is a
+        // tool nobody can approve.
+        let Ok(target) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tool.network_target(args)))
+        else {
+            return Verdict::Deny(
+                Decider::Unevaluable,
+                format!(
+                    "{} panicked when asked where it would connect, so it was not run. That is \
+                     a bug in the tool; nothing about the call can be approved on its word.",
+                    tool.name()
+                ),
+            );
+        };
         let verdict = self
             .decide(tool.name(), tool.meta(), target, args, term)
             .await;
