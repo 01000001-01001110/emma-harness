@@ -410,6 +410,53 @@
   </p>
 </div>
 
+<div class="note warn">
+  <span class="h">And it breaks a hard link, which is the price of the fix</span>
+  <p>
+    A rename replaces the directory entry rather than writing through it. That is
+    what makes the write atomic, and it is also what severs a hard link: the
+    edited name gets the new content, <strong>every other name keeps the
+    old</strong>, and the link count drops to one on each. A plain
+    <code>fs::write</code> &mdash; what this did before &mdash; writes through the
+    inode, so both names change together.
+    <span class="chip cert">certified</span> on this machine's NTFS by probe,
+    both halves: plain write, both names change, count stays 2; temp-and-rename,
+    one name changes, count drops to 1.
+  </p>
+  <p>
+    <strong>This is not an argument for going back.</strong> Most editors do the
+    same thing, and a torn file after a crash is worse than a broken link. It is
+    a real consequence that the commit which introduced it did not mention, and
+    somebody who hard-links a config into two places and edits it through Emma
+    would otherwise get silent divergence.
+  </p>
+  <p>
+    So the outcome says it, and does not refuse:
+    <em>&ldquo;this file had 2 names on disk (hard links); writing it replaces
+    the directory entry, so the other name keeps the old content and the link is
+    broken&rdquo;</em>. The count is read <em>before</em> the write, because
+    after the rename it is one and the fact is gone.
+    <span class="chip test">tested</span>
+    <code>write_says_when_it_has_just_broken_a_hard_link</code> creates a real
+    link and asserts both the sentence and the severance &mdash; a note
+    describing something the write did not do would be its own defect, and the
+    sentence alone cannot tell the two apart.
+    <code>an_ordinary_write_says_nothing_about_links</code> is the other half:
+    a note that fires on every file is noise, which is the same as not having
+    one. Mutation: raising the threshold above any real count turns both link
+    tests red and leaves the ordinary one green.
+  </p>
+  <p>
+    Getting the count on Windows needs an open handle &mdash;
+    <code>GetFileInformationByHandle</code>. std wraps exactly that in
+    <code>MetadataExt::number_of_links</code> and keeps it behind the unstable
+    <code>windows_by_handle</code> feature, so <code>path::hard_links</code>
+    makes the call itself; unix reads <code>nlink</code> off the stat it already
+    has. <code>None</code> from that function means <em>could not be told</em>,
+    never <em>one name</em>, and nothing prints a 1 for it.
+  </p>
+</div>
+
 <p>
   A Windows reserved device name (<code>NUL</code>, <code>CON</code>, <code>COM1</code>)
   or a name ending in a dot or a space gets a warning note on the outcome. Emma's

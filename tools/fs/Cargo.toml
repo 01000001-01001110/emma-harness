@@ -14,6 +14,15 @@ tokio.workspace = true
 walkdir.workspace = true
 emma-tool-api.workspace = true
 
+# Only for `path::hard_links`. std's `MetadataExt::number_of_links` is behind
+# the unstable `windows_by_handle` feature, and the count is the one fact that
+# tells a caller an atomic write is about to sever a link.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+] }
+
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }

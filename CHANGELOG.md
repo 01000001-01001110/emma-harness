@@ -28,6 +28,18 @@ out for themselves.
 
 ## Unreleased
 
+- **A write that breaks a hard link now says so.** Emma writes files by
+  building a complete copy and renaming it over the target, so a crash cannot
+  leave your source half-written. That rename replaces the directory entry
+  rather than writing through it, which means a file with two names on disk
+  ends up with the edited name changed and **the other name still holding the
+  old content**.
+
+  Most editors behave the same way and a torn file is worse, so the write is
+  unchanged. What is new is that `Write` and `Edit` count the file's names
+  before writing and add a line to the result when there is more than one. The
+  count is read first because after the rename it is gone.
+
 - **Three tool pages open inside Emma instead of launching programs.**
   `Alt+,` is Settings, `Alt+d` is the Data Explorer, `Alt+m` is Memory, and
   `Esc` returns to the conversation. The sidebar, the status bar and the

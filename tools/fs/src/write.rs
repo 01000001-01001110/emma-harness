@@ -189,6 +189,11 @@ impl Write {
             })?;
         }
 
+        // **Asked before the write, because the rename destroys the answer.**
+        // Afterwards the count is one and the fact that there was ever another
+        // name is gone from the filesystem.
+        let severed = path::severed_link_note(&target);
+
         path::write_atomically(&target, content.as_bytes())
             .map_err(|e| ToolError::Failed(format!("{raw} could not be written: {e}")))?;
 
@@ -228,8 +233,18 @@ impl Write {
                 )
             })
             .unwrap_or_default();
+        // Same rule, second fact: said, not refused. The write is what was
+        // asked for and it worked.
+        let severed = severed
+            .map(|why| {
+                format!(
+                    "
+[note: `{shown}` — {why}.]"
+                )
+            })
+            .unwrap_or_default();
         Ok(ToolOutcome::new(format!(
-            "{verb} {shown} ({lines} lines, {} bytes){note}",
+            "{verb} {shown} ({lines} lines, {} bytes){note}{severed}",
             content.len()
         ))
         .with_display(format!("{verb} {shown}")))

@@ -429,6 +429,10 @@ impl Edit {
             before.replacen(old, new, 1)
         };
 
+        // **Read before the write, because the rename destroys the answer.**
+        // See `path::severed_link_note`: afterwards the count is one.
+        let severed = path::severed_link_note(file);
+
         path::write_atomically(file, after.as_bytes())
             .map_err(|e| ToolError::Failed(format!("{raw} could not be written: {e}")))?;
         // Re-stamped so the edit does not read as an outside change, but the
@@ -450,7 +454,10 @@ impl Edit {
         } else {
             format!("{hits} replacements")
         };
-        Ok(ToolOutcome::new(format!("{shown}: {what}")).with_display(format!("{shown}: {what}")))
+        Ok(
+            ToolOutcome::new(format!("{shown}: {what}{}", link_note(&shown, severed)))
+                .with_display(format!("{shown}: {what}")),
+        )
     }
 }
 
@@ -637,6 +644,10 @@ impl Edit {
             )));
         }
 
+        // **Read before the write, because the rename destroys the answer.**
+        // See `path::severed_link_note`: afterwards the count is one.
+        let severed = path::severed_link_note(file);
+
         path::write_atomically(file, after.as_bytes())
             .map_err(|e| ToolError::Failed(format!("{raw} could not be written: {e}")))?;
 
@@ -653,13 +664,10 @@ impl Edit {
             &after,
         );
 
-        Ok(report(
-            &path::display(root, file),
-            first,
-            last,
-            &replacement,
-            ending,
-        ))
+        let shown = path::display(root, file);
+        let mut out = report(&shown, first, last, &replacement, ending);
+        out.content.push_str(&link_note(&shown, severed));
+        Ok(out)
     }
 }
 
@@ -778,6 +786,22 @@ fn moved(raw: &str, anchor: &hashline::Anchor, content: &str, lines: &[&str]) ->
 /// needs no `Read` at all — the same saving the scheme makes on the first edit,
 /// extended to the second. The shift is stated in words as well, because it is
 /// what the model needs for the lines it is *not* being handed.
+/// The sentence a write appends when it has just broken a hard link.
+///
+/// **On `content` and not on `display`.** The model is the one that has to know
+/// — it may be about to tell the user the file is updated everywhere — and the
+/// terminal line stays a summary. Same split the truncation note uses.
+fn link_note(shown: &str, severed: Option<String>) -> String {
+    severed
+        .map(|why| {
+            format!(
+                "
+[note: `{shown}` — {why}.]"
+            )
+        })
+        .unwrap_or_default()
+}
+
 fn report(
     shown: &str,
     first: usize,

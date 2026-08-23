@@ -1054,3 +1054,115 @@ async fn a_reserved_device_name_is_written_and_the_awkwardness_is_named() {
         .await;
     assert!(!format!("{out:?}").contains("note:"), "{out:?}");
 }
+
+// region: Hard links
+// ---------------------------------------------------------------------------
+// Hard links
+//
+// The atomic write that DEF-006 added replaces the directory entry instead of
+// writing through it. That is what makes it atomic and it is also what breaks a
+// hard link: the edited name gets the new content, the other name keeps the
+// old, and the count drops to one on each. Most editors do the same and a torn
+// file on a crash is worse, so the write stays as it is and the outcome says
+// what happened.
+// ---------------------------------------------------------------------------
+
+/// Without this, `Write` goes back to breaking a hard link in silence.
+///
+/// **The severance is asserted as well as the sentence**, because a note that
+/// described something the write did not do would be its own defect, and a note
+/// asserted alone cannot tell the two apart. Both names are read back: the
+/// written one changed, the other did not.
+#[tokio::test]
+async fn write_says_when_it_has_just_broken_a_hard_link() {
+    let sandbox = Sandbox::new();
+    sandbox.write_file("linked.txt", "original\n");
+    let one = sandbox.root().join("linked.txt");
+    let two = sandbox.root().join("other-name.txt");
+    if std::fs::hard_link(&one, &two).is_err() {
+        // Some filesystems have no hard links at all. Skipping loudly beats a
+        // test that quietly asserts nothing on a machine that cannot host it.
+        eprintln!("skipped: this filesystem refused a hard link");
+        return;
+    }
+
+    sandbox
+        .ok("Read", json!({ "file_path": "linked.txt" }))
+        .await;
+    let out = sandbox
+        .ok(
+            "Write",
+            json!({ "file_path": "linked.txt", "content": "rewritten\n" }),
+        )
+        .await;
+
+    assert!(
+        out.content.contains("hard links"),
+        "the outcome did not say the link was broken: {out:?}"
+    );
+    assert!(
+        out.content.contains("2 names"),
+        "the count is what makes it checkable: {out:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&one).unwrap(), "rewritten\n");
+    assert_eq!(
+        std::fs::read_to_string(&two).unwrap(),
+        "original\n",
+        "if this now says `rewritten` the write stopped being atomic and the note is wrong"
+    );
+}
+
+/// Without this, the note fires on ordinary files and becomes noise nobody
+/// reads — which is the same as not having it.
+#[tokio::test]
+async fn an_ordinary_write_says_nothing_about_links() {
+    let sandbox = Sandbox::new();
+    sandbox.write_file("plain.txt", "original\n");
+    sandbox
+        .ok("Read", json!({ "file_path": "plain.txt" }))
+        .await;
+
+    let out = sandbox
+        .ok(
+            "Write",
+            json!({ "file_path": "plain.txt", "content": "rewritten\n" }),
+        )
+        .await;
+
+    assert!(
+        !out.content.contains("hard link"),
+        "a file with one name was told it had more: {out:?}"
+    );
+}
+
+/// Without this, `Edit` keeps the silence `Write` just lost. It goes through
+/// the same `write_atomically` and breaks the link exactly as hard.
+#[tokio::test]
+async fn edit_says_it_too() {
+    let sandbox = Sandbox::new();
+    sandbox.write_file("linked.rs", "let x = 1;\n");
+    let one = sandbox.root().join("linked.rs");
+    let two = sandbox.root().join("linked-elsewhere.rs");
+    if std::fs::hard_link(&one, &two).is_err() {
+        eprintln!("skipped: this filesystem refused a hard link");
+        return;
+    }
+
+    sandbox
+        .ok("Read", json!({ "file_path": "linked.rs" }))
+        .await;
+    let out = sandbox
+        .ok(
+            "Edit",
+            json!({ "file_path": "linked.rs", "old_string": "1", "new_string": "9" }),
+        )
+        .await;
+
+    assert!(
+        out.content.contains("hard links"),
+        "Edit broke the link without saying so: {out:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&two).unwrap(), "let x = 1;\n");
+}
+
+// endregion: Hard links

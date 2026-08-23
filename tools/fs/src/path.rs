@@ -114,6 +114,83 @@ pub fn write_atomically(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
     }
 }
 
+/// How many names this file has on disk, when that can be told.
+///
+/// **[`write_atomically`] severs a hard link, and nothing else says so.** The
+/// rename replaces the directory entry rather than writing through it, which is
+/// the property that makes the write atomic and also the property that breaks
+/// the link: the edited name gets the new content, every other name keeps the
+/// old, and the link count drops to one on each. Measured on NTFS, not argued —
+/// a plain `fs::write` writes through and both names change; temp-and-rename
+/// does not. Most editors behave the same way, and a torn file on a crash is
+/// worse than a broken link, so this is not an argument for going back. It is a
+/// consequence somebody has to be told about, because silent divergence between
+/// two names of one file is not something a user will attribute to their editor.
+///
+/// `None` means *could not be told*, never *one name*: an unreadable file, a
+/// filesystem that does not report it, or a platform arm that has no way to ask.
+/// A caller must not print "1" for `None` — that is the difference between a
+/// measurement and an assumption.
+///
+/// The two arms ask different questions of the same fact. Unix has `nlink` on
+/// the stat every metadata call already did. Windows keeps the count in
+/// `BY_HANDLE_FILE_INFORMATION`, which needs an open handle;
+/// `MetadataExt::number_of_links` wraps exactly this and is behind the unstable
+/// `windows_by_handle` feature, so a stable build has to make the call itself.
+#[cfg(unix)]
+pub fn hard_links(file: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    // `symlink_metadata`, not `metadata`: the link count wanted is the one for
+    // the entry about to be replaced, and following a symlink would report the
+    // target's instead.
+    std::fs::symlink_metadata(file).ok().map(|m| m.nlink())
+}
+
+#[cfg(windows)]
+pub fn hard_links(file: &Path) -> Option<u64> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    // A plain read handle. Opening for read shares with other readers and does
+    // not need write access, so asking this question cannot fail a write that
+    // would otherwise have succeeded — the reason it is asked before the write
+    // rather than during it.
+    let f = std::fs::File::open(file).ok()?;
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: `f` is open for the duration of the call, and `info` is a
+    // correctly-sized, zeroed instance of the struct the call writes into.
+    let ok = unsafe { GetFileInformationByHandle(f.as_raw_handle() as _, &mut info) };
+    if ok == 0 {
+        return None;
+    }
+    Some(u64::from(info.nNumberOfLinks))
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn hard_links(_file: &Path) -> Option<u64> {
+    None
+}
+
+/// The sentence to append to a write's outcome when it is about to break a
+/// link, or nothing.
+///
+/// Said rather than refused, the same rule the awkward-filename note follows:
+/// the write is what was asked for, it succeeds, and refusing it would be Emma
+/// deciding how a user may arrange their filesystem. **Read before the write**,
+/// because after the rename the count is one and the fact is gone.
+pub fn severed_link_note(file: &Path) -> Option<String> {
+    match hard_links(file) {
+        Some(n) if n > 1 => Some(format!(
+            "this file had {n} names on disk (hard links); writing it replaces the \
+             directory entry, so the other {} keeps the old content and the link is broken",
+            if n == 2 { "name" } else { "names" }
+        )),
+        _ => None,
+    }
+}
+
 /// The canonical root. Canonicalised once per call so that comparisons below
 /// are against the same spelling the OS uses — on Windows that means the
 /// `\\?\` verbatim form, and comparing a verbatim path to a non-verbatim one
