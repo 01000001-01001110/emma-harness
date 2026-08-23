@@ -259,11 +259,36 @@ impl Ending {
             // The spend of an abandoned call is unrecoverable rather than
             // unrecorded — the tokens were spent on the provider's side and
             // nothing local ever learned the number. A resumed session
-            // therefore under-counts by that one call, and saying so is the
-            // only honest option available.
+            // therefore under-counts by that one call.
+            //
+            // **And then the replacement asserted the abandoned call for
+            // endings that never had one.** A reviewer traced the three ways a
+            // run reaches this variant and only one of them abandons anything:
+            //
+            //   1. the iteration-boundary break, where a cancelled *tool* was
+            //      recorded with its own `tool_cancelled` entry and a failure
+            //      result, and no model call was in flight;
+            //   2. `call_model` returning `Ok(None)`, which is the real
+            //      mid-call abandon;
+            //   3. `main`'s blocked-prompt path, where a hook refused the goal
+            //      and nothing ran at all.
+            //
+            // So `DEF-024` replaced a false promise with a false claim pointing
+            // the other way, and the test could not see it because it reads the
+            // string rather than the path that produced it.
+            //
+            // The condition is stated rather than asserted. That is weaker than
+            // this file usually allows, and it is the honest shape while one
+            // variant covers three endings: a sentence that names the abandon
+            // is wrong twice out of three, and one that omits it hides a real
+            // cost. Splitting the variant is the fix that would let this assert
+            // again — `Ending` is not serialised, so the cost is five match
+            // arms — and it is not being done in the same change that found the
+            // wording wrong.
             Self::Interrupted => "interrupted. Everything that finished before the interrupt \
-                 is in the session log; a model call still in flight was abandoned, so its \
-                 answer and its cost are not recorded anywhere."
+                 is in the session log. If the interrupt landed during a model call, that call \
+                 was abandoned: its answer and its cost are recorded nowhere, so a resumed \
+                 session under-counts by it."
                 .into(),
             Self::Provider(e) => format!("stopped: {e}"),
         }
@@ -2357,6 +2382,19 @@ mod tests {
         // because a resumed session under-counts by that call and nothing local
         // can ever learn the number.
         assert!(m.contains("cost"), "{m}");
+
+        // **And it must not assert the abandon, because two of the three ways
+        // a run reaches this variant abandon nothing.** A reviewer traced them:
+        // the iteration-boundary break (a cancelled tool, recorded with its own
+        // entry), `call_model` returning `Ok(None)` (the real mid-call case),
+        // and `main`'s blocked-prompt path (nothing ran). This test could not
+        // see that, because it reads the string rather than the path -- so the
+        // condition is now asserted here rather than left to the wording.
+        assert!(
+            m.contains("If the interrupt landed"),
+            "the sentence asserts an abandoned call for endings that never had one; \
+             it must state the condition: {m}"
+        );
     }
 
     #[test]
