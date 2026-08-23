@@ -28,6 +28,15 @@ out for themselves.
 
 ## Unreleased
 
+- **`config check` no longer tells you a working deny rule can never fire.** A
+  rule like `Bash(sudo*)` was announced as "ends its prefix inside a word, so it
+  can never match". It matches: the `*` is consumed as part of the prefix, and a
+  rule matches the exact command it spells. The note now says that, and still
+  points out the surprise — `sudo*` looks like a wildcard and is not — with the
+  same remedy as before, `sudo *`.
+
+  If you deleted such a rule because Emma called it dead, it was not.
+
 - **New: `emma verify`.** Sends an independent reviewer at each outstanding row
   of the parity ledger — a fresh model with the read tools, briefed to disprove
   the row rather than confirm it — and writes a receipt with its verdict and its

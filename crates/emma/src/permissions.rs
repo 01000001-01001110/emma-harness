@@ -1075,12 +1075,35 @@ impl Rules {
                 // case is silent again. Distinguishing "useless exact rule"
                 // from "intended exact rule" needs the author's intent, which
                 // is not in the string.
+                // **This said "it can never match", and that was false.**
+                //
+                // Third pass over this branch, and the first two were wrong in
+                // the same direction. The argument that silenced the no-star
+                // case is written eleven lines above: `command_matches` tries
+                // equality before the word-boundary test, so a non-empty prefix
+                // always matches at least one command — itself. That is exactly
+                // as true of `Bash(sudo*)`, whose star the parser consumed,
+                // leaving the prefix `sudo`. It denies the command `sudo`.
+                //
+                // A reviewer reproduced it against the release binary. The cost
+                // of the wrong sentence is not a wasted minute: it appears in
+                // the output of the command whose job is "why can it not do X",
+                // it says a deny rule is inert, and the obvious next move is to
+                // delete the rule. Telling an operator a live protection is dead
+                // is how a live protection gets deleted.
+                //
+                // The surprise is real and worth keeping — `sudo*` looks like a
+                // wildcard and is not — so the note stays and states what is
+                // true: it matches that one command and nothing after it. The
+                // remedy it already gave was right all along.
                 if !star_is_a_wildcard && !prefix.is_empty() {
                     notes.push(format!(
-                        "{}: `{}` ends its prefix inside a word, so it can never match. \
-                     Commands match at a word boundary — `{prefix}` would have to be \
-                     followed by a space. Write `{prefix} *`, or name the whole first \
-                     word and use `:*` for the arguments.",
+                        "{}: `{}` matches only the exact command `{prefix}`, and not \
+                     `{prefix}` followed by anything — the `*` is consumed as part of \
+                     the prefix rather than treated as a wildcard, and commands match \
+                     at a word boundary. If that is what you meant, it is doing it. If \
+                     you meant `{prefix}` with arguments, write `{prefix} *`, or name \
+                     the whole first word and use `:*` for the arguments.",
                         entry.source.display(),
                         entry.rule
                     ));
@@ -1547,8 +1570,14 @@ mod tests {
         for (rule, must_say) in [
             // A tool that is not in this run at all. Previously silent.
             ("Bahs(rm)", "not a tool in this run"),
-            // A prefix ending mid-word. Previously silent.
-            ("Bash(curl https://*)", "inside a word"),
+            // A prefix the parser left ending mid-word. Previously silent.
+            ("Bash(curl https://*)", "matches only the exact command"),
+            // **The rule that made this branch lie.** `sudo*` looks like a
+            // wildcard and is not: the parser consumes the star, leaving the
+            // prefix `sudo`, and the rule denies the command `sudo`. It was
+            // announced as unable to match anything at all.
+            ("Bash(sudo*)", "matches only the exact command"),
+            ("Bash(rm -rf /*)", "matches only the exact command"),
             // The two that already spoke, kept so this cannot pass by the
             // older branches having been deleted.
             ("bash(rm)", "spelled `Bash`"),
@@ -1582,11 +1611,43 @@ mod tests {
         ] {
             let notes =
                 Rules::unmatchable_here(&[entry(PermissionKind::Deny, rule)], known, network);
+            // **The marker had to change with the note, or this control would
+            // have stopped controlling.** It used to look for "inside a word",
+            // which the corrected note no longer contains anywhere -- so after
+            // the fix it would have passed against any output whatsoever,
+            // including a note announcing every one of these as dead. An
+            // assertion that survives the disappearance of what it looks for is
+            // the false receipt this file has already been rewritten over
+            // twice.
             assert!(
-                !notes.iter().any(|n| n.contains("inside a word")),
+                !notes
+                    .iter()
+                    .any(|n| n.contains("matches only the exact command")),
                 "`{rule}` is an exact-match rule that fires, and was announced as dead. \
                  Telling an operator a live protection is dead is how a live protection \
                  gets deleted: {notes:?}"
+            );
+        }
+
+        // **And the sentence that was false, named so it cannot come back.**
+        // Three passes over this branch, two of them wrong in the same
+        // direction; the specific falsehood was that a rule "can never match".
+        // No rule this function sees can be truthfully described that way,
+        // because `command_matches` tries equality first and a non-empty prefix
+        // always matches itself.
+        for rule in [
+            "Bash(sudo*)",
+            "Bash(rm -rf /*)",
+            "Bash(curl https://*)",
+            "Bash(rm -rf /)",
+        ] {
+            let notes =
+                Rules::unmatchable_here(&[entry(PermissionKind::Deny, rule)], known, network);
+            assert!(
+                !notes.iter().any(|n| n.contains("never match")),
+                "`{rule}` was announced as unable to match. It matches at least the \
+                 command it spells: equality is tried before the word-boundary test. \
+                 An operator who believes this deletes a rule that works: {notes:?}"
             );
         }
 

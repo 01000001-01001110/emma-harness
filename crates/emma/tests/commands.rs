@@ -901,11 +901,25 @@ fn config_check_names_a_deny_rule_that_can_never_fire() {
         "config check did not name the rule that cannot fire: {text}"
     );
     assert!(
-        text.contains("inside a word"),
-        "config check named the rule without saying why it cannot match: {text}"
+        text.contains("matches only the exact command"),
+        "config check named the rule without saying what it does match: {text}"
     );
+    // **The sentence that shipped, refused by name.** It said such a rule "can
+    // never match", which is false of every rule this branch sees: equality is
+    // tried before the word-boundary test, so a non-empty prefix matches at
+    // least the command it spells. An operator who believed it would delete a
+    // deny rule that works, and this is the channel they would read it on.
     assert!(
-        !text.contains("`Bash(rm -rf /)` ends its prefix"),
+        !text.contains("never match"),
+        "config check told the operator a rule can never fire. It can, and this \
+         is the output somebody acts on: {text}"
+    );
+    // The exact-match rule stays silent. Asserted against the RULE rather than
+    // against a phrase, so it survives the note being reworded again -- the
+    // previous version of this assertion looked for wording that the fix
+    // removed, which would have left it passing against anything.
+    assert!(
+        !text.contains("`Bash(rm -rf /)` matches only"),
         "an exact-match rule that fires was announced as dead, which is how a \
          live protection gets deleted: {text}"
     );
