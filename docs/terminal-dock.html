@@ -677,7 +677,21 @@
   <p>
     <strong>Not settled here.</strong> Two things. The drain is proven over a
     scripted queue and a hand-built editor; the <em>reader thread</em> that
-    fills them has never been driven by a test, because it needs a terminal.
+    fills them cannot be started by a test, because it owns a real terminal.
+    <strong>One of its arms is now driven anyway.</strong> The paste arm was
+    lifted out as <code>on_paste</code>, taking a narrow <code>Surface</code>
+    trait that <code>Frame</code> implements and a test satisfies with a
+    recorder &mdash; so what the arm <em>does</em> is asserted rather than only
+    what it decides. That distinction is the whole of <code>ARCH-003</code>: a
+    reviewer deleted the line carrying the paste note to the screen and the
+    entire workspace stayed green, because the decision had a test and the
+    effect had nowhere to be observed.
+    <span class="chip test">tested</span>
+    <code>a_paste_puts_its_note_on_the_surface_and_a_clean_one_puts_nothing</code>;
+    deleting that line now turns it red.
+    The other arms &mdash; keys, mouse, resize &mdash; are untouched, and the
+    thread's one call to <code>on_paste</code> is itself still deletable with
+    the suite green. The boundary moved rather than vanishing.
     <span class="chip unv">unverified</span>: type into a running Emma while a
     goal is in flight, then trigger an approval, and check the box is empty and
     the count is reported. And the whole of <code>Editor</code>'s Windows
