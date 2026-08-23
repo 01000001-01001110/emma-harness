@@ -370,7 +370,12 @@ mod tests {
         let mut m = menu();
         m.sync("/", false);
         m.sync("/ex", false);
-        assert_eq!(names(&m), ["exit"]);
+        // `/ex` is a prefix of two commands now that `/export` exists, and the
+        // menu is meant to narrow rather than to guess: showing both and
+        // highlighting the first is the behaviour, and picking one would be the
+        // defect. This assertion moved when `/export` landed, which is the pin
+        // doing its job — the vocabulary is a contract.
+        assert_eq!(names(&m), ["exit", "export"]);
         assert_eq!(m.selection().map(|e| e.name.clone()), Some("exit".into()));
     }
 

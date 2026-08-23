@@ -1146,6 +1146,18 @@ mod tests {
     #[test]
     fn quick_help_names_the_tool_chords() {
         let mut app = App::new((130, 40));
+        // **Set the tools, because the real app does.** `App::new` seeds the
+        // list with the slash commands as a placeholder and the shell replaces
+        // it with the user-tool catalogue before the first paint. Drawing the
+        // placeholder tests a state nobody sees — and it is length-sensitive:
+        // adding two slash commands made the untouched sidebar tall enough to
+        // push QUICK HELP off a 40-row window, which failed this test for a
+        // reason that has nothing to do with what it asserts.
+        app.set_tools(vec![sidebar::Row {
+            name: "Shell".into(),
+            trailing: "Alt+s".into(),
+            selected: false,
+        }]);
         let (rows, _) = draw(&mut app, &view(), 130, 40);
         assert!(
             rows.iter().any(|r| r.contains("Alt+key")),

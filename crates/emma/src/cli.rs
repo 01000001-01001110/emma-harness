@@ -124,6 +124,15 @@ THE INTERACTIVE SESSION
                                are kept too, and /clear names them: they are
                                consent about the process, and /exit is what
                                drops them.
+    /export                    write this conversation to a file, in markdown.
+                               /export <path> chooses where; with no argument it
+                               lands beside the session log. Works on -p, on a
+                               pipe and with no console — everywhere /copy is
+                               refused, which is where the text is hardest to get
+                               out by hand. If any record of the session could
+                               not be read, the file says so at the top rather
+                               than reading as complete.
+
     /copy                      put the last answer on the clipboard. The text is
                                the markdown the model wrote, taken from the
                                session log — not what is on screen, which has

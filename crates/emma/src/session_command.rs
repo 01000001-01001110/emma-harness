@@ -93,6 +93,16 @@ pub const BUILTINS: &[(&str, &str)] = &[
     ("resume", "how to continue an earlier session"),
     ("exit", "end this session"),
     ("quit", "end this session — the same thing as /exit"),
+    // **After `exit`, deliberately.** The menu lists in this order, so a prefix
+    // that matches both highlights whichever comes first — and `/ex` followed by
+    // Enter has meant "end this session" for the life of this command set.
+    // Putting `export` earlier would silently repurpose that muscle memory, and
+    // the two outcomes are not close: one ends the session and one writes a
+    // file. A new command does not get to take an established prefix.
+    (
+        "export",
+        "write this conversation to a file — works where /copy cannot",
+    ),
 ];
 
 /// One of Emma's own commands.
@@ -131,6 +141,12 @@ pub enum SessionCommand {
     /// and copying the source sidesteps it entirely rather than competing with
     /// the terminal for the mouse.
     Copy,
+    /// `/export`, `/export <path>` — write the conversation to a file.
+    ///
+    /// The answer for every path `/copy` refuses. A file needs no escape byte,
+    /// so this works on `-p`, on a pipe and with no console, which is where a
+    /// clipboard write is forbidden and where somebody most wants the text.
+    Export(Option<String>),
     /// `/theme`, `/theme <name>`.
     ///
     /// There is no `--save`, and that is not an omission: a theme is read once
@@ -181,6 +197,17 @@ pub fn parse(line: &str) -> Option<SessionCommand> {
         "agents" => Some(SessionCommand::Agents),
         "clear" => Some(SessionCommand::Clear),
         "copy" => Some(SessionCommand::Copy),
+        "export" => Some(match args.as_slice() {
+            [] => SessionCommand::Export(None),
+            [one] if !one.starts_with('-') => SessionCommand::Export(Some((*one).to_string())),
+            // A flag here is somebody expecting options this does not have, and
+            // guessing which of several they meant is how a file lands somewhere
+            // nobody asked for.
+            _ => SessionCommand::Misuse {
+                name: "export",
+                usage: EXPORT_USAGE,
+            },
+        }),
         "theme" => Some(match args.as_slice() {
             [] => SessionCommand::Theme { name: None },
             // A flag is never a theme name, and `--save` is the one somebody
@@ -310,6 +337,7 @@ pub async fn run(cmd: SessionCommand, s: &mut Session<'_, '_>) -> Flow {
             }
         }
         SessionCommand::Copy => copy_last_answer(s),
+        SessionCommand::Export(path) => export_conversation(s, path.as_deref()),
         SessionCommand::Config => {
             let live = crate::commands::Live {
                 provider: s.kind.name().to_string(),
@@ -1003,6 +1031,106 @@ fn plural(n: usize, what: &str) -> String {
 // and one line per row is what `insert_before` scrolls correctly.
 // ---------------------------------------------------------------------------
 
+/// What `/export` takes.
+const EXPORT_USAGE: &str = "  /export            write this conversation beside the session log\n                            \x20 /export <path>     write it to that file instead";
+
+/// Write the conversation to a file, in markdown.
+///
+/// **The file is the honest half of the copy story.** A clipboard write is an
+/// escape sequence and is therefore forbidden on `-p`, on a pipe and with no
+/// console — which is exactly where somebody is most likely to want the text out
+/// and least able to select it. A file needs no escape byte, so this path is
+/// available everywhere.
+///
+/// Rendered from the session log rather than from the transcript, for the same
+/// reason `/copy` is: the log holds what was written, and the screen holds what
+/// was painted beside a sidebar at some width.
+fn export_conversation(s: &Session<'_, '_>, path: Option<&str>) {
+    let (records, lost) = match crate::session::SessionLog::read_reporting(&s.log_path) {
+        Ok(r) => r,
+        Err(e) => {
+            s.term
+                .warn(&format!("/export could not read this session: {e:#}"));
+            return;
+        }
+    };
+
+    let target = match path {
+        Some(p) => std::path::PathBuf::from(p),
+        // Beside the log, named after it: the session id is already the name
+        // somebody would reach for, and putting it in the working directory
+        // would drop a file into a repository the user is editing.
+        None => s.log_path.with_extension("md"),
+    };
+
+    let mut out = String::new();
+    let mut turns = 0usize;
+    for r in &records {
+        match r["kind"].as_str().unwrap_or_default() {
+            "goal" => {
+                let text = r["text"].as_str().unwrap_or_default().trim();
+                if !text.is_empty() {
+                    out.push_str(&format!("\n## {text}\n\n"));
+                    turns += 1;
+                }
+            }
+            "assistant" => {
+                let text = r["text"].as_str().unwrap_or_default().trim();
+                if !text.is_empty() {
+                    out.push_str(text);
+                    out.push_str("\n\n");
+                    turns += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if turns == 0 {
+        s.term
+            .note("/export: nothing to write — this session has no conversation yet.");
+        return;
+    }
+
+    // **A damaged log is said out loud, in the file and on screen.** `read_reporting`
+    // returns the lines it could not parse, and an export that quietly omitted
+    // them would produce a transcript that reads as complete. That is the exact
+    // failure the session log's own loss counting exists to prevent, and it
+    // would be undone here by not passing it on.
+    if !lost.is_empty() {
+        let note = format!(
+            "> **{} record(s) of this session could not be read and are missing below**              (line {}). This export is incomplete.\n\n",
+            lost.len(),
+            lost.iter()
+                .take(5)
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        out.insert_str(0, &note);
+    }
+
+    match std::fs::write(&target, &out) {
+        Ok(()) => {
+            s.term.note(&format!(
+                "/export: wrote {turns} turn(s) to {}",
+                target.display()
+            ));
+            if !lost.is_empty() {
+                s.term.warn(&format!(
+                    "/export: {} record(s) could not be read and are missing from the file; \
+                     it says so at the top.",
+                    lost.len()
+                ));
+            }
+        }
+        Err(e) => s.term.warn(&format!(
+            "/export could not write {}: {e}",
+            target.display()
+        )),
+    }
+}
+
 /// The clipboard write, and the reasons it is shaped this way.
 ///
 /// **OSC 52** — `ESC ] 52 ; c ; <base64> BEL` — asks the *terminal* to put text
@@ -1295,6 +1423,25 @@ mod tests {
             Some(SessionCommand::Misuse { name: "theme", .. })
         ));
         assert!(THEME_USAGE.contains("no --save"), "{THEME_USAGE}");
+    }
+
+    /// `/export` takes a path or nothing, and a flag is refused rather than
+    /// guessed at.
+    ///
+    /// A wrong guess here writes somebody's conversation to a file they did not
+    /// name, which is the one mistake this command can make that the user cannot
+    /// undo by running it again.
+    #[test]
+    fn export_takes_a_path_or_nothing() {
+        assert_eq!(parse("/export"), Some(SessionCommand::Export(None)));
+        assert_eq!(
+            parse("/export out.md"),
+            Some(SessionCommand::Export(Some("out.md".into())))
+        );
+        assert!(matches!(
+            parse("/export --force"),
+            Some(SessionCommand::Misuse { name: "export", .. })
+        ));
     }
 
     /// The rule that closes the only door a repository has to your colours.
