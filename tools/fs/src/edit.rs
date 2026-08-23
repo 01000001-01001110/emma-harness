@@ -429,6 +429,10 @@ impl Edit {
             before.replacen(old, new, 1)
         };
 
+        // Narrows the check-to-write gap; `path::still_contained` says plainly
+        // that narrowing is all it does.
+        path::still_contained(root, raw, file)?;
+
         // **Read before the write, because the rename destroys the answer.**
         // See `path::severed_link_note`: afterwards the count is one.
         let severed = path::severed_link_note(file);
@@ -643,6 +647,10 @@ impl Edit {
                  what is already there; nothing would change"
             )));
         }
+
+        // Narrows the check-to-write gap; `path::still_contained` says plainly
+        // that narrowing is all it does.
+        path::still_contained(root, raw, file)?;
 
         // **Read before the write, because the rename destroys the answer.**
         // See `path::severed_link_note`: afterwards the count is one.

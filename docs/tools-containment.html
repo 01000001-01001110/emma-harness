@@ -333,6 +333,87 @@
 </div>
 <span class="src">tools/fs/src/path.rs — module doc; tools/fs/src/bash.rs — module doc</span>
 
+<h2 id="toctou">The gap between the check and the write</h2>
+
+<p>
+  <code>resolve</code> proves a <em>string</em> lands inside the root.
+  The write happens later. In between, a directory component of that path can be
+  replaced by a link pointing somewhere else, and the write follows it out. An
+  external reviewer filed this as <code>DEF-016</code>, and it is real.
+</p>
+
+<p>
+  <strong>The check is now re-run as the last thing before every write</strong>
+  &mdash; <code>path::still_contained</code>, from <code>Write</code> and both
+  <code>Edit</code> paths. It re-resolves from the <em>original argument</em>
+  rather than re-checking the resolved path against itself, because the second
+  is a tautology and is the shape this check decays into once the reason stops
+  being written down.
+</p>
+
+<div class="note warn">
+  <span class="h">This narrows the window. It does not close it</span>
+  <p>
+    The gap goes from &ldquo;however long the tool spends thinking&rdquo; to
+    &ldquo;a canonicalise and a syscall&rdquo;. A gap of microseconds is still a
+    gap, and the function's own doc says so in those words. <strong>Closing it
+    means handle-based I/O</strong> &mdash; <code>openat</code> against a
+    directory descriptor on unix, a relative open against a parent handle on
+    Windows &mdash; so that the path checked and the path written are the same
+    <em>object</em> rather than the same <em>string</em>. That is a rewrite of
+    four call sites on two platforms with <code>unsafe</code> on both, and it is
+    not done.
+  </p>
+</div>
+
+<p>
+  <span class="chip test">tested</span> Two cases, because one does not cover
+  the other and mutation proved it. A directory swapped for a link pointing
+  <em>out</em> is refused by <code>resolve</code> itself, so disabling the
+  drift comparison left that test green; the second case &mdash; a link to a
+  different directory <em>inside</em> the root, where containment still holds
+  and the path now names a different file &mdash; is what exercises the
+  comparison, and it goes red when the comparison is disabled.
+  <code>a_directory_swapped_for_a_link_out_is_caught_by_the_recheck</code> and
+  <code>a_path_that_resolves_somewhere_else_inside_the_root_is_refused_too</code>.
+  Both perform the swap deliberately rather than racing it: a race that can be
+  won on demand is not the race being guarded against.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> <strong>That the guard is called at
+  all.</strong> Deleting <code>still_contained(&hellip;)</code> from
+  <code>write.rs</code> leaves the whole workspace green. On the happy path the
+  guard is a no-op by construction &mdash; the tool resolved the path at the top
+  of the call and nothing between there and here moves it &mdash; so its wiring
+  is asserted by reading the code and nothing else. <em>What would settle it:</em>
+  a test that wins the race on demand, which is the thing that cannot be built.
+</p>
+
+<div class="note">
+  <span class="h">Whether closing it is worth paying for is a product question, and it is open</span>
+  <p>
+    Winning this race needs somebody who can write into the working directory
+    <em>while Emma is running</em>. Two records already put that person out of
+    scope: the module doc above says containment is <em>&ldquo;a boundary
+    against paths, not against an operator who has already placed a link inside
+    the tree&rdquo;</em>, and <code>CLAUDE.md</code> is blunter &mdash;
+    <em>&ldquo;the approval gate is a consent interface, not a sandbox&hellip;
+    and <code>Bash</code> can do anything.&rdquo;</em> Someone able to swap a
+    directory under Emma mid-call has a far shorter route to the same result.
+  </p>
+  <p>
+    Under that reading, containment is a leash on a wandering model, it already
+    does that job, and <code>DEF-016</code> is asking it to be a sandbox the
+    product has decided it is not. The counter-argument is that
+    &ldquo;<code>Bash</code> can do it anyway&rdquo; is the reasoning that ends
+    with every guard removed &mdash; so the decision is the owner's and is
+    recorded as <code>SEC-001</code> in <code>notes/RULINGS-PENDING.md</code>,
+    unanswered.
+  </p>
+</div>
+<span class="src">tools/fs/src/path.rs &mdash; <code>still_contained</code>; tools/fs/tests/containment.rs</span>
+
 <h2 id="traversal">Containment guards arguments; not following links guards the walk</h2>
 
 <p>

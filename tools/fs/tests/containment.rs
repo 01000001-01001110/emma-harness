@@ -327,3 +327,112 @@ async fn an_empty_path_is_refused_rather_than_treated_as_the_root() {
 }
 
 // endregion: The tools that take a path of their own
+
+// region: The re-check immediately before a write
+// ---------------------------------------------------------------------------
+// The re-check immediately before a write
+//
+// `DEF-016`: containment is checked against a *string* and the I/O happens
+// later, so a directory component swapped in between lands the write outside
+// the root. `path::still_contained` re-runs the check as the last thing before
+// the write, which narrows the window and does not close it. These tests are
+// about the guard, not about the race: a race that can be reproduced on demand
+// is not a race, and asserting on one would be a receipt for something else.
+// ---------------------------------------------------------------------------
+
+/// Without this, the re-check can be deleted or turned into a tautology --
+/// re-resolving the already-resolved path against itself always succeeds -- and
+/// every other test in this file still passes.
+///
+/// The swap is done deliberately rather than raced: a directory inside the root
+/// is replaced by a link pointing outside it, which is exactly the state the
+/// window would leave behind, and the guard must refuse in that state.
+#[tokio::test]
+async fn a_directory_swapped_for_a_link_out_is_caught_by_the_recheck() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.root().canonicalize().unwrap();
+    let inside = root.join("sub");
+    std::fs::create_dir_all(&inside).unwrap();
+
+    // Resolved while `sub` is an ordinary directory.
+    let resolved =
+        emma_tools_fs::path::resolve(&root, "sub/file.txt").expect("an ordinary path resolves");
+
+    // The window: `sub` becomes a link pointing out of the root.
+    let outside = root.parent().unwrap().join("emma-outside-recheck");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::remove_dir(&inside).unwrap();
+    if support::symlink_dir(&outside, &inside).is_none() {
+        eprintln!("SKIPPED: this platform will not create a directory link");
+        let _ = std::fs::remove_dir_all(&outside);
+        return;
+    }
+
+    let err = emma_tools_fs::path::still_contained(&root, "sub/file.txt", &resolved)
+        .expect_err("the re-check accepted a path that now leaves the root");
+    let detail = format!("{err}");
+    assert!(
+        detail.contains("emma-outside-recheck") || detail.contains("outside"),
+        "the refusal must name where it now goes: {detail}"
+    );
+
+    let _ = std::fs::remove_dir_all(&outside);
+}
+
+/// The positive control, and it is doing real work: the cheapest wrong way to
+/// pass the test above is a re-check that refuses everything, and a `Write`
+/// that always failed would be caught by nothing else in this file.
+#[tokio::test]
+async fn the_recheck_passes_an_ordinary_unchanged_path() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.root().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    let resolved = emma_tools_fs::path::resolve(&root, "sub/file.txt").unwrap();
+    emma_tools_fs::path::still_contained(&root, "sub/file.txt", &resolved)
+        .expect("nothing moved, so nothing should be refused");
+
+    // And through the tool, which is the path that actually matters.
+    sandbox
+        .ok(
+            "Write",
+            json!({ "file_path": "sub/file.txt", "content": "hello\n" }),
+        )
+        .await;
+    assert_eq!(sandbox.read_file("sub/file.txt"), "hello\n");
+}
+
+/// The drift branch, which the escape test above does **not** cover.
+///
+/// When `sub` becomes a link pointing *out*, `resolve` itself refuses and the
+/// comparison never runs — proved by mutation: disabling `again != resolved`
+/// left that test green. So the branch needs its own case, and this is it: a
+/// link to a different directory **inside** the root. Containment still holds,
+/// the path resolved twice to two different places, and a write aimed at the
+/// first would land in the second.
+#[tokio::test]
+async fn a_path_that_resolves_somewhere_else_inside_the_root_is_refused_too() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.root().canonicalize().unwrap();
+    let inside = root.join("sub");
+    let elsewhere = root.join("elsewhere");
+    std::fs::create_dir_all(&inside).unwrap();
+    std::fs::create_dir_all(&elsewhere).unwrap();
+
+    let resolved = emma_tools_fs::path::resolve(&root, "sub/file.txt").unwrap();
+
+    std::fs::remove_dir(&inside).unwrap();
+    if support::symlink_dir(&elsewhere, &inside).is_none() {
+        eprintln!("SKIPPED: this platform will not create a directory link");
+        return;
+    }
+
+    let err = emma_tools_fs::path::still_contained(&root, "sub/file.txt", &resolved)
+        .expect_err("the re-check accepted a path that now names a different file");
+    let detail = format!("{err}");
+    assert!(
+        detail.contains("moved underneath"),
+        "the refusal must say the path drifted rather than blaming the argument: {detail}"
+    );
+}
+
+// endregion: The re-check immediately before a write

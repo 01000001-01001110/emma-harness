@@ -269,6 +269,62 @@ pub fn resolve_existing(root: &Path, raw: &str) -> Result<(PathBuf, std::fs::Met
     }
 }
 
+/// Assert, immediately before the I/O, that a path already resolved by
+/// [`resolve`] still lands inside the root.
+///
+/// **This narrows the window. It does not close it, and calling it a fix would
+/// be the more expensive mistake.** Between [`resolve`] and the write there is
+/// a gap in which a directory component of the path can be replaced by a link
+/// pointing somewhere else, and the write then lands outside the root. Calling
+/// this last thing before the I/O shortens that gap from "however long the tool
+/// spends thinking" to "however long a canonicalise and a syscall take". A gap
+/// of microseconds is still a gap.
+///
+/// **What would actually close it** is handle-based I/O: `openat` against a
+/// directory file descriptor on unix, a relative open against a parent handle
+/// on Windows — so the path checked and the path written are the same *object*
+/// rather than the same *string*. That is a rewrite of this module's callers on
+/// two platforms with unsafe code on both, and it is `DEF-016`.
+///
+/// **The threat model is worth stating, because it decides whether any of that
+/// is worth doing.** Winning this race needs an adversary who can write into
+/// the working directory while Emma is running. That is the same operator the
+/// module doc above already places out of scope for hard links and bind mounts,
+/// and `CLAUDE.md` is blunt about the reason: *"the approval gate is a consent
+/// interface, not a sandbox"*, and `Bash` can do anything. Somebody able to
+/// swap a directory under Emma mid-call has a far shorter path to the same
+/// result. Containment here is a guard against a model wandering, not against a
+/// local attacker — so this function exists to keep an honest guard honest, not
+/// to hold a line that `Bash` leaves open anyway.
+/// **The call sites are not covered and cannot easily be.** Deleting
+/// `still_contained(...)` from `write.rs` leaves the whole workspace green —
+/// proved by mutation. On the happy path the guard is a no-op by construction:
+/// the tool already resolved the path at the top of the call and nothing
+/// between there and here moves it, so removing the second check changes no
+/// observable behaviour unless something races. A test that could observe the
+/// wiring would have to win that race on demand, and a race that can be won on
+/// demand is not the race being guarded against. So: the function is tested,
+/// its two branches are tested, and its being *called* is asserted by reading
+/// the code and nothing else. Said here rather than left for someone to
+/// discover.
+pub fn still_contained(root: &Path, raw: &str, resolved: &Path) -> Result<(), ToolError> {
+    // Re-resolve from the *original* argument rather than re-checking the
+    // resolved path against itself: the second is a tautology, and it is the
+    // shape this check would decay into if the reason were not written down.
+    // What must be re-proven is that the string the model asked for still names
+    // a place inside the root.
+    let again = resolve(root, raw)?;
+    if again != resolved {
+        return Err(ToolError::Failed(format!(
+            "{raw} resolved to {} when it was checked and to {} a moment later; \
+             something moved underneath it and the write was not attempted",
+            resolved.display(),
+            again.display()
+        )));
+    }
+    Ok(())
+}
+
 // endregion: Containment
 
 // region: How a path is resolved, and how it reads back

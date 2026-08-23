@@ -189,6 +189,12 @@ impl Write {
             })?;
         }
 
+        // **Last thing before the I/O.** Narrows the gap between the
+        // containment check and the write; see `path::still_contained`, which
+        // is explicit that narrowing is all it does.
+
+        path::still_contained(&root, raw, &target)?;
+
         // **Asked before the write, because the rename destroys the answer.**
         // Afterwards the count is one and the fact that there was ever another
         // name is gone from the filesystem.
