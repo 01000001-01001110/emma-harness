@@ -697,6 +697,9 @@ pub struct Harness {
     tools: Option<Vec<String>>,
     agents: Vec<AgentDef>,
     agent_notes: Vec<String>,
+    /// What the skill loader had to say: duplicate names, and how many files
+    /// were skipped. Returned rather than only printed, so a test can see them.
+    skill_notes: Vec<String>,
     /// The configured status-line program, when one resolved.
     status_line: Option<StatusLine>,
     /// Why there is not one, when configuration asked for something Emma could
@@ -815,12 +818,15 @@ impl Harness {
         // in the cached prompt prefix and directory iteration order must not
         // decide the prompt bytes. `claude::agents` sorts, and this preserves it.
         let (agents, agent_notes) = claude::load_agents(&root)?;
+        let (skills, skill_notes) =
+            load_skills(&root, &spine_path, flavor, block.skills.as_deref())?;
 
         Ok(Self {
             instructions,
             persona,
             config_hash: hash::short(&raw),
-            skills: load_skills(&root, &spine_path, flavor, block.skills.as_deref())?,
+            skills,
+            skill_notes,
             commands: load_commands(&root)?,
             hooks: hooks::resolve(&root, &spine_path, &hook_defs, block.hooks.as_deref())?,
             tools: block.tools,
@@ -908,6 +914,10 @@ impl Harness {
     /// Read by `main` at startup and by `emma config check`. A catalogue quietly
     /// shorter than the directory is the gap nobody notices until the model
     /// cannot find an agent that is plainly there.
+    pub fn skill_notes(&self) -> &[String] {
+        &self.skill_notes
+    }
+
     pub fn agent_notes(&self) -> &[String] {
         &self.agent_notes
     }
@@ -1315,13 +1325,25 @@ impl From<ClaudeFront> for Front {
     }
 }
 
+/// Load the skills, and hand back what was said about them.
+///
+/// **The notes are returned, not merely printed, and that is the whole of this
+/// change.** `HARD-001` exists because skipped skills were named on stderr and
+/// never counted; the fix added a count — on stderr. So the guarantee stayed
+/// exactly as observable as it had been, which is to say not at all, and a
+/// mutation deleting the entire summary left the suite green.
+///
+/// The shape to copy was one file away, as usual: `claude::load_agents` already
+/// returns `(agents, notes)` and `Harness::agent_notes` already exposes them.
+/// Skills never got it.
 fn load_skills(
     root: &Path,
     spine_path: &Path,
     flavor: Flavor,
     elected: Option<&[String]>,
-) -> Result<Vec<SkillDef>> {
+) -> Result<(Vec<SkillDef>, Vec<String>)> {
     let dir = root.join("skills");
+    let mut notes: Vec<String> = Vec::new();
     // A `BTreeMap` keyed on the front-matter name gives the sorted catalogue the
     // prompt prefix needs, whatever order the directory iterated in.
     let mut found: BTreeMap<String, SkillDef> = BTreeMap::new();
@@ -1373,6 +1395,14 @@ fn load_skills(
             // sibling agent loader already does this with a boot note
             // (`claude.rs`, `load_agents`); skills never got one.
             if let Some(previous) = found.get(&front.name) {
+                notes.push(format!(
+                    "two skills both declare the name `{}` — {} is in the catalogue and {} \
+                     replaces it; which one wins depends on the order the filesystem returned \
+                     the directory in, so it may differ between runs",
+                    front.name,
+                    previous.name,
+                    path.display()
+                ));
                 eprintln!(
                     "emma: two skills both declare the name `{}` — {} is in the catalogue and \
                      {} replaces it. Only one can be loaded under one name, and which one wins \
@@ -1390,6 +1420,10 @@ fn load_skills(
         }
     }
     if skipped > 0 {
+        notes.push(format!(
+            "{skipped} skill(s) in {} were skipped and are not in the catalogue",
+            dir.display()
+        ));
         eprintln!(
             "emma: {skipped} skill(s) in {} were skipped and are not in the catalogue; \
              each is named above with its reason.",
@@ -1397,7 +1431,7 @@ fn load_skills(
         );
     }
     let Some(elected) = elected else {
-        return Ok(found.into_values().collect());
+        return Ok((found.into_values().collect(), notes));
     };
     let mut out = BTreeMap::new();
     for want in elected {
@@ -1410,7 +1444,7 @@ fn load_skills(
         })?;
         out.insert(skill.name.clone(), skill);
     }
-    Ok(out.into_values().collect())
+    Ok((out.into_values().collect(), notes))
 }
 
 fn split_skill(text: &str, path: &Path, flavor: Flavor) -> Result<(Front, String)> {

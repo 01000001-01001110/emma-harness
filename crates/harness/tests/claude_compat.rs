@@ -556,6 +556,57 @@ fn a_claude_skill_may_open_with_a_licence_comment() {
     assert_eq!(h.skill("debug").expect("found").body, "body\n");
 }
 
+/// Two skills declaring one name is reported, not silently resolved.
+///
+/// **Which one wins depends on the order the filesystem returned the directory
+/// in**, so the same tree can load different skills on different runs, and
+/// nothing said so. The sibling agent loader had been printing exactly this
+/// note for months; skills never got it.
+///
+/// Asserted on `skill_notes` rather than on stderr, because a report nothing can
+/// read is the defect rather than the fix — the same mistake HARD-001's first
+/// attempt made.
+#[test]
+fn two_skills_declaring_one_name_are_reported_rather_than_silently_collapsed() {
+    let base = scratch("claude-skill-dupe");
+    let root = base.join(".claude");
+    write(
+        &root.join("skills/first/SKILL.md"),
+        "---
+name: shared
+description: The first one.
+---
+first body
+",
+    );
+    write(
+        &root.join("skills/second/SKILL.md"),
+        "---
+name: shared
+description: The second one.
+---
+second body
+",
+    );
+
+    let h = Harness::load(&root).expect("a duplicate name must not fail the boot");
+    assert_eq!(
+        h.skill_names(),
+        vec!["shared"],
+        "both loaded under one name"
+    );
+
+    let notes = h.skill_notes();
+    assert!(
+        notes.iter().any(|n| n.contains("shared")),
+        "a name collision was resolved in silence: {notes:?}"
+    );
+    assert!(
+        notes.iter().any(|n| n.contains("may differ between runs")),
+        "the note does not say the winner is filesystem-order dependent: {notes:?}"
+    );
+}
+
 /// The other side of permissive, and the reason it is a skip rather than a
 /// shrug: a file this loader genuinely cannot read is not silently dropped, it is
 /// named on stderr — but it does not take the boot, and above all it does not
@@ -579,6 +630,18 @@ fn an_unreadable_claude_skill_is_skipped_rather_than_fatal() {
         h.skill_names(),
         vec!["good"],
         "the readable skill beside the broken ones still has to load"
+    );
+
+    // **And the count is observable, which is what HARD-001 was actually
+    // asking for.** That row exists because skipped skills were named on
+    // stderr and never counted; the first fix added a count — on stderr. So the
+    // guarantee stayed exactly as unobservable as before, and a mutation
+    // deleting the whole summary left the suite green. A number nothing can
+    // read is not a count, it is a comment.
+    let notes = h.skill_notes();
+    assert!(
+        notes.iter().any(|n| n.contains("2 skill(s)")),
+        "the skip count is not reported anywhere a caller can see it: {notes:?}"
     );
 }
 
