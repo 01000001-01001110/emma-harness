@@ -121,7 +121,9 @@
       <tr><td><code>WebFetch(domain:apnews.com)</code></td><td><code>Spec::Domain</code></td><td>egress only</td><td>that host, for that tool</td></tr>
       <tr><td><code>WebFetch(domain:*.example.com)</code></td><td><code>Spec::Domain</code></td><td>egress only</td><td>a strict subdomain at any depth, <strong>not</strong> <code>example.com</code> itself</td></tr>
       <tr><td><code>WebFetch(domain:example.*)</code></td><td><code>Spec::Domain</code></td><td>egress only</td><td><code>example.org</code>; the <code>*</code> is one label and cannot cross a dot</td></tr>
-      <tr><td><code>Bash(git log:*)</code></td><td><code>Spec::Unsupported</code></td><td>nothing</td><td>parses, <strong>never matches</strong>, and is said out loud at boot</td></tr>
+      <tr><td><code>Bash(git *)</code>, <code>Bash(git log:*)</code></td><td><code>Spec::Command</code></td><td>the run question</td><td>a <strong>word-boundary prefix</strong> over the <code>command</code> argument; <code>git</code> does not match <code>github-cli</code></td></tr>
+      <tr><td><code>Read(./src/**)</code></td><td><code>Spec::Path</code></td><td>the run question</td><td>a glob over the <code>file_path</code> or <code>path</code> argument, matched after both sides are normalised to one spelling</td></tr>
+      <tr><td><em>either row above, before ARCH-002</em></td><td><code>Spec::Unsupported</code></td><td>nothing</td><td>what both shapes used to be: parsed, announced at boot, and matching nothing. 62 of 64 rules in a real settings file were inert this way</td></tr>
       <tr><td><code>*</code>, <code>Web*</code>, <code>mcp__*</code></td><td>a parse error</td><td>nothing</td><td>Claude Code permits globbing the tool name for deny rules; Emma refuses it in all three lists</td></tr>
     </tbody>
   </table>
@@ -211,9 +213,24 @@
   <p>
     A specifier that is well-formed but outside this build's vocabulary is kept as
     a value rather than dropped, so the boot can announce it.
-    <code>Bash(git log:*)</code> and <code>Read(./src/**)</code> are the two the
-    code names. <code>Rules::parse</code> writes a note about each and then
+    <code>Rules::parse</code> writes a note about each and then
     <code>continue</code>s, so an unsupported rule never reaches a list at all.
+  </p>
+
+  <p>
+    <strong>This variant used to hold the two shapes people actually write.</strong>
+    <code>Bash(git *)</code> and <code>Read(./src/**)</code> both parsed to
+    <code>Spec::Unsupported</code>, which means they were announced at boot and
+    then matched nothing &mdash; including in <code>deny</code> lists. Measured
+    against a real settings file: <strong>62 of its 64 rules were inert</strong>.
+    ARCH-002 gave both shapes real matchers, and what remains here is the
+    genuinely unknown specifier rather than the common case.
+    <span class="chip test">tested</span>
+    <code>the_shapes_that_used_to_be_inert_now_evaluate</code> parses a
+    Claude-Code-shaped deny list and asserts a <code>rm</code> call is denied and
+    a <code>./src</code> read is allowed, with no boot note left to make &mdash; an
+    announcement that fires on a rule which works is how announcements stop
+    being read.
   </p>
 
   <p>
@@ -480,13 +497,102 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
   </p>
   <span class="src">crates/emma/src/permissions.rs — already_written; tests::what_is_written_is_what_is_read_back_next_boot</span>
 
+  <h2 id="boundary">What a prefix and a glob cannot see</h2>
+
+  <p>
+    Both matchers read <em>argument text</em>. <code>Bash</code> hands that text
+    to a shell, and the fs tools resolve their path long after the gate has
+    decided &mdash; so a rule can be evaded by writing the same thing differently,
+    and that is a property of the shape rather than a bug in it.
+  </p>
+
+  <p>
+    <strong>The command half.</strong> <code>Bash(git *)</code> does not match
+    <code>env git push</code>, <code>cd . &amp;&amp; git push</code>,
+    <code>GIT_SSH_COMMAND=x git push</code>, <code>echo hi | git push</code>, or
+    <code>/usr/bin/git push</code> &mdash; every one of which plainly runs git.
+    The fix is <em>not</em> a shell parser: quoting, substitution and operator
+    precedence are the shell's business, and a half-parser gives rules a meaning
+    that differs from what the shell actually does. What happens instead is
+    narrower. When a <code>deny</code> rule for the tool carries a command prefix
+    and the command is <strong>composed</strong> &mdash; chained, piped,
+    substituted, led by an environment assignment, a wrapper such as
+    <code>env</code> or <code>sh</code>, or a path-qualified binary &mdash; and no
+    deny actually matched, the answer is <code>Ask</code>. Not <code>Deny</code>:
+    the rule genuinely did not match, and claiming it did would be the same
+    dishonesty pointing the other way. What is refused is passing <em>quietly</em>.
+    <span class="chip test">tested</span>
+    <code>a_composed_command_cannot_slip_past_a_deny_prefix</code> walks seven
+    evasions and asserts each becomes a question.
+  </p>
+
+  <p>
+    <code>is_composed</code> is deliberately over-broad. A false positive costs a
+    question a human answers; a false negative is a deny rule that did not fire.
+  </p>
+
+  <p>
+    <strong>One command evasion is not caught, and cannot be by this shape.</strong>
+    <code>git -C . push</code> against a rule reading <code>Bash(git push *)</code>
+    is an ordinary spelling with nothing suspicious in it &mdash; a genuine prefix
+    mismatch. Treating an option sitting between two words a rule names as
+    unjudgeable would make every flag a prompt. That is the boundary of prefix
+    matching over argument text; the honest options are to widen the heuristic
+    endlessly, to match after resolution, or to say plainly that a
+    command-prefix deny narrows to the spellings it names. This paragraph is the
+    third.
+    <span class="chip unv">unverified</span>
+    <em>What would settle it:</em> nothing settles it &mdash; it is a statement
+    about what the shape can express, not a claim about a run.
+  </p>
+
+  <p>
+    <strong>The path half.</strong> <code>./src/x</code> and <code>src/x</code> are
+    one file to the tool and were two strings to the matcher, so a deny protected
+    only the spelling the operator happened to use. Both the rule pattern and the
+    call's path are now normalised before matching &mdash; separators become
+    <code>/</code>, repeated separators collapse, <code>./</code> segments go
+    &mdash; so the rule and the call meet in one spelling.
+    <span class="chip test">tested</span>
+    <code>a_path_rule_is_not_defeated_by_respelling_the_same_file</code> crosses
+    two rule spellings with five call spellings and asserts all ten deny.
+    Removing the normalisation on the call side turns it red, along with two
+    older tests that had been relying on it without saying so.
+  </p>
+
+  <p>
+    Normalisation stops short of <code>..</code>, because <code>a/link/../b</code>
+    is <code>a/b</code> only when <code>link</code> is a directory, and a matcher
+    that guesses wrong gets a deny wrong in whichever direction the guess fell.
+    A <code>..</code> component on either side, or an absolute call against a
+    relative rule, is <strong>refused rather than resolved</strong>: the same
+    <code>Ask</code> the composed commands get.
+    <span class="chip test">tested</span>
+    <code>a_path_a_rule_cannot_be_compared_against_asks_rather_than_passes</code>
+    asserts three such paths answer <code>Deny</code> or <code>Ask</code> and
+    never silence, and that an ordinary relative path is still judged &mdash; a
+    gate that asks about everything is a gate nobody reads.
+  </p>
+
+  <p>
+    What is still open: an absolute call and a relative rule become a question
+    rather than a match, because the gate does not hold the project root that
+    would settle whether they are the same file. Closing that means matching
+    after resolution, which needs the gate to run later than it does.
+    <span class="chip unv">unverified</span>
+    <em>What would settle it:</em> a design that moves the path decision to the
+    tool, where the resolved path exists.
+  </p>
+  <span class="src">crates/emma/src/permissions.rs &mdash; is_composed, normalise_path, path_unjudgeable, Rules::for_call</span>
+
   <h2 id="unsettled">What is not settled here</h2>
 
   <ul class="body">
     <li>
       <span class="chip cert">certified</span>
-      <code>cargo test -p emma --lib permissions::</code> reports 25 passed, 0
-      failed at commit <code>a3eba74</code>. Re-runnable.
+      <code>cargo test -p emma --lib permissions</code> reports 32 passed, 0
+      failed at commit <code>0baff1e</code> plus the path half of DEF-031.
+      Re-runnable.
     </li>
     <li>
       <span class="chip unv">unverified</span> The mutation results quoted above

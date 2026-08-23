@@ -221,7 +221,10 @@ impl Rule {
         // metacharacter. Tried before the command shape so `Read(./src/**)` is
         // not read as a command prefix beginning "./src/".
         if inner.contains('/') || inner.contains('\\') || inner.contains('[') {
-            if let Ok(g) = globset::Glob::new(inner) {
+            // The compiled pattern is normalised and the raw text is kept for
+            // display, so a rule reads back exactly as written while matching
+            // the same file however the call spells it.
+            if let Ok(g) = globset::Glob::new(&normalise_path(inner)) {
                 return Ok(Self {
                     tool,
                     spec: Spec::Path(inner.to_string(), g.compile_matcher()),
@@ -299,6 +302,51 @@ fn command_of(args: &Value) -> Option<String> {
         .map(normalise_command)
 }
 
+/// One spelling for a path, so a rule and a call can be compared at all.
+///
+/// **This is a matcher, not a filesystem.** `tools/fs/src/path.rs` resolves
+/// `./src/x` and `src/x` to the same file long after the gate has decided, so
+/// until this existed the two were one file to the tool and two strings to the
+/// rule — a deny written one way and a call spelled the other way passed in
+/// silence. Found by an adversarial pass on DEF-031 and left open when the
+/// command half landed.
+///
+/// What it does is lexical and small: separators become `/`, repeated
+/// separators collapse, and `./` segments go. What it deliberately does **not**
+/// do is resolve `..`, because `a/link/../b` is `a/b` only when `link` is a
+/// directory, and a matcher that guesses wrong about that gets a deny rule
+/// wrong in whichever direction the guess fell. `..` is handled by refusing to
+/// judge instead — see `path_unjudgeable`.
+fn normalise_path(p: &str) -> String {
+    let unified = p.replace('\\', "/");
+    let leading = if unified.starts_with('/') { "/" } else { "" };
+    let body: Vec<&str> = unified
+        .split('/')
+        .filter(|seg| !seg.is_empty() && *seg != ".")
+        .collect();
+    format!("{leading}{}", body.join("/"))
+}
+
+/// Whether a rule pattern and a call's path cannot honestly be compared.
+///
+/// Two cases, both of which make a lexical match meaningless rather than merely
+/// awkward:
+///
+/// - **A `..` component**, on either side. Resolving it needs to know what is a
+///   directory and what is a link, which the gate cannot know before the tool
+///   runs.
+/// - **Disagreeing absoluteness.** A rule reading `src/**` and a call naming
+///   `/home/me/project/src/x` may well be the same file, and the gate does not
+///   hold the root that would settle it. Comparing them as strings answers a
+///   question nobody asked.
+fn path_unjudgeable(pattern: &str, path: &str) -> bool {
+    let dotdot = |s: &str| s.split('/').any(|seg| seg == "..");
+    if dotdot(pattern) || dotdot(path) {
+        return true;
+    }
+    pattern.starts_with('/') != path.starts_with('/')
+}
+
 /// The path a call would touch, if it names one.
 ///
 /// Both spellings, because the tools use both: `file_path` for the ones that
@@ -307,7 +355,7 @@ fn path_of(args: &Value) -> Option<String> {
     ["file_path", "path"]
         .iter()
         .find_map(|k| args.get(*k).and_then(Value::as_str))
-        .map(str::to_string)
+        .map(normalise_path)
 }
 
 /// Whether a command falls under a prefix rule.
@@ -814,6 +862,38 @@ impl Rules {
                 return Some(Decision::Ask);
             }
         }
+        // **The same reasoning for paths, and it was the half left open when
+        // the command half landed.** A `deny` naming a path shape, a call whose
+        // path cannot honestly be compared against it — a `..` in either, or
+        // one absolute and the other relative — and no deny that actually
+        // matched: that is not a miss, it is a question. `Ask`, not `Deny`,
+        // because the rule genuinely did not match and saying otherwise would
+        // be the same dishonesty in the other direction.
+        if let Some(path) = path_of(args) {
+            let denies_by_path: Vec<&str> = self
+                .deny
+                .iter()
+                .filter(|r| r.tool == tool)
+                .filter_map(|r| match &r.spec {
+                    Spec::Path(raw, _) => Some(raw.as_str()),
+                    _ => None,
+                })
+                .collect();
+            if !denies_by_path.is_empty()
+                && denies_by_path
+                    .iter()
+                    .any(|raw| path_unjudgeable(&normalise_path(raw), &path))
+                && !self.deny.iter().any(|r| {
+                    r.tool == tool
+                        && match &r.spec {
+                            Spec::Path(_, g) => g.is_match(&path),
+                            _ => false,
+                        }
+                })
+            {
+                return Some(Decision::Ask);
+            }
+        }
         self.decide(|r| {
             r.tool == tool
                 && match &r.spec {
@@ -1170,6 +1250,76 @@ mod tests {
         );
         assert_eq!(
             r.for_call("Read", &json!({ "file_path": "./docs/index.html" })),
+            None
+        );
+    }
+
+    /// A path rule and the call it is written against are the same file however
+    /// each is spelled. Until DEF-031's path half landed, `Read(./src/**)` was
+    /// blind to `src/main.rs` and `Read(src/**)` was blind to `./src/main.rs` —
+    /// two strings for one file, and a deny that protected only the spelling
+    /// the operator happened to use.
+    #[test]
+    fn a_path_rule_is_not_defeated_by_respelling_the_same_file() {
+        use serde_json::json;
+        let deny = |raw: &str| {
+            let mut r = Rules::default();
+            r.deny.push(Rule::parse(raw).unwrap());
+            r
+        };
+        for rule in ["Read(./src/**)", "Read(src/**)"] {
+            let r = deny(rule);
+            for spelling in [
+                "src/main.rs",
+                "./src/main.rs",
+                "src//main.rs",
+                "./src/./main.rs",
+                r"src\\main.rs",
+            ] {
+                assert_eq!(
+                    r.for_call("Read", &json!({ "file_path": spelling })),
+                    Some(Decision::Deny),
+                    "rule {rule} was defeated by spelling the same file {spelling}"
+                );
+            }
+            assert_eq!(
+                r.for_call("Read", &json!({ "file_path": "./docs/index.html" })),
+                None,
+                "rule {rule} widened to a file it does not name"
+            );
+        }
+    }
+
+    /// What normalisation cannot settle, it refuses to answer quietly. A `..`
+    /// needs to know what is a directory and what is a link; an absolute call
+    /// against a relative rule needs a root the gate does not hold. Both reach
+    /// the human instead of passing in silence.
+    #[test]
+    fn a_path_a_rule_cannot_be_compared_against_asks_rather_than_passes() {
+        use serde_json::json;
+        let mut r = Rules::default();
+        r.deny.push(Rule::parse("Read(src/**)").unwrap());
+        for unjudgeable in [
+            "src/../etc/passwd",
+            "build/../src/main.rs",
+            "/home/me/project/src/main.rs",
+        ] {
+            // Deny or Ask, never silence. A `..` path that the glob happens to
+            // match anyway gets the stricter answer, which needs no question;
+            // what must not happen is passing through as if the rule had been
+            // consulted and had nothing to say.
+            assert!(
+                matches!(
+                    r.for_call("Read", &json!({ "file_path": unjudgeable })),
+                    Some(Decision::Deny) | Some(Decision::Ask)
+                ),
+                "{unjudgeable} slipped past a deny rule without a question"
+            );
+        }
+        // An ordinary relative path is still judged, not questioned: a gate that
+        // asks about everything is a gate nobody reads.
+        assert_eq!(
+            r.for_call("Read", &json!({ "file_path": "docs/index.html" })),
             None
         );
     }
