@@ -83,9 +83,10 @@
 </nav>
 
 <p class="lede">
-  Three arguments, one shell, and the widest hole in the containment story,
+  Four arguments, one shell, and the widest hole in the containment story,
   documented as one rather than papered over. This is also the tool that forced
-  the workspace's error rule to be restated.
+  the workspace's error rule to be restated, and the only tool that can hand
+  back a handle instead of a result.
 </p>
 
 <div class="tw">
@@ -93,8 +94,9 @@
     <thead><tr><th>Argument</th><th>Type</th><th>Meaning</th></tr></thead>
     <tbody>
       <tr><td><code>command</code> <em>required</em></td><td>string</td><td>A shell command line. Whitespace-only is <code>Bash.command is empty</code>.</td></tr>
-      <tr><td><code>timeout_ms</code></td><td>integer ≥ 1</td><td>Default 120,000, clamped at 600,000. Zero is refused; an over-large value is clamped, because "wait an hour" is a real intention the engine will not honour past its ceiling.</td></tr>
+      <tr><td><code>timeout_ms</code></td><td>integer ≥ 1</td><td>Default 120,000, clamped at 600,000. Zero is refused; an over-large value is clamped, because "wait an hour" is a real intention the engine will not honour past its ceiling. <strong>Refused outright alongside <code>run_in_background</code></strong> — see below.</td></tr>
       <tr><td><code>cwd</code></td><td>string</td><td>Must resolve inside the working directory and be a directory. Defaults to the root.</td></tr>
+      <tr><td><code>run_in_background</code></td><td>boolean</td><td>Return a task id immediately instead of waiting. The command keeps running; <code>BashOutput</code> reads what has arrived since you last asked, and <code>KillShell</code> stops it.</td></tr>
     </tbody>
   </table>
 </div>
@@ -443,6 +445,79 @@
   </p>
 </div>
 <span class="src">tools/fs/src/bash.rs — <code>Bash::run</code>; tools/fs/tests/truncation.rs</span>
+
+<h2 id="background">Running in the background, and the two tools that go with it</h2>
+
+<p>
+  <code>run_in_background: true</code> returns a task id immediately instead of
+  waiting. The command keeps running; <code>BashOutput</code> returns what has
+  arrived <em>since you last asked</em>, and <code>KillShell</code> stops it.
+  Both are registered tools with their own names, because a hook matcher or an
+  allow-list written against Claude Code names them that way and spelling is the
+  compatibility contract.
+</p>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Tool</th><th>Takes</th><th>Does</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>BashOutput</code></td>
+        <td><code>bash_id</code></td>
+        <td>The bytes that have arrived since the last read, and the task's
+        state. Declares <code>read_only: true</code>: moving a cursor into an
+        in-memory buffer is the same class of session bookkeeping
+        <code>Read</code> mutates while claiming the bit.</td>
+      </tr>
+      <tr>
+        <td><code>KillShell</code></td>
+        <td><code>bash_id</code></td>
+        <td>Signals the shell it started &mdash; <strong>never a process
+        tree</strong> &mdash; and the outcome says which. Deliberately does not
+        claim <code>read_only</code>: signalling a process is exactly the local
+        damage the bit exists to flag.</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<span class="src">tools/fs/src/bash.rs, tools/fs/src/bashoutput.rs, tools/fs/src/killshell.rs, crates/tool-api/src/background.rs</span>
+
+<p>
+  <strong><code>timeout_ms</code> together with <code>run_in_background</code> is
+  refused rather than ignored.</strong> The two mean opposite things &mdash; one
+  says "stop waiting after N", the other says "do not wait" &mdash; and silently
+  dropping either would be the tool deciding which half of a call the caller
+  meant.
+</p>
+
+<p>
+  <strong>What a task holds is capped on two axes, and only one of them was.</strong>
+  <code>MAX_TASK_OUTPUT_BYTES</code> is 256&nbsp;KiB per task, dropping from the
+  front and moving the read cursor with the bytes it pointed at. The number of
+  remembered tasks had no bound at all until 2026-08-23: a dead task stays
+  findable by design, so a long session held every handle it ever made.
+  <code>MAX_REMEMBERED_TASKS</code> is 64, and <strong>only finished tasks are
+  ever evicted</strong> &mdash; losing the handle to a live process means losing
+  the ability to kill it, which is worse than the leak the bound exists for.
+  <span class="chip test">tested</span>
+  <code>the_registry_forgets_old_finished_tasks_and_never_a_running_one</code>,
+  mutation-proven in both directions.
+</p>
+
+<div class="note warn">
+  <span class="h">These two tools had no page at all until 2026-08-23</span>
+  <p>
+    <code>ARCH-001</code> registered them, and every page on this site went on
+    describing a six-tool <code>tools/fs</code> with a three-argument
+    <code>Bash</code>. Searching <code>docs/</code> for
+    <code>run_in_background</code>, <code>BashOutput</code> or
+    <code>KillShell</code> returned nothing. <code>CLAUDE.md</code> is explicit
+    that <em>&ldquo;a commit that changes what Emma does and leaves the docs
+    describing the old behaviour is incomplete&rdquo;</em>, so this was an
+    incomplete commit rather than a documentation chore &mdash; and it was found
+    by an adversarial reviewer, not by the sweep that had just finished.
+  </p>
+</div>
 
 <h2 id="containment">The containment story, stated rather than implied</h2>
 

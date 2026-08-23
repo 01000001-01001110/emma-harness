@@ -371,8 +371,10 @@ struct Facts {
   <p>
     <span class="chip cert">certified</span> The right-hand column was built by
     reading every <code>input_schema</code> in the tree rather than from memory:
-    of the 21 tools this build registers, 13 carry one of the five probed names
-    and 8 fall in the residual. Repeat it by extracting the top-level
+    of the 23 tools this build registers, 13 carry one of the five probed names
+    and 10 fall in the residual &mdash; <code>BashOutput</code> and
+    <code>KillShell</code> arrived with <code>ARCH-001</code> and neither takes a
+    probed name. Repeat it by extracting the top-level
     <code>properties</code> keys from each <code>fn input_schema</code> under
     <code>tools/</code> and <code>crates/emma/src/skill.rs</code>.
   </p>

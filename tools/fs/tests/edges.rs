@@ -1357,3 +1357,65 @@ fn lock_exclusive(path: &std::path::Path) -> Option<std::fs::File> {
 fn lock_exclusive(_path: &std::path::Path) -> Option<std::fs::File> {
     None
 }
+
+/// A refused write creates nothing.
+///
+/// **It used to create a file named something the error never mentioned.** On
+/// NTFS `foo:bar` names an alternate data stream of `foo`. The atomic write
+/// builds `foo:bar.emma-tmp.<pid>.<seq>`, and `fs::write` on that materialises
+/// the base file `foo` as a zero-byte entry before failing; the rename then
+/// fails with os error 87 and the cleanup removes only the stream. A reviewer
+/// certified it — `Write` returned an error and `dir /r` showed `brandnew`.
+///
+/// Two promises were false for this one input: `write.rs`'s *"nothing before
+/// the refusal changes the filesystem, which is what makes a refusal actually a
+/// refusal"*, and `write_atomically`'s *"a stray `.emma-tmp` in somebody's
+/// repository is a bug report"*.
+///
+/// The directory listing is the assertion, not the error. An error message is
+/// what the tool *says*; the empty directory is what it *did*, and those came
+/// apart here.
+#[tokio::test]
+async fn a_refused_stream_write_leaves_the_directory_empty() {
+    if !cfg!(windows) {
+        eprintln!("SKIPPED: alternate data streams are an NTFS concept");
+        return;
+    }
+    let sandbox = Sandbox::new();
+
+    let error = sandbox
+        .err(
+            "Write",
+            json!({ "file_path": "brandnew:s", "content": "x\n" }),
+        )
+        .await;
+    // **The directory first, deliberately.** The error text is what the tool
+    // SAYS; the empty directory is what it DID, and those came apart here — the
+    // old behaviour returned a perfectly clear error and left a file behind.
+    // Asserting the message first would let a regression be caught by the
+    // wording rather than by the side effect.
+    let left: Vec<String> = std::fs::read_dir(sandbox.root())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        left.is_empty(),
+        "a refused write created {left:?} — the base file the error never mentions"
+    );
+
+    assert_eq!(error.kind(), "bad_arguments");
+    assert!(
+        error.detail().contains("alternate data stream"),
+        "the refusal must name what it refused: {error}"
+    );
+}
+
+// The reserved-name decision is the opposite one and is already pinned by
+// `a_reserved_device_name_is_written_and_the_awkwardness_is_named` above: `NUL`
+// under Emma's verbatim root is a real file that round-trips, is merely awkward
+// for other Windows tooling, and is noted rather than refused. A stream write
+// does not work at all, so there is nothing to preserve and a real side effect
+// to prevent. Different facts, different answers — and the existing test is the
+// one that reads the file back the way Emma wrote it, which a duplicate written
+// here got wrong.

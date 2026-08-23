@@ -83,10 +83,12 @@
 </nav>
 
 <p class="lede">
-  Four of the six tools in <code>tools/fs</code>. Three of them declare
+  Four of the eight tools in <code>tools/fs</code>. Three of these four declare
   <code>read_only: true</code> and run without a prompt, and the fourth is the
   one that refuses to work blind. <code>Edit</code> and <code>Bash</code> have
-  pages of their own.
+  pages of their own, and the two background tools
+  <code>BashOutput</code> and <code>KillShell</code> are on
+  <a href="tools-bash.html">the Bash page</a> with the flag that starts them.
 </p>
 
 <h2 id="args">One spelling for every malformed call</h2>
@@ -694,19 +696,53 @@
   <code>read_only</code> against a populated sandbox and fingerprints the tree
   before and after, <em>and</em> pins which tools claim the bit in
   <code>the_read_only_declarations_are_the_expected_ones</code>, whose assertion
-  is the exact list <code>["Glob", "Grep", "Read"]</code>. The pin is what
+  is the exact list
+  <code>["BashOutput", "Glob", "Grep", "Read"]</code>. <code>BashOutput</code>
+  joined it with the background tools &mdash; reading a task's buffer moves a
+  cursor and nothing else, the same class of session bookkeeping
+  <code>Read</code> mutates while declaring itself read-only &mdash; and
+  <code>KillShell</code> deliberately does not claim the bit, because signalling
+  a process is exactly the local damage it exists to flag. The pin is what
   notices a new claim rather than merely leaving it unexercised: a fingerprint
   test alone stays green for a tool nobody thought to run. The file's third
   test, <code>the_mutating_tools_actually_mutate</code>, is the positive
   control.
-  <span class="chip cert">certified</span> 3 tests in that file, passing at
-  commit <code>a3eba74</code> on this box.
+  <span class="chip cert">certified</span> 3 tests in that file, passing on
+  this box:
+  <code>cargo test -p emma-tools-fs --test read_only</code> reports
+  <code>3 passed</code>.
 </p>
 
+<div class="note warn">
+  <span class="h">This page said six tools, and cited a test that does not exist</span>
+  <p>
+    Until 2026-08-23 the paragraphs above claimed <code>tools/fs</code> was six
+    tools, that the read-only list was
+    <code>["Glob", "Grep", "Read"]</code>, and that a test called
+    <code>the_surface_is_the_six_claude_code_names</code> asserted a six-name
+    vector. <strong>That test exists nowhere in the tree.</strong> The real one
+    is <code>the_surface_is_the_claude_code_names</code>, and its own comment
+    reads <em>&ldquo;this pin fired when the two background tools were
+    registered, which is the pin working rather than the pin being in the
+    way.&rdquo;</em> The pin did its job, the vector was updated, and this page
+    was not.
+  </p>
+  <p>
+    Both claims carried <span class="chip cert">certified</span>, which is the
+    exact failure this site's evidence scheme exists to prevent. It happened
+    because <code>DOC-001</code>'s sweep finished before <code>ARCH-001</code>
+    landed on top of it. <strong>A row is not done when its code lands; it is
+    done when its blast radius is swept</strong> &mdash; the rows that cite it,
+    the pages that describe it, and the guards written around the shape it just
+    changed. Found by an adversarial reviewer, not by the sweep.
+  </p>
+</div>
+
 <p>
-  <span class="chip cert">certified</span> The six names are pinned too.
-  <code>the_surface_is_the_six_claude_code_names</code> asserts the exact vector
-  <code>["Read", "Write", "Edit", "Glob", "Grep", "Bash"]</code>, because
+  <span class="chip cert">certified</span> The names are pinned too.
+  <code>the_surface_is_the_claude_code_names</code> asserts the exact vector
+  <code>["Read", "Write", "Edit", "Glob", "Grep", "Bash", "BashOutput",
+  "KillShell"]</code>, because
   spelling is the compatibility contract: a rename silently breaks every hook
   matcher written against Claude Code, silently because a matcher that matches
   nothing looks identical to a tool nobody called.

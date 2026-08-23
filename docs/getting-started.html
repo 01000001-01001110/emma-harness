@@ -123,7 +123,10 @@ emma config check</code></pre>
     and why: an agent file with no description, frontmatter that will not parse,
     a settings key Emma does not model. It makes no model call and costs
     nothing. <span class="chip cert">certified</span>: run it in this repository
-    and it reports 21 tools and a tool-schema hash.
+    and it reports 23 tools and a tool-schema hash. It said 21 until
+    <code>ARCH-001</code> registered <code>BashOutput</code> and
+    <code>KillShell</code>; the number here was not moved with it, under a green
+    chip, until a reviewer ran the binary.
   </p>
   <span class="src">crates/emma/src/commands.rs</span>
 

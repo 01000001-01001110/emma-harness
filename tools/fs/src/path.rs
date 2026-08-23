@@ -251,6 +251,40 @@ pub fn resolve(root: &Path, raw: &str) -> Result<PathBuf, ToolError> {
         root.join(asked)
     };
 
+    // **A colon inside a name is an NTFS alternate data stream, and it made a
+    // refused write create a file.** `foo:bar` names a stream of `foo`. The
+    // atomic write builds `foo:bar.emma-tmp.<pid>.<seq>`, and `fs::write` on
+    // that **materialises the base file `foo`** as a zero-byte entry before
+    // failing; the rename then fails with os error 87, and the cleanup removes
+    // only the stream. A reviewer certified it: `Write` returned an error and
+    // `dir /r` showed `brandnew` left behind — a file named something the error
+    // never mentioned.
+    //
+    // `write.rs` promises *"nothing before the refusal changes the filesystem,
+    // which is what makes a refusal actually a refusal"*, and `write_atomically`
+    // promises a failed temp is removed *"because a stray `.emma-tmp` in
+    // somebody's repository is a bug report"*. Both were false for this input.
+    //
+    // Refused here rather than warned about, which is the opposite of the
+    // reserved-name decision one file over — and the difference is what
+    // succeeds. A `NUL` file is real, round-trips, and is merely awkward for
+    // other tools, so refusing it would be Emma deciding what a user may call a
+    // file. A stream write does not work *at all*; there is nothing to preserve
+    // and a real side effect to prevent.
+    //
+    // Windows only, and on the last component only: the prefix of an absolute
+    // path is where a drive letter's colon legitimately lives.
+    #[cfg(windows)]
+    if let Some(Component::Normal(name)) = lexical_normalize(&joined).components().next_back() {
+        if name.to_string_lossy().contains(':') {
+            return Err(ToolError::BadArguments(format!(
+                "{raw} names an alternate data stream (the `:` in the file name). Emma cannot \
+                 write one — the attempt creates the base file and then fails — so it is \
+                 refused before anything is touched"
+            )));
+        }
+    }
+
     let lexical = lexical_normalize(&joined);
     let (mut out, tail) = canonical_prefix(&lexical);
     for component in tail {
