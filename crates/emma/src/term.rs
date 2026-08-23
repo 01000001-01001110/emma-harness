@@ -737,8 +737,8 @@ impl Term {
     }
 
     /// The human said no.
-    pub fn tool_refused(&self, name: &str) {
-        self.side(self.skin.tool_refused(name));
+    pub fn tool_refused(&self, name: &str, because: &str) {
+        self.side(self.skin.tool_refused(name, because));
     }
 
     pub fn kick(&self, n: u32, max: u32) {
@@ -1487,7 +1487,7 @@ mod tests {
         term.tool_result(None, "out", false, None);
         term.tool_failed("Bash", "boom");
         term.tool_blocked("Bash", "policy");
-        term.tool_refused("Bash");
+        term.tool_refused("Bash", "you declined it; the model was told");
         term.kick(1, 3);
         term.ending("done", true, 1, 2);
         term.delta("x");

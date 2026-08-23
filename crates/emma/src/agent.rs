@@ -1643,14 +1643,26 @@ impl<'a> Agent<'a> {
             .await
         {
             Verdict::Allow => {}
-            Verdict::Deny(reason) => {
+            Verdict::Deny(who, reason) => {
                 // Said on screen as well as in the log. A call that vanishes
                 // between "wants to run" and the next thing is a tool that
                 // mysteriously did nothing.
-                self.s.term.tool_refused(&call.name);
+                //
+                // **Both of those name a decider, and both used to name the
+                // wrong one.** `by` was the literal `"user"` on every path,
+                // including `-p`, where there is nobody to ask by construction.
+                // The session log is the only account of a run somebody did not
+                // watch, and "the user said no" and "there was no user" are
+                // different runs.
+                self.s.term.tool_refused(&call.name, who.because());
                 self.s.log.append(
                     "denied",
-                    json!({ "turn_id": turn_id, "id": call.id, "by": "user", "reason": reason }),
+                    json!({
+                        "turn_id": turn_id,
+                        "id": call.id,
+                        "by": who.logged(),
+                        "reason": reason,
+                    }),
                 );
                 return fail("not_approved", reason);
             }

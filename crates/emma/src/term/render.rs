@@ -246,14 +246,26 @@ impl Skin {
         out
     }
 
-    /// The human said no. Not an error — nothing broke — so it is yellow and
+    /// The call was refused. Not an error — nothing broke — so it is yellow and
     /// its own glyph, and the sentence says who decided.
-    pub fn tool_refused(&self, name: &str) -> Vec<Line<'static>> {
+    ///
+    /// **The clause comes from the verdict, because this used to say "you
+    /// declined it" on every path.** Four of the six do not involve a person at
+    /// all: a `deny` rule, a `-p` run with nobody to ask, a prompt that reached
+    /// end of input, and a network call that named no host. Found by running the
+    /// real binary — a `-p` run refused `Bash` correctly and then told the
+    /// operator they had declined it, three lines above the detail saying there
+    /// was nobody to ask.
+    ///
+    /// `tool_blocked` below already carries this argument in the other
+    /// direction: a reader who is told the wrong decider goes looking for a
+    /// prompt that never existed.
+    pub fn tool_refused(&self, name: &str, because: &str) -> Vec<Line<'static>> {
         vec![self.marked(
             self.glyphs.refused,
             Role::Warn,
             Span::styled(format!("{name} refused"), self.palette.bold(Role::Warn)),
-            "you declined it; the model was told",
+            because,
         )]
     }
 
@@ -846,7 +858,7 @@ mod tests {
         let events = [
             first(s.tool_started("Bash", "cargo test")),
             first(s.tool_failed("Bash", "exit 1")),
-            first(s.tool_refused("Bash")),
+            first(s.tool_refused("Bash", "you declined it; the model was told")),
             first(s.tool_blocked("Bash", "no shell in this repo")),
             first(s.kick(1, 3)),
             first(s.ending("goal complete", true, 4, 100)),
@@ -863,7 +875,9 @@ mod tests {
         // And the two that a user must not confuse — "you said no" against
         // "policy said no" — differ in colour as well as in glyph, because one
         // of them is a decision the user can revisit and the other is not.
-        let refused = first(s.tool_refused("Bash")).1.fg;
+        let refused = first(s.tool_refused("Bash", "you declined it; the model was told"))
+            .1
+            .fg;
         let blocked = first(s.tool_blocked("Bash", "x")).1.fg;
         assert_ne!(refused, blocked);
     }
@@ -964,7 +978,7 @@ mod tests {
             s.tool_started("Bash", "ls"),
             s.tool_ok("out", true, Some("50 of 70 links shown")),
             s.tool_failed("Bash", "boom"),
-            s.tool_refused("Bash"),
+            s.tool_refused("Bash", "you declined it; the model was told"),
             s.tool_blocked("Bash", "policy"),
             s.kick(1, 3),
             s.ending("done", true, 1, 2),

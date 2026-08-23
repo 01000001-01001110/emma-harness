@@ -219,9 +219,76 @@ pub enum Answer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
     Allow,
-    /// Carries the sentence the model is told. A denial the model cannot read
-    /// is a tool that mysteriously does nothing.
-    Deny(String),
+    /// Who decided, and the sentence the model is told. A denial the model
+    /// cannot read is a tool that mysteriously does nothing.
+    Deny(Decider, String),
+}
+
+/// Who refused a call.
+///
+/// **Because the screen and the session log both name a decider, and until
+/// 2026-08-23 both named the wrong one on four of the six paths.** Every denial
+/// rendered as *"you declined it"* and was logged as `"by": "user"`, including
+/// the `-p` case where there is nobody to ask by construction. That was found by
+/// running the real binary: a `-p` run refused `Bash` correctly, said the user
+/// had declined it, and wrote a record saying so into the only account of the
+/// run.
+///
+/// The neighbouring `tool_blocked` renderer already carries the argument for
+/// why this matters, about a hook denial: *"a user who reads this as 'I could
+/// have said yes' will go looking for a prompt that never comes."* The inverse
+/// costs the same. A reader who is told they declined something goes looking
+/// for when they did, and they never did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decider {
+    /// A person saw the prompt and said no.
+    Human,
+    /// A `deny` permission rule. No prompt was shown and no answer would have
+    /// helped.
+    Rule,
+    /// `-p` with no bypass. There was nobody to ask.
+    NoOneToAsk,
+    /// The prompt reached end of input before an answer arrived. Distinct from
+    /// [`Decider::Human`]: a closed stdin is not somebody saying no, and a
+    /// script whose input ran out should read that rather than a refusal it did
+    /// not make.
+    NoAnswer,
+    /// Nothing was decided, because the call did not say enough to decide
+    /// about -- a network tool that named no host. The refusal is real and the
+    /// decider is not a party.
+    Unevaluable,
+}
+
+impl Decider {
+    /// The clause the transcript puts after "<tool> refused".
+    pub fn because(self) -> &'static str {
+        match self {
+            Decider::Human => "you declined it; the model was told",
+            Decider::Rule => "a `deny` rule forbids it; no answer would have allowed it",
+            Decider::NoOneToAsk => {
+                "there was nobody to ask in a non-interactive run; the model was told"
+            }
+            Decider::NoAnswer => "input ended before an answer arrived; the model was told",
+            Decider::Unevaluable => {
+                "the call did not say what it would reach, so there was nothing to approve"
+            }
+        }
+    }
+
+    /// What the session log records under `by`.
+    ///
+    /// Distinct strings rather than a bool, because whoever reads this file
+    /// back is reconstructing a run they did not watch, and "the user said no"
+    /// and "there was no user" are different runs.
+    pub fn logged(self) -> &'static str {
+        match self {
+            Decider::Human => "user",
+            Decider::Rule => "rule",
+            Decider::NoOneToAsk => "unattended",
+            Decider::NoAnswer => "end-of-input",
+            Decider::Unevaluable => "unevaluable",
+        }
+    }
 }
 
 /// How approval is obtained.
@@ -458,17 +525,20 @@ impl Approvals {
         // A `deny` rule first, above the bypass. See the precedence block at the
         // top of the file: written policy outranks a flag somebody typed.
         if rule == Some(Decision::Deny) {
-            return Verdict::Deny(format!(
-                "A `deny` permission rule forbids {name}. It was not run, and no answer at a \
+            return Verdict::Deny(
+                Decider::Rule,
+                format!(
+                    "A `deny` permission rule forbids {name}. It was not run, and no answer at a \
                  prompt can change that — it is written down in a settings file. Do not retry \
                  it; tell the user which rule is in the way if they need to know."
-            ));
+                ),
+            );
         }
         // Egress before the local question, and independent of it: a tool can
         // be read-only — genuinely, honestly read-only — and still be the way
         // something leaves this machine. Every arm below this line assumes the
         // network question has already been answered.
-        if let deny @ Verdict::Deny(_) = self.egress(name, meta, target, term).await {
+        if let deny @ Verdict::Deny(..) = self.egress(name, meta, target, term).await {
             return deny;
         }
         if self.gate == Gate::SkipAll {
@@ -496,11 +566,14 @@ impl Approvals {
             }
         }
         if self.gate == Gate::Unattended {
-            return Verdict::Deny(format!(
-                "{name} needs approval and this is a non-interactive run (-p), so there is \
+            return Verdict::Deny(
+                Decider::NoOneToAsk,
+                format!(
+                    "{name} needs approval and this is a non-interactive run (-p), so there is \
                  nobody to ask. It was not run. Use a read-only tool, or tell the user what \
                  needs approving and stop."
-            ));
+                ),
+            );
         }
 
         // On this question the narrow rule and the tool-wide one are the same
@@ -539,15 +612,19 @@ impl Approvals {
                 self.keep(rule, term).await;
                 Verdict::Allow
             }
-            Some(Answer::No) => Verdict::Deny(format!(
-                "The user declined this {name} call. It was not run. Do not retry it \
+            Some(Answer::No) => Verdict::Deny(
+                Decider::Human,
+                format!(
+                    "The user declined this {name} call. It was not run. Do not retry it \
                  unchanged — take a different approach, or ask what they would prefer."
-            )),
+                ),
+            ),
             // End of input, or a scripted run that ran out of answers. Silence
             // is not consent.
-            None => Verdict::Deny(format!(
-                "No approval was given for this {name} call, so it was not run."
-            )),
+            None => Verdict::Deny(
+                Decider::NoAnswer,
+                format!("No approval was given for this {name} call, so it was not run."),
+            ),
         }
     }
 
@@ -609,21 +686,27 @@ impl Approvals {
             // asking for a grant nobody can write down, and the alternative
             // reading — "no target, so nothing to gate" — hands silent network
             // access to whichever tool forgets to implement one method.
-            return Verdict::Deny(format!(
-                "{name} reaches the network but did not name the host this call would \
+            return Verdict::Deny(
+                Decider::Unevaluable,
+                format!(
+                    "{name} reaches the network but did not name the host this call would \
                  contact, so there was nothing for the user to approve and it was not run. \
                  That is a defect in {name}; it is not something to work around from here."
-            ));
+                ),
+            );
         };
         // Bare `Tool` rules and this tool's `domain:` rules both answer here.
         let rule = self.rules.lock().await.for_egress(name, &target.host);
         if rule == Some(Decision::Deny) {
-            return Verdict::Deny(format!(
-                "A `deny` permission rule forbids {name} from contacting {}. It was not run, \
+            return Verdict::Deny(
+                Decider::Rule,
+                format!(
+                    "A `deny` permission rule forbids {name} from contacting {}. It was not run, \
                  no answer at a prompt can change that, and a different host to reach the \
                  same content is not a workaround — it is the thing the rule is about.",
-                target.host
-            ));
+                    target.host
+                ),
+            );
         }
         // The bypass, here as well as in `decide`. Both questions are waved
         // through by one flag; a `deny` rule is what neither of them waves.
@@ -640,13 +723,16 @@ impl Approvals {
             }
         }
         if self.gate == Gate::Unattended {
-            return Verdict::Deny(format!(
-                "{name} would send a request to {} and this is a non-interactive run (-p), \
+            return Verdict::Deny(
+                Decider::NoOneToAsk,
+                format!(
+                    "{name} would send a request to {} and this is a non-interactive run (-p), \
                  so there is nobody to approve that host. It was not run. Work from what is \
                  already on this machine, or tell the user which host needs approving and \
                  stop.",
-                target.host
-            ));
+                    target.host
+                ),
+            );
         }
 
         // The two grants on offer, and they are deliberately different sizes.
@@ -689,17 +775,23 @@ impl Approvals {
                 .await;
                 Verdict::Allow
             }
-            Some(Answer::No) => Verdict::Deny(format!(
-                "The user declined to let {name} contact {}. It was not run. Do not retry it \
+            Some(Answer::No) => Verdict::Deny(
+                Decider::Human,
+                format!(
+                    "The user declined to let {name} contact {}. It was not run. Do not retry it \
                  unchanged and do not try a different host to reach the same content — ask \
                  what they would prefer.",
-                target.host
-            )),
+                    target.host
+                ),
+            ),
             // End of input, or a scripted run that ran out of answers.
-            None => Verdict::Deny(format!(
-                "No approval was given for {name} to contact {}, so it was not run.",
-                target.host
-            )),
+            None => Verdict::Deny(
+                Decider::NoAnswer,
+                format!(
+                    "No approval was given for {name} to contact {}, so it was not run.",
+                    target.host
+                ),
+            ),
         }
     }
 
@@ -998,6 +1090,96 @@ pub fn network_preview(target: &NetworkTarget) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// Every refusal names the decider it actually had.
+    ///
+    /// **Found by running the real binary, not by reading.** `emma -p "run the
+    /// shell command: echo hello-from-emma"` refused `Bash` correctly and then
+    /// printed *"you declined it"* three lines above its own detail saying
+    /// there was nobody to ask — and wrote `"by": "user"` into the session log,
+    /// which is the only account of a run nobody watched.
+    ///
+    /// Four of the six denial paths involve no person at all. This asserts the
+    /// mapping in both directions, because the screen clause and the log key are
+    /// read by different people for different reasons and drifting apart is the
+    /// failure.
+    #[test]
+    fn every_decider_says_who_actually_decided() {
+        use super::Decider::*;
+
+        // The screen. Only one of these may claim a person did anything.
+        assert!(Human.because().contains("you declined"));
+        for d in [Rule, NoOneToAsk, NoAnswer, Unevaluable] {
+            assert!(
+                !d.because().contains("you declined"),
+                "{d:?} tells the reader they declined something they never saw: {}",
+                d.because()
+            );
+        }
+
+        // And each says something specific rather than a shared hedge.
+        assert!(Rule.because().contains("deny"), "{}", Rule.because());
+        assert!(
+            NoOneToAsk.because().contains("nobody to ask"),
+            "{}",
+            NoOneToAsk.because()
+        );
+        assert!(
+            NoAnswer.because().contains("input ended"),
+            "{}",
+            NoAnswer.because()
+        );
+        assert!(
+            Unevaluable.because().contains("did not say"),
+            "{}",
+            Unevaluable.because()
+        );
+
+        // The log. Distinct keys, because whoever reads the file back is
+        // reconstructing a run they did not watch.
+        let keys: Vec<&str> = [Human, Rule, NoOneToAsk, NoAnswer, Unevaluable]
+            .iter()
+            .map(|d| d.logged())
+            .collect();
+        assert_eq!(
+            keys,
+            ["user", "rule", "unattended", "end-of-input", "unevaluable"]
+        );
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            keys.len(),
+            "two deciders log the same key: {keys:?}"
+        );
+    }
+
+    /// The `-p` path denies with `NoOneToAsk`, not with a person.
+    ///
+    /// The mapping test above pins the sentences; this pins that the sentence a
+    /// real refusal reaches for is the right one. Without it the enum could be
+    /// perfect and every call site could still pass `Human`.
+    #[tokio::test]
+    async fn an_unattended_denial_is_not_attributed_to_a_person() {
+        let a = Approvals::unattended();
+        match a
+            .decide("Bash", WRITES, None, &Value::Null, &Term::silent())
+            .await
+        {
+            Verdict::Deny(who, why) => {
+                assert_eq!(
+                    who,
+                    Decider::NoOneToAsk,
+                    "a -p refusal was attributed to {who:?}, and the log would say so"
+                );
+                assert!(why.contains("-p"), "{why}");
+                assert_eq!(who.logged(), "unattended");
+            }
+            other => panic!("-p allowed a tool that needs approval: {other:?}"),
+        }
+    }
+
     use super::*;
 
     /// A local reader: changes nothing, reaches nothing.
@@ -1104,7 +1286,7 @@ mod tests {
             .decide("Bash", WRITES, None, &Value::Null, &Term::silent())
             .await
         {
-            Verdict::Deny(why) => assert!(why.contains("-p"), "{why}"),
+            Verdict::Deny(_, why) => assert!(why.contains("-p"), "{why}"),
             Verdict::Allow => panic!("an unattended run approved a shell command"),
         }
     }
@@ -1131,7 +1313,7 @@ mod tests {
         assert!(matches!(
             a.decide("Bash", WRITES, None, &Value::Null, &Term::silent())
                 .await,
-            Verdict::Deny(_)
+            Verdict::Deny(..)
         ));
     }
 
@@ -1159,7 +1341,7 @@ mod tests {
                 matches!(
                     a.decide(gated, writes, None, &Value::Null, &Term::silent())
                         .await,
-                    Verdict::Deny(_)
+                    Verdict::Deny(..)
                 ),
                 "{gated} was not gated"
             );
@@ -1172,7 +1354,7 @@ mod tests {
         assert!(matches!(
             a.decide("Bash", WRITES, None, &Value::Null, &Term::silent())
                 .await,
-            Verdict::Deny(_)
+            Verdict::Deny(..)
         ));
     }
 
@@ -1234,7 +1416,7 @@ mod tests {
             )
             .await
         {
-            Verdict::Deny(why) => assert!(why.contains("evil.example"), "{why}"),
+            Verdict::Deny(_, why) => assert!(why.contains("evil.example"), "{why}"),
             Verdict::Allow => panic!("a grant for one host covered another"),
         }
     }
@@ -1286,7 +1468,7 @@ mod tests {
             )
             .await
         {
-            Verdict::Deny(why) => {
+            Verdict::Deny(_, why) => {
                 assert!(why.contains("docs.rs"), "{why}");
                 assert!(why.contains("-p"), "the model was not told why: {why}");
             }
@@ -1325,7 +1507,7 @@ mod tests {
             .decide("Mystery", REACHES, None, &Value::Null, &Term::silent())
             .await
         {
-            Verdict::Deny(why) => assert!(why.contains("did not name the host"), "{why}"),
+            Verdict::Deny(_, why) => assert!(why.contains("did not name the host"), "{why}"),
             Verdict::Allow => panic!("a tool reached an unnamed host"),
         }
     }
@@ -1343,7 +1525,7 @@ mod tests {
             )
             .await
         {
-            Verdict::Deny(why) => {
+            Verdict::Deny(_, why) => {
                 assert!(why.contains("docs.rs"), "{why}");
                 assert!(why.contains("different host"), "{why}");
             }
@@ -1373,7 +1555,7 @@ mod tests {
                 &Term::silent()
             )
             .await,
-            Verdict::Deny(_)
+            Verdict::Deny(..)
         ));
     }
 
@@ -1456,7 +1638,7 @@ mod tests {
                 &Term::silent()
             )
             .await,
-            Verdict::Deny(_)
+            Verdict::Deny(..)
         ));
     }
 
@@ -1475,7 +1657,7 @@ mod tests {
             )
             .await
         {
-            Verdict::Deny(why) => assert!(why.contains("deny"), "{why}"),
+            Verdict::Deny(_, why) => assert!(why.contains("deny"), "{why}"),
             Verdict::Allow => panic!("an allow rule overrode a deny rule on the network axis"),
         }
         // The same, on the local axis, where the deny is narrow and the allow
@@ -1484,7 +1666,7 @@ mod tests {
         assert!(matches!(
             a.decide("Bash", WRITES, None, &Value::Null, &Term::silent())
                 .await,
-            Verdict::Deny(_)
+            Verdict::Deny(..)
         ));
         assert_eq!(
             a.decide("Write", WRITES, None, &Value::Null, &Term::silent())
@@ -1504,7 +1686,7 @@ mod tests {
         assert!(matches!(
             a.decide("Bash", WRITES, None, &Value::Null, &Term::silent())
                 .await,
-            Verdict::Deny(_)
+            Verdict::Deny(..)
         ));
         // …and on the egress axis, which is a separate `if` and so a separate
         // way to get it wrong.
@@ -1518,7 +1700,7 @@ mod tests {
                 &Term::silent()
             )
             .await,
-            Verdict::Deny(_)
+            Verdict::Deny(..)
         ));
         // The bypass still bypasses everything nobody wrote a rule about,
         // which is the half that keeps this from being "the flag stopped
@@ -1583,7 +1765,7 @@ mod tests {
             matches!(
                 a.decide("Write", WRITES, None, &Value::Null, &Term::silent())
                     .await,
-                Verdict::Deny(_)
+                Verdict::Deny(..)
             ),
             "an `ask` rule was outranked by a session grant"
         );
@@ -1599,12 +1781,12 @@ mod tests {
         assert!(matches!(
             a.decide("Read", LOCAL_READ, None, &Value::Null, &Term::silent())
                 .await,
-            Verdict::Deny(_)
+            Verdict::Deny(..)
         ));
         assert!(matches!(
             a.decide(EXEMPT[0], WRITES, None, &Value::Null, &Term::silent())
                 .await,
-            Verdict::Deny(_)
+            Verdict::Deny(..)
         ));
     }
 
@@ -1628,7 +1810,7 @@ mod tests {
                 &Term::silent()
             )
             .await,
-            Verdict::Deny(_),
+            Verdict::Deny(..),
         ));
     }
 
@@ -1684,7 +1866,7 @@ mod tests {
                 &Term::silent()
             )
             .await,
-            Verdict::Deny(_)
+            Verdict::Deny(..)
         ));
     }
 
@@ -1736,7 +1918,7 @@ mod tests {
                 &Term::silent()
             )
             .await,
-            Verdict::Deny(_)
+            Verdict::Deny(..)
         ));
     }
 
