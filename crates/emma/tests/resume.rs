@@ -636,3 +636,87 @@ fn a_compaction_record_missing_its_fields_does_not_silently_rebuild_a_different_
     // a damaged session unresumable, which is worse than resuming a short one.
     assert!(!restored.resumed.messages.is_empty());
 }
+
+// region: A finished goal is not a goal in flight
+// ---------------------------------------------------------------------------
+// A finished goal is not a goal in flight
+//
+// `worked` decides whether a model that stops without calling a tool has
+// *answered* or *stalled*. A resumed run started with `worked = true` on the
+// grounds — written in a comment — that "a resume only ever continues a goal
+// that was already in flight". That was not true: `Resumed::messages` is the
+// fold of the whole file, so it is non-empty after any goal at all, finished or
+// not. An adversarial reviewer found it by reading; this is the run that
+// settles it.
+// ---------------------------------------------------------------------------
+
+/// A plain question, asked after resuming a session whose goal finished
+/// cleanly, is answered rather than nudged.
+///
+/// **What went wrong for a user:** they run a goal, it completes. They resume
+/// and ask something conversational — no tool needed, no marker. The model
+/// answers. The loop decides that cannot be an answer, because `worked` was
+/// seeded true, and nudges. And nudges. Then ends the goal `Stalled` or
+/// `KicksExhausted`, which `main.rs` reports as a failure and `-p` turns into a
+/// non-zero exit code. A correct answer, delivered, reported as a failed run.
+///
+/// The two model calls asserted below are the real evidence: one for the
+/// answer, and none after it. Counting calls rather than trusting the ending is
+/// the same choice the four budget tests above make, and for the same reason.
+#[tokio::test]
+async fn a_question_after_a_finished_goal_is_answered_and_not_nudged() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let log = SessionLog::open(dir.path(), "sess-test").unwrap();
+    // Run one: a goal that really finishes, through a tool call and the marker.
+    let first = Fake::new(vec![
+        call("Fine", json!({ "x": "1" })),
+        text("done\n\nGOAL COMPLETE"),
+    ]);
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![TestTool::ok("Fine", true).0]),
+        &first,
+        budgets(),
+        &goal(),
+        &log,
+        None,
+    )
+    .await;
+    assert_eq!(
+        out.ending,
+        Ending::Done,
+        "the first goal must finish cleanly, or this test is about something else"
+    );
+
+    // Run two: resume that file and ask a question needing no tool.
+    let resumed = session::restore(log.path()).unwrap();
+    let second = Fake::new(vec![text("it is four.")]);
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![TestTool::ok("Fine", true).0]),
+        &second,
+        budgets(),
+        &Goal::new("what is two plus two"),
+        &log,
+        Some(resumed.resumed),
+    )
+    .await;
+
+    assert_eq!(
+        second.calls(),
+        1,
+        "the model was asked again after it had already answered, which is the \
+         nudge this test exists to refuse"
+    );
+    assert_eq!(
+        out.ending,
+        Ending::Answered,
+        "a conversational turn after a finished goal was reported as a stall, \
+         which `-p` turns into a non-zero exit code for a run that worked"
+    );
+}
+
+// endregion: A finished goal is not a goal in flight

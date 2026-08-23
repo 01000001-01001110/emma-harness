@@ -469,6 +469,20 @@ pub struct Resumed {
     /// Human-readable labels for everything that failed during the goal, which
     /// is what a kick quotes back.
     pub failed_ever: Vec<String>,
+    /// Whether the session's last goal was still running when the file ended.
+    ///
+    /// **This used to be inferred from `messages` being non-empty, and that was
+    /// wrong.** `messages` is the fold of the whole file, so it is non-empty
+    /// after *any* goal, finished or not — and the loop used it to seed
+    /// `worked`, which decides whether a model that stops without calling a
+    /// tool has answered or stalled. So resuming a session whose goal had
+    /// completed and asking a plain question got the answer nudged, then
+    /// nudged again, and the run ended `Stalled`: a correct answer reported as
+    /// a failed run, and a non-zero exit code under `-p`.
+    ///
+    /// The file always knew. A `goal_finished` record carries the ending; it
+    /// was read for its counters and thrown away otherwise.
+    pub in_flight: bool,
 }
 
 // endregion: What a resumed run inherits
@@ -969,7 +983,9 @@ impl<'a> Agent<'a> {
         // `max_context` therefore runs this one goal at that size, and only this
         // one. That is the same flattening resume already does, showing up once
         // more.
-        let resuming_a_goal_in_flight = !resumed.messages.is_empty();
+        // From the file's own `goal_finished` record, not from whether any
+        // conversation came back — see `Resumed::in_flight` for what that cost.
+        let resuming_a_goal_in_flight = resumed.in_flight;
         let mut query: Vec<Message> = open_query(resumed.messages, opening);
         // The meter, not a local: a delegation charges this same integer while
         // it runs. See [`Spend`].
@@ -990,11 +1006,15 @@ impl<'a> Agent<'a> {
         // command and then stopped talking has abandoned something, however
         // chatty the sentence it stopped on.
         //
-        // A resumed run starts as though it had, because a resume only ever
-        // continues a goal that was already in flight. The error this refuses
-        // to make is the asymmetric one: mistaking a stall for an answer ends a
-        // real goal early and silently, while mistaking an answer for a stall
-        // costs one model call and is what the loop did before today.
+        // A resumed run starts as though it had **only when the goal it is
+        // resuming was still in flight**. It used to start that way whenever
+        // any conversation came back, which is every resume, so a plain
+        // question asked after a completed goal could not be an answer and was
+        // nudged instead. The error worth refusing is still the asymmetric one:
+        // mistaking a stall for an answer ends a real goal early and silently,
+        // while mistaking an answer for a stall costs a model call. That is an
+        // argument for erring one way when the answer is unknown, and not for
+        // declining to read the answer the file records.
         let mut worked = resuming_a_goal_in_flight;
         // Cleared whenever any tool succeeds — see the module comment. This is
         // "nothing has changed since this failed", not "this failed once".

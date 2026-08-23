@@ -280,6 +280,34 @@ impl SessionLog {
         self.write_failed.load(Ordering::SeqCst)
     }
 
+    /// What to tell the operator when this session stopped being recorded, or
+    /// `None` when it is being recorded fine.
+    ///
+    /// **The flag was right and nothing read it, which a second reviewer found
+    /// after the first.** `transcript_failed` had a real unit test against a
+    /// real read-only handle and zero call sites outside this file: the only
+    /// signal a live run gave was one `eprintln!` at the moment of failure, and
+    /// this project's own `DEF-022` records that stderr's visibility under the
+    /// alternate-screen frame is unestablished. So a full disk or a revoked
+    /// handle could stop the recording and the run would finish looking
+    /// entirely normal — and the session file named in the exit line, which is
+    /// the record this project tells people to go and read, would be missing
+    /// the end of the work.
+    ///
+    /// Named separately from the write error itself because they answer
+    /// different questions: that one says a write failed once, this one says
+    /// the transcript is not what happened.
+    pub fn transcript_warning(&self) -> Option<String> {
+        if !self.transcript_failed() {
+            return None;
+        }
+        Some(format!(
+            "this session stopped being recorded: {} is missing part of what happened, \
+             so --resume will not bring all of it back. The run itself was not affected.",
+            self.path().display()
+        ))
+    }
+
     /// A second view of this same file for one delegation, and the buffer its
     /// records also land in.
     ///
@@ -918,6 +946,10 @@ pub fn restore_records(records: &[Value]) -> Resumed {
     for record in records {
         match record["kind"].as_str().unwrap_or_default() {
             "goal" => {
+                // A goal opens in flight and stays that way until its
+                // `goal_finished` closes it. The last one to win is the last
+                // one in the file, which is what a resume is continuing.
+                r.in_flight = true;
                 r.tokens = 0;
                 r.iterations = 0;
                 r.kicks = 0;
@@ -987,6 +1019,19 @@ pub fn restore_records(records: &[Value]) -> Resumed {
             // one model call for that turn, not fifteen.
             "delegation" => r.tokens += record["cost_tokens"].as_i64().unwrap_or(0),
             "goal_finished" => {
+                // **Only a goal that reached an answer is finished.** A
+                // `goal_finished` record is written for every ending, including
+                // the ones that cut a goal off — a budget, a nudge count, an
+                // interrupt — and those are exactly what a resume exists to
+                // continue. Reading this record as "not in flight" regardless
+                // of its ending was the first attempt, and it turned
+                // `a_resumed_run_inherits_the_nudges_the_first_one_used` red:
+                // a run resumed after `KicksExhausted` stopped being treated as
+                // work in progress. The suite caught it, which is the point of
+                // that test. See `Resumed::in_flight`.
+                if matches!(string(record, "ending").as_str(), "done" | "answered") {
+                    r.in_flight = false;
+                }
                 r.tokens = record["tokens"].as_i64().unwrap_or(r.tokens);
                 r.iterations = record["iterations"]
                     .as_u64()
@@ -1322,6 +1367,40 @@ mod tests {
             std::fs::read_to_string(&path).unwrap(),
             "",
             "a read-only handle somehow wrote, so this test proves nothing"
+        );
+
+        // And the operator is told. The flag above was correct from the day it
+        // was written and had no call site outside this file, so a run whose
+        // recording stopped finished looking entirely normal.
+        let warning = log
+            .transcript_warning()
+            .expect("the transcript stopped and there was nothing to say about it");
+        assert!(
+            warning.contains(&path.display().to_string()),
+            "the warning does not name the file that is now incomplete: {warning}"
+        );
+        assert!(
+            warning.contains("--resume"),
+            "the warning does not say what is lost: {warning}"
+        );
+        assert!(
+            warning.contains("run itself was not affected"),
+            "the warning reads as though the work failed: {warning}"
+        );
+    }
+
+    /// An ordinary session says nothing about its transcript.
+    ///
+    /// The control. A warning that fires on every run is one nobody reads, and
+    /// this one has to be believed the once it matters.
+    #[test]
+    fn a_session_that_is_being_recorded_says_nothing_about_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SessionLog::open(dir.path(), "sess-fine").unwrap();
+        log.append("goal", json!({ "text": "one" }));
+        assert!(
+            log.transcript_warning().is_none(),
+            "an ordinary run warned that its transcript was incomplete"
         );
     }
 

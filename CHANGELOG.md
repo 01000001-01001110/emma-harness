@@ -28,6 +28,19 @@ out for themselves.
 
 ## Unreleased
 
+- **Resuming a finished session and asking a plain question no longer reports a
+  failure.** A conversational turn — one needing no tool and claiming no
+  completion — was treated as a stall, nudged twice more, and ended as
+  `stalled` or `kicks exhausted`. Under `-p` that is a non-zero exit code for a
+  run that answered correctly. A goal that was genuinely cut off — by a budget,
+  by the nudge count, by Ctrl-C — is still continued as before.
+
+- **Emma now tells you when it stops recording a session.** If the transcript
+  cannot be written — a full disk, a handle revoked underneath the run — the
+  run continues, which is right, but you were not told. The file named in the
+  exit line was quietly missing the end of the work, and `--resume` would not
+  bring it back.
+
 - **`emma config check` now lists frontmatter keys that do nothing.** If you
   wrote `allowed-tools:` in a skill or a command, Emma read past it and acted on
   nothing — and there was no way to find that out. It is dead in every file

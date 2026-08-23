@@ -763,6 +763,13 @@ async fn run(cli: cli::Cli) -> Result<()> {
                 term.warn(&warning);
             }
         }
+        // **A transcript that stopped being written is said out loud.** The
+        // flag was already correct and nothing read it; the only signal was an
+        // `eprintln!` whose visibility under the frame is unestablished
+        // (`DEF-022`). See `SessionLog::transcript_warning`.
+        if let Some(warning) = log.transcript_warning() {
+            term.warn(&warning);
+        }
         // `-p` runs one goal and stops. Interactively, Ctrl-C interrupts the
         // goal and hands the prompt back, which is what `cli.rs` and the
         // session's opening note have always said it does; `/exit`, `/quit` and
