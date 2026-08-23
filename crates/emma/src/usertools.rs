@@ -43,18 +43,20 @@
 //! every draw. PATH lookups are cached for the life of the process (PATH is
 //! fixed at startup; a program installed mid-session appears after restart,
 //! which the cache makes true by construction rather than intermittently).
-//! `settings.json` is re-read on every call — one small file read — so the
-//! Settings tool's own writes show up on the next frame. An unavailable tool
+//! `settings.json` is re-read on every call — one small file read — so an edit
+//! made outside Emma shows up on the next frame. An unavailable tool
 //! names exactly what was looked for, because "no editor configured and none
 //! of code, cursor, subl, zed, nvim is on PATH" is fixable and a dead key is
 //! not.
 //!
-//! On `DataExplorer` vs `FileBrowser`: the owner asked for "open explorer or
-//! mac version here". The two tools share one mechanism and differ only in
-//! target — the project directory versus Emma's data directory
-//! (`tools.data_dir`, default `~/.emma`). That difference is the point: one
-//! answers "show me my project", the other "show me what Emma keeps about
-//! me". If `data_dir` is set to the project they coincide, by choice.
+//! **Four of the seven never reach any of this.** Search, Memory, the Data
+//! Explorer and Settings run inside the frame; [`plan`] refuses them and the
+//! catalogue marks them available on the strength of [`Tool::routed`] alone.
+//! The last two joined that list on 2026-08-23 — before it, they resolved an
+//! editor and a file manager they no longer launch, so a machine with neither
+//! installed showed `n/a` beside two chords that worked. `tools.data_dir` is
+//! still read by the Data Explorer's page; nothing opens a file manager on it
+//! any more.
 //!
 //! The decision layer ([`plan`]) is pure — it takes a [`Machine`] (env, PATH,
 //! settings, OS) and returns a [`Launch`] value or an error string — so every
@@ -90,11 +92,15 @@ pub enum Tool {
 
 impl Tool {
     /// True for the tools that run inside Emma rather than launching a
-    /// program. The shell routes their keys itself; [`launch`] refuses them
+    /// program: the command menu, and the three pages. [`launch`] refuses them
     /// with a sentence saying so, because returning `Ok` for a launch that
-    /// never happened is a fake receipt.
+    /// never happened is a fake receipt. Whether the frame has actually claimed
+    /// the key is a different question — see [`Tool::routed`].
     pub fn in_app(self) -> bool {
-        matches!(self, Tool::Search | Tool::Memory)
+        matches!(
+            self,
+            Tool::Search | Tool::Memory | Tool::Settings | Tool::DataExplorer
+        )
     }
 
     /// Whether the frame *actually* routes this tool's key today.
@@ -112,8 +118,18 @@ impl Tool {
     /// pages", which is exactly right: there is no page. Splitting the two
     /// questions — *does it run inside Emma* and *is it wired up* — is what
     /// lets the sidebar stop claiming otherwise until one is built.
+    /// Settings and the Data Explorer joined this list on 2026-08-23, when
+    /// they became pages. **Nothing in the frame changed to make that true —
+    /// this predicate is what the sidebar reads**, and while they were still
+    /// planned as launches the catalogue probed for an editor and a file
+    /// manager they no longer need. On a machine with neither installed the
+    /// sidebar showed `n/a` beside two chords that worked, which is the
+    /// availability contract broken in the direction nobody thinks to check.
     pub fn routed(self) -> bool {
-        matches!(self, Tool::Search | Tool::Memory)
+        matches!(
+            self,
+            Tool::Search | Tool::Memory | Tool::Settings | Tool::DataExplorer
+        )
     }
 
     pub fn label(self) -> &'static str {
@@ -180,17 +196,6 @@ pub fn catalogue(cwd: &Path) -> Vec<Entry> {
 pub fn launch(tool: Tool, cwd: &Path) -> Result<String, String> {
     let m = RealMachine;
     launch_on(tool, cwd, &m, |l| {
-        if tool == Tool::Settings {
-            // The Settings tool edits a file that may not exist yet. Created
-            // through settings.rs — load then save — so the file an editor
-            // opens is the file every other reader would have produced, and
-            // an existing file is never rewritten (load/save would reformat
-            // it, and a settings file that mutates on open is one nobody can
-            // diff).
-            if let Some(home) = m.home() {
-                ensure_settings_file(&home)?;
-            }
-        }
         adopt(spawn_detached(l)?);
         Ok(())
     })
@@ -374,9 +379,7 @@ fn plan(tool: Tool, cwd: &Path, m: &dyn Machine) -> Result<Launch, String> {
         Tool::Shell => plan_shell(cwd, m),
         Tool::Code => plan_code(cwd, m),
         Tool::FileBrowser => plan_file_browser(cwd, m),
-        Tool::DataExplorer => plan_data_explorer(cwd, m),
-        Tool::Settings => plan_settings(cwd, m),
-        Tool::Search | Tool::Memory => Err(in_app_note(tool)),
+        Tool::Search | Tool::Memory | Tool::Settings | Tool::DataExplorer => Err(in_app_note(tool)),
     }
 }
 
@@ -473,85 +476,6 @@ fn plan_file_browser(cwd: &Path, m: &dyn Machine) -> Result<Launch, String> {
         cwd: cwd.to_path_buf(),
         window: Window::Detached,
     })
-}
-
-fn plan_data_explorer(cwd: &Path, m: &dyn Machine) -> Result<Launch, String> {
-    let target = match m.tools().data_dir {
-        Some(dir) => PathBuf::from(dir),
-        None => m
-            .home()
-            .ok_or("no home directory (HOME/USERPROFILE unset), so ~/.emma has no address")?
-            .join(".emma"),
-    };
-    if !m.exists(&target) {
-        return Err(format!(
-            "data directory {} does not exist (set tools.data_dir in settings)",
-            target.display()
-        ));
-    }
-    let program = browser_program(m)?;
-    Ok(Launch {
-        what: format!("{} at {}", stem(&program), target.display()),
-        program,
-        args: vec![target.into_os_string()],
-        cwd: cwd.to_path_buf(),
-        window: Window::Detached,
-    })
-}
-
-fn plan_settings(cwd: &Path, m: &dyn Machine) -> Result<Launch, String> {
-    let home = m
-        .home()
-        .ok_or("no home directory (HOME/USERPROFILE unset), so settings.json has no address")?;
-    let file = settings::path(&home);
-    // The editor first; a plain opener second. The fallback is not a
-    // substitution smuggled past the "report, don't swap" rule: the tool's
-    // promise is "edit your settings", not "open your chosen editor", and the
-    // detail names whichever program will actually appear.
-    let (program, args, window) = match resolve_editor(m) {
-        Ok((editor, source)) => match editor_window(&editor, &source, m.os()) {
-            Ok(Window::NewConsole) if console_hostable(&editor).is_err() => {
-                let why = console_hostable(&editor).expect_err("checked");
-                fallback_opener(m, &file, &why)?
-            }
-            Ok(window) => (editor, vec![file.as_os_str().to_os_string()], window),
-            Err(why) => fallback_opener(m, &file, &why)?,
-        },
-        Err(why) => fallback_opener(m, &file, &why)?,
-    };
-    Ok(Launch {
-        what: format!("{} on {}", stem(&program), file.display()),
-        program,
-        args,
-        cwd: cwd.to_path_buf(),
-        window,
-    })
-}
-
-/// Something guaranteed-editable for `settings.json` when the editor chain
-/// came up empty (or unusable on this OS). Notepad is on every Windows box;
-/// `open -t` is the Mac's "default text editor"; `xdg-open` hands the file to
-/// whatever owns `.json`.
-fn fallback_opener(
-    m: &dyn Machine,
-    file: &Path,
-    editor_why: &str,
-) -> Result<(PathBuf, Vec<OsString>, Window), String> {
-    let file_arg = file.as_os_str().to_os_string();
-    match m.os() {
-        Os::Windows => m
-            .find("notepad")
-            .map(|p| (p, vec![file_arg], Window::Detached))
-            .ok_or_else(|| format!("{editor_why}; and notepad is not on PATH either")),
-        Os::Mac => m
-            .find("open")
-            .map(|p| (p, vec![OsString::from("-t"), file_arg], Window::Detached))
-            .ok_or_else(|| format!("{editor_why}; and 'open' is not on PATH either")),
-        Os::Linux => m
-            .find("xdg-open")
-            .map(|p| (p, vec![file_arg], Window::Detached))
-            .ok_or_else(|| format!("{editor_why}; and xdg-open is not on PATH either")),
-    }
 }
 
 /// The file manager: configured value, else the OS's own
@@ -723,6 +647,8 @@ fn in_app_detail(tool: Tool) -> String {
     match tool {
         Tool::Search => "search this project, inside Emma".to_string(),
         Tool::Memory => "what Emma remembers about this project, inside Emma".to_string(),
+        Tool::DataExplorer => "what the session store holds, inside Emma".to_string(),
+        Tool::Settings => "what this run resolved, and from where, inside Emma".to_string(),
         // Unreachable by construction; a wrong caller gets words, not a panic.
         other => in_app_note(other),
     }
@@ -768,19 +694,6 @@ fn launch_on(
     let l = plan(tool, cwd, m)?;
     spawner(&l)?;
     Ok(format!("opened {}", l.what))
-}
-
-/// Create `settings.json` if it does not exist, through `settings.rs` so the
-/// file an editor opens is the same file every other writer would produce. An
-/// existing file is left byte-for-byte alone.
-fn ensure_settings_file(home: &Path) -> Result<(), String> {
-    let path = settings::path(home);
-    if path.exists() {
-        return Ok(());
-    }
-    settings::save(home, &settings::load(home))
-        .map(|_| ())
-        .map_err(|e| format!("could not create {}: {e}", path.display()))
 }
 
 // endregion: Planning
@@ -1415,14 +1328,7 @@ mod tests {
                 ("gnome-terminal", host("/usr/bin/gnome-terminal")),
                 ("code", host("/usr/bin/code")),
             ];
-            m.files = vec![host("/home/test/.emma")];
-            for tool in [
-                Tool::Shell,
-                Tool::Code,
-                Tool::FileBrowser,
-                Tool::DataExplorer,
-                Tool::Settings,
-            ] {
+            for tool in [Tool::Shell, Tool::Code, Tool::FileBrowser] {
                 let l =
                     plan(tool, &cwd(), &m).unwrap_or_else(|e| panic!("{tool:?} on {os:?}: {e}"));
                 assert_eq!(l.window, Window::Detached, "{tool:?} on {os:?}");
@@ -1431,26 +1337,12 @@ mod tests {
     }
 
     #[test]
-    fn the_file_browser_opens_the_project_and_the_data_explorer_opens_the_data_dir() {
+    fn the_file_browser_opens_the_project_directory() {
         let mut m = Fake::new(Os::Windows);
         m.programs = vec![("explorer", host("C:\\Windows\\explorer.exe"))];
-        m.files = vec![host("C:\\Users\\test\\.emma")];
 
         let fb = plan(Tool::FileBrowser, &cwd(), &m).unwrap();
         assert_eq!(fb.args, vec![OsString::from(host("C:\\src\\emma"))]);
-
-        let de = plan(Tool::DataExplorer, &cwd(), &m).unwrap();
-        assert_eq!(
-            de.args,
-            vec![OsString::from(host("C:\\Users\\test\\.emma"))]
-        );
-        assert!(de.what.contains(".emma"), "{}", de.what);
-
-        // A configured data_dir wins over the default.
-        m.tools.data_dir = Some(host("D:\\emma-data"));
-        m.files = vec![host("D:\\emma-data")];
-        let de = plan(Tool::DataExplorer, &cwd(), &m).unwrap();
-        assert_eq!(de.args, vec![OsString::from(host("D:\\emma-data"))]);
     }
 
     #[test]
@@ -1477,22 +1369,51 @@ mod tests {
         assert!(plan(Tool::Code, &cwd(), &m).is_ok());
     }
 
+    /// The three pages must not depend on a program being installed.
+    ///
+    /// **This is the availability contract read the other way round.** The
+    /// module doc promises `available: true` means the key does something, and
+    /// the converse has to hold too: `n/a` beside a chord that works is the same
+    /// lie in the other direction. Settings and the Data Explorer resolved an
+    /// editor and a file manager for as long as they launched them; when they
+    /// became pages, nothing on this machine is needed any more, and a bare
+    /// machine is where a leftover probe shows.
     #[test]
-    fn a_missing_data_dir_is_named_not_opened() {
-        let mut m = Fake::new(Os::Windows);
-        m.programs = vec![("explorer", host("C:\\Windows\\explorer.exe"))];
-        // home exists but ~/.emma was never created on this machine
-        let e = plan(Tool::DataExplorer, &cwd(), &m).unwrap_err();
-        assert!(e.contains(".emma"), "{e}");
-        assert!(e.contains("does not exist"), "{e}");
+    fn the_pages_are_available_on_a_machine_with_nothing_installed() {
+        // No PATH entries, no EDITOR, no ~/.emma. Everything that used to be
+        // probed for is absent.
+        let m = Fake::new(Os::Windows);
+        let cat = catalogue_on(&cwd(), &m);
+        for tool in [Tool::Settings, Tool::DataExplorer, Tool::Memory] {
+            let e = cat.iter().find(|e| e.tool == tool).expect("in catalogue");
+            assert!(
+                e.available,
+                "{} is a page in the frame and must not need a program: {}",
+                e.label, e.detail
+            );
+        }
+        // And the ones that really do launch still say so honestly.
+        for tool in [Tool::Shell, Tool::Code, Tool::FileBrowser] {
+            let e = cat.iter().find(|e| e.tool == tool).expect("in catalogue");
+            assert!(
+                !e.available,
+                "{} needs a program and none is installed",
+                e.label
+            );
+        }
     }
 
     #[test]
-    fn search_and_memory_never_reach_the_spawner() {
+    fn no_in_app_tool_ever_reaches_the_spawner() {
         // Two layers say no — launch_on's early return and plan's own refusal
         // — and this asserts the observable sum: no spawn, an honest sentence.
         let m = Fake::new(Os::Windows);
-        for tool in [Tool::Search, Tool::Memory] {
+        for tool in [
+            Tool::Search,
+            Tool::Memory,
+            Tool::Settings,
+            Tool::DataExplorer,
+        ] {
             let spawned = Cell::new(0u32);
             let r = launch_on(tool, &cwd(), &m, |_| {
                 spawned.set(spawned.get() + 1);
@@ -1534,66 +1455,6 @@ mod tests {
             Ok(())
         });
         assert_eq!(r.unwrap(), format!("opened pwsh in {}", cwd().display()));
-    }
-
-    #[test]
-    fn settings_opens_the_settings_file_with_the_editor_or_a_fallback() {
-        let mut m = Fake::new(Os::Windows);
-        m.programs = vec![
-            ("code", host("C:\\vs\\code.cmd")),
-            ("notepad", host("C:\\Windows\\notepad.exe")),
-        ];
-        let l = plan(Tool::Settings, &cwd(), &m).unwrap();
-        assert_eq!(l.program, PathBuf::from(host("C:\\vs\\code.cmd")));
-        assert_eq!(
-            l.args,
-            vec![OsString::from(host(
-                "C:\\Users\\test\\.emma\\settings.json"
-            ))]
-        );
-
-        // No editor: notepad carries it, and the detail says notepad.
-        m.programs = vec![("notepad", host("C:\\Windows\\notepad.exe"))];
-        let l = plan(Tool::Settings, &cwd(), &m).unwrap();
-        assert_eq!(l.program, PathBuf::from(host("C:\\Windows\\notepad.exe")));
-        assert!(l.what.starts_with("notepad on "), "{}", l.what);
-
-        // Neither: both absences named, so the user can fix either one.
-        m.programs = vec![];
-        let e = plan(Tool::Settings, &cwd(), &m).unwrap_err();
-        assert!(e.contains("no editor configured"), "{e}");
-        assert!(e.contains("notepad"), "{e}");
-
-        // On unix a terminal-only $EDITOR falls back to the opener rather
-        // than refusing outright — the file still gets edited, and the detail
-        // names the program that will actually appear.
-        let mut m = Fake::new(Os::Linux);
-        m.env = vec![("EDITOR", "vim")];
-        m.programs = vec![
-            ("vim", host("/usr/bin/vim")),
-            ("xdg-open", host("/usr/bin/xdg-open")),
-        ];
-        let l = plan(Tool::Settings, &cwd(), &m).unwrap();
-        assert_eq!(l.program, PathBuf::from(host("/usr/bin/xdg-open")));
-    }
-
-    #[test]
-    fn ensure_settings_file_creates_once_and_never_clobbers() {
-        let home = tempfile::tempdir().unwrap();
-        ensure_settings_file(home.path()).unwrap();
-        let path = settings::path(home.path());
-        assert!(path.exists());
-        // What it wrote is what settings.rs would read back — same producer.
-        let _ = settings::load(home.path());
-
-        // A file with a choice in it survives the ensure untouched.
-        let mut s = settings::load(home.path());
-        s.tools.editor = Some(host("C:\\somewhere\\code.exe"));
-        settings::save(home.path(), &s).unwrap();
-        let before = std::fs::read_to_string(&path).unwrap();
-        ensure_settings_file(home.path()).unwrap();
-        let after = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(before, after);
     }
 
     #[test]

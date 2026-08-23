@@ -28,6 +28,62 @@ out for themselves.
 
 ## Unreleased
 
+- **Three tool pages open inside Emma instead of launching programs.**
+  `Alt+,` is Settings, `Alt+d` is the Data Explorer, `Alt+m` is Memory, and
+  `Esc` returns to the conversation. The sidebar, the status bar and the
+  transcript are all where they were — a page replaces the middle of the frame
+  and nothing else, and leaving one loses no scroll position.
+
+  **`Alt+,` used to open your editor on `~/.emma/settings.json`, and `Alt+d`
+  your file manager.** They no longer do. If you preferred that, say so — the
+  external launch was deliberate and is easy to bring back.
+
+  Each page shows only values that exist, with where they came from, and names
+  what it is *not* drawing rather than showing a control that would not act.
+  Settings names seven such panels; the Data Explorer says why there is no query
+  box; Memory says plainly that Emma has no embedding index, no retrieval and
+  therefore no similarity scores. An empty panel invites you to assume the
+  number is somewhere else, so the pages say it in words.
+
+  `Alt+m` previously produced a warning claiming "the frame owns the 'm' key"
+  about a key nothing had claimed. That is fixed in both directions: the page
+  exists, and the frame routes the key.
+
+- **`/copy` puts the last answer on the clipboard, and `/export` writes the
+  conversation to a file.** Both take the text from the session log rather than
+  from the screen, so you get the markdown the model wrote — not something
+  wrapped to a column with a sidebar beside it, which is what a mouse selection
+  of the same answer gives you.
+
+  `/copy` uses OSC 52 and is **refused** on `-p`, on a pipe and with no console,
+  because those runs must contain no escape byte at all; it tells you to use
+  `/export`, which works everywhere. Emma cannot tell whether the terminal
+  accepted a clipboard write — there is no acknowledgement in the protocol — so
+  it reports what it sent and never that it arrived.
+
+  If a session file has records that cannot be read, `/export` says so at the
+  top of the file rather than producing a transcript that reads as complete.
+
+- **Hooks accept Claude Code's `args` field.** A `settings.json` carrying it was
+  previously refused as *malformed* — a file valid for the program it was
+  written for, reported as your mistake. Arguments are passed as a real argv,
+  never joined into a string and never through a shell.
+
+  `shell: true` is now read and then **refused with a sentence** naming what to
+  do instead, rather than being an unknown field. Emma execs a contained argv
+  with a cleared environment and has no shell to offer; running such a command
+  anyway would give it different semantics than it was written for.
+
+  A hook Emma cannot honour now costs **that hook** rather than the whole
+  session: under `EMMA_CLAUDE_HOOKS=skip-unknown` it is named and skipped, so a
+  settings file with one unusable hook still boots.
+
+- **`Bash` can run a command in the background.** Pass `run_in_background: true`
+  and the call returns a task id immediately; `BashOutput` returns what has
+  arrived since you last asked, and `KillShell` stops it. `timeout_ms` together
+  with `run_in_background` is refused rather than ignored, and `KillShell`
+  signals the shell it started — never a process tree — which the outcome says.
+
 - **`Bash` can now run a command in the background, and two new tools read and
   stop it.** Pass `run_in_background: true` and the call returns immediately
   with a task id instead of waiting; `BashOutput` returns whatever that task has

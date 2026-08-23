@@ -82,12 +82,14 @@
       <a href="terminal-sidebar.html">Sidebar</a>
       <a href="terminal-dock.html">Dock</a>
       <span class="now">User tools</span>
+      <a href="terminal-pages.html">Pages</a>
     </nav>
 
   <p class="lede">
-    The sidebar's middle section lists seven entries in a fixed order. Five start
-    a program on the machine; two run inside Emma and say so rather than
-    pretending to launch. Three rules carry the design, and every one exists
+    The sidebar's middle section lists seven entries in a fixed order. Three
+    start a program on the machine; four run inside Emma and say so rather than
+    pretending to launch &mdash; Search, and the three
+    <a href="terminal-pages.html">tool pages</a>. Three rules carry the design, and every one exists
     because breaking it fails silently. The sharpest of them cost twenty-two
     green tests and a canary in the wrong stream to find.
   </p>
@@ -102,22 +104,49 @@
         <tr><td>Code</td><td><code>Alt+c</code></td><td>The configured editor on the project.</td></tr>
         <tr><td>File Browser</td><td><code>Alt+f</code></td><td>The OS file manager on the project.</td></tr>
         <tr><td>Search</td><td><code>/</code></td><td>Nothing. Runs inside Emma; the frame owns the key.</td></tr>
-        <tr><td>Memory</td><td><code>Alt+m</code></td><td>Nothing. Same.</td></tr>
-        <tr><td>Data Explorer</td><td><code>Alt+d</code></td><td>The same file manager on Emma's own data directory.</td></tr>
-        <tr><td>Settings</td><td><code>Alt+,</code></td><td><code>~/.emma/settings.json</code> in something that can edit it.</td></tr>
+        <tr><td>Memory</td><td><code>Alt+m</code></td><td>Nothing. A page inside Emma.</td></tr>
+        <tr><td>Data Explorer</td><td><code>Alt+d</code></td><td>Nothing. A page inside Emma.</td></tr>
+        <tr><td>Settings</td><td><code>Alt+,</code></td><td>Nothing. A page inside Emma.</td></tr>
       </tbody>
     </table>
   </div>
   <span class="src">crates/emma/src/usertools.rs — <code>enum Tool</code>, <code>ALL</code>, <code>Tool::key</code>, <code>Tool::label</code></span>
 
   <p>
-    <code>Tool::in_app</code> is the two-variant predicate, and
-    <code>launch</code> refuses those two with a sentence rather than returning
-    success: <em>&ldquo;returning <code>Ok</code> for a launch that never
-    happened is a fake receipt.&rdquo;</em> They are still marked
-    <code>available: true</code> in the catalogue, because their keys really are
-    live in the frame, and <em>&ldquo;a probe failure must never mark them
-    dead.&rdquo;</em>
+    <strong>Three of these used to launch programs and now do not.</strong>
+    Settings opened <code>~/.emma/settings.json</code> in the configured editor,
+    the Data Explorer opened the file manager on <code>~/.emma</code>, and Memory
+    opened nothing at all while claiming it would. Each is a page in the frame
+    now &mdash; see <a href="terminal-pages.html">the tool pages</a>. The launches
+    were deliberate and correct as built; the owner ruled on 2026-08-23 that they
+    should be pages, which is a different thing from their having been wrong.
+  </p>
+
+  <p>
+    <code>Tool::in_app</code> says a tool runs inside Emma; <code>Tool::routed</code>
+    says the frame actually takes its key. <strong>They were one predicate, and
+    the gap between them was a defect.</strong> <code>in_app</code>'s doc has
+    always said <em>&ldquo;the shell routes their keys itself&rdquo;</em>, which
+    was true of Search and false of Memory: nothing routed Memory, so
+    <code>launch_tool</code> sent it to <code>launch</code>, which refused it
+    with the words <em>&ldquo;the frame owns the <code>m</code> key&rdquo;</em>
+    &mdash; a key the frame had never claimed. The sidebar advertised
+    <code>Alt+M</code> and pressing it produced a warning.
+  </p>
+
+  <p>
+    <code>launch</code> still refuses an in-app tool rather than returning
+    success, because <em>&ldquo;returning <code>Ok</code> for a launch that never
+    happened is a fake receipt&rdquo;</em>. What changed is that the frame now
+    intercepts all three before they reach it.
+    <span class="chip test">tested</span>
+    <code>the_catalogue_lists_all_seven_tools_with_their_fixed_keys</code>, whose
+    assertion has been through all three states and carries the history: it
+    first claimed both in-app tools were available <em>because their keys are
+    live in the frame</em> &mdash; the claim rather than the behaviour, which is
+    what held the defect in place &mdash; was then inverted with a note saying
+    the day a Memory page existed it should be flipped back, and was flipped back
+    on the day that happened.
   </p>
 
   <p>
@@ -139,8 +168,13 @@
   </p>
 
   <p>
-    <span class="chip cert">certified</span> against this machine, 2026-08-16,
-    by running the ignored probe test:
+    <span class="chip unv">unverified</span> The certification below was run on
+    2026-08-16 and its last three rows are <strong>superseded</strong>: Settings,
+    Data Explorer and Memory no longer resolve a program, so
+    <code>available=true</code> for them now means &ldquo;the frame routes this
+    key&rdquo; rather than &ldquo;a program was found&rdquo;. The first four rows
+    still describe what the probe does. <em>What would settle it:</em> re-running
+    the ignored probe test on a machine and pasting the current output.
   </p>
 
   <pre><code>$ cargo test -p emma --lib usertools::tests::certify -- --ignored --nocapture
@@ -154,12 +188,20 @@ Data Explorer [d] available=true -- explorer at C:\Users\owner\.emma
 Settings      [,] available=true -- code on C:\Users\owner\.emma\settings.json</code></pre>
 
   <p>
-    Two things in that output are the design working. <code>Code</code> resolved
-    to <code>code</code> through the PATH probe, which on Windows means the
-    probe had to find <code>code.cmd</code> rather than a bare
-    <code>code</code>; and <code>Settings</code> reused the same editor rather
-    than falling back to notepad, so the fallback chain is in the branch it says
-    it is.
+    <code>Code</code> resolving to <code>code</code> is the design working: on
+    Windows the PATH probe had to find <code>code.cmd</code> rather than a bare
+    <code>code</code>, or the catalogue would have promised a launch the spawn
+    could not perform.
+  </p>
+
+  <p>
+    The last three lines are the superseded ones. <code>Settings</code> reads
+    <code>code on &hellip;settings.json</code> there because it still resolved an
+    editor; it does not any more, and neither does the Data Explorer resolve a
+    file manager. On this run both happened to be installed, which is why the
+    defect stayed invisible: with neither on the machine, the two rows would have
+    read <code>available=false</code> and the sidebar <code>n/a</code>, beside two
+    chords that worked.
   </p>
 
   <h2 id="seam">The machine is a trait</h2>
@@ -458,13 +500,14 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
   </p>
 
   <p>
-    The Settings tool has one sanctioned fallback, and the file argues it is not
-    a substitution smuggled past the rule: <em>&ldquo;the tool's promise is
-    &lsquo;edit your settings&rsquo;, not &lsquo;open your chosen editor&rsquo;,
-    and the detail names whichever program will actually appear.&rdquo;</em>
-    <code>fallback_opener</code> is notepad, <code>open -t</code>, or
-    <code>xdg-open</code>, and when neither the editor nor the opener exists
-    both absences are named so the user can fix either one.
+    <strong>Settings used to have a sanctioned fallback and no longer has
+    one.</strong> <code>fallback_opener</code> tried notepad, <code>open -t</code>
+    or <code>xdg-open</code> when the editor chain came up empty, and the file
+    argued it was not a substitution smuggled past the report-don't-swap rule:
+    <em>&ldquo;the tool's promise is &lsquo;edit your settings&rsquo;, not
+    &lsquo;open your chosen editor&rsquo;.&rdquo;</em> That argument still holds;
+    it is simply not a launch any more. The chain, both plan functions and the
+    fallback went out together on 2026-08-23, and <code>git log</code> has them.
   </p>
 
   <h2 id="probe">The PATH probe has to agree with the spawner</h2>
@@ -513,33 +556,44 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
   </p>
 
   <p>
-    <code>ensure_settings_file</code> creates <code>settings.json</code> through
-    <code>settings.rs</code> so the file an editor opens is the file every other
-    reader would have produced, and leaves an existing file byte-for-byte alone:
-    <em>&ldquo;load/save would reformat it, and a settings file that mutates on
-    open is one nobody can diff.&rdquo;</em>
-    <span class="chip test">tested</span>:
-    <code>ensure_settings_file_creates_once_and_never_clobbers</code> writes a
-    real choice into a temp home and compares the file before and after.
+    <code>ensure_settings_file</code> is gone too. It created
+    <code>settings.json</code> through <code>settings.rs</code> so the file an
+    editor opened was the file every other reader would have produced, and left
+    an existing one byte-for-byte alone &mdash; <em>&ldquo;load/save would
+    reformat it, and a settings file that mutates on open is one nobody can
+    diff.&rdquo;</em> Nothing opens that file on Emma's behalf now, so nothing
+    needs to create it first. <strong>The consequence is worth stating:</strong>
+    a machine that has never had a <code>settings.json</code> written still has
+    none after opening the Settings page, and the page shows the resolved
+    defaults rather than a file.
   </p>
 
   <h2 id="coverage">Coverage</h2>
 
   <p>
-    <code>usertools.rs</code> is 1,736 lines and was read in full for this page.
-    Above the outer <code>#[cfg(test)]</code> boundary it declares 50 function
-    items, counting the <code>Machine</code> trait's six methods separately from
-    <code>RealMachine</code>'s six implementations and the
+    <code>usertools.rs</code> was 1,736 lines when this page was written and is
+    1,649 now: the two page tools took four functions and three tests out with
+    them. Above the outer <code>#[cfg(test)]</code> boundary it declares 45
+    function items, counting the <code>Machine</code> trait's six methods
+    separately from <code>RealMachine</code>'s six implementations and the
     <code>cfg</code>-duplicated <code>candidates</code>,
-    <code>is_program</code> and <code>spawn_detached</code> as two each. Every
-    one is named on this page or in the tables above: 50 of 50. That is three
-    <code>Tool</code> methods, two public entry points, twelve machine-seam
-    items (the trait's six and <code>RealMachine</code>'s six), five probe
-    helpers, twenty planning functions, three spawning functions and the five
-    inside <code>new_console</code>. All six constants and all nine types are
-    covered. Sixteen of its twenty-four tests are cited, including all three
-    ignored certifications, which were <strong>run</strong> for this page rather
-    than cited.
+    <code>is_program</code> and <code>spawn_detached</code> as two each. That is
+    four <code>Tool</code> methods, two public entry points, twelve machine-seam
+    items, five probe helpers, sixteen planning functions, three spawning
+    functions and the reaper's <code>Drop</code>, plus two inside
+    <code>new_console</code>.
+    <span class="chip cert">certified</span> &mdash; redo it with
+    <code>wc -l crates/emma/src/usertools.rs</code> and
+    <code>head -983 crates/emma/src/usertools.rs | grep -c "^\s*\(pub \)\?fn "</code>,
+    less the three items inside the inner test module.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> Whether every one of those 45 is
+    still <em>named</em> somewhere on this page. It was true of the 50 when the
+    page was written and four have gone since, but nobody has re-walked the list
+    against the prose. <em>What would settle it:</em> read the two lists side by
+    side.
   </p>
 
   <p>
@@ -547,7 +601,7 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
     console that is not Emma's. It does not prove the <em>frame survives</em>
     the launch: nobody has pressed <code>Alt+s</code> inside a running
     full-screen Emma and looked at the screen afterwards.
-    <span class="chip unv">unverified</span>: launch each of the five spawning
+    <span class="chip unv">unverified</span>: launch each of the three spawning
     tools from a live framed session and check the alternate screen is
     undisturbed. The unix arms are
     <span class="chip unv">unverified</span> entirely: every unix decision here

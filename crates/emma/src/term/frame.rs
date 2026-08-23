@@ -990,7 +990,6 @@ impl Frame {
         }
     }
 
-    /// Ctrl-B. Latches — see [`super::app::Latch`].
     /// Return to the conversation, if a page is showing.
     ///
     /// Answers whether it did anything, so the reader can tell "I handled this"
@@ -1009,6 +1008,7 @@ impl Frame {
         true
     }
 
+    /// Ctrl-B. Latches — see [`super::app::Latch`].
     pub fn toggle_sidebar(&self) {
         let mut inner = self.lock();
         let cols = inner.screen.0;

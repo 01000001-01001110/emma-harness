@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pages inside the frame &middot; The terminal &middot; Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page on purpose. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it — which is the deal, and is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav here" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/emma/src/term/app.rs</p>
+  <h1>Pages inside the frame</h1>
+
+  <nav class="chapter">
+      <a class="up" href="terminal.html">The terminal</a>
+      <a href="terminal-surface.html">Surface</a>
+      <a href="terminal-frame.html">Frame</a>
+      <a href="terminal-layout.html">Layout</a>
+      <a href="terminal-colour.html">Colour</a>
+      <a href="terminal-themes.html">Themes</a>
+      <a href="terminal-skin.html">Vocabulary</a>
+      <a href="terminal-transcript.html">Transcript</a>
+      <a href="terminal-markdown.html">Markdown</a>
+      <a href="terminal-diff.html">Diffs</a>
+      <a href="terminal-status.html">Status</a>
+      <a href="terminal-sidebar.html">Sidebar</a>
+      <a href="terminal-dock.html">Dock</a>
+      <a href="terminal-usertools.html">User tools</a>
+      <span class="now">Pages</span>
+    </nav>
+
+  <p class="lede">
+    <code>Alt+,</code>, <code>Alt+d</code> and <code>Alt+m</code> each replace the
+    middle of the frame with a page and nothing else &mdash; the sidebar, the
+    dock and the status row stay exactly where they were, and <code>Esc</code>
+    puts the conversation back with its scroll position intact. All three used
+    to launch a program on the machine, or claim they would. What they draw is
+    only what Emma actually has, and each one names in words what it is
+    deliberately not drawing.
+  </p>
+
+  <h2 id="seam">One field, not a second application</h2>
+
+  <p>
+    The main region&rsquo;s occupant is a single value on <code>App</code>:
+  </p>
+
+  <pre><code>pub enum Page { Settings, DataExplorer, Memory }
+
+pub enum Pane {
+    #[default]
+    Chat,
+    Page(Page),
+}</code></pre>
+  <span class="src">crates/emma/src/term/app.rs &mdash; <code>enum Pane</code>, <code>App::render</code></span>
+
+  <p>
+    <code>App::render</code> lays the frame out first &mdash; border, sidebar,
+    dock, hint, status &mdash; and only then matches on <code>self.pane</code> to
+    decide what fills the space between them. So a page is not a window, not a
+    mode and not a second <code>App</code>. Nothing about the surrounding frame
+    is reachable from a page&rsquo;s drawing code, which is why a page cannot
+    accidentally move the status row.
+  </p>
+
+  <p>
+    <strong><code>Chat</code> is a named variant rather than the absence of a
+    page</strong>, and that is the part doing work. A fourth page added tomorrow
+    is a compile error at every site that decides what to draw, instead of
+    falling silently through to the transcript.
+    <span class="chip test">tested</span>
+    <code>the_pane_seam_paints_the_chat_view_and_leaves_the_frame_alone</code>
+    renders both occupants at the same size and asserts every row outside the
+    chat region is byte-identical between them.
+  </p>
+
+  <h2 id="text-page">Two of the three are the same page twice</h2>
+
+  <p>
+    The Data Explorer and Memory both read the session store and both draw a
+    captured report with a footer. <code>text_page</code> is that shape, taking a
+    title, a subtitle and the footer lines; the footer is per page because
+    <em>what each one refuses to draw</em> is the part a reader most needs told.
+    The text itself is one <code>Vec&lt;String&gt;</code> on <code>App</code>,
+    not one per page &mdash; only one page shows at a time, and a second buffer
+    would be a second thing to forget to clear.
+  </p>
+  <span class="src">crates/emma/src/term/app.rs &mdash; <code>App::text_page</code>, <code>App::show_explorer</code>, <code>App::show_memory</code></span>
+
+  <p>
+    <strong>The snapshot is taken when the page opens, never on paint.</strong>
+    Reading the store is a directory walk and real file I/O; the frame repaints
+    on every keystroke, every stream chunk and every resize, so a page that
+    rescanned each time would put that walk on the render path. It is also the
+    more honest of the two: a table that changed under the reader between two
+    repaints would be worse than one that is plainly as of when it was opened,
+    and the subtitle says <em>&ldquo;as of opening this page&rdquo;</em> for
+    exactly that reason.
+  </p>
+
+  <p>
+    <strong>The page and the command cannot disagree, because there is one
+    implementation.</strong> The text comes from a <code>commands::*</code>
+    writer &mdash; <code>commands::sessions</code> and
+    <code>commands::memory</code>, both writer-shaped like
+    <code>commands::agents</code> &mdash; captured into a string by
+    <code>capture_sessions</code> / <code>capture_memory</code>. The frame paints
+    what a command would have printed.
+  </p>
+  <span class="src">crates/emma/src/commands.rs &mdash; <code>sessions</code>, <code>memory</code>, <code>capture_sessions</code>, <code>capture_memory</code></span>
+
+  <p>
+    Headings are styled from shape rather than from a parallel list: an
+    unindented non-empty line is a heading, everything else is data. A list of
+    which lines to embolden, kept beside a writer that emits them, is two things
+    that drift.
+  </p>
+
+  <h2 id="honesty">What each page will not draw, and says so</h2>
+
+  <p>
+    Every one of these came from a mockup that had more on it than Emma has
+    behind it. The rule applied throughout: <strong>an empty panel invites the
+    reader to assume the number lives somewhere else, so the page says it in
+    words.</strong>
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Page</th><th>Draws</th><th>Refuses, and says why</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Settings</td>
+          <td>The values this run actually resolved, each with where it came from.</td>
+          <td>Seven of the mockup&rsquo;s panels have nothing behind them yet, and are named. A switch that changes nothing is worse on a settings page than anywhere else, because that is where a user goes <em>expecting</em> their change to take.</td>
+        </tr>
+        <tr>
+          <td>Data Explorer</td>
+          <td>A real count of real files in the session store: sessions, records, kinds, and any records that could not be read.</td>
+          <td>The query box, typed columns, elapsed time and chart. A query surface over a store with no query engine would be the most convincing thing on the page and the least real.</td>
+        </tr>
+        <tr>
+          <td>Memory</td>
+          <td>What was asked in this project, how many sessions, how many compactions and clears.</td>
+          <td>Similarity scores, an embedding model name, retrieval latency, index coverage. Emma has no embedding index and no retrieval; she keeps a record of what was asked and what happened, which is a real thing to show and a different one.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    <span class="chip test">tested</span>
+    <code>the_memory_page_says_it_has_no_index_rather_than_inventing_one</code>
+    asserts the rendered buffer contains the sentence about having no index, and
+    <code>the_explorer_page_draws_its_snapshot_and_names_what_it_omits</code>
+    does the same for the query box. Both are assertions on painted cells, not on
+    the strings that were passed in.
+  </p>
+
+  <p>
+    The Data Explorer counts through <code>SessionLog::read_reporting</code>
+    rather than <code>read</code>, so a session with unreadable records is
+    reported as damaged rather than counted as clean. An explorer that tallied
+    only what parsed would describe a damaged library as a tidy one.
+  </p>
+
+  <h2 id="keys">Getting in, and getting back out</h2>
+
+  <p>
+    The chords are the tools&rsquo; own, unchanged: the sidebar advertises
+    <code>Alt+,</code>, <code>Alt+d</code> and <code>Alt+m</code>, and
+    <code>Frame::launch_tool</code> intercepts those three before they reach
+    <code>usertools::launch</code>. The scan happens there &mdash; the frame
+    already knows the session path because the status row shows it &mdash; and
+    the page is handed a finished snapshot.
+  </p>
+  <span class="src">crates/emma/src/term/frame.rs &mdash; <code>Frame::launch_tool</code>, <code>Frame::leave_page</code></span>
+
+  <p>
+    <strong><code>Esc</code> is routed after the menu, not before.</strong> With
+    the command menu open, <code>Esc</code> dismisses the menu and keeps the
+    typed line, which is what it has always done; only when no menu is up does it
+    reach <code>leave_page</code>. That function answers whether it did anything,
+    so a caller can tell <em>&ldquo;handled&rdquo;</em> from <em>&ldquo;pass it
+    on&rdquo;</em> &mdash; an <code>Esc</code> swallowed while no page was showing
+    would quietly take the key away from whatever else wanted it.
+  </p>
+  <span class="src">crates/emma/src/term/input.rs &mdash; the reader loop, below <code>menu_key</code></span>
+
+  <p>
+    The transcript is not discarded while a page is up. It is simply not painted,
+    so returning costs nothing and loses no scroll position.
+  </p>
+
+  <h2 id="history">Why these three stopped launching programs</h2>
+
+  <p>
+    Settings opened <code>~/.emma/settings.json</code> in the configured editor
+    and the Data Explorer opened the file manager on <code>~/.emma</code>. Both
+    were correct as built &mdash; the original comment argued that
+    <em>&ldquo;the tool&rsquo;s promise is edit your settings, not open your
+    chosen editor&rdquo;</em> &mdash; and simply were not what was wanted. The
+    owner reported <code>Alt+,</code> opening VS Code three times before it was
+    ruled on. That is a reversal, not a bug found.
+  </p>
+
+  <p>
+    <strong>Memory is the one that was a defect.</strong> It had declared
+    <code>in_app</code> since the tools were written and <em>nothing routed
+    it</em>: pressing the chord reached <code>usertools::launch</code>, which
+    refused it with the words <em>&ldquo;the frame owns the <code>m</code>
+    key&rdquo;</em> &mdash; a key the frame had never claimed. The sidebar
+    advertised a chord that only produced a warning. That is why
+    <code>Tool::in_app</code> and <code>Tool::routed</code> are now two
+    predicates: one says a tool runs inside Emma, the other says the frame
+    actually takes its key, and the gap between them is where this hid.
+    <a href="terminal-usertools.html">The user tools page</a> has the catalogue.
+  </p>
+
+  <h2 id="unverified">What has not been checked</h2>
+
+  <p>
+    <span class="chip unv">unverified</span> <strong>Nobody has pressed these
+    chords on a real terminal and reported back.</strong> Every assertion above
+    is against ratatui&rsquo;s <code>TestBackend</code>, which is a cell buffer
+    and not a console: it cannot tell you that Windows Terminal delivered
+    <code>Alt+,</code> as the frame expects, or that the page painted without
+    tearing. <code>Frame</code> cannot be constructed in a test binary at all, so
+    the chord path from key press to painted page is genuinely uncovered.
+    <em>What would settle it:</em> open a framed session, press each of the three
+    chords and <code>Esc</code>, and say what appeared.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> Behaviour at very narrow widths is
+    untested for all three pages. The report lines are painted unwrapped and are
+    clipped by the chat region&rsquo;s width, so a narrow terminal loses the
+    right-hand end of a row rather than wrapping it. <em>What would settle it:</em>
+    render each page at 40 columns and decide whether clipping or wrapping is
+    wanted.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Back to <a href="terminal.html">The terminal</a>, or on to
+      <a href="terminal-usertools.html">the tools a person launches</a>, which is
+      where the other four entries go.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

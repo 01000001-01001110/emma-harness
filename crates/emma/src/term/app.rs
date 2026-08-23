@@ -272,7 +272,10 @@ pub struct App {
     pub transcript: Transcript,
     /// What the main region is showing. See [`Pane`].
     pane: Pane,
-    /// The Data Explorer's rendered text, captured when the page was opened.
+    /// The showing page's rendered text, captured when that page was opened.
+    ///
+    /// One field, not one per page, because only one page shows at a time and a
+    /// second `Vec` would be a second thing to forget to clear.
     ///
     /// **Scanned once, on open, rather than on every paint.** The store is a
     /// directory of files and reading it is real I/O; a frame repaints on every
@@ -281,7 +284,7 @@ pub struct App {
     /// also the honest thing to show: a table that silently changed under the
     /// reader between two repaints would be worse than one that is plainly as of
     /// when it was opened.
-    explorer: Vec<String>,
+    page_text: Vec<String>,
     latch: Latch,
     side: sidebar::State,
     /// The column entries are wrapped to: [`chat::message_width`] of the chat
@@ -308,7 +311,7 @@ impl App {
         Self {
             transcript: Transcript::new(Cap::default()),
             pane: Pane::default(),
-            explorer: Vec::new(),
+            page_text: Vec::new(),
             latch,
             side: sidebar::State {
                 sessions: Vec::new(),
@@ -499,13 +502,13 @@ impl App {
     /// would print through — one implementation behind two surfaces, so the page
     /// and the command cannot come to disagree about what the store holds.
     pub fn show_explorer(&mut self, text: &str) {
-        self.explorer = text.lines().map(str::to_string).collect();
+        self.page_text = text.lines().map(str::to_string).collect();
         self.pane = Pane::Page(Page::DataExplorer);
     }
 
     /// The Memory page's snapshot, taken on open for the same reason.
     pub fn show_memory(&mut self, text: &str) {
-        self.explorer = text.lines().map(str::to_string).collect();
+        self.page_text = text.lines().map(str::to_string).collect();
         self.pane = Pane::Page(Page::Memory);
     }
 
@@ -571,7 +574,7 @@ impl App {
 
         let mut y = r.chat.y;
         let end = r.chat.y.saturating_add(r.chat.height);
-        for line in &self.explorer {
+        for line in &self.page_text {
             if y >= end {
                 break;
             }

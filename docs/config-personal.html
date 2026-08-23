@@ -402,7 +402,9 @@ pub struct ToolSettings {
       </tr>
       <tr>
         <td><code>data_dir</code></td>
-        <td>Where the Data Explorer points. Absolute path.</td>
+        <td>Where the Data Explorer looks. Absolute path. It opened a file
+            manager there until 2026-08-23; the Data Explorer is a page in the
+            frame now and launches nothing.</td>
         <td><code>~/.emma</code>.</td>
       </tr>
     </tbody>
@@ -509,7 +511,8 @@ expected ident at line 1 column 2</code></pre>
       <code>tools.shell</code>, <code>tools.editor</code>,
       <code>tools.file_browser</code> and <code>tools.data_dir</code> comes from
       reading <code>usertools.rs</code>, whose decision layer is pure and
-      testable. No program was launched from a running frame here, and the
+      testable. Only the first three are still launch settings: Settings and the
+      Data Explorer became pages on 2026-08-23 and resolve no program at all. No program was launched from a running frame here, and the
       <code>code --wait</code> message was never seen on a screen.
       <span class="chip unv">unverified</span>. Settle it by setting
       <code>tools.editor</code> to a value with an argument in it, pressing
