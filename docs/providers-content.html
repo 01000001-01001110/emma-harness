@@ -143,6 +143,54 @@
     a fixture a reader can grep, in
     <code>a_real_tool_use_block_is_a_tool_call_and_still_round_trips</code>.
   </p>
+<div class="note warn">
+  <span class="h">The same failure has another door, and it is still open</span>
+  <p>
+    The demotion above fires on an <em>extra</em> key. It also fires on a
+    <em>missing</em> one, and that half is not fixed. A <code>tool_use</code>
+    block with no <code>input</code> still decodes to
+    <code>Passthrough</code> in the batch path &mdash; so the run reports
+    <em>"answered, no tools were needed"</em>, which is the exact sentence this
+    page was written about.
+  </p>
+  <p>
+    Streaming disagrees with batch about the same input. Reproduced against the
+    loopback stub on 2026-08-23:
+  </p>
+  <pre><code>batch  (tool_use with no `input`): Passthrough{…}      tool_calls = 0
+stream (tool_use with no `name`):  ToolCall{name:"",…}  tool_calls = 1</code></pre>
+  <p>
+    One quietly loses the call; the other produces a call named
+    <code>""</code> that no registry can dispatch. Neither errors. <strong>Batch
+    is the unattended path</strong> &mdash; it is what <code>-p</code> uses, and
+    what a script gets.
+    <span class="chip unv">unverified</span> Whether the API can actually emit
+    either shape. The decoder's behaviour on them is measured; what the wire
+    does is not, and the honest position is that a decoder should not have two
+    answers for one input regardless.
+  </p>
+  <p>
+    Deliberately not pinned by a test. The only assertion available today is
+    "the two modes disagree", which is a receipt for a defect rather than a
+    guarantee, and writing it would make the disagreement harder to remove.
+  </p>
+</div>
+
+<div class="note warn">
+  <span class="h">A batch turn with no <code>usage</code> costs nothing, silently</span>
+  <p>
+    <code>msg.get("usage")…unwrap_or_default()</code>: a body with no usage
+    block decodes to four zeros. The turn looks finished and free, the budget
+    never moves, and nothing says so.
+    <span class="chip test">tested</span>
+    <code>an_absent_usage_block_reports_zero_tokens_and_says_nothing</code> pins
+    it &mdash; and its doc says plainly that it pins a <em>gap</em> rather than a
+    guarantee, with a control beside it showing that a usage block which is
+    present and malformed IS refused loudly. So the quiet case is absence, not
+    corruption.
+  </p>
+</div>
+
   <span class="src">crates/llm/src/content.rs — module doc §"The rule that makes this safe to type"; commit <code>482a2cc</code></span>
 
   <p class="faint">crates/llm/src/content.rs · <code>a_real_tool_use_block_is_a_tool_call_and_still_round_trips</code></p>
