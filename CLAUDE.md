@@ -100,6 +100,36 @@ only person who can write any of it is whoever just hit it.
 Report both as well as writing them — a lesson or a status nobody relays is
 one nobody reads.
 
+## Report the round to the project channel when the turn is done
+
+**At the end of a full turn — not each commit inside one — post what was
+actually completed to the project's Discord channel.** The webhook lives in
+`EMMA_PROGRESS_WEBHOOK` in `.env`, which `.gitignore` covers.
+
+```bash
+curl -sS -X POST -H 'Content-Type: application/json'   -d "$(python - <<'PY'
+import json, os
+print(json.dumps({"content": "…the round, in Discord markdown…"}))
+PY
+)" "$EMMA_PROGRESS_WEBHOOK"
+```
+
+**The URL never goes in a file git tracks, and that includes this one.** A
+webhook is a credential: anyone holding it can post as the project. This
+repository is private today, which is not the same as safe — a credential in a
+commit is in every clone and every future state of that repository, and
+`git rm` does not remove it from history. `.env` is where the repo already keeps
+this class of thing.
+
+**Say what happened, not what was attempted.** The same rule as everywhere else
+here: a round that fixed two things and left a third broken says so. A progress
+report that reads as uniformly successful is the one nobody believes twice, and
+this one is addressed to somebody who was not watching — which makes an
+overstatement harder to catch and therefore worse.
+
+Post the outcome, the evidence, and what is still open. If a round produced
+nothing worth reading, post nothing.
+
 ## The premise the rules follow from
 
 **This codebase has no author's memory, and every reader is a stranger —

@@ -307,6 +307,75 @@ pub struct Cli {
 // because neither can be decided until every argument has been seen.
 // ---------------------------------------------------------------------------
 
+/// The subcommand a single-word goal was probably meant to be.
+///
+/// Distance one, and one word only. Two edits reaches too far — `agent` is one
+/// from `agents` and `test` is four from anything, which is the separation that
+/// makes this safe to apply without asking. Case-insensitive, because `Init` is
+/// the same mistake as `init` and `parse` matches the lowercase spelling.
+fn near_miss(goal: &str) -> Option<&'static str> {
+    const COMMANDS: &[&str] = &[
+        "goal",
+        "init",
+        "api",
+        "model",
+        "set-provider",
+        "set-model",
+        "agents",
+        "config",
+    ];
+    if goal.split_whitespace().count() != 1 {
+        return None;
+    }
+    let g = goal.to_ascii_lowercase();
+    // Equality is NOT excluded. `parse` matches subcommands case-sensitively, so
+    // `Agents` never became one — it is a case typo and belongs here. Excluding
+    // it was the first version's bug, found by its own test.
+    COMMANDS
+        .iter()
+        .copied()
+        .find(|c| edit_distance_at_most_one(&g, c))
+}
+
+/// Whether two strings are within one insertion, deletion or substitution.
+///
+/// Written out rather than pulling a crate: this is the whole of what is needed,
+/// and a dependency for eight comparisons of short strings is a dependency to
+/// audit, update and explain.
+fn edit_distance_at_most_one(a: &str, b: &str) -> bool {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let (long, short) = if a.len() >= b.len() {
+        (&a, &b)
+    } else {
+        (&b, &a)
+    };
+    if long.len() - short.len() > 1 {
+        return false;
+    }
+    let mut i = 0;
+    let mut j = 0;
+    let mut slack = 1usize;
+    while i < long.len() && j < short.len() {
+        if long[i] == short[j] {
+            i += 1;
+            j += 1;
+            continue;
+        }
+        if slack == 0 {
+            return false;
+        }
+        slack -= 1;
+        if long.len() == short.len() {
+            i += 1;
+            j += 1;
+        } else {
+            i += 1;
+        }
+    }
+    // Whatever is left over must fit in the slack that is still unspent.
+    slack >= (long.len() - i) + (short.len() - j)
+}
+
 pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
     let mut it = args.into_iter().peekable();
     let mut opts = Opts::default();
@@ -420,10 +489,55 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
     }
 
     let joined = (!words.is_empty()).then(|| words.join(" "));
+
+    // **A mistyped subcommand must not become a paid model call.**
+    //
+    // Every non-flag word falls through to a goal, so `emma agent` — one letter
+    // short of `agents` — is not an error. It is a goal, and a goal starts a
+    // session, calls the model and spends money answering a word the user never
+    // meant as a question. Found by running `emma nonsense-subcommand` expecting
+    // a refusal and watching it launch a real run: a shell, a `Glob *` that hit
+    // the 1000-path cap, and several greps, all in service of a typo.
+    //
+    // The interactive prompt has been guarded against the neighbouring mistake
+    // since a run that cost 580,000 tokens on a misread `init` — see
+    // `typed_at_the_prompt`. The argv path had no equivalent, so the same hazard
+    // was closed on one door and open on the other.
+    //
+    // **Narrow on purpose: one word, and close to a real command.** A goal is
+    // usually a sentence; a single word that is one edit from a subcommand is
+    // almost never one. Multi-word goals are untouched, and `emma goal init` is
+    // the escape hatch for anybody who genuinely means the word — which is why
+    // this refuses rather than guessing, and names the two ways forward.
+    if matches!(command, None | Some(Command::Run(_))) {
+        if let Some(goal) = joined.as_deref() {
+            if let Some(meant) = near_miss(goal) {
+                return Err(format!(
+                    "`{goal}` is not an emma command, and as a goal it would start a session and \
+                     call the model. Did you mean `emma {meant}`? If `{goal}` really is the goal, \
+                     say `emma goal {goal}`."
+                ));
+            }
+        }
+    }
+
     let command = match command {
         Some(Command::Run(_)) | None => Command::Run(joined),
         Some(Command::Api(_)) => Command::Api(joined),
-        Some(Command::Model(_)) => Command::Model(joined),
+        // One word, like `set-model`, which this is an alias for. Without the
+        // check `emma model the API surface` stored a model id of "the API
+        // surface" — and the interactive prompt disagreed with it, treating the
+        // same four words as a goal (`typed_at_the_prompt` accepts `model` only
+        // at one or two words). One hazard, two doors, and they answered
+        // differently.
+        Some(Command::Model(_)) => Command::Model(match joined {
+            Some(text) if text.contains(' ') => {
+                return Err(format!(
+                    "`model` takes a model id, one word; got `{text}`. If that was the goal,                      say `emma goal {text}`."
+                ))
+            }
+            other => other,
+        }),
         // One word, required. A provider name with a space in it is a typo, and
         // guessing which half was meant is how `emma set-provider anthropic
         // please` ends up storing a key for a provider called `anthropic
@@ -450,6 +564,27 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
                 ))
             }
             None => Command::Init,
+        },
+        // **The same rule as `init`, and it was missing here.** `emma agents are
+        // slow` became `Command::Agents` with "are slow" dropped on the floor,
+        // and `config check --whatever` the same. `init`'s own comment one arm
+        // above says why that is wrong — "silently discarding it is the wrong
+        // half of the guess" — and these two took the wrong half.
+        //
+        // A user who typed extra words meant something by them. Either they
+        // wanted a goal, or they expected the command to take an argument it
+        // does not. Both are answered by saying so.
+        Some(cmd @ (Command::Agents | Command::ConfigCheck)) => match joined {
+            Some(extra) => {
+                let name = match cmd {
+                    Command::Agents => "agents",
+                    _ => "config check",
+                };
+                return Err(format!(
+                    "`{name}` takes no arguments; got `{extra}`. If that was the goal, say                      `emma goal {extra}`."
+                ));
+            }
+            None => cmd,
         },
         Some(other) => other,
     };
@@ -841,6 +976,91 @@ mod tests {
                 }
                 other => panic!("`{line}` was not recognised: {other:?}"),
             }
+        }
+    }
+
+    /// A mistyped subcommand is refused instead of becoming a paid model call.
+    ///
+    /// **Found by running `emma nonsense-subcommand` expecting a refusal.** It
+    /// launched a real session instead — a shell, a `Glob *` that hit the
+    /// 1000-path cap, several greps — all to answer a word nobody meant as a
+    /// question. Every non-flag word falls through to a goal, so `emma agent`,
+    /// one letter short of `agents`, spends money rather than erroring.
+    ///
+    /// The interactive prompt has been guarded against the neighbouring mistake
+    /// since a run that cost 580,000 tokens on a misread `init`. The argv path
+    /// had no equivalent: one hazard, one door closed and one open.
+    #[test]
+    fn a_single_word_near_miss_of_a_command_is_refused_not_charged_for() {
+        for (typo, meant) in [
+            ("agent", "agents"),
+            ("ini", "init"),
+            ("mode", "model"),
+            ("confg", "config"),
+            ("set-mode", "set-model"),
+            ("Agents", "agents"),
+        ] {
+            let e = p(&[typo]).expect_err("a near miss was accepted as a goal");
+            assert!(
+                e.contains(meant),
+                "the refusal does not name what was meant: {e}"
+            );
+            assert!(
+                e.contains("emma goal"),
+                "the refusal does not offer the escape hatch: {e}"
+            );
+        }
+    }
+
+    /// Extra words after an argument-less command are refused, not dropped.
+    ///
+    /// `init` already refused them, with the reason in its own comment:
+    /// "silently discarding it is the wrong half of the guess". `agents` and
+    /// `config check`, one arm below it, took exactly that half — `emma agents
+    /// are slow` ran the ledger and dropped "are slow" on the floor. A user who
+    /// typed extra words meant something by them.
+    #[test]
+    fn extra_words_after_an_argument_less_command_are_refused() {
+        for (args, name) in [
+            (vec!["agents", "are", "slow"], "agents"),
+            (vec!["config", "check", "everything"], "config check"),
+            (vec!["init", "the", "database"], "init"),
+        ] {
+            let e = p(&args).expect_err("extra words were silently discarded");
+            assert!(
+                e.contains(name),
+                "the refusal does not name the command: {e}"
+            );
+        }
+    }
+
+    /// And the guard stays narrow: a real goal is still a goal.
+    ///
+    /// A sentence is never one edit from a subcommand, and a single word that is
+    /// genuinely wanted has `emma goal <word>`. Widening this to two edits would
+    /// start refusing goals, which is the failure this must not trade for.
+    #[test]
+    fn a_real_goal_is_not_mistaken_for_a_typo() {
+        for goal in [
+            "fix the build",
+            // `init the database` and `model the API surface` are deliberately
+            // absent: both are subcommands in first position on argv, and both
+            // now refuse their extra words loudly rather than storing or
+            // ignoring them. The interactive prompt reads either as a goal,
+            // which is an asymmetry the refusals make visible instead of silent.
+            // `model the API surface` is deliberately absent: on argv `model`
+            // is a subcommand in first position, and it now refuses a
+            // multi-word argument rather than storing one. The prompt reads the
+            // same words as a goal, which is the asymmetry that refusal makes
+            // visible instead of silent.
+            "refactor",
+            "test",
+        ] {
+            let cli = p(&goal.split(' ').collect::<Vec<_>>()).expect(goal);
+            assert!(
+                matches!(cli.command, Command::Run(Some(_))),
+                "`{goal}` stopped being a goal"
+            );
         }
     }
 
