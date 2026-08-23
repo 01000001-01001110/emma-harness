@@ -1391,6 +1391,134 @@ mod tests {
         assert!(msg.contains("maxChars"), "{msg}");
         assert!(msg.contains("max_chars"), "{msg}");
     }
+
+    /// **What breaks in the real world:** `max_chars: 0` is a read that returns
+    /// nothing, which the model reads as "the page is empty" rather than as
+    /// "you asked for no characters". It then acts on a page it believes has no
+    /// content. The refusal is what turns a silent wrong answer into a fixable
+    /// argument error.
+    ///
+    /// The control is the point of the second half: `1` and an omitted budget
+    /// both have to survive, or the clamp has become a blanket refusal and no
+    /// read works at all.
+    #[test]
+    fn a_read_budget_of_zero_is_refused_and_an_ordinary_one_is_not() {
+        let pool = pool_at("https://example.com/");
+        let read = BrowserRead::new(pool);
+        for key in ["max_chars", "max_links"] {
+            let mut args_v = json!({ "session": "s1" });
+            args_v[key] = json!(0);
+            let err = read
+                .validate_args(&args_v)
+                .expect_err(&format!("{key}: zero validated"));
+            assert_eq!(err.kind(), "bad_arguments");
+            assert!(
+                err.detail().contains(key) && err.detail().contains("at least 1"),
+                "the message does not say what a usable value is: {}",
+                err.detail()
+            );
+        }
+        read.validate_args(&json!({ "session": "s1", "max_chars": 1, "max_links": 1 }))
+            .expect("a budget of one was refused");
+        read.validate_args(&json!({ "session": "s1" }))
+            .expect("a read with no budget at all was refused");
+    }
+
+    /// **What breaks in the real world:** `timeout_ms: 0` is a `wait_for` that
+    /// gives up before it looks, so every wait reports the condition was never
+    /// met and the model concludes the page is broken. A number the caller can
+    /// write that means "never succeed" is worse than no number.
+    #[test]
+    fn a_wait_of_zero_is_refused_and_an_ordinary_one_is_not() {
+        let pool = pool_at("https://example.com/");
+        let act = BrowserAct::new(pool);
+        let err = act
+            .validate_args(&json!({ "session": "s1", "action": "wait_for", "timeout_ms": 0 }))
+            .expect_err("a zero timeout validated");
+        assert!(err.detail().contains("at least 1"), "{}", err.detail());
+        act.validate_args(&json!({ "session": "s1", "action": "wait_for", "timeout_ms": 1 }))
+            .expect("a one-millisecond wait was refused");
+        act.validate_args(&json!({ "session": "s1", "action": "wait_for" }))
+            .expect("a wait with no timeout was refused");
+    }
+
+    /// **What breaks in the real world:** a form is filled on a host the user
+    /// never approved. `BrowserFill` computes its own `network_target` rather
+    /// than calling `session_target` — it has to, because the payload goes in
+    /// the detail line — so the cross-origin re-ask is implemented *twice* in
+    /// this file, and only `BrowserRead`'s copy had a test. A session that
+    /// wandered to `evil.example` and then gets an email address typed into it
+    /// is the whole failure this mechanism exists to prevent.
+    #[tokio::test]
+    async fn filling_asks_about_the_host_the_session_is_on_now() {
+        let pool = pool_at("https://example.com/form");
+        let fill = BrowserFill::new(pool.clone());
+        let args = json!({
+            "session": "s1",
+            "fields": [{ "selector": "#email", "value": "someone@example.com" }]
+        });
+        assert_eq!(fill.network_target(&args).unwrap().host, "example.com");
+
+        pool.arrived_at("s1", "https://evil.example/form");
+        let after = fill.network_target(&args).expect("no target");
+        assert_eq!(
+            after.host, "evil.example",
+            "the gate was asked about the host the session was opened on, so a grant for it \
+             would silently cover typing into a form on another origin"
+        );
+        // …and the prompt shows the new URL, so the human is answering about the
+        // page the data is actually going to.
+        assert!(
+            after.detail.contains("https://evil.example/form"),
+            "{}",
+            after.detail
+        );
+    }
+
+    /// **What breaks in the real world:** the model is told a browser was closed
+    /// when it was not, or is told nothing useful and closes again. The answer
+    /// names the session and the URL it was on, which is also the only record of
+    /// what was open once the registry entry is gone.
+    ///
+    /// Runs offline: the session behind this has `pid: 0` and a websocket on a
+    /// port nothing listens on, so `close` fails its polite CDP call, kills
+    /// nothing, and returns — which is exactly the path a browser that already
+    /// exited takes.
+    #[tokio::test]
+    async fn closing_a_known_session_reports_what_it_ended_and_forgets_it() {
+        let pool = Arc::new(BrowserPool::new(None));
+        let id = format!("emma-tool-close-{}", std::process::id());
+        pool.insert_for_test(super::super::pool::test_session(
+            &id,
+            "https://example.com/inbox",
+        ));
+        let close = BrowserClose::new(pool.clone());
+
+        let out = close
+            .run(json!({ "session": id }))
+            .await
+            .expect("closing an open session was reported as an error");
+        assert!(out.content.contains(&id), "{}", out.content);
+        assert!(
+            out.content.contains("https://example.com/inbox"),
+            "the answer does not say what was closed: {}",
+            out.content
+        );
+        assert!(pool.is_empty(), "a closed session is still in the registry");
+
+        // The second call is the control on "closed" meaning something: the same
+        // id now gets the nothing-to-close answer rather than repeating the
+        // first one.
+        let again = close
+            .run(json!({ "session": id }))
+            .await
+            .expect("a repeat close errored");
+        assert!(
+            again.content.contains("nothing to close"),
+            "{}",
+            again.content
+        );
+    }
 }
 
 // endregion: Tests

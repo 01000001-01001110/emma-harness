@@ -106,6 +106,113 @@ async fn create_appends_rather_than_replacing() {
     );
 }
 
+/// Two steps of a plan can genuinely read the same — "run the tests" appears
+/// twice in half the plans anyone writes — and `TaskCreate` is documented as
+/// not deduplicating them. What it must not do is hand back one handle for
+/// both, or two lines carrying the same one: `TaskGet` cannot see a duplicate
+/// and would answer confidently about whichever line it reached first, so the
+/// model would tick off a step it never did. The second call is here because
+/// the salting has to survive a re-read of the file as well as a single batch.
+#[tokio::test]
+async fn identical_task_text_still_gets_distinct_handles() {
+    let project = Project::new();
+    let first = project
+        .ok(
+            "TaskCreate",
+            json!({ "tasks": ["run the tests", "run the tests"] }),
+        )
+        .await;
+    let second = project
+        .ok("TaskCreate", json!({ "tasks": ["run the tests"] }))
+        .await;
+
+    let mut handles = ids(&first);
+    handles.extend(ids(&second));
+    assert_eq!(handles.len(), 3, "{first:?} {second:?}");
+    let mut unique = handles.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        3,
+        "two tasks share a handle, so TaskGet is ambiguous: {handles:?}"
+    );
+
+    // And each of them addresses a line that is really there.
+    for id in &handles {
+        project.ok("TaskGet", json!({ "id": id })).await;
+    }
+    let file = project.read_tasks();
+    assert_eq!(
+        file.matches("- [ ] run the tests").count(),
+        3,
+        "a task was deduplicated away:\n{file}"
+    );
+}
+
+/// The batch is the unit. A plan whose fourth entry is malformed must write
+/// none of the first three, or the model is left holding a half-written list
+/// it has no ids for and no way to tell which half landed. The existing
+/// refusal test starts from no file at all, so it cannot see the failure this
+/// one catches: good entries being written *around* the bad one into a file
+/// that already exists.
+#[tokio::test]
+async fn one_bad_entry_in_a_batch_writes_none_of_it() {
+    let project = Project::new();
+    project.hand_write("- [ ] already here `#0001`\n");
+    let before = fingerprint(project.root());
+
+    let error = project
+        .err(
+            "TaskCreate",
+            json!({ "tasks": ["good one", "good two", { "text": "   " }] }),
+        )
+        .await;
+    assert_eq!(error.kind(), "bad_arguments");
+    assert_eq!(
+        before,
+        fingerprint(project.root()),
+        "a batch with a bad entry wrote its good entries anyway"
+    );
+
+    // The negative control: the same batch minus the bad entry does write, so
+    // the assertion above is about the rejection and not about a tool that
+    // writes nothing under any circumstances.
+    project
+        .ok("TaskCreate", json!({ "tasks": ["good one", "good two"] }))
+        .await;
+    let after = project.read_tasks();
+    assert!(after.contains("- [ ] good one"), "{after}");
+    assert!(after.contains("- [ ] good two"), "{after}");
+}
+
+/// A model that has used another harness will send `{"text": ..., "id": ...}`
+/// or `{"task": ...}` sooner or later. Ignoring the extra key silently is the
+/// expensive answer: an `id` the model believes it chose, and does not get,
+/// becomes a `TaskUpdate` against a handle that was never written. Naming the
+/// key that was not understood is one turn; a wrong handle is a whole branch
+/// of confused calls.
+#[tokio::test]
+async fn a_task_object_with_a_key_that_is_not_a_key_is_refused() {
+    let project = Project::new();
+    let error = project
+        .err(
+            "TaskCreate",
+            json!({ "tasks": [{ "text": "port it", "id": "a1b2" }] }),
+        )
+        .await;
+    assert_eq!(error.kind(), "bad_arguments");
+    assert!(error.detail().contains("id"), "{error}");
+    assert!(
+        error.detail().contains("text"),
+        "the message has to say what is accepted: {error}"
+    );
+    assert!(
+        !project.tasks_file().exists(),
+        "a refused call created the file anyway"
+    );
+}
+
 // endregion: Writing a plan down
 
 // region: Naming one task
@@ -287,6 +394,67 @@ async fn the_readers_touch_nothing() {
     );
 }
 
+/// Document order is information — the sequence a person put their tasks in is
+/// the order they mean them to be done — and `render::block` is documented as
+/// never sorting. Nothing else in the suite would notice a sort: every other
+/// fixture is written in an order that happens to agree with alphabetical or
+/// with handle order, so a `sort_by_key` slipped into `TaskList` would leave
+/// the whole file green while telling the model to start with the wrong step.
+#[tokio::test]
+async fn list_returns_tasks_in_the_files_own_order() {
+    let project = Project::new();
+    // Deliberately the reverse of both alphabetical order and handle order, so
+    // neither sort can pass by coincidence.
+    project.hand_write("- [ ] zulu `#00ff`\n- [ ] mike `#00aa`\n- [ ] alpha `#0001`\n");
+
+    let listed = project.ok("TaskList", json!({})).await;
+    let order: Vec<usize> = ["zulu", "mike", "alpha"]
+        .iter()
+        .map(|w| {
+            listed
+                .content
+                .find(w)
+                .unwrap_or_else(|| panic!("{w} missing: {listed:?}"))
+        })
+        .collect();
+    assert!(
+        order[0] < order[1] && order[1] < order[2],
+        "the list was reordered; the plan's sequence is not the tool's to choose: {listed:?}"
+    );
+}
+
+/// The claim `TaskList` makes in its own module doc, end to end: it hands the
+/// model an id for a task the file has never been written to name, and asking
+/// for that id back still costs no write. It is what lets the loop read a
+/// hand-written list — nobody types `` `#a1b2` `` after their own tasks — and
+/// address it without first rewriting the person's file underneath them.
+/// The fingerprint spans both calls, so a reader that stamped handles to make
+/// the lookup work would be caught even though the lookup itself succeeded.
+#[tokio::test]
+async fn a_task_the_file_never_named_is_still_addressable_without_a_write() {
+    let project = Project::new();
+    project
+        .hand_write("- [ ] port the middleware\n  the trait is in src/auth.rs\n- [~] wire it up\n");
+    let before = fingerprint(project.root());
+
+    let listed = project.ok("TaskList", json!({})).await;
+    let handles = ids(&listed);
+    assert_eq!(handles.len(), 2, "{listed:?}");
+
+    let got = project.ok("TaskGet", json!({ "id": &handles[0] })).await;
+    assert!(got.content.contains("port the middleware"), "{got:?}");
+    assert!(
+        got.content.contains("the trait is in src/auth.rs"),
+        "the note under an unstamped task is still the human's: {got:?}"
+    );
+
+    assert_eq!(
+        before,
+        fingerprint(project.root()),
+        "reading a hand-written list rewrote it"
+    );
+}
+
 // endregion: What the loop reads every turn
 
 // region: Ticking a box, and the round trip
@@ -418,6 +586,71 @@ async fn open_count_answers_the_loops_question_without_a_tool_call() {
         .ok("TaskUpdate", json!({ "id": id, "status": "completed" }))
         .await;
     assert_eq!(emma_tools_tasks::open_count(project.root()).unwrap(), 1);
+}
+
+/// Status and text arrive together whenever a model starts a step and sharpens
+/// the wording in the same breath, and that call takes a branch neither
+/// single-argument test reaches: the line is re-emitted from its fields
+/// *including* the glyph, rather than spliced. A glyph read from the wrong
+/// place there loses the status change while reporting success — the task
+/// reads as still pending and gets done twice. The second half is the negative
+/// control: a status-only call must leave the words exactly as they were, so
+/// this is not passing on a tool that rewrites the line every time.
+#[tokio::test]
+async fn update_can_change_the_status_and_the_words_in_one_call() {
+    let project = Project::new();
+    project.hand_write("- [ ] first `#0001`\n- [ ] second `#0002`\n");
+
+    project
+        .ok(
+            "TaskUpdate",
+            json!({ "id": "0001", "status": "in_progress", "text": "port the auth middleware" }),
+        )
+        .await;
+    assert_eq!(
+        project.read_tasks(),
+        "- [~] port the auth middleware `#0001`\n- [ ] second `#0002`\n",
+        "one of the two changes was dropped, or the neighbour was rewritten"
+    );
+
+    project
+        .ok("TaskUpdate", json!({ "id": "0002", "status": "completed" }))
+        .await;
+    assert_eq!(
+        project.read_tasks(),
+        "- [~] port the auth middleware `#0001`\n- [x] second `#0002`\n",
+        "a status-only call changed the words"
+    );
+}
+
+/// The id `TaskList` derives from a task's text is the id the model then
+/// passes to `TaskUpdate` — and that update is the first write, so it is where
+/// the handle gets stamped into the file. If the stamped handle were not the
+/// derived one the model was told, its next call would name a task that no
+/// longer exists, on the very turn it did the work. The `TaskGet` afterwards
+/// is the point: the id has to keep working across the write that changed the
+/// file from unnamed to named.
+#[tokio::test]
+async fn an_update_stamps_the_same_handle_the_reader_handed_out() {
+    let project = Project::new();
+    project.hand_write("- [ ] port the middleware\n");
+    assert!(
+        !project.read_tasks().contains('#'),
+        "the fixture must start with no handle in it"
+    );
+
+    let id = ids(&project.ok("TaskList", json!({})).await).remove(0);
+    project
+        .ok("TaskUpdate", json!({ "id": &id, "status": "completed" }))
+        .await;
+
+    assert_eq!(
+        project.read_tasks(),
+        format!("- [x] port the middleware `#{id}`\n"),
+        "the write stamped a handle the model was never given"
+    );
+    let got = project.ok("TaskGet", json!({ "id": &id })).await;
+    assert!(got.content.contains("port the middleware"), "{got:?}");
 }
 
 // endregion: Ticking a box, and the round trip

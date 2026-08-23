@@ -2068,5 +2068,591 @@ mod tests {
         }
     }
 
+    // region: what the real wire sends that the fixtures do not
+    // ------------------------------ what the real wire sends that fixtures --
+    //
+    // This crate shipped a strict decoder that passed every test in this file
+    // and then decoded no real tool call, because the API puts a `caller` key
+    // on every `tool_use` block and the fixtures did not. The tests below are
+    // written from the other direction: they start from a shape the socket
+    // actually produces — an unmodelled key, a null where a string was
+    // expected, an unfamiliar `stop_reason`, a body that is not JSON at all —
+    // and ask what the decoder does with it.
+    //
+    // The bias throughout is toward the *quiet* failure. A 400 is a bad
+    // afternoon; a turn reported as finished when it was cut, or a token count
+    // silently zero, is a wrong answer nobody can see.
+
+    /// Frames as the wire carries them: one `data:` line, one blank line.
+    fn frames(list: &[&str]) -> String {
+        list.iter().map(|d| format!("data: {d}\n\n")).collect()
+    }
+
+    /// **If this breaks:** every turn reports zero tokens, or every call fails
+    /// with "usage: unknown field", because the API added a key to `usage`.
+    ///
+    /// The `usage` object on the live wire carries more than the four fields
+    /// [`Usage`] models — `service_tier`, the `cache_creation` breakdown, and
+    /// `server_tool_use` are all on it today, and the list grows without asking
+    /// us. Every existing fixture in this file supplies exactly the four fields
+    /// the struct declares, so nothing here would notice a strict
+    /// `deny_unknown_fields` being added, and nothing would notice the numbers
+    /// being read from the wrong place either. Both assertions are needed: that
+    /// the extra keys are tolerated, and that the four that matter still carry
+    /// their real values.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_usage_object_with_keys_this_client_does_not_model_still_counts() {
+        let body = json!({
+            "type": "message",
+            "role": "assistant",
+            "stop_reason": "end_turn",
+            "content": [{ "type": "text", "text": "ok" }],
+            "usage": {
+                "input_tokens": 41,
+                "cache_creation_input_tokens": 3200,
+                "cache_read_input_tokens": 29000,
+                "output_tokens": 17,
+                // Everything below is on the real wire and modelled nowhere here.
+                "cache_creation": {
+                    "ephemeral_5m_input_tokens": 3200,
+                    "ephemeral_1h_input_tokens": 0
+                },
+                "service_tier": "standard",
+                "server_tool_use": { "web_search_requests": 0 }
+            }
+        })
+        .to_string();
+        let s = stub(vec![Reply::json(body)]).await;
+        let (turn, _) = run(&s, request(), Mode::Batch).await;
+
+        let usage = turn.expect("a real usage object was refused").usage;
+        assert_eq!(usage.input_tokens, 41);
+        assert_eq!(usage.output_tokens, 17);
+        assert_eq!(usage.cache_creation_input_tokens, 3_200);
+        assert_eq!(usage.cache_read_input_tokens, 29_000);
+        assert_eq!(usage.billable_input_tokens(), 41 + 3_200 + 29_000);
+    }
+
+    /// **If this breaks:** the same thing, on the streaming path only — so
+    /// batch runs cost what they say and interactive ones report zero.
+    ///
+    /// `message_start` carries the same object, and the streaming decoder reads
+    /// it field by field with `pick` rather than through serde. The two paths
+    /// therefore fail differently and neither one covers the other.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_streamed_usage_object_with_unmodelled_keys_still_counts() {
+        let body = frames(&[
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":41,"cache_creation_input_tokens":3200,"cache_read_input_tokens":29000,"output_tokens":1,"cache_creation":{"ephemeral_5m_input_tokens":3200},"service_tier":"standard"}}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":17}}"#,
+            r#"{"type":"message_stop"}"#,
+        ]);
+        let s = stub(vec![Reply::sse(body)]).await;
+        let (turn, _) = run(&s, request(), Mode::Stream).await;
+
+        let usage = turn.expect("a real message_start was refused").usage;
+        assert_eq!(usage.input_tokens, 41);
+        assert_eq!(usage.cache_creation_input_tokens, 3_200);
+        assert_eq!(usage.cache_read_input_tokens, 29_000);
+        assert_eq!(usage.output_tokens, 17, "the final count must win");
+    }
+
+    /// **If this breaks:** a streamed turn reports zero output tokens, so the
+    /// session total under-counts and every cap folded from it loosens.
+    ///
+    /// `Assembly::apply` guards the `message_delta` write with `if out != 0`
+    /// and the comment above it says why: `pick` cannot tell "absent" from
+    /// "zero", so an unguarded assignment lets a `message_delta` carrying only
+    /// a stop reason erase what `message_start` established. That guard had no
+    /// test — deleting the `if` left the whole suite green, because every SSE
+    /// fixture here happens to put a usage on its final frame.
+    ///
+    /// A wrong token count is the quietest failure in this crate: nothing
+    /// errors, the answer is right, and only the invoice disagrees.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_message_delta_with_no_usage_does_not_erase_the_token_count() {
+        let body = frames(&[
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":41,"output_tokens":9}}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#,
+            r#"{"type":"message_stop"}"#,
+        ]);
+        let s = stub(vec![Reply::sse(body)]).await;
+        let (turn, _) = run(&s, request(), Mode::Stream).await;
+
+        let usage = turn.unwrap().usage;
+        assert_eq!(
+            usage.output_tokens, 9,
+            "a message_delta carrying only a stop reason erased the output count"
+        );
+        assert_eq!(usage.input_tokens, 41);
+    }
+
+    /// **If this breaks:** a cached streamed turn reports its cache reads as
+    /// zero, which is the ~10× under-count `Usage`'s own doc was written about.
+    ///
+    /// The control on the guard above, in the other direction. The cache fields
+    /// are read from `message_start` and never written again, and the only test
+    /// that covers them at all (`streaming_assembles_the_same_turn_as_batch`)
+    /// uses a `message_delta` whose usage happens to carry `output_tokens`
+    /// alone. Widening the `message_delta` handler to assign the cache fields
+    /// the way it assigns output tokens would zero them on every real response,
+    /// because the live `message_delta` does not repeat them.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_message_delta_does_not_erase_the_cache_counts_from_message_start() {
+        let body = frames(&[
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":2,"cache_creation_input_tokens":3200,"cache_read_input_tokens":29000,"output_tokens":1}}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":17}}"#,
+            r#"{"type":"message_stop"}"#,
+        ]);
+        let s = stub(vec![Reply::sse(body)]).await;
+        let (turn, _) = run(&s, request(), Mode::Stream).await;
+
+        let usage = turn.unwrap().usage;
+        assert_eq!(usage.cache_creation_input_tokens, 3_200);
+        assert_eq!(usage.cache_read_input_tokens, 29_000);
+        // The scar restated as an assertion: `input_tokens` alone is 2 here,
+        // and the turn really carried 32,202.
+        assert_eq!(usage.billable_input_tokens(), 2 + 3_200 + 29_000);
+    }
+
+    /// **If this breaks:** nothing visibly. The turn is right, the answer is
+    /// right, and the session's token total is silently zero for that call.
+    ///
+    /// **This test pins a gap rather than a guarantee, and says so.** A batch
+    /// body with no `usage` key at all decodes to `Usage::default()` — four
+    /// zeros — with no error and no signal anywhere downstream. The live API
+    /// always sends `usage`, so nothing has hit this; a gateway that strips it,
+    /// or a proxy that rewrites the body, would produce a turn that looks
+    /// finished and costs nothing.
+    ///
+    /// Note what is *not* silent, and is asserted below as the control: a
+    /// `usage` object that is present and malformed is refused loudly, because
+    /// `input_tokens` and `output_tokens` have no serde default. The quiet case
+    /// is absence, not corruption.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_absent_usage_block_reports_zero_tokens_and_says_nothing() {
+        let body = json!({
+            "type": "message",
+            "role": "assistant",
+            "stop_reason": "end_turn",
+            "content": [{ "type": "text", "text": "done" }]
+        })
+        .to_string();
+        let s = stub(vec![Reply::json(body)]).await;
+        let (turn, _) = run(&s, request(), Mode::Batch).await;
+        let turn = turn.expect("a body with no usage is accepted today");
+        assert_eq!(turn.usage, Usage::default());
+        assert_eq!(turn.usage.billable_total_tokens(), 0);
+        assert_eq!(turn.text(), "done", "the turn itself decoded normally");
+
+        // The control: corruption is loud even though absence is not.
+        let body = json!({
+            "type": "message",
+            "stop_reason": "end_turn",
+            "content": [{ "type": "text", "text": "done" }],
+            "usage": { "input_tokens": "forty-one", "output_tokens": 17 }
+        })
+        .to_string();
+        let s = stub(vec![Reply::json(body)]).await;
+        let (turn, _) = run(&s, request(), Mode::Batch).await;
+        match turn {
+            Err(LlmError::Protocol(m)) => assert!(m.contains("usage"), "{m}"),
+            other => panic!("a malformed usage object was accepted: {other:?}"),
+        }
+    }
+
+    /// **If this breaks:** a turn the connection cut short is handed to the
+    /// user as a finished answer, ending "The tests all pa".
+    ///
+    /// `null` is the shape this matters for, and it is not hypothetical: the
+    /// Messages API spells an unset stop reason `"stop_reason": null` — that is
+    /// what the `message` object inside `message_start` carries — so a proxy
+    /// replaying or truncating a response produces a null here far more readily
+    /// than a missing key. Both decoders reach the emptiness check through
+    /// `and_then(Value::as_str)`, which turns a null into `None` and then into
+    /// `""`; a decoder that started reading the field with `to_string()`
+    /// instead would see the string `"null"`, find it non-empty, and accept the
+    /// cut turn.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_null_stop_reason_is_refused_exactly_like_a_missing_one() {
+        let body = json!({
+            "type": "message",
+            "role": "assistant",
+            "stop_reason": Value::Null,
+            "content": [{ "type": "text", "text": "The tests all pa" }],
+            "usage": { "input_tokens": 1, "output_tokens": 4 }
+        })
+        .to_string();
+        let s = stub(vec![Reply::json(body)]).await;
+        let (turn, _) = run(&s, request(), Mode::Batch).await;
+        let shown = format!("{}", turn.expect_err("a null stop reason read as finished"));
+        assert!(
+            shown.contains("stop reason") || shown.contains("incomplete"),
+            "{shown}"
+        );
+
+        // The streaming path spells it the same way and must answer the same.
+        let body = frames(&[
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":1,"output_tokens":4}}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"The tests all pa"}}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":null}}"#,
+        ]);
+        let s = stub(vec![Reply::sse(body)]).await;
+        let (turn, _) = run(&s, request(), Mode::Stream).await;
+        let shown = format!("{}", turn.expect_err("a null stop reason read as finished"));
+        assert!(
+            shown.contains("stop reason") || shown.contains("incomplete"),
+            "{shown}"
+        );
+    }
+
+    /// **If this breaks:** a working model release stops working, with an error
+    /// naming a value the user never set.
+    ///
+    /// The other half of the refusal above, and the half a refusal usually
+    /// costs. `stop_reason` is an open set the provider extends — `pause_turn`
+    /// and `refusal` were both added after this client was written, and
+    /// `model_context_window_exceeded` after that. Emma's own truncation
+    /// warning keys on the *string*, so this client must carry an unfamiliar
+    /// one through untouched rather than refusing it, normalising it, or
+    /// folding it to `end_turn`.
+    ///
+    /// Both modes, because a whitelist added to one decoder would leave the
+    /// other green.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unfamiliar_stop_reason_is_carried_through_rather_than_refused() {
+        for reason in ["pause_turn", "refusal", "model_context_window_exceeded"] {
+            let body = json!({
+                "type": "message",
+                "stop_reason": reason,
+                "content": [{ "type": "text", "text": "partial" }],
+                "usage": { "input_tokens": 1, "output_tokens": 1 }
+            })
+            .to_string();
+            let s = stub(vec![Reply::json(body)]).await;
+            let (turn, _) = run(&s, request(), Mode::Batch).await;
+            assert_eq!(
+                turn.expect("an unfamiliar stop reason was refused")
+                    .stop_reason,
+                reason,
+                "batch"
+            );
+
+            let last = format!(
+                r#"{{"type":"message_delta","delta":{{"stop_reason":"{reason}"}},"usage":{{"output_tokens":1}}}}"#
+            );
+            let body = frames(&[
+                r#"{"type":"message_start","message":{"usage":{"input_tokens":1,"output_tokens":1}}}"#,
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}"#,
+                &last,
+            ]);
+            let s = stub(vec![Reply::sse(body)]).await;
+            let (turn, _) = run(&s, request(), Mode::Stream).await;
+            assert_eq!(
+                turn.expect("an unfamiliar stop reason was refused")
+                    .stop_reason,
+                reason,
+                "stream"
+            );
+        }
+    }
+
+    /// **If this breaks:** an answer cut off at the token ceiling is presented
+    /// as complete, with no warning, in both modes.
+    ///
+    /// `max_tokens` is the one `stop_reason` that means "this is not the whole
+    /// answer" while everything else about the response looks healthy — the
+    /// body is well-formed, the content array is complete, the usage adds up.
+    /// The only carrier of that fact is the string itself, so the claim worth
+    /// pinning is that it survives verbatim and identically on both paths, and
+    /// that the turn is still `Ok` — refusing it would throw away the partial
+    /// answer the user paid for.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_turn_cut_at_the_token_ceiling_keeps_the_only_signal_that_says_so() {
+        let body = json!({
+            "type": "message",
+            "stop_reason": "max_tokens",
+            "content": [{ "type": "text", "text": "the answer, up to the ceiling" }],
+            "usage": { "input_tokens": 1, "output_tokens": 32000 }
+        })
+        .to_string();
+        let s = stub(vec![Reply::json(body)]).await;
+        let (batch, _) = run(&s, request(), Mode::Batch).await;
+        let batch = batch.expect("a max_tokens turn must still be delivered");
+        assert_eq!(batch.stop_reason, "max_tokens");
+        assert_eq!(batch.text(), "the answer, up to the ceiling");
+
+        let body = frames(&[
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":1,"output_tokens":1}}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"the answer, up to the ceiling"}}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":32000}}"#,
+        ]);
+        let s = stub(vec![Reply::sse(body)]).await;
+        let (streamed, _) = run(&s, request(), Mode::Stream).await;
+        let streamed = streamed.expect("a max_tokens turn must still be delivered");
+        assert_eq!(
+            streamed.stop_reason, batch.stop_reason,
+            "the two paths must agree"
+        );
+        assert_eq!(streamed.text(), batch.text());
+    }
+
+    /// **If this breaks:** a tool that takes no arguments is never callable —
+    /// every such call fails with "tool arguments were not valid JSON", or
+    /// worse, vanishes from the turn and leaves it reading as an answer.
+    ///
+    /// The control for `a_truncated_tool_argument_is_a_fault_not_an_empty_call`.
+    /// That test proves a *fragment* is refused; this one proves the
+    /// empty-string case beside it in `parse_tool_input` is not the same case.
+    /// A `tool_use` block that received no `input_json_delta` at all is a call
+    /// to a no-argument tool, and the two are distinguishable precisely because
+    /// truncation leaves a fragment behind and a fragment does not parse.
+    ///
+    /// Both halves matter and the second is the easy one to lose: the block
+    /// must still arrive as a **tool call** the loop can dispatch, not as an
+    /// opaque block that leaves the turn looking like the model answered
+    /// without using tools.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_tool_call_that_streamed_no_arguments_is_a_call_with_empty_input() {
+        let body = frames(&[
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":1,"output_tokens":1}}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_9","name":"Tasks","input":{}}}"#,
+            r#"{"type":"content_block_stop","index":0}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5}}"#,
+        ]);
+        let s = stub(vec![Reply::sse(body)]).await;
+        let (turn, _) = run(&s, request(), Mode::Stream).await;
+        let turn = turn.expect("a no-argument tool call was refused");
+        let calls = turn.tool_calls();
+        assert_eq!(calls.len(), 1, "the call vanished from the turn: {turn:?}");
+        assert_eq!(calls[0].name, "Tasks");
+        assert_eq!(calls[0].id, "toolu_9");
+        assert_eq!(calls[0].input, json!({}));
+    }
+
+    /// **If this breaks:** the second attempt of a retried call sends different
+    /// bytes than the first — a different cache prefix at best, a different
+    /// conversation at worst.
+    ///
+    /// `execute` renders once and loops over the same `Value`, which is what
+    /// makes a retry a re-send rather than a re-build. Nothing asserted that.
+    /// The failure it guards against is quiet in the way this crate's failures
+    /// are: a re-render that dropped the last query message, or moved a
+    /// breakpoint, produces a successful turn answering a slightly different
+    /// question, and every existing retry test only counts requests rather than
+    /// comparing them.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_retry_re_sends_the_identical_body_rather_than_re_rendering_it() {
+        let s = stub(vec![
+            Reply::error(529, r#"{"error":{"message":"overloaded"}}"#),
+            Reply::json(batch_body()),
+        ])
+        .await;
+        let req = request()
+            .with_history(vec![
+                Message::user(big_instructions()),
+                Message::assistant_text("older answer"),
+            ])
+            .with_query(vec![Message::user("the new question")]);
+        let (turn, _) = run(&s, req, Mode::Batch).await;
+        assert!(turn.is_ok(), "{:?}", turn.err());
+
+        let sent = s.requests();
+        assert_eq!(sent.len(), 2, "the failure should have been re-sent");
+        assert_eq!(
+            sent[0], sent[1],
+            "the retry sent a different request than the attempt it was retrying"
+        );
+        // Anti-vacuity: two empty bodies would also be equal.
+        assert_eq!(cache_marks(&sent[1]), 2, "{}", sent[1]);
+        assert_eq!(sent[1]["messages"][2]["content"], "the new question");
+    }
+
+    /// **If this breaks:** a gateway outage reads as "the API is unavailable
+    /// (HTTP 502): " with nothing after the colon, and the user has no idea
+    /// what answered.
+    ///
+    /// Every error fixture in this file is a well-formed Anthropic error
+    /// envelope, and the failures a user actually meets in the middle are not:
+    /// a corporate proxy, a load balancer or a captive portal answers with HTML
+    /// and no `error.message` anywhere in it. `api_message` falls back to the
+    /// whole body for exactly this, and the fallback had no test — a decoder
+    /// that returned an empty string when the envelope is missing would pass
+    /// everything else here.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_gateway_error_that_is_not_an_api_envelope_still_says_what_answered() {
+        const HTML: &str =
+            "<html><head><title>502 Bad Gateway</title></head><body><h1>nginx</h1></body></html>";
+        let s = stub(vec![
+            Reply::error(502, HTML),
+            Reply::error(502, HTML),
+            Reply::error(502, HTML),
+        ])
+        .await;
+        let (turn, _) = run(&s, request(), Mode::Batch).await;
+
+        let err = turn.expect_err("a 502 is not a turn");
+        assert!(
+            matches!(err, LlmError::Unavailable { status: 502, .. }),
+            "{err:?}"
+        );
+        let shown = format!("{err}");
+        assert!(shown.contains("502 Bad Gateway"), "{shown}");
+        assert!(shown.contains("nginx"), "{shown}");
+        // …and a 5xx is retried to the cap rather than surfaced on the first.
+        assert_eq!(s.requests().len(), 3);
+    }
+
+    /// **If this breaks:** a proxy's HTML login page decodes as a finished turn
+    /// with no content, and Emma reports that the model said nothing.
+    ///
+    /// HTTP 200 with a body that is not JSON is what a captive portal and a
+    /// re-authenticating proxy both produce. `read_batch` must call it a
+    /// protocol fault and quote what came back; the alternative shape — an
+    /// empty turn — is the exact class of quiet wrong answer this crate has
+    /// already shipped once.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_two_hundred_that_is_not_json_is_a_fault_and_not_an_empty_turn() {
+        let s = stub(vec![Reply::json(
+            "<html><body>Sign in to continue</body></html>",
+        )])
+        .await;
+        let (turn, _) = run(&s, request(), Mode::Batch).await;
+        match turn {
+            Err(LlmError::Protocol(m)) => assert!(
+                m.contains("Sign in to continue"),
+                "the fault must quote what actually came back: {m}"
+            ),
+            other => panic!("a non-JSON 200 was not refused: {other:?}"),
+        }
+    }
+
+    /// **If this breaks:** a malformed response decodes as a turn with no
+    /// content and no tool calls, which the loop reports as "answered — no
+    /// tools were needed".
+    ///
+    /// The three shapes `content` arrives in when something upstream went
+    /// wrong: absent, null, and an object rather than an array. All three are
+    /// one `unwrap_or_default()` away from being an empty turn, and an empty
+    /// turn is indistinguishable from a model that chose to say nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_content_field_that_is_not_an_array_of_blocks_is_refused() {
+        for content in [None, Some(Value::Null), Some(json!({ "type": "text" }))] {
+            let mut body = json!({
+                "type": "message",
+                "stop_reason": "end_turn",
+                "usage": { "input_tokens": 1, "output_tokens": 1 }
+            });
+            if let Some(c) = &content {
+                body["content"] = c.clone();
+            }
+            let s = stub(vec![Reply::json(body.to_string())]).await;
+            let (turn, _) = run(&s, request(), Mode::Batch).await;
+            match turn {
+                Err(LlmError::Protocol(m)) => assert!(
+                    m.contains("content"),
+                    "the fault must name the field: {m} (for {content:?})"
+                ),
+                other => panic!("content {content:?} was accepted: {other:?}"),
+            }
+        }
+
+        // The control: an array really is accepted, including an empty one — a
+        // model may legitimately produce a turn with no blocks, and a refusal
+        // that swallowed that would be worse than the bug above.
+        let body = json!({
+            "type": "message",
+            "stop_reason": "end_turn",
+            "content": [],
+            "usage": { "input_tokens": 1, "output_tokens": 1 }
+        })
+        .to_string();
+        let s = stub(vec![Reply::json(body)]).await;
+        let (turn, _) = run(&s, request(), Mode::Batch).await;
+        assert!(turn.unwrap().content.is_empty());
+    }
+
+    /// **If this breaks:** a stream cut in the middle of its last frame is
+    /// reported as a finished turn, missing whatever that frame carried.
+    ///
+    /// `read_stream` only parses on a `\n\n` boundary, so a connection that
+    /// dies part-way through a frame leaves that frame in the buffer and drops
+    /// it on exit. That is the right thing to do with half a frame — but it
+    /// means the *only* thing standing between a cut connection and a confident
+    /// half-answer is `finish`'s stop-reason check, because the frame that was
+    /// lost is exactly the one that would have carried the stop reason. This
+    /// asserts that the two behaviours compose.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stream_cut_in_the_middle_of_its_last_frame_is_not_a_finished_turn() {
+        let mut body = frames(&[
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":1,"output_tokens":1}}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"The tests all pa"}}"#,
+        ]);
+        // The frame that would have said why it stopped, sliced through.
+        body.push_str(r#"data: {"type":"message_delta","delta":{"stop_re"#);
+
+        let s = stub(vec![Reply::sse(body)]).await;
+        let (turn, _) = run(&s, request(), Mode::Stream).await;
+        let shown = format!(
+            "{}",
+            turn.expect_err("a stream cut mid-frame read as a finished turn")
+        );
+        assert!(
+            shown.contains("stop reason") || shown.contains("incomplete"),
+            "{shown}"
+        );
+    }
+
+    /// **If this breaks:** a rate limit is retried instantly three times and the
+    /// user is told to give up, seconds after the first 429.
+    ///
+    /// `retry_after_seconds` refuses the HTTP-date form deliberately — the
+    /// Messages API sends seconds, and mis-parsing a date into a duration is
+    /// worse than ignoring it. `retry.rs` unit-tests the parse; nothing tested
+    /// what the *provider* does with the `None` it returns, and the failure
+    /// mode is a plausible one-liner: a parse that fell back to `Some(ZERO)`
+    /// rather than `None` would look correct in isolation and turn every
+    /// date-carrying 429 into a hot loop.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_retry_after_this_client_cannot_read_falls_back_to_the_curve() {
+        let s = stub(vec![
+            Reply::error(429, r#"{"error":{"message":"rate limit"}}"#)
+                .with_header("retry-after", "Wed, 21 Oct 2026 07:28:00 GMT"),
+            Reply::json(batch_body()),
+        ])
+        .await;
+        let (turn, events) = run(&s, request(), Mode::Batch).await;
+        assert!(turn.is_ok(), "{:?}", turn.err());
+
+        let delays: Vec<Duration> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Retrying { delay, .. } => Some(*delay),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(delays.len(), 1, "{events:?}");
+        assert!(
+            delays[0] > Duration::ZERO,
+            "an unreadable retry-after must back off on the curve, not instantly"
+        );
+        // …and the user is still told what happened.
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::Retrying { reason, .. } if reason.contains("429")
+        )));
+    }
+
+    // endregion: what the real wire sends that the fixtures do not
+
     // endregion: tests
 }

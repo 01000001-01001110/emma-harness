@@ -371,3 +371,295 @@ async fn the_read_only_declaration_holds() {
         "a tool declaring read_only modified the tree"
     );
 }
+
+// region: The gaps this file had
+// ---------------------------------------------------------------------------
+// The gaps this file had
+//
+// Everything above exercises `FindReferences` hard, `Hover` and
+// `DocumentSymbols` once each on their happy path, and `GoToDefinition` only
+// for the arguments it refuses. Two consequences, each of which survived a
+// green suite until these were written:
+//
+//   * no test read what `GoToDefinition` *returns*, so the LSP method it sends
+//     and the noun it labels the answer with were both unasserted;
+//   * `GoToDefinition`, `Hover` and `DocumentSymbols` each pass `readiness`
+//     into the renderer separately, and only `FindReferences`' path was
+//     checked — the rule the whole crate is built around was one line of
+//     copy-paste away from being silently dropped in three places.
+//
+// Each test below pairs the unready case with the ready one, because a test
+// that only asserts the hedge is satisfied by hedging everything, which is the
+// other way to get this wrong.
+// ---------------------------------------------------------------------------
+
+/// `GoToDefinition` must ask the *definition* question, and label the answer as
+/// one.
+///
+/// What breaks in the real world if this fails: the tool sends some other LSP
+/// method — `textDocument/references` is a few characters' worth of edit away
+/// and is answered by the same server with the same shape — and a model asking
+/// "where is this defined" is handed the list of call sites, labelled as
+/// definitions, with nothing in the output saying which question was answered.
+/// That is the crate's second rule ("never quietly answer a different
+/// question") failing in the one place nothing else would notice.
+#[tokio::test]
+async fn go_to_definition_answers_the_definition_question_and_not_a_neighbouring_one() {
+    let sandbox = Sandbox::new();
+    sandbox.write("src/config.rs", SOURCE);
+    let root = sandbox.canonical();
+
+    // The negative control, and the point of the test: this server answers
+    // *both* methods, with different lines. A tool that sends the wrong one
+    // still gets a well-formed, plausible, wrong answer — which is what
+    // shipping this defect would actually look like.
+    let client = Fake::new(Indexing::Finishes)
+        // A bare `Location` object rather than an array: one of the three
+        // shapes `textDocument/definition` may reply with, and the one a
+        // parser that handles only arrays renders as "there is no definition".
+        .answers(
+            "textDocument/definition",
+            location(&root, "src/config.rs", 0, 11),
+        )
+        .answers(
+            "textDocument/references",
+            json!([location(&root, "src/config.rs", 10, 7)]),
+        )
+        .start(&root)
+        .await;
+    let pool = Arc::new(Pool::new());
+    pool.adopt(&root, client).await;
+
+    let out = GoToDefinition::new(pool)
+        .invoke(
+            &sandbox.ctx,
+            json!({ "file_path": "src/config.rs", "line": 7, "symbol": "Config" }),
+        )
+        .await
+        .expect("no fault")
+        .expect("no tool error");
+
+    assert!(
+        out.content.contains("1: pub struct Config"),
+        "the declaration line is what the caller asked for: {}",
+        out.content
+    );
+    // The noun is a separate argument to `render::locations`, so the label and
+    // the method are two independent things to get wrong.
+    assert!(
+        out.content.contains("1 definitions in 1 file"),
+        "the answer is not labelled as definitions: {}",
+        out.content
+    );
+    // The reference answer is reachable from this same server and must not be
+    // what came back.
+    assert!(
+        !out.content.contains("merge"),
+        "GoToDefinition returned the reference answer: {}",
+        out.content
+    );
+    assert!(
+        !out.content.contains("references"),
+        "the answer is labelled with the wrong question: {}",
+        out.content
+    );
+}
+
+/// `GoToDefinition` with nothing to report must not say "there is none" unless
+/// the index was finished.
+///
+/// What breaks in the real world if this fails: rust-analyzer answers
+/// `definition` with `null` for the first ten to sixty seconds of a cold start.
+/// A model told "no definitions found — there are none" about a symbol it is
+/// about to edit concludes the symbol is dead. `FindReferences` is the only
+/// tool whose readiness plumbing any test read; this is the same line of code
+/// in a different function.
+#[tokio::test]
+async fn go_to_definition_with_nothing_to_report_respects_the_readiness_rule() {
+    let (sandbox, pool) = fixture(
+        Indexing::NeverFinishes,
+        &[("textDocument/definition", Value::Null)],
+    )
+    .await;
+    let unready = GoToDefinition::new(pool)
+        .invoke(
+            &sandbox.ctx,
+            json!({ "file_path": "src/config.rs", "line": 1, "symbol": "Config" }),
+        )
+        .await
+        .expect("no fault")
+        .expect("emptiness is not an error");
+    assert!(
+        unready.content.contains("still indexing"),
+        "{}",
+        unready.content
+    );
+    assert!(
+        unready.content.contains("not an answer"),
+        "{}",
+        unready.content
+    );
+    assert!(
+        !unready.content.contains("there are none"),
+        "an unindexed server was allowed to declare a symbol undefined: {}",
+        unready.content
+    );
+
+    // The negative control. Hedging every answer would satisfy the half above
+    // and destroy the tool.
+    let (sandbox, pool) = fixture(
+        Indexing::Finishes,
+        &[("textDocument/definition", Value::Null)],
+    )
+    .await;
+    let ready = GoToDefinition::new(pool)
+        .invoke(
+            &sandbox.ctx,
+            json!({ "file_path": "src/config.rs", "line": 1, "symbol": "Config" }),
+        )
+        .await
+        .expect("no fault")
+        .expect("emptiness is not an error");
+    assert!(
+        ready.content.contains("No definitions found"),
+        "{}",
+        ready.content
+    );
+    assert!(
+        ready.content.contains("there are none"),
+        "a finished index must be allowed to answer: {}",
+        ready.content
+    );
+    assert!(
+        !ready.content.contains("still indexing"),
+        "{}",
+        ready.content
+    );
+}
+
+/// An empty symbol list from an unfinished index must not read as "this file is
+/// empty".
+///
+/// What breaks in the real world if this fails: `DocumentSymbols` is the tool
+/// to reach for on the *first* look at an unfamiliar file, which is precisely
+/// when the server is coldest. "No symbols found — there are none" about a
+/// 900-line module is the most confidently wrong sentence this crate can emit,
+/// and `render::symbols` takes `readiness` as its own argument, so nothing but
+/// this test connects the two.
+#[tokio::test]
+async fn document_symbols_with_nothing_to_report_respects_the_readiness_rule() {
+    let (sandbox, pool) = fixture(
+        Indexing::NeverFinishes,
+        &[("textDocument/documentSymbol", json!([]))],
+    )
+    .await;
+    let unready = DocumentSymbols::new(pool)
+        .invoke(&sandbox.ctx, json!({ "file_path": "src/config.rs" }))
+        .await
+        .expect("no fault")
+        .expect("emptiness is not an error");
+    assert!(
+        unready.content.contains("still indexing"),
+        "{}",
+        unready.content
+    );
+    assert!(
+        unready.content.contains("not an answer"),
+        "{}",
+        unready.content
+    );
+    assert!(
+        !unready.content.contains("there are none"),
+        "an unindexed server was allowed to call a Rust file symbol-less: {}",
+        unready.content
+    );
+
+    // The negative control.
+    let (sandbox, pool) = fixture(
+        Indexing::Finishes,
+        &[("textDocument/documentSymbol", json!([]))],
+    )
+    .await;
+    let ready = DocumentSymbols::new(pool)
+        .invoke(&sandbox.ctx, json!({ "file_path": "src/config.rs" }))
+        .await
+        .expect("no fault")
+        .expect("emptiness is not an error");
+    assert!(
+        ready.content.contains("No symbols found"),
+        "{}",
+        ready.content
+    );
+    assert!(
+        ready.content.contains("there are none"),
+        "a finished index must be allowed to answer: {}",
+        ready.content
+    );
+}
+
+/// `Hover` with no type information must say which of the two things happened.
+///
+/// What breaks in the real world if this fails: `Hover` is the only one of the
+/// four that assembles its own empty-result sentence rather than letting
+/// `render::locations` or `render::symbols` do it — the call to
+/// `no_results_line` sits inline in `Hover::run`, where replacing it with a
+/// plain string reads as a tidy-up. A model told "no type information" about a
+/// symbol on a cold server concludes the symbol has no type, and the usual next
+/// move is to rewrite the code around it.
+#[tokio::test]
+async fn hover_with_no_type_information_respects_the_readiness_rule() {
+    // `contents` absent entirely, which is what a server that has not yet
+    // indexed the file replies with.
+    let (sandbox, pool) = fixture(
+        Indexing::NeverFinishes,
+        &[("textDocument/hover", Value::Null)],
+    )
+    .await;
+    let unready = Hover::new(pool)
+        .invoke(
+            &sandbox.ctx,
+            json!({ "file_path": "src/config.rs", "line": 1, "symbol": "Config" }),
+        )
+        .await
+        .expect("no fault")
+        .expect("emptiness is not an error");
+    assert!(
+        unready.content.contains("still indexing"),
+        "{}",
+        unready.content
+    );
+    assert!(
+        unready.content.contains("not an answer"),
+        "{}",
+        unready.content
+    );
+    assert!(
+        !unready.content.contains("there are none"),
+        "an unindexed server was allowed to declare a symbol untyped: {}",
+        unready.content
+    );
+
+    // The negative control, and the half that also pins the noun: what the
+    // model is told is missing is "type information", not "results".
+    let (sandbox, pool) = fixture(Indexing::Finishes, &[("textDocument/hover", Value::Null)]).await;
+    let ready = Hover::new(pool)
+        .invoke(
+            &sandbox.ctx,
+            json!({ "file_path": "src/config.rs", "line": 1, "symbol": "Config" }),
+        )
+        .await
+        .expect("no fault")
+        .expect("emptiness is not an error");
+    assert!(
+        ready.content.contains("No type information found"),
+        "{}",
+        ready.content
+    );
+    assert!(
+        ready.content.contains("there are none"),
+        "a finished index must be allowed to answer: {}",
+        ready.content
+    );
+}
+
+// endregion: The gaps this file had

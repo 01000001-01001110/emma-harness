@@ -1374,6 +1374,346 @@ goals asked    12",
         );
     }
 
+    /// Every page names the one key that gets out of it.
+    ///
+    /// **There is no other way off a page.** `Esc` is it — no scroll, no
+    /// close affordance, no click target — so the sentence saying so is not
+    /// decoration, it is the exit. If it were deleted the user would see three
+    /// pages that look like modes with no visible way back, and the recorded
+    /// shape of that complaint in this repository is somebody pressing the
+    /// chord again and reporting that it "does not close".
+    ///
+    /// The chat pane is the control: it must *not* carry the sentence, or the
+    /// assertion above is satisfied by a string that lives somewhere in the
+    /// frame rather than on the page. (`Esc` still appears in the sidebar's
+    /// QUICK HELP as `close menu / leave page`, which is a different claim in
+    /// different words, and is why the assertion is on the whole sentence.)
+    ///
+    /// **A cell buffer is not a console.** This proves the characters were
+    /// written into the cells the layout chose. It does not prove a terminal
+    /// painted them, that they were not overdrawn by a later widget on a real
+    /// screen, or that `Esc` arrives at all through the reader.
+    #[test]
+    fn every_page_names_the_key_that_leaves_it() {
+        const EXIT: &str = "Esc returns to the conversation.";
+        let v = view();
+        for (name, pane) in [
+            ("Settings", Pane::Page(Page::Settings)),
+            ("Data Explorer", Pane::Page(Page::DataExplorer)),
+            ("Memory", Pane::Page(Page::Memory)),
+        ] {
+            let mut a = App::new((120, 40));
+            match pane {
+                Pane::Page(Page::DataExplorer) => a.show_explorer("source  C:/store"),
+                Pane::Page(Page::Memory) => a.show_memory("project  C:/src/emma"),
+                other => a.show(other),
+            }
+            let (rows, _) = draw(&mut a, &v, 120, 40);
+            let screen = rows.join("\n");
+            assert!(
+                screen.contains(EXIT),
+                "{name} does not say how to leave it, and nothing else does:\n{screen}"
+            );
+        }
+
+        let mut a = App::new((120, 40));
+        let (rows, _) = draw(&mut a, &v, 120, 40);
+        let screen = rows.join("\n");
+        assert!(
+            !screen.contains(EXIT),
+            "the conversation tells you how to return to itself, so the assertions \
+             above pass without any page drawing anything:\n{screen}"
+        );
+    }
+
+    /// Each page's disclosure is that page's, and no other page claims it.
+    ///
+    /// **Two of the three pages are the same function** — Memory and the Data
+    /// Explorer are both `text_page`, differing only in the footer handed in —
+    /// so the failure that is actually available here is a footer landing on
+    /// the wrong page, or one page's footer being drawn for all of them. A
+    /// reader who saw `no embedding index` under the Data Explorer would
+    /// conclude the session store is an index that failed, which is a worse
+    /// state than no sentence at all.
+    ///
+    /// Written as a matrix rather than three `contains` calls because the
+    /// positive half alone is what the three existing page tests already do,
+    /// and each of them stays green if its sentence is copied onto all three
+    /// pages. The negatives are the part that can fail.
+    ///
+    /// **A cell buffer is not a console**: this establishes which strings the
+    /// layout wrote for which pane, nothing about what a terminal renders.
+    #[test]
+    fn each_pages_disclosure_belongs_to_that_page_alone() {
+        // The sentence that is the whole argument of each page, in the words
+        // the page uses.
+        const SETTINGS: &str = "Not wired yet";
+        const EXPLORER: &str = "Not drawn, because nothing is behind it yet";
+        const MEMORY: &str = "no embedding index";
+
+        let v = view();
+        let render = |pane: Pane| {
+            let mut a = App::new((120, 40));
+            match pane {
+                Pane::Page(Page::DataExplorer) => a.show_explorer("source  C:/store"),
+                Pane::Page(Page::Memory) => a.show_memory("project  C:/src/emma"),
+                other => a.show(other),
+            }
+            let (rows, _) = draw(&mut a, &v, 120, 40);
+            rows.join("\n")
+        };
+
+        let settings = render(Pane::Page(Page::Settings));
+        let explorer = render(Pane::Page(Page::DataExplorer));
+        let memory = render(Pane::Page(Page::Memory));
+
+        for (name, screen, mine, theirs) in [
+            ("Settings", &settings, SETTINGS, [EXPLORER, MEMORY]),
+            ("Data Explorer", &explorer, EXPLORER, [SETTINGS, MEMORY]),
+            ("Memory", &memory, MEMORY, [SETTINGS, EXPLORER]),
+        ] {
+            assert!(
+                screen.contains(mine),
+                "{name} lost its own disclosure:\n{screen}"
+            );
+            for other in theirs {
+                assert!(
+                    !screen.contains(other),
+                    "{name} is carrying another page's disclosure ({other:?}), which \
+                     tells the reader the wrong thing is missing:\n{screen}"
+                );
+            }
+        }
+    }
+
+    /// The Data Explorer names the four things it will not draw, one by one.
+    ///
+    /// **`Not drawn` on its own is a shrug.** The existing test asserts that
+    /// phrase, and it stays green if the list behind it is replaced with
+    /// nothing, or with a different four items. The page's claim (UI-002) is
+    /// specific: the query box, the typed columns, the elapsed time and the
+    /// chart are absent because there is no query engine — and the query box is
+    /// the one a user will otherwise spend a minute hunting for, because every
+    /// data explorer they have ever used has one.
+    ///
+    /// This is also the standard the Memory page does not meet: the Explorer
+    /// names its omitted input surface, Memory's footer speaks only about
+    /// embeddings and never about the composer its own sidebar row promises.
+    /// That gap is recorded in `memory_has_no_composer_and_the_page_does_not_
+    /// mention_one` rather than asserted here, because it is a defect to fix,
+    /// not a behaviour to pin.
+    ///
+    /// **A cell buffer is not a console**: cells written, not pixels shown.
+    #[test]
+    fn the_explorer_names_the_query_box_among_what_it_will_not_draw() {
+        let v = view();
+        let mut a = App::new((120, 40));
+        a.show_explorer("source  C:/store\nsessions  2 file(s), 9 record(s)");
+        let (rows, _) = draw(&mut a, &v, 120, 40);
+        let screen = rows.join("\n");
+        for absent in ["query box", "columns", "elapsed time", "chart"] {
+            assert!(
+                screen.contains(absent),
+                "the page does not say the {absent} is missing, so its absence reads \
+                 as an oversight rather than a refusal:\n{screen}"
+            );
+        }
+    }
+
+    /// Settings shows this run's own values, and says where each one came from.
+    ///
+    /// **The page's subtitle is a promise — "what this run resolved, and where
+    /// each value came from"** — and nothing checked either half. A one-line
+    /// change swapping `st.model` for a literal, or dropping the third column,
+    /// left every existing assertion green, because they all key off the
+    /// `Not wired yet` block at the bottom.
+    ///
+    /// The model string is deliberately not the one the status-bar fixture
+    /// carries: `contains` over the whole screen would otherwise be satisfied
+    /// by the status bar, three rows below, and the test would pass with the
+    /// Settings row blank. Each assertion is on a single row holding both the
+    /// value and its provenance, which is the pairing the page promises.
+    ///
+    /// The last one is the honesty branch: an unset budget must read `not set`,
+    /// not `0`. `0` on a settings page reads as a configured limit of zero.
+    ///
+    /// **A cell buffer is not a console.** It proves the row was composed and
+    /// written; it cannot prove the terminal showed all of it, and at narrower
+    /// widths `fit_spans` will cut the provenance column off the right edge —
+    /// which is why this renders wide, and why the cut is a separate test.
+    #[test]
+    fn the_settings_page_shows_this_runs_values_beside_where_each_came_from() {
+        let mut v = view();
+        v.status.model = "a-model-only-this-test-sets".into();
+        v.status.session = "C:/Users/you/.emma/sessions/only-this-test.jsonl".into();
+        v.status.context = Some((0, 120_000));
+        // Unset on purpose: the branch that has to say so rather than say zero.
+        v.status.spend = None;
+
+        let mut a = App::new((140, 40));
+        a.show(Pane::Page(Page::Settings));
+        let (rows, _) = draw(&mut a, &v, 140, 40);
+        let screen = rows.join("\n");
+
+        for (what, value, why) in [
+            (
+                "the model",
+                "a-model-only-this-test-sets",
+                "provider settings",
+            ),
+            (
+                "the session log",
+                "only-this-test.jsonl",
+                "record of this run",
+            ),
+            (
+                "the context limit",
+                "120000",
+                "compaction happens at this size",
+            ),
+        ] {
+            assert!(
+                rows.iter().any(|r| r.contains(value) && r.contains(why)),
+                "{what} is not shown beside where it came from — one row has to \
+                 carry both, or the page's subtitle is not true:\n{screen}"
+            );
+        }
+
+        assert!(
+            rows.iter()
+                .any(|r| r.contains("Per-goal budget") && r.contains("not set")),
+            "an unset budget did not read as unset; a number here reads as a \
+             configured limit:\n{screen}"
+        );
+    }
+
+    /// Memory has no composer, and the page does not mention one.
+    ///
+    /// **This is a finding, not a feature.** The sidebar row and the mockup
+    /// notes describe Memory as "the only page with its own composer"
+    /// (`Ask Emma about your memory…`). There is no composer in this
+    /// repository: `Pane::Page(Page::Memory)` goes to the shared `text_page`
+    /// with the same call shape as the Data Explorer, and the only input on
+    /// screen is the chat dock `render` draws for every pane after the match.
+    ///
+    /// What is asserted here is the true half — **there is exactly one input
+    /// box on the Memory page, and it is the chat one, unchanged**. That is
+    /// worth pinning in its own right: the thing this codebase would actually
+    /// do wrong is draw a second box that looks like a composer and swallows
+    /// nothing, which is the "declaration wearing the costume of a mechanism"
+    /// the Settings page's doc refuses. Two boxes, or a dock that differs
+    /// between Memory and the conversation, fails here.
+    ///
+    /// What is *not* asserted, and is a live defect: the Memory footer
+    /// discloses only the missing embeddings, while the Data Explorer's names
+    /// its own omitted query box. Same shortfall, one page owns up to it.
+    /// Pinning the silence would make the fix turn this test red, so it is
+    /// written down instead — see `the_explorer_names_the_query_box_among_what_
+    /// it_will_not_draw`.
+    ///
+    /// **A cell buffer is not a console**, and it matters more here than
+    /// elsewhere: identical cells in two buffers say nothing about whether a
+    /// terminal repainted the dock when the pane changed under it.
+    #[test]
+    fn memory_has_no_composer_and_the_page_does_not_mention_one() {
+        let v = view();
+        let tools = vec![sidebar::Row {
+            name: "Memory".into(),
+            trailing: "Alt+m".into(),
+            selected: false,
+        }];
+
+        let mut chat = App::new((120, 40));
+        chat.set_tools(tools.clone());
+        let (chat_rows, _) = draw(&mut chat, &v, 120, 40);
+
+        let mut mem = App::new((120, 40));
+        mem.set_tools(tools);
+        mem.show_memory("project        C:/src/emma\ngoals asked    12");
+        let (mem_rows, _) = draw(&mut mem, &v, 120, 40);
+
+        // `[send: Enter]` is drawn once per input box, by the box itself.
+        // Counting it counts boxes.
+        let boxes = mem_rows
+            .iter()
+            .filter(|r| r.contains("[send: Enter]"))
+            .count();
+        assert_eq!(
+            boxes,
+            1,
+            "the Memory page draws {boxes} input boxes; it has one, and it is the \
+             conversation's:\n{}",
+            mem_rows.join("\n")
+        );
+
+        // The dock is the shared one, cell for cell, not a page-local copy that
+        // could drift into a composer.
+        let area = Rect::new(0, 0, 120, 40);
+        let r = regions(
+            area,
+            sidebar::width(120, hidden(120, Latch::default())),
+            dock_height(&v, 40),
+        );
+        let slice = |rows: &[String]| {
+            (r.dock.y..r.dock.y.saturating_add(r.dock.height))
+                .map(|y| rows[usize::from(y)].clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            slice(&mem_rows),
+            slice(&chat_rows),
+            "the Memory page's input dock is not the conversation's — a page-local \
+             input is the composer this repository does not have"
+        );
+    }
+
+    /// The three page chords the sidebar advertises are chords the key decoder
+    /// actually returns.
+    ///
+    /// **A rendered key that does nothing is the defect `tool_rows`' own doc
+    /// names**, and it has already shipped once: the sidebar showed `Alt+M`
+    /// while `launch_tool` sent the key to `launch`, which refused it with a
+    /// warning about a key the frame had never claimed. The half that was
+    /// missing was not the chord and not the page, it was the agreement
+    /// between them.
+    ///
+    /// This walks the real catalogue rather than a fixture, because a fixture
+    /// asserts what the fixture's author believed. For the three pages the
+    /// catalogue is machine-independent — `catalogue_on` takes their
+    /// availability from `Tool::routed()` and never probes the box — so this is
+    /// deterministic on any developer's machine, unlike the launching tools
+    /// beside them.
+    ///
+    /// It stops at the decoder. **Nothing here proves a terminal delivers
+    /// `Alt+,`** — Windows Terminal's handling of that chord is exactly the
+    /// thing a buffer cannot speak for, and the only evidence for it is
+    /// somebody pressing the key.
+    #[test]
+    fn the_page_chords_the_sidebar_advertises_are_chords_the_decoder_returns() {
+        use super::super::input::tool_key;
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let entries = crate::usertools::catalogue(std::path::Path::new("."));
+        for (label, key) in [("Settings", ','), ("Memory", 'm'), ("Data Explorer", 'd')] {
+            let entry = entries
+                .iter()
+                .find(|e| e.label == label)
+                .unwrap_or_else(|| panic!("{label} is not in the catalogue at all"));
+            let row = &tool_rows(std::slice::from_ref(entry))[0];
+            assert_eq!(
+                row.trailing,
+                format!("Alt+{key}"),
+                "the sidebar does not offer {label} a working chord; `n/a` here means \
+                 the page is unreachable from the panel that names it"
+            );
+            assert_eq!(
+                tool_key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::ALT), false),
+                Some(key),
+                "the sidebar advertises Alt+{key} for {label} and the decoder drops it"
+            );
+        }
+    }
+
     /// The chat view goes through the pane match, and nothing else moved.
     ///
     /// **Story 1 of the pane plan is a refactor, and a refactor's whole claim is

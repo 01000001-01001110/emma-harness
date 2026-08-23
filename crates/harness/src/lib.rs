@@ -1245,7 +1245,30 @@ fn read_if_present(path: &Path) -> Result<String> {
     if !path.is_file() {
         return Ok(String::new());
     }
-    std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))
+    let raw =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    Ok(strip_bom(raw))
+}
+
+/// Drop a leading UTF-8 byte-order mark.
+///
+/// **The same byte, the third surface.** `claude::open_frontmatter` strips it
+/// because 101 real `SKILL.md` files opened with it and parsed as nothing; the
+/// JSON readers never did, and `serde_json` answers `expected value at line 1
+/// column 1` — a sentence that reads as "your JSON is broken" about a file that
+/// is not. It is not exotic on this platform: PowerShell's `>`, `Out-File` and
+/// `Set-Content -Encoding utf8` all write the mark, so a `settings.json` a
+/// Windows operator generated from a script refused the whole boot, and the
+/// error blamed their file for it.
+///
+/// Applied at the read rather than at each `from_str`, so the spine, both
+/// settings files and the user's global one get one answer. A BOM is an
+/// encoding artefact, not content, in every format this crate reads.
+pub(crate) fn strip_bom(raw: String) -> String {
+    match raw.strip_prefix('\u{feff}') {
+        Some(rest) => rest.to_string(),
+        None => raw,
+    }
 }
 
 fn select_persona(
@@ -1474,18 +1497,66 @@ fn load_skills(
     // exactly like a catalogue that is complete. The total is the number that
     // tells an operator something is wrong.
     let mut skipped = 0usize;
+    // Counted separately from `skipped`, because it is a different sentence: a
+    // skipped skill is a file this loader read and could not use, and a nested
+    // one is a file it never looked at. Telling an operator "3 skills were
+    // skipped" about files that parse perfectly would send them to fix the
+    // wrong thing.
+    let mut nested = 0usize;
     if dir.is_dir() {
         for entry in
             std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))?
         {
-            // A subdirectory without a `SKILL.md` is skipped without complaint,
-            // and a loose file in `skills/` is ignored.
-            let path = entry?.path().join("SKILL.md");
+            // A loose file in `skills/` is ignored. A subdirectory without a
+            // `SKILL.md` used to be skipped without complaint — see `nested`
+            // below for what that hid.
+            let dir_entry = entry?.path();
+            let path = dir_entry.join("SKILL.md");
             if !path.is_file() {
+                // **A skill one level deeper contributed nothing and said
+                // nothing.** `skills/<group>/<name>/SKILL.md` is how a plugin
+                // ships its skills, and this loop reads `skills/<x>/SKILL.md`
+                // only — so a whole nested tree loaded as an empty catalogue
+                // with no note, which is the shape of silence this crate keeps
+                // ruling against. `load_commands` had already grown the count
+                // for its own nesting; skills never got it.
+                if dir_entry.is_dir() {
+                    nested += std::fs::read_dir(&dir_entry)
+                        .map(|it| {
+                            it.flatten()
+                                .filter(|e| e.path().join("SKILL.md").is_file())
+                                .count()
+                        })
+                        .unwrap_or(0);
+                }
                 continue;
             }
-            let text = std::fs::read_to_string(&path)
-                .with_context(|| format!("reading {}", path.display()))?;
+            let text = match std::fs::read_to_string(&path) {
+                Ok(text) => text,
+                // **Not `?`, and this is the ruling `ClaudeFront`'s doc already
+                // stated and the code did not honour:** "a file that cannot be
+                // read at all is skipped with a warning rather than taken as a
+                // reason not to start". That covered a parse failure and not a
+                // read failure, so one skill file saved in Latin-1 — the shape
+                // an editor leaves when a stray accented character is typed into
+                // a non-UTF-8 buffer — took the entire session down, while the
+                // agent loader one file away noted the identical input and
+                // carried on. Three loaders, three answers, one input shape.
+                //
+                // `.emma/` stays fatal, on the same line the parse failure draws:
+                // there the file was written for Emma and an unreadable one is
+                // the operator's mistake in their own format.
+                Err(e) if flavor == Flavor::Claude => {
+                    let note = format!("skill {} could not be read: {e}", path.display());
+                    eprintln!("emma: skipping {note}");
+                    notes.push(note);
+                    skipped += 1;
+                    continue;
+                }
+                Err(e) => {
+                    return Err(anyhow::Error::new(e).context(format!("reading {}", path.display())))
+                }
+            };
             let (front, body) = match (split_skill(&text, &path, flavor), flavor) {
                 (Ok(v), _) => v,
                 // Emma's own format: a file this loader cannot read is a mistake
@@ -1546,6 +1617,17 @@ fn load_skills(
                 SkillDef::new(front.name, front.description, body),
             );
         }
+    }
+    if nested > 0 {
+        notes.push(format!(
+            "{nested} skill(s) below {} are one directory too deep and were not loaded — only \
+             `skills/<name>/SKILL.md` is read. Move them up if they are wanted.",
+            dir.display()
+        ));
+        eprintln!(
+            "emma: {nested} skill(s) below {} are one directory too deep and were not loaded.",
+            dir.display()
+        );
     }
     if skipped > 0 {
         notes.push(format!(
@@ -1685,8 +1767,22 @@ fn load_commands(root: &Path) -> Result<(BTreeMap<String, String>, Vec<String>)>
             continue;
         }
         let name = path.file_stem().unwrap_or_default().to_string_lossy();
-        let body = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        // **Not `?`.** A command is prose a person summons, and this function
+        // already rules that losing one to a malformed `---` is a worse outcome
+        // than showing a stray line — but a command file that is not UTF-8 took
+        // the whole boot down, so the tolerant ruling held for the second-worst
+        // input and not for the worst. One file saved in Latin-1 anywhere in
+        // `commands/` and Emma would not start, naming a file the operator may
+        // not have written.
+        let body = match std::fs::read_to_string(&path) {
+            Ok(body) => body,
+            Err(e) => {
+                notes.push(format!(
+                    "command `{name}` was not read, so `/{name}` does not exist: {e}"
+                ));
+                continue;
+            }
+        };
         // Frontmatter is metadata about the command, not part of it. 59 of the
         // 116 real commands on the owner's machine carry a `---` block, and all
         // of it used to be pasted into the model's context as if the operator

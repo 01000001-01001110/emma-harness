@@ -671,6 +671,112 @@ mod tests {
         }
     }
 
+    /// **If this breaks:** a tool result the model sent back — an image, a
+    /// search result, anything the API renders as blocks — is decoded with its
+    /// payload replaced by an empty string, and nothing says so.
+    ///
+    /// `ToolResult::content` is a `String` because that is what Emma *writes*.
+    /// It is not what the API accepts: `tool_result.content` may be an array of
+    /// blocks, and a session file or a replayed transcript can carry one. The
+    /// two ways that can go wrong pull in opposite directions and only one of
+    /// them is loud, so both are asserted here — the block must not decode as a
+    /// `ToolResult` whose content silently became `""`, and it must not be
+    /// dropped either. Demotion to `Passthrough` is the answer that loses
+    /// nothing.
+    #[test]
+    fn a_tool_result_whose_content_is_a_block_array_is_kept_whole() {
+        let v = json!({
+            "type": "tool_result",
+            "tool_use_id": "toolu_1",
+            "content": [
+                { "type": "text", "text": "line one" },
+                { "type": "image", "source": { "type": "base64", "data": "AAAA" } }
+            ]
+        });
+        let block = round_trips(v.clone());
+        assert!(
+            matches!(block, ContentBlock::Passthrough(_)),
+            "a block shape this struct cannot hold must stay opaque rather than \
+             being decoded lossily: {block:?}"
+        );
+        // The anti-vacuity half: `round_trips` would also pass if the payload
+        // came back as an empty array, so name what has to still be inside.
+        assert_eq!(block.to_value()["content"][0]["text"], "line one");
+        assert_eq!(
+            block.to_value()["content"][1]["source"]["data"],
+            "AAAA",
+            "the second block was dropped"
+        );
+    }
+
+    /// **If this breaks:** a block with no usable `type` is decoded as whatever
+    /// the fallback happens to name, and its fields are read as that type's —
+    /// which is how a turn gets quietly rewritten on replay.
+    ///
+    /// `from_value` reads the tag with `and_then(Value::as_str)`, so a missing
+    /// tag and a null tag both land in the same place. Neither is a shape the
+    /// live API produces; both are shapes a truncated session file, a
+    /// hand-edited transcript or a middlebox produces, and the decoder has no
+    /// way to tell those apart from a response. There is nothing to interpret,
+    /// so the only correct answer is to interpret nothing and keep the bytes.
+    #[test]
+    fn a_block_with_no_readable_type_is_kept_rather_than_guessed_at() {
+        for v in [
+            json!({ "text": "looks like a text block, is not tagged as one" }),
+            json!({ "type": null, "text": "tagged with a null" }),
+            json!({ "type": 7, "text": "tagged with a number" }),
+        ] {
+            let block = round_trips(v.clone());
+            assert!(
+                matches!(block, ContentBlock::Passthrough(_)),
+                "an untagged block was guessed at rather than carried: {block:?}"
+            );
+            // It must also not answer questions about itself that it cannot
+            // know — an unreadable block is conservatively model-bound.
+            assert!(block.is_model_bound(), "{block:?}");
+            assert_eq!(block.tool_use_id(), None);
+        }
+    }
+
+    /// **If this breaks:** a corrupt session file loads as a conversation with
+    /// a message whose content silently became empty, and the next call is made
+    /// against a history that is not the one on disk.
+    ///
+    /// `Content` accepts the two forms the API takes and refuses everything
+    /// else with a message naming what it got. The refusal is the whole reason
+    /// this is a hand-written `Deserialize` rather than an untagged enum: an
+    /// untagged enum's failure mode is to try each variant and report nothing
+    /// useful, and a lenient one's is to fall through to `Text(String::new())`.
+    /// A number, a bare object and a null are all one lenient arm away from
+    /// being an empty message.
+    #[test]
+    fn a_message_content_that_is_neither_a_string_nor_blocks_is_refused_loudly() {
+        for v in [
+            json!(42),
+            json!(null),
+            json!({ "type": "text" }),
+            json!(true),
+        ] {
+            let err = serde_json::from_value::<Content>(v.clone())
+                .expect_err(&format!("content {v} was accepted"));
+            let shown = err.to_string();
+            assert!(
+                shown.contains("string or an array of blocks"),
+                "the refusal must say what shape was expected: {shown}"
+            );
+        }
+
+        // The control, so the refusal above cannot be a decoder that refuses
+        // everything: both real forms still load, including an empty array.
+        for v in [
+            json!("hi"),
+            json!([]),
+            json!([{ "type": "text", "text": "hi" }]),
+        ] {
+            let back: Content = serde_json::from_value(v.clone()).expect("a real form was refused");
+            assert_eq!(serde_json::to_value(&back).unwrap(), v);
+        }
+    }
     #[test]
     fn wire_len_counts_the_rendered_bytes_not_the_text() {
         // The cache size gate is fed by this, and it used to be

@@ -152,8 +152,13 @@ impl Settings {
         if !path.is_file() {
             return Ok((Self::default(), String::new()));
         }
-        let raw = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        // `strip_bom` for the reason its doc gives: a `settings.json` written by
+        // a PowerShell redirect opens with a byte-order mark, and `serde_json`
+        // reports that as malformed JSON at column 1.
+        let raw = crate::strip_bom(
+            std::fs::read_to_string(&path)
+                .with_context(|| format!("reading {}", path.display()))?,
+        );
         if raw.trim().is_empty() {
             return Ok((Self::default(), raw));
         }

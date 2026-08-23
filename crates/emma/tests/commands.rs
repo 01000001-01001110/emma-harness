@@ -17,7 +17,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use emma::agent::{Agent, Budgets, Interrupt, Running, Setup, Spend};
-use emma::approval::Approvals;
+use emma::approval::{Answer, Approvals, Asker, Gate};
 use emma::goal::{Goal, MarkerClaim};
 use emma::session::SessionLog;
 use emma::session_command::{self, Flow, Session};
@@ -57,6 +57,29 @@ fn fixture() -> Fixture {
         harness,
         tools: registry(vec![tool]),
         approvals: Approvals::unattended(),
+        term: Term::recording(),
+        log: SessionLog::open(dir.path(), "sess-commands").unwrap(),
+        kind: emma_llm::kind("anthropic").unwrap(),
+        dir,
+    }
+}
+
+/// The same machine with a gate that asks, one writing tool, and the answers
+/// already queued.
+///
+/// It exists for `/clear`'s receipt. The default fixture is `unattended` with a
+/// read-only tool, so no question is ever put and no session grant can exist —
+/// which means the "kept" line has only ever been read in its empty form.
+fn fixture_asking(answers: Vec<Answer>) -> Fixture {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let harness = Harness::load_selecting(&root, Flavor::Emma, None).unwrap();
+    // Not read-only, so the gate actually asks rather than exempting the call.
+    let (tool, _) = TestTool::ok("Edit", false);
+    Fixture {
+        harness,
+        tools: registry(vec![tool]),
+        approvals: Approvals::new(Gate::Ask, Asker::Scripted(answers.into())),
         term: Term::recording(),
         log: SessionLog::open(dir.path(), "sess-commands").unwrap(),
         kind: emma_llm::kind("anthropic").unwrap(),
@@ -1157,3 +1180,505 @@ fn config_check_names_the_command_files_it_passed_over() {
         "the top-level command was lost along with the nested one"
     );
 }
+
+// region: /export
+// ---------------------------------------------------------------------------
+// /export
+//
+// The command with no test at all until now, and the one that writes to the
+// user's filesystem. Everything here is asserted on the file that lands and on
+// the sentence the user is shown, because those are the two things a person
+// acts on: they go looking for a file at the path they were told.
+// ---------------------------------------------------------------------------
+
+/// If this fails, `/export` writes a file the user cannot find, or reports a
+/// turn count that does not describe what is in it.
+#[tokio::test]
+async fn export_writes_the_conversation_beside_the_log_and_names_the_file() {
+    let f = fixture();
+    let mut script = working_goal();
+    script.extend(working_goal());
+    let provider = Fake::new(script);
+    let mut agent = f.agent(provider.clone());
+    let mut current: Arc<dyn Provider> = provider.clone();
+    let running = Running::new(provider.clone());
+    agent.run_goal(&Goal::new("the first question")).await;
+    agent.run_goal(&Goal::new("the second question")).await;
+
+    let beside = f.log.path().with_extension("md");
+    assert!(!beside.exists(), "the export existed before /export ran");
+    f.command(&mut agent, &mut current, &running, "/export")
+        .await;
+
+    let written = std::fs::read_to_string(&beside).expect("/export wrote no file");
+    // Both goals, as headings, and the answers under them. A file that held
+    // only the last turn would still be a file at the promised path.
+    assert!(written.contains("## the first question"), "{written}");
+    assert!(written.contains("## the second question"), "{written}");
+    assert!(written.contains("done"), "{written}");
+
+    let said = f.said();
+    // The path is the whole of what the user does next with this message.
+    assert!(
+        said.contains(&format!("/export: wrote 4 turn(s) to {}", beside.display())),
+        "{said}"
+    );
+    // The damage banner is for a damaged log. A warning that fires on a clean
+    // session is a warning nobody reads on a dirty one.
+    assert!(
+        !said.contains("could not be read"),
+        "a clean session was reported as damaged: {said}"
+    );
+    assert!(!written.contains("This export is incomplete"), "{written}");
+}
+
+/// If this fails, `/export somewhere.md` drops a copy of the conversation in a
+/// second place the user did not ask for — beside the session log, which is
+/// under their home directory.
+#[tokio::test]
+async fn export_to_a_named_path_writes_there_and_nowhere_else() {
+    let f = fixture();
+    let provider = Fake::new(working_goal());
+    let mut agent = f.agent(provider.clone());
+    let mut current: Arc<dyn Provider> = provider.clone();
+    let running = Running::new(provider.clone());
+    agent.run_goal(&Goal::new("the only question")).await;
+
+    let target = f.dir.path().join("chosen.md");
+    let beside = f.log.path().with_extension("md");
+    f.command(
+        &mut agent,
+        &mut current,
+        &running,
+        &format!("/export {}", target.display()),
+    )
+    .await;
+
+    let written = std::fs::read_to_string(&target).expect("nothing at the named path");
+    assert!(written.contains("## the only question"), "{written}");
+    assert!(
+        !beside.exists(),
+        "a named path was honoured and the default one was written as well"
+    );
+    assert!(
+        f.said().contains(&target.display().to_string()),
+        "{}",
+        f.said()
+    );
+}
+
+/// If this fails, `/export` on a session that has said nothing leaves an empty
+/// file on disk and reports having written it — and the user believes their
+/// conversation is in it.
+#[tokio::test]
+async fn export_with_no_conversation_writes_no_file_and_says_why() {
+    let f = fixture();
+    let provider = Fake::new(Vec::new());
+    let mut agent = f.agent(provider.clone());
+    let mut current: Arc<dyn Provider> = provider.clone();
+    let running = Running::new(provider.clone());
+
+    f.command(&mut agent, &mut current, &running, "/export")
+        .await;
+
+    let beside = f.log.path().with_extension("md");
+    assert!(!beside.exists(), "an empty export was written to disk");
+    let said = f.said();
+    assert!(
+        said.contains("/export: nothing to write — this session has no conversation yet."),
+        "{said}"
+    );
+    // The success sentence must not also fire. "wrote 0 turn(s)" is the shape
+    // of report that sends somebody looking for a file that is not there.
+    assert!(!said.contains("wrote"), "{said}");
+}
+
+/// If this fails, a session whose log was damaged exports as though it were
+/// whole — and the missing turns are invisible in the only copy the user keeps.
+#[tokio::test]
+async fn export_says_in_the_file_and_on_screen_that_a_damaged_log_is_incomplete() {
+    let f = fixture();
+    let mut script = working_goal();
+    script.extend(working_goal());
+    let provider = Fake::new(script);
+    let mut agent = f.agent(provider.clone());
+    let mut current: Arc<dyn Provider> = provider.clone();
+    let running = Running::new(provider.clone());
+    agent.run_goal(&Goal::new("the first question")).await;
+
+    // Damage in the middle of the file, not the torn last line a crash leaves:
+    // the trailing record below is what makes the bad line a middle one.
+    {
+        use std::io::Write as _;
+        let mut log = std::fs::OpenOptions::new()
+            .append(true)
+            .open(f.log.path())
+            .unwrap();
+        writeln!(log, "{{ this line is not json").unwrap();
+        writeln!(log, r#"{{"kind":"note","text":"after the damage"}}"#).unwrap();
+    }
+
+    f.command(&mut agent, &mut current, &running, "/export")
+        .await;
+
+    let beside = f.log.path().with_extension("md");
+    let written = std::fs::read_to_string(&beside).expect("/export wrote no file");
+    assert!(
+        written.contains("record(s) of this session could not be read"),
+        "the file reads as a complete transcript: {written}"
+    );
+    assert!(written.contains("This export is incomplete"), "{written}");
+    let said = f.said();
+    assert!(
+        said.contains("could not be read and are missing from the file"),
+        "the loss reached the file and not the person: {said}"
+    );
+}
+
+// endregion: /export
+
+// region: /copy
+// ---------------------------------------------------------------------------
+// /copy
+// ---------------------------------------------------------------------------
+
+/// If this fails, `/copy` on a run that emits no escape bytes reports having
+/// copied something. Nothing reached the clipboard, the user pastes whatever
+/// was there before, and `INV-001` is what stopped the bytes — so the report is
+/// a claim about a write that was refused two layers down.
+///
+/// The unframed arm is the only one a test can reach: `Term::recording` has no
+/// viewport, and `Term::clipboard` refuses without one. The framed arm is
+/// **unverified here** and is named in the report.
+#[tokio::test]
+async fn copy_on_a_run_with_no_escape_bytes_refuses_and_points_at_export() {
+    let f = fixture();
+    let provider = Fake::new(working_goal());
+    let mut agent = f.agent(provider.clone());
+    let mut current: Arc<dyn Provider> = provider.clone();
+    let running = Running::new(provider.clone());
+    agent.run_goal(&Goal::new("the only question")).await;
+    assert!(!f.term.framed(), "the fixture grew a viewport");
+
+    f.command(&mut agent, &mut current, &running, "/copy").await;
+    let said = f.said();
+    // The claim that must never appear on this path, keyed on the exact prefix
+    // of the success line. Two looser spellings do not work and both were tried:
+    // `"sent"` matches the refusal's own "nothing was sent", and
+    // `"to the clipboard"` matches the refusal's first clause — which is how
+    // this assertion failed the first time it was run, against correct code.
+    assert!(
+        !said.contains("/copy: sent"),
+        "/copy claimed a clipboard write on a run that emits no escape bytes: {said}"
+    );
+    // …and the escape hatch is named, because "it did not work" with no next
+    // step is the report that comes back as a bug.
+    assert!(said.contains("/export"), "{said}");
+    assert!(
+        said.contains("no escape bytes"),
+        "the refusal did not say why: {said}"
+    );
+}
+
+// endregion: /copy
+
+// region: A built-in name with arguments it does not take
+// ---------------------------------------------------------------------------
+// Misuse
+//
+// Three commands reach `SessionCommand::Misuse`, and until now nothing drove
+// any of them through `run`. The parser's own tests stop at the variant; what
+// they cannot see is whether the usage line is ever printed, and whether the
+// command does anything on its way to printing it.
+// ---------------------------------------------------------------------------
+
+/// If this fails, a mistyped command either does its job with arguments the
+/// user did not mean — `/export --force` writing a file somewhere nobody named
+/// — or answers with nothing at all, which reads as Emma having hung.
+#[tokio::test]
+async fn a_misused_command_answers_with_its_usage_and_changes_nothing() {
+    let f = fixture();
+    let provider = Fake::named("model-one", working_goal());
+    let mut agent = f.agent(provider.clone());
+    let mut current: Arc<dyn Provider> = provider.clone();
+    let running = Running::new(provider.clone());
+    agent.run_goal(&Goal::new("the only question")).await;
+
+    let settings = f.dir.path().join(".emma").join("settings.json");
+    let beside = f.log.path().with_extension("md");
+
+    f.command(&mut agent, &mut current, &running, "/export --force")
+        .await;
+    f.command(&mut agent, &mut current, &running, "/theme --save")
+        .await;
+    f.command(&mut agent, &mut current, &running, "/model the api surface")
+        .await;
+
+    let said = f.said();
+    // The header, per command, and one line of the usage each — the sentence
+    // that tells the reader what to type instead.
+    assert!(said.contains("/export takes:"), "{said}");
+    assert!(
+        said.contains("/export <path>     write it to that file instead"),
+        "{said}"
+    );
+    assert!(said.contains("/theme takes:"), "{said}");
+    assert!(said.contains("There is no --save"), "{said}");
+    assert!(said.contains("/model takes:"), "{said}");
+    assert!(
+        said.contains("/model <id>                use <id> for the rest of this session"),
+        "{said}"
+    );
+
+    // And not one of the three did its job on the way past.
+    assert!(!beside.exists(), "/export --force wrote a file anyway");
+    assert!(!settings.exists(), "a misuse wrote settings.json");
+    assert_eq!(
+        current.model_id(),
+        "model-one",
+        "/model with a sentence changed the model"
+    );
+    assert_eq!(running.get().model_id(), "model-one");
+}
+
+// endregion: Misuse
+
+// region: /model --save
+// ---------------------------------------------------------------------------
+// The half of /model that outlives the session
+// ---------------------------------------------------------------------------
+
+/// If this fails, either `--save` does not remember the model — the next
+/// session silently starts on the old one — or a plain `/model <id>` writes to
+/// `settings.json` without being asked, which changes every future session from
+/// a command whose own output says it did not.
+#[tokio::test]
+async fn model_writes_settings_only_when_save_is_asked_for_and_says_which_it_did() {
+    let f = fixture();
+    let provider = Fake::named("model-one", Vec::new());
+    let mut agent = f.agent(provider.clone());
+    let mut current: Arc<dyn Provider> = provider.clone();
+    let running = Running::new(provider.clone());
+    let settings = f.dir.path().join(".emma").join("settings.json");
+
+    f.command(
+        &mut agent,
+        &mut current,
+        &running,
+        "/model claude-sonnet-4-5",
+    )
+    .await;
+    assert!(
+        !settings.exists(),
+        "a /model with no --save wrote the choice to disk"
+    );
+    let said = f.said();
+    assert!(
+        said.contains("settings  unchanged. `/model claude-sonnet-4-5 --save` remembers it"),
+        "{said}"
+    );
+
+    f.command(
+        &mut agent,
+        &mut current,
+        &running,
+        "/model claude-opus-5 --save",
+    )
+    .await;
+    let stored: Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap())
+        .expect("--save wrote no readable settings.json");
+    assert_eq!(
+        stored["models"]["anthropic"], "claude-opus-5",
+        "--save did not record the model for this provider: {stored}"
+    );
+    let said = f.said();
+    assert!(
+        said.contains(&format!(
+            "settings  claude-opus-5 written to {}",
+            settings.display()
+        )),
+        "{said}"
+    );
+}
+
+/// If this fails, `/model <the model already running>` reports a model change
+/// that did not happen — including the paragraph saying the cached prefix is
+/// gone, which is a bill the user has not been charged.
+#[tokio::test]
+async fn model_set_to_what_is_already_running_says_so_and_claims_no_cache_loss() {
+    let f = fixture();
+    let provider = Fake::named("claude-opus-5", Vec::new());
+    let mut agent = f.agent(provider.clone());
+    let mut current: Arc<dyn Provider> = provider.clone();
+    let running = Running::new(provider.clone());
+
+    f.command(&mut agent, &mut current, &running, "/model claude-opus-5")
+        .await;
+    let said = f.said();
+    assert!(
+        said.contains("claude-opus-5 is already what this session is using."),
+        "{said}"
+    );
+    // The two lines a real change prints. Either of them here is a report of
+    // work that was not done.
+    assert!(
+        !said.contains("the cached prefix is gone"),
+        "a no-op /model told the user their cache had been thrown away: {said}"
+    );
+    assert!(
+        !said.contains("for the rest of this session (was"),
+        "a no-op /model reported a change: {said}"
+    );
+}
+
+// endregion: /model --save
+
+// region: What /clear kept
+// ---------------------------------------------------------------------------
+// The receipt, in both of its forms
+//
+// `clear_says_what_it_kept_…` above asserts `contains("grant")`, and the empty
+// arm — "no tool or host grants have been given this session" — contains that
+// word too. So the two arms have never been told apart. These two do it.
+// ---------------------------------------------------------------------------
+
+/// If this fails, `/clear` names grants that were never given. The receipt's
+/// whole job is that a user can see what consent survived; one that lists
+/// something in a session where nothing was granted teaches them to ignore it.
+#[tokio::test]
+async fn clear_with_nothing_granted_says_nothing_was_granted() {
+    let f = fixture();
+    let provider = Fake::new(working_goal());
+    let mut agent = f.agent(provider.clone());
+    let mut current: Arc<dyn Provider> = provider.clone();
+    let running = Running::new(provider.clone());
+    agent.run_goal(&Goal::new("first")).await;
+
+    f.command(&mut agent, &mut current, &running, "/clear")
+        .await;
+    let said = f.said();
+    assert!(
+        said.contains("kept      no tool or host grants have been given this session"),
+        "{said}"
+    );
+    assert!(
+        !said.contains("you will not be asked about them again"),
+        "a session with no grants was told its grants were kept: {said}"
+    );
+}
+
+/// If this fails, a tool the user allowed for the process survives `/clear` in
+/// silence. `/clear` is the moment somebody expects a reset, and consent that
+/// quietly outlives it is what the receipt exists to make visible.
+#[tokio::test]
+async fn clear_names_the_tool_grant_it_is_keeping() {
+    let f = fixture_asking(vec![Answer::AlwaysThisTool]);
+    let provider = Fake::new(vec![
+        call("Edit", serde_json::json!({ "x": "1" })),
+        text("done\n\nGOAL COMPLETE"),
+    ]);
+    let mut agent = f.agent(provider.clone());
+    let mut current: Arc<dyn Provider> = provider.clone();
+    let running = Running::new(provider.clone());
+    agent.run_goal(&Goal::new("first")).await;
+
+    f.command(&mut agent, &mut current, &running, "/clear")
+        .await;
+    let said = f.said();
+    // The tool by name, and the sentence that says how long it lasts. A count
+    // with no name is a receipt nobody can act on.
+    assert!(said.contains("kept      1 tool grant (Edit)"), "{said}");
+    assert!(
+        said.contains("you will not be asked about them again until you /exit"),
+        "{said}"
+    );
+    assert!(
+        !said.contains("no tool or host grants have been given"),
+        "a granted tool was reported as no grant at all: {said}"
+    );
+}
+
+// endregion: What /clear kept
+
+// region: /agents
+// ---------------------------------------------------------------------------
+// /agents
+//
+// The existing assertion is `contains("sessions")`, which is the first word of
+// the first line and is printed whatever the data says. These two read the part
+// that depends on what was actually recorded.
+// ---------------------------------------------------------------------------
+
+/// If this fails, `/agents` on a machine that has delegated nothing prints an
+/// empty table instead of saying there is nothing to compare — and the user
+/// reads a blank report as a broken command.
+#[tokio::test]
+async fn agents_with_no_delegations_says_there_is_nothing_to_compare() {
+    let f = fixture();
+    let provider = Fake::new(Vec::new());
+    let mut agent = f.agent(provider.clone());
+    let mut current: Arc<dyn Provider> = provider.clone();
+    let running = Running::new(provider.clone());
+
+    f.command(&mut agent, &mut current, &running, "/agents")
+        .await;
+    let said = f.said();
+    assert!(
+        said.contains("Nothing has been delegated from this machine yet"),
+        "{said}"
+    );
+    // The header of the table that must not be there. Asserted on its columns
+    // rather than on emptiness, because a header with no rows under it is
+    // exactly the output this is written against.
+    assert!(!said.contains("tokens/run"), "{said}");
+}
+
+/// If this fails, `/agents` does not count what the harness recorded — the
+/// command's entire purpose — and a user comparing subagent types is reading
+/// numbers that came from somewhere other than the logs.
+#[tokio::test]
+async fn agents_counts_the_delegations_that_were_recorded() {
+    let f = fixture();
+    let provider = Fake::new(Vec::new());
+    let mut agent = f.agent(provider.clone());
+    let mut current: Arc<dyn Provider> = provider.clone();
+    let running = Running::new(provider.clone());
+
+    // A second session file in the same directory, holding one delegation. It
+    // is written rather than driven because `/agents` reads the recorded
+    // account and nothing else — which is the property being pinned.
+    std::fs::write(
+        f.dir.path().join("sess-earlier.jsonl"),
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "kind": "delegation",
+                "agent": "scout",
+                "ending": "done",
+                "cost_tokens": 4321,
+                "elapsed_ms": 7000,
+                "iterations": 3,
+                "tool_calls": 5,
+                "task": "look at the manifest"
+            })
+        ),
+    )
+    .unwrap();
+
+    f.command(&mut agent, &mut current, &running, "/agents")
+        .await;
+    let said = f.said();
+    assert!(said.contains("delegations    1"), "{said}");
+    // The row, with the name and the finished-of-runs ratio that is the whole
+    // reason to run this command.
+    assert!(said.contains("scout"), "{said}");
+    assert!(said.contains("1/1"), "{said}");
+    assert!(said.contains("4321"), "{said}");
+    assert!(said.contains("look at the manifest"), "{said}");
+    assert!(
+        !said.contains("Nothing has been delegated"),
+        "a recorded delegation was reported as none: {said}"
+    );
+}
+
+// endregion: /agents
