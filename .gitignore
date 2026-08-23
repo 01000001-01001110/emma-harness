@@ -24,3 +24,8 @@
 
 # Loop-harness session state: local to one run, never shared.
 .claude/*.local.md
+
+# Python bytecode from the verification scripts. They import the gate snapshot
+# to compute the fingerprint, and an import writes one of these next to it.
+__pycache__/
+*.pyc
