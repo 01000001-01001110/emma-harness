@@ -1049,6 +1049,41 @@ impl Frame {
     /// lines, which can never enter the line channel, answer a prompt, or
     /// touch the editor: a launch pending across a prompt's appearance stays
     /// outside the drain guarantee by construction.
+    /// What the Memory page shows, including when the store cannot be read.
+    ///
+    /// **Lifted out because the fallback had no test and could not have one.**
+    /// It lived inside `launch_tool`, which needs a real `Frame` and therefore a
+    /// real terminal, so `"nothing could be read"` was a string that existed in
+    /// exactly one place: the source. A page that renders an error is still a
+    /// page somebody reads, and the difference between it and an empty one is
+    /// the difference between "there is nothing here" and "something went
+    /// wrong" — which are opposite instructions to the person reading.
+    ///
+    /// `ARCH-003`'s shape again, and the smallest useful cut of it: the routing
+    /// stays where it is, and the part with a decision in it moves somewhere a
+    /// test can reach.
+    pub(crate) fn memory_page_text(
+        session_dir: Option<&std::path::Path>,
+        cwd: &std::path::Path,
+    ) -> String {
+        match crate::commands::capture_memory(session_dir, cwd) {
+            Ok(t) => t,
+            Err(e) => format!("nothing could be read: {e:#}"),
+        }
+    }
+
+    /// What the Data Explorer shows, including when the store cannot be read.
+    ///
+    /// Separate wording from [`memory_page_text`] on purpose. The Memory page
+    /// reads Emma's own notes and the Explorer reads the session store; a reader
+    /// who sees the same sentence on both learns nothing about which one failed.
+    pub(crate) fn explorer_page_text(session_dir: Option<&std::path::Path>) -> String {
+        match crate::commands::capture_sessions(session_dir) {
+            Ok(t) => t,
+            Err(e) => format!("the session store could not be read: {e:#}"),
+        }
+    }
+
     pub fn launch_tool(self: &Arc<Self>, key: char) {
         let picked = {
             let inner = self.lock();
@@ -1085,10 +1120,7 @@ impl Frame {
                     std::path::PathBuf::from(&inner.view.status.cwd),
                 )
             };
-            let text = match crate::commands::capture_memory(dir.as_deref(), &cwd) {
-                Ok(t) => t,
-                Err(e) => format!("nothing could be read: {e:#}"),
-            };
+            let text = Self::memory_page_text(dir.as_deref(), &cwd);
             let mut inner = self.lock();
             if let Ui::Full(app) = &mut inner.ui {
                 app.show_memory(&text);
@@ -1109,10 +1141,7 @@ impl Frame {
                     .parent()
                     .map(|p| p.to_path_buf())
             };
-            let text = match crate::commands::capture_sessions(dir.as_deref()) {
-                Ok(t) => t,
-                Err(e) => format!("the session store could not be read: {e:#}"),
-            };
+            let text = Self::explorer_page_text(dir.as_deref());
             let mut inner = self.lock();
             if let Ui::Full(app) = &mut inner.ui {
                 app.show_explorer(&text);
@@ -1980,6 +2009,80 @@ mod tests {
     /// of two statements in one function, with no runtime moment at which it
     /// can be observed from outside: by the time a panic proves the hook was
     /// missing, the process is going down.
+    /// A page that cannot read its store says so, and says which store.
+    ///
+    /// **Neither fallback had a test, and neither could have had one**: both
+    /// lived inside `launch_tool`, which needs a real `Frame` and therefore a
+    /// terminal. `"nothing could be read"` existed in exactly one place in the
+    /// repository — the source line that produces it.
+    ///
+    /// That matters more than a missing branch usually does. A page rendering
+    /// an error and a page rendering nothing look similar and mean opposite
+    /// things: *"there is nothing here"* and *"something went wrong"* are
+    /// different instructions to whoever is reading. And the two pages read
+    /// different stores, so a shared sentence would leave a reader unable to
+    /// tell which one failed — which is why this asserts they differ.
+    #[test]
+    fn a_page_that_cannot_read_its_store_says_which_store() {
+        // **`None`, not a missing directory, and that difference is the test.**
+        // The first version passed `Some("definitely-not-a-directory")` and both
+        // mutations below survived it: `commands::memory` treats a directory
+        // that is not there as an *empty store*, writes "(nothing remembered
+        // here yet)" and returns `Ok`, so the error arm was never reached. The
+        // bail is on `None` — no home directory, so no store to name at all.
+        //
+        // Caught by mutating rather than by reading, which is the only way this
+        // class is ever caught.
+        let memory = Frame::memory_page_text(None, std::path::Path::new("."));
+        let explorer = Frame::explorer_page_text(None);
+
+        // Whatever they say, they must not come back empty: an empty page reads
+        // as "your store is empty", which is a different and wrong claim.
+        assert!(
+            !memory.trim().is_empty(),
+            "the memory page came back blank when its store could not be read, \
+             which reads as an empty store"
+        );
+        assert!(
+            !explorer.trim().is_empty(),
+            "the explorer page came back blank when its store could not be read"
+        );
+
+        // And they are distinguishable, so a reader can tell which store failed.
+        //
+        // **Two mutations were run against this and only one dies, which is
+        // worth stating rather than leaving as a silent survivor.** Blanking
+        // the memory fallback kills it. Giving both pages the *same prefix*
+        // does not, and that is an equivalent mutant rather than a gap: the two
+        // wrapped errors already name their own stores, so the pair stays
+        // distinguishable and the guarantee this asserts still holds. Measured:
+        //
+        //   MEMORY  : "nothing could be read: … nothing remembered to read. …"
+        //   EXPLORER: "the session store could not be read: … nothing recorded
+        //              to read. …"
+        assert_ne!(
+            memory, explorer,
+            "both pages say the same thing, so a reader cannot tell which store \
+             could not be read"
+        );
+    }
+
+    /// The Memory page's failure sentence names the failure rather than a count.
+    ///
+    /// The positive half of the test above: it asserts the two differ, which a
+    /// pair of unhelpful strings would also satisfy.
+    #[test]
+    fn the_memory_pages_failure_says_something_went_wrong() {
+        let text = Frame::memory_page_text(None, std::path::Path::new("."));
+        // This is the failure arm, so it must read as a failure rather than as
+        // an empty store. The two are opposite claims to whoever is reading.
+        assert!(
+            text.contains("nothing could be read"),
+            "the memory page did not report the failure it hit; a blank or bland \
+             page reads as an empty store, which is the opposite claim: {text:?}"
+        );
+    }
+
     #[test]
     fn the_panic_hook_is_installed_before_the_first_mode_it_undoes() {
         let source = include_str!("frame.rs");
