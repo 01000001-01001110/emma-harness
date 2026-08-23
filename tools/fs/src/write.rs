@@ -197,8 +197,13 @@ impl Write {
         // in for the same reason — a file the agent just wrote is one it can
         // address by line without reading back, and refusing that would make
         // `Write` then `Edit` cost a `Read` in between for no information.
-        self.tracker
-            .record(&ctx.session_id, &target, true, LineHashes::of_text(content));
+        self.tracker.record(
+            &ctx.session_id,
+            &target,
+            true,
+            LineHashes::of_text(content),
+            content,
+        );
 
         let shown = path::display(&root, &target);
         let lines = content.lines().count();

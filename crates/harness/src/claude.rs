@@ -397,14 +397,49 @@ pub(crate) fn split_agent(text: &str) -> (AgentFront, &str, Option<String>) {
     let Some(rest) = open_frontmatter(text) else {
         return (AgentFront::default(), text, None);
     };
-    let Some(end) = rest.find("\n---") else {
+    let Some((yaml, body)) = close_frontmatter(rest) else {
         return (AgentFront::default(), text, None);
     };
-    let body = rest[end + 4..].trim_start_matches(['\r', '\n']);
-    match serde_yaml::from_str(&rest[..end]) {
+    match serde_yaml::from_str(yaml) {
         Ok(front) => (front, body, None),
         Err(e) => (AgentFront::default(), body, Some(e.to_string())),
     }
+}
+
+/// Split the text after an opening fence into its frontmatter and its body.
+///
+/// **The closing fence can sit at offset zero, and for weeks it could not.**
+/// Every caller searched `rest.find("\n---")`, which requires a newline
+/// *before* the closer — so `---` immediately followed by `---`, an empty
+/// frontmatter block, was never closed. An adversarial reviewer found it and
+/// checked what each caller then did: `split_agent` returned default
+/// frontmatter with no error and **both fence lines leaked into the body**,
+/// `split_skill` refused with "frontmatter is not closed" (loud, but the wrong
+/// diagnosis), and `strip_frontmatter` handed the fences back as command text.
+/// Three callers, three different wrong answers, one missing case.
+///
+/// An empty block is not exotic. It is what a template leaves behind, and what
+/// an editor writes when every key has been deleted.
+///
+/// Shared rather than fixed three times, for the reason
+/// `open_frontmatter`'s doc already gives: the CRLF defect recurred precisely
+/// because the first fix was a local edit rather than a function both callers
+/// reached. Please do not inline a copy of this.
+pub(crate) fn close_frontmatter(rest: &str) -> Option<(&str, &str)> {
+    // Offset zero first: an empty block has nothing before its closer.
+    if let Some(after) = rest.strip_prefix("---") {
+        // ...but only when the fence really is the whole line. `----` and
+        // `---x` are not a closing fence, and treating them as one would eat a
+        // body that happens to start with a rule.
+        if after.starts_with(['\r', '\n']) || after.is_empty() {
+            return Some(("", after.trim_start_matches(['\r', '\n'])));
+        }
+    }
+    let end = rest.find("\n---")?;
+    Some((
+        &rest[..end],
+        rest[end + 4..].trim_start_matches(['\r', '\n']),
+    ))
 }
 
 /// `---` on the first line, whatever the file's line endings are, and

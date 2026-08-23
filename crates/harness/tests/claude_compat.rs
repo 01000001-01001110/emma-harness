@@ -440,6 +440,66 @@ fn two_skills_claiming_one_name_are_reported() {
     );
 }
 
+/// An empty frontmatter block closes, and its fences do not become content.
+///
+/// **Three callers, three different wrong answers, one missing case.** Every
+/// one searched for the closing fence with `rest.find("\n---")`, which needs a
+/// newline *before* the closer — so `---` immediately followed by `---` was
+/// never closed. An adversarial reviewer checked what each caller then did:
+/// `split_agent` returned default frontmatter with no error and leaked **both**
+/// fence lines into the body, `split_skill` refused with "frontmatter is not
+/// closed" (loud, and the wrong diagnosis), and `strip_frontmatter` handed the
+/// fences back as command text — which means they were sent to the model as
+/// part of the prompt.
+///
+/// An empty block is not an exotic input. It is what a template leaves behind
+/// and what an editor writes once every key has been deleted.
+///
+/// Both line endings, because the last defect in this same code was CRLF.
+#[test]
+fn an_empty_frontmatter_block_closes_and_its_fences_are_not_content() {
+    for (tag, nl) in [("lf", "\n"), ("crlf", "\r\n")] {
+        let base = scratch(&format!("claude-empty-front-{tag}"));
+        let root = base.join(".claude");
+
+        // A command: its frontmatter is stripped before the body reaches the
+        // model, so a leaked fence is a leaked fence in the prompt.
+        write(
+            &root.join("commands").join("empty.md"),
+            &format!("---{nl}---{nl}do the thing"),
+        );
+        // A skill with the same shape. It cannot load — an empty block declares
+        // no `name` — but *why* it is refused is the point: "frontmatter is not
+        // closed" was the wrong diagnosis for a file whose frontmatter is
+        // closed and empty, and a wrong reason sends its reader to the wrong
+        // line.
+        write(
+            &root.join("skills").join("hollow").join("SKILL.md"),
+            &format!("---{nl}---{nl}I am the skill."),
+        );
+
+        let h = Harness::load(&root).expect("an empty frontmatter block must not fail the load");
+
+        let body = h
+            .expand_command("/empty")
+            .unwrap_or_else(|| panic!("{tag}: the command did not load"))
+            .text;
+        assert!(
+            !body.contains("---"),
+            "{tag}: a fence line reached the model as prompt text: {body:?}"
+        );
+        assert!(
+            body.contains("do the thing"),
+            "{tag}: the body was lost: {body:?}"
+        );
+
+        assert!(
+            !h.skill_names().contains(&"hollow"),
+            "{tag}: a skill declaring no name loaded anyway"
+        );
+    }
+}
+
 /// A skill written on Windows loads.
 ///
 /// **This is the defect that cost 99 of 324 real skills on the owner's machine.**

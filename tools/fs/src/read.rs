@@ -263,6 +263,7 @@ impl Read {
             &file,
             !shown.outcome.truncated && offset == 1,
             shown.lines,
+            &text,
         );
 
         Ok(shown.outcome)

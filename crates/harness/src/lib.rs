@@ -1425,15 +1425,20 @@ fn split_skill(text: &str, path: &Path, flavor: Flavor) -> Result<(Front, String
     // away had already been fixed for precisely that. See its doc.
     let rest = crate::claude::open_frontmatter(text)
         .with_context(|| named("expected YAML frontmatter"))?;
-    let end = rest
-        .find("\n---")
+    // `close_frontmatter`, not a local `find("\n---")`. The local form required a
+    // newline before the closer, so an EMPTY block -- `---` immediately followed
+    // by `---` -- was never closed, and this call refused the file with
+    // "frontmatter is not closed": loud, and the wrong diagnosis. The two
+    // sibling callers got two DIFFERENT wrong answers from the same missing
+    // case. Same argument as the opener above: share the function.
+    let (yaml, body) = crate::claude::close_frontmatter(rest)
         .with_context(|| named("frontmatter is not closed"))?;
     let front: Front = match flavor {
-        Flavor::Emma => serde_yaml::from_str(&rest[..end]),
-        Flavor::Claude => serde_yaml::from_str::<ClaudeFront>(&rest[..end]).map(Front::from),
+        Flavor::Emma => serde_yaml::from_str(yaml),
+        Flavor::Claude => serde_yaml::from_str::<ClaudeFront>(yaml).map(Front::from),
     }
     .with_context(|| named("bad frontmatter"))?;
-    Ok((front, rest[end + 4..].trim_start().to_string()))
+    Ok((front, body.trim_start().to_string()))
 }
 
 /// Step over an HTML comment before the frontmatter, `.claude/` only.
@@ -1473,8 +1478,8 @@ fn strip_frontmatter(text: &str) -> &str {
     let Some(rest) = crate::claude::open_frontmatter(text) else {
         return text;
     };
-    match rest.find("\n---") {
-        Some(end) => rest[end + 4..].trim_start_matches(['\r', '\n']),
+    match crate::claude::close_frontmatter(rest) {
+        Some((_, body)) => body,
         None => text,
     }
 }

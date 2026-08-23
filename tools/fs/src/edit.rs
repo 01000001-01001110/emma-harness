@@ -441,6 +441,7 @@ impl Edit {
             file,
             prior == ReadState::Fresh,
             LineHashes::of_text(&after),
+            &after,
         );
 
         let shown = path::display(root, file);
@@ -649,6 +650,7 @@ impl Edit {
             file,
             prior == ReadState::Fresh,
             LineHashes::of_text(&after),
+            &after,
         );
 
         Ok(report(

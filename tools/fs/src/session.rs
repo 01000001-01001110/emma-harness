@@ -153,15 +153,29 @@ impl ReadTracker {
     /// `LineHashes::default()`, and every addressed edit against those lines
     /// will then be refused for want of a record — which is the safe direction
     /// for this to fail in.
-    pub fn record(&self, session: &str, path: &Path, complete: bool, lines: LineHashes) {
-        // **The hash of what was actually shown, not of what is there now.**
-        // `stamp_of` re-stats after the caller has already read the bytes, so a
-        // change landing in between paired the old content with a new stamp and
-        // the tracker called it `Fresh`. Recording the content the caller saw
-        // closes that window: if the file moved underneath the read, the two
-        // disagree and the next check says `Stale`.
+    pub fn record(
+        &self,
+        session: &str,
+        path: &Path,
+        complete: bool,
+        lines: LineHashes,
+        text: &str,
+    ) {
+        // **The hash of what was actually shown, not of what is there now** —
+        // and until `text` was a parameter, this comment claimed a guarantee the
+        // code did not provide. It called `content_of(path)`, which *re-reads
+        // the disk*, so a change landing between the caller's read and this call
+        // was hashed as though it were what the caller saw. `state()` then said
+        // `Fresh` about a file the model's picture no longer matched: the exact
+        // window the comment declared closed, merely narrowed.
+        //
+        // Found by an adversarial reviewer reading the comment against the code.
+        // Every caller already held the bytes — `Read` has the text it rendered
+        // from, `Write` has what it wrote, `Edit` has `after` — so closing it was
+        // a parameter, not a redesign. The comment was the only thing that had
+        // ever been true.
         let mut stamp = stamp_of(path);
-        stamp.content = content_of(path);
+        stamp.content = Some(hashline::hash_line(text));
         let sighting = Sighting {
             stamp,
             complete,
@@ -310,6 +324,45 @@ fn same_file(remembered: &Stamp, now: &Stamp, path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A change landing between the read and the record does not read as fresh.
+    ///
+    /// **The window the doc comment claimed was closed, and was not.** `record`
+    /// hashed the file by re-reading it from disk, so anything written between
+    /// the caller's read and the record was stamped as though the caller had
+    /// seen it. `state()` then answered `Fresh` about a file the model's picture
+    /// no longer matched — and `Write`, which trusts `Fresh` to mean "you have
+    /// seen what you are about to replace", would overwrite it.
+    ///
+    /// Found by an adversarial reviewer reading the comment against the code
+    /// rather than by any test: the old behaviour was self-consistent, and every
+    /// test recorded the same bytes it had just written, so the re-read always
+    /// agreed.
+    ///
+    /// Staged by passing text that differs from what is on disk, which is
+    /// exactly what a racing writer produces and what the old code could not
+    /// distinguish.
+    #[test]
+    fn content_recorded_is_what_the_caller_saw_not_what_is_on_disk_afterwards() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("code.rs");
+        let seen = "let a = 1;\n";
+        std::fs::write(&file, seen).unwrap();
+
+        let tracker = ReadTracker::default();
+
+        // Somebody else writes between the read and the record. Same length, so
+        // the metadata cannot tell — which is the case the content hash exists
+        // for in the first place.
+        std::fs::write(&file, "let a = 2;\n").unwrap();
+        tracker.record("s", &file, true, LineHashes::of_text(seen), seen);
+
+        assert_eq!(
+            tracker.state("s", &file),
+            ReadState::Stale,
+            "a file that changed under the read was recorded as though it had been seen"
+        );
+    }
 
     /// A same-length rewrite with an identical mtime is still detected.
     ///
