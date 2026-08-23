@@ -402,10 +402,37 @@ fn describe(types: &BTreeMap<String, AgentType>) -> String {
     out
 }
 
+/// An agent's description, on one line, cut if it is long — and **saying so in
+/// the terms `INV-011` requires**.
+///
+/// **A bare `…` here is the worst place in the codebase to cut silently.** This
+/// string is what `describe()` puts in the `Task` tool's schema, which is the
+/// only text the calling model has to choose a delegation target with. A model
+/// reading a sentence that stops mid-clause has no way to tell a short
+/// description from an amputated one, and the thing it is deciding is which
+/// agent to hand the work to.
+///
+/// Measured against the real library on this machine when the row was filed:
+/// **11 of 86 agent descriptions were over the cap** — one of them 450
+/// characters — every one of them cut with a bare ellipsis and no cap named.
+///
+/// `INV-011` is stated as *"every place output is cut names the cap, the loss
+/// and the remedy, or says plainly that no argument raises it"*. Its
+/// preservation evidence covered `ToolOutcome` truncation only, so this was
+/// outside the guard rather than exempt from the rule.
+///
+/// There is no remedy to offer — the cap is a constant and no argument reaches
+/// it — so it says that, which is the branch the invariant provides for.
 fn one_line(text: &str) -> String {
+    const CAP: usize = 300;
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if text.chars().count() > 300 {
-        format!("{}…", text.chars().take(300).collect::<String>())
+    let total = text.chars().count();
+    if total > CAP {
+        format!(
+            "{}… [cut at {CAP} of {total} characters; no argument raises that — read the \
+             agent's own file for the rest]",
+            text.chars().take(CAP).collect::<String>()
+        )
     } else {
         text
     }
@@ -1318,6 +1345,37 @@ mod tests {
     /// `None` for every command a subagent ever ran, and the footer said "no
     /// result" every time. A fixture that agrees with its author is the exact
     /// failure this repository keeps paying for.
+    /// A cut description names its cap, and a short one is left alone.
+    ///
+    /// **The string this guards is the only text the calling model has to pick
+    /// a delegation target with.** A sentence that stops mid-clause with a bare
+    /// ellipsis is indistinguishable from a short description, and 11 of 86
+    /// real agent descriptions on this machine were over the cap when the row
+    /// was filed.
+    #[test]
+    fn a_cut_agent_description_names_the_cap_and_a_short_one_is_untouched() {
+        let long = "x".repeat(450);
+        let cut = one_line(&long);
+        assert!(cut.contains("300"), "the cap is not named: {cut}");
+        assert!(cut.contains("450"), "the loss is not named: {cut}");
+        assert!(
+            cut.contains("No argument raises") || cut.contains("no argument raises"),
+            "INV-011 requires a remedy or a plain statement there is none: {cut}"
+        );
+
+        // The positive control. A notice on every description is noise, and it
+        // would also make the assertions above pass for the wrong reason.
+        let short = "audits a crate for unwrap in library code";
+        assert_eq!(
+            one_line(short),
+            short,
+            "a description that fitted was annotated anyway"
+        );
+
+        // Whitespace is still collapsed, which is the function's other job.
+        assert_eq!(one_line("two   words"), "two words");
+    }
+
     #[test]
     fn an_exit_status_is_read_from_where_bash_actually_puts_it() {
         // The shape the real tool emits: banner first, status second.
