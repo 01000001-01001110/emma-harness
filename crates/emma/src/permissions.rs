@@ -995,15 +995,37 @@ impl Rules {
             if let Spec::Command(raw, prefix) = &rule.spec {
                 let star_is_a_wildcard =
                     raw.ends_with(":*") || raw.ends_with(" *") || !raw.ends_with('*');
-                // **And the same rule with no star at all.** A reviewer
-                // pointed out the check only fired on a stripped `*`, so
-                // `Bash(curl https://)` -- identically inert, for identically
-                // the reason -- said nothing. A prefix ending in `/`, `:`, `=`
-                // or `-` is one whose author plainly meant "and then more of
-                // this word", which is the one thing a word-boundary matcher
-                // cannot do.
-                let ends_mid_token = prefix.ends_with(['/', ':', '=', '-']);
-                if (!star_is_a_wildcard || ends_mid_token) && !prefix.is_empty() {
+                // **A rule with no star is not inert and must not be
+                // announced as inert. This was got wrong for half a day.**
+                //
+                // A reviewer observed that `Bash(curl https://*)` is announced
+                // and `Bash(curl https://)` is not, called the second
+                // "identically inert", and the check was widened to any prefix
+                // ending `/`, `:`, `=` or `-`. That was accepted too readily.
+                //
+                // The premise is false. `command_matches` matches on equality
+                // OR on the prefix followed by a space, so a prefix always
+                // matches at least one command: itself. `Bash(curl https://)`
+                // exactly matches the command `curl https://` -- useless in
+                // practice, and not inert.
+                //
+                // And the widening could not tell that case from
+                // `Bash(rm -rf /)`, which has no star, ends in `/`, and is a
+                // complete command somebody meant exactly as written. A second
+                // reviewer printed the two together: the rule denied `rm -rf /`
+                // AND was announced at every boot as unable to match. The
+                // counterexample was already in this file's own test module,
+                // `a_bash_deny_containing_a_slash_still_denies`.
+                //
+                // Telling an operator that a live protection is dead is how a
+                // live protection gets deleted, and the note's own remedy
+                // ("write `rm -rf / *`") strips to the same prefix and changes
+                // nothing -- so following it teaches them the tool lied twice.
+                // The wrong note is worse than the missing one, so the no-star
+                // case is silent again. Distinguishing "useless exact rule"
+                // from "intended exact rule" needs the author's intent, which
+                // is not in the string.
+                if !star_is_a_wildcard && !prefix.is_empty() {
                     notes.push(format!(
                         "{}: `{}` ends its prefix inside a word, so it can never match. \
                      Commands match at a word boundary — `{prefix}` would have to be \
@@ -1471,10 +1493,6 @@ mod tests {
             ("Bahs(rm)", "not a tool in this run"),
             // A prefix ending mid-word. Previously silent.
             ("Bash(curl https://*)", "inside a word"),
-            // The same shape with no star at all, found by review: identically
-            // inert, and it used to say nothing because the check only fired
-            // on a stripped `*`.
-            ("Bash(curl https://)", "inside a word"),
             // The two that already spoke, kept so this cannot pass by the
             // older branches having been deleted.
             ("bash(rm)", "spelled `Bash`"),
@@ -1485,6 +1503,34 @@ mod tests {
             assert!(
                 notes.iter().any(|n| n.contains(must_say)),
                 "`{rule}` was not announced with `{must_say}`: {notes:?}"
+            );
+        }
+
+        // **The rules that must stay silent, and this half was missing.**
+        //
+        // For half a day the check also fired on any prefix ending `/`, `:`,
+        // `=` or `-`, so `Bash(rm -rf /)` denied `rm -rf /` and was announced
+        // at every boot as unable to match. A reviewer printed the decision and
+        // the note side by side. The original positive control below could not
+        // catch it, because none of its four rules ends in one of those
+        // characters -- a control only controls for what it contains.
+        //
+        // These are exact-match rules, which is a legitimate thing to write:
+        // `command_matches` matches on equality as well as on prefix-plus-space,
+        // so a rule with no star matches the command it spells out.
+        for rule in [
+            "Bash(rm -rf /)",
+            "Bash(cd /)",
+            "Bash(make CC=gcc)",
+            "Bash(ls -l)",
+        ] {
+            let notes =
+                Rules::unmatchable_here(&[entry(PermissionKind::Deny, rule)], known, network);
+            assert!(
+                !notes.iter().any(|n| n.contains("inside a word")),
+                "`{rule}` is an exact-match rule that fires, and was announced as dead. \
+                 Telling an operator a live protection is dead is how a live protection \
+                 gets deleted: {notes:?}"
             );
         }
 

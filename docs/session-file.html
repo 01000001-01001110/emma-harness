@@ -294,7 +294,7 @@ pub struct SessionLog {
             seen.push(payload.clone());
         }
     }
-    <span class=\"c\">// **A poisoned lock is recovered, not treated as a reason to stop
+    <span class="c">// **A poisoned lock is recovered, not treated as a reason to stop
     // writing.** The lock is poisoned when some thread panicked while
     // holding it, which says nothing about whether the file is still
     // writable -- and this returned instead, silently dropping every record
@@ -308,12 +308,12 @@ pub struct SessionLog {
     // `input` -- and this file was the outlier. The data inside is a `File`
     // handle, which a panic elsewhere cannot leave torn.</span>
     let mut guard = self.file.lock().unwrap_or_else(|e| e.into_inner());
-    <span class=\"c\">// `None` is the no-log constructor and is the one silence here that is
+    <span class="c">// `None` is the no-log constructor and is the one silence here that is
     // correct: a run with no session directory has nothing to append to.</span>
     let Some(file) = guard.as_mut() else { return };
     let mut line = payload.to_string();
     line.push(&#x27;\n&#x27;);
-    <span class=\"c\">// Not `let _ =`. This file is the only record of the run: resume folds
+    <span class="c">// Not `let _ =`. This file is the only record of the run: resume folds
     // it, `emma agents` reads it, and the exit line names it as the place
     // the conversation went. A full disk or a revoked handle used to lose
     // all of that in silence, for the whole rest of the session, because
