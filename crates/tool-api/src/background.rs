@@ -45,6 +45,29 @@ use std::sync::{Arc, Mutex};
 /// scrolled away hours ago is not worth the resident memory.
 pub const MAX_TASK_OUTPUT_BYTES: usize = 256 * 1024;
 
+/// How many finished tasks the registry keeps before dropping the oldest.
+///
+/// **The buffer cap bounds one axis of a two-axis quantity, and only one was
+/// bounded.** `MAX_TASK_OUTPUT_BYTES` caps what a single task holds; nothing
+/// capped how many tasks there are. Rule 1 — a dead task is still findable —
+/// requires a handle to survive the process it started, and nothing ever
+/// dropped one, so a long session that backgrounds N commands holds up to
+/// N × 256 KiB for its whole life. The doc said *"an unbounded buffer behind a
+/// command nobody is reading is a memory leak with a friendly face"*, which was
+/// true of the buffer and not of the map.
+///
+/// **Only finished tasks are evicted, and only when there are more than this
+/// many.** A running task is never dropped whatever the count: losing the
+/// handle to a live process is losing the ability to kill it, which is a worse
+/// failure than the leak. So the bound is on *remembering*, not on running.
+///
+/// Eviction is announced through the same door as a stale id: `find` reports
+/// "not found", and the message already explains that ids are sequential, so an
+/// evicted id reads as a task that finished long ago rather than as a bug. That
+/// is the honest degradation — the alternative is a session that grows without
+/// limit and is killed by the operating system, which explains nothing.
+pub const MAX_REMEMBERED_TASKS: usize = 64;
+
 /// What a background task is doing, or what it did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskState {
@@ -305,11 +328,42 @@ impl Registry {
                 read_to: 0,
             })),
         };
-        self.tasks
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(id, task.clone());
+        let mut tasks = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
+        tasks.insert(id, task.clone());
+        Self::forget_oldest_finished(&mut tasks);
         task
+    }
+
+    /// Drop the oldest *finished* tasks until the map is back inside
+    /// [`MAX_REMEMBERED_TASKS`]. See that constant for why the bound exists and
+    /// why a running task is never a candidate.
+    ///
+    /// Oldest by id, which is the insertion order: ids are `bash_<n>` from a
+    /// monotonic counter, so the numeric suffix *is* the age. Parsed rather
+    /// than assumed — a task whose id does not have that shape sorts last and
+    /// is therefore never evicted, which is the safe direction for an id this
+    /// function does not understand.
+    fn forget_oldest_finished(tasks: &mut HashMap<String, Task>) {
+        if tasks.len() <= MAX_REMEMBERED_TASKS {
+            return;
+        }
+        let mut finished: Vec<(u64, String)> = tasks
+            .values()
+            .filter(|t| t.state().finished())
+            .map(|t| {
+                let n =
+                    t.id.rsplit('_')
+                        .next()
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(u64::MAX);
+                (n, t.id.clone())
+            })
+            .collect();
+        finished.sort_unstable();
+        let excess = tasks.len() - MAX_REMEMBERED_TASKS;
+        for (_, id) in finished.into_iter().take(excess) {
+            tasks.remove(&id);
+        }
     }
 
     /// Find a task belonging to this session.
@@ -415,6 +469,57 @@ mod tests {
             "the newest bytes were the ones discarded"
         );
         assert_eq!(read.new_output.len(), MAX_TASK_OUTPUT_BYTES);
+    }
+
+    /// The number of remembered tasks is bounded, and a running one is never
+    /// the thing dropped.
+    ///
+    /// **The per-task buffer was capped and the task count was not**, so a
+    /// session that backgrounds commands all day holds every handle it ever
+    /// made — up to `MAX_TASK_OUTPUT_BYTES` each. The doc called an unbounded
+    /// buffer "a memory leak with a friendly face", which was true of the
+    /// buffer and not of the map holding them.
+    ///
+    /// The second assertion is the one that matters more than the first. Losing
+    /// the handle to a *live* process means losing the ability to kill it,
+    /// which is a worse failure than the leak — so the bound is on remembering,
+    /// never on running, and a registry full of live tasks grows rather than
+    /// dropping one.
+    #[test]
+    fn the_registry_forgets_old_finished_tasks_and_never_a_running_one() {
+        let reg = Registry::default();
+
+        // One long-lived running task, spawned first so it is also the oldest.
+        let running = reg.spawn("s", "the one that must survive");
+
+        for i in 0..MAX_REMEMBERED_TASKS + 20 {
+            let t = reg.spawn("s", format!("done {i}"));
+            t.set_state(TaskState::Exited(Some(0)));
+        }
+
+        assert!(
+            reg.get("s", &running.id).is_some(),
+            "the oldest task was evicted while still running — that is the kill \
+             handle gone, which is worse than the leak this bound exists for"
+        );
+
+        // And the bound actually bounds. The running task is over the limit by
+        // design, so the map settles at the cap plus whatever is still alive.
+        let remembered = reg.list("s").len();
+        assert!(
+            remembered <= MAX_REMEMBERED_TASKS + 1,
+            "the registry kept {remembered} tasks against a cap of {MAX_REMEMBERED_TASKS}"
+        );
+
+        // The most recent finished task is still findable: eviction takes the
+        // oldest, not an arbitrary one, or "my task from a moment ago is gone"
+        // becomes the common case.
+        let newest = reg.spawn("s", "just finished");
+        newest.set_state(TaskState::Exited(Some(0)));
+        assert!(
+            reg.get("s", &newest.id).is_some(),
+            "the task that finished a moment ago was evicted"
+        );
     }
 
     #[test]

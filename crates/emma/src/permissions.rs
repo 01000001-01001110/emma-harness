@@ -953,8 +953,50 @@ impl Rules {
                         entry.source.display(),
                         entry.rule
                     ));
+                } else {
+                    // **The other half of this row's own title, and it fell out
+                    // of the `if` in silence.** Only the case-variant branch
+                    // said anything, so `deny("Bahs")` produced nothing at all —
+                    // a rule the operator believes is protecting them, matching
+                    // no tool that exists.
+                    //
+                    // The argument for the silence was that a persona may have
+                    // filtered a real tool out of this run, so an unknown name
+                    // is not necessarily a typo. True, and it does not follow
+                    // that nothing should be said: the note below states both
+                    // readings rather than choosing one, which is what an
+                    // operator needs in order to tell which it is.
+                    notes.push(format!(
+                        "{}: `{}` names `{named}`, which is not a tool in this run. Either it \
+                     is a typo, or a persona filtered that tool out — in both cases the rule \
+                     matches nothing here.",
+                        entry.source.display(),
+                        entry.rule
+                    ));
                 }
                 continue;
+            }
+            // **A prefix that ends mid-word can never fire, and that was
+            // silent too.** `command_matches` is a word-boundary test on
+            // purpose — `git` must not match `github-cli`, which in a deny list
+            // is the difference between blocking what was written and blocking
+            // something nobody named. So `Bash(curl https://*)` strips its `*`,
+            // leaves a prefix ending in `/`, and matches no command ever
+            // written. The matching is right; the silence was not, and this is
+            // `DEF-015`'s class in a shape `DEF-015` did not cover.
+            if let Spec::Command(raw, prefix) = &rule.spec {
+                let star_is_a_wildcard =
+                    raw.ends_with(":*") || raw.ends_with(" *") || !raw.ends_with('*');
+                if !star_is_a_wildcard && !prefix.is_empty() {
+                    notes.push(format!(
+                        "{}: `{}` ends its prefix inside a word, so it can never match. \
+                     Commands match at a word boundary — `{prefix}` would have to be \
+                     followed by a space. Write `{prefix} *`, or name the whole first \
+                     word and use `:*` for the arguments.",
+                        entry.source.display(),
+                        entry.rule
+                    ));
+                }
             }
             if matches!(rule.spec, Spec::Domain(_)) && !reaches_network.contains(&named) {
                 notes.push(format!(
@@ -1374,6 +1416,60 @@ mod tests {
             None,
             "the word boundary was lost — `git` must not match `github-cli`"
         );
+    }
+
+    /// Every rule that can never fire says so at boot.
+    ///
+    /// **Both of these were silent, and both are the sentence `DEF-015` was
+    /// filed over: a protection the operator believes they have.** One is the
+    /// unregistered tool name in that row's own title, which was never
+    /// implemented — only the case-variant branch spoke, and an unknown name
+    /// fell out of the `if` in silence. The other is a command prefix that ends
+    /// inside a word: `command_matches` is a word-boundary test on purpose, so
+    /// such a prefix matches nothing however it is written.
+    ///
+    /// Asserted on the notes, which is the operator's channel, and not on the
+    /// parse — a rule that parses is not a rule that fires, and that gap is
+    /// where every defect in this file has lived.
+    #[test]
+    fn a_rule_that_can_never_fire_is_announced() {
+        let known: &[&'static str] = &["Bash", "Read", "WebFetch"];
+        let network: &[&'static str] = &["WebFetch"];
+
+        for (rule, must_say) in [
+            // A tool that is not in this run at all. Previously silent.
+            ("Bahs(rm)", "not a tool in this run"),
+            // A prefix ending mid-word. Previously silent.
+            ("Bash(curl https://*)", "inside a word"),
+            // The two that already spoke, kept so this cannot pass by the
+            // older branches having been deleted.
+            ("bash(rm)", "spelled `Bash`"),
+            ("Read(domain:example.com)", "does not declare"),
+        ] {
+            let notes =
+                Rules::unmatchable_here(&[entry(PermissionKind::Deny, rule)], known, network);
+            assert!(
+                notes.iter().any(|n| n.contains(must_say)),
+                "`{rule}` was not announced with `{must_say}`: {notes:?}"
+            );
+        }
+
+        // The positive control, and it is load-bearing: a note on every rule is
+        // noise, and would also make every assertion above pass for the wrong
+        // reason.
+        for rule in [
+            "Bash(git *)",
+            "Bash(npm run test:*)",
+            "Read(src/**)",
+            "Bash",
+        ] {
+            let notes =
+                Rules::unmatchable_here(&[entry(PermissionKind::Deny, rule)], known, network);
+            assert!(
+                notes.is_empty(),
+                "`{rule}` fires perfectly well and was announced as inert: {notes:?}"
+            );
+        }
     }
 
     #[test]
