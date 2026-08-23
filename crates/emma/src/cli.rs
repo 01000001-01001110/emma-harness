@@ -124,6 +124,16 @@ THE INTERACTIVE SESSION
                                are kept too, and /clear names them: they are
                                consent about the process, and /exit is what
                                drops them.
+    /copy                      put the last answer on the clipboard. The text is
+                               the markdown the model wrote, taken from the
+                               session log — not what is on screen, which has
+                               been wrapped to a column and sits beside the
+                               sidebar, so a mouse selection of it arrives with
+                               borders and gutters in every line. Uses OSC 52,
+                               which the terminal either honours or ignores
+                               silently; Emma says what it sent, never that it
+                               arrived. Refused on -p and on a pipe, where no
+                               escape byte may be written.
     /theme                     the colours: which theme is selected, which
                                ones this machine and this project have, and
                                where a theme file goes. A fresh machine has

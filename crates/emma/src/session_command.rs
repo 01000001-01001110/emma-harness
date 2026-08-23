@@ -78,6 +78,10 @@ pub const BUILTINS: &[(&str, &str)] = &[
         "start a fresh conversation — this session's grants are kept",
     ),
     (
+        "copy",
+        "put the last answer on the clipboard — the source, not the screen",
+    ),
+    (
         "theme",
         "the colours — /theme <name> selects one, from the next start",
     ),
@@ -117,6 +121,16 @@ pub enum SessionCommand {
         instruction: Option<String>,
     },
     Clear,
+    /// `/copy` — put the last answer on the clipboard.
+    ///
+    /// **The source, not the screen.** The text comes from the session log,
+    /// which holds what the model actually wrote; the transcript on screen has
+    /// been wrapped to a column and interleaved with the sidebar, so a terminal
+    /// selection of the same answer arrives with borders and gutters in every
+    /// line. That is the owner's actual complaint — the mess, not the modifier —
+    /// and copying the source sidesteps it entirely rather than competing with
+    /// the terminal for the mouse.
+    Copy,
     /// `/theme`, `/theme <name>`.
     ///
     /// There is no `--save`, and that is not an omission: a theme is read once
@@ -166,6 +180,7 @@ pub fn parse(line: &str) -> Option<SessionCommand> {
         "config" => Some(SessionCommand::Config),
         "agents" => Some(SessionCommand::Agents),
         "clear" => Some(SessionCommand::Clear),
+        "copy" => Some(SessionCommand::Copy),
         "theme" => Some(match args.as_slice() {
             [] => SessionCommand::Theme { name: None },
             // A flag is never a theme name, and `--save` is the one somebody
@@ -294,6 +309,7 @@ pub async fn run(cmd: SessionCommand, s: &mut Session<'_, '_>) -> Flow {
                 Err(e) => s.term.warn(&format!("/agents: {e}")),
             }
         }
+        SessionCommand::Copy => copy_last_answer(s),
         SessionCommand::Config => {
             let live = crate::commands::Live {
                 provider: s.kind.name().to_string(),
@@ -986,6 +1002,68 @@ fn plural(n: usize, what: &str) -> String {
 // renders through `Skin::note` and, on the framed path, `frame.write_lines`,
 // and one line per row is what `insert_before` scrolls correctly.
 // ---------------------------------------------------------------------------
+
+/// The clipboard write, and the reasons it is shaped this way.
+///
+/// **OSC 52** — `ESC ] 52 ; c ; <base64> BEL` — asks the *terminal* to put text
+/// on the user's clipboard. It is the only mechanism that works the same way
+/// locally and over SSH, and it needs no dependency. Windows Terminal has
+/// supported it since 2020.
+///
+/// **It is an escape sequence, so it is refused where escape sequences are.**
+/// `INV-001` promises zero escape bytes on `-p`, on a pipe, under
+/// `EMMA_NO_FRAME` and with no console. A clipboard write on any of those paths
+/// would put raw bytes into somebody's redirected output, which is the exact
+/// defect that invariant exists to prevent — so the check is on `Term::framed`
+/// rather than on whether the write would probably be seen.
+///
+/// **Emma cannot tell whether it worked**, and says so instead of implying it
+/// did. The terminal either honours the sequence or ignores it, silently, with
+/// no reply; there is no acknowledgement in the protocol to wait for. Reporting
+/// "copied" as a fact would be a claim about somebody else's program.
+fn copy_last_answer(s: &Session<'_, '_>) {
+    if !s.term.framed() {
+        s.term.warn(
+            "/copy writes to the clipboard with an escape sequence, which this run must not \
+             emit — piped and `-p` output carries no escape bytes at all. Use `/export` to \
+             write the transcript to a file instead.",
+        );
+        return;
+    }
+
+    let (records, _lost) = match crate::session::SessionLog::read_reporting(&s.log_path) {
+        Ok(r) => r,
+        Err(e) => {
+            s.term
+                .warn(&format!("/copy could not read this session: {e:#}"));
+            return;
+        }
+    };
+    // The last assistant turn that actually said something. A turn that only
+    // called tools has no prose to copy, and skipping past it is what makes
+    // `/copy` mean "the answer" rather than "the last record".
+    let text = records
+        .iter()
+        .rev()
+        .filter(|r| r["kind"] == "assistant")
+        .find_map(|r| {
+            let t = r["text"].as_str().unwrap_or_default().trim();
+            (!t.is_empty()).then(|| t.to_string())
+        });
+    let Some(text) = text else {
+        s.term
+            .note("/copy: nothing to copy — this session has no answer yet.");
+        return;
+    };
+
+    s.term.clipboard(&text);
+    let lines = text.lines().count();
+    let chars = text.chars().count();
+    s.term.note(&format!(
+        "/copy: sent {chars} characters ({lines} line(s)) to the clipboard. Emma cannot see \
+         whether the terminal accepted it — if nothing arrives, this terminal does not do OSC 52."
+    ));
+}
 
 fn say(term: &Term, text: &str) {
     for line in text.lines() {

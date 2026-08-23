@@ -349,6 +349,37 @@ impl Term {
         self.frame.is_some()
     }
 
+    /// Put text on the user's clipboard, through the terminal.
+    ///
+    /// **OSC 52** — `ESC ] 52 ; c ; <base64> BEL`. The terminal, not Emma, does
+    /// the writing, which is why this works identically over SSH and needs no
+    /// platform clipboard API. Windows Terminal has supported it since 2020.
+    ///
+    /// **Callers must check [`Term::framed`] first.** This emits escape bytes,
+    /// and `INV-001` promises none of those on `-p`, on a pipe, under
+    /// `EMMA_NO_FRAME` or with no console. The guard is at the call site rather
+    /// than here so the caller can say something useful instead — a clipboard
+    /// write that silently does nothing is the failure this whole area is about.
+    ///
+    /// **There is no acknowledgement.** The terminal honours the sequence or
+    /// ignores it, with no reply and no error, so nothing downstream can report
+    /// success as a fact. Callers say what was sent, never what arrived.
+    pub fn clipboard(&self, text: &str) {
+        // Straight to stdout rather than through `write_out`, which routes prose
+        // into the frame retained transcript. This is a control sequence, not
+        // content: a buffer that held it would replay somebody clipboard write
+        // on every redraw.
+        //
+        // Writing under the frame is safe because OSC 52 draws nothing - it
+        // moves no cursor and paints no cell, so it cannot disturb a frame
+        // mid-paint the way an unsolicited line would.
+        use std::io::Write as _;
+        let mut out = std::io::stdout();
+        let seq = format!("\x1b]52;c;{}\x07", base64(text.as_bytes()));
+        let _ = out.write_all(seq.as_bytes());
+        let _ = out.flush();
+    }
+
     /// How much colour this run has, as `Level::of` decided it.
     ///
     /// For the one caller that has to say plainly that a setting will not
@@ -1531,3 +1562,86 @@ mod tests {
 }
 
 // endregion: Tests
+
+#[cfg(test)]
+mod clipboard_tests {
+    use super::base64;
+
+    /// The RFC 4648 vectors, plus the payload shape OSC 52 actually carries.
+    ///
+    /// **A hand-written encoder is exactly the thing to check against somebody
+    /// else's numbers rather than against itself.** These six strings are the
+    /// canonical vectors: they exercise every remainder — no padding, one `=`,
+    /// two `=` — which is where an encoder written from the format description
+    /// goes wrong. Getting the padding subtly wrong produces output that looks
+    /// like base64, decodes to nothing, and fails silently in a terminal that
+    /// never reports errors.
+    #[test]
+    fn the_encoder_matches_the_published_vectors() {
+        for (input, want) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg=="),
+            ("fooba", "Zm9vYmE="),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(base64(input.as_bytes()), want, "encoding {input:?}");
+        }
+    }
+
+    /// Multi-byte text survives, because an answer is not ASCII.
+    ///
+    /// The encoder takes bytes, so this is really a check that the caller hands
+    /// it UTF-8 and nothing tries to be clever about characters — a `chars()`
+    /// based encoder would produce something that decodes to mojibake, and the
+    /// clipboard would receive it without complaint.
+    #[test]
+    fn utf8_round_trips_through_the_encoder() {
+        // "héllo — ✓" as bytes, encoded, then decoded by hand from the alphabet.
+        let text = "héllo — ✓";
+        let encoded = base64(text.as_bytes());
+        assert!(
+            !encoded.contains(|c: char| !c.is_ascii()),
+            "the encoding is not ascii-safe: {encoded}"
+        );
+        // Length is a function of byte count, not character count. Getting this
+        // wrong is the symptom of counting characters somewhere.
+        let expect = text.len().div_ceil(3) * 4;
+        assert_eq!(encoded.len(), expect, "{encoded}");
+    }
+}
+
+/// Base64, standard alphabet with padding — the encoding OSC 52 specifies.
+///
+/// Written out rather than pulling a crate. `base64` is already in the lock file
+/// as somebody else's transitive dependency, and taking it as a *direct* one
+/// makes it Emma's to audit and to keep current, for a single call site of
+/// twenty lines. The same trade `cli::edit_distance_at_most_one` made.
+///
+/// The three-byte groups and the `=` padding are the whole of the format; there
+/// is no line wrapping, because OSC 52 carries one unbroken payload.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        let idx = [(n >> 18) & 63, (n >> 12) & 63, (n >> 6) & 63, n & 63];
+        for (i, &v) in idx.iter().enumerate() {
+            // A group of one byte carries two characters of payload, a group of
+            // two carries three; the rest is padding rather than data.
+            if i <= chunk.len() {
+                out.push(char::from(ALPHABET[v as usize]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
