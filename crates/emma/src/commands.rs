@@ -976,6 +976,9 @@ pub fn config_check(
     for note in harness.skill_notes() {
         writeln!(out, "               {note}")?;
     }
+    for note in harness.command_notes() {
+        writeln!(out, "               {note}")?;
+    }
     let project = harness.command_names();
     writeln!(
         out,

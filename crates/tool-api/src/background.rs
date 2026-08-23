@@ -485,6 +485,51 @@ mod tests {
     /// which is a worse failure than the leak — so the bound is on remembering,
     /// never on running, and a registry full of live tasks grows rather than
     /// dropping one.
+    /// Eviction takes the **oldest**, and "oldest" is numeric.
+    ///
+    /// **The sibling test cannot see this and a reviewer said so.** Eviction
+    /// runs inside `spawn`, before the caller marks the new task finished, so
+    /// the newest task is still `Running` at its own eviction pass and is never
+    /// a candidate — which means "the most recent finished task survives" holds
+    /// under *any* ordering, including a plain string sort. Replacing the
+    /// numeric parse with `sort()` over the ids left that test green.
+    ///
+    /// Ids are `bash_<n>` from a counter, so a string sort puts `bash_10`
+    /// before `bash_2`. This chooses a size where the two orderings disagree
+    /// about specific ids and asserts on those: numeric eviction takes
+    /// `bash_1..bash_6`, string eviction takes `bash_1, bash_10, bash_11 …`.
+    /// So `bash_5` gone and `bash_10` alive is only true of the numeric one.
+    #[test]
+    fn eviction_takes_the_numerically_oldest_not_the_lexically_first() {
+        let reg = Registry::default();
+        let excess = 6usize;
+        let mut ids = Vec::new();
+        for i in 0..MAX_REMEMBERED_TASKS + excess {
+            let t = reg.spawn("s", format!("done {i}"));
+            t.set_state(TaskState::Exited(Some(0)));
+            ids.push(t.id.clone());
+        }
+        // One more spawn so the last batch's eviction pass actually runs with
+        // every earlier task already finished.
+        let last = reg.spawn("s", "trigger");
+        last.set_state(TaskState::Exited(Some(0)));
+
+        assert!(
+            reg.get("s", "bash_5").is_none(),
+            "bash_5 is among the numerically oldest and should have gone; a lexical \
+             sort would have kept it"
+        );
+        assert!(
+            reg.get("s", "bash_10").is_some(),
+            "bash_10 survives a numeric sort and is evicted early by a lexical one, \
+             so its absence means the ordering is by string"
+        );
+        assert!(
+            ids.len() > MAX_REMEMBERED_TASKS,
+            "the fixture did not exceed the cap, so nothing was evicted at all"
+        );
+    }
+
     #[test]
     fn the_registry_forgets_old_finished_tasks_and_never_a_running_one() {
         let reg = Registry::default();

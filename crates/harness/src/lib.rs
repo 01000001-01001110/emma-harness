@@ -726,6 +726,7 @@ pub struct Harness {
     /// What the skill loader had to say: duplicate names, and how many files
     /// were skipped. Returned rather than only printed, so a test can see them.
     skill_notes: Vec<String>,
+    command_notes: Vec<String>,
     /// The configured status-line program, when one resolved.
     status_line: Option<StatusLine>,
     /// Why there is not one, when configuration asked for something Emma could
@@ -847,6 +848,7 @@ impl Harness {
         // in the cached prompt prefix and directory iteration order must not
         // decide the prompt bytes. `claude::agents` sorts, and this preserves it.
         let (agents, agent_notes) = claude::load_agents(&root)?;
+        let (commands, command_notes) = load_commands(&root)?;
         let (skills, skill_notes) =
             load_skills(&root, &spine_path, flavor, block.skills.as_deref())?;
 
@@ -856,7 +858,8 @@ impl Harness {
             config_hash: hash::short(&raw),
             skills,
             skill_notes,
-            commands: load_commands(&root)?,
+            commands,
+            command_notes,
             hooks: hooks::resolve(&root, &spine_path, &hook_defs, block.hooks.as_deref())?,
             tools: block.tools,
             agents,
@@ -951,6 +954,12 @@ impl Harness {
     /// Read by `main` at startup and by `emma config check`. A catalogue quietly
     /// shorter than the directory is the gap nobody notices until the model
     /// cannot find an agent that is plainly there.
+    /// What `load_commands` passed over. Beside [`Harness::skill_notes`],
+    /// because they are the same claim about a different directory.
+    pub fn command_notes(&self) -> &[String] {
+        &self.command_notes
+    }
+
     pub fn skill_notes(&self) -> &[String] {
         &self.skill_notes
     }
@@ -1566,11 +1575,23 @@ fn strip_frontmatter(text: &str) -> &str {
     }
 }
 
-fn load_commands(root: &Path) -> Result<BTreeMap<String, String>> {
+/// Load `commands/*.md`, and **return** what was passed over.
+///
+/// **The count used to reach an `eprintln!` and nothing else**, which is
+/// `HARD-001`'s reopened defect verbatim: a number nothing can read is a
+/// comment. That row's own text says the shape to copy was one file away —
+/// `load_skills` already returned its notes and `Harness` already exposed
+/// `skill_notes`. This is that shape, applied to the sibling that was left out.
+///
+/// A reviewer proved the gap the direct way: the only test asserts
+/// `command_names() == ["top"]`, which stays true whether the nested files are
+/// counted, reported, or ignored entirely.
+fn load_commands(root: &Path) -> Result<(BTreeMap<String, String>, Vec<String>)> {
     let dir = root.join("commands");
     let mut out = BTreeMap::new();
+    let mut notes = Vec::new();
     if !dir.is_dir() {
-        return Ok(out);
+        return Ok((out, notes));
     }
     // Top level only, by design: a command is summoned as `/name`, and a name
     // taken from a nested path is either ambiguous or ugly. But a subdirectory
@@ -1609,14 +1630,14 @@ fn load_commands(root: &Path) -> Result<BTreeMap<String, String>> {
         );
     }
     if nested > 0 {
-        eprintln!(
-            "emma: {nested} command file(s) below {} are in subdirectories and were not \
-             loaded — only `commands/*.md` at the top level becomes a `/name`. Move them up \
-             if they are wanted.",
+        notes.push(format!(
+            "{nested} command file(s) below {} are in subdirectories and were not loaded — \
+             only `commands/*.md` at the top level becomes a `/name`. Move them up if they \
+             are wanted.",
             dir.display()
-        );
+        ));
     }
-    Ok(out)
+    Ok((out, notes))
 }
 
 // endregion: Loading

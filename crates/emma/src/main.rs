@@ -419,6 +419,9 @@ async fn run(cli: cli::Cli) -> Result<()> {
     for note in harness.skill_notes() {
         term.note(note);
     }
+    for note in harness.command_notes() {
+        term.note(note);
+    }
     for note in &agent_notes {
         term.note(note);
     }

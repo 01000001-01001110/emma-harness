@@ -893,3 +893,58 @@ fn config_check_names_the_skills_it_skipped_and_counts_them() {
         "the usable skill was lost along with the broken one"
     );
 }
+
+/// `config check` says which command files were passed over, and how many.
+///
+/// **The same defect as `HARD-001`, in the sibling directory, found by review.**
+/// `load_commands` counted nested files into an `eprintln!` and returned nothing,
+/// so the number reached stderr and no further — and the only test asserted
+/// `command_names() == ["top"]`, which stays true whether the nested files are
+/// counted, reported, or ignored entirely. `HARD-001`'s own text had already
+/// named the fix: `load_skills` returned its notes and `Harness` exposed them,
+/// one file away.
+///
+/// Asserted on `config check`'s output, not on the accessor, because asserting
+/// on the accessor is the mistake this row's neighbour made twice.
+#[test]
+fn config_check_names_the_command_files_it_passed_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(".claude");
+    let commands = root.join("commands");
+    std::fs::create_dir_all(commands.join("nested")).unwrap();
+    std::fs::write(
+        commands.join("top.md"),
+        "a top-level command
+",
+    )
+    .unwrap();
+    std::fs::write(
+        commands.join("nested").join("buried.md"),
+        "not loaded
+",
+    )
+    .unwrap();
+
+    let harness =
+        emma_harness::Harness::load(&root).expect("a nested command must not stop the boot");
+    let tools = emma_tool_api::Registry::default();
+
+    let mut out: Vec<u8> = Vec::new();
+    emma::commands::config_check(&harness, &tools, dir.path(), &[], None, &mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+
+    assert!(
+        text.contains("subdirectories"),
+        "`config check` said nothing about the command file it passed over:
+{text}"
+    );
+    assert!(
+        text.contains('1'),
+        "the shortfall was named without a count:
+{text}"
+    );
+    assert!(
+        harness.command_names().contains(&"top"),
+        "the top-level command was lost along with the nested one"
+    );
+}
