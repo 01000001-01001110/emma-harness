@@ -455,6 +455,31 @@ impl Approvals {
         self
     }
 
+    /// The decision `main` used to make inline: pipe or keyboard.
+    ///
+    /// **Moved here so it has a name and a test.** It was
+    /// `if stdin().is_terminal() { a } else { a.piped() }` in `main`, and a
+    /// reviewer deleted the whole branch: the reported user-facing defect came
+    /// straight back -- `echo "goal" | emma` drains its goal and explains the
+    /// loss in terms of a keyboard -- and the only thing that noticed was a
+    /// compiler warning about an unused import.
+    ///
+    /// The predicate is a parameter rather than read here, for the reason
+    /// `piped`'s own doc gives: under `cargo test` stdin is never a terminal,
+    /// so a function that asked the process would answer "pipe" in every test
+    /// and could not be tested at all.
+    ///
+    /// `ARCH-003`'s shape once more: `main` calling this is still deletable
+    /// with the suite green, and that residual is smaller than the branch it
+    /// replaces because the decision behind it is now covered.
+    pub fn for_stdin(self, is_terminal: bool) -> Self {
+        if is_terminal {
+            self
+        } else {
+            self.piped()
+        }
+    }
+
     /// The rules this run operates under, and the file a remembered one goes in.
     ///
     /// Separate from [`Approvals::new`] rather than two more parameters on it,
@@ -1230,6 +1255,85 @@ mod tests {
     /// exists — and this path used to drop it in silence. A user cannot tell a
     /// line that was eaten from a command that does not work, and they will
     /// report the second.
+    /// **A pipe exempts the goal prompt from the drain and never the approval
+    /// prompt**, and only the first half had a test.
+    ///
+    /// The row's own written constraint is *"preserve drain-before-approval
+    /// while exempting first goal prompt on non-TTY"*. `read_line` skips the
+    /// drain when the input is piped, which is right: a script cannot type
+    /// ahead, everything it sends is on purpose, and draining it discarded the
+    /// goal and then explained the loss in terms of a keyboard.
+    ///
+    /// `ask` must keep draining regardless, and for the opposite reason. The
+    /// line most likely to be sitting in a stream when an approval question
+    /// appears is a `y` aimed at a *different* question, and approving an
+    /// unseen command is the failure this whole file exists to prevent. A
+    /// reviewer made `ask`'s drain conditional on the same flag and the entire
+    /// workspace stayed green, because the only piped test covers the goal
+    /// prompt.
+    ///
+    /// So this is the negative control the exemption needed: exempting the goal
+    /// prompt must not have exempted the approval prompt with it.
+    /// A keyboard drains, a pipe does not, and the choice is one function.
+    ///
+    /// The half of `DEF-010` that lived in `main` as a bare `if`. Both
+    /// directions are asserted because a constructor that always piped would
+    /// satisfy the interesting one on its own -- and always piping is the
+    /// defect in the other direction, where somebody types ahead of a prompt
+    /// and silently loses it.
+    #[tokio::test]
+    async fn for_stdin_pipes_only_when_stdin_is_not_a_terminal() {
+        // Not a terminal: the goal survives.
+        let term = Term::recording();
+        let piped = Approvals::new(
+            Gate::Ask,
+            Asker::Terminal(crate::term::input::LineSource::scripted(&["goal one"]).into()),
+        )
+        .for_stdin(false);
+        assert_eq!(
+            piped.read_line(&term).await.as_deref(),
+            Some("goal one"),
+            "a piped goal was drained; `echo \"goal\" | emma` cannot run"
+        );
+
+        // A terminal: anything waiting before the prompt is type-ahead and goes.
+        let term = Term::recording();
+        let typed = Approvals::new(
+            Gate::Ask,
+            Asker::Terminal(crate::term::input::LineSource::scripted(&["typed ahead"]).into()),
+        )
+        .for_stdin(true);
+        assert_eq!(
+            typed.read_line(&term).await,
+            None,
+            "a line typed before the prompt survived, so the drain is off for a keyboard too"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pipe_does_not_exempt_the_approval_prompt_from_the_drain() {
+        let term = Term::recording();
+        // `y` is waiting in the stream before any question is asked: the shape
+        // of an answer meant for something else.
+        let a = Approvals::new(
+            Gate::Ask,
+            Asker::Terminal(crate::term::input::LineSource::scripted(&["y", "n"]).into()),
+        )
+        .piped();
+
+        let verdict = a.decide("Bash", WRITES, None, &Value::Null, &term).await;
+
+        // The drain ate the stale `y`, so nothing is left to answer with and the
+        // call is refused. If `ask` ever stops draining on a pipe, that `y`
+        // survives and this becomes `Allow` -- an unseen command approved by a
+        // line meant for a different question.
+        assert!(
+            matches!(verdict, Verdict::Deny(..)),
+            "a line waiting in the stream before the question was asked \
+             approved the call: {verdict:?}"
+        );
+    }
+
     #[tokio::test]
     async fn a_piped_session_keeps_its_input_instead_of_draining_it() {
         // The other side of the drain. On a pipe there is no such thing as

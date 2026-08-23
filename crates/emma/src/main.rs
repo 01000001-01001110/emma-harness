@@ -263,16 +263,13 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // `Approvals` would re-ask for a host the user already approved — and could
     // be handed a bypass the parent was not.
     let approvals = Arc::new(
-        {
-            let a = Approvals::new(gate, asker);
-            // The one place the process is asked. See `Approvals::piped`.
-            if std::io::stdin().is_terminal() {
-                a
-            } else {
-                a.piped()
-            }
-        }
-        .with_rules(rules, Some(emma::permissions::file_for(&harness.root))),
+        // The one place the process is asked. The decision itself is
+        // `Approvals::for_stdin`, in the library, where it has a test -- this
+        // used to be the `if` and deleting it brought the reported defect
+        // straight back with only a compiler warning to show for it.
+        Approvals::new(gate, asker)
+            .for_stdin(std::io::stdin().is_terminal())
+            .with_rules(rules, Some(emma::permissions::file_for(&harness.root))),
     );
     // The one place a running provider is chosen. An unknown name fails here
     // rather than falling back, so a mis-set provider cannot look like a
