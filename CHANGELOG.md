@@ -45,6 +45,9 @@ out for themselves.
   therefore no similarity scores. An empty panel invites you to assume the
   number is somewhere else, so the pages say it in words.
 
+  QUICK HELP's `Esc` row now reads `close menu / leave page`, and `Alt+key`
+  reads `tool or page` — three of the seven chords no longer launch anything.
+
   `Alt+m` previously produced a warning claiming "the frame owns the 'm' key"
   about a key nothing had claimed. That is fixed in both directions: the page
   exists, and the frame routes the key.

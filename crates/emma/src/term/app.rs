@@ -889,12 +889,12 @@ fn keymap() -> Vec<(String, String)> {
     [
         ("/", "command menu"),
         ("Enter", "send"),
-        ("Esc", "close menu"),
+        ("Esc", "close menu / leave page"),
         ("PgUp/PgDn", "scroll"),
         ("Ctrl+Up/Dn", "scroll a row"),
         ("Home/End", "top / tail (empty box)"),
         ("Ctrl+B", "toggle sidebar"),
-        ("Alt+key", "launch tool"),
+        ("Alt+key", "tool or page"),
         ("Ctrl+C", "interrupt"),
         ("Ctrl+D", "quit"),
         ("Shift+drag", "select text"),
@@ -980,6 +980,66 @@ mod tests {
     /// for what exists", and a settings screen is the one place a user arrives
     /// *expecting* a control to take — so a panel with nothing behind it has to
     /// read as absent rather than as available.
+    /// Print the three pages, for a human who wants to look at them.
+    ///
+    /// **A cell buffer is not a console, and this is a picture of the buffer.**
+    /// It shows the layout, the wording and what each page refuses to draw; it
+    /// cannot show colour, cannot show that Windows Terminal delivered `Alt+,`,
+    /// and cannot show tearing. Everything it proves is already asserted by the
+    /// three tests below it. What it is for is the question those tests cannot
+    /// answer — *does this read well* — which only a person can settle.
+    ///
+    ///     cargo test -p emma --lib term::app::tests::show_the_pages -- --ignored --nocapture
+    #[test]
+    #[ignore = "prints for a human to read; asserts nothing"]
+    fn show_the_pages() {
+        let v = view();
+        let sample = concat!(
+            "source         C:\\Users\\you\\.emma\\sessions\n",
+            "sessions       3 file(s), 412 record(s)\n",
+            "\n",
+            "kinds\n",
+            "  assistant        118\n",
+            "  goal               3\n",
+            "  tool_result       97\n",
+            "\n",
+            "sessions, newest last\n",
+            "  2026-08-21T09-14-02              88 records       31 KiB\n",
+            "  2026-08-23T11-02-55             206 records       74 KiB\n",
+        );
+        let memory_sample = concat!(
+            "project        C:\\\\src\\\\emma\n",
+            "sessions here  3\n",
+            "goals asked    3\n",
+            "compactions    1 - a summary replaced older turns this many times\n",
+            "clears         0\n",
+            "\n",
+            "what was asked here, newest last\n",
+            "  2026-08-21T09-14-02            harden the permission matcher\n",
+            "  2026-08-23T11-02-55            make Alt+, open a page, not my editor\n",
+        );
+        for (title, page) in [
+            ("SETTINGS", Pane::Page(Page::Settings)),
+            ("DATA EXPLORER", Pane::Page(Page::DataExplorer)),
+            ("MEMORY", Pane::Page(Page::Memory)),
+        ] {
+            let mut a = App::new((120, 40));
+            a.set_tools(tool_rows(&crate::usertools::catalogue(
+                std::path::Path::new("."),
+            )));
+            match page {
+                Pane::Page(Page::DataExplorer) => a.show_explorer(sample),
+                Pane::Page(Page::Memory) => a.show_memory(memory_sample),
+                other => a.show(other),
+            }
+            let (rows, _) = draw(&mut a, &v, 120, 40);
+            println!("\n===== {title} =====");
+            for r in rows {
+                println!("{}", r.trim_end());
+            }
+        }
+    }
+
     #[test]
     fn the_settings_page_swaps_the_middle_and_keeps_the_frame() {
         let v = view();

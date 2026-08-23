@@ -273,6 +273,21 @@ pub enum Pane {
     <a href="terminal-usertools.html">The user tools page</a> has the catalogue.
   </p>
 
+  <h2 id="look">Looking at them</h2>
+
+  <p>
+    An ignored test prints all three, for the question the assertions cannot
+    answer &mdash; <em>does this read well</em>:
+  </p>
+
+  <pre><code>cargo test -p emma --lib term::app::tests::show_the_pages -- --ignored --nocapture</code></pre>
+
+  <p>
+    It asserts nothing, and what it shows is the cell buffer rather than a
+    console: no colour, no proof that the chord arrived, no tearing. Everything
+    it draws is already covered by the three tests above it.
+  </p>
+
   <h2 id="unverified">What has not been checked</h2>
 
   <p>
