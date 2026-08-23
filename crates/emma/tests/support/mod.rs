@@ -282,6 +282,16 @@ pub struct TestTool {
     /// enough for a test that only counts calls; a test asserting that a
     /// *result* survived into a later turn needs a body it can search for.
     body: Option<String>,
+    /// The exit status this tool reports, as a real command runner does.
+    ///
+    /// **Added because nothing set it, which is why `DEF-004`'s fix was
+    /// deletable with the whole suite green.** `ToolOutcome::exit_code`
+    /// exists so the delegation footer reads a field rather than re-parsing
+    /// prose — the parse never matched, so the footer said "no result" for
+    /// every command a subagent ran, and the lie-detector it exists for
+    /// could not fire. No fixture ever set the field, so no test could tell
+    /// the structural read from the fallback.
+    exit: Option<i64>,
     /// Panics instead of returning. The one failure class the loop did not
     /// convert into an observation, so the one a test has to be able to stage.
     panics: bool,
@@ -314,6 +324,7 @@ impl TestTool {
             host: None,
             fails: false,
             body: None,
+            exit: None,
             panics: false,
             panics_early: false,
             slow: Some(std::time::Duration::from_secs(secs)),
@@ -335,6 +346,7 @@ impl TestTool {
             host: None,
             fails: false,
             body: None,
+            exit: None,
             panics: false,
             panics_early: true,
             slow: None,
@@ -353,6 +365,7 @@ impl TestTool {
             host: None,
             fails: false,
             body: None,
+            exit: None,
             panics: true,
             panics_early: false,
             slow: None,
@@ -376,6 +389,34 @@ impl TestTool {
     /// A tool that changes nothing locally and reaches one host — the shape
     /// `WebFetch` and `WebSearch` have, and the shape that would run silently
     /// if the gate asked only about writing.
+    /// A tool that ran a command and reports its status, the way `Bash` does.
+    ///
+    /// **The body deliberately carries no `exit status` line for a zero code**,
+    /// because that is what the real `Bash` writes: it prefixes the status only
+    /// when `!status.success()`. A fixture stating the status in its prose would
+    /// let the footer's *fallback* parser find it, and the test would pass with
+    /// the structural read deleted — which is the hole this exists to close.
+    pub fn ran(
+        name: &'static str,
+        body: impl Into<String>,
+        exit: i64,
+    ) -> (Arc<dyn Tool>, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tool = Self {
+            name,
+            read_only: false,
+            host: None,
+            fails: false,
+            body: Some(body.into()),
+            exit: Some(exit),
+            panics: false,
+            panics_early: false,
+            slow: None,
+            calls: calls.clone(),
+        };
+        (Arc::new(tool), calls)
+    }
+
     pub fn reaching(name: &'static str, host: &'static str) -> (Arc<dyn Tool>, Arc<AtomicUsize>) {
         Self::build(name, true, Some(host), false, None)
     }
@@ -395,6 +436,7 @@ impl TestTool {
                 host,
                 fails,
                 body,
+                exit: None,
                 panics: false,
                 panics_early: false,
                 slow: None,
@@ -458,10 +500,13 @@ impl Tool for TestTool {
         Ok(if self.fails {
             Err(ToolError::Failed(format!("{} broke on purpose", self.name)))
         } else {
-            Ok(ToolOutcome::new(match &self.body {
-                Some(body) => body.clone(),
-                None => format!("{} ran", self.name),
-            }))
+            Ok(ToolOutcome {
+                exit_code: self.exit,
+                ..ToolOutcome::new(match &self.body {
+                    Some(body) => body.clone(),
+                    None => format!("{} ran", self.name),
+                })
+            })
         })
     }
 }

@@ -199,6 +199,82 @@ async fn a_delegation_runs_a_nested_loop_and_returns_its_conclusion_under_a_foot
     assert!(seen.contains("recorded by the harness"), "{seen}");
 }
 
+/// A command that **succeeded** reaches the footer with its status.
+///
+/// **The half of `DEF-004` that no test could see.** The footer reads
+/// `ToolOutcome::exit_code` and falls back to parsing the tool's prose. Real
+/// `Bash` writes `exit status <n>` only when `!status.success()` — so for every
+/// command that worked, the prose carries no status at all and the fallback
+/// returns `None`. The footer then renders `no result (refused, or the run
+/// stopped)` for a command that ran and exited 0, which is the opposite of
+/// what happened.
+///
+/// Every fixture in this file predates the field, so deleting the structural
+/// read left all fourteen tests green. An independent reviewer found that by
+/// deleting it. The fixture here sets the field and states nothing in its
+/// prose, which is what makes the two paths distinguishable.
+#[tokio::test]
+async fn a_command_that_succeeded_is_not_reported_as_no_result() {
+    let dir = tempfile::tempdir().unwrap();
+    // No `exit status` line: exactly what Bash writes on success.
+    let (bash, bash_calls) = TestTool::ran(
+        "Bash",
+        "shell: bash
+all tests passed
+",
+        0,
+    );
+    let fake = Fake::new(vec![
+        delegate_to("runner", "run the tests"),
+        call("Bash", json!({ "command": "cargo test" })),
+        text(
+            "They pass.
+
+GOAL COMPLETE",
+        ),
+        text(
+            "Done.
+
+GOAL COMPLETE",
+        ),
+    ]);
+
+    let run = delegating(
+        dir.path(),
+        fake.clone(),
+        &[agent_type("runner", Some(vec!["Bash"]))],
+        vec![bash],
+        allowing_everything(),
+        budgets(),
+        Arc::new(SessionLog::none()),
+        Arc::new(Term::silent()),
+    )
+    .await;
+
+    assert_eq!(run.outcome.ending, Ending::Done);
+    assert_eq!(
+        bash_calls.load(Ordering::SeqCst),
+        1,
+        "the sub did not run the command, so the footer has nothing to report on"
+    );
+
+    let seen = fake.transcript();
+    assert!(
+        seen.contains("cargo test"),
+        "the command is missing from the footer: {seen}"
+    );
+    assert!(
+        !seen.contains("no result"),
+        "a command that ran and exited 0 was reported as having no result, which \
+         is what the footer says about a command that was refused or never \
+         finished: {seen}"
+    );
+    assert!(
+        seen.contains("cargo test → exit 0") || seen.contains("cargo test → 0"),
+        "the footer did not carry the exit status it was handed: {seen}"
+    );
+}
+
 /// **The test the whole design turns on, and the one to mutate.**
 ///
 /// The scripted subagent claims, in perfectly plausible prose, to have read two
