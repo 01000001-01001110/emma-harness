@@ -872,6 +872,83 @@ fn a_hook_event_emma_does_not_implement_is_a_loud_startup_error() {
     assert!(msg.contains("PreToolUse"), "{msg}");
 }
 
+/// A `settings.json` hook's `args` reach the program as a real argv.
+///
+/// **`hook_arguments_arrive_as_a_real_argv` drives `.emma/config.json`, not
+/// this file**, so the `.claude` translation of `args` had nothing on it. A
+/// reviewer replaced `entry.args.clone().unwrap_or_default()` with
+/// `Vec::new()` -- a hook the operator configured `["--strict"]` running with
+/// no arguments at all -- and the whole workspace stayed green.
+///
+/// That is a silent policy change rather than a crash: the hook still runs,
+/// still returns something, and enforces whatever its default is.
+///
+/// The argument carries a space on purpose. A value joined into a string and
+/// re-split would arrive as two, and the assertion below would see `[a]`.
+#[tokio::test]
+async fn a_settings_json_hooks_args_arrive_as_a_real_argv() {
+    let base = scratch("claude-hook-args");
+    let root = base.join(".claude");
+    let cmd = script(
+        &root.join("hooks"),
+        "echoarg",
+        r#"printf '{"decision":"deny","reason":"[%s]"}' "$1""#,
+        r#"echo {"decision":"deny","reason":"[%~1]"}"#,
+    );
+    write(
+        &root.join("settings.json"),
+        &format!(
+            r#"{{"hooks":{{"PreToolUse":[{{"hooks":[{{"type":"command","command":"$CLAUDE_PROJECT_DIR/.claude/hooks/{cmd}","args":["a b"]}}]}}]}}}}"#
+        ),
+    );
+
+    let h = Harness::load(&root).expect("a settings.json hook with args must load");
+    let v = h
+        .run_hooks(HookEvent::PreToolUse, &call(&serde_json::json!({})))
+        .await;
+    assert_eq!(v.runs.len(), 1, "the hook did not run: {:?}", v.runs);
+    assert_eq!(
+        v.denied.as_deref().unwrap_or_default(),
+        "[a b]",
+        "the argument the operator configured did not reach the program whole"
+    );
+}
+
+/// `shell: true` is refused, and refusing it is the whole point.
+///
+/// **The refusal had no test.** A reviewer changed `if entry.shell ==
+/// Some(true)` to `if false` -- silently running a command written for a
+/// shell without one -- and the whole workspace stayed green.
+///
+/// The refusal's own comment says why it is a refusal rather than a shrug:
+/// glob expansion, `\u{26}\u{26}` and quoting all mean something different without a
+/// shell, and the failure would look like the hook misbehaving rather than
+/// like Emma disregarding a field it read.
+#[tokio::test]
+async fn a_settings_json_hook_asking_for_a_shell_is_refused_by_name() {
+    let base = scratch("claude-hook-shell");
+    let root = base.join(".claude");
+    let cmd = script(&root.join("hooks"), "x", "exit 0", "exit /b 0");
+    write(
+        &root.join("settings.json"),
+        &format!(
+            r#"{{"hooks":{{"PreToolUse":[{{"hooks":[{{"type":"command","command":"$CLAUDE_PROJECT_DIR/.claude/hooks/{cmd}","shell":true}}]}}]}}}}"#
+        ),
+    );
+
+    let _strict = StrictHooks::take();
+    let err = Harness::load(&root).expect_err("`shell: true` must not be silently ignored");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("shell: true"),
+        "the refusal must name the field it is refusing: {msg}"
+    );
+    assert!(
+        msg.contains("args") || msg.contains("hooks/"),
+        "the refusal must say what to do instead: {msg}"
+    );
+}
+
 /// The opt-in turns a refusal into a named skip, and never a silent one.
 ///
 /// **Measured before this existed:** zero of five real hooks in a real
