@@ -171,6 +171,17 @@ pub struct BrowserPool {
     allowlist: Option<PathBuf>,
     /// Lifts the loopback refusal. See [`BrowserPool::for_fixture_tests`].
     allow_local: bool,
+    /// Profile directories `remove_profile` gave up on, in the order it gave up.
+    ///
+    /// **The removal was already best-effort; what it was not was legible.** Ten
+    /// attempts over roughly three seconds, and then nothing at all -- no return
+    /// value, no record, no line anywhere. The backstop is real
+    /// ([`BrowserPool::sweep_stale_profiles`] at the next start) and it is not
+    /// the same as knowing: a profile directory holds the session's cookies, and
+    /// this module's own doc is that a browser Emma opened may hold a login. If
+    /// that is sitting in a shared temp folder until the next run, somebody
+    /// should be able to find out.
+    leaked_profiles: Mutex<Vec<PathBuf>>,
 }
 
 impl BrowserPool {
@@ -181,6 +192,30 @@ impl BrowserPool {
             sessions: Mutex::new(HashMap::new()),
             allowlist,
             allow_local: false,
+            leaked_profiles: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Profile directories this pool could not remove, and has not retried.
+    ///
+    /// Empty is the ordinary answer. A non-empty one means cookies are on disk
+    /// in a temp directory until [`BrowserPool::sweep_stale_profiles`] runs at
+    /// the next start.
+    pub fn leaked_profiles(&self) -> Vec<PathBuf> {
+        self.leaked_profiles
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Record a profile directory the removal gave up on.
+    fn note_leak(&self, dir: &Path) {
+        let mut leaks = self
+            .leaked_profiles
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !leaks.iter().any(|p| p == dir) {
+            leaks.push(dir.to_path_buf());
         }
     }
 
@@ -453,7 +488,9 @@ impl BrowserPool {
         // …and the kill regardless, because "polite close returned Ok" is a
         // claim about a message being sent, not about a process being gone.
         kill_pid(s.pid);
-        remove_profile(s.pid, &s.profile_dir());
+        if !remove_profile(s.pid, &s.profile_dir()) {
+            self.note_leak(&s.profile_dir());
+        }
         Some(s)
     }
 
@@ -482,7 +519,9 @@ impl BrowserPool {
         };
         for s in doomed {
             kill_pid(s.pid);
-            remove_profile(s.pid, &s.profile_dir());
+            if !remove_profile(s.pid, &s.profile_dir()) {
+                self.note_leak(&s.profile_dir());
+            }
         }
     }
 
@@ -639,16 +678,23 @@ fn kill_pid(pid: u32) {
 ///
 /// A failure even then is not fatal: `sweep_stale_profiles` on the next start
 /// is the backstop's backstop, which is what it is for.
-fn remove_profile(pid: u32, dir: &Path) {
+///
+/// **Returns whether the directory is gone**, because "not fatal" and "not worth
+/// mentioning" are different claims and this function used to make the second
+/// one by returning `()`. Ten attempts and then silence: no value, no record,
+/// nothing anywhere for anybody to find. The caller records a `false` on the
+/// pool, where [`BrowserPool::leaked_profiles`] can report it.
+fn remove_profile(pid: u32, dir: &Path) -> bool {
     chromehand::session::wait_for_exit(pid);
     for attempt in 0..10 {
         if !dir.exists() || std::fs::remove_dir_all(dir).is_ok() {
-            return;
+            return true;
         }
         // Not `tokio::time::sleep`: this runs from `Drop` too, where there is no
         // runtime to sleep on and nothing left to yield to.
         std::thread::sleep(Duration::from_millis(50 * (attempt + 1)));
     }
+    false
 }
 
 /// Delete the session record chromehand wrote into the working directory, and
@@ -761,6 +807,82 @@ mod tests {
         assert!(pool.is_empty());
         pool.kill_all_now();
         assert!(pool.is_empty());
+    }
+
+    /// A profile that will not go away is recorded, and one that does is not.
+    ///
+    /// **Ten attempts and then nothing at all** was the old behaviour: no return
+    /// value, no record, no line anywhere. The backstop is real -- the next
+    /// `BrowserPool::new` sweeps stale profiles -- but "not fatal" and "not
+    /// worth mentioning" are different claims, and returning `()` made the
+    /// second one. A profile directory holds the session's cookies, and this
+    /// module's own doc says a browser Emma opened may hold a login.
+    ///
+    /// The failure is produced rather than mocked. A *file* is created where the
+    /// directory should be, so `remove_dir_all` fails on every attempt for a
+    /// reason the filesystem supplies. `pid` is 0, which `wait_for_exit` and
+    /// `kill_pid` both treat as nothing to wait for.
+    ///
+    /// **The clean half is load-bearing.** An implementation that recorded a
+    /// leak on every close would pass a test that only checked the failure, and
+    /// would then report cookies on disk after every goal -- a warning that
+    /// fires when it should not is how an operator learns to skip it.
+    #[test]
+    fn a_profile_that_cannot_be_removed_is_recorded_and_a_removed_one_is_not() {
+        let tmp = std::env::temp_dir().join(format!(
+            "emma-leak-probe-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_file(&tmp);
+
+        // Nothing there at all: removal has nothing to do and succeeds.
+        assert!(
+            remove_profile(0, &tmp),
+            "an absent directory was reported as a failed removal"
+        );
+
+        // A real directory: removed, and reported as removed.
+        std::fs::create_dir_all(tmp.join("inner")).unwrap();
+        std::fs::write(tmp.join("inner").join("cookies"), b"x").unwrap();
+        assert!(
+            remove_profile(0, &tmp),
+            "a removable directory was not removed"
+        );
+        assert!(
+            !tmp.exists(),
+            "it reported success and the directory is there"
+        );
+
+        // A FILE where the directory should be: `remove_dir_all` fails every
+        // time, so the ten attempts run out.
+        std::fs::write(&tmp, b"not a directory").unwrap();
+        assert!(
+            !remove_profile(0, &tmp),
+            "a removal that could not succeed was reported as success"
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// The pool records what the removal gave up on, once per directory.
+    #[test]
+    fn the_pool_reports_a_leaked_profile_and_does_not_repeat_itself() {
+        let pool = BrowserPool::new(None);
+        assert!(
+            pool.leaked_profiles().is_empty(),
+            "a fresh pool claimed to have leaked something"
+        );
+
+        let dir = std::env::temp_dir().join("emma-leak-note-probe");
+        pool.note_leak(&dir);
+        pool.note_leak(&dir);
+        assert_eq!(
+            pool.leaked_profiles(),
+            vec![dir],
+            "the same directory was recorded twice, which would make the count a \
+             measure of how often teardown ran rather than of what is on disk"
+        );
     }
 
     #[test]

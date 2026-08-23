@@ -742,6 +742,22 @@ async fn run(cli: cli::Cli) -> Result<()> {
                     closed.len()
                 ));
             }
+            // **A profile that could not be removed is said out loud.** It
+            // holds the session's cookies, and this pool's own module doc is
+            // that a browser Emma opened may hold a login.
+            // `sweep_stale_profiles` clears it at the next start, which is a
+            // backstop rather than a reason for the user not to know it is
+            // there now.
+            let leaked = pool.leaked_profiles();
+            if !leaked.is_empty() {
+                term.warn(&format!(
+                    "{} browser profile director(ies) could not be removed and are still on \
+                     disk with this session's cookies in them; Emma clears them at its next \
+                     start. First: {}",
+                    leaked.len(),
+                    leaked[0].display()
+                ));
+            }
         }
         // `-p` runs one goal and stops. Interactively, Ctrl-C interrupts the
         // goal and hands the prompt back, which is what `cli.rs` and the
