@@ -57,7 +57,7 @@ impl Tool for BashOutput {
     }
 
     fn description(&self) -> &str {
-        include_str!("bashoutput.md")
+        include_str!("descriptions/bashoutput.md")
     }
 
     fn input_schema(&self) -> Value {
@@ -236,7 +236,10 @@ impl BashOutput {
                 }
             }
         } else {
-            format!("{} ({}): {phrase}\n{}", task.id, task.label, read.new_output)
+            format!(
+                "{} ({}): {phrase}\n{}",
+                task.id, task.label, read.new_output
+            )
         };
 
         let display = if read.new_output.is_empty() {
@@ -363,7 +366,11 @@ mod tests {
             "{}",
             third.content
         );
-        assert!(!third.content.contains("still running"), "{}", third.content);
+        assert!(
+            !third.content.contains("still running"),
+            "{}",
+            third.content
+        );
     }
 
     #[tokio::test]
@@ -387,7 +394,9 @@ mod tests {
         let ctx = ctx_for("s1", &reg);
         let task = reg.spawn("s1", "cargo test");
 
-        let err = call(&ctx, "bash_99").await.expect_err("a guessed id was answered");
+        let err = call(&ctx, "bash_99")
+            .await
+            .expect_err("a guessed id was answered");
         assert_eq!(err.kind(), "bad_arguments");
         assert!(
             err.detail().contains(&task.id) && err.detail().contains("cargo test"),
@@ -399,7 +408,9 @@ mod tests {
         // empty set the model would misread as a formatting accident.
         let empty = Registry::new();
         let ctx2 = ctx_for("s1", &empty);
-        let err2 = call(&ctx2, "bash_1").await.expect_err("an empty registry answered");
+        let err2 = call(&ctx2, "bash_1")
+            .await
+            .expect_err("an empty registry answered");
         assert!(
             err2.detail().contains("no background tasks"),
             "{}",
@@ -417,7 +428,9 @@ mod tests {
         theirs.push(b"not yours\n");
 
         let ctx = ctx_for("s1", &reg);
-        let err = call(&ctx, &theirs.id).await.expect_err("cross-session read succeeded");
+        let err = call(&ctx, &theirs.id)
+            .await
+            .expect_err("cross-session read succeeded");
         assert_eq!(err.kind(), "bad_arguments");
         assert!(
             !err.detail().contains("not yours") && !err.detail().contains("secret work"),

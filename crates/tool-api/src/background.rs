@@ -71,9 +71,23 @@ impl TaskState {
 /// a reader that saw `Running` alongside the final output — or a final status
 /// alongside a stale tail — would report a coherent-looking lie. One lock means
 /// one consistent answer.
-#[derive(Debug)]
 struct Shared {
     state: TaskState,
+    /// How to stop this task, taken when it is used.
+    ///
+    /// **Under the same lock as `state`, and that is the whole point.** It used
+    /// to have a mutex of its own, so `kill` could take the killer while another
+    /// thread was writing the exit status — and `Task::kill` returned `true` for
+    /// any *registered* killer even when the child had already exited on its
+    /// own, then stamped `Killed` over the real status. A caller was told it had
+    /// stopped something it had not, and the true exit code was destroyed on the
+    /// way past.
+    ///
+    /// Found by the agent building `KillShell`, which worked around it by
+    /// checking `state()` before calling `kill()` — a fix that cannot be
+    /// complete at that layer, because the check and the call are two locks and
+    /// a task can exit between them.
+    killer: Option<Killer>,
     output: Vec<u8>,
     /// Bytes discarded from the front to stay under the cap. Reported, never
     /// silently absorbed.
@@ -87,6 +101,8 @@ struct Shared {
 /// How to stop one task. Boxed because the caller owns the mechanism — a
 /// `tokio` child handle, an abort handle, or in a test a flag — and this module
 /// deliberately knows none of them.
+///
+/// Not `Debug`, which is why `Shared` and `Task` write theirs out by hand.
 type Killer = Box<dyn FnOnce() + Send>;
 
 /// A handle on one background task. Cloning is cheap and shares the state.
@@ -98,7 +114,6 @@ pub struct Task {
     pub label: String,
     pub session_id: String,
     shared: Arc<Mutex<Shared>>,
-    killer: Arc<Mutex<Option<Killer>>>,
 }
 
 /// What a reader gets back, and everything it needs to be honest about it.
@@ -110,6 +125,18 @@ pub struct TaskRead {
     /// Bytes dropped from the front of the buffer to stay under the cap, across
     /// the whole life of the task.
     pub dropped: u64,
+}
+
+impl std::fmt::Debug for Shared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Shared")
+            .field("state", &self.state)
+            .field("killer", &self.killer.is_some())
+            .field("output", &self.output.len())
+            .field("dropped", &self.dropped)
+            .field("read_to", &self.read_to)
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for Task {
@@ -189,8 +216,8 @@ impl Task {
 
     /// Register how to stop this task. Called once, by whoever spawned it.
     pub fn on_kill(&self, f: impl FnOnce() + Send + 'static) {
-        let mut k = self.killer.lock().unwrap_or_else(|e| e.into_inner());
-        *k = Some(Box::new(f));
+        let mut s = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+        s.killer = Some(Box::new(f));
     }
 
     /// Stop the task, if it is running and if a killer was registered.
@@ -207,11 +234,21 @@ impl Task {
     /// caller says so out loud rather than implying a guarantee this does not
     /// provide.
     pub fn kill(&self) -> bool {
-        let taken = self.killer.lock().unwrap_or_else(|e| e.into_inner()).take();
-        match taken {
+        let mut s = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+        // **Finished first, under this lock.** A task that exited on its own
+        // still holds a registered killer, and firing it would signal a pid that
+        // is gone — or, worse, one the operating system has since handed to
+        // somebody else — and then overwrite the real exit status with `Killed`.
+        // Checking outside the lock is not enough: the task can exit between the
+        // check and the call, which is exactly the window a caller cannot close
+        // from outside.
+        if s.state.finished() {
+            return false;
+        }
+        match s.killer.take() {
             Some(f) => {
                 f();
-                self.set_state(TaskState::Killed);
+                s.state = TaskState::Killed;
                 true
             }
             None => false,
@@ -262,11 +299,11 @@ impl Registry {
             session_id: session_id.to_string(),
             shared: Arc::new(Mutex::new(Shared {
                 state: TaskState::Running,
+                killer: None,
                 output: Vec::new(),
                 dropped: 0,
                 read_to: 0,
             })),
-            killer: Arc::new(Mutex::new(None)),
         };
         self.tasks
             .lock()
@@ -427,6 +464,42 @@ mod tests {
         // "stopped it" for a task that was already dead is exactly the plausible
         // success this project treats as a defect.
         assert!(!t.kill(), "killing a dead task claimed to have stopped it");
+    }
+
+    /// A task that exited on its own is not killable, and its status survives.
+    ///
+    /// **The registered killer outlives the child.** `kill` used to fire it for
+    /// any task that still had one — so a task that had already exited was
+    /// signalled anyway (a pid that is gone, or one the operating system has
+    /// since handed to somebody else) and its real exit status was overwritten
+    /// with `Killed`. The caller was told it had stopped something it had not.
+    ///
+    /// Found by the agent building `KillShell`, which guarded it by checking
+    /// `state()` before calling `kill()`. That cannot be complete at the caller:
+    /// the check and the call are two separate locks, and the task can exit
+    /// between them. The check belongs here, under the lock that owns the state.
+    #[test]
+    fn a_task_that_exited_on_its_own_cannot_be_killed_and_keeps_its_status() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let r = Registry::new();
+        let t = r.spawn("s1", "cargo build");
+        let fired = Arc::new(AtomicBool::new(false));
+        let f = fired.clone();
+        t.on_kill(move || f.store(true, Ordering::SeqCst));
+
+        // It finishes on its own, with a status somebody will want.
+        t.set_state(TaskState::Exited(Some(0)));
+
+        assert!(!t.kill(), "a task that had already exited reported a kill");
+        assert!(
+            !fired.load(Ordering::SeqCst),
+            "a stale killer was fired at a process that had already gone"
+        );
+        assert_eq!(
+            t.state(),
+            TaskState::Exited(Some(0)),
+            "the real exit status was overwritten with Killed"
+        );
     }
 
     #[test]

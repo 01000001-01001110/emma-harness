@@ -28,6 +28,30 @@ out for themselves.
 
 ## Unreleased
 
+- **`Bash` can now run a command in the background, and two new tools read and
+  stop it.** Pass `run_in_background: true` and the call returns immediately
+  with a task id instead of waiting; `BashOutput` returns whatever that task has
+  produced since the last read, along with whether it is still running; and
+  `KillShell` stops it. The names match Claude Code's, so a hook matcher or an
+  allow-list written for one works for the other.
+
+  Three things worth knowing before you use it. A background result is a receipt
+  for a *start*, not for a finish — nothing has been waited for, and the outcome
+  says so, because a model that reads a spawn as a completed build will report
+  success for work that has not happened. `timeout_ms` together with
+  `run_in_background` is **refused** rather than ignored, since there is no wait
+  to bound and accepting an argument that does nothing is worse than saying no.
+  And `KillShell` signals the shell it started, never a process tree: a command
+  that launched a server leaves that server running, which the outcome states
+  rather than implying otherwise.
+
+  Output is capped at 256 KiB per task, oldest first, and a read that lost bytes
+  says how many and names the cap.
+
+  If you write permission rules, note the surface grew: `Bash(...)` rules do not
+  cover `BashOutput` or `KillShell`, which are separate tool names and need
+  their own entries. `BashOutput` is read-only; `KillShell` is not.
+
 - Prompt caching now uses each model's own minimum cacheable prefix instead of
   assuming Opus 5's 512 tokens. On models with a higher floor —
   `claude-haiku-4-5` and `claude-opus-4-6` need 4,096 — Emma was marking

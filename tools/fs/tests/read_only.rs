@@ -41,6 +41,22 @@ fn provocations(name: &str) -> Vec<serde_json::Value> {
             json!({ "pattern": "no-such-string-anywhere" }),
             json!({ "pattern": "[", }),
         ],
+        // `BashOutput` reads a background task's buffer. It is `read_only`
+        // because the question this bit answers is "can this damage the
+        // machine", and reading output cannot — the cursor it advances is
+        // session bookkeeping of the same class as the `ReadTracker` that
+        // `Read` mutates while declaring itself read-only.
+        //
+        // The provocations are the ids most likely to make a careless
+        // implementation touch the filesystem: one that looks like a path, one
+        // that looks like a traversal, and one that is simply absent. All three
+        // must come back as errors and leave the tree alone.
+        "BashOutput" => vec![
+            json!({ "bash_id": "bash_1" }),
+            json!({ "bash_id": "../../src/main.rs" }),
+            json!({ "bash_id": "src/main.rs" }),
+            json!({ "bash_id": "" }),
+        ],
         other => panic!("no provocations written for {other}"),
     }
 }
@@ -93,7 +109,14 @@ async fn the_read_only_declarations_are_the_expected_ones() {
         .map(|t| t.name())
         .collect();
     claimed.sort_unstable();
-    assert_eq!(claimed, ["Glob", "Grep", "Read"]);
+    // `BashOutput` joined the list when the background tools registered, and it
+    // had to be argued rather than assumed: it advances a read cursor, so it is
+    // not free of side effects. The bit means "can this damage this machine",
+    // and a cursor into an in-memory buffer cannot — it is the same class of
+    // session bookkeeping `Read` mutates while declaring itself read-only.
+    // `KillShell` is deliberately not here: signalling a process is exactly the
+    // local damage the bit exists to flag.
+    assert_eq!(claimed, ["BashOutput", "Glob", "Grep", "Read"]);
 }
 
 #[tokio::test]

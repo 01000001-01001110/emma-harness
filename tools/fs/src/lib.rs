@@ -66,10 +66,12 @@ use emma_tool_api::Tool;
 // against the same containment.
 mod args;
 pub mod bash;
+pub mod bashoutput;
 pub mod edit;
 pub mod glob;
 pub mod grep;
 pub mod hashline;
+pub mod killshell;
 pub mod path;
 pub mod read;
 pub mod session;
@@ -77,9 +79,11 @@ pub mod walk;
 pub mod write;
 
 pub use bash::{resolve_shell, Bash, Shell, ShellKind, ShellSource};
+pub use bashoutput::BashOutput;
 pub use edit::Edit;
 pub use glob::Glob;
 pub use grep::Grep;
+pub use killshell::KillShell;
 pub use read::Read;
 pub use session::{LineHashes, ReadState, ReadTracker};
 pub use write::Write;
@@ -98,6 +102,12 @@ pub fn fs_tools() -> (Vec<Arc<dyn Tool>>, Arc<ReadTracker>) {
         Arc::new(Glob::new()),
         Arc::new(Grep::new()),
         Arc::new(Bash::new()),
+        // The two halves of a background command. They are separate tools
+        // rather than modes of `Bash` because the approval question is
+        // different for each: reading output is not running something, and
+        // stopping a process is not either.
+        Arc::new(BashOutput::new()),
+        Arc::new(KillShell::new()),
     ];
     (tools, tracker)
 }
@@ -107,12 +117,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_surface_is_the_six_claude_code_names() {
+    fn the_surface_is_the_claude_code_names() {
         // Spelling is the compatibility contract. A rename here silently breaks
         // every hook matcher and allow-list written against Claude Code.
+        //
+        // **This pin fired when the two background tools were registered, which
+        // is the pin working rather than the pin being in the way.** Adding a
+        // tool is a change to the surface a hook matcher sees, and it should
+        // cost a deliberate edit here — the whole point is that the set cannot
+        // grow by accident.
         let (tools, _) = fs_tools();
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
-        assert_eq!(names, ["Read", "Write", "Edit", "Glob", "Grep", "Bash"]);
+        assert_eq!(
+            names,
+            [
+                "Read",
+                "Write",
+                "Edit",
+                "Glob",
+                "Grep",
+                "Bash",
+                "BashOutput",
+                "KillShell"
+            ]
+        );
     }
 
     #[test]

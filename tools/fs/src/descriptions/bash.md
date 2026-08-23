@@ -25,6 +25,22 @@ subdirectory of it).
   command that failed.
 - The call itself fails only when the command could not be started, timed out,
   or was killed — that is the shell being broken, not the command saying no.
+- `run_in_background: true` starts the command and returns at once with a task
+  id (`bash_1`, `bash_2`, ...). **That result is a receipt for a start, not for
+  a finish.** The command has not finished when the call returns: it has no
+  exit status yet, none of its output is in the result, and it may already be
+  failing. Do not report the work as done on the strength of the spawn — a
+  build or test run "succeeds" this way while having done nothing. Call
+  `BashOutput` with the task id to read output as it accumulates and, once the
+  task exits, the real status; act on that status exactly as you would a
+  foreground one. `KillShell` with the same id stops the command (its
+  descendants may survive — nothing here kills a process tree).
+- `timeout_ms` is refused together with `run_in_background` rather than
+  silently ignored: a background command has no wait to bound, and runs until
+  it exits or `KillShell` stops it.
+- A background command is built exactly like a foreground one — same shell,
+  same environment allowlist, same `cwd` rules. The only difference is who
+  waits.
 
 The working directory is where the command starts, not a boundary it is held
 inside: a command that names an absolute path elsewhere, or that runs `cd ..`,

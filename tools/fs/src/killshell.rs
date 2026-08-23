@@ -53,7 +53,7 @@ impl Tool for KillShell {
     }
 
     fn description(&self) -> &str {
-        include_str!("killshell.md")
+        include_str!("descriptions/killshell.md")
     }
 
     fn input_schema(&self) -> Value {
@@ -220,7 +220,10 @@ mod tests {
         let fired = armed(&task);
 
         let out = call(&ctx, &task.id).await.expect("a running kill failed");
-        assert!(fired.load(Ordering::SeqCst), "nothing was actually signalled");
+        assert!(
+            fired.load(Ordering::SeqCst),
+            "nothing was actually signalled"
+        );
         assert_eq!(task.state(), TaskState::Killed);
         assert!(out.content.contains("stopped"), "{}", out.content);
         // The single most important sentence: the kill's blast radius is the
@@ -244,7 +247,9 @@ mod tests {
         task.push(b"done\n");
         task.set_state(TaskState::Exited(Some(0)));
 
-        let out = call(&ctx, &task.id).await.expect("an already-finished kill errored");
+        let out = call(&ctx, &task.id)
+            .await
+            .expect("an already-finished kill errored");
         assert!(!fired.load(Ordering::SeqCst), "a dead task was signalled");
         assert_eq!(
             task.state(),
@@ -252,7 +257,8 @@ mod tests {
             "the real exit status was overwritten"
         );
         assert!(
-            out.content.contains("already finished") && out.content.contains("exited with status 0"),
+            out.content.contains("already finished")
+                && out.content.contains("exited with status 0"),
             "{}",
             out.content
         );
@@ -291,7 +297,9 @@ mod tests {
         let ctx = ctx_for("s1", &reg);
         let task = reg.spawn("s1", "orphan");
 
-        let err = call(&ctx, &task.id).await.expect_err("an impossible kill succeeded");
+        let err = call(&ctx, &task.id)
+            .await
+            .expect_err("an impossible kill succeeded");
         assert_eq!(err.kind(), "tool_failed");
         assert!(err.detail().contains("still running"), "{}", err.detail());
         assert_eq!(task.state(), TaskState::Running);
@@ -306,15 +314,22 @@ mod tests {
         let theirs_fired = armed(&theirs);
 
         let ctx = ctx_for("s1", &reg);
-        let err = call(&ctx, "bash_99").await.expect_err("a guessed id was honoured");
+        let err = call(&ctx, "bash_99")
+            .await
+            .expect_err("a guessed id was honoured");
         assert_eq!(err.kind(), "bad_arguments");
         assert!(err.detail().contains(&mine.id), "{}", err.detail());
 
         // Another session's task must be unkillable from here, and the
         // refusal must read exactly like a nonexistent id.
-        let err2 = call(&ctx, &theirs.id).await.expect_err("cross-session kill succeeded");
+        let err2 = call(&ctx, &theirs.id)
+            .await
+            .expect_err("cross-session kill succeeded");
         assert_eq!(err2.kind(), "bad_arguments");
-        assert!(!theirs_fired.load(Ordering::SeqCst), "another session's task was signalled");
+        assert!(
+            !theirs_fired.load(Ordering::SeqCst),
+            "another session's task was signalled"
+        );
         assert!(
             !err2.detail().contains("their server"),
             "the refusal leaked another session's task: {}",

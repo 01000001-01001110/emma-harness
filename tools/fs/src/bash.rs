@@ -1418,9 +1418,12 @@ mod background_tests {
     async fn a_background_exit_code_is_the_childs_not_a_default() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ctx_in(dir.path());
-        call(&ctx, json!({ "command": "exit 7", "run_in_background": true }))
-            .await
-            .expect("background spawn");
+        call(
+            &ctx,
+            json!({ "command": "exit 7", "run_in_background": true }),
+        )
+        .await
+        .expect("background spawn");
         let task = ctx.background.get(&ctx.session_id, "bash_1").expect("task");
         let (state, _) = read_to_end(&task).await;
         assert_eq!(state, TaskState::Exited(Some(7)));
