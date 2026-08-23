@@ -524,11 +524,31 @@ pub(crate) fn close_frontmatter(rest: &str) -> Option<(&str, &str)> {
             return Some(("", after.trim_start_matches(['\r', '\n'])));
         }
     }
-    let end = rest.find("\n---")?;
-    Some((
-        &rest[..end],
-        rest[end + 4..].trim_start_matches(['\r', '\n']),
-    ))
+    // **The same whole-line rule as above, which this branch did not have.**
+    // The offset-zero case has checked since it was written that `----` and
+    // `---x` are not a closing fence; the search below took the first `\n---`
+    // it found, so a `----` line *inside* a frontmatter block closed it early
+    // and leaked the leftover `-` into the body. Two branches of one function,
+    // one of them enforcing the rule the other's comment states.
+    //
+    // Found by an independent reviewer. It is latent rather than live: 529 real
+    // `SKILL.md`, `commands/*.md` and `agents/*.md` files were probed for the
+    // shape and none has it. Fixed anyway, because "no file does this today" is
+    // a fact about today, and the failure is silent — a truncated block and a
+    // body with a stray rule at the top, from a parser that reported success.
+    //
+    // Keep looking rather than give up on the first candidate: a `----` early
+    // in the block must not stop a real fence later from closing it.
+    let mut from = 0;
+    while let Some(rel) = rest[from..].find("\n---") {
+        let end = from + rel;
+        let after = &rest[end + 4..];
+        if after.starts_with(['\r', '\n']) || after.is_empty() {
+            return Some((&rest[..end], after.trim_start_matches(['\r', '\n'])));
+        }
+        from = end + 1;
+    }
+    None
 }
 
 /// `---` on the first line, whatever the file's line endings are, and
@@ -650,3 +670,69 @@ pub(crate) fn load_agents(root: &Path) -> Result<(Vec<crate::AgentDef>, Vec<Stri
 }
 
 // endregion: Agents — Claude Code's nearest thing to a persona
+
+#[cfg(test)]
+mod tests {
+    use super::close_frontmatter;
+
+    /// A `----` line inside a block is not a closing fence.
+    ///
+    /// **Two branches of one function, and only one enforced the rule the
+    /// other's comment states.** The offset-zero case has always checked that
+    /// the fence is a whole line -- its comment says `----` and `---x` are not
+    /// a closing fence and treating them as one would eat a body. The search
+    /// branch took the first `\n---` it found.
+    ///
+    /// So a block containing a `----` line closed early, the keys after it were
+    /// lost, and the leftover `-` became the first character of the body. The
+    /// parser reported success throughout.
+    ///
+    /// Found by an independent reviewer, and latent rather than live: 529 real
+    /// `SKILL.md`, `commands/*.md` and `agents/*.md` files were probed and none
+    /// has the shape. Fixed anyway -- "no file does this today" is a fact about
+    /// today, and this failure is silent.
+    #[test]
+    fn a_rule_inside_a_block_is_not_a_closing_fence() {
+        let (yaml, body) = close_frontmatter("name: x\n----\ndescription: y\n---\nbody\n")
+            .expect("a block with a real fence after a rule must still close");
+        assert!(
+            yaml.contains("description: y"),
+            "the block was closed by a `----` line, so every key after it was \
+             lost: {yaml:?}"
+        );
+        assert_eq!(
+            body, "body\n",
+            "the leftover dash leaked into the body: {body:?}"
+        );
+    }
+
+    /// The whole-line rule does not break the ordinary cases it guards.
+    ///
+    /// The control. Requiring a whole line is exactly the change that can stop
+    /// a real fence closing a real block, and a parser that refuses valid input
+    /// is worse than one that accepts a shape nobody writes.
+    #[test]
+    fn an_ordinary_block_still_closes_on_both_line_endings() {
+        let (yaml, body) = close_frontmatter("name: x\n---\nbody\n").expect("lf");
+        assert_eq!(yaml, "name: x");
+        assert_eq!(body, "body\n");
+
+        let (yaml, body) = close_frontmatter("name: x\r\n---\r\nbody\r\n").expect("crlf");
+        assert_eq!(yaml, "name: x\r");
+        assert_eq!(body, "body\r\n");
+
+        // The empty block, which is what the offset-zero branch exists for.
+        let (yaml, body) = close_frontmatter("---\nbody\n").expect("empty block");
+        assert_eq!(yaml, "");
+        assert_eq!(body, "body\n");
+    }
+
+    /// A block that never closes is still `None`, not a guess.
+    #[test]
+    fn a_block_with_no_whole_line_fence_is_unclosed() {
+        assert!(
+            close_frontmatter("name: x\n----\nstill going\n").is_none(),
+            "a block whose only candidate fence is a rule was treated as closed"
+        );
+    }
+}
