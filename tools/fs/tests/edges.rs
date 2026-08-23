@@ -1461,3 +1461,78 @@ async fn a_large_file_that_cannot_be_opened_is_reported_not_called_binary() {
         out.content
     );
 }
+
+/// The stream refusal covers a directory component, not only the file name.
+///
+/// **`sub:s/file.txt` went through untouched.** The check read the last
+/// component, so a stream named one level to the left was invisible to it: the
+/// same NTFS construction the test above is about, with a path hung off it. A
+/// directory cannot exist under a stream, so the write was always going to
+/// fail; the point of refusing is that it fails *before* the filesystem is
+/// touched, which is the promise `write.rs` makes.
+///
+/// Found by a reviewer as a residual on `DEF-051` while the last-component
+/// version was being certified.
+///
+/// The directory listing is the assertion again, for the same reason as above:
+/// an error message is what the tool says, an empty root is what it did.
+#[tokio::test]
+async fn a_stream_named_in_a_directory_component_is_refused_too() {
+    if !cfg!(windows) {
+        eprintln!("SKIPPED: alternate data streams are an NTFS concept");
+        return;
+    }
+    let sandbox = Sandbox::new();
+
+    let error = sandbox
+        .err(
+            "Write",
+            json!({ "file_path": "sub:s/file.txt", "content": "x\n" }),
+        )
+        .await;
+
+    let left: Vec<String> = std::fs::read_dir(sandbox.root())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        left.is_empty(),
+        "a refused write created {left:?} - the base entry the error never mentions"
+    );
+
+    assert_eq!(error.kind(), "bad_arguments");
+    assert!(
+        error.detail().contains("alternate data stream"),
+        "the refusal must name what it refused: {error}"
+    );
+    // And it names WHICH component, because `sub:s/file.txt` has two and the
+    // one at fault is not the one a reader looks at first.
+    assert!(
+        error.detail().contains("sub:s"),
+        "the refusal must point at the offending component, not just the path: {error}"
+    );
+}
+
+/// A plain nested path with no colon in it still resolves.
+///
+/// The positive control for the test above. Widening a refusal from one
+/// component to all of them is exactly the change that can start refusing
+/// ordinary input, and a test that only asserts the refusal cannot see that.
+#[tokio::test]
+async fn an_ordinary_nested_path_is_not_caught_by_the_stream_refusal() {
+    let sandbox = Sandbox::new();
+    // `ok` panics on a refusal, so the call itself is the assertion: if the
+    // widened check caught an ordinary nested path this line would fail, not
+    // the read below.
+    sandbox
+        .ok(
+            "Write",
+            json!({ "file_path": "sub/dir/file.txt", "content": "x\n" }),
+        )
+        .await;
+    assert_eq!(
+        std::fs::read_to_string(sandbox.root().join("sub/dir/file.txt")).unwrap(),
+        "x\n"
+    );
+}

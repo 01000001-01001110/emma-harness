@@ -260,6 +260,117 @@
   permit. That ordering is the whole reason the two functions are separate.
 </p>
 
+<h2 id="streams">A colon is a fourth move, and it refuses</h2>
+
+<p>
+  On NTFS <code>foo:bar</code> does not name a file called <code>foo:bar</code>.
+  It names an alternate data stream of <code>foo</code>. That mattered here
+  because the atomic write builds <code>foo:bar.emma-tmp.&lt;pid&gt;.&lt;seq&gt;</code>,
+  and writing to that <em>materialises the base file</em> <code>foo</code> as a
+  zero-byte entry before failing; the rename then fails with os error 87, and
+  the cleanup removes only the stream. A reviewer certified the outcome:
+  <code>Write</code> returned an error and <code>dir /r</code> showed
+  <code>brandnew</code> left behind, a file the error never mentioned.
+  <span class="chip cert">certified</span> by that probe, and pinned since by
+  <code>a_refused_stream_write_leaves_the_directory_empty</code>, which asserts
+  on the directory listing before it asserts on the message.
+</p>
+
+<p>
+  Two promises in the write path were false for that one input:
+  <em>&ldquo;nothing before the refusal changes the filesystem, which is what
+  makes a refusal actually a refusal&rdquo;</em>, and <em>&ldquo;a stray
+  <code>.emma-tmp</code> in somebody&rsquo;s repository is a bug
+  report&rdquo;</em>. So this is refused rather than attempted.
+</p>
+
+<pre><code><span class="c">// **A colon inside a name is an NTFS alternate data stream, and it made a
+// refused write create a file.** `foo:bar` names a stream of `foo`. The
+// atomic write builds `foo:bar.emma-tmp.&lt;pid&gt;.&lt;seq&gt;`, and `fs::write` on
+// that **materialises the base file `foo`** as a zero-byte entry before
+// failing; the rename then fails with os error 87, and the cleanup removes
+// only the stream. A reviewer certified it: `Write` returned an error and
+// `dir /r` showed `brandnew` left behind — a file named something the error
+// never mentioned.
+//
+// `write.rs` promises *&quot;nothing before the refusal changes the filesystem,
+// which is what makes a refusal actually a refusal&quot;*, and `write_atomically`
+// promises a failed temp is removed *&quot;because a stray `.emma-tmp` in
+// somebody&#x27;s repository is a bug report&quot;*. Both were false for this input.
+//
+// Refused here rather than warned about, which is the opposite of the
+// reserved-name decision one file over — and the difference is what
+// succeeds. A `NUL` file is real, round-trips, and is merely awkward for
+// other tools, so refusing it would be Emma deciding what a user may call a
+// file. A stream write does not work *at all*; there is nothing to preserve
+// and a real side effect to prevent.
+//
+// Windows only, and on **every** normal component rather than the last.
+//
+// It was the last one only until a reviewer pointed at `sub:s/file.txt`,
+// which is a stream of the directory `sub` with a path hung off it. That is
+// the same construction the paragraph above is about, one component to the
+// left, and it went through this check without a word. A directory cannot
+// live under a stream, so the write fails either way; what the refusal
+// buys is that it fails *before* anything is created, which is the promise
+// `write.rs` makes and the reason this check exists at all.
+//
+// `Component::Normal` is the right filter and not merely a convenient one:
+// a drive letter&#x27;s colon arrives as `Component::Prefix`, so `C:\a\b` yields
+// Prefix, RootDir, Normal, Normal and the legitimate colon is never
+// examined. Widening from the last component to all of them therefore adds
+// no false refusals on absolute paths.</span>
+#[cfg(windows)]
+for component in lexical_normalize(&amp;joined).components() {
+    let Component::Normal(name) = component else {
+        continue;
+    };
+    if name.to_string_lossy().contains(&#x27;:&#x27;) {
+        return Err(ToolError::BadArguments(format!(
+            &quot;{raw} names an alternate data stream (the `:` in `{}`). Emma cannot write one \
+             — the attempt creates the base file and then fails — so it is refused before \
+             anything is touched&quot;,
+            name.to_string_lossy()
+        )));
+    }
+}</code></pre>
+<span class="src">tools/fs/src/path.rs &mdash; <code>resolve</code></span>
+
+<p>
+  <strong>It is a refusal here and a warning one file over</strong>, and the
+  difference is what succeeds. A file named <code>NUL</code> under Emma&rsquo;s
+  verbatim root is real, round-trips, and is merely awkward for other Windows
+  tooling, so refusing it would be Emma deciding what a user may call a file.
+  A stream write does not work at all. There is nothing to preserve and a real
+  side effect to prevent.
+</p>
+
+<p>
+  The check reads <em>every</em> normal component and not only the last. It read
+  only the last until 2026-08-23, when a reviewer pointed at
+  <code>sub:s/file.txt</code>: the same construction one component to the left,
+  going through without a word. <code>Component::Normal</code> is what makes
+  widening safe rather than merely convenient, because a drive letter&rsquo;s
+  colon arrives as <code>Component::Prefix</code> &mdash; <code>C:\a\b</code>
+  yields Prefix, RootDir, Normal, Normal, and the legitimate colon is never
+  examined.
+  <span class="chip test">tested</span>
+  <code>a_stream_named_in_a_directory_component_is_refused_too</code> goes red
+  when the loop is narrowed back to <code>next_back()</code>, while
+  <code>an_ordinary_nested_path_is_not_caught_by_the_stream_refusal</code> stays
+  green &mdash; which is what says the widening refuses the right thing and not
+  simply more things.
+</p>
+
+<p>
+  It is <code>#[cfg(windows)]</code>. On unix a colon is an ordinary character
+  in a file name and refusing it would break real paths.
+  <span class="chip unv">unverified</span> Whether any non-NTFS Windows
+  filesystem Emma might run on treats <code>:</code> as ordinary has not been
+  checked; if one does, this refuses a name that would have worked. What would
+  settle it is running the same probe on a FAT32 or exFAT volume.
+</p>
+
 <h2 id="existing">The variant that demands the file be there</h2>
 
 <pre><code><span class="c">/// Resolve a path that must already exist, reporting the two failures</span>

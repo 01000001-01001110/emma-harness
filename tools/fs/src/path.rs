@@ -272,15 +272,32 @@ pub fn resolve(root: &Path, raw: &str) -> Result<PathBuf, ToolError> {
     // file. A stream write does not work *at all*; there is nothing to preserve
     // and a real side effect to prevent.
     //
-    // Windows only, and on the last component only: the prefix of an absolute
-    // path is where a drive letter's colon legitimately lives.
+    // Windows only, and on **every** normal component rather than the last.
+    //
+    // It was the last one only until a reviewer pointed at `sub:s/file.txt`,
+    // which is a stream of the directory `sub` with a path hung off it. That is
+    // the same construction the paragraph above is about, one component to the
+    // left, and it went through this check without a word. A directory cannot
+    // live under a stream, so the write fails either way; what the refusal
+    // buys is that it fails *before* anything is created, which is the promise
+    // `write.rs` makes and the reason this check exists at all.
+    //
+    // `Component::Normal` is the right filter and not merely a convenient one:
+    // a drive letter's colon arrives as `Component::Prefix`, so `C:\a\b` yields
+    // Prefix, RootDir, Normal, Normal and the legitimate colon is never
+    // examined. Widening from the last component to all of them therefore adds
+    // no false refusals on absolute paths.
     #[cfg(windows)]
-    if let Some(Component::Normal(name)) = lexical_normalize(&joined).components().next_back() {
+    for component in lexical_normalize(&joined).components() {
+        let Component::Normal(name) = component else {
+            continue;
+        };
         if name.to_string_lossy().contains(':') {
             return Err(ToolError::BadArguments(format!(
-                "{raw} names an alternate data stream (the `:` in the file name). Emma cannot \
-                 write one — the attempt creates the base file and then fails — so it is \
-                 refused before anything is touched"
+                "{raw} names an alternate data stream (the `:` in `{}`). Emma cannot write one \
+                 — the attempt creates the base file and then fails — so it is refused before \
+                 anything is touched",
+                name.to_string_lossy()
             )));
         }
     }
