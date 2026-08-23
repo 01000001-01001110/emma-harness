@@ -936,6 +936,22 @@ pub fn config_check(
         writeln!(out, "               {line}")?;
     }
     writeln!(out, "tool schema    {}", tools.schema_hash())?;
+    // Keys that were written, read past, and acted on by nothing. Emma honours
+    // `tools:` on an agent and nothing else anywhere; a command's whole block is
+    // discarded. None of that is a boot failure and none of it should be -- but
+    // "I wrote allowed-tools and it did nothing" had no way of being answered,
+    // which is the same trap as a tool that registers without its key.
+    let inert = harness.inert_frontmatter();
+    if !inert.is_empty() {
+        writeln!(
+            out,
+            "inert keys     {} file(s) carry frontmatter Emma does not act on",
+            inert.len()
+        )?;
+        for line in &inert {
+            writeln!(out, "               {line}")?;
+        }
+    }
     writeln!(
         out,
         "skills         {}",

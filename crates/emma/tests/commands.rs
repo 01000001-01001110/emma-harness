@@ -911,6 +911,119 @@ fn config_check_names_a_deny_rule_that_can_never_fire() {
     );
 }
 
+/// `config check` names frontmatter keys that were written and do nothing.
+///
+/// **The trap being closed: "I wrote `allowed-tools:` and it did nothing".**
+/// Emma honours `tools:` on an agent and nothing else anywhere, and a command's
+/// whole block is discarded, so a `description:` meant for a menu never reaches
+/// one. That is defensible -- `.claude` files are written for Claude Code,
+/// which has keys Emma has no business acting on -- but being unable to ask was
+/// not.
+///
+/// **Asserted on the operator's channel, not on the accessor.** The accessor
+/// version of this test is the mistake `HARD-001` made twice and `DEF-043` made
+/// again this week: a test that loops the getter into a buffer stays green when
+/// the call site that prints it is deleted.
+#[tokio::test]
+async fn config_check_names_frontmatter_keys_that_do_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(".claude");
+
+    // A skill carrying keys Claude Code understands and Emma does not.
+    std::fs::create_dir_all(root.join("skills").join("thing")).unwrap();
+    std::fs::write(
+        root.join("skills").join("thing").join("SKILL.md"),
+        // The nested block is here on purpose: its indented lines are VALUES,
+        // and a scanner that read them as keys would report `path` and `write`
+        // as inert and make the count meaningless.
+        "---
+name: thing
+description: does a thing
+allowed-tools: Bash
+model: opus
+hooks:
+  path: x
+  write: y
+---
+body
+",
+    )
+    .unwrap();
+
+    // A command whose whole block is discarded.
+    std::fs::create_dir_all(root.join("commands")).unwrap();
+    std::fs::write(
+        root.join("commands").join("go.md"),
+        "---
+description: run the thing
+argument-hint: <path>
+---
+do it
+",
+    )
+    .unwrap();
+
+    // And an agent that uses only keys Emma really honours, so the report is a
+    // report and not a list of every file.
+    std::fs::create_dir_all(root.join("agents")).unwrap();
+    std::fs::write(
+        root.join("agents").join("helper.md"),
+        "---
+name: helper
+description: helps
+tools: Read
+model: sonnet
+---
+be helpful
+",
+    )
+    .unwrap();
+
+    let harness = emma_harness::Harness::load(&root).expect("this harness must load");
+    let tools = emma_tool_api::Registry::default();
+    let mut out: Vec<u8> = Vec::new();
+    emma::commands::config_check(&harness, &tools, dir.path(), &[], None, &mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+
+    assert!(
+        text.contains("allowed-tools"),
+        "the key most likely to be written and least likely to work was not          named:
+{text}"
+    );
+    assert!(
+        text.contains("argument-hint"),
+        "a command's discarded frontmatter was not reported:
+{text}"
+    );
+    assert!(
+        text.contains("2 file(s)"),
+        "the count is missing or wrong -- the agent uses only honoured keys and          must not be listed:
+{text}"
+    );
+    // Scoped to the line in question rather than the whole output. The loose
+    // version of this -- `!text.contains("path")` -- failed against other lines
+    // of `config check` that legitimately carry the word, which is the same
+    // false-positive as `DEF-043`'s `contains('1')` with the sign flipped.
+    let skill_line = text
+        .lines()
+        .find(|l| l.contains("SKILL.md"))
+        .expect("the skill was not reported at all");
+    assert!(
+        !skill_line.contains("path") && !skill_line.contains("write"),
+        "an indented VALUE was reported as a key, which makes the count a measure \
+         of indentation rather than of what is inert: {skill_line:?}"
+    );
+    assert!(
+        skill_line.contains("hooks"),
+        "the KEY of a nested block was skipped along with its values: {skill_line:?}"
+    );
+    assert!(
+        !text.contains("helper.md"),
+        "a file whose every key is honoured was reported as inert, which would          make the report a list of every file and therefore useless:
+{text}"
+    );
+}
+
 #[test]
 fn config_check_names_the_skills_it_skipped_and_counts_them() {
     let dir = tempfile::tempdir().unwrap();

@@ -1048,6 +1048,77 @@ impl Harness {
         self.commands.keys().map(String::as_str).collect()
     }
 
+    /// Frontmatter keys in this harness that Emma read past and did nothing
+    /// with, one line per file.
+    ///
+    /// **The question this answers is "I wrote `allowed-tools:` and it did
+    /// nothing".** Emma honours `tools:` on an agent and nothing else anywhere;
+    /// a command's whole block is discarded, so a `description:` meant for a
+    /// menu never reaches one. None of that is a boot failure and none of it
+    /// should be: `.claude` files are written for Claude Code, which has keys
+    /// Emma has no business acting on, and refusing to start over them would
+    /// make Emma unable to read the corpus it exists to be compatible with.
+    /// Being unable to *ask* was the trap.
+    ///
+    /// Computed on demand rather than at boot, and deliberately: it re-reads
+    /// every file, which is the wrong cost on a path that runs before every
+    /// session and the right one on the command whose job is to answer "why can
+    /// it not do X".
+    ///
+    /// Silent on a directory it cannot read. A permissions error here is not
+    /// worth a diagnostic of its own -- the loader that already walked the same
+    /// directory reported it, and saying it twice trains a reader to skim.
+    pub fn inert_frontmatter(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut note = |rel: String, text: &str, honoured: &[&str]| {
+            let Some(block) = crate::claude::frontmatter_block(text) else {
+                return;
+            };
+            let keys = crate::claude::inert_keys(block, honoured);
+            if !keys.is_empty() {
+                lines.push(format!("{rel}: {}", keys.join(", ")));
+            }
+        };
+
+        // Skills are a directory each, holding SKILL.md.
+        if let Ok(entries) = std::fs::read_dir(self.root.join("skills")) {
+            let mut dirs: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+            dirs.sort();
+            for dir in dirs {
+                let file = dir.join("SKILL.md");
+                if let Ok(text) = std::fs::read_to_string(&file) {
+                    let name = dir.file_name().unwrap_or_default().to_string_lossy();
+                    note(
+                        format!("skills/{name}/SKILL.md"),
+                        &text,
+                        crate::claude::SKILL_KEYS,
+                    );
+                }
+            }
+        }
+
+        for (dir, honoured) in [
+            ("commands", crate::claude::COMMAND_KEYS),
+            ("agents", crate::claude::AGENT_KEYS),
+        ] {
+            if let Ok(entries) = std::fs::read_dir(self.root.join(dir)) {
+                let mut files: Vec<_> = entries
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().is_some_and(|e| e == "md"))
+                    .collect();
+                files.sort();
+                for file in files {
+                    if let Ok(text) = std::fs::read_to_string(&file) {
+                        let name = file.file_name().unwrap_or_default().to_string_lossy();
+                        note(format!("{dir}/{name}"), &text, honoured);
+                    }
+                }
+            }
+        }
+        lines
+    }
+
     /// The configured status-line program, or `None` for the built-in status.
     /// See `statusline.rs` for what it is allowed to be and why.
     pub fn status_line(&self) -> Option<&StatusLine> {

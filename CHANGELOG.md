@@ -28,6 +28,19 @@ out for themselves.
 
 ## Unreleased
 
+- **`emma config check` now lists frontmatter keys that do nothing.** If you
+  wrote `allowed-tools:` in a skill or a command, Emma read past it and acted on
+  nothing — and there was no way to find that out. It is dead in every file
+  type; agents spell it `tools:`. A command's whole frontmatter block is
+  discarded, so a `description:` meant for the menu never reached one, and the
+  menu uses the file stem. `model:` works on `agents/*.md` and only when that
+  agent is delegated to.
+
+  Reported, not honoured: acting on `allowed-tools:` would mean pre-approving
+  tools, which is not a decision to make on your behalf. And not a startup
+  error, because `.claude` files are written for Claude Code and carry keys Emma
+  has no business touching.
+
 - **BREAKING: `WebFetch` now refuses a page that redirected to another host.**
   You approve a host — `example.com` — and Chrome then follows whatever
   redirect that host serves, including a JavaScript one. Until now the page it

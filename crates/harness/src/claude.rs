@@ -671,6 +671,90 @@ pub(crate) fn load_agents(root: &Path) -> Result<(Vec<crate::AgentDef>, Vec<Stri
 
 // endregion: Agents — Claude Code's nearest thing to a persona
 
+// region: Keys Emma reads, and keys it does not
+// ---------------------------------------------------------------------------
+// Keys Emma reads, and keys it does not
+//
+// A configuration key that appears supported and does nothing is a trap: the
+// user writes it, nothing happens, and nothing tells them. Emma's own rule is
+// that a capability which silently is not there is worse than an absent one,
+// and this is that rule applied to frontmatter.
+//
+// The lists below are the keys that reach a decision. Everything else in a
+// block is reported by `config check` -- reported, not honoured, and not a boot
+// failure: `.claude` files are written for Claude Code, which has keys Emma has
+// no business acting on, and refusing to start over them would make Emma
+// unable to read the corpus it exists to be compatible with.
+// ---------------------------------------------------------------------------
+
+/// Skill keys that reach a decision. Both are the catalogue line the model
+/// chooses from.
+pub const SKILL_KEYS: &[&str] = &["name", "description"];
+
+/// Command keys that reach a decision: **none**. `strip_frontmatter` discards
+/// the block whole, so a `description:` written for `/help` and an
+/// `argument-hint:` are both dropped in silence. The menu uses the file stem.
+pub const COMMAND_KEYS: &[&str] = &[];
+
+/// Agent keys that reach a decision. `model` is honoured by `Delegate` only:
+/// selecting a file as the session persona does not change the run's model.
+/// Note what is absent -- `allowed-tools` is spelled `tools` here, and the
+/// hyphenated form does nothing in any file Emma reads.
+pub const AGENT_KEYS: &[&str] = &[
+    "name",
+    "description",
+    "tools",
+    "model",
+    "max_turns",
+    "maxTurns",
+    "max_tokens",
+    "maxTokens",
+];
+
+/// Top-level keys in a frontmatter block that Emma will not act on.
+///
+/// **Deliberately a line scan and not a YAML parse.** The block has already
+/// been through `serde_yaml` by the time anyone asks this, so a second parse
+/// would only be able to disagree with the first; and this runs on files whose
+/// frontmatter may be malformed, where the useful answer is still "you wrote
+/// `allowed-tools` and nothing reads it". A key is a line at column zero of the
+/// form `name:` -- indented lines are values and list items are not keys, so
+/// nested structures are skipped rather than mis-reported.
+///
+/// The limitation, stated: a key written in flow style (`{name: x}`) or with a
+/// quoted name containing a colon is not seen. Neither appears in any of the
+/// 529 real files this was checked against, and a missed key here under-reports
+/// rather than inventing one, which is the right direction to fail.
+pub fn inert_keys(block: &str, honoured: &[&str]) -> Vec<String> {
+    let mut found = Vec::new();
+    for line in block.lines() {
+        if line.starts_with([' ', '\t', '-', '#']) {
+            continue;
+        }
+        let Some((name, _)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            continue;
+        }
+        if !honoured.contains(&name) && !found.iter().any(|k| k == name) {
+            found.push(name.to_string());
+        }
+    }
+    found
+}
+
+/// The frontmatter block of a file, or `None` when it has none.
+pub fn frontmatter_block(text: &str) -> Option<&str> {
+    let rest = open_frontmatter(text)?;
+    close_frontmatter(rest).map(|(yaml, _)| yaml)
+}
+
 #[cfg(test)]
 mod tests {
     use super::close_frontmatter;
