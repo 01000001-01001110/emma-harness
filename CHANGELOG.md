@@ -28,6 +28,15 @@ out for themselves.
 
 ## Unreleased
 
+- **A timed-out or killed command now actually stops, on Windows.** `Bash`'s
+  `timeout_ms` and `KillShell` both reported success over a shell that kept
+  running, on any box using Git for Windows. `Git\bin\bash.exe` is a launcher
+  that starts the real shell as a child, so the process Emma could kill was one
+  generation above the command; the command carried on writing files after
+  Emma said it had stopped. Emma now prefers `Git\usr\bin\bash.exe`, which is
+  the shell itself. If you have scripted around this by killing processes
+  yourself, you no longer need to. Nothing to change on your side.
+
 - **A `settings.json` written by PowerShell now starts Emma.** Every JSON config
   — `.emma/config.json`, `.claude/settings.json`, `settings.local.json`, and the
   user's global one — refused to boot if it began with a UTF-8 byte order mark,

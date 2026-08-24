@@ -222,11 +222,52 @@
 <p>
   Git for Windows is searched <em>before</em> <code>PATH</code>, and the WSL
   launcher is skipped rather than merely ranked below it, because on a box
-  without Git the ranking alone still ends at WSL. Five directories are tried,
-  built from <code>ProgramFiles</code>, <code>ProgramW6432</code>,
-  <code>ProgramFiles(x86)</code>, <code>LOCALAPPDATA</code> and
-  <code>ProgramFiles</code> again for <code>Git\usr\bin</code>.
+  without Git the ranking alone still ends at WSL. Seven directories are tried:
+  the three spellings of <code>Git\usr\bin</code> &mdash;
+  <code>ProgramFiles</code>, <code>ProgramW6432</code>,
+  <code>LOCALAPPDATA</code> &mdash; and then the four of
+  <code>Git\bin</code>.
 </p>
+
+<div class="note warn">
+  <span class="h">That order is a bug fix, and the bug was a kill that lied</span>
+  <p>
+    <code>Git\bin\bash.exe</code> is a <em>launcher</em>. It re-execs
+    <code>Git\usr\bin\bash.exe</code> as a child process and waits. Emma
+    spawns what it finds, so while <code>Git\bin</code> was searched first the
+    process Emma held &mdash; the only one <code>start_kill</code> and
+    <code>kill_on_drop</code> can reach &mdash; was the launcher, and the shell
+    running the command was a generation further down. Killing the launcher left
+    the command running, and both <code>timeout_ms</code> and
+    <code>KillShell</code> reported that it had stopped.
+  </p>
+  <p>
+    <span class="chip cert">certified</span> Measured twice on 2026-08-23, by
+    the worker that found it and then independently, both on this box, with
+    <code>Get-CimInstance Win32_Process</code> and <code>Stop-Process</code>:
+  </p>
+  <pre><code>spawned  Git\bin\bash.exe
+  children       : conhost.exe, Git\bin\..\usr\bin\bash.exe
+  grew AFTER kill: 15,050 bytes
+  orphans left   : 1
+
+spawned  Git\usr\bin\bash.exe
+  children       : conhost.exe
+  grew AFTER kill: 0 bytes
+  orphans left   : 0</code></pre>
+  <p>
+    The byte count is only how long the orphan happened to live before it was
+    cleaned up &mdash; the first run measured 14,962. What the two runs agree on
+    is that the file grew after the kill in one case and not the other.
+  </p>
+  <p>
+    The launcher is kept as a fallback rather than dropped: it is what exists on
+    an installation whose <code>usr\bin</code> is laid out differently, and a
+    shell that cannot be cleanly killed still beats no shell at all.
+    <span class="chip unv">unverified</span> Whether any non-Windows platform
+    has the same shape. Nobody has looked.
+  </p>
+</div>
 <span class="src">tools/fs/src/bash.rs — <code>WINDOWS_POSIX_DIRS</code>, <code>resolve_with</code></span>
 
 <p>
