@@ -200,6 +200,41 @@ loop {
     with the "no approval was given" denial.
   </p>
 
+  <div class="note warn">
+    <span class="h">Two of those four had never been executed by a test</span>
+    <p>
+      Until 2026-08-23 nothing in this repository could reach the block above.
+      Changing the empty-line arm to <code>Answer::Yes</code> &mdash; so that
+      pressing Return at any prompt approves the call &mdash; left all 85 tests
+      in <code>approval</code> and <code>permissions</code> green. So did
+      accepting <code>r</code> and <code>t</code> on a prompt that offered
+      neither.
+    </p>
+    <p>
+      Not a forgotten test. <code>ask</code> drains before it prints the
+      question (below), and the only test constructor,
+      <code>LineSource::scripted</code>, pre-fills the channel and drops the
+      sender &mdash; so every scripted line is type-ahead by construction, the
+      drain eats it, and <code>next()</code> finds a closed channel. Every one
+      of the forty-five gate tests therefore exercises the policy above this
+      block and none of them the parser inside it.
+      <code>LineSource::answering</code> keeps the sender, so a test can drain
+      first and send after.
+    </p>
+    <p>
+      <span class="chip test">tested</span> An empty line is <code>n</code>:
+      <code>return_on_its_own_refuses_the_call</code>. Mutating the arm to
+      <code>Answer::Yes</code> turns it red.
+      <span class="chip test">tested</span> A key that was not offered does not
+      resolve: <code>a_key_the_prompt_did_not_offer_does_not_answer_it</code>
+      types <code>r</code> then <code>t</code> at a <code>Write</code> prompt.
+      Dropping <code>ask</code>'s <code>if narrow.is_some()</code> guard turns
+      it red.
+      <span class="chip unv">unverified</span> Trimming and lowercasing, and
+      the <code>None</code> arm, are still read from source only.
+    </p>
+  </div>
+
   <h2 id="drain">Lines typed before the question are dropped</h2>
 
   <p>
@@ -432,16 +467,20 @@ loop {
   </p>
 
   <p>
-    <span class="chip unv">unverified</span> The <code>t</code> key is described
-    as network-only from the two places <code>Offers.wide</code> is populated. No
-    test asserts that a local prompt refuses a <code>t</code>.
-    <em>What would settle it:</em> a terminal-asker test that types <code>t</code>
-    at a <code>Write</code> prompt and asserts the "not one of y / n / a / r"
-    notice.
+    <span class="chip test">tested</span> A local prompt refuses a
+    <code>t</code>: this is the test this paragraph used to ask for, and it now
+    exists as
+    <code>a_key_the_prompt_did_not_offer_does_not_answer_it</code>.
+    <span class="chip unv">unverified</span> It asserts the <em>verdict</em> the
+    fall-through produces, not the <code>"not one of y / n / a / r"</code>
+    notice itself, so the wording a user actually reads is still unchecked.
+    <em>What would settle it:</em> the same test, asserting against the
+    recording <code>Term</code>'s notes &mdash; which is a cell buffer, so it
+    settles the wording and not the console.
   </p>
 
   <footer class="pg">
-    Emma 0.1.0 · read at commit <code>a3eba74</code> ·
+    Emma 0.1.0 · read at commit <code>f64b032</code> ·
     <code>crates/emma/src/approval.rs</code> ·
     <a href="consent.html">back to the chapter</a>
   </footer>
