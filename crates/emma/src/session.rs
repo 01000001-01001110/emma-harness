@@ -379,14 +379,32 @@ impl SessionLog {
         let raw =
             fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let lines: Vec<&str> = raw.lines().collect();
-        let last = lines.len().saturating_sub(1);
+        // **A torn tail is a file that stops mid-line, and that is a fact about
+        // the trailing byte rather than about the line's position.** Until
+        // 2026-08-23 the last line was exempt from damage reporting whatever
+        // the file looked like, which is right after a crash — the writer was
+        // interrupted between the record and its newline — and wrong for a file
+        // that ends cleanly, where the last line is a whole record like any
+        // other. Corruption there was dropped in silence and the resume came
+        // back a turn short saying nothing, which is the silent-data-loss shape
+        // this file's own reporting exists to refuse. Found by mutation, in a
+        // pass that was not permitted to fix it.
+        //
+        // `ends_with('\n')` rather than a check on the last line's contents: a
+        // truncated record can be valid JSON, so nothing about the text
+        // distinguishes the two cases and only the byte does.
+        let torn_tail = if raw.ends_with('\n') {
+            usize::MAX
+        } else {
+            lines.len().saturating_sub(1)
+        };
         let mut out = Vec::new();
         let mut lost = Vec::new();
         for (n, line) in lines.iter().enumerate() {
             match serde_json::from_str(line) {
                 Ok(v) => out.push(v),
                 // A blank line is not damage, and neither is the torn tail.
-                Err(_) if line.trim().is_empty() || n == last => {}
+                Err(_) if line.trim().is_empty() || n == torn_tail => {}
                 Err(_) => lost.push(n + 1),
             }
         }
@@ -1327,6 +1345,50 @@ mod tests {
         let records = SessionLog::read(&path).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0]["text"], "a");
+    }
+
+    /// Damage in the final record of a file that ended cleanly is damage.
+    ///
+    /// **The exemption above it used to fire on position rather than on the
+    /// trailing byte**, so the last line of any file was excused. That is right
+    /// for a crash, which stops between the record and its newline. It is wrong
+    /// for a session that closed properly, where the last line is a whole record
+    /// like every other -- and there the loss was silent, the resume came back a
+    /// turn short, and nothing said so.
+    ///
+    /// The two files below differ by one byte. That is the entire distinction,
+    /// and it is why the check cannot be made on the line's contents: a
+    /// truncated record can be valid JSON, and this one deliberately is not, so
+    /// that both cases reach the error arm and only the byte separates them.
+    #[test]
+    fn corruption_in_the_last_record_of_a_closed_file_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = "{\"kind\":\"goal\",\"text\":\"a\"}";
+        let bad = "{\"kind\":\"assis";
+
+        // Ends with a newline: the writer finished. The damaged record is
+        // damage.
+        let closed = dir.path().join("closed.jsonl");
+        fs::write(&closed, format!("{good}\n{bad}\n")).unwrap();
+        let (records, lost) = SessionLog::read_reporting(&closed).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            lost,
+            vec![2],
+            "corruption in the last record of a cleanly closed file was dropped in silence"
+        );
+
+        // The control, and the reason the exemption exists at all: the same
+        // bytes without the final newline are a torn tail, and a warning on
+        // every crash-resume is one nobody reads by the third time.
+        let torn = dir.path().join("torn.jsonl");
+        fs::write(&torn, format!("{good}\n{bad}")).unwrap();
+        let (records, lost) = SessionLog::read_reporting(&torn).unwrap();
+        assert_eq!(records.len(), 1);
+        assert!(
+            lost.is_empty(),
+            "a torn tail was reported as damage: {lost:?}"
+        );
     }
 
     #[test]
