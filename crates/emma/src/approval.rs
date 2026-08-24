@@ -1310,6 +1310,62 @@ mod tests {
         );
     }
 
+    /// Answer a live prompt the way a person does: after the drain, not before.
+    ///
+    /// `LineSource::scripted` cannot reach the parser at all — `ask` drains
+    /// before it prints the question, so a pre-filled queue is type-ahead by
+    /// construction and every line is discarded. That is why the two tests
+    /// below did not exist until 2026-08-23, and why until then the whole
+    /// keystroke half of this gate was unasserted.
+    async fn answered_with(gate: Gate, keys: &[&str], term: &Term) -> Verdict {
+        let (lines, tx) = crate::term::input::LineSource::answering();
+        let a = Approvals::new(gate, Asker::Terminal(lines.into()));
+        let typing = async {
+            // The decide side has to reach `lines.next()` first, or these are
+            // stale input and the drain is right to eat them.
+            for _ in 0..8 {
+                tokio::task::yield_now().await;
+            }
+            for key in keys {
+                let _ = tx.send((*key).to_string()).await;
+            }
+        };
+        let (verdict, ()) =
+            tokio::join!(a.decide("Bash", WRITES, None, &Value::Null, term), typing);
+        verdict
+    }
+
+    #[tokio::test]
+    async fn return_on_its_own_refuses_the_call() {
+        // **Measured, not supposed:** flipping the `"" | "n" | "no"` arm to
+        // `Answer::Yes` left all 85 tests in this file and `permissions` green.
+        // A person who hits return to get their prompt back has read nothing,
+        // and the one input a terminal produces by accident must not be the one
+        // that approves a command.
+        let term = Term::recording();
+        let verdict = answered_with(Gate::Ask, &[""], &term).await;
+        assert!(
+            matches!(verdict, Verdict::Deny(..)),
+            "a bare return approved the call: {verdict:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_key_the_prompt_did_not_offer_does_not_answer_it() {
+        // `r` writes a persistent rule and `t` trusts a whole tool. Both are
+        // guarded on the offer rather than on the question, so on a prompt that
+        // offered neither they must fall through to the retry loop rather than
+        // silently granting something nobody read. `""` follows to end the loop,
+        // and the expected verdict is the refusal that empty line earns -- so a
+        // failure here shows up as `Allow`, which is the trap.
+        let term = Term::recording();
+        let verdict = answered_with(Gate::Ask, &["r", "t", ""], &term).await;
+        assert!(
+            matches!(verdict, Verdict::Deny(..)),
+            "an undocumented key answered a prompt that never offered it: {verdict:?}"
+        );
+    }
+
     #[tokio::test]
     async fn a_pipe_does_not_exempt_the_approval_prompt_from_the_drain() {
         let term = Term::recording();
@@ -2211,6 +2267,496 @@ mod tests {
             p.contains("-500 lines") || p.contains("+1 -500 lines"),
             "{p}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // What the gate consults, and what it must not let stand in for something
+    // else
+    //
+    // Everything below was found the same way: a line in `decide` or `egress`
+    // was changed to the wrong thing and the whole workspace stayed green.
+    // Each one has a control asserting the ordinary case still behaves, because
+    // a gate that refuses everything passes a refusal-only test.
+    // -----------------------------------------------------------------------
+
+    /// A tool that cannot be asked where it is going does not get to go.
+    ///
+    /// `request` wraps `network_target` in `catch_unwind` and denies when the
+    /// tool panics — model-written JSON reaching a tool's own argument reading
+    /// is exactly the shape that took a session down once before. Replacing
+    /// that denial with `Verdict::Allow` left every test green, which means the
+    /// documented fail-closed answer was resting on nothing: a panic in one
+    /// tool's argument parsing would have been silent egress.
+    ///
+    /// This drives `request` rather than `decide`, because `catch_unwind` is in
+    /// `request` and a test of `decide` cannot see it.
+    #[tokio::test]
+    async fn a_tool_that_panics_when_asked_where_it_is_going_is_refused() {
+        // The panic is caught, so the unwind message on stderr is noise from a
+        // test that is working. Silenced and restored around the call rather
+        // than left to alarm whoever reads the run.
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let a = Approvals::new(Gate::Ask, Asker::Scripted(Mutex::new(Vec::new())));
+        let verdict = a.request(&Panics, &Value::Null, &Term::silent()).await;
+        std::panic::set_hook(hook);
+
+        match verdict {
+            Verdict::Deny(who, why) => {
+                assert_eq!(who, Decider::Unevaluable, "{why}");
+                assert!(
+                    why.contains("Panics"),
+                    "the refusal does not name the tool: {why}"
+                );
+                assert!(why.contains("panicked"), "{why}");
+            }
+            Verdict::Allow => panic!("a tool that panicked about its destination was run"),
+        }
+
+        // The control. A gate that denied every call through `request` would
+        // pass the half above; a tool that answers honestly still gets as far
+        // as the prompt, and is refused for want of an answer rather than for
+        // being unevaluable.
+        match a.request(&Honest, &Value::Null, &Term::silent()).await {
+            Verdict::Deny(who, _) => assert_eq!(
+                who,
+                Decider::NoAnswer,
+                "a well-behaved tool was refused as though it had misbehaved"
+            ),
+            Verdict::Allow => panic!("an unanswered prompt allowed a network call"),
+        }
+    }
+
+    /// Every verdict the gate reached is in the record it keeps.
+    ///
+    /// `decisions()` is public and `seen` is what fills it. Deleting the push
+    /// left the workspace green — the field's own doc notes that no caller in
+    /// the workspace reads it today, which is precisely why nothing noticed and
+    /// precisely why it needs a test: an accessor nobody exercises is one that
+    /// quietly stops working before its first real reader arrives.
+    #[tokio::test]
+    async fn the_gate_records_every_call_it_decided_and_what_it_decided() {
+        let a = Approvals::new(Gate::SkipAll, Asker::Scripted(Mutex::new(Vec::new())));
+        assert_eq!(
+            a.request(&Honest, &Value::Null, &Term::silent()).await,
+            Verdict::Allow
+        );
+        let denied = Approvals::unattended();
+        assert!(matches!(
+            denied.request(&Honest, &Value::Null, &Term::silent()).await,
+            Verdict::Deny(..)
+        ));
+
+        let allowed = a.decisions().await;
+        assert_eq!(allowed.len(), 1, "{allowed:?}");
+        assert_eq!(allowed[0].0, "Honest");
+        assert_eq!(allowed[0].1, Verdict::Allow);
+
+        // A refusal is recorded too, and as a refusal. A record that only
+        // remembers what it let through is the one nobody can audit.
+        let refused = denied.decisions().await;
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert_eq!(refused[0].0, "Honest");
+        assert!(matches!(refused[0].1, Verdict::Deny(..)), "{refused:?}");
+    }
+
+    /// A grant that could not be written is said out loud.
+    ///
+    /// `keep`'s own doc: a failed write is a warning and not a denial, and what
+    /// the user loses is the persistence — "and they are told exactly that".
+    /// Replacing the `warn` with nothing left the workspace green, so the
+    /// telling was untested. The case in the doc is the one built here: a
+    /// settings file this run declines to touch because it cannot parse it.
+    #[tokio::test]
+    async fn a_grant_that_could_not_be_saved_says_so_rather_than_looking_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = crate::permissions::file_for(dir.path());
+        std::fs::write(&file, "{ this is not json").unwrap();
+
+        let term = Term::recording();
+        let a = Approvals::new(
+            Gate::Ask,
+            Asker::Scripted(Mutex::new(vec![Answer::RememberNarrow])),
+        )
+        .with_rules(crate::permissions::Rules::default(), Some(file.clone()));
+
+        // The answer stands: the call runs. Failing it over bookkeeping would
+        // punish the user for a problem with a file.
+        assert_eq!(
+            a.decide("Write", WRITES, None, &Value::Null, &term).await,
+            Verdict::Allow
+        );
+        let said = term.recorded().join("\n");
+        assert!(
+            said.contains("NOT saved"),
+            "the user was not told the grant did not persist: {said:?}"
+        );
+        assert!(
+            said.contains("Write"),
+            "the warning does not name the rule that was lost: {said:?}"
+        );
+        // And the unparseable file was left exactly as it was, which is the
+        // other half of the same promise.
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "{ this is not json"
+        );
+
+        // The control. A `keep` that warned unconditionally would pass all of
+        // the above, so a write that succeeds must say "saved" and not warn.
+        let ok = tempfile::tempdir().unwrap();
+        let ok = crate::permissions::file_for(ok.path());
+        let term = Term::recording();
+        let a = Approvals::new(
+            Gate::Ask,
+            Asker::Scripted(Mutex::new(vec![Answer::RememberNarrow])),
+        )
+        .with_rules(crate::permissions::Rules::default(), Some(ok.clone()));
+        assert_eq!(
+            a.decide("Write", WRITES, None, &Value::Null, &term).await,
+            Verdict::Allow
+        );
+        let said = term.recorded().join("\n");
+        assert!(said.contains("saved"), "{said:?}");
+        assert!(!said.contains("NOT saved"), "{said:?}");
+    }
+
+    /// The gate asks the rules about the **call**, not about the tool.
+    ///
+    /// `decide` calls `for_call`; changing that one line back to `for_tool`
+    /// left every test in the workspace green, and it is the whole of
+    /// `ARCH-002` undone: a `deny` list copied from a Claude Code project would
+    /// once again protect only what it named baldly, and every
+    /// `Bash(git push *)` and `Read(secrets/**)` in it would go back to
+    /// matching nothing at the gate.
+    ///
+    /// `permissions.rs` tests `for_call` thoroughly. What none of them can see
+    /// is whether this file ever calls it — the same residual `ARCH-003` names,
+    /// closed the same way, by asserting the behaviour at the gate.
+    #[tokio::test]
+    async fn a_rule_naming_a_command_or_a_path_fires_at_the_gate() {
+        let a = ruled(
+            Gate::Ask,
+            &["Bash(git push *)", "Read(secrets/**)"],
+            &[],
+            &[],
+        );
+
+        match a
+            .decide(
+                "Bash",
+                WRITES,
+                None,
+                &serde_json::json!({ "command": "git push --force origin main" }),
+                &Term::silent(),
+            )
+            .await
+        {
+            Verdict::Deny(who, why) => {
+                assert_eq!(who, Decider::Rule, "{why}");
+                assert!(why.contains("deny"), "{why}");
+            }
+            Verdict::Allow => panic!("a `deny` rule naming this command did not fire at the gate"),
+        }
+
+        // The same for the path axis, on a read-only tool — which is the harder
+        // half, because `read_only` is an early `Allow` and a gate that
+        // consulted the rules after it would pass this call silently.
+        match a
+            .decide(
+                "Read",
+                LOCAL_READ,
+                None,
+                &serde_json::json!({ "file_path": "secrets/id_rsa" }),
+                &Term::silent(),
+            )
+            .await
+        {
+            Verdict::Deny(who, why) => assert_eq!(who, Decider::Rule, "{why}"),
+            Verdict::Allow => panic!("a `deny` rule naming this path did not fire at the gate"),
+        }
+
+        // The controls. A gate that denied everything would pass both halves
+        // above. An ordinary read the rule does not name runs without a word,
+        // and an ordinary command the rule does not name reaches the prompt
+        // rather than a rule — the queue is empty, so it is refused for want of
+        // an answer, which is a different refusal with a different decider.
+        assert_eq!(
+            a.decide(
+                "Read",
+                LOCAL_READ,
+                None,
+                &serde_json::json!({ "file_path": "src/main.rs" }),
+                &Term::silent()
+            )
+            .await,
+            Verdict::Allow,
+            "a deny naming one directory stopped an unrelated read"
+        );
+        match a
+            .decide(
+                "Bash",
+                WRITES,
+                None,
+                &serde_json::json!({ "command": "git status" }),
+                &Term::silent(),
+            )
+            .await
+        {
+            Verdict::Deny(who, _) => assert_eq!(
+                who,
+                Decider::NoAnswer,
+                "a deny naming `git push` was applied to `git status`"
+            ),
+            Verdict::Allow => panic!("an unanswered prompt allowed a shell command"),
+        }
+    }
+
+    /// The exemption is on the local axis, and stops there.
+    ///
+    /// `EXEMPT`'s own doc lists two things it does not weaken. The network
+    /// question is a third, and it was not written down or tested: adding an
+    /// `EXEMPT` check to `egress` left the whole workspace green. The two axes
+    /// exist because they are two risks, and "this tool only writes its own
+    /// bookkeeping file" is an argument about local damage that says nothing
+    /// whatever about where bytes go.
+    #[tokio::test]
+    async fn the_exemption_does_not_reach_the_network_question() {
+        let a = Approvals::new(Gate::Ask, Asker::Scripted(Mutex::new(Vec::new())));
+        for exempt in EXEMPT {
+            assert!(
+                matches!(
+                    a.decide(
+                        exempt,
+                        REACHES,
+                        target("evil.example"),
+                        &Value::Null,
+                        &Term::silent()
+                    )
+                    .await,
+                    Verdict::Deny(..)
+                ),
+                "{exempt} is exempt from the write question and was waved past the network one"
+            );
+            // The control, and the reason the exemption exists: the same tool
+            // doing the same local write is still not asked about.
+            assert_eq!(
+                a.decide(exempt, WRITES, None, &Value::Null, &Term::silent())
+                    .await,
+                Verdict::Allow,
+                "{exempt} is listed as exempt but was gated on the local question"
+            );
+        }
+    }
+
+    /// A tool allowance and a host allowance cannot stand in for each other.
+    ///
+    /// `hosts_allowed`'s own doc: "approving `WebFetch` once approved every
+    /// host it might ever be pointed at, which is the grant this design refuses
+    /// to offer." Letting `egress` consult `session_allowed` as well left every
+    /// test green — the existing coverage runs the implication the other way,
+    /// pinning that a *host* grant does not answer the *tool* question, and
+    /// nothing ran it in the direction that leaks.
+    #[tokio::test]
+    async fn a_session_tool_grant_does_not_answer_the_network_question() {
+        let a = Approvals::new(
+            Gate::Ask,
+            Asker::Scripted(Mutex::new(vec![Answer::AlwaysThisTool])),
+        );
+        // `a` at the local question. The tool reaches nothing on this call, so
+        // the network question is not asked and the answer files a tool grant.
+        assert_eq!(
+            a.decide("WebFetch", WRITES, None, &Value::Null, &Term::silent())
+                .await,
+            Verdict::Allow
+        );
+        // The control: that grant does cover the local question again, with an
+        // empty queue. Without this the assertion below could pass because the
+        // grant was never recorded at all.
+        assert_eq!(
+            a.decide("WebFetch", WRITES, None, &Value::Null, &Term::silent())
+                .await,
+            Verdict::Allow,
+            "the tool allowance was not recorded, so the next assertion proves nothing"
+        );
+        // And it answers nothing about a destination.
+        assert!(
+            matches!(
+                a.decide(
+                    "WebFetch",
+                    REACHES,
+                    target("evil.example"),
+                    &Value::Null,
+                    &Term::silent()
+                )
+                .await,
+                Verdict::Deny(..)
+            ),
+            "approving the tool for the session approved every host it can be pointed at"
+        );
+        let (tools, hosts) = a.session_grants().await;
+        assert_eq!(tools, ["WebFetch"]);
+        assert!(hosts.is_empty(), "{hosts:?}");
+    }
+
+    /// An `ask` rule puts the **network** question back too.
+    ///
+    /// The precedence block says `ask` sits above `allow` and above a session
+    /// grant, and the existing test for that runs only the local axis. On the
+    /// egress axis nothing held it: treating `Decision::Ask` as `Allow` in
+    /// `egress` left every test green, which would turn "I allow this tool
+    /// generally, and I want to be asked about it today" into no rule at all
+    /// for the one question where the answer is where data goes.
+    #[tokio::test]
+    async fn an_ask_rule_puts_the_network_question_back_over_an_allow_and_over_a_grant() {
+        // The control first, so "denied" below means the `ask` rule and not the
+        // absence of an answer: with only the allow rule, the host runs
+        // silently.
+        let allowed = ruled(Gate::Ask, &[], &[], &["WebFetch(domain:docs.rs)"]);
+        assert_eq!(
+            allowed
+                .decide(
+                    "WebFetch",
+                    REACHES,
+                    target("docs.rs"),
+                    &Value::Null,
+                    &Term::silent()
+                )
+                .await,
+            Verdict::Allow
+        );
+
+        // The same allow rule, with an `ask` rule over it. The queue is empty,
+        // so reaching the prompt is what `NoAnswer` means here.
+        let asked = ruled(Gate::Ask, &[], &["WebFetch"], &["WebFetch(domain:docs.rs)"]);
+        match asked
+            .decide(
+                "WebFetch",
+                REACHES,
+                target("docs.rs"),
+                &Value::Null,
+                &Term::silent(),
+            )
+            .await
+        {
+            Verdict::Deny(who, _) => assert_eq!(
+                who,
+                Decider::NoAnswer,
+                "an `ask` rule did not reach the prompt on the network question"
+            ),
+            Verdict::Allow => panic!("an `allow` rule beat an `ask` rule on the network question"),
+        }
+
+        // And it cannot be undone by a `y` typed earlier in the session. Two
+        // scripted answers — a bare `ask` rule reaches both questions, so the
+        // first call spends one on each — and then two more calls to the same
+        // host with an empty queue. Both must ask again, or the rule is a
+        // preference rather than a rule.
+        let rules = crate::permissions::Rules::parse(&[emma_harness::PermissionEntry {
+            rule: "WebFetch".to_string(),
+            kind: emma_harness::PermissionKind::Ask,
+            source: std::path::PathBuf::from("settings.local.json"),
+        }])
+        .0;
+        let granted = Approvals::new(
+            Gate::Ask,
+            Asker::Scripted(Mutex::new(vec![Answer::Yes, Answer::Yes])),
+        )
+        .with_rules(rules, None);
+        assert_eq!(
+            granted
+                .decide(
+                    "WebFetch",
+                    REACHES,
+                    target("docs.rs"),
+                    &Value::Null,
+                    &Term::silent()
+                )
+                .await,
+            Verdict::Allow
+        );
+        assert!(
+            matches!(
+                granted
+                    .decide(
+                        "WebFetch",
+                        REACHES,
+                        target("docs.rs"),
+                        &Value::Null,
+                        &Term::silent()
+                    )
+                    .await,
+                Verdict::Deny(..)
+            ),
+            "a `y` on one call silenced an `ask` rule for the rest of the session"
+        );
+    }
+
+    /// Two tools that exist only to be driven through `Approvals::request`.
+    ///
+    /// `decide` takes a name and a `ToolMeta`, so every other test here can
+    /// skip the trait. `catch_unwind` and the decision record both live in
+    /// `request`, which takes the tool itself — so they need something that
+    /// implements it.
+    struct Panics;
+    struct Honest;
+
+    fn schema() -> Value {
+        serde_json::json!({ "type": "object", "properties": {} })
+    }
+
+    #[async_trait::async_trait]
+    impl Tool for Panics {
+        fn name(&self) -> &'static str {
+            "Panics"
+        }
+        fn description(&self) -> &str {
+            "a tool whose argument reading is broken"
+        }
+        fn input_schema(&self) -> Value {
+            schema()
+        }
+        fn meta(&self) -> ToolMeta {
+            REACHES
+        }
+        fn network_target(&self, _args: &Value) -> Option<NetworkTarget> {
+            panic!("this tool cannot read its own arguments")
+        }
+
+        async fn invoke(
+            &self,
+            _ctx: &emma_tool_api::ToolCtx,
+            _args: Value,
+        ) -> anyhow::Result<Result<emma_tool_api::ToolOutcome, emma_tool_api::ToolError>> {
+            unreachable!("the gate refuses this call before anything runs")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Tool for Honest {
+        fn name(&self) -> &'static str {
+            "Honest"
+        }
+        fn description(&self) -> &str {
+            "a tool that says where it is going"
+        }
+        fn input_schema(&self) -> Value {
+            schema()
+        }
+        fn meta(&self) -> ToolMeta {
+            REACHES
+        }
+        fn network_target(&self, _args: &Value) -> Option<NetworkTarget> {
+            target("docs.rs")
+        }
+
+        async fn invoke(
+            &self,
+            _ctx: &emma_tool_api::ToolCtx,
+            _args: Value,
+        ) -> anyhow::Result<Result<emma_tool_api::ToolOutcome, emma_tool_api::ToolError>> {
+            unreachable!("the gate refuses this call before anything runs")
+        }
     }
 }
 

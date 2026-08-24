@@ -859,6 +859,41 @@ impl LineSource {
         }
     }
 
+    /// A queue whose lines arrive **after** the drain, the way a person does.
+    ///
+    /// **Without this, the approval gate's keystroke parser cannot be tested at
+    /// all, and on 2026-08-23 that was measured rather than supposed.** Changing
+    /// `ask`'s `"" => Answer::No` arm to `Yes` — so that pressing Return at a
+    /// prompt approves the call — left all 85 tests in `approval` and
+    /// `permissions` green. So did accepting `r` (write a persistent rule) and
+    /// `t` (trust a whole tool) when the prompt had not offered them.
+    ///
+    /// The reason is mechanical and worth stating, because it looks like a
+    /// missing test and is not. `ask` calls [`LineSource::drain`] before it
+    /// prints the question — deliberately, so type-ahead cannot answer a prompt
+    /// the user has not read. [`LineSource::scripted`] pre-fills the channel and
+    /// drops the sender, so every scripted line is type-ahead by construction:
+    /// the drain eats all of them and `next()` then finds a closed channel. A
+    /// gate tested only that way has tested its policy and never its interface,
+    /// and the interface is where a person's consent is actually read.
+    ///
+    /// So this one keeps the sender and hands it back. The test drains first,
+    /// then sends — which is exactly the order a human at a terminal produces,
+    /// and the only order under which the parser is reachable.
+    #[cfg(test)]
+    pub(crate) fn answering() -> (Self, mpsc::Sender<String>) {
+        let (tx, rx) = mpsc::channel(16);
+        (
+            Self {
+                rx,
+                editing: None,
+                menu: None,
+                frame: None,
+            },
+            tx,
+        )
+    }
+
     /// The same, with a half-typed line and a menu behind it — the raw path's
     /// shape, without a terminal.
     #[cfg(test)]
@@ -938,6 +973,55 @@ mod tests {
         typed(&mut ed, "abc");
         assert_eq!(ed.key(ctrl('r')), Action::Ignore);
         assert_eq!(ed.text(), "abc");
+    }
+
+    /// **An Alt chord types nothing, and `tool_key` is not what stops it.**
+    ///
+    /// Found by mutation, not by reading: deleting
+    /// `|| key.modifiers.contains(KeyModifiers::ALT)` from the guard in
+    /// [`Editor::key`] left the whole `emma` lib suite green — 527 passed, 0
+    /// failed. Every existing assertion about Alt is about [`tool_key`], which
+    /// is a *different function on a different branch of the reader*, and the
+    /// editor is what runs when that branch declines.
+    ///
+    /// The branch declines more often than it looks. `tool_key` returns `None`
+    /// while a question is pending (§4.6), and it returns `None` for a chord
+    /// the catalogue does not bind. In both cases the keystroke falls through
+    /// to here — so without the guard, `Alt+s` at an approval prompt puts an
+    /// `s` in the answer box, and the user's next Return sends it as their
+    /// reply.
+    ///
+    /// **What this establishes and what it does not.** It establishes that the
+    /// pure editor refuses the chord. It does not establish that a real
+    /// terminal delivers `Alt+s` as `KeyModifiers::ALT` rather than as
+    /// `ESC` followed by `s` — some terminals send the latter, crossterm
+    /// normalises what it can, and nothing in a cell buffer can tell the
+    /// difference. That is a certification item, on a real terminal.
+    #[test]
+    fn an_alt_chord_types_nothing_even_when_no_tool_takes_it() {
+        let alt = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT);
+        let mut ed = Editor::default();
+        typed(&mut ed, "y");
+        for c in ['s', 'c', 'z', ','] {
+            assert_eq!(ed.key(alt(c)), Action::Ignore, "Alt+{c:?} was not ignored");
+        }
+        assert_eq!(
+            ed.text(),
+            "y",
+            "an Alt chord typed its letter into the line"
+        );
+
+        // The reachable route, stated as itself: under a prompt `tool_key`
+        // hands the chord back, and the editor is the next thing to see it.
+        let key = alt('s');
+        assert_eq!(tool_key(key, true), None, "the fixture proves nothing");
+        assert_eq!(ed.key(key), Action::Ignore);
+        assert_eq!(ed.text(), "y");
+
+        // The control: the same letter with no modifier is an ordinary
+        // character, so this is not passing by refusing everything.
+        assert_eq!(ed.key(press(KeyCode::Char('s'))), Action::Edit);
+        assert_eq!(ed.text(), "ys");
     }
 
     /// Ctrl-C in raw mode is a keystroke, not a signal — this file is the only
@@ -1152,6 +1236,58 @@ mod tests {
         let mut ed = Editor::default();
         ed.paste("first\r\n\r\n\r\nsecond\rthird\nfourth");
         assert_eq!(ed.text(), "first second third fourth");
+    }
+
+    /// **The two breaks nothing else in this file mentions**: U+2028 LINE
+    /// SEPARATOR and U+2029 PARAGRAPH SEPARATOR.
+    ///
+    /// Found by mutation: dropping them from [`Editor::paste`]'s `matches!`
+    /// left the whole lib suite green. Every existing paste test writes `\n`
+    /// and `\r`, which is the shape of a clipboard that came from a file — and
+    /// these two arrive from the ones that came from a browser, a PDF viewer,
+    /// or a JavaScript string, which is most of what a person pastes into a
+    /// terminal.
+    ///
+    /// **They do not fall through to the control-byte arm**, which is why the
+    /// omission would be silent rather than merely wrong: `char::is_control`
+    /// is `false` for both (they are `Zl`/`Zp`, not `Cc`), so an unhandled
+    /// U+2028 is *inserted into the line verbatim* and reported as a paste
+    /// that lost nothing. The note the user reads would say the paste arrived
+    /// intact while the line held a separator the terminal draws as it
+    /// pleases.
+    ///
+    /// A cell buffer cannot show what a terminal draws for U+2028. What is
+    /// asserted is the string that leaves the editor, which is the thing that
+    /// goes to the model and to the screen.
+    #[test]
+    fn a_unicode_line_separator_is_a_line_break_like_any_other() {
+        let mut ed = Editor::default();
+        let loss = ed.paste("first\u{2028}second\u{2029}third");
+        assert_eq!(ed.text(), "first second third", "{:?}", ed.text());
+        assert_eq!(
+            loss.breaks_joined, 2,
+            "a Unicode line separator was not counted as a break: {loss:?}"
+        );
+        assert!(
+            !ed.text().contains('\u{2028}') && !ed.text().contains('\u{2029}'),
+            "a separator survived into the line: {:?}",
+            ed.text()
+        );
+        // And it joins a run with the ASCII breaks rather than being counted
+        // beside them: `\r\n` then U+2028 is one gap, not three.
+        let mut ed = Editor::default();
+        let loss = ed.paste("a\r\n\u{2028}b");
+        assert_eq!(ed.text(), "a b");
+        assert_eq!(loss.breaks_joined, 1, "{loss:?}");
+
+        // **The control.** An ordinary space is not a break, so a paste of
+        // plain spaced words reports nothing — without this, an implementation
+        // that counted every whitespace character would pass.
+        let mut ed = Editor::default();
+        let loss = ed.paste("a b c");
+        assert_eq!(loss.breaks_joined, 0, "{loss:?}");
+        assert!(loss.is_clean(), "{loss:?}");
+        assert!(loss.note().is_none());
     }
 
     /// **A clipboard is untrusted bytes.** Its contents are rendered into cells
