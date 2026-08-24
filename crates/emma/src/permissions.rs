@@ -2585,6 +2585,98 @@ mod tests {
             None
         );
     }
+
+    // -----------------------------------------------------------------------
+    // What one shape of rule may and may not answer
+    //
+    // Every rule shape answers exactly one of the gate's two questions. Both
+    // tests below are written the way the file's own doc argues they should
+    // be: an assertion that the wrong shape says *nothing*, beside a control
+    // asserting the right shape still says what it always said. A matcher that
+    // has stopped answering anything passes the first half on its own.
+    // -----------------------------------------------------------------------
+
+    /// A command prefix and a path glob say nothing about where bytes go.
+    ///
+    /// **Nothing defended this.** Turning `Spec::Command(..) | Spec::Path(..)`
+    /// in `for_egress` from `false` to `true` left the whole workspace green,
+    /// and it is a widening in both directions at once: an
+    /// `allow: ["WebFetch(./cache/**)"]` — a rule about a *file*, and a
+    /// perfectly ordinary thing to find in a settings file written for the
+    /// other program — would have approved egress to every host on the
+    /// internet without a prompt, and a `deny` of the same shape would have cut
+    /// the tool off from all of them.
+    ///
+    /// The rule the module states is that a narrow grant must not answer a
+    /// question nobody asked it. This is that rule on the axis where getting it
+    /// wrong is exfiltration.
+    #[test]
+    fn a_command_or_path_rule_says_nothing_about_where_bytes_go() {
+        let allowing = rules(&[], &[], &["WebFetch(./cache/**)", "Bash(curl *)"]);
+        assert_eq!(
+            allowing.for_egress("WebFetch", "evil.example"),
+            None,
+            "a rule naming a local path approved egress to a host it never mentioned"
+        );
+        assert_eq!(
+            allowing.for_egress("Bash", "evil.example"),
+            None,
+            "a command prefix approved egress to a host it never mentioned"
+        );
+
+        // The same in the other direction, which costs a capability rather than
+        // a secret and is still not what the operator wrote.
+        let denying = rules(&["WebFetch(./cache/**)"], &[], &[]);
+        assert_eq!(
+            denying.for_egress("WebFetch", "docs.rs"),
+            None,
+            "a rule naming a local path denied egress to a host it never mentioned"
+        );
+
+        // The controls. A gate that answered `None` to everything would pass
+        // all four assertions above and be useless, so the two shapes that
+        // *are* about a destination must still answer here.
+        let real = rules(&["WebFetch(domain:evil.example)"], &[], &["WebSearch"]);
+        assert_eq!(
+            real.for_egress("WebFetch", "evil.example"),
+            Some(Decision::Deny)
+        );
+        assert_eq!(
+            real.for_egress("WebSearch", "anywhere.example"),
+            Some(Decision::Allow)
+        );
+    }
+
+    /// A path rule is matched against both spellings the tools use.
+    ///
+    /// `path_of` reads `file_path` and `path`, and its own doc says why: "the
+    /// tools use both — `file_path` for the ones that address a single file,
+    /// `path` for the ones that address a base." Nothing tested the second
+    /// spelling. Deleting `"path"` from that list left every test in the
+    /// workspace green, and what it costs is a `deny` rule that silently stops
+    /// applying to `Glob` and `Grep` — the two tools whose whole job is to walk
+    /// a directory the operator may have written a rule about.
+    #[test]
+    fn a_path_rule_is_matched_against_both_spellings_of_the_argument() {
+        let r = rules(&["Grep(secrets/**)"], &[], &[]);
+        for key in ["file_path", "path"] {
+            assert_eq!(
+                r.for_call("Grep", &serde_json::json!({ key: "secrets/keys.pem" })),
+                Some(Decision::Deny),
+                "a deny naming a directory did not fire on a call that spelled it `{key}`"
+            );
+        }
+        // The control, and it is the one that matters: a rule that denied every
+        // path would pass both assertions above. An unrelated read is not
+        // touched by the rule, in either spelling.
+        for key in ["file_path", "path"] {
+            assert_eq!(
+                r.for_call("Grep", &serde_json::json!({ key: "src/main.rs" })),
+                None,
+                "the deny fired on a path it does not name, spelled `{key}`"
+            );
+        }
+    }
 }
 
 // endregion: Tests

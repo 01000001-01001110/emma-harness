@@ -1203,6 +1203,112 @@ mod tests {
         assert_eq!(cols_upto("一二三", 99), 6);
     }
 
+    /// **A combining mark costs the cursor no column**, and until this test
+    /// nothing said so.
+    ///
+    /// Found by mutation. Changing [`char_cols`] to
+    /// `cols(c.encode_utf8(&mut buf)).max(1)` — one character, one line — left
+    /// the entire `emma` lib suite green: 527 passed, 0 failed. The existing
+    /// column tests are all CJK, where every character is *wider* than one
+    /// cell, so a floor of one is invisible to every one of them. The other
+    /// direction, a character *narrower* than one cell, had no test at all.
+    ///
+    /// It is [`cols_upto`] that pays for it, because that is the bridge the
+    /// input box crosses: [`super::input::Editor`] counts the cursor in
+    /// characters and the terminal wants a column. `é` typed as `e` + U+0301 is
+    /// two characters and one cell, so with a floor of one the cursor sits a
+    /// column to the right of the letter it is supposed to be after — and the
+    /// error accumulates, one column per mark, which is what makes it a
+    /// Vietnamese or Hebrew user's whole line rather than one glyph.
+    ///
+    /// **What this establishes, and what it does not.** It establishes that
+    /// Emma's arithmetic and ratatui's agree, because both go through
+    /// `Span::width`. It does not establish that a terminal draws `e` + U+0301
+    /// in one cell — some do not, some draw the mark on the following cell, and
+    /// no cell buffer can tell. The module doc above already names the same
+    /// limit for ZWJ sequences: Emma is wrong together with its renderer, which
+    /// keeps a box from being overrun, not from looking wrong.
+    #[test]
+    fn a_combining_mark_costs_the_cursor_no_column() {
+        // The bridge, at every cursor position across the mark.
+        let text = "e\u{301}mma";
+        assert_eq!(text.chars().count(), 5);
+        assert_eq!(cols(text), 4);
+        assert_eq!(cols_upto(text, 0), 0);
+        assert_eq!(cols_upto(text, 1), 1, "the base letter is one column");
+        assert_eq!(
+            cols_upto(text, 2),
+            1,
+            "the combining acute was given a column of its own"
+        );
+        assert_eq!(cols_upto(text, 5), 4);
+        // Several marks in a row, because the error is cumulative and one mark
+        // is within rounding of being right by accident.
+        assert_eq!(cols_upto("a\u{301}\u{302}\u{303}", 4), 1);
+
+        // A zero-width character is not the only narrow case, and the control
+        // that stops a floor of zero from passing: an ordinary letter still
+        // costs one, and a CJK glyph still costs two.
+        assert_eq!(cols_upto("abc", 3), 3);
+        assert_eq!(cols_upto("一", 1), 2);
+
+        // And `fit` counts the same way, so a marked-up name is not cut short
+        // by the marks on it.
+        assert_eq!(fit("e\u{301}mma", 4, "…"), "e\u{301}mma");
+    }
+
+    /// **`fit` never overruns at any budget either glyph set actually
+    /// reaches** — and it has a precondition, which is written down here
+    /// because it is not written down anywhere else.
+    ///
+    /// The existing wide-character sweep starts at budget 1 and only ever
+    /// passes the one-column `…`. The ASCII glyph set's ellipsis is `...`,
+    /// three columns, and at a budget below that `fit` returns the ellipsis
+    /// alone and is **wider than the budget it was given**. Measured, not
+    /// inferred:
+    ///
+    /// ```text
+    /// fit("abcdef", 0, "…")   -> "…"    1 column in a 0-column budget
+    /// fit("abcdef", 2, "...") -> "..."  3 columns in a 2-column budget
+    /// ```
+    ///
+    /// [`super::sidebar::clipped`] already knows this and guards it with a
+    /// `budget < cols(ellipsis)` branch of its own; `view.rs`, `statusbar.rs`
+    /// and `app.rs` call `fit` directly and do not. That is a defect in `fit`'s
+    /// contract rather than in this test, and it is reported rather than
+    /// pinned: a test asserting the overrun would make the fix red.
+    ///
+    /// So this asserts the range the callers can rely on — every budget from
+    /// `cols(ellipsis)` up — over both glyph sets and over text that is narrow,
+    /// wide, and mixed. Mutating `keep` to `budget` in [`fit`] turns it red.
+    #[test]
+    fn a_cut_never_overruns_at_any_budget_the_glyph_sets_actually_use() {
+        for ellipsis in [UNICODE.ellipsis, ASCII.ellipsis] {
+            let floor = cols(ellipsis);
+            assert!(floor >= 1, "an ellipsis of no width proves nothing");
+            for text in ["x".repeat(40), "一".repeat(20), "a一b二c三".repeat(6)] {
+                for budget in floor..=24 {
+                    let cut = fit(&text, budget, ellipsis);
+                    assert!(
+                        cols(&cut) <= budget,
+                        "fit({text:?}, {budget}, {ellipsis:?}) is {} columns",
+                        cols(&cut)
+                    );
+                    // Cut, and said so. A silent cut is the failure this
+                    // function exists to avoid, and an implementation that
+                    // returned an empty string would satisfy the bound above.
+                    assert!(cut.ends_with(ellipsis), "the cut was not marked: {cut:?}");
+                }
+            }
+            // **The control: text that fits is returned untouched.** Without
+            // it, a `fit` that marked everything would pass every assertion
+            // above, and every short name on screen would grow a lie.
+            let short = "emma";
+            assert_eq!(fit(short, 40, ellipsis), short);
+            assert_eq!(fit("一二", 4, ellipsis), "一二");
+        }
+    }
+
     /// The status row is right-aligned by arithmetic, and the arithmetic used
     /// to be in characters: a CJK directory name pushed the live fields off the
     /// end of the row it was supposed to fit inside.

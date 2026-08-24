@@ -1842,6 +1842,120 @@ mod tests {
         assert!(leaving.ends_with("\x1b[0m"), "{leaving:?}");
     }
 
+    /// **The alternate screen is entered with an explicit erase**, and not
+    /// only with `?1049h`.
+    ///
+    /// Found by mutation: shortening [`ALT_ENTER`] to just `\x1b[?1049h` left
+    /// the whole lib suite green. The pairing test above only ever reads the
+    /// *mode numbers* out of this constant, so everything between them is
+    /// unexamined by construction.
+    ///
+    /// The erase is not decoration. xterm clears the alternate buffer on entry
+    /// and most terminals copy it, but that is a convention rather than a
+    /// promise in DEC's definition of the mode — and on a console that keeps
+    /// the buffer, ratatui's first draw diffs against cells it believes are
+    /// blank and leaves whatever was there showing through the gaps in the
+    /// first frame. `2J` erases, `H` puts the cursor where ratatui's model
+    /// says it is.
+    ///
+    /// **This is a constant, so what it establishes is small and worth
+    /// stating.** It proves the bytes Emma intends to send are the bytes in
+    /// the constant. It proves nothing about what any terminal does with them
+    /// — that is a certification item, and the only way to run it is to open
+    /// a console and look.
+    #[test]
+    fn the_alternate_screen_is_entered_with_an_explicit_clear() {
+        // Assembled rather than written out, for the reason the neighbouring
+        // manifest test gives: it counts occurrences of this sequence across
+        // the whole file, and a literal here would be a second one.
+        let switch = format!("\x1b[?10{}h", "49");
+        assert!(
+            ALT_ENTER.starts_with(&switch),
+            "the switch is no longer the first thing sent: {ALT_ENTER:?}"
+        );
+        assert!(
+            ALT_ENTER.contains("\x1b[2J"),
+            "the alternate screen is entered without erasing it, so a console that \
+             does not clear on 1049h shows its old contents through the first \
+             frame: {ALT_ENTER:?}"
+        );
+        assert!(
+            ALT_ENTER.ends_with("\x1b[H"),
+            "the cursor is left where the switch put it rather than at the origin \
+             ratatui's first diff assumes: {ALT_ENTER:?}"
+        );
+        // The control: the *leave* carries none of this. An erase on the way
+        // out would wipe the shell content the mode's own restore exists to
+        // bring back.
+        assert_eq!(ALT_LEAVE, format!("\x1b[?10{}l", "49"));
+    }
+
+    /// **An insert is capped, so no tool can ask the terminal for an unbounded
+    /// number of rows.**
+    ///
+    /// Found by mutation: raising [`MAX_INSERT_ROWS`] from 500 to `u16::MAX`
+    /// left the whole lib suite green. The constant's own doc explains why it
+    /// exists — a tool returning fifty thousand lines would otherwise ask
+    /// `insert_before` to make fifty thousand rows of room in one call — and
+    /// nothing checked that the number was still doing anything.
+    ///
+    /// Six hundred one-row lines into a twelve-row screen: with the cap in
+    /// place 493 rows reach `TestBackend`'s scrollback and the viewport holds
+    /// the rest; without it, all six hundred do.
+    ///
+    /// **The part this does not defend, said plainly.** The lines past the cap
+    /// are dropped and *nothing tells the reader they were* — measured: the
+    /// last row in scrollback is `row 492` and row 599 is nowhere, with no
+    /// note anywhere saying so. On the full-screen path the retained
+    /// transcript still holds them, so the loss is the `EMMA_UI=inline`
+    /// hatch's alone; on that path it is a real defect and it is reported
+    /// rather than pinned here, because a test asserting the silence would
+    /// have to be deleted to fix it.
+    ///
+    /// And this is a cell buffer. It shows how many rows ratatui was asked to
+    /// make and what landed in `TestBackend`'s idea of scrollback. Whether a
+    /// real terminal captured those rows into *its* scrollback is the thing
+    /// this file has never been able to assert.
+    #[test]
+    fn an_enormous_insert_is_capped_rather_than_handed_to_the_terminal_whole() {
+        let mut term = screen(12, 5);
+        let view = view();
+        paint_into(&mut term, &view);
+
+        let lines: Vec<Line<'static>> = (0..600)
+            .map(|i| view.skin.prose(&format!("row {i}")))
+            .collect();
+        emit_into(&mut term, lines);
+
+        let scrolled = term.backend().scrollback().area.height;
+        // **The bound is a literal, and that is the point.** Written as
+        // `scrolled <= MAX_INSERT_ROWS` this test passes for every possible
+        // value of the constant, including `u16::MAX` — measured: with the
+        // constant raised to `u16::MAX` all six hundred rows arrive and the
+        // self-referential form stays green. 500 is the cap the constant is
+        // documented at; 493 is what a twelve-row screen puts in scrollback
+        // under it, and 593 is what arrives without it.
+        assert!(
+            scrolled <= 500,
+            "an insert of 600 lines pushed {scrolled} rows; the documented cap is 500 \
+             (MAX_INSERT_ROWS is {MAX_INSERT_ROWS})"
+        );
+        assert!(
+            scrolled < 600,
+            "the whole block was handed to the terminal in one call: {scrolled} rows"
+        );
+        // The control: the cap is a cap and not a refusal. Something arrived,
+        // and it is the *front* of the block — dropping the beginning instead
+        // of the end would lose the line that says what went wrong.
+        assert!(scrolled > 0, "the whole insert was thrown away");
+        let sb = term.backend().scrollback();
+        let first: String = (0..sb.area.width).map(|x| sb[(x, 0u16)].symbol()).collect();
+        assert!(
+            first.trim_end().ends_with("row 0"),
+            "the insert kept its tail rather than its head: {first:?}"
+        );
+    }
+
     /// Bracketed paste specifically, because it is the one being added and the
     /// number is the whole of it: `2004`, not `2044` or `20004`.
     #[test]
@@ -1981,6 +2095,36 @@ mod tests {
         assert!(
             !ALT_ON.load(Ordering::SeqCst),
             "the alternate screen survived: the user is looking at the wrong screen"
+        );
+
+        // **Mouse capture alone has to be enough to make the teardown run.**
+        //
+        // Found by mutation: deleting `&& !MOUSE_ON.load(..)` from that
+        // early-return guard left the whole lib suite green. The phase above
+        // cannot catch it, because it sets three latches and the guard only
+        // needs one of them to decide to carry on.
+        //
+        // Capture left on is not a cosmetic leak. The shell that inherits the
+        // terminal has `?1000`/`?1006` enabled by a process that has exited,
+        // so every click and every wheel notch types an escape sequence into
+        // the prompt, and no program still running will ever turn it off.
+        //
+        // **Second phase in the same test rather than a test of its own**, for
+        // the reason the file already gives about `FRAME_ON`: these latches are
+        // process-global and the tests run in parallel. `MOUSE_ON` is touched
+        // by nothing else, so this owns it outright. The other three being
+        // flipped underneath by a neighbouring test can only make this pass
+        // when it should have failed — never fail when it should have passed.
+        MOUSE_ON.store(true, Ordering::SeqCst);
+        RAW_ON.store(false, Ordering::SeqCst);
+        ALT_ON.store(false, Ordering::SeqCst);
+        FRAME_ON.store(false, Ordering::SeqCst);
+        restore_terminal();
+        assert!(
+            !MOUSE_ON.load(Ordering::SeqCst),
+            "mouse capture survived a teardown where it was the only mode left on: \
+             the shell that inherits this terminal types escape sequences when it \
+             is clicked"
         );
     }
 
@@ -2454,6 +2598,53 @@ mod tests {
             "the restore path no longer ends a synchronized update: {:?}",
             leave_modes()
         );
+
+        // **The ordinary pairing, which is the one nobody was checking.**
+        //
+        // Everything above is about the *exit*. The far commoner unmatched `h`
+        // is the one in `synchronized` itself, which runs on every single
+        // draw — and deleting `out.write_all(SYNC_END.as_bytes())` from it
+        // left the whole lib suite green. A terminal told to hold its picture
+        // and never released holds it until its own timeout fires, which is
+        // Emma redrawing at whatever rate the terminal's watchdog allows.
+        //
+        // **This is a source assertion, and this file's rule is that those are
+        // a last resort.** `DEF-018`'s scar is a grep that passed while the
+        // thing it guarded was disabled, and the test this sits inside carries
+        // its own scar of the same kind. The defences are the ones used
+        // elsewhere here: the slice is bounded by markers that must stay
+        // inside `synchronized`, and each `expect` says outright that a rename
+        // has made the assertion vacuous rather than letting it match nothing.
+        //
+        // Why not a behavioural one: `synchronized` writes to the process's
+        // real `stdout` and hands back only its closure's value. There is no
+        // seam to pass a writer through and no way to read those bytes from
+        // inside the test binary, so the alternative to this is nothing at
+        // all. Making it behavioural means giving `synchronized` a `Write`
+        // parameter, which is a change to production code.
+        let source = include_str!("frame.rs");
+        let start = source
+            .find("fn synchronized<T>(")
+            .expect("synchronized was renamed; this assertion is now vacuous");
+        let end = source[start..]
+            .find(
+                "
+}",
+            )
+            .expect("synchronized was restructured; this assertion is now vacuous")
+            + start;
+        let body = &source[start..end];
+        let begins = body.matches("SYNC_BEGIN").count();
+        let ends = body.matches("SYNC_END").count();
+        assert_eq!(
+            begins, 1,
+            "synchronized no longer begins exactly one update: {body}"
+        );
+        assert_eq!(
+            ends, begins,
+            "synchronized begins an update it does not end, so every draw leaves the \
+             terminal holding its picture until its own timeout fires: {body}"
+        );
     }
 
     #[test]
@@ -2479,6 +2670,45 @@ mod tests {
 
     #[test]
     fn restore_runs_once_however_many_times_it_is_called() {
+        // **What the inline path actually writes to take its viewport off the
+        // screen**, asserted here rather than in a test of its own because
+        // `CURSOR_ROW` is process-global and this test already owns it.
+        //
+        // Found by mutation: making `erase_frame` return an empty string
+        // unconditionally left the whole lib suite green. Every existing
+        // assertion about the teardown is about the *latches*; the bytes were
+        // unexamined. On the `EMMA_UI=inline` path those bytes are the entire
+        // cleanup — there is no alternate screen to leave — so an empty string
+        // means the viewport stays painted on the shell the user gets back,
+        // with a prompt drawn over the top of it.
+        CURSOR_ROW.store(3, Ordering::SeqCst);
+        let erase = erase_frame();
+        assert_eq!(
+            erase, "\x1b[3A\r\x1b[J",
+            "the erase no longer climbs to the frame's top row and wipes from there"
+        );
+        // Relative and upward only, by the number written down at the last
+        // paint. An absolute row number here is the Windows screen-buffer bug
+        // the restore path's doc is written around.
+        assert!(!erase.contains('H'), "{erase:?}");
+        assert!(!erase.contains('B'), "{erase:?}");
+
+        // It is one-shot: `CURSOR_ROW` is swapped out, so a second teardown —
+        // `Drop` after the panic hook, say — writes nothing rather than
+        // climbing three more rows into somebody's transcript.
+        assert_eq!(
+            erase_frame(),
+            "",
+            "a second erase climbed again, into the transcript above the frame"
+        );
+
+        // **The control for the row arithmetic**: a frame drawn on the row the
+        // cursor is already on climbs nowhere. Without this, an `erase_frame`
+        // that always emitted `\x1b[{row+1}A` would satisfy the assertion
+        // above's shape and still eat the line above the frame every time.
+        CURSOR_ROW.store(0, Ordering::SeqCst);
+        assert_eq!(erase_frame(), "\r\x1b[J");
+
         // Set by hand: a test binary has no terminal, so `install` correctly
         // refuses and cannot set this for us. What is under test is the latch,
         // which is what makes `Drop` + panic hook + an explicit call safe.
