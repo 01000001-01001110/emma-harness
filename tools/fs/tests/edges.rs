@@ -338,13 +338,77 @@ async fn read_says_when_it_truncated() {
 /// line cap has to exist independently of the line *count* cap. This is the
 /// test that keeps the two separate: a clipped line still sets `truncated`,
 /// which is what stops `Write` from accepting that read as a whole-file view.
+///
+/// **The second assertion here used to be `content.contains("line clipped")`,
+/// and it could not fail.** `[line clipped]` is the marker `clip` appends to
+/// the *line body* — it is in the rendered text of the line, not in the
+/// truncation notice — so the assertion was satisfied by output saying nothing
+/// about which cap fired. Deleting the whole `if clipped_line` block from
+/// `read.rs`, the sentence that names the cap and explains the marker, left
+/// this test green: proved by mutation on 2026-08-23. The flag survived the
+/// same deletion too, because `truncated` is computed from `clipped_line`
+/// independently of the sentence — so neither half of the old test was
+/// watching the thing `tests/truncation.rs` exists to defend.
+///
+/// Both are asserted now, and separately: the marker, because it is what stops
+/// the model addressing a line it only half saw, and the notice, because it is
+/// what the runtime quotes to the model and to the terminal.
 #[tokio::test]
 async fn read_clips_a_very_long_line_and_says_so() {
+    use emma_tools_fs::read::MAX_LINE_CHARS;
+
     let sandbox = Sandbox::new();
     sandbox.write_file("long.txt", &format!("{}\nshort\n", "x".repeat(5000)));
     let outcome = sandbox.ok("Read", json!({ "file_path": "long.txt" })).await;
     assert!(outcome.truncated);
-    assert!(outcome.content.contains("line clipped"), "{outcome:?}");
+    // The marker on the line itself. A hash here would stand for text the
+    // model was never shown, so a clipped line gets `----` instead.
+    assert!(outcome.content.contains("[line clipped]"), "{outcome:?}");
+    assert!(
+        outcome.content.contains(emma_tools_fs::hashline::CLIPPED),
+        "a clipped line was labelled with a hash for text nobody saw: {outcome:?}"
+    );
+
+    // And the notice, which is a different string in a different field. This
+    // is the half that had nothing watching it.
+    let reason = outcome
+        .truncation
+        .as_deref()
+        .expect("a clipped line set the flag and named no cap");
+    assert!(
+        reason.contains(&format!("longer than {MAX_LINE_CHARS} characters")),
+        "the notice does not name the cap that fired: {reason}"
+    );
+    assert!(
+        reason.contains(&format!("first {MAX_LINE_CHARS}")),
+        "the notice does not say how much survived: {reason}"
+    );
+    assert!(
+        reason.contains(emma_tools_fs::hashline::CLIPPED),
+        "the notice does not explain the marker it caused: {reason}"
+    );
+    assert!(
+        reason.contains("no argument raises"),
+        "advertising a knob that does not exist costs a turn: {reason}"
+    );
+    assert!(
+        outcome.content.contains(reason),
+        "the content and the notice tell different stories: {reason}"
+    );
+
+    // The control, and it is not optional: every assertion above is satisfied
+    // by a `Read` that reports a clip on every call, which is the warning
+    // nobody reads.
+    sandbox.write_file("short.txt", "one\ntwo\n");
+    let plain = sandbox
+        .ok("Read", json!({ "file_path": "short.txt" }))
+        .await;
+    assert!(
+        !plain.truncated,
+        "an unclipped read claimed a clip: {plain:?}"
+    );
+    assert!(plain.truncation.is_none(), "{plain:?}");
+    assert!(!plain.content.contains("[line clipped]"), "{plain:?}");
 }
 
 /// Emptiness is a result. The tempting alternative is to return a helpful
@@ -678,6 +742,145 @@ async fn bash_kills_a_command_that_outruns_its_timeout() {
     );
 }
 
+/// A command Emma gave up on has actually stopped, certified by its effect
+/// rather than by the sentence saying so.
+///
+/// **What the test above proves is that the *call* stopped waiting.** That is
+/// a different fact from the child stopping, and nothing here checked the
+/// second: with both `child.start_kill()` and `cmd.kill_on_drop(true)` removed
+/// from `bash.rs`, the whole crate stayed green (mutation, 2026-08-23), and
+/// the machine would have been left running work nobody is waiting for — the
+/// next call sees a busy box and no explanation.
+///
+/// **This goes red only when *both* are removed, and that is the honest
+/// description of the code rather than a weakness of the test.** The two kill
+/// the same child by different routes and either alone suffices, so no test
+/// can distinguish them; removing one is a redundancy change, removing both is
+/// the guarantee. Verified by mutation both ways.
+///
+/// The loop appends from the shell itself, so the process being signalled is
+/// the process doing the writing — a shell that spawned a separate writer
+/// would keep writing after the kill, and that is documented behaviour rather
+/// than this guarantee.
+#[tokio::test]
+async fn a_timed_out_command_stops_working_after_the_call_returns() {
+    let sandbox = Sandbox::new();
+    let error = sandbox
+        .err(
+            "Bash",
+            json!({
+                "command": "while true; do echo x >> grew.txt; done",
+                "timeout_ms": 700
+            }),
+        )
+        .await;
+    assert!(error.detail().contains("killed after 700ms"), "{error}");
+
+    let grew = sandbox.root().join("grew.txt");
+    let first = std::fs::metadata(&grew).map(|m| m.len()).unwrap_or(0);
+    // Without this the comparison below is `0 == 0` and passes for a child
+    // that never started — the shape of a test satisfied by the ordinary state
+    // of the world.
+    assert!(
+        first > 0,
+        "the command never wrote anything, so this proves nothing about a kill"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    let second = std::fs::metadata(&grew).map(|m| m.len()).unwrap_or(0);
+    assert_eq!(
+        first,
+        second,
+        "the file grew by {} bytes after Emma reported the command killed",
+        second.saturating_sub(first)
+    );
+}
+
+/// `KillShell` stops a **real** background shell, and `BashOutput` still
+/// answers about it afterwards.
+///
+/// **Both tools had tests and neither had ever met a process.** Their unit
+/// tests drive a synthetic registry — `Registry::spawn` with a label, bytes
+/// pushed in by hand, a state set directly — which proves the wording and the
+/// state machine and nothing about the wiring: `Bash`'s background path
+/// registering an `on_kill` that reaches the child, the waiter noticing the
+/// flag, the child dying. `bash.rs`'s own background tests assert
+/// `task.kill()` returns `true`, which says a killer was registered, not that
+/// it worked.
+///
+/// So the assertion is the file: it stops growing. A `KillShell` that returned
+/// the right sentence and signalled nothing passes every other test in this
+/// workspace and fails this one.
+#[tokio::test]
+async fn killshell_stops_a_real_background_shell_and_bashoutput_still_reads_it() {
+    let sandbox = Sandbox::new();
+    let started = sandbox
+        .ok(
+            "Bash",
+            json!({
+                "command": "while true; do echo x >> grew.txt; done",
+                "run_in_background": true
+            }),
+        )
+        .await;
+    assert!(
+        started.content.contains("has not finished"),
+        "a spawn read as a completed command: {}",
+        started.content
+    );
+
+    let tasks = sandbox.ctx.background.list(&sandbox.ctx.session_id);
+    assert_eq!(tasks.len(), 1, "the background spawn registered no task");
+    let id = tasks[0].id.clone();
+
+    // Wait for the child to be demonstrably alive before killing it, or the
+    // kill is being credited for a process that had not started.
+    let grew = sandbox.root().join("grew.txt");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if std::fs::metadata(&grew).map(|m| m.len()).unwrap_or(0) > 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the background command never produced anything to stop"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    let killed = sandbox.ok("KillShell", json!({ "bash_id": id })).await;
+    assert!(
+        killed.content.contains("stopped"),
+        "the kill did not report stopping anything: {}",
+        killed.content
+    );
+
+    // The kill is a poll away (`KILL_POLL`) plus teardown, so give it a moment
+    // before taking the first measurement — otherwise the pair below straddles
+    // the kill and the test flakes rather than fails.
+    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    let first = std::fs::metadata(&grew).map(|m| m.len()).unwrap_or(0);
+    assert!(first > 0, "the file vanished; this measures nothing");
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    let second = std::fs::metadata(&grew).map(|m| m.len()).unwrap_or(0);
+    assert_eq!(
+        first,
+        second,
+        "the shell kept running {} bytes past a kill that reported success",
+        second.saturating_sub(first)
+    );
+
+    // And the second half of the pair: a killed task is still an answer.
+    // "It was stopped" and "no such task" are different facts, and the model
+    // routes differently on each.
+    let after = sandbox.ok("BashOutput", json!({ "bash_id": id })).await;
+    assert!(
+        after.content.contains("killed by KillShell"),
+        "a stopped task did not report itself as stopped: {}",
+        after.content
+    );
+}
+
 /// A noisy build can spend an entire context window in one call. This pins both
 /// halves of the fix: output is capped, and the cap is admitted. It also
 /// exercises the drain-past-the-cap behaviour on purpose — a reader that
@@ -956,15 +1159,119 @@ async fn a_write_leaves_no_temporary_file_beside_the_target() {
 
     assert_eq!(fs.read_file("keep.txt"), "after\n");
 
-    let strays: Vec<String> = std::fs::read_dir(fs.root())
+    // **This used to filter the listing down to names containing `tmp` and
+    // assert the result was empty, which could not fail for the reason it was
+    // written.** A plain non-atomic `fs::write` leaves no temporary file
+    // either — it never makes one — so the assertion was satisfied by the
+    // absence of the whole mechanism, and it was blind to a stray under any
+    // name the filter did not guess. The listing is compared whole now:
+    // exactly the file that was asked for, and nothing beside it.
+    let entries = listing(fs.root());
+    assert_eq!(
+        entries,
+        ["keep.txt"],
+        "the write left something beside the target"
+    );
+}
+
+/// Hold `path` open in a way that lets readers in and keeps renames out.
+///
+/// **Not [`lock_exclusive`], and the difference is the whole test.** Sharing
+/// nothing also blocks `Write`'s own freshness read — `session::content_of`
+/// does a `fs::read` — so the call was refused as `bad_arguments: changed on
+/// disk` before it ever reached the rename, and the failure being staged never
+/// happened. `FILE_SHARE_READ` lets every read through and withholds
+/// `FILE_SHARE_DELETE`, which is exactly what `MoveFileEx` needs to replace the
+/// target, so the refusal lands on the rename and nowhere earlier.
+///
+/// (That earlier refusal is worth knowing about on its own: a file Emma cannot
+/// read reports as *changed since you read it* rather than as unreadable. It
+/// is reported, not fixed here.)
+#[cfg(windows)]
+fn lock_against_delete(path: &std::path::Path) -> Option<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 0x0000_0001;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(path)
+        .ok()
+}
+
+#[cfg(not(windows))]
+fn lock_against_delete(_path: &std::path::Path) -> Option<std::fs::File> {
+    None
+}
+
+/// Every name directly under `dir`, sorted. The whole listing rather than a
+/// filtered one, because a filter can only catch strays somebody predicted.
+fn listing(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
         .expect("read the sandbox")
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.contains("tmp"))
         .collect();
+    names.sort();
+    names
+}
+
+/// A write whose rename fails leaves no temporary file behind.
+///
+/// **The path the test above cannot reach, and the one the cleanup exists
+/// for.** On the happy path the rename consumes the temp file, so "nothing
+/// beside the target" holds whether or not the failure arm cleans up — which
+/// is why deleting `remove_file` from that arm is invisible to every other
+/// test here. This forces the failure: the target is held open in a way that
+/// withholds `FILE_SHARE_DELETE`, Windows refuses the rename onto it, and the
+/// only thing between that and a `.emma-tmp.<pid>.<seq>` left in somebody's
+/// repository is the one line in `write_atomically`'s error arm.
+///
+/// The assertion is the directory listing, not the error. An error message is
+/// what the tool *says*; the listing is what it *did*, and `write_atomically`'s
+/// own doc promises the second — *"a stray `.emma-tmp` in somebody's
+/// repository is a bug report"*.
+#[tokio::test]
+async fn a_write_whose_rename_fails_leaves_no_temporary_file_behind() {
+    let fs = Sandbox::new();
+    fs.write_file("held.txt", "before\n");
+    fs.ok("Read", json!({ "file_path": "held.txt" })).await;
+
+    let Some(lock) = lock_against_delete(&fs.root().join("held.txt")) else {
+        // Honest skip. A silent `return` here would look like a pass, and this
+        // is the only platform where the failure can be staged at all.
+        eprintln!("SKIPPED: this platform will not deny a rename onto an open file");
+        return;
+    };
+
+    let error = fs
+        .err(
+            "Write",
+            json!({ "file_path": "held.txt", "content": "after\n" }),
+        )
+        .await;
+    assert_eq!(
+        error.kind(),
+        "tool_failed",
+        "a filesystem that refused the write is machinery failing, not a bad path: {error}"
+    );
     assert!(
-        strays.is_empty(),
-        "a temporary file survived the write: {strays:?}"
+        error.detail().contains("could not be written"),
+        "the refusal must say the write is what failed: {error}"
+    );
+
+    let entries = listing(fs.root());
+    assert_eq!(
+        entries,
+        ["held.txt"],
+        "a failed write left its temporary file behind"
+    );
+
+    // Released before reading, or the read hits the same lock the write did.
+    drop(lock);
+    assert_eq!(
+        fs.read_file("held.txt"),
+        "before\n",
+        "the write it could not finish damaged the file anyway"
     );
 }
 

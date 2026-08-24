@@ -146,6 +146,61 @@ const ENV_ALLOWLIST: &[&str] = &[
     "TERM",
 ];
 
+/// The timeout a call actually gets: the default when none was asked for, and
+/// never more than [`MAX_TIMEOUT_MS`].
+///
+/// An over-large timeout is clamped rather than refused. Zero is refused in
+/// `validate_args`, because zero is a mistake with no plausible meaning,
+/// whereas "wait an hour" is a real intention the engine simply will not
+/// honour past its own ceiling.
+///
+/// **A function rather than three lines at the call site, because the clamp had
+/// nothing watching it.** Deleting `.min(MAX_TIMEOUT_MS)` from the expression
+/// this replaced left the whole crate green (mutation, 2026-08-23), and the
+/// reason is arithmetic rather than oversight: the only end-to-end evidence
+/// that the ceiling bound is a call that waits the full ten minutes out, and a
+/// suite nobody will run is not a guarantee. Pulled out here, it is a pure
+/// function with a unit test that goes red the moment the clamp goes.
+///
+/// **What that still does not cover, said rather than left to be discovered.**
+/// A call site that stopped calling this and inlined an unclamped `unwrap_or`
+/// would pass the test below. The clamp is tested; its being *used* is read
+/// from the code — the same admission `path::still_contained` makes about its
+/// own call sites, and for the same reason.
+pub fn effective_timeout_ms(requested: Option<u64>) -> u64 {
+    requested.unwrap_or(DEFAULT_TIMEOUT_MS).min(MAX_TIMEOUT_MS)
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+
+    /// Three separate claims, and the third is the one that had no test at
+    /// all: a request above the ceiling comes back at the ceiling. The other
+    /// two are here because a clamp that also swallowed the caller's own
+    /// number, or that forgot the default, would satisfy the third alone —
+    /// `fn effective_timeout_ms(_) -> u64 { MAX_TIMEOUT_MS }` passes a test
+    /// that only checks the clamp.
+    #[test]
+    fn the_ceiling_binds_the_default_applies_and_a_smaller_ask_is_honoured() {
+        assert_eq!(effective_timeout_ms(None), DEFAULT_TIMEOUT_MS);
+        assert_eq!(effective_timeout_ms(Some(700)), 700);
+        assert_eq!(effective_timeout_ms(Some(MAX_TIMEOUT_MS)), MAX_TIMEOUT_MS);
+        assert_eq!(
+            effective_timeout_ms(Some(MAX_TIMEOUT_MS + 1)),
+            MAX_TIMEOUT_MS
+        );
+        assert_eq!(effective_timeout_ms(Some(u64::MAX)), MAX_TIMEOUT_MS);
+        // And the default has to sit *below* the ceiling, or the first
+        // assertion above is a second spelling of the clamp and neither one is
+        // saying anything. Both operands are constants, so this is settled at
+        // compile time rather than pretending to be a runtime check —
+        // `const` because clippy is right that an assertion which cannot vary
+        // at run time is not a test result.
+        const { assert!(DEFAULT_TIMEOUT_MS < MAX_TIMEOUT_MS) };
+    }
+}
+
 #[derive(Default)]
 pub struct Bash;
 
@@ -264,13 +319,7 @@ impl Bash {
         self.validate_args(&args_v)?;
         let root = path::root(ctx)?;
         let command = args::req_str(&args_v, NAME, "command")?;
-        // An over-large timeout is clamped rather than refused. Zero is refused
-        // in `validate_args`, because zero is a mistake with no plausible
-        // meaning, whereas "wait an hour" is a real intention the engine simply
-        // will not honour past its own ceiling.
-        let timeout_ms = args::opt_u64(&args_v, NAME, "timeout_ms")?
-            .unwrap_or(DEFAULT_TIMEOUT_MS)
-            .min(MAX_TIMEOUT_MS);
+        let timeout_ms = effective_timeout_ms(args::opt_u64(&args_v, NAME, "timeout_ms")?);
 
         let cwd = match args::opt_str(&args_v, NAME, "cwd")? {
             None => root.clone(),
@@ -698,12 +747,39 @@ pub const OVERRIDE_ENV: &str = "EMMA_SHELL";
 /// Searched *before* `PATH`, which is the whole fix: WSL's launcher is on
 /// `PATH` ahead of Git for Windows on a stock box, so ordering by `PATH` alone
 /// picks the one shell whose filesystem Emma cannot reason about.
+///
+/// **`Git\usr\bin` comes before `Git\bin`, and that ordering is a bug fix, not
+/// a preference.** `Git\bin\bash.exe` is a *launcher*: it re-execs
+/// `Git\usr\bin\bash.exe` as a child process and waits. Emma spawns the
+/// launcher, so the process Emma holds — and therefore the only process
+/// `start_kill` and `kill_on_drop` can reach — is the launcher, and the shell
+/// actually running the command is a generation further down. Killing the
+/// launcher leaves it running.
+///
+/// Certified on this box, 2026-08-23, both directions and controlled:
+/// `Get-CimInstance Win32_Process` shows `Git\bin\bash.exe -c "while true; do
+/// echo x >> grew.txt; done"` with a child spelled
+/// `Git\bin\..\usr\bin\bash.exe`; `Stop-Process` on the launcher left that
+/// child alive and the file grew 14,962 bytes afterwards. The same command run
+/// through `Git\usr\bin\bash.exe` and stopped the same way grew 0 bytes and
+/// left nothing behind.
+///
+/// What this cost while it stood: `Bash`'s `timeout_ms` and `KillShell` both
+/// reported the command stopped, and it had not been — the plausible success
+/// this project treats as a defect rather than a rough edge, and one nothing
+/// in the result could have let a model route around.
+///
+/// The launcher is kept as a fallback rather than dropped, because it is what
+/// exists on an installation whose `usr\bin` is laid out differently, and a
+/// shell that cannot be cleanly killed still beats no shell at all.
 const WINDOWS_POSIX_DIRS: &[(&str, &str)] = &[
+    ("ProgramFiles", r"Git\usr\bin"),
+    ("ProgramW6432", r"Git\usr\bin"),
+    ("LOCALAPPDATA", r"Programs\Git\usr\bin"),
     ("ProgramFiles", r"Git\bin"),
     ("ProgramW6432", r"Git\bin"),
     ("ProgramFiles(x86)", r"Git\bin"),
     ("LOCALAPPDATA", r"Programs\Git\bin"),
-    ("ProgramFiles", r"Git\usr\bin"),
 ];
 
 /// Directory names Windows keeps the WSL launcher in. `bash.exe` in any of them
@@ -1105,6 +1181,48 @@ mod shell_tests {
         let err = resolve_with(None, &e).expect_err("wsl must not be chosen");
         assert_eq!(err.kind(), "tool_unavailable");
         assert!(err.detail().contains(OVERRIDE_ENV), "{err}");
+    }
+
+    /// The real shell wins over the launcher that starts it.
+    ///
+    /// **`Git\bin\bash.exe` re-execs `Git\usr\bin\bash.exe` and waits**, so the
+    /// process Emma spawns is one generation above the shell running the
+    /// command, and killing it leaves the command running. `Bash`'s
+    /// `timeout_ms` and `KillShell` both reported success over a command that
+    /// had not stopped; the measurement is on [`WINDOWS_POSIX_DIRS`].
+    ///
+    /// The end-to-end proof is `tests/edges.rs` — a file that stops growing
+    /// after a kill — and reordering this constant turns both of those red,
+    /// which is the guard that matters. What a wall-clock test cannot leave
+    /// behind is a reason legible to whoever next tidies the list, so the
+    /// ordering is asserted here too, against the constant itself.
+    ///
+    /// **Against the constant, and not against a directory list a test made
+    /// up.** The first draft of this passed `[usr\bin, bin]` into
+    /// `resolve_with` and asserted the first won — which is a fact about
+    /// `resolve_with`, true whatever this constant says, and green with the
+    /// launcher put straight back in front.
+    ///
+    /// The second half is not decoration: the launcher must stay in the list.
+    /// Dropping it turns an installation laid out differently from a working
+    /// shell into a refusal, and a shell that resists a kill still beats no
+    /// shell at all.
+    #[test]
+    fn the_real_shell_is_searched_for_before_the_launcher_that_re_execs_it() {
+        let real = WINDOWS_POSIX_DIRS
+            .iter()
+            .position(|(_, suffix)| suffix.ends_with(r"Git\usr\bin"))
+            .expect("the real shell's directory is not searched at all");
+        let launcher = WINDOWS_POSIX_DIRS
+            .iter()
+            .position(|(_, suffix)| suffix.ends_with(r"Git\bin"))
+            .expect("the launcher is no longer there as a fallback");
+        assert!(
+            real < launcher,
+            "the launcher is searched first, so Emma spawns the process that \
+             re-execs the shell — and a kill reaches the launcher, not the \
+             command. Certified 2026-08-23; see this constant's own doc."
+        );
     }
 
     /// The refusal has to name what was looked for, or the user is left

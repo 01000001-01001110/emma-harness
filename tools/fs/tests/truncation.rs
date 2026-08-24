@@ -225,6 +225,142 @@ async fn read_hands_the_same_sentence_to_both_audiences() {
     );
 }
 
+/// `Read` names the **byte** cap when that is the one that bit.
+///
+/// **A truncation notice with nothing watching it.** `Read` has three caps and
+/// the module note above says each is asserted separately because they fail
+/// separately — but only the line-count one ever was. Deleting the whole
+/// `if byte_capped` block from `read.rs` left the crate green (mutation,
+/// 2026-08-23), and the result is a notice that says only "cut by the fixed
+/// 2000-line ceiling" about a read that stopped at line 600: a model told the
+/// line ceiling bound will raise nothing, page from the offset, and get the
+/// same short answer again without ever learning why.
+///
+/// Both sentences are asserted, because both are true at once here and each
+/// carries something the other does not — the line notice carries the offset
+/// to continue from, the byte notice carries the reason `limit` was not
+/// honoured.
+#[tokio::test]
+async fn read_names_the_byte_cap_when_it_bit_before_the_line_count() {
+    use emma_tools_fs::read::{MAX_BYTES, MAX_LINES};
+
+    let sandbox = Sandbox::new();
+    // Well inside the line ceiling and well past the byte cap, so the cap
+    // under test is the only one that can have stopped the read. Each line is
+    // shorter than the per-line clip, so that third cap stays out of it.
+    let wide = "y".repeat(400);
+    let text: String = (1..=1000).map(|n| format!("{n} {wide}\n")).collect();
+    assert!(
+        text.len() > MAX_BYTES,
+        "the fixture is smaller than the cap"
+    );
+    sandbox.write_file("wide.txt", &text);
+
+    let outcome = sandbox.ok("Read", json!({ "file_path": "wide.txt" })).await;
+    let reason = outcome
+        .truncation
+        .as_deref()
+        .expect("a byte-capped read named no cap");
+    assert!(
+        reason.contains(&format!("{MAX_BYTES}-byte cap")),
+        "the notice does not name the cap that fired: {reason}"
+    );
+    assert!(
+        reason.contains("fewer") && reason.contains("`limit`"),
+        "the notice does not say why `limit` was not honoured: {reason}"
+    );
+    assert!(
+        reason.contains("no argument raises it"),
+        "a remedy that does not exist is worse than none: {reason}"
+    );
+    // The loss and the way on, which live in the line sentence beside it.
+    assert!(
+        reason.contains("continue with offset"),
+        "no route past the cut: {reason}"
+    );
+    assert!(
+        outcome.content.contains(reason),
+        "the content and the notice tell different stories: {reason}"
+    );
+
+    // The control, and it is what makes the assertions above mean anything: an
+    // ordinary line-count truncation must **not** claim the byte cap bit. A
+    // `Read` that named every cap on every cut would satisfy the block above
+    // and tell the model nothing.
+    let tall: String = (1..=MAX_LINES + 500)
+        .map(|n| format!("line {n}\n"))
+        .collect();
+    sandbox.write_file("tall.txt", &tall);
+    let outcome = sandbox.ok("Read", json!({ "file_path": "tall.txt" })).await;
+    let reason = outcome.truncation.as_deref().expect("a cut named no cap");
+    assert!(
+        reason.contains("cut by the fixed"),
+        "the line ceiling did not name itself: {reason}"
+    );
+    assert!(
+        !reason.contains(&format!("{MAX_BYTES}-byte cap")),
+        "a read the byte cap never touched blamed it anyway: {reason}"
+    );
+}
+
+/// `Grep` says when it clipped a matching line, and points at the file rather
+/// than at a knob.
+///
+/// **The fourth of `Grep`'s cuts, and the one with no test.** The other three —
+/// the output ceiling, the unopened-file skip, the unreadable directory — each
+/// have one; deleting the `if clipped_lines > 0` block left the crate green
+/// (mutation, 2026-08-23). What that costs is specific: a match inside a
+/// minified bundle comes back as 400 characters of it with no sign that the
+/// line continued, and the model quotes the fragment back as though it were
+/// the line.
+#[tokio::test]
+async fn grep_says_when_it_clipped_a_long_matching_line() {
+    use emma_tools_fs::grep::MAX_MATCH_CHARS;
+
+    let sandbox = Sandbox::new();
+    let wide = format!("{}needle{}\n", "z".repeat(MAX_MATCH_CHARS), "z".repeat(50));
+    sandbox.write_file("bundle.min.js", &wide);
+
+    let outcome = sandbox.ok("Grep", json!({ "pattern": "needle" })).await;
+    assert!(
+        outcome.truncated,
+        "a line shown in part was reported as a whole match: {outcome:?}"
+    );
+    let reason = outcome
+        .truncation
+        .as_deref()
+        .expect("a clipped match named no cap");
+    assert!(
+        reason.contains(&format!("longer than {MAX_MATCH_CHARS} characters")),
+        "the notice does not name the cap: {reason}"
+    );
+    assert!(
+        reason.starts_with("1 "),
+        "the notice does not say how many lines were clipped: {reason}"
+    );
+    assert!(reason.contains("no argument raises"), "{reason}");
+    // The remedy has to be one that works. `head_limit` is the only size knob
+    // `Grep` has and it does nothing about line width, so naming it here would
+    // be the mistake this whole file was written after.
+    assert!(
+        reason.contains("Read the file at the line number shown"),
+        "no remedy that works: {reason}"
+    );
+    assert!(!reason.contains("head_limit"), "wrong knob: {reason}");
+    assert!(outcome.content.contains("[truncated:"), "{outcome:?}");
+
+    // The control. Without it the block above is satisfied by a `Grep` that
+    // reports a clip on every search, and a warning on every result is one
+    // nobody reads.
+    let plain = Sandbox::new();
+    plain.write_file("code.rs", "let needle = 1;\n");
+    let outcome = plain.ok("Grep", json!({ "pattern": "needle" })).await;
+    assert!(
+        !outcome.truncated,
+        "an ordinary match was reported as clipped: {outcome:?}"
+    );
+}
+
 /// Two failures wearing one flag: the 64 KiB cap, and the case where the drain
 /// race is lost and the body is empty rather than a prefix. Only the first is
 /// tested here — see the module note in `bash.rs` for why the second needs a
