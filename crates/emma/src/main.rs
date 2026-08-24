@@ -279,17 +279,6 @@ async fn run(cli: cli::Cli) -> Result<()> {
         opts.model.as_deref(),
         home.as_deref(),
     )?;
-    let key = auth::load_default(kind)?;
-    let provider: Arc<dyn Provider> = kind.build(key.clone(), Some(resolved.model.clone()));
-    // The one cell everything that resolves a provider *late* reads — today
-    // that is `Delegate` and nothing else. Written only by `/model`. See
-    // `agent::Running`.
-    let running = emma::agent::Running::new(provider.clone());
-
-    // **Reviewing is a run of its own, and it stops here rather than falling
-    // into the session loop.** It needs the provider and the tools and none of
-    // the rest — no session file to append to, no goal, no resume. Its own
-    // function so that `main` stays wiring; see `emma::verify`.
     if let Command::Verify {
         rows,
         limit,
@@ -303,8 +292,14 @@ async fn run(cli: cli::Cli) -> Result<()> {
             rows,
             *limit,
             *dry_run,
-            provider.clone(),
-            &resolved.model,
+            // Resolved only if a review is really going to run.
+            || {
+                let key = auth::load_default(kind)?;
+                Ok((
+                    kind.build(key, Some(resolved.model.clone())),
+                    resolved.model.clone(),
+                ))
+            },
             &harness,
             &tools,
             &term,
@@ -313,6 +308,18 @@ async fn run(cli: cli::Cli) -> Result<()> {
         )
         .await;
     }
+
+    let key = auth::load_default(kind)?;
+    let provider: Arc<dyn Provider> = kind.build(key.clone(), Some(resolved.model.clone()));
+    // The one cell everything that resolves a provider *late* reads — today
+    // that is `Delegate` and nothing else. Written only by `/model`. See
+    // `agent::Running`.
+    let running = emma::agent::Running::new(provider.clone());
+
+    // **Reviewing is a run of its own, and it stops here rather than falling
+    // into the session loop.** It needs the provider and the tools and none of
+    // the rest — no session file to append to, no goal, no resume. Its own
+    // function so that `main` stays wiring; see `emma::verify`.
 
     let session_dir = opts
         .session_dir
@@ -858,8 +865,13 @@ async fn run_verification(
     rows: &[String],
     limit: usize,
     dry_run: bool,
-    provider: Arc<dyn Provider>,
-    model: &str,
+    // **Lazy, so the paths that reach no model need no key.** `--dry-run` and
+    // `--print-brief` only read the ledger and print, and the help says so; the
+    // provider used to be built before this function was reached, so on a
+    // machine without a key they died at key resolution and listed nothing.
+    // That made the help a promise the binary did not keep. Found by a worker
+    // reading its own scenario's captured bytes.
+    provider: impl FnOnce() -> Result<(Arc<dyn Provider>, String)>,
     harness: &Arc<Harness>,
     tools: &Registry,
     term: &Arc<Term>,
@@ -888,7 +900,7 @@ async fn run_verification(
     // noticing: a production edit made while reviews were in flight.
     let chosen: Vec<_> = outstanding.iter().take(limit).collect();
     term.note(&format!(
-        "{} row(s) want an independent review; reviewing {} of them with {model}. Tree {}.",
+        "{} row(s) want an independent review; reviewing {} of them. Tree {}.",
         outstanding.len(),
         chosen.len(),
         &fingerprint[..16]
@@ -923,6 +935,10 @@ async fn run_verification(
         }
         return Ok(());
     }
+
+    // Past the two early returns, so this is the first point a key is needed.
+    let (provider, model) = provider()?;
+    let model = model.as_str();
 
     let approvals = Approvals::unattended();
     let mut upheld = 0usize;
