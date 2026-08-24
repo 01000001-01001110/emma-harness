@@ -28,6 +28,13 @@ out for themselves.
 
 ## Unreleased
 
+- **A tool that prints colour no longer puts escape bytes in your redirected
+  file.** `emma | tee log` with a `Bash` call emitting colour wrote those
+  bytes into the file, and a tool emitting a bare carriage return could
+  overwrite the line above its own output in a record you read later. Emma
+  strips control bytes from tool output on every path now, as it already did
+  for the status line. The text itself is unchanged.
+
 - **A timed-out or killed command now actually stops, on Windows.** `Bash`'s
   `timeout_ms` and `KillShell` both reported success over a shell that kept
   running, on any box using Git for Windows. `Git\bin\bash.exe` is a launcher
