@@ -557,7 +557,12 @@ fn rule(skin: &Skin, width: usize, info: &str) -> Line<'static> {
 /// refuses (`view.rs`), applied to the one other thing on screen that comes from
 /// outside. Tabs become spaces because a tab in a cell has no width anybody
 /// agrees on; everything else that is not printable is dropped.
-fn sanitise(raw: &str) -> String {
+///
+/// `pub(crate)` since 2026-08-23, when the same defect turned up in
+/// `render.rs`: tool stdout became spans without passing through here, so a
+/// `Bash` call that emitted colour put those bytes in a redirected file. One
+/// sanitiser, both doors.
+pub(crate) fn sanitise(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for ch in raw.chars() {
         match ch {

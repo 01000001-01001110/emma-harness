@@ -251,6 +251,25 @@ the remedy — or says plainly that no argument raises it.
   used to say "there is a test" when there was not one: what existed were
   component-level assertions inside `term/`, none of which ran the binary.
   The test's own doc records the one path it still cannot reach.
+
+  **A third correction, 2026-08-23, and this one was about the code.** The
+  sentence was false as written. It held for Emma's own styling and not for
+  text passing through: `for_stream` at `Level::None` calls `plain`, which
+  returns span contents verbatim, and `Skin::body` put raw tool stdout into a
+  span. So `emma | tee log` with a `Bash` call that emitted colour wrote those
+  escape bytes to the file, and a tool emitting a bare CR could overwrite the
+  line above its own output in a record somebody reads later. Fixed at the
+  source — `Skin::body` now runs the same `sanitise` `markdown.rs` has had
+  since the status line hit this class — and pinned by
+  `a_tools_own_escape_bytes_do_not_reach_a_redirected_stream`, which goes red
+  when the call is removed.
+
+  Worth keeping for the shape rather than the fix: `no_escape_bytes.rs` is a
+  good test of the path it covers and could never have seen this, because a
+  keyless run never gets as far as running a tool, so no outside bytes reach
+  the renderer. And one sanitiser existed one module over with a test on it.
+  **One input shape, two answers, inside one codebase** — when a tolerance is
+  added to one reader, go and look at the others.
 - **A tool failure is an observation, not an abort.** It comes back as a
   `tool_result` with `is_error` and the loop continues.
 - **The approval gate is a consent interface, not a sandbox.** It enforces

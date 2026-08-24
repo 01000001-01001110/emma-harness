@@ -33,6 +33,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 
+use super::markdown::sanitise;
+
 use super::palette::{Level, Palette, Role};
 use super::theme::Theme;
 
@@ -380,7 +382,26 @@ impl Skin {
         let mut out: Vec<Line<'static>> = lines
             .by_ref()
             .take(RESULT_LINES)
-            .map(|l| Line::from(Span::styled(format!("  {l}"), style)))
+            // **Sanitised, because this is the one thing on this page that
+            // comes from outside Emma.** Everything `body` renders is a tool's
+            // own bytes: stdout, an error's detail, a refusal's reason. Until
+            // 2026-08-23 they became spans verbatim, and `plain` -- what
+            // `for_stream` writes when the destination is not a terminal --
+            // returns span contents unchanged. So `emma | tee log` with a
+            // `Bash` call that emitted colour put escape bytes in the file,
+            // and `CLAUDE.md`'s "redirected output contains zero escape bytes"
+            // was true of Emma's own styling and false of text passing through
+            // it. Measured, not supposed:
+            //
+            //     for_stream(Level::None, tool_ok("\x1b[31mred\x1b[0m"))
+            //         -> "  \u{1b}[31mred\u{1b}[0m"
+            //
+            // `markdown.rs` had the sanitiser and a test for it since the
+            // status line hit the same class; the `Skin` constructors were
+            // written separately and never got it. The existing test could not
+            // see it because its fixtures contain no escapes -- the
+            // fixtures-agree-with-their-author scar, again.
+            .map(|l| Line::from(Span::styled(format!("  {}", sanitise(l)), style)))
             .collect();
         let rest = lines.count();
         if rest > 0 {
@@ -834,6 +855,50 @@ pub fn owned(line: &Line<'_>) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// A tool's own escape bytes must not reach a redirected stream.
+    ///
+    /// **`CLAUDE.md` called this invariant load-bearing and it was false.** It
+    /// held for Emma's own styling -- `for_stream` at [`Level::None`] adds no
+    /// attribute of its own -- and not for text passing through, because
+    /// `plain` returns span contents verbatim and `Skin::body` put raw tool
+    /// stdout in a span. `emma | tee log` with a `Bash` call that emitted
+    /// colour wrote those bytes to the file.
+    ///
+    /// The existing guard, `tests/no_escape_bytes.rs`, runs the real binary
+    /// with both streams piped and could not see it: a keyless run never gets
+    /// as far as running a tool, so no outside bytes ever reach the renderer.
+    /// It is a good test of the path it covers. This is the other path.
+    ///
+    /// The fixture is deliberately not a lone `ESC`. It is a complete SGR pair
+    /// around a word, which is what a real `ls --color` or `cargo` emits, plus
+    /// a bare CR -- the byte that makes a terminal overwrite the line it just
+    /// drew, so a tool can hide the line above its own output in a file
+    /// somebody later reads as a record.
+    #[test]
+    fn a_tools_own_escape_bytes_do_not_reach_a_redirected_stream() {
+        let skin = skin(Level::None);
+        let lines = skin.tool_ok("\u{1b}[31mred\u{1b}[0m and\ra rewrite", false, None);
+        let written: String = lines.iter().map(|l| for_stream(&skin, l)).collect();
+
+        assert!(
+            !written.contains('\u{1b}'),
+            "a tool's escape byte reached a redirected stream: {written:?}"
+        );
+        assert!(
+            !written.chars().any(char::is_control),
+            "a tool's control byte reached a redirected stream: {written:?}"
+        );
+        // And the text itself survives, or the guarantee is being met by
+        // throwing the output away -- which would pass the two assertions
+        // above and lose the evidence the line exists to carry.
+        assert!(
+            written.contains("red") && written.contains("a rewrite"),
+            "the words were dropped along with the escapes: {written:?}"
+        );
+    }
+
     use super::*;
 
     fn skin(level: Level) -> Skin {
