@@ -2568,6 +2568,104 @@ mod tests {
         let i = Ending::Iterations.message(&Budgets::default());
         assert!(i.contains("limit"), "{i}");
     }
+
+    /// The token budget counts what a call **cost**, not how much context it
+    /// carried.
+    ///
+    /// **Written because the weighting could be deleted with the workspace
+    /// green.** Replacing the three multipliers with a plain sum — the exact
+    /// arithmetic `billable_total_tokens` already does — turned nothing red.
+    /// The scripted provider sets `input_tokens` and leaves both cache fields
+    /// at zero, so every end-to-end test in this repository exercises the one
+    /// input for which the weighted and unweighted sums agree.
+    ///
+    /// `Budgets::max_tokens` is where the argument is: a cache read is billed
+    /// at 0.1× and a cache write at 1.25×, and a session that re-sends its whole
+    /// conversation charges ~100,000 tokens of *size* per call against a bill of
+    /// a few cents. Counting size fired the default budget five calls into a
+    /// barely-started goal. That is the bug this function is the fix for, and
+    /// until now the fix was undefended.
+    #[test]
+    fn the_budget_counts_what_a_call_cost_rather_than_what_it_carried() {
+        // A long conversation being re-read from cache: almost all of the
+        // context is a cache read, which is the case the budget used to get
+        // wrong.
+        let cached = emma_llm::Usage {
+            input_tokens: 1_000,
+            output_tokens: 500,
+            cache_creation_input_tokens: 0,
+            // Every field named, zeros included, so the cache split a reader
+            // has to see is on the page — and so that a `Usage` which gains a
+            // field fails to compile *here*, where the weighting that has to
+            // account for it is written.
+            cache_read_input_tokens: 100_000,
+        };
+        // 1,000 + 100,000/10 + 500.
+        assert_eq!(cost_tokens(&cached), 11_500);
+        // And the number the *log* carries is the unweighted one, so the two
+        // must not be the same function. A cache read counted at its size is
+        // roughly nine times the bill here.
+        assert!(
+            cached.billable_total_tokens() > cost_tokens(&cached) * 8,
+            "the weighting is not being applied: size {} against cost {}",
+            cached.billable_total_tokens(),
+            cost_tokens(&cached)
+        );
+
+        // A cache *write* is the other direction — billed above face value, so
+        // counting it at size under-charges.
+        let written = emma_llm::Usage {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_creation_input_tokens: 1_000,
+            cache_read_input_tokens: 0,
+        };
+        assert_eq!(cost_tokens(&written), 1_250);
+
+        // The control, and the reason the two above are not just arithmetic:
+        // with no caching at all the weighted count is the plain sum, so
+        // nothing here is a general multiplier applied to every call.
+        let plain = emma_llm::Usage {
+            input_tokens: 700,
+            output_tokens: 300,
+            ..Default::default()
+        };
+        assert_eq!(cost_tokens(&plain), 1_000);
+        assert_eq!(cost_tokens(&plain), plain.billable_total_tokens());
+    }
+
+    /// The list of failed calls a goal remembers is bounded.
+    ///
+    /// **The mutation that survived:** making `trim_oldest` a no-op. Nothing
+    /// went red, because no test has ever produced more than a handful of
+    /// distinct failures. The list is written into a session record and read
+    /// back by `--resume`, so an unbounded one is a payload that grows for the
+    /// life of the session rather than a transient.
+    ///
+    /// Oldest-first is asserted as well as the size, because a cap that kept
+    /// the wrong end would still pass a length check while throwing away the
+    /// failure most likely to be repeated next.
+    #[test]
+    fn the_failed_call_list_is_bounded_and_loses_its_oldest_first() {
+        let mut v: Vec<String> = (0..FAILED_EVER_MAX + 5)
+            .map(|i| format!("call-{i}"))
+            .collect();
+        trim_oldest(&mut v);
+        assert_eq!(v.len(), FAILED_EVER_MAX, "the list grew without bound");
+        assert_eq!(
+            v.first().unwrap(),
+            "call-5",
+            "the newest entries were dropped"
+        );
+        assert_eq!(v.last().unwrap(), &format!("call-{}", FAILED_EVER_MAX + 4));
+
+        // The control: a list under the cap is not touched at all, so the
+        // assertions above are about the cap rather than about a function that
+        // always trims.
+        let mut short: Vec<String> = vec!["only".into()];
+        trim_oldest(&mut short);
+        assert_eq!(short, vec!["only".to_string()]);
+    }
 }
 
 // endregion: Tests

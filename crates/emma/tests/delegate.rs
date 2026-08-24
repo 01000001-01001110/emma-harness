@@ -1311,7 +1311,7 @@ async fn a_sub_run_gets_its_own_wall_clock_and_a_single_nudge() {
         &[ty],
         vec![read],
         allowing_everything(),
-        parent.clone(),
+        parent,
         log.clone(),
         Arc::new(Term::silent()),
     )

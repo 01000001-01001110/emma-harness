@@ -23,7 +23,7 @@ use emma_llm::{Caching, Mode};
 use emma_tool_api::Registry;
 use serde_json::json;
 
-use support::{call, cut_off, empty_harness, harness_denying, registry, text, Fake, TestTool};
+use support::{call, cut_off, empty_harness, harness_denying, registry, text, Fake, Say, TestTool};
 
 fn budgets() -> Budgets {
     Budgets {
@@ -1217,3 +1217,782 @@ async fn the_fold_carries_a_finished_goal_forward_the_way_the_loop_does() {
 }
 
 // endregion: The record
+
+// region: The guarantees nothing defended
+// ---------------------------------------------------------------------------
+// The guarantees nothing defended
+//
+// Every test in this region was written after a mutation of `agent.rs`
+// survived the whole workspace suite. The mutation is named in each doc
+// comment, because a test whose motivating mutation is not written down is a
+// test the next reader cannot re-validate.
+// ---------------------------------------------------------------------------
+
+/// A tool that refuses the model's arguments is **not run**, and the refusal
+/// reaches the model as an error block.
+///
+/// **The mutation that survived:** deleting the whole
+/// `if let Err(e) = validated { return fail(e.kind(), ...) }` arm in
+/// `run_tool_call`, so a `validate_args` rejection is computed and thrown away
+/// and `invoke` is called anyway. The workspace stayed green. No fixture in the
+/// support module has ever returned `Err` from `validate_args` -- the one that
+/// touches that function panics instead -- so the arm had never been executed
+/// by a test at all.
+///
+/// What that would be in production is the class this project cares about
+/// most. The argument check is where `Read`, `Edit`, `Bash` and sixteen others
+/// state their preconditions; running past a rejection hands a tool the input
+/// it has just said it cannot take, and whatever it returns is then reported
+/// to the model as a success.
+#[tokio::test]
+async fn a_tool_that_refuses_its_arguments_is_not_run_and_the_model_is_told() {
+    use std::sync::atomic::AtomicUsize;
+
+    struct Picky {
+        refuse: bool,
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl emma_tool_api::Tool for Picky {
+        fn name(&self) -> &'static str {
+            "Picky"
+        }
+        fn description(&self) -> &str {
+            "a tool that checks its arguments before it runs"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            json!({ "type": "object", "properties": { "x": { "type": "string" } } })
+        }
+        fn meta(&self) -> emma_tool_api::ToolMeta {
+            emma_tool_api::ToolMeta {
+                read_only: true,
+                reaches_network: false,
+                idempotent: true,
+            }
+        }
+        fn validate_args(&self, _args: &serde_json::Value) -> Result<(), emma_tool_api::ToolError> {
+            if self.refuse {
+                return Err(emma_tool_api::ToolError::BadArguments(
+                    "x must name a file that exists".into(),
+                ));
+            }
+            Ok(())
+        }
+        async fn invoke(
+            &self,
+            _ctx: &emma_tool_api::ToolCtx,
+            _args: serde_json::Value,
+        ) -> anyhow::Result<Result<emma_tool_api::ToolOutcome, emma_tool_api::ToolError>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Ok(emma_tool_api::ToolOutcome::new("Picky ran")))
+        }
+    }
+
+    async fn run(refuse: bool) -> (Outcome, usize, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = empty_harness(dir.path());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tool: Arc<dyn emma_tool_api::Tool> = Arc::new(Picky {
+            refuse,
+            calls: calls.clone(),
+        });
+        let fake = Fake::new(vec![
+            call("Picky", json!({ "x": "nowhere" })),
+            text("understood.\n\nGOAL COMPLETE"),
+        ]);
+        let out = drive(
+            &root,
+            dir.path(),
+            registry(vec![tool]),
+            &Approvals::unattended(),
+            &fake,
+            budgets(),
+            &goal(),
+            &SessionLog::none(),
+        )
+        .await;
+        let seen = fake.transcript();
+        (out, calls.load(Ordering::SeqCst), seen)
+    }
+
+    let (out, ran, seen) = run(true).await;
+    // The loop continued: a rejected argument is an observation like every
+    // other failure class, not an abort.
+    assert_eq!(out.ending, Ending::Done, "an argument check ended the goal");
+    assert_eq!(
+        ran, 0,
+        "the tool said its arguments were wrong and was invoked anyway"
+    );
+    assert!(
+        seen.contains("bad_arguments"),
+        "the model was not told which failure class this was: {seen}"
+    );
+    assert!(
+        seen.contains("x must name a file that exists"),
+        "the tool's own reason was not passed through: {seen}"
+    );
+    assert!(
+        seen.contains("is_error"),
+        "the refusal reached the model as an ordinary result: {seen}"
+    );
+
+    // The control, and the half that makes the assertions above mean
+    // something: the same call with the same arguments against a tool that
+    // does not object. It runs, and none of the above is said.
+    let (out, ran, seen) = run(false).await;
+    assert_eq!(out.ending, Ending::Done);
+    assert_eq!(ran, 1, "the ordinary call did not reach the tool");
+    assert!(
+        !seen.contains("bad_arguments"),
+        "an accepted call was reported to the model as a rejected one: {seen}"
+    );
+    assert!(
+        !seen.contains("is_error"),
+        "an ordinary successful call carried the error flag: {seen}"
+    );
+}
+
+/// Ctrl-C during a model call ends the goal, and ends it as `Interrupted`.
+///
+/// **The mutation that survived:** replacing `self.s.interrupt.wait()` in
+/// `call_model`'s `select!` with a future that never completes, so a keypress
+/// can no longer cut a call in flight. Nothing went red. The one interrupt test
+/// this file had covers a running *tool*; the model call -- the branch a person
+/// actually hits, because a long answer is where the waiting happens -- was
+/// asserted nowhere.
+///
+/// The assertion is a timeout rather than an ending alone, because the shape of
+/// the regression is a hang: without that branch `run_goal` waits on a provider
+/// that will never answer, and a test that only compared endings would never
+/// reach the comparison.
+#[tokio::test]
+async fn a_ctrl_c_during_a_model_call_ends_the_goal_rather_than_hanging() {
+    use std::sync::atomic::AtomicUsize;
+
+    /// A provider that answers nothing, ever, having first pressed Ctrl-C.
+    /// `Fake` cannot express this: every script entry returns.
+    struct Hanging {
+        interrupt: Arc<Interrupt>,
+        calls: Arc<AtomicUsize>,
+        press: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl emma_llm::Provider for Hanging {
+        fn model_id(&self) -> &str {
+            "hanging"
+        }
+        async fn send(
+            &self,
+            _request: emma_llm::Request,
+            _mode: Mode,
+            _events: Option<tokio::sync::mpsc::Sender<emma_llm::Event>>,
+        ) -> Result<emma_llm::AssistantTurn, emma_llm::LlmError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.press {
+                self.interrupt.trip();
+            }
+            std::future::pending::<()>().await;
+            unreachable!("the pending future resolved")
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let harness = Harness::load_selecting(&root, Flavor::Emma, None).unwrap();
+    let term = Term::silent();
+    let tools = registry(vec![]);
+    let approvals = Approvals::unattended();
+    let log = SessionLog::none();
+    let interrupt = Interrupt::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn emma_llm::Provider> = Arc::new(Hanging {
+        interrupt: interrupt.clone(),
+        calls: calls.clone(),
+        press: true,
+    });
+
+    let mut agent = Agent::new(Setup {
+        background: Default::default(),
+        provider,
+        harness: &harness,
+        instructions: &harness.instructions,
+        tools: &tools,
+        approvals: &approvals,
+        log: &log,
+        term: &term,
+        interrupt: interrupt.clone(),
+        spend: emma::agent::Spend::new(),
+        done: &MarkerClaim,
+        cwd: dir.path().to_path_buf(),
+        session_id: "sess-test".into(),
+        budgets: budgets(),
+        caching: Caching::On,
+        mode: Mode::Batch,
+    });
+
+    let out = tokio::time::timeout(Duration::from_secs(5), agent.run_goal(&goal()))
+        .await
+        .expect(
+            "Ctrl-C did not reach the model call: run_goal was still waiting on a provider \
+             that never answers",
+        );
+    assert_eq!(
+        out.ending,
+        Ending::Interrupted,
+        "the abandoned call was reported as something other than an interrupt"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // Nothing came back, so nothing is billed and no iteration is counted --
+    // which is the claim `Ending::Interrupted`'s own message makes about an
+    // abandoned call.
+    assert_eq!(out.tokens, 0, "an abandoned call was charged for");
+    assert_eq!(
+        out.iterations, 0,
+        "an abandoned call counted as an iteration"
+    );
+
+    // The control. The same provider and the same silence, with no keypress:
+    // the goal must now fail to end, which is what makes the ending above
+    // evidence about the interrupt rather than about the loop giving up on its
+    // own. Asserted as a timeout that is expected to expire.
+    let interrupt = Interrupt::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn emma_llm::Provider> = Arc::new(Hanging {
+        interrupt: interrupt.clone(),
+        calls: calls.clone(),
+        press: false,
+    });
+    let mut agent = Agent::new(Setup {
+        background: Default::default(),
+        provider,
+        harness: &harness,
+        instructions: &harness.instructions,
+        tools: &tools,
+        approvals: &approvals,
+        log: &log,
+        term: &term,
+        interrupt,
+        spend: emma::agent::Spend::new(),
+        done: &MarkerClaim,
+        cwd: dir.path().to_path_buf(),
+        session_id: "sess-test".into(),
+        budgets: budgets(),
+        caching: Caching::On,
+        mode: Mode::Batch,
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(400), agent.run_goal(&goal()))
+            .await
+            .is_err(),
+        "the goal ended without an interrupt and without an answer, so the ending above \
+         proves nothing about Ctrl-C"
+    );
+}
+
+/// A cancelled tool is recorded as cancelled, and a tool that finished is not.
+///
+/// **The mutation that survived:** deleting the `tool_cancelled` record from
+/// the interrupt arm of `run_tool_call`. The session file is the only account
+/// of a run nobody watched, and "the tool was stopped part-way" and "the tool
+/// was never reached" are different runs -- the first may have left half a file
+/// on disk.
+///
+/// The existing interrupt test asserts elapsed time and that the conversation
+/// stays wire-legal. It does not read the log, and it does not check the
+/// ending.
+#[tokio::test]
+async fn a_cancelled_tool_is_recorded_as_cancelled_and_a_finished_one_is_not() {
+    async fn run(interrupt_it: bool) -> (Outcome, String, Vec<emma_llm::Message>) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = empty_harness(dir.path());
+        let harness = Harness::load_selecting(&root, Flavor::Emma, None).unwrap();
+        let term = Term::silent();
+        // Ten seconds when it is going to be cancelled, none when it is not:
+        // the same tool both times would make the control take ten seconds.
+        let (slow, _) = if interrupt_it {
+            TestTool::slow("Slow", 10)
+        } else {
+            TestTool::ok("Slow", true)
+        };
+        let tools = registry(vec![slow]);
+        let approvals = Approvals::unattended();
+        let log = SessionLog::open(dir.path(), "cancel").unwrap();
+        let fake = Fake::new(vec![
+            call("Slow", json!({})),
+            text("stopped.\n\nGOAL COMPLETE"),
+        ]);
+        let interrupt = Interrupt::new();
+        if interrupt_it {
+            let trip = interrupt.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                trip.trip();
+            });
+        }
+
+        let mut agent = Agent::new(Setup {
+            background: Default::default(),
+            provider: fake.clone(),
+            harness: &harness,
+            instructions: &harness.instructions,
+            tools: &tools,
+            approvals: &approvals,
+            log: &log,
+            term: &term,
+            interrupt,
+            spend: emma::agent::Spend::new(),
+            done: &MarkerClaim,
+            cwd: dir.path().to_path_buf(),
+            session_id: "sess-test".into(),
+            budgets: budgets(),
+            caching: Caching::On,
+            mode: Mode::Batch,
+        });
+        let out = agent.run_goal(&goal()).await;
+        let kinds = SessionLog::read(log.path())
+            .unwrap()
+            .iter()
+            .map(|r| r["kind"].as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        (out, kinds, agent.conversation())
+    }
+
+    let (out, kinds, convo) = run(true).await;
+    assert_eq!(
+        out.ending,
+        Ending::Interrupted,
+        "a goal cut off at a tool boundary reported some other ending"
+    );
+    assert!(
+        kinds.contains("tool_cancelled"),
+        "the log does not say the tool was stopped part-way through, so a reader cannot \
+         tell it from a tool that was never reached: {kinds}"
+    );
+    // And the model was told, in the conversation a resume will start from --
+    // the cancelled call is never sent again in this run, so the transcript
+    // cannot be where this is checked.
+    let said = convo
+        .iter()
+        .map(|m| m.content.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        said.contains("cancelled"),
+        "the cancelled call is a hole in the transcript rather than an observation: {said}"
+    );
+
+    // The control: the same script and the same tool name, with nothing
+    // pressed.
+    let (out, kinds, _) = run(false).await;
+    assert_eq!(out.ending, Ending::Done);
+    assert!(
+        !kinds.contains("tool_cancelled"),
+        "a tool that ran to completion was recorded as cancelled: {kinds}"
+    );
+}
+
+/// The wall clock ends a goal, and ends it before spending anything.
+///
+/// **The mutation that survived:** deleting the `started.elapsed() >
+/// wall_clock` break. `Ending::Deadline` has a unit test for its *wording* and
+/// had nothing anywhere for its *behaviour* -- no test in the workspace had
+/// ever produced one.
+#[tokio::test]
+async fn the_wall_clock_ends_the_goal_before_the_first_call() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let fake = Fake::new(vec![text("GOAL COMPLETE")]);
+    let mut b = budgets();
+    b.wall_clock = Duration::ZERO;
+
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![]),
+        &Approvals::unattended(),
+        &fake,
+        b,
+        &goal(),
+        &SessionLog::none(),
+    )
+    .await;
+
+    assert_eq!(out.ending, Ending::Deadline);
+    assert_eq!(
+        fake.calls(),
+        0,
+        "the deadline was checked after the call it was supposed to prevent"
+    );
+
+    // The control: the identical script under an ordinary clock finishes, so
+    // the ending above is the deadline rather than anything else about this
+    // run.
+    let fake = Fake::new(vec![text("GOAL COMPLETE")]);
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![]),
+        &Approvals::unattended(),
+        &fake,
+        budgets(),
+        &goal(),
+        &SessionLog::none(),
+    )
+    .await;
+    assert_eq!(out.ending, Ending::Done);
+}
+
+/// An ending that lands on a turn full of tool calls still reports the last
+/// thing the assistant actually said.
+///
+/// **The mutation that survived:** dropping the `if !text.trim().is_empty()`
+/// guard around `last_text`, so a final turn that is nothing but tool calls
+/// blanks the answer. `Outcome::text` is what `-p` prints and what the exit
+/// line carries, so the symptom is a run that did work, hit a budget, and
+/// reported an empty string -- a stopped run that reads as a quiet successful
+/// one.
+#[tokio::test]
+async fn an_ending_on_a_tool_call_turn_still_reports_the_last_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let (fine, _) = TestTool::ok("Fine", true);
+    let fake = Fake::new(vec![
+        // A turn that both says something and calls a tool, which `text` and
+        // `call` cannot express on their own.
+        Say {
+            text: "I have read the file and it is a router.".into(),
+            calls: vec![("Fine".into(), json!({ "x": "1" }))],
+            tokens: 10,
+            truncated: false,
+            fail: None,
+        },
+        // ...and then a turn that is only tool calls. This is the one the
+        // budget stops on.
+        call("Fine", json!({ "x": "2" })),
+        text("never reached"),
+    ]);
+    let mut b = budgets();
+    b.max_iterations = 2;
+
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![fine]),
+        &Approvals::unattended(),
+        &fake,
+        b,
+        &goal(),
+        &SessionLog::none(),
+    )
+    .await;
+
+    assert_eq!(out.ending, Ending::Iterations);
+    assert_eq!(
+        out.text, "I have read the file and it is a router.",
+        "the run reported {:?} instead of the last thing the assistant said",
+        out.text
+    );
+}
+
+/// A kick quotes what has already failed, once each.
+///
+/// **Two mutations survived here.** Passing `&[]` instead of
+/// `tail(&failed_ever, 5)`, so the nudge never tells the model what it just
+/// tried; and replacing the `if !failed_ever.contains(&label)` guard with
+/// `true`, so one repeated call is listed as many times as it was attempted.
+/// The kick is the loop's only chance to stop a model repeating itself, and a
+/// nudge that says "keep going" and nothing else is the nudge that produces the
+/// same call again.
+#[tokio::test]
+async fn a_kick_quotes_what_already_failed_once_each() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let (boom, _) = TestTool::failing("Boom", true);
+    let fake = Fake::new(vec![
+        // The same call twice: the second is refused by the memo, which is a
+        // second failure carrying the *same* label -- the case the dedupe
+        // guard is about.
+        call("Boom", json!({ "x": "a" })),
+        call("Boom", json!({ "x": "a" })),
+        text("I think that is everything."),
+        text("all done.\n\nGOAL COMPLETE"),
+    ]);
+
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![boom]),
+        &Approvals::unattended(),
+        &fake,
+        budgets(),
+        &goal(),
+        &SessionLog::none(),
+    )
+    .await;
+
+    assert_eq!(out.ending, Ending::Done);
+    assert_eq!(
+        out.kicks, 1,
+        "the nudge never fired, so this proves nothing"
+    );
+    let seen = fake.transcript();
+    assert!(
+        seen.contains("These calls failed earlier in this goal"),
+        "the nudge did not carry the failure list at all: {seen}"
+    );
+    // `Boom({` rather than the whole label: the transcript renders each
+    // message as JSON, so the label's own quotes come back escaped and a
+    // literal written the obvious way would match nothing at all — which is
+    // exactly how this assertion failed the first time it ran.
+    let listed = seen.matches("Boom({").count();
+    assert_eq!(
+        listed, 1,
+        "one repeated call is listed {listed} times in the nudge: {seen}"
+    );
+
+    // The control: the same shape with nothing failing. A nudge with no
+    // failures behind it must not grow a list, or the assertion above is
+    // satisfied by a sentence that is there either way.
+    let (fine, _) = TestTool::ok("Fine", true);
+    let fake = Fake::new(vec![
+        call("Fine", json!({ "x": "a" })),
+        text("I think that is everything."),
+        text("all done.\n\nGOAL COMPLETE"),
+    ]);
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![fine]),
+        &Approvals::unattended(),
+        &fake,
+        budgets(),
+        &goal(),
+        &SessionLog::none(),
+    )
+    .await;
+    assert_eq!(out.kicks, 1);
+    assert!(
+        !fake.transcript().contains("These calls failed earlier"),
+        "a goal in which nothing failed was nudged with a list of failures: {}",
+        fake.transcript()
+    );
+}
+
+/// Compaction fires on the size the provider **measured**, not on the local
+/// estimate -- and it leaves the new goal room to work in.
+///
+/// **Two mutations survived here.** Setting `last_input = None` after every
+/// call, so the threshold falls back to `estimate`, which `emma-llm` documents
+/// as under-counting; and widening the compaction target from `cap / 2` to
+/// `cap`, so a conversation is compacted to exactly the limit it just crossed
+/// and crosses it again on the next call.
+///
+/// The conversation here is built so the two numbers disagree in the direction
+/// that matters: the estimate sits comfortably under the cap while the measured
+/// request is well over it. That is the ordinary case rather than a contrived
+/// one -- the request also carries the system prompt and every tool schema, and
+/// `chars / 4` under-counts what is left.
+#[tokio::test]
+async fn compaction_fires_on_the_measured_request_rather_than_the_estimate() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let harness = Harness::load_selecting(&root, Flavor::Emma, None).unwrap();
+    let term = Term::recording();
+    // ~240,000 characters is ~60,000 estimated tokens: over half the cap, and
+    // well under the cap itself.
+    let (reader, _) = TestTool::returning("Read", "x".repeat(240_000));
+    let tools = registry(vec![reader]);
+    let approvals = Approvals::unattended();
+    let log = SessionLog::none();
+    let fake = Fake::new(vec![
+        call("Read", json!({ "x": "1" })).costing(200_000),
+        text("read it.\n\nGOAL COMPLETE").costing(200_000),
+        text("and the second.\n\nGOAL COMPLETE").costing(200_000),
+    ]);
+    let mut b = budgets();
+    b.max_context = 100_000;
+    b.max_tokens = i64::MAX;
+
+    let mut agent = Agent::new(Setup {
+        background: Default::default(),
+        provider: fake.clone(),
+        harness: &harness,
+        instructions: &harness.instructions,
+        tools: &tools,
+        approvals: &approvals,
+        log: &log,
+        term: &term,
+        interrupt: Interrupt::new(),
+        spend: emma::agent::Spend::new(),
+        done: &MarkerClaim,
+        cwd: dir.path().to_path_buf(),
+        session_id: "sess-test".into(),
+        budgets: b,
+        caching: Caching::On,
+        mode: Mode::Batch,
+    });
+    agent.run_goal(&Goal::new("first goal")).await;
+    // Nothing has been compacted yet: within the first goal there is no
+    // finished goal behind it to summarise. This is the control for the
+    // assertion below -- it is what makes "it compacted" evidence about the
+    // second goal's measurement rather than about the conversation being large.
+    assert!(
+        !term.recorded().iter().any(|s| s.contains("compacted")),
+        "something was compacted before the second goal opened, so the next assertion \
+         proves nothing: {:?}",
+        term.recorded()
+    );
+
+    // Only what the second goal said. The first goal warned once that it had
+    // nothing behind it to compact — correctly, and that warning is `said once`
+    // rather than `said again`, so reading the whole recording would mix the
+    // two goals' accounts together.
+    let before = term.recorded().len();
+    agent.run_goal(&Goal::new("second goal")).await;
+    let said = term.recorded()[before..].join("\n");
+    assert!(
+        said.contains("compacted"),
+        "the request the provider measured at 200,000 tokens against a 100,000 cap was \
+         not compacted, so the trigger is reading the estimate: {said}"
+    );
+    assert!(
+        !said.contains("compaction cannot"),
+        "compaction reported that it had nothing to give, which is what happens when the \
+         target is the whole cap rather than half of it: {said}"
+    );
+}
+
+/// `max_context` of zero turns compaction off, and says nothing about it.
+///
+/// **The mutation that survived:** deleting the `if cap <= 0 { return; }`
+/// guard. With it gone, every request is over a cap of zero, so an ordinary run
+/// is told on its first call that "this conversation is over the context limit
+/// and compaction cannot shrink it" -- a warning about a limit the user
+/// switched off.
+#[tokio::test]
+async fn a_context_cap_of_zero_is_off_rather_than_a_cap_of_zero() {
+    async fn run(cap: i64) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let root = empty_harness(dir.path());
+        let harness = Harness::load_selecting(&root, Flavor::Emma, None).unwrap();
+        let term = Term::recording();
+        let tools = registry(vec![]);
+        let approvals = Approvals::unattended();
+        let log = SessionLog::none();
+        // Two goals, because the check that has to stay silent is the one a
+        // *second* goal makes: with only one goal there is no conversation
+        // behind it and every cap is under-run, so a one-goal run is silent
+        // whatever the guard does.
+        let fake = Fake::new(vec![
+            text("done.\n\nGOAL COMPLETE"),
+            text("done again.\n\nGOAL COMPLETE"),
+        ]);
+        let mut b = budgets();
+        b.max_context = cap;
+
+        let mut agent = Agent::new(Setup {
+            background: Default::default(),
+            provider: fake.clone(),
+            harness: &harness,
+            instructions: &harness.instructions,
+            tools: &tools,
+            approvals: &approvals,
+            log: &log,
+            term: &term,
+            interrupt: Interrupt::new(),
+            spend: emma::agent::Spend::new(),
+            done: &MarkerClaim,
+            cwd: dir.path().to_path_buf(),
+            session_id: "sess-test".into(),
+            budgets: b,
+            caching: Caching::On,
+            mode: Mode::Batch,
+        });
+        agent.run_goal(&Goal::new("first goal")).await;
+        agent.run_goal(&Goal::new("second goal")).await;
+        term.recorded().join("\n")
+    }
+
+    let off = run(0).await;
+    assert!(
+        !off.contains("context limit"),
+        "a run with compaction switched off was warned about the context limit: {off}"
+    );
+
+    // The control, and the reason the assertion above is not satisfied by a
+    // terminal that records nothing: a cap of one is a real cap this
+    // conversation is over, and there the warning does appear.
+    let on = run(1).await;
+    assert!(
+        on.contains("context limit"),
+        "a conversation over a cap of one said nothing, so the silence above is the \
+         terminal rather than the guard: {on}"
+    );
+}
+
+/// Context a `UserPromptSubmit` hook injected rides into the model with the
+/// goal, attributed rather than merged into the user's sentence.
+///
+/// **The mutation that survived:** `goal.opening_turn()` -> `goal.text`, which
+/// drops every injected block on the floor. `goal.rs` has unit tests for the
+/// composition; nothing checked that the loop sends the composed string rather
+/// than the raw one, and the two are identical for every other goal in this
+/// file.
+#[tokio::test]
+async fn injected_context_reaches_the_model_in_front_of_the_users_words() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let fake = Fake::new(vec![text("noted.\n\nGOAL COMPLETE")]);
+    let with_context =
+        Goal::new("make it work").with_injected(vec!["branch: main, 3 files dirty".into()]);
+
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![]),
+        &Approvals::unattended(),
+        &fake,
+        budgets(),
+        &with_context,
+        &SessionLog::none(),
+    )
+    .await;
+
+    assert_eq!(out.ending, Ending::Done);
+    let sent = fake.last_query();
+    assert!(
+        sent.contains("branch: main, 3 files dirty"),
+        "the hook's context never reached the model: {sent}"
+    );
+    assert!(
+        sent.contains("The user did not write it"),
+        "the injected context was passed off as the user's own words: {sent}"
+    );
+    assert!(sent.contains("make it work"), "{sent}");
+
+    // The control: a goal with nothing injected sends the user's words alone,
+    // so the attribution line above is evidence of the injection rather than
+    // something every turn carries.
+    let fake = Fake::new(vec![text("noted.\n\nGOAL COMPLETE")]);
+    drive(
+        &root,
+        dir.path(),
+        registry(vec![]),
+        &Approvals::unattended(),
+        &fake,
+        budgets(),
+        &goal(),
+        &SessionLog::none(),
+    )
+    .await;
+    assert!(
+        !fake.last_query().contains("The user did not write it"),
+        "an ordinary goal was labelled as hook-injected: {}",
+        fake.last_query()
+    );
+}
+
+// endregion: The guarantees nothing defended
