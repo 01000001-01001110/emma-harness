@@ -577,11 +577,9 @@ fn clipped(text: &str, budget: usize, skin: &Skin) -> String {
     if cols(text) <= budget {
         return text.to_string();
     }
-    let ellipsis = skin.glyphs.ellipsis;
-    if budget < cols(ellipsis) {
-        return ".".repeat(budget);
-    }
-    fit(text, budget, ellipsis)
+    // The narrow-budget rule used to live here and only here, which is why
+    // `view.rs`, `statusbar.rs` and `app.rs` overran. It is `fit`'s now.
+    fit(text, budget, skin.glyphs.ellipsis)
 }
 
 /// Cut the assembled lines to the pane's height, counting the loss out loud.

@@ -762,9 +762,25 @@ fn char_cols(c: char) -> usize {
 /// so when the next character would cross the budget the cut happens before it,
 /// and the result is one column short rather than one column over. Short is
 /// recoverable; over writes into the next widget.
+///
+/// **The marker itself used to break that rule.** Below `cols(ellipsis)` the
+/// subtraction saturated to zero, no text was kept, and the whole ellipsis was
+/// appended anyway: `fit("abcdef", 2, "...")` returned three columns for a
+/// budget of two. Not reachable with the Unicode glyph set, where `…` is one
+/// column — the ASCII fallback's `...` is three, which is where it bit, and the
+/// existing sweep starts at budget 1 and only ever passed the one-column form.
+/// Found by mutation on 2026-08-23; `sidebar::clipped` was the only caller that
+/// knew, and `view.rs`, `statusbar.rs` and `app.rs` called straight through.
+///
+/// The answer is `clipped`'s, moved here so it is the answer everywhere: fill
+/// the budget with dots. A cut still reads as a cut at one or two columns, and
+/// nothing is written into the next widget.
 pub fn fit(text: &str, budget: usize, ellipsis: &str) -> String {
     if cols(text) <= budget {
         return text.to_string();
+    }
+    if budget < cols(ellipsis) {
+        return ".".repeat(budget);
     }
     let keep = budget.saturating_sub(cols(ellipsis));
     let mut out = String::new();
@@ -899,10 +915,58 @@ mod tests {
         );
     }
 
-    use super::*;
-
     fn skin(level: Level) -> Skin {
         Skin::new(Palette::new(level), UNICODE)
+    }
+
+    /// `fit` never returns more columns than it was given, for any budget and
+    /// either ellipsis.
+    ///
+    /// **The existing sweep could not fail.** It starts at budget 1 and passes
+    /// the Unicode `…`, which is one column — so `budget < cols(ellipsis)` is
+    /// never true and the branch that used to overrun was never entered. The
+    /// ASCII fallback's `...` is three columns, and there
+    /// `fit("abcdef", 2, "...")` returned three for a budget of two. That
+    /// writes into whatever is drawn next, which the function's own doc names
+    /// as the thing it exists to prevent.
+    ///
+    /// Both glyph sets and every budget from 0 up past the text, because the
+    /// defect lived in exactly the two or three budgets nobody thinks to pass.
+    #[test]
+    fn fit_never_returns_more_columns_than_its_budget() {
+        // A CJK glyph in the middle, so the "never cut a wide character in
+        // half" rule is exercised by the same sweep rather than assumed.
+        for text in ["abcdef", "ab一cd", "一二三", ""] {
+            for ellipsis in ["…", "..."] {
+                for budget in 0..=(cols(text) + 2) {
+                    let got = fit(text, budget, ellipsis);
+                    assert!(
+                        cols(&got) <= budget,
+                        "fit({text:?}, {budget}, {ellipsis:?}) = {got:?} \
+                         takes {} columns",
+                        cols(&got)
+                    );
+                }
+            }
+        }
+    }
+
+    /// The control on the sweep above: a budget that fits nothing still says a
+    /// cut happened.
+    ///
+    /// Without this, `fn fit(_, _, _) -> String { String::new() }` passes the
+    /// sweep — which is the standing risk with any assertion of the form "not
+    /// more than", and this file has already paid once for an assertion the
+    /// ordinary state of the world satisfies.
+    #[test]
+    fn a_budget_too_narrow_for_the_marker_still_marks_the_cut() {
+        assert_eq!(fit("abcdef", 2, "..."), "..");
+        assert_eq!(fit("abcdef", 1, "..."), ".");
+        assert_eq!(fit("abcdef", 0, "..."), "");
+        // And where the marker does fit, it is the marker that was asked for
+        // rather than the dots.
+        assert_eq!(fit("abcdef", 3, "..."), "...");
+        assert_eq!(fit("abcdef", 4, "..."), "a...");
     }
 
     /// The defect this whole vocabulary replaces: every tool line was `●`,
