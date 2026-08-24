@@ -4,28 +4,39 @@
 //! `Agent::run_goal` running a second time: the same `Fake` provider answers the
 //! parent and then the child, in the order the two loops ask.
 //!
-//! Four of these were validated by mutation — the guarantee was removed, the
-//! test was watched to fail, and the guarantee was restored. They are marked
-//! where they sit. The one that matters most is
+//! Most of these were validated by mutation — the guarantee was removed from
+//! `delegate.rs`, the test was watched to fail, and the guarantee was restored.
+//! They are marked where they sit, with the line to delete. The one that
+//! matters most is
 //! [`the_footer_is_the_harnesss_record_and_not_the_subagents_account`]: make
 //! `Facts::from` read the subagent's final message instead of the log and it
 //! goes red, which is the difference between a record and a claim.
+//!
+//! **The last region is there because everything above it asserts on what came
+//! back.** A delegation's `tool_result` cannot show the tool surface the
+//! sub-run was offered, the system prompt it booted on, the brief it opened, or
+//! the budget it was lent — and each of those was a one-line deletion away from
+//! silent, with all fifteen of the tests above staying green. Six guarantees
+//! were undefended that way: the agent file's tool list, the persona's
+//! allowlist one level down, the argument check on the agent name, half the
+//! remaining allowance, the ending written to the `delegation` record, and the
+//! whole of what the caller tells the subagent.
 
 mod support;
 
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use emma::agent::{Agent, Budgets, Ending, Interrupt, Outcome, Running, Setup, Spend};
 use emma::approval::{Answer, Approvals, Asker, Gate};
 use emma::delegate::{Delegate, Nest};
-use emma::goal::{Goal, MarkerClaim};
+use emma::goal::{DoneCheck, Goal, MarkerClaim};
 use emma::session::SessionLog;
 use emma::term::Term;
 use emma_harness::{AgentDef, Flavor, Harness};
-use emma_llm::{Caching, Message, Mode, Provider};
+use emma_llm::{AssistantTurn, Caching, Event, LlmError, Message, Mode, Provider, Request};
 use emma_tool_api::{Registry, Tool, ToolCtx, ToolError, ToolMeta, ToolOutcome};
 use serde_json::{json, Value};
 
@@ -69,10 +80,14 @@ struct Run {
 }
 
 /// Drive one parent goal whose registry contains `Delegate`.
+///
+/// Generic over the client rather than taking `Arc<Fake>`, so a test that has
+/// to see what the *sub-run* was sent can pass a [`Watching`] wrapped around
+/// the same script. Nothing else changes: `Fake` still satisfies it.
 #[allow(clippy::too_many_arguments)]
 async fn delegating(
     dir: &Path,
-    provider: Arc<Fake>,
+    provider: Arc<impl Provider + 'static>,
     defs: &[AgentDef],
     sub_tools: Vec<Arc<dyn Tool>>,
     approvals: Arc<Approvals>,
@@ -111,7 +126,7 @@ async fn delegating(
 
     let mut agent = Agent::new(Setup {
         background: Default::default(),
-        provider: provider.clone(),
+        provider: base.clone(),
         harness: &harness,
         instructions: &harness.instructions,
         tools: &tools,
@@ -909,3 +924,634 @@ fn a_resumed_parent_gets_back_what_its_delegations_spent() {
 }
 
 // endregion: The gate, the budget and the resume
+
+// region: What the sub-run is actually given
+// ---------------------------------------------------------------------------
+// What the sub-run is actually given
+//
+// Everything above asserts on what came *back* from a delegation. Five of the
+// guarantees in this file are about what goes *in* — the tool surface, the
+// system prompt, the brief and the budget — and none of them is visible in a
+// `tool_result`. Deleting the line that enforces any of them left all fifteen
+// tests above green, which is what this region exists to change.
+// ---------------------------------------------------------------------------
+
+/// A client that forwards to a scripted one and keeps what each request carried.
+///
+/// It exists because `Fake::transcript` renders the *messages*, and the
+/// guarantees below live in the other two fields: `instructions` is the system
+/// prompt a sub-run was booted with, and `tools` is the closed set it was
+/// offered. A test that can only read messages cannot tell an agent type handed
+/// one tool from one handed every tool the process has.
+struct Watching {
+    inner: Arc<Fake>,
+    /// The system prompt of every request, oldest first. A delegation produces
+    /// the parent's and then the sub's, and they must differ.
+    prompts: Mutex<Vec<String>>,
+    /// The tool names offered on every request, in the same order.
+    surfaces: Mutex<Vec<Vec<String>>>,
+    /// Streaming or not, per request. A sub-run reports once at the end and a
+    /// subordinate `Term` swallows prose, so streaming one is bytes nobody
+    /// reads — and nothing else in this file can see which was asked for.
+    modes: Mutex<Vec<Mode>>,
+}
+
+impl Watching {
+    fn over(inner: Arc<Fake>) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            prompts: Mutex::default(),
+            surfaces: Mutex::default(),
+            modes: Mutex::default(),
+        })
+    }
+
+    fn prompts(&self) -> Vec<String> {
+        self.prompts.lock().unwrap().clone()
+    }
+
+    fn surfaces(&self) -> Vec<Vec<String>> {
+        self.surfaces.lock().unwrap().clone()
+    }
+
+    fn modes(&self) -> Vec<Mode> {
+        self.modes.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for Watching {
+    fn model_id(&self) -> &str {
+        self.inner.model_id()
+    }
+
+    async fn send(
+        &self,
+        request: Request,
+        mode: Mode,
+        events: Option<tokio::sync::mpsc::Sender<Event>>,
+    ) -> Result<AssistantTurn, LlmError> {
+        self.prompts
+            .lock()
+            .unwrap()
+            .push(request.instructions.clone());
+        self.surfaces.lock().unwrap().push(
+            request
+                .tools
+                .iter()
+                .filter_map(|t| t["name"].as_str().map(str::to_string))
+                .collect(),
+        );
+        self.modes.lock().unwrap().push(mode);
+        self.inner.send(request, mode, events).await
+    }
+}
+
+/// **What a subagent may use is what its agent file says, not what it asks
+/// for.**
+///
+/// Mutation-checked: make `resolve_tools` register every candidate instead of
+/// the ones the file named — one line — and this goes red twice over. The
+/// closed tool set is the security property the module doc names beside the
+/// closed agent enum: an agent type that can be talked into a tool the operator
+/// did not give it is a free-text tool list wearing a name.
+///
+/// The `Read` assertion is the control. Without it a `resolve_tools` that
+/// returned an empty registry for everything would satisfy the interesting
+/// half, and "no tools at all" is a different defect rather than this guarantee
+/// holding.
+#[tokio::test]
+async fn a_subagent_is_offered_only_the_tools_its_agent_file_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let (read, read_calls) = TestTool::returning("Read", "fn retry() {}");
+    let (write, write_calls) = TestTool::ok("Write", false);
+    let fake = Fake::new(vec![
+        delegate_to("explorer", "read a file, and try to write one"),
+        // The inner model asks for a tool its file did not name.
+        call("Write", json!({ "file_path": "a.rs", "content": "x" })),
+        call("Read", json!({ "file_path": "src/retry.rs" })),
+        text("I could read but not write.\n\nGOAL COMPLETE"),
+        text("Understood.\n\nGOAL COMPLETE"),
+    ]);
+    let provider = Watching::over(fake.clone());
+
+    let run = delegating(
+        dir.path(),
+        provider.clone(),
+        &[agent_type("explorer", Some(vec!["Read"]))],
+        // Both tools exist in this build and both were handed to `Delegate`.
+        // The agent file is the only thing standing between the sub and `Write`.
+        vec![read, write],
+        allowing_everything(),
+        budgets(),
+        Arc::new(SessionLog::none()),
+        Arc::new(Term::silent()),
+    )
+    .await;
+    assert_eq!(run.outcome.ending, Ending::Done);
+    assert_eq!(
+        write_calls.load(Ordering::SeqCst),
+        0,
+        "the sub reached a tool its agent file does not name"
+    );
+    assert_eq!(
+        read_calls.load(Ordering::SeqCst),
+        1,
+        "the tool the file *did* name never ran either, so this proves nothing \
+         about the filter"
+    );
+
+    // The surface itself, which is what the filter decides. Every request in
+    // this run is one of two: the parent's, holding `Delegate`, and the sub's,
+    // which must hold exactly what its file named.
+    let surfaces = provider.surfaces();
+    let sub: Vec<&Vec<String>> = surfaces
+        .iter()
+        .filter(|s| !s.iter().any(|n| n == "Delegate"))
+        .collect();
+    assert!(!sub.is_empty(), "no sub-run request was captured");
+    for surface in sub {
+        assert_eq!(
+            surface,
+            &vec!["Read".to_string()],
+            "the sub-run was offered a tool surface its agent file did not name"
+        );
+    }
+
+    let seen = fake.transcript();
+    assert!(
+        seen.contains("`Write` is not available"),
+        "the inner model got something other than the ordinary unknown-tool \
+         observation for a tool it was not given: {seen}"
+    );
+}
+
+/// **The persona's allowlist reaches one level down.**
+///
+/// An agent type must not be a route to a tool the operator excluded from this
+/// run. Mutation-checked: drop the `persona_allowed` filter in `Delegate::new`
+/// — one closure — and this goes red while every other test stays green,
+/// because every other test passes `None` for it.
+///
+/// The `None` half is the control, and it is what proves the `Some` half
+/// narrowed the set rather than the fixture never having offered `Write` at
+/// all.
+#[test]
+fn an_agent_type_cannot_reach_a_tool_the_persona_excluded() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let harness = Arc::new(Harness::load_selecting(&root, Flavor::Emma, None).unwrap());
+    let (read, _) = TestTool::returning("Read", "x");
+    let (write, _) = TestTool::ok("Write", false);
+    let available = vec![read, write];
+    // The file asks for both, every time. Only the persona's list changes.
+    let defs = [agent_type("explorer", Some(vec!["Read", "Write"]))];
+
+    let tools_of = |allowed: Option<&[String]>| {
+        let fake = Fake::new(Vec::new());
+        let base: Arc<dyn Provider> = fake.clone();
+        let (delegate, _) = Delegate::new(
+            Nest {
+                harness: harness.clone(),
+                approvals: allowing_everything(),
+                log: Arc::new(SessionLog::none()),
+                term: Arc::new(Term::silent()),
+                interrupt: Interrupt::new(),
+                spend: Spend::new(),
+                cwd: dir.path().to_path_buf(),
+                session_id: "sess-test".into(),
+                caching: Caching::On,
+                budgets: budgets(),
+                running: Running::new(base),
+            },
+            &defs,
+            &available,
+            allowed,
+            &|_| None,
+        );
+        delegate
+            .expect("no agent types resolved")
+            .tools_of("explorer")
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<String>>()
+    };
+
+    // The control: with no persona list, the file gets what it asked for.
+    assert_eq!(
+        tools_of(None),
+        vec!["Read".to_string(), "Write".to_string()],
+        "the fixture never offered both, so the exclusion below would prove \
+         nothing"
+    );
+    assert_eq!(
+        tools_of(Some(&["Read".to_string()])),
+        vec!["Read".to_string()],
+        "an agent type was handed a tool the operator excluded from this run"
+    );
+}
+
+/// **The agent name is a closed enum, enforced and not merely declared.**
+///
+/// `input_schema` states it, and a provider that ignores an enum must not turn
+/// this into something that runs a prompt nobody wrote. Mutation-checked:
+/// disable the `types.contains_key` refusal in `validate_args` and this goes
+/// red, and nothing else in the suite notices — `invoke`'s own second check
+/// keeps the end-to-end path working, which is exactly why the first one is
+/// deletable in silence.
+///
+/// The accepted case is the control: a `validate_args` that refused everything
+/// would satisfy the refusal on its own.
+#[test]
+fn an_unknown_agent_name_is_refused_by_the_argument_check_and_not_only_by_the_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let harness = Arc::new(Harness::load_selecting(&root, Flavor::Emma, None).unwrap());
+    let (read, _) = TestTool::returning("Read", "x");
+    let fake = Fake::new(Vec::new());
+    let base: Arc<dyn Provider> = fake.clone();
+    let (delegate, _) = Delegate::new(
+        Nest {
+            harness,
+            approvals: allowing_everything(),
+            log: Arc::new(SessionLog::none()),
+            term: Arc::new(Term::silent()),
+            interrupt: Interrupt::new(),
+            spend: Spend::new(),
+            cwd: dir.path().to_path_buf(),
+            session_id: "sess-test".into(),
+            caching: Caching::On,
+            budgets: budgets(),
+            running: Running::new(base),
+        },
+        &[agent_type("explorer", Some(vec!["Read"]))],
+        &[read],
+        None,
+        &|_| None,
+    );
+    let delegate = delegate.expect("no agent types resolved");
+
+    // The control.
+    assert!(delegate
+        .validate_args(&json!({ "agent": "explorer", "task": "go and look" }))
+        .is_ok());
+
+    let refused = delegate
+        .validate_args(&json!({ "agent": "explorer-2", "task": "go and look" }))
+        .expect_err("a name that is not in the catalogue was accepted");
+    let ToolError::BadArguments(message) = refused else {
+        panic!("an unknown agent name is a bad argument, not a failure: {refused:?}");
+    };
+    assert!(
+        message.contains("no agent named `explorer-2`"),
+        "the refusal does not say what was wrong: {message}"
+    );
+    assert!(
+        message.contains("Available: explorer"),
+        "the refusal does not say what would work instead: {message}"
+    );
+}
+
+/// **A delegation is lent half of what is left, and the agent file's own
+/// iteration cap.**
+///
+/// Both numbers are on the `delegation` record, which is the only place a
+/// person can read them back. Mutation-checked, one line each: lend the whole
+/// remaining allowance rather than half, or take the parent's iteration cap
+/// rather than the file's, and this goes red. Neither was visible anywhere
+/// before — the suite's parent budget is large enough that a subagent given all
+/// of it still finishes, and its iteration cap is never reached either way.
+///
+/// Half is the number that leaves the parent enough to report what happened
+/// after a subagent runs away.
+#[tokio::test]
+async fn a_delegation_is_lent_half_of_what_is_left_and_the_files_own_iteration_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = Arc::new(SessionLog::open(dir.path(), "sess-sub-budget").unwrap());
+    let (read, _) = TestTool::returning("Read", "x");
+    let mut ty = agent_type("explorer", Some(vec!["Read"]));
+    // Distinct from the parent's 20, so "the file's cap" and "the parent's cap"
+    // are not the same integer.
+    ty.max_turns = Some(7);
+    let fake = Fake::new(vec![
+        delegate_to("explorer", "look").costing(100),
+        text("found it\n\nGOAL COMPLETE"),
+        text("ok\n\nGOAL COMPLETE"),
+    ]);
+
+    let run = delegating(
+        dir.path(),
+        fake.clone(),
+        &[ty],
+        vec![read],
+        allowing_everything(),
+        budgets(),
+        log.clone(),
+        Arc::new(Term::silent()),
+    )
+    .await;
+    assert_eq!(run.outcome.ending, Ending::Done);
+
+    let records = SessionLog::read(log.path()).unwrap();
+    let record = records
+        .iter()
+        .find(|r| r["kind"] == "delegation")
+        .expect("no delegation was recorded");
+    // 100 of the parent's million was gone when the delegation started.
+    let remaining = budgets().max_tokens - 100;
+    assert_eq!(
+        record["max_tokens"].as_i64(),
+        Some(remaining / 2),
+        "a subagent was lent something other than half of what the goal had \
+         left: {record}"
+    );
+    assert_eq!(
+        record["max_iterations"].as_u64(),
+        Some(7),
+        "the agent file's own iteration cap is not what the sub-run got: {record}"
+    );
+}
+
+/// **The ending recorded per delegation is the one that happened.**
+///
+/// `emma agents` counts a run as finished from this field, so a record that
+/// always said `done` would report a fleet of subagents that never fails.
+/// Mutation-checked: hardcode `"ending": "done"` on the record and this goes
+/// red, while `what_a_delegation_cost_can_be_read_back_across_sessions` — whose
+/// single delegation really does end `done` — stays green.
+///
+/// Two delegations in one session, one of each, is what makes that mutation
+/// catchable: the `done` half is the control, so hardcoding `"tokens"` instead
+/// fails as well.
+#[tokio::test]
+async fn the_ending_recorded_for_each_delegation_is_the_one_that_happened() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = Arc::new(SessionLog::open(dir.path(), "sess-endings").unwrap());
+    let (read, _) = TestTool::returning("Read", "x");
+    let mut spender = agent_type("spender", Some(vec!["Read"]));
+    spender.max_tokens = Some(5_000);
+    let fake = Fake::new(vec![
+        delegate_to("explorer", "look once"),
+        text("found it\n\nGOAL COMPLETE"),
+        delegate_to("spender", "read everything"),
+        // One call over that type's own cap: the run stops on tokens.
+        call("Read", json!({ "file_path": "src/big.rs" })).costing(9_000),
+        text("done\n\nGOAL COMPLETE"),
+    ]);
+
+    let run = delegating(
+        dir.path(),
+        fake.clone(),
+        &[agent_type("explorer", Some(vec!["Read"])), spender],
+        vec![read],
+        allowing_everything(),
+        budgets(),
+        log.clone(),
+        Arc::new(Term::silent()),
+    )
+    .await;
+    assert_eq!(run.outcome.ending, Ending::Done);
+
+    let records = SessionLog::read(log.path()).unwrap();
+    let endings: Vec<(String, String)> = records
+        .iter()
+        .filter(|r| r["kind"] == "delegation")
+        .map(|r| {
+            (
+                r["agent"].as_str().unwrap_or_default().to_string(),
+                r["ending"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        endings,
+        vec![
+            ("explorer".to_string(), "done".to_string()),
+            ("spender".to_string(), "tokens".to_string()),
+        ],
+        "the endings on the records are not the endings the two runs had"
+    );
+}
+
+/// **The brief carries what the caller knows and what it must deliver.**
+///
+/// A subagent starts with none of the parent's conversation, so `context` and
+/// `deliver` are the whole of what it is told beyond the task. Mutation-checked:
+/// stop reading either argument in `brief` — one line each — and this goes red.
+/// Nothing above passes either field, so both were free to delete.
+///
+/// The second run is the control, and it is what makes the first meaningful: a
+/// `brief` that appended the heading unconditionally would put "what the agent
+/// that sent you already knows" over an empty list on every delegation, which
+/// is a lie of a smaller size.
+#[tokio::test]
+async fn the_brief_carries_what_the_caller_knows_and_what_it_asked_for() {
+    let dir = tempfile::tempdir().unwrap();
+    let (read, _) = TestTool::returning("Read", "x");
+    let fake = Fake::new(vec![
+        call(
+            "Delegate",
+            json!({
+                "agent": "explorer",
+                "task": "find every call site of the old constructor",
+                "context": ["src/retry.rs is the caller", "cargo build already fails"],
+                "deliver": "the paths and line numbers",
+            }),
+        ),
+        text("Two of them.\n\nGOAL COMPLETE"),
+        text("Right.\n\nGOAL COMPLETE"),
+    ]);
+    delegating(
+        dir.path(),
+        fake.clone(),
+        &[agent_type("explorer", Some(vec!["Read"]))],
+        vec![read.clone()],
+        allowing_everything(),
+        budgets(),
+        Arc::new(SessionLog::none()),
+        Arc::new(Term::silent()),
+    )
+    .await;
+
+    let seen = fake.transcript();
+    assert!(
+        seen.contains("- src/retry.rs is the caller")
+            && seen.contains("- cargo build already fails"),
+        "what the caller already knew never reached the sub-run: {seen}"
+    );
+    assert!(
+        seen.contains("Your answer must contain: the paths and line numbers"),
+        "what the caller asked for never reached the sub-run: {seen}"
+    );
+
+    // The control: a delegation that passed neither says neither. `context` is
+    // present and **empty**, which is the shape that catches a heading written
+    // unconditionally — a key that is absent is skipped by the `if let` above
+    // whatever the emptiness check does, so a bare `delegate_to` here would
+    // leave that guard free to delete.
+    let dir = tempfile::tempdir().unwrap();
+    let bare = Fake::new(vec![
+        call(
+            "Delegate",
+            json!({
+                "agent": "explorer",
+                "task": "find every call site of the old constructor",
+                "context": [],
+            }),
+        ),
+        text("Two of them.\n\nGOAL COMPLETE"),
+        text("Right.\n\nGOAL COMPLETE"),
+    ]);
+    delegating(
+        dir.path(),
+        bare.clone(),
+        &[agent_type("explorer", Some(vec!["Read"]))],
+        vec![read],
+        allowing_everything(),
+        budgets(),
+        Arc::new(SessionLog::none()),
+        Arc::new(Term::silent()),
+    )
+    .await;
+    let seen = bare.transcript();
+    assert!(
+        !seen.contains("already knows"),
+        "a delegation with no context announced context anyway: {seen}"
+    );
+    assert!(
+        !seen.contains("Your answer must contain"),
+        "a delegation with no `deliver` demanded one anyway: {seen}"
+    );
+}
+
+/// **A subagent inherits the project's standing instructions, and is told what
+/// it is.**
+///
+/// Three lines, none of them observable in anything a delegation returns, all
+/// three in the sub-run's system prompt:
+///
+/// - the project's own instructions, above the agent file's body. Rules about
+///   evidence and honesty are not persona-specific, and a delegated agent that
+///   does not inherit *report what the checks actually said* is one that
+///   reports what they were expected to say.
+/// - the framing that its final message is the only thing that reaches the
+///   caller, which is what makes it write one that stands alone.
+/// - the caller's `deliver`, restated.
+///
+/// Mutation-checked, one line each: drop the harness half of `instructions`,
+/// drop the `push_str` of the framing, or drop the `deliver` restatement, and
+/// this goes red. All three survived the whole suite before it existed.
+#[tokio::test]
+async fn a_subagent_inherits_the_projects_instructions_and_is_told_who_it_works_for() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(".emma");
+    std::fs::create_dir_all(root.join("personas").join("tester")).unwrap();
+    std::fs::write(root.join("config.json"), "{}").unwrap();
+    std::fs::write(
+        root.join("personas").join("tester").join("soul.md"),
+        "Report what the checks actually said, not what they were expected to say.\n",
+    )
+    .unwrap();
+    let harness =
+        Arc::new(Harness::load_selecting(&root, Flavor::Emma, Some("tester".to_string())).unwrap());
+    assert!(
+        !harness.instructions.is_empty(),
+        "the fixture harness carries no standing instructions, so this test \
+         could not tell whether they were inherited"
+    );
+
+    let (read, _) = TestTool::returning("Read", "x");
+    let fake = Fake::new(vec![
+        text("the first answer\n\nGOAL COMPLETE"),
+        text("the second answer\n\nGOAL COMPLETE"),
+    ]);
+    let provider = Watching::over(fake.clone());
+    let base: Arc<dyn Provider> = provider.clone();
+    let (delegate, _) = Delegate::new(
+        Nest {
+            harness,
+            approvals: allowing_everything(),
+            log: Arc::new(SessionLog::none()),
+            term: Arc::new(Term::silent()),
+            interrupt: Interrupt::new(),
+            spend: Spend::new(),
+            cwd: dir.path().to_path_buf(),
+            session_id: "sess-test".into(),
+            caching: Caching::On,
+            budgets: budgets(),
+            running: Running::new(base),
+        },
+        &[agent_type("explorer", Some(vec!["Read"]))],
+        &[read],
+        None,
+        &|_| None,
+    );
+    let delegate = delegate.expect("no agent types resolved");
+    let ctx = ToolCtx {
+        cwd: dir.path().to_path_buf(),
+        session_id: "sess-test".into(),
+        turn_id: "turn-1".into(),
+        background: Default::default(),
+    };
+
+    let out = delegate
+        .invoke(
+            &ctx,
+            json!({
+                "agent": "explorer",
+                "task": "go and look",
+                "deliver": "the failing assertion, verbatim",
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(out.is_ok(), "{out:?}");
+
+    assert_eq!(
+        provider.modes(),
+        vec![Mode::Batch],
+        "a sub-run was asked for streaming: it reports once at the end, and a \
+         subordinate terminal swallows the prose either way"
+    );
+
+    let prompts = provider.prompts();
+    let prompt = prompts.first().expect("the sub-run was never called");
+    assert!(
+        prompt.contains("Report what the checks actually said"),
+        "the sub-run did not inherit the project's standing instructions: {prompt}"
+    );
+    assert!(
+        prompt.contains("You are explorer."),
+        "the agent file's own body is missing from its prompt: {prompt}"
+    );
+    assert!(
+        prompt.contains("working on behalf of another agent"),
+        "the sub-run was never told its final message is all that reaches the \
+         caller: {prompt}"
+    );
+    assert!(
+        prompt.contains("asked specifically for: the failing assertion, verbatim"),
+        "the caller's `deliver` was not restated to the agent that has to \
+         satisfy it: {prompt}"
+    );
+
+    // The controls, both about those two lines being conditional rather than
+    // boilerplate that would be there whatever was passed.
+    let out = delegate
+        .invoke(&ctx, json!({ "agent": "explorer", "task": "go and look" }))
+        .await
+        .unwrap();
+    assert!(out.is_ok(), "{out:?}");
+    let second = provider.prompts()[1].clone();
+    assert!(
+        !second.contains("asked specifically for"),
+        "a delegation with no `deliver` restated one anyway: {second}"
+    );
+    assert!(
+        !MarkerClaim.contract().contains("working on behalf"),
+        "the framing is in the contract every goal already runs under, so it \
+         says nothing about being a subagent"
+    );
+}
+
+// endregion: What the sub-run is actually given

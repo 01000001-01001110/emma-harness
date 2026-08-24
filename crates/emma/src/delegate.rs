@@ -1303,6 +1303,34 @@ mod tests {
     }
 
     #[test]
+    fn a_file_opened_twice_is_listed_once_and_still_counted_twice() {
+        // The two halves disagree on purpose, and both are true: `tool_calls`
+        // is attendance and the list is what was looked at. Turning
+        // `push_unique` into a plain `push` — one line — leaves a footer
+        // reading `files touched (2)` over the same path twice, which reads as
+        // twice the work.
+        //
+        // The command is the control on the other side of the same convention:
+        // commands are *not* deduped, because two runs of `cargo test` either
+        // side of an edit are two facts and the exit codes are the point.
+        let facts = Facts::from(&[
+            call("t1", "Read", json!({ "file_path": "src/a.rs" })),
+            call("t2", "Read", json!({ "file_path": "src/a.rs" })),
+            call("t3", "Bash", json!({ "command": "cargo test" })),
+            result("t3", "exit status 101"),
+            call("t4", "Bash", json!({ "command": "cargo test" })),
+            result("t4", "exit status 0"),
+            json!({ "kind": "sub.goal_finished", "ending": "done" }),
+        ]);
+        assert_eq!(facts.tool_calls, 4);
+        let footer = facts.footer();
+        assert!(footer.contains("files touched (1)"), "{footer}");
+        assert!(footer.contains("commands run (2)"), "{footer}");
+        assert!(footer.contains("cargo test → exit 101"), "{footer}");
+        assert!(footer.contains("cargo test → exit 0"), "{footer}");
+    }
+
+    #[test]
     fn a_long_file_list_is_cut_and_says_it_was() {
         let mut records: Vec<Value> = (0..30)
             .map(|i| {
