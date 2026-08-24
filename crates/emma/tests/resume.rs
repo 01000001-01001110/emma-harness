@@ -521,6 +521,55 @@ fn resuming_into_a_changed_harness_names_what_changed() {
         "an unchanged tool surface was reported as changed: {lines}"
     );
 
+    // **And in that order, on every line — not only the directory one.** The
+    // order check further down was written for `cwd` alone, and the three lines
+    // above it come from a single shared closure whose format string reads
+    // `{was} → {now}`. Swapping those two arguments is one character of
+    // movement, tells the reader the instructions and the model moved the
+    // opposite way, and left every test in the crate green: both-strings-appear
+    // is satisfied by a sentence that has them backwards.
+    //
+    // Which way round it reads is the whole content of the line. "aaaa → cccc"
+    // says the transcript was written under `aaaa` and this run is using
+    // `cccc`; reversed, somebody checking out the older prompt to reproduce the
+    // conversation reaches for the wrong one.
+    for (what, was_value, now_value) in [
+        ("instructions", "aaaa", "cccc"),
+        ("model", "claude-old", "claude-new"),
+    ] {
+        let line = lines
+            .lines()
+            .find(|l| l.starts_with(what))
+            .unwrap_or_else(|| panic!("no line for `{what}`: {lines}"));
+        let old = line.find(was_value).expect("the recorded value");
+        let new = line.find(now_value).expect("the current value");
+        assert!(
+            old < new,
+            "the `{what}` line reads `now → was`, so it tells the reader the \
+             change went the other way: {line}"
+        );
+    }
+
+    // The third field the closure writes, given its own case because the two
+    // above happen to differ in length and this one does not: two four-character
+    // hashes make an order bug invisible to anything but a position check.
+    let swapped = Continuity {
+        instructions_hash: "aaaa".into(),
+        tool_schema_hash: "bbbb".into(),
+        model: "m".into(),
+        cwd: "/work/alpha".into(),
+    }
+    .differences("aaaa", "dddd", "m", "/work/alpha")
+    .join("\n");
+    assert!(
+        swapped.starts_with("tool schema"),
+        "the tool-schema change was not reported at all: {swapped}"
+    );
+    assert!(
+        swapped.find("bbbb") < swapped.find("dddd"),
+        "the tool-schema line reads `now → was`: {swapped}"
+    );
+
     // A session recorded before a field existed cannot be compared, and a
     // warning about an empty string is noise that trains people past warnings.
     assert!(Continuity::default()
