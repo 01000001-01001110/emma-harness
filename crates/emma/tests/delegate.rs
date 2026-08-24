@@ -1272,6 +1272,74 @@ async fn a_delegation_is_lent_half_of_what_is_left_and_the_files_own_iteration_c
     );
 }
 
+/// A sub-run gets its own wall clock and one nudge, not the parent's.
+///
+/// **Both numbers were unobservable until they were put on the record**, which
+/// is why this test could not be written before. Replacing
+/// `SUB_WALL_CLOCK.min(parent)` with the parent's own clock, and `max_kicks: 1`
+/// with the parent's, left the whole suite green on 2026-08-23 -- not for want
+/// of a test but for want of anywhere to look. `max_tokens` and
+/// `max_iterations` were already on the record and were already defended.
+///
+/// **The parent here is deliberately not the shared `budgets()` fixture**, and
+/// that is the load-bearing part. That fixture allows 60 seconds and one kick,
+/// so `SUB_WALL_CLOCK.min(parent)` is the parent's 60 either way and
+/// `max_kicks: 1` is the parent's 1 either way -- a test written against it
+/// passes whichever code is in place, which is the same trap this test exists
+/// to close. The parent below allows half an hour and three kicks, so every
+/// number asserted differs from the one the mutation would produce.
+#[tokio::test]
+async fn a_sub_run_gets_its_own_wall_clock_and_a_single_nudge() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = Arc::new(SessionLog::open(dir.path(), "sess-sub-clock").unwrap());
+    let (read, _) = TestTool::returning("Read", "x");
+    let ty = agent_type("explorer", Some(vec!["Read"]));
+    let fake = Fake::new(vec![
+        delegate_to("explorer", "look").costing(100),
+        text("found it\n\nGOAL COMPLETE"),
+        text("ok\n\nGOAL COMPLETE"),
+    ]);
+    let parent = Budgets {
+        wall_clock: Duration::from_secs(30 * 60),
+        max_kicks: 3,
+        ..budgets()
+    };
+
+    let run = delegating(
+        dir.path(),
+        fake.clone(),
+        &[ty],
+        vec![read],
+        allowing_everything(),
+        parent.clone(),
+        log.clone(),
+        Arc::new(Term::silent()),
+    )
+    .await;
+    assert_eq!(run.outcome.ending, Ending::Done);
+
+    let records = SessionLog::read(log.path()).unwrap();
+    let record = records
+        .iter()
+        .find(|r| r["kind"] == "delegation")
+        .expect("no delegation was recorded");
+
+    assert_eq!(
+        record["wall_clock_ms"].as_u64(),
+        Some(5 * 60 * 1000),
+        "a subagent was lent a wall clock other than its own five minutes, and \
+         the parent's was {:?}: {record}",
+        parent.wall_clock
+    );
+    assert_eq!(
+        record["max_kicks"].as_u64(),
+        Some(1),
+        "a subagent got more than the one nudge `sub_budgets` argues for, out of \
+         the parent's {}: {record}",
+        parent.max_kicks
+    );
+}
+
 /// **The ending recorded per delegation is the one that happened.**
 ///
 /// `emma agents` counts a run as finished from this field, so a record that

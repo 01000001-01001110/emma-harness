@@ -712,6 +712,22 @@ impl Tool for Delegate {
                 "denied": facts.denied.len(),
                 "max_tokens": budgets.max_tokens,
                 "max_iterations": budgets.max_iterations,
+                // **These two are here to be observable, and that is the whole
+                // reason.** A mutation replacing `SUB_WALL_CLOCK.min(parent)`
+                // with the parent's own clock, or `max_kicks: 1` with the
+                // parent's, left the entire suite green on 2026-08-23 -- not
+                // because nobody had written the test, but because no test
+                // could: both are derived in `sub_budgets` and neither reached
+                // anything a caller can read. The other two budget numbers were
+                // already on this record and were already defended.
+                //
+                // A subagent silently inheriting the parent's wall clock is a
+                // run that can occupy the parent for as long as the parent
+                // itself may live, and inheriting its kick count is the
+                // "spends the parent's budget arguing with a run the parent
+                // cannot see" case `sub_budgets` argues against directly above.
+                "wall_clock_ms": budgets.wall_clock.as_millis() as u64,
+                "max_kicks": budgets.max_kicks,
             }),
         );
 
