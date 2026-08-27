@@ -29,3 +29,12 @@
 # to compute the fingerprint, and an import writes one of these next to it.
 __pycache__/
 *.pyc
+
+# Windows shell-expansion litter. A tool that wrote to `%SystemDrive%\...` or
+# `$env:APPDATA\...` without the variable being expanded creates a directory of
+# that literal name in the working directory. `Microsoft/Windows/PowerShell/
+# ModuleAnalysisCache`, a 16KB binary cache, reached a commit that way on
+# 2026-08-23 and was found by `platform.rs`'s survey listing it as repository
+# structure.
+%SystemDrive%/
+Microsoft/
