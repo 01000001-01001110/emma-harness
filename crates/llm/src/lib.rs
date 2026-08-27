@@ -41,6 +41,7 @@ pub mod auth;
 pub mod content;
 pub mod kind;
 pub mod models;
+pub mod ollama;
 mod retry;
 
 use async_trait::async_trait;
