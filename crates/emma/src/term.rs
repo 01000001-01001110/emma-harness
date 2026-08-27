@@ -69,6 +69,7 @@ use std::sync::{Arc, Mutex};
 use ratatui::text::Line;
 
 pub mod app;
+pub mod bindings;
 pub mod chat;
 pub mod diff;
 pub mod frame;

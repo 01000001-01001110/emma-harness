@@ -1000,23 +1000,21 @@ pub fn tool_rows(entries: &[crate::usertools::Entry]) -> Vec<sidebar::Row> {
 /// is here because mouse capture is on for the wheel, which takes plain
 /// drag-selection away — the key that gives it back is the one fact a user
 /// cannot guess.
-fn keymap() -> Vec<(String, String)> {
-    [
-        ("/", "command menu"),
-        ("Enter", "send"),
-        ("Esc", "close menu / leave page"),
-        ("PgUp/PgDn", "scroll"),
-        ("Ctrl+Up/Dn", "scroll a row"),
-        ("Home/End", "top / tail (empty box)"),
-        ("Ctrl+B", "toggle sidebar"),
-        ("Alt+key", "tool or page"),
-        ("Ctrl+C", "interrupt"),
-        ("Ctrl+D", "quit"),
-        ("Shift+drag", "select text"),
-    ]
-    .into_iter()
-    .map(|(k, d)| (k.to_string(), d.to_string()))
-    .collect()
+///
+/// **The rows used to be literals here, and that is the arrangement that
+/// produced the defect this now cannot have.** A `(key, description)` pair
+/// typed by hand carries no reference to the `match` arm that answers it, so
+/// the two drift and nothing says so —
+/// `notes/design/tui-fork-inventory.md` §11 counted a branch's copy of this
+/// panel advertising six keys of which four do nothing, one of them `Ctrl+k`
+/// for a binding that is `Ctrl-U`. The rows now come from
+/// [`super::bindings::CHAT`], where each carries the chord it means; the
+/// printed spelling is derived from that chord rather than typed beside it,
+/// and the tests there drive every one through the real decoders. Both paint
+/// sites — the sidebar's panel and the Settings page's `Keys` block — read
+/// this one value, so there is still exactly one table on screen.
+pub(crate) fn keymap() -> Vec<(String, String)> {
+    super::bindings::CHAT.hints()
 }
 
 /// The last path component, for the status bar's ENV cell. Local rather than
