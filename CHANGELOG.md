@@ -28,6 +28,39 @@ out for themselves.
 
 ## Unreleased
 
+- **Every full-screen page now says the key that gets you out of it.** Settings
+  says `Esc closes`, Memory says `Alt+m closes` and the Harness dashboard says
+  `Alt+h closes`, in the page's top-left corner. All three keys already worked;
+  none of the pages said so, and there is no scroll, no close button and no
+  click target on any of them, so the key was the only way off and nothing on
+  screen named it. Memory's is `Alt+m` rather than `Esc` on purpose — `Esc`
+  there clears the focus and the half-typed add flow, and closes nothing.
+
+- **The Settings page tells you when it has run out of room.** At 80×24 four of
+  the nine cards were simply absent, unreachable by any key, with nothing saying
+  they existed. The last row now reads `… 4 more cards below — this page does
+  not scroll; make the window taller`. The page still does not scroll; a taller
+  window is the remedy, and now it says so.
+
+- **A memory store that cannot be read no longer looks like an empty one.** If
+  Emma could not open or read `.emma/memory`, the Memory page rendered exactly
+  as it does for a wiki with nothing in it — six zero counts and `No index yet`
+  — which is the opposite of what happened. It now says
+  `the memory wiki under .emma/memory could not be read — not the same as
+  empty`. The Harness dashboard says the same thing about the session history.
+
+- **A panic during startup restores your terminal again.** The panic hook that
+  turns off raw mode and leaves the alternate screen was being installed after
+  both were already on, so a panic in between left a shell with no echo on a
+  screen that was not yours. It goes on first now. Related: the teardown used to
+  refuse to run unless startup had finished completely, which meant a frame that
+  got half way was never undone; each of raw mode, the alternate screen and
+  mouse capture now answers for itself.
+
+- **`Alt+d` no longer appears beside the Data Explorer.** The page is gone —
+  superseded by the Harness dashboard — and the sidebar prints `n/a` for it
+  rather than advertising a chord that nothing routes.
+
 - **A tool that prints colour no longer puts escape bytes in your redirected
   file.** `emma | tee log` with a `Bash` call emitting colour wrote those
   bytes into the file, and a tool emitting a bare carriage return could

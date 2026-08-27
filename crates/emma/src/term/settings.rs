@@ -37,7 +37,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Widget};
 
 use super::palette::Role;
-use super::render::{cols, fit, Skin, ASCII};
+use super::render::{cols, corner_row, fit, Skin, ASCII};
 
 // region: State
 // ---------------------------------------------------------------------------
@@ -153,6 +153,11 @@ pub enum TestState {
 
 /// The subtitle under the title, verbatim from the mock.
 pub const SUBTITLE: &str = "Configure Emma to match your workflow";
+
+/// The key that leaves this screen, drawn on it. `Esc` is what
+/// [`handle_key`] answers with [`SettingsAction::Close`]; `Alt+,` toggles from
+/// outside and is not this page's to promise.
+pub const EXIT_HINT: &str = "Esc closes";
 
 /// How many cards the grid has, and what Tab wraps within. The ninth is
 /// LANGUAGE SERVERS, so the two-by-four grid is a two-by-five with the last
@@ -775,12 +780,7 @@ pub fn render_hits(area: Rect, buf: &mut Buffer, s: &SettingsView, skin: &Skin) 
     let head_h = 5.min(area.height);
     let [head, grid] =
         Layout::vertical([Constraint::Length(head_h), Constraint::Min(0)]).areas(area);
-    let mut head_lines: Vec<Line<'static>> = Vec::new();
-    let version = fit(&s.version, w, skin.glyphs.ellipsis);
-    head_lines.push(Line::from(vec![
-        Span::raw(" ".repeat(w.saturating_sub(cols(&version)))),
-        Span::styled(version, skin.palette.dim()),
-    ]));
+    let mut head_lines: Vec<Line<'static>> = vec![corner_row(EXIT_HINT, &s.version, w, skin)];
     // "Very large" is not a thing a terminal cell can do; one bold accent row
     // is this repository's standing substitute (design Q8: no figlet).
     head_lines.push(Line::from(Span::styled(
@@ -812,11 +812,66 @@ pub fn render_hits(area: Rect, buf: &mut Buffer, s: &SettingsView, skin: &Skin) 
     render_grid(grid, buf, s, skin)
 }
 
+/// The out-of-room notice, one row, at the bottom of the grid.
+///
+/// **A page that ran out of room says how much is missing and how to get it.**
+/// This grid clips whole card-rows from the bottom and, until 2026-08-27, said
+/// nothing at all: at 80x24 — an ordinary default — the last cards were simply
+/// absent, unreachable by any key, with no sentence saying they existed. The
+/// page does not scroll, so a taller window is the only remedy there is, and a
+/// count is what lets a reader judge whether resizing is worth it. Item A1 of
+/// `notes/design/term-hardening-backport.md`; the guarantee predates the TUI
+/// import, did not survive it, and is restored here rather than papered over in
+/// the test that found it missing.
+fn overflow_line(hidden: usize, w: usize, skin: &Skin) -> Line<'static> {
+    Line::from(Span::styled(
+        fit(
+            &format!(
+                "{} {hidden} more {} below — this page does not scroll; make the window taller",
+                skin.glyphs.ellipsis,
+                if hidden == 1 { "card" } else { "cards" },
+            ),
+            w,
+            skin.glyphs.ellipsis,
+        ),
+        skin.palette.dim(),
+    ))
+}
+
 /// The two-by-four grid. Each grid row is as tall as the taller of its two
-/// cards; a pane too short simply clips from the bottom, whole rows at a time.
+/// cards; a pane too short clips from the bottom, whole rows at a time, and
+/// [`overflow_line`] says how many cards went with them.
 fn render_grid(area: Rect, buf: &mut Buffer, s: &SettingsView, skin: &Skin) -> Hits {
-    let mut hits = Hits::default();
     let cards = cards(s);
+    // Two passes over the same arithmetic, because the notice has to be
+    // *reserved* before the cards are placed or it paints over the last one.
+    // The first pass asks how many pairs fit in the whole grid; if that is all
+    // of them there is nothing to say and no row is taken.
+    let placed = |height: u16| {
+        let mut y = 0u16;
+        let mut pairs = 0usize;
+        for pair in cards.chunks(2) {
+            if y >= height {
+                break;
+            }
+            let tallest = pair
+                .iter()
+                .map(|c| c.rows.len() as u16 + 3) // header + rows + border
+                .max()
+                .unwrap_or(0);
+            let h = tallest.min(height - y);
+            if h < 3 {
+                break;
+            }
+            y += h;
+            pairs += 1;
+        }
+        pairs
+    };
+    let total_pairs = cards.chunks(2).len();
+    let notice = u16::from(placed(area.height) < total_pairs);
+    let grid_h = area.height - notice;
+    let mut hits = Hits::default();
     let [left_col, _, right_col] = Layout::horizontal([
         Constraint::Fill(1),
         Constraint::Length(1),
@@ -824,8 +879,9 @@ fn render_grid(area: Rect, buf: &mut Buffer, s: &SettingsView, skin: &Skin) -> H
     ])
     .areas(area);
     let mut y = area.y;
+    let mut drawn = 0usize;
     for (pair_i, pair) in cards.chunks(2).enumerate() {
-        if y >= area.y + area.height {
+        if y >= area.y + grid_h {
             break;
         }
         let tallest = pair
@@ -833,7 +889,7 @@ fn render_grid(area: Rect, buf: &mut Buffer, s: &SettingsView, skin: &Skin) -> H
             .map(|c| c.rows.len() as u16 + 3) // header + rows + border
             .max()
             .unwrap_or(0);
-        let room = (area.y + area.height).saturating_sub(y);
+        let room = (area.y + grid_h).saturating_sub(y);
         let h = tallest.min(room);
         if h < 3 {
             break;
@@ -852,6 +908,11 @@ fn render_grid(area: Rect, buf: &mut Buffer, s: &SettingsView, skin: &Skin) -> H
             );
         }
         y += h;
+        drawn += pair.len();
+    }
+    if notice > 0 && drawn < cards.len() {
+        let line = overflow_line(cards.len() - drawn, usize::from(area.width), skin);
+        buf.set_line(area.x, area.y + area.height - 1, &line, area.width);
     }
     hits
 }

@@ -62,9 +62,10 @@
 // constants, `erase_frame`, `synchronized`, `resize_target`, `anchor` and
 // `MAX_INSERT_ROWS` private to itself. A sibling module cannot see one of
 // them, so for those items the narrowest surface that exists is the file's
-// own text. Where a public or `pub(crate)` surface does exist — `view_rows`,
-// `Frame::memory_page_text`, `Frame::explorer_page_text` — the test goes
-// through it and reads nothing.
+// own text. Where a public or `pub(crate)` surface does exist — `view_rows` —
+// the test goes through it and reads nothing. F32's two arms used to be the
+// other example; they left with the pages they read, and the F32 note below
+// says where the guarantee went.
 //
 // The source assertions are written to the shape the replaced file already
 // used, with its two defences kept: every slice is bounded by markers that
@@ -82,7 +83,7 @@
 
 #[cfg(test)]
 mod frame_rs {
-    use crate::term::frame::{view_rows, Frame};
+    use crate::term::frame::view_rows;
 
     /// The file under guard. Read as text because nearly everything on §1a is
     /// private to it — see the region header.
@@ -886,64 +887,20 @@ mod frame_rs {
     }
 
     // -- F32: the page failure arms ------------------------------------------
-
-    /// **A page that cannot read its store says so, and says which store.**
-    /// (F32)
-    ///
-    /// Both arms lived inside `launch_tool`, which needs a real terminal, so
-    /// `"nothing could be read"` existed in exactly one place in the
-    /// repository: the line that produces it. "A page rendering an error and a
-    /// page rendering nothing look similar and mean opposite things" — *there
-    /// is nothing here* and *something went wrong* are different instructions
-    /// to whoever is reading. And the two pages read different stores, so a
-    /// shared sentence would leave a reader unable to tell which failed.
-    ///
-    /// **`None`, not a missing directory, and that difference is the test.**
-    /// The first version passed `Some("definitely-not-a-directory")` and both
-    /// mutants survived it: `commands::capture_memory` treats an absent
-    /// directory as an *empty store* and returns `Ok`, so the error arm was
-    /// never reached (`bd280d5`).
-    ///
-    /// **The extraction is the item.** These are `pub(crate) fn` on `Frame`
-    /// precisely so a test can call them without a terminal; a backport that
-    /// folds them back into `launch_tool` is a regression even if the strings
-    /// survive — and it takes this file's compilation with it, which is the
-    /// loudest signal available.
-    #[test]
-    fn a_page_that_cannot_read_its_store_says_which_store() {
-        let memory = Frame::memory_page_text(None, std::path::Path::new("."));
-        let explorer = Frame::explorer_page_text(None);
-
-        assert!(
-            !memory.trim().is_empty(),
-            "the memory page came back blank when its store could not be read, which \
-             reads as an empty store — the opposite claim"
-        );
-        assert!(
-            !explorer.trim().is_empty(),
-            "the explorer page came back blank when its store could not be read"
-        );
-        assert_ne!(
-            memory, explorer,
-            "both pages say the same thing, so a reader cannot tell which store could \
-             not be read"
-        );
-    }
-
-    /// The positive half of the pair above: the Memory page's failure sentence
-    /// names a failure rather than a count. (F32)
-    ///
-    /// Without it, two unhelpful-but-different strings satisfy the assertion
-    /// that they differ.
-    #[test]
-    fn the_memory_pages_failure_says_something_went_wrong() {
-        let text = Frame::memory_page_text(None, std::path::Path::new("."));
-        assert!(
-            text.contains("nothing could be read"),
-            "the memory page did not report the failure it hit; a blank or bland page \
-             reads as an empty store, which is the opposite claim: {text:?}"
-        );
-    }
+    //
+    // **Moved, not deleted — see `app_rs::an_unreadable_store_says_so_and_says
+    // _which_store`.** The two tests that lived here called
+    // `Frame::memory_page_text` and `Frame::explorer_page_text`, the extracted
+    // text-page builders. The 2026-08-27 import replaced both pages: the Data
+    // Explorer is archived by owner ruling and the Memory page is now
+    // structured, built by `app::memory_view_from` and painted by
+    // `term::memory::render`. So the guarantee has the same words and a
+    // different surface, and its test has to render a page rather than read a
+    // string — which needs `App`, a `View` and a buffer, all of which are the
+    // next module's fixtures.
+    //
+    // The guarantee itself was **found broken by the move**, and the fix is in
+    // production code rather than in the test: see that test's doc.
 }
 
 // endregion: frame.rs
@@ -977,7 +934,7 @@ mod app_rs {
     use ratatui::text::Line;
 
     use super::super::app::{
-        dock_height, hidden, regions, stem, tool_rows, App, Latch, Page, Pane, Regions,
+        dock_height, hidden, new_session_hit, regions, stem, tool_rows, App, Latch, Regions,
     };
     use super::super::palette::{Level, Palette};
     use super::super::render::{Skin, UNICODE};
@@ -1053,42 +1010,132 @@ mod app_rs {
         )
     }
 
-    /// Just the main pane's transcript/page rectangle, as lines.
+    /// The whole **main region** as lines — the border's interior, header and
+    /// bottom-anchored rows included.
     ///
-    /// Every "is it on the page" assertion below reads this rather than the
-    /// whole screen. A `contains` over the whole window is satisfied by the
-    /// sidebar's QUICK HELP or by the status bar three rows down, and that has
-    /// already made one assertion here vacuous.
-    fn pane_rows(rows: &[String], r: &Regions) -> Vec<String> {
-        (r.chat.y..r.chat.bottom())
+    /// **Every "is it on the page" assertion below reads a rectangle rather
+    /// than the whole window.** A `contains` over the window is satisfied by
+    /// the sidebar's QUICK HELP or by the status bar three rows down, and that
+    /// has already made one assertion here vacuous.
+    ///
+    /// The rectangle used to be `Regions::chat` — the conversation's transcript
+    /// slot, which stops above the dock. The imported pages do not use that
+    /// slot: Settings owns header-through-hint as one panel, and Memory and
+    /// Harness are handed `Regions::main` whole and bottom-anchor a query box
+    /// and a notice row into cells `chat` has already ended before. A
+    /// `chat`-only read of those pages silently drops the honesty channel,
+    /// which is the row several of these guarantees are about — and, measured
+    /// 2026-08-27, let A11's negative control pass over an exit hint hoisted
+    /// into the chat screen's own hint row.
+    fn main_rows(rows: &[String], r: &Regions) -> Vec<String> {
+        let rect = r.main;
+        (rect.y..rect.bottom())
             .map(|y| {
                 rows[usize::from(y)]
                     .chars()
-                    .skip(usize::from(r.chat.x))
-                    .take(usize::from(r.chat.width))
+                    .skip(usize::from(rect.x))
+                    .take(usize::from(rect.width))
                     .collect::<String>()
             })
             .collect()
     }
 
-    fn pane_text(rows: &[String], r: &Regions) -> String {
-        pane_rows(rows, r).join("\n")
+    fn main_text(rows: &[String], r: &Regions) -> String {
+        main_rows(rows, r).join("\n")
     }
 
-    /// Render one pane at `w`×`h` and return the whole screen and the carve.
-    fn page_screen(v: &View, pane: Pane, w: u16, h: u16) -> (Vec<String>, Regions) {
+    /// The rectangle the **Settings** screen is handed: header through hint,
+    /// which is `app::settings_screen`'s own arithmetic. Narrower than
+    /// [`main_rows`] by exactly the main pane's border, and that border is why
+    /// it exists — "the last row the page has" is not the last row of the
+    /// window's chrome.
+    fn panel_rows(rows: &[String], r: &Regions) -> Vec<String> {
+        let bottom = r.hint.y + r.hint.height;
+        (r.header.y..bottom)
+            .map(|y| {
+                rows[usize::from(y)]
+                    .chars()
+                    .skip(usize::from(r.header.x))
+                    .take(usize::from(r.header.width))
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    /// A screen this file can put in the main region and read back.
+    ///
+    /// **There is no such type in `app.rs` any more, and that is the model
+    /// change rather than a gap this enum papers over.** The replaced shell had
+    /// one value — `Pane::Chat` / `Pane::Page(Page::…)` — and `App::show` set
+    /// it. The imported shell has one field per screen (`settings_open: bool`,
+    /// `memory: Option<MemoryView>`, `harness: Option<HarnessView>`) and one
+    /// toggle each, which is what [`open`] drives. This enum exists only so a
+    /// test that asserts the *same* thing of every screen can still say so in a
+    /// loop; nothing outside this module has it, and no production code is
+    /// reachable through it that a caller could not reach directly.
+    ///
+    /// **Two members, and both absences are deliberate.**
+    ///
+    /// `DataExplorer` is gone by owner ruling, 2026-08-27: superseded by the
+    /// three Harness mocks and archived at
+    /// `notes/archive/mockup-data-explorer.md`. `usertools::Tool::routed()`
+    /// dropped it the same day.
+    ///
+    /// ⚠ `Harness` is absent for a worse reason — this file cannot reach it
+    /// honestly. `toggle_harness` reads the session directory held in `App`'s
+    /// private `harness_dir`, whose only test seam is the field itself,
+    /// reachable from `app.rs`'s own test module and from nowhere else. Driven
+    /// from here it would read the real `~/.emma/sessions`, so every assertion
+    /// would be a claim about whatever the developer's machine happened to have
+    /// run. A page loop that is silently a function of the box is worse than a
+    /// loop that is honestly two long. **So the Harness page is undefended by
+    /// this net**; a `set_harness_dir` seam is what would close it.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Screen {
+        Settings,
+        Memory,
+    }
+
+    /// Every screen in [`Screen`] — what the "each page" guarantees loop over.
+    const RENDERABLE: [Screen; 2] = [Screen::Settings, Screen::Memory];
+
+    /// Put `app` on `screen`, through the real toggles. Called twice, it closes
+    /// what it opened: these are toggles, not setters.
+    ///
+    /// The memory root is a caller-owned tempdir, never the repository: opening
+    /// the page *creates* `.emma/memory` under whatever it is handed, which is
+    /// how the built-in schema installs on first touch.
+    fn open(app: &mut App, screen: Screen, memory_root: &std::path::Path) {
+        match screen {
+            Screen::Settings => app.toggle_settings(),
+            Screen::Memory => app.toggle_memory(&memory_root.to_string_lossy()),
+        }
+    }
+
+    /// The key each screen says gets out of it, as the screen's own module
+    /// spells it.
+    ///
+    /// Read from the page rather than written down here: a constant this file
+    /// owns would go on agreeing with itself after the page changed its key,
+    /// which is the drift the whole file exists to catch. What is asserted is
+    /// that the string reaches the screen.
+    fn exit_hint(screen: Screen) -> &'static str {
+        match screen {
+            Screen::Settings => super::super::settings::EXIT_HINT,
+            Screen::Memory => super::super::memory::EXIT_HINT,
+        }
+    }
+
+    /// Render one screen at `w`×`h` and return the whole window and the carve.
+    ///
+    /// The tempdir is created and dropped inside: the page's data is read once,
+    /// at the toggle, and held on the view from then on, so the store does not
+    /// have to outlive the call.
+    fn page_screen(v: &View, screen: Screen, w: u16, h: u16) -> (Vec<String>, Regions) {
+        let store = tempfile::TempDir::new().expect("tempdir");
         let mut a = App::new((w, h));
         a.set_tools(one_tool());
-        match pane {
-            // Five lines, not one: the Data Explorer's page is its snapshot
-            // plus a footer, so a one-line snapshot fits in any window and the
-            // out-of-room case (A1) becomes unreachable through this helper.
-            Pane::Page(Page::DataExplorer) => a.show_explorer(
-                "source         C:/store\nsessions       3 file(s)\n\nkinds\n  goal   3\n",
-            ),
-            Pane::Page(Page::Memory) => a.show_memory("project  C:/src/emma"),
-            other => a.show(other),
-        }
+        open(&mut a, screen, store.path());
         let (rows, _) = cells(&mut a, v, w, h);
         (rows, layout_for(v, w, h))
     }
@@ -1180,9 +1227,16 @@ mod app_rs {
              advertised {chords} `Alt+` chords"
         );
 
-        // The three in-app pages, by name. These are the deterministic half —
+        // The in-app pages, by name. These are the deterministic half —
         // `Tool::routed()` decides their availability and never probes the box.
-        for (label, key) in [("Settings", ','), ("Memory", 'm'), ("Data Explorer", 'd')] {
+        //
+        // **Two, not three.** `Data Explorer` left `Tool::routed()` on
+        // 2026-08-27 with the TUI import: the incoming shell has no such page,
+        // so nothing routes `Alt+d` and the catalogue marks the row
+        // unavailable. Asserting a working chord for it here would be asserting
+        // the defect DEF-037 was filed for — a rendered key that does nothing —
+        // so the row is checked in the other direction instead.
+        for (label, key) in [("Settings", ','), ("Memory", 'm')] {
             let entry = entries
                 .iter()
                 .find(|e| e.label == label)
@@ -1191,10 +1245,25 @@ mod app_rs {
             assert_eq!(
                 row.trailing,
                 format!("Alt+{key}"),
-                "the sidebar does not offer {label} a working chord; `n/a` here means \
-                 the page is unreachable from the panel that names it"
+                "the sidebar does not offer {label} a working chord; `n/a` here \
+                 means the page is unreachable from the panel that names it"
             );
         }
+
+        // …and the direction nobody checks. A page that no longer exists must
+        // not keep its chord: the key decodes, the frame routes nothing, and
+        // the panel teaches a key that does nothing.
+        let explorer = entries
+            .iter()
+            .find(|e| e.label == "Data Explorer")
+            .expect("Data Explorer left the catalogue entirely; this assertion is vacuous");
+        assert_eq!(
+            tool_rows(std::slice::from_ref(explorer))[0].trailing,
+            "n/a",
+            "the sidebar still advertises a chord for the Data Explorer and no \
+             page takes it: owner ruling 2026-08-27, superseded by the Harness \
+             mocks and archived at notes/archive/mockup-data-explorer.md"
+        );
     }
 
     /// **A16.** `tool_rows` puts the real binding in the key column: `Alt+<key>`,
@@ -1253,6 +1322,67 @@ mod app_rs {
         assert!(all.contains("Alt+s"), "{all}");
     }
 
+    /// **The `n/a` overlay reaches the drawn panel.** (A16's second half, and
+    /// a guarantee that was left undefended by the import.)
+    ///
+    /// **Two TOOLS tables now exist and only one of them is drawn.**
+    /// `sidebar::tool_rows` mints the mock's seven rows — glyphs, names,
+    /// chords — and knows nothing about what is installed on the box;
+    /// `app::tool_rows` maps the catalogue, which does. `app::unavailable_marked`
+    /// is the whole seam between them, and it is matched on the label, which is
+    /// a string. Before the import the mapped rows *were* the panel, so the
+    /// test above reached the screen by itself. After it, that test proves only
+    /// that the mapper is right, and a seam that silently matched nothing would
+    /// leave `Alt+c` beside a program that is not on the machine — DEF-037,
+    /// which this repository has already paid for once.
+    ///
+    /// Both directions, because the failure is available in both: an overlay
+    /// that marks nothing, and one that marks everything.
+    #[test]
+    fn an_uninstalled_tool_is_marked_on_the_panel_the_reader_sees() {
+        let entry = |available| crate::usertools::Entry {
+            tool: crate::usertools::Tool::Code,
+            label: "Code".into(),
+            key: 'c',
+            detail: "open the editor".into(),
+            available,
+        };
+        let drawn = |available| {
+            let mut app = App::new((130, 40));
+            app.set_tools(tool_rows(&[entry(available)]));
+            let (rows, _) = cells(&mut app, &view(), 130, 40);
+            rows.iter()
+                .find(|r| r.contains("Code"))
+                .cloned()
+                .unwrap_or_else(|| panic!("no Code row on the panel:\n{}", rows.join("\n")))
+        };
+
+        let missing = drawn(false);
+        assert!(
+            missing.contains("n/a"),
+            "the editor is not on this machine and the panel still offers a chord for \
+             it; a key that does nothing is worse than a blank cell, because the \
+             reader will press it: {missing:?}"
+        );
+        assert!(
+            !missing.contains("Alt+c"),
+            "the row carries both the chord and the mark, so the reader is told two \
+             opposite things at once: {missing:?}"
+        );
+
+        let present = drawn(true);
+        assert!(
+            present.contains("Alt+c"),
+            "an installed editor lost its chord, so the mark above proves nothing \
+             about the seam: {present:?}"
+        );
+        assert!(
+            !present.contains("n/a"),
+            "the overlay marks every row regardless of the catalogue, which is the \
+             same defect pointing the other way: {present:?}"
+        );
+    }
+
     /// **A18.** The chord *class* is discoverable where the design says keys
     /// are discovered — the QUICK HELP table — and it is a class the decoder
     /// honours.
@@ -1306,175 +1436,219 @@ mod app_rs {
     #[test]
     fn every_page_names_the_key_that_leaves_it_and_the_conversation_does_not() {
         let v = view();
-        for (name, pane) in [
-            ("Settings", Pane::Page(Page::Settings)),
-            ("Data Explorer", Pane::Page(Page::DataExplorer)),
-            ("Memory", Pane::Page(Page::Memory)),
-        ] {
-            let (rows, r) = page_screen(&v, pane, 120, 40);
-            let body = pane_text(&rows, &r);
+        for screen in RENDERABLE {
+            // The page's own exit hint, not a literal `Esc`: the two screens
+            // leave by different keys, and asserting one word for both would
+            // pin the wrong key on one of them. `Esc` on the Memory page clears
+            // focus and closes nothing.
+            let expected = exit_hint(screen);
+            // The page's whole panel, not the transcript slot: the imported
+            // pages put their action bars and their bottom-anchored rows on
+            // cells `Regions::chat` stops above.
+            let (rows, r) = page_screen(&v, screen, 120, 40);
+            let body = main_text(&rows, &r);
             assert!(
-                body.contains("Esc"),
-                "{name} does not say how to leave it, and nothing on the page does:\n{body}"
+                body.contains(expected),
+                "{screen:?} does not say how to leave it ({expected:?}), and nothing \
+                 on the page does:\n{body}"
             );
         }
 
+        // **The negative control is the load-bearing half**, and it reads the
+        // whole main region rather than the transcript slot. A test that only
+        // checks the sentence appears passes over a page that never draws it
+        // and a frame that always does — which is exactly what hoisting the
+        // hint into the chat screen's own hint row looks like, and that row is
+        // outside `Regions::chat`. Measured 2026-08-27: with the read scoped to
+        // the chat rectangle, that mutation survived. The sidebar's QUICK HELP
+        // is outside the main region, so widening the read costs nothing.
         let mut a = App::new((120, 40));
         a.set_tools(one_tool());
         let (rows, _) = cells(&mut a, &v, 120, 40);
-        let body = pane_text(&rows, &layout_for(&v, 120, 40));
-        assert!(
-            !body.contains("Esc"),
-            "the conversation's own pane names Esc, so the assertions above pass \
-             without any page drawing anything:\n{body}"
-        );
+        let body = main_text(&rows, &layout_for(&v, 120, 40));
+        for screen in RENDERABLE {
+            assert!(
+                !body.contains(exit_hint(screen)),
+                "the conversation's own pane names {:?}, so the assertions above pass \
+                 without any page drawing anything:\n{body}",
+                exit_hint(screen)
+            );
+        }
     }
 
     /// **A12.** Each page's disclosure belongs to that page alone.
     ///
-    /// Memory and the Data Explorer are the **same function**, differing only
-    /// in the footer handed in, so the failure actually available here is a
+    /// Memory and the Data Explorer used to be the **same function**, differing
+    /// only in the footer handed in, so the failure actually available was a
     /// footer landing on the wrong page. *"A reader who saw `no embedding
     /// index` under the Data Explorer would conclude the session store is an
     /// index that failed, which is a worse state than no sentence at all."*
     ///
-    /// A matrix with negatives, because the positive half alone is what the
-    /// three page tests already do and every one of them stays green if one
-    /// sentence is copied onto all three.
+    /// **The shared function is gone; the shared channel that replaced it is
+    /// what this now watches.** Both imported pages speak their honesty through
+    /// one `notice: Option<String>` field rendered in one row, and both fill it
+    /// from a block of `pub const NOTICE_…` strings sitting in files next to
+    /// each other. That is the same failure with a different mechanism: a
+    /// constant pasted onto the wrong page, or a notice row that outlives the
+    /// screen that set it. So each page is *driven to speak* — Settings through
+    /// Enter on a row, Memory through its own Search key — and each screen must
+    /// carry its own sentence and never the other's.
     ///
-    /// The markers are one distinctive noun per page rather than the sentence,
-    /// so a rewrite that keeps the meaning keeps this green. **Expect to adjust
-    /// on arrival if a page's subject changes** — a Memory page that grew a
-    /// real embedding index would rightly fail the `embedding` negative on the
-    /// other two.
+    /// The static half rides along: each page's honest empty state must be on
+    /// its own screen and on neither of the other's. **Expect to adjust on
+    /// arrival if a page's subject changes** — a Memory page that grew a real
+    /// embedding index would rightly stop saying it has no index.
     #[test]
     fn each_pages_disclosure_belongs_to_that_page_alone() {
-        const SETTINGS: &str = "telemetry";
-        const EXPLORER: &str = "query box";
-        const MEMORY: &str = "embedding";
+        use super::super::memory::{NOTICE_M2, NO_INDEX};
+        use super::super::settings::NOTICE_PROVIDER;
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
         let v = view();
-        let body = |pane| {
-            let (rows, r) = page_screen(&v, pane, 120, 40);
-            pane_text(&rows, &r)
-        };
-        let settings = body(Pane::Page(Page::Settings));
-        let explorer = body(Pane::Page(Page::DataExplorer));
-        let memory = body(Pane::Page(Page::Memory));
+        let store = tempfile::TempDir::new().expect("tempdir");
 
+        // Settings, made to speak: Tab focuses card 1, Enter asks its first row
+        // where its value comes from.
+        let mut app = App::new((120, 40));
+        app.set_tools(one_tool());
+        open(&mut app, Screen::Settings, store.path());
+        app.settings_key(KeyEvent::from(KeyCode::Tab));
+        app.settings_key(KeyEvent::from(KeyCode::Enter));
+        let (rows, _) = cells(&mut app, &v, 120, 40);
+        let settings = main_text(&rows, &layout_for(&v, 120, 40));
+
+        // Memory, made to speak: `s` is its Search key, and it has no retrieval
+        // stage behind it.
+        let mut app = App::new((120, 40));
+        app.set_tools(one_tool());
+        open(&mut app, Screen::Memory, store.path());
+        app.memory_key(KeyEvent::from(KeyCode::Char('s')));
+        let (rows, _) = cells(&mut app, &v, 120, 40);
+        let memory = main_text(&rows, &layout_for(&v, 120, 40));
+
+        // A prefix each, because the notice row is cut to the pane's width and
+        // an assertion on the whole sentence is an assertion about the window.
+        let provider = NOTICE_PROVIDER
+            .split(':')
+            .next()
+            .expect("a notice with no text");
         for (name, screen, mine, theirs) in [
-            ("Settings", &settings, SETTINGS, [EXPLORER, MEMORY]),
-            ("Data Explorer", &explorer, EXPLORER, [SETTINGS, MEMORY]),
-            ("Memory", &memory, MEMORY, [SETTINGS, EXPLORER]),
+            ("Settings", &settings, provider, NOTICE_M2),
+            ("Memory", &memory, NOTICE_M2, provider),
         ] {
             assert!(
                 screen.contains(mine),
-                "{name} lost its own disclosure ({mine:?}):\n{screen}"
+                "{name} did not say its own piece ({mine:?}); a key that answers with \
+                 silence is a key the reader will call broken:\n{screen}"
             );
-            for other in theirs {
-                assert!(
-                    !screen.contains(other),
-                    "{name} is carrying another page's disclosure ({other:?}), which \
-                     tells the reader the wrong thing is missing:\n{screen}"
-                );
-            }
+            assert!(
+                !screen.contains(theirs),
+                "{name} is carrying the other page's disclosure ({theirs:?}), which \
+                 tells the reader the wrong thing is missing:\n{screen}"
+            );
         }
+
+        // And the static half: an honest empty state stays on the page whose
+        // store is empty.
+        assert!(
+            memory.contains(NO_INDEX),
+            "the Memory page stopped saying it has no index:\n{memory}"
+        );
+        assert!(
+            !settings.contains(NO_INDEX),
+            "Settings is claiming the memory store has no index, which is not its \
+             store to report on:\n{settings}"
+        );
     }
 
-    /// **A13.** The Data Explorer names the four things it will not draw, one
-    /// by one.
-    ///
-    /// *"`Not drawn` on its own is a shrug."* The phrase alone stays true if
-    /// the list behind it is replaced with nothing, or with four different
-    /// items. The query box is the one a user will spend a minute hunting for,
-    /// because every data explorer they have used has one.
-    #[test]
-    fn the_explorer_names_the_query_box_among_what_it_will_not_draw() {
-        let v = view();
-        let (rows, r) = page_screen(&v, Pane::Page(Page::DataExplorer), 120, 40);
-        let body = pane_text(&rows, &r);
-        for absent in ["query box", "columns", "elapsed", "chart"] {
-            assert!(
-                body.contains(absent),
-                "the page does not say the {absent} is missing, so its absence reads \
-                 as an oversight rather than a refusal:\n{body}"
-            );
-        }
-    }
+    // A13 — **deleted, not rewritten.** The guarantee was "the Data Explorer
+    // names the four things it will not draw, one by one", and the Data
+    // Explorer no longer exists: owner ruling, 2026-08-27, the three Harness
+    // mocks supersede it, and the page is archived at
+    // `notes/archive/mockup-data-explorer.md`. `usertools::Tool::routed()`
+    // dropped it the same day, so the sidebar prints `n/a` where its chord was.
+    // There is no page to make the claim, no query box to be missing from it,
+    // and nothing to assert. The *shape* of the guarantee — a page that refuses
+    // to draw something says which thing, by name — survives in A12 above and
+    // in the Memory page's own `NOTICE_M2`.
 
     // -----------------------------------------------------------------------
     // A14 — Settings shows this run, not a mockup
     // -----------------------------------------------------------------------
 
-    /// **A14.** Settings shows *this run's* values beside where each came from,
-    /// and an absent value reads as absent rather than as `0`.
+    /// **A14.** The values Settings claims are *this run's* really are this
+    /// run's, and the page can say where each came from.
     ///
-    /// The page's subtitle is a promise — "what this run resolved, and where
-    /// each value came from" — and nothing checked either half: *"a one-line
-    /// change swapping `st.model` for a literal, or dropping the third column,
-    /// left every existing assertion green, because they all key off the
-    /// `Not wired yet` block at the bottom."*
+    /// The old page's subtitle was a promise — "what this run resolved, and
+    /// where each value came from" — and nothing checked either half: *"a
+    /// one-line change swapping `st.model` for a literal, or dropping the third
+    /// column, left every existing assertion green, because they all key off
+    /// the `Not wired yet` block at the bottom."* So this is written
+    /// **differentially**: the same page is rendered for two different runs, and
+    /// each run's values must appear on its own screen and *not* on the other's.
+    /// A row that is a constant — a compiled-in sample, a literal where
+    /// `st.model` was — is identical on both screens and fails here. A
+    /// single-run `contains` cannot see that at all.
     ///
-    /// `notes/design/settings-wiring.md` makes "an absent value renders as
-    /// absent, never as a plausible placeholder" an acceptance criterion for
-    /// the whole Settings port, and the incoming page compiles the mockup's
-    /// sample values into its paint path. So this is written **differentially**:
-    /// the same page is rendered for two different runs, and each run's values
-    /// must appear on its own screen and *not* on the other's. A row that is a
-    /// constant — a compiled-in sample value, a literal where `st.model` was —
-    /// is identical on both screens and fails here. A single-run `contains`
-    /// cannot see that at all.
+    /// **Two things changed with the import, and neither is a defect this test
+    /// may hide.** The provenance *column* is gone: the incoming page is a card
+    /// grid whose third column does not exist, and each row's "where this comes
+    /// from" is a `RowKind::Note` the reader asks for with Enter. That is a
+    /// different affordance for the same promise, so the provenance half is
+    /// asserted through the key that surfaces it rather than deleted. And the
+    /// set of rows that are really this run's shrank to two — `Model` and
+    /// `Working Directory`. The session log and the per-goal budget are not on
+    /// the page at all, and `Max Context Tokens`, `Temperature`, `Response
+    /// Budget` and the rest are the mockup's sample figures compiled into
+    /// `settings::cards`.
     ///
-    /// Each assertion is on **one row** holding both the value and its
-    /// provenance, which is the pairing the page promises; a `contains` over
-    /// the screen is satisfied by the status bar with the Settings row blank.
+    /// ⚠ **Recorded, not asserted: those samples are undisclosed until
+    /// focused.** `NOTICE_CONTEXT` says outright that "these rows are the
+    /// mock's samples", and it renders only when the reader presses Enter on
+    /// the row. A reader who never focuses one sees `Max Context Tokens 8192`
+    /// beside a live `Model`, with nothing separating the two. That is the
+    /// `settings-wiring.md` acceptance criterion — "an absent value renders as
+    /// absent, never as a plausible placeholder" — still open, and it is a
+    /// finding rather than something this test can fix.
     #[test]
     fn settings_shows_this_runs_values_beside_where_each_came_from() {
+        use super::super::settings::NOTICE_MODEL;
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
+
         let mut a = view();
         a.status.model = "a-model-only-run-a-has".into();
-        a.status.session = "C:/sessions/only-run-a.jsonl".into();
-        a.status.context = Some((0, 120_000));
-        // Unset on purpose: the branch that has to say so rather than say zero.
-        a.status.spend = None;
+        a.status.cwd = "Q:/only-run-a".into();
 
         let mut b = view();
         b.status.model = "a-model-only-run-b-has".into();
-        b.status.session = "C:/sessions/only-run-b.jsonl".into();
-        b.status.context = Some((0, 64_000));
-        b.status.spend = Some((0, 900));
+        b.status.cwd = "Q:/only-run-b".into();
 
         let render = |v: &View| {
-            let (rows, r) = page_screen(v, Pane::Page(Page::Settings), 140, 40);
-            pane_rows(&rows, &r)
+            let (rows, r) = page_screen(v, Screen::Settings, 200, 60);
+            main_rows(&rows, &r)
         };
         let a_rows = render(&a);
         let b_rows = render(&b);
         let shown = |rows: &[String]| rows.join("\n");
 
-        for (what, mine, theirs, why) in [
+        for (what, label, mine, theirs) in [
             (
                 "the model",
+                "Model",
                 "a-model-only-run-a-has",
                 "a-model-only-run-b-has",
-                "provider",
             ),
             (
-                "the session log",
-                "only-run-a.jsonl",
-                "only-run-b.jsonl",
-                "record of this run",
-            ),
-            (
-                "the context limit",
-                "120000",
-                "64000",
-                "compaction happens at this size",
+                "the working directory",
+                "Working Directory",
+                "Q:/only-run-a",
+                "Q:/only-run-b",
             ),
         ] {
             assert!(
-                a_rows.iter().any(|r| r.contains(mine) && r.contains(why)),
-                "{what} is not shown beside where it came from — one row has to carry \
-                 both, or the page's subtitle is not true:\n{}",
+                a_rows.iter().any(|r| r.contains(label) && r.contains(mine)),
+                "{what} is not shown beside its own label — one row has to carry \
+                 both, or the page is not saying what it resolved:\n{}",
                 shown(&a_rows)
             );
             assert!(
@@ -1491,21 +1665,33 @@ mod app_rs {
             );
         }
 
+        // The provenance half, through the affordance that now carries it:
+        // Tab focuses card 1, ↓ lands on `Model`, Enter asks where it came
+        // from. A page that drew the value and could not say where it came
+        // from would pass everything above.
+        let store = tempfile::TempDir::new().expect("tempdir");
+        let mut app = App::new((140, 40));
+        app.set_tools(one_tool());
+        open(&mut app, Screen::Settings, store.path());
         assert!(
-            a_rows
-                .iter()
-                .any(|r| r.contains("Per-goal budget") && r.contains("not set")),
-            "an unset budget did not read as unset; a number here reads as a \
-             configured limit of that size:\n{}",
-            shown(&a_rows)
+            app.settings_key(KeyEvent::from(KeyCode::Tab)),
+            "the open Settings screen refused Tab"
         );
+        app.settings_key(KeyEvent::from(KeyCode::Down));
+        app.settings_key(KeyEvent::from(KeyCode::Enter));
+        let (rows, _) = cells(&mut app, &a, 140, 40);
+        let body = main_text(&rows, &layout_for(&a, 140, 40));
+        // A prefix, not the whole sentence: the notice row is cut to the pane's
+        // width, so an assertion on the full string is an assertion about the
+        // window size as much as about the page.
+        let head = NOTICE_MODEL
+            .split(';')
+            .next()
+            .expect("a notice with no text");
         assert!(
-            b_rows
-                .iter()
-                .any(|r| r.contains("Per-goal budget") && r.contains("900")),
-            "a budget that is set did not show its figure, so `not set` above proves \
-             nothing about the branch:\n{}",
-            shown(&b_rows)
+            body.contains(head),
+            "the Model row cannot say where its value came from; the page shows a \
+             figure and nothing about its origin:\n{body}"
         );
     }
 
@@ -1513,49 +1699,44 @@ mod app_rs {
     // A1 — a page that ran out of room says so
     // -----------------------------------------------------------------------
 
-    /// **A1.** A page that ran out of room says how many lines are missing and
-    /// names the remedy, on its last row.
+    /// **A1.** A page that ran out of room says how much is missing and names
+    /// the remedy, on its last row.
     ///
     /// *"At 80×24 — an ordinary default — the Settings page stopped after
     /// `PgUp/PgDn scroll` and the whole 'Not wired yet' block was off-screen,
-    /// unreachable by any key, with nothing saying it existed."* The three page
-    /// tests all render at 120×40, the smallest size at which the disclosure
-    /// fits; an adversarial reviewer rendered one at 80×24 and the assertions
-    /// were simply false there. These pages do not scroll, so a taller window
-    /// is the only remedy that exists.
+    /// unreachable by any key, with nothing saying it existed."* The page tests
+    /// all render at 120×40, the smallest size at which the disclosures fit; an
+    /// adversarial reviewer rendered one at 80×24 and the assertions were
+    /// simply false there. These pages do not scroll, so a taller window is the
+    /// only remedy that exists.
+    ///
+    /// **This test found the guarantee gone and it was restored in production
+    /// rather than lowered here.** The imported Settings grid's own doc said a
+    /// short pane "simply clips from the bottom, whole rows at a time" — nine
+    /// cards, four of them absent at 80×24, nothing saying so. `settings::
+    /// overflow_line` is the restoration and it carries the argument; this is
+    /// what watches it.
     ///
     /// **The 120×40 positive control is load-bearing**: without it a notice
     /// that fired at every size passes the assertions above for the wrong
     /// reason, and would itself be the noise the page exists to avoid.
     ///
-    /// **The guarantee is weaker than the checklist's wording, measured here
-    /// on 2026-08-26.** A1 says the notice "names the remedy"; at 80 columns —
-    /// the width the whole item is about — the notice is 86 columns long and
-    /// `fit_spans` cuts it at `…make the w…`, so the remedy is off the right
-    /// edge on exactly the window that triggers it. What survives at 80 is the
-    /// count and "this page does not scroll", which is the loss and the reason,
-    /// not the way out. So the remedy is asserted at a width where it fits and
-    /// the shortfall is written down rather than asserted away. Shortening the
-    /// notice, or wrapping it onto two rows, would close it.
+    /// Only Settings is swept. The Memory page does not clip: it compresses its
+    /// cards to the room it has and each one counts its own hidden rows
+    /// (`memory::more_line`), which is the same guarantee one level down and is
+    /// tested where that function lives.
     #[test]
     fn a_page_that_runs_out_of_room_says_how_much_is_missing() {
         let v = view();
-        for (name, pane) in [
-            ("Settings", Pane::Page(Page::Settings)),
-            ("Data Explorer", Pane::Page(Page::DataExplorer)),
-        ] {
-            let (rows, r) = page_screen(&v, pane, 80, 24);
-            let body = pane_rows(&rows, &r);
+        for (w, h) in [(80u16, 24u16), (140, 24)] {
+            let (rows, r) = page_screen(&v, Screen::Settings, w, h);
+            let body = panel_rows(&rows, &r);
             let last = body.last().cloned().unwrap_or_default();
             assert!(
-                body.iter().any(|l| l.contains("more line")),
-                "{name} at 80x24 dropped content and said nothing:\n{}",
-                body.join("\n")
-            );
-            assert!(
-                last.contains("more line"),
-                "the notice is not on the last row the page has, where a reader who \
-                 has run out of page is looking:\n{}",
+                last.contains("more"),
+                "Settings at {w}x{h} dropped content and said nothing on the last row \
+                 the page has, where a reader who has run out of page is \
+                 looking:\n{}",
                 body.join("\n")
             );
             assert!(
@@ -1568,37 +1749,27 @@ mod app_rs {
                 "the notice does not say why the rest is unreachable, so a reader \
                  hunts for a scroll key that is not there:\n{last}"
             );
-
-            // Wide enough for the whole notice: the remedy has to be in it.
-            // 140 columns, not 120 — measured 2026-08-26: a 120-column window
-            // leaves the chat pane 84 columns and the notice is 85, so it is
-            // cut at `make the window tall…`. The remedy is only ever read by
-            // somebody whose window is already wide.
-            let (rows, r) = page_screen(&v, pane, 140, 24);
-            let body = pane_rows(&rows, &r);
-            let last = body.last().cloned().unwrap_or_default();
-            assert!(
-                last.contains("more line"),
-                "{name} at 140x24 dropped content and said nothing:\n{}",
-                body.join("\n")
-            );
             assert!(
                 last.contains("taller"),
                 "the notice names the loss and not the way out of it; a taller window \
-                 is the only remedy that exists, because these pages do not \
+                 is the only remedy that exists, because this page does not \
                  scroll:\n{last}"
             );
         }
 
-        let (rows, r) = page_screen(&v, Pane::Page(Page::Settings), 120, 40);
-        let body = pane_text(&rows, &r);
+        // The positive control, at a size where everything fits: 200x60 is
+        // taller than the whole grid, so a notice here is a notice that fires
+        // unconditionally.
+        let (rows, r) = page_screen(&v, Screen::Settings, 200, 60);
+        let body = main_text(&rows, &r);
         assert!(
-            !body.contains("more line"),
+            !body.contains("does not scroll"),
             "a page that fitted claimed it had been cut:\n{body}"
         );
         assert!(
-            body.contains("telemetry"),
-            "the disclosure that must survive at this size did not:\n{body}"
+            body.contains("LANGUAGE SERVERS"),
+            "the last card did not draw at a size that holds the whole grid, so the \
+             negative above proves nothing:\n{body}"
         );
     }
 
@@ -1664,70 +1835,107 @@ mod app_rs {
         );
     }
 
-    /// **A6.** A left click on the SESSIONS header row toggles the sidebar;
-    /// nothing else does; a collapsed sidebar takes no click.
+    /// **A6.** The pointer hits what the reader saw: a left press lands on the
+    /// SESSIONS header's `[+]` and on nothing else, and a sidebar that is not
+    /// on screen takes no press at all.
     ///
-    /// The collapse defect was reported as *"+ and - does not seem to work"* —
-    /// **the owner aimed at the affordance with the mouse**, and nothing routed
-    /// a click anywhere. The whole row is the target rather than the
-    /// affordance's three cells: those columns are the sidebar's internal
-    /// layout, and a three-cell target at a guessed offset is a miss magnet.
+    /// **The control on that row changed owner with the import, and the
+    /// guarantee did not.** It used to be the collapse affordance — the defect
+    /// was reported as *"+ and - does not seem to work"*, **the owner aimed at
+    /// the affordance with the mouse**, and nothing routed a click anywhere.
+    /// The imported sidebar puts the `[+]` New Session control on the same row
+    /// and the collapse is a keyboard toggle (A5 above covers the latch). So
+    /// this is the same sentence about a different control, which is what
+    /// option (a) means: the guarantee is the sentence, not the method it used
+    /// to call.
     ///
-    /// The coordinates come from `regions` rather than being written down,
-    /// because a mouse aims at what was on screen at the last paint. A
-    /// hit-test against a freshly computed rectangle is a different rectangle,
-    /// and that is the failure this arrangement exists to prevent.
+    /// The coordinates come from the paint rather than being written down,
+    /// because a mouse aims at what was on screen at the last paint.
+    /// `App::new_session_clicked` hit-tests against the rectangle
+    /// `App::render` recorded, and `new_session_hit` is the geometry both that
+    /// paint and this test derive from — so the third assertion, that the
+    /// rectangle contains the cells the `[+]` glyph actually occupies, is the
+    /// one that would catch the two drifting apart. A hit-test against a
+    /// freshly computed rectangle is a different rectangle, and that is the
+    /// failure this arrangement exists to prevent.
     #[test]
-    fn only_the_sessions_header_row_takes_a_click_and_it_latches() {
+    fn only_the_new_session_control_takes_a_click_and_it_is_where_it_was_drawn() {
         let v = view();
         let mut app = App::new((120, 30));
+        app.set_tools(one_tool());
         let (rows, _) = cells(&mut app, &v, 120, 30);
         let r = layout_for(&v, 120, 30);
         assert!(
-            rows.iter().any(|r| r.contains("SESSIONS")),
+            rows.iter().any(|row| row.contains("SESSIONS")),
             "precondition: the sidebar is not even drawn:\n{}",
             rows.join("\n")
         );
 
-        // Everything that is not the header row.
+        let hit = new_session_hit(r.sidebar).expect("no [+] on a 120-column sidebar");
+
+        // The rectangle is where the glyph is. Reading the painted row is the
+        // whole point: geometry that agrees with itself and not with the paint
+        // is exactly the miss this arrangement is arranged against.
+        let header_row = &rows[usize::from(hit.y)];
+        let painted: String = header_row
+            .chars()
+            .skip(usize::from(hit.x))
+            .take(usize::from(hit.width))
+            .collect();
+        assert!(
+            painted.contains('+'),
+            "the hit rectangle does not cover the [+] the reader saw; it covers \
+             {painted:?} on\n{header_row}"
+        );
+
+        // Everything that is not the control. The cell immediately left of the
+        // affordance is the important one: a rectangle one column wide of the
+        // truth is a control that eats the header text beside it.
         for (x, y, what) in [
             (r.sidebar.x + 2, r.sidebar.y, "the sidebar's top border row"),
             (r.sidebar.x + 2, r.sidebar.y + 2, "the first session row"),
-            (r.main.x + 5, r.sidebar.y + 1, "the main pane, same row"),
+            (r.main.x + 5, hit.y, "the main pane, same row"),
+            (r.sidebar.x + 1, hit.y, "the SESSIONS label, same row"),
             (
-                r.sidebar.x - 1,
-                r.sidebar.y + 1,
-                "the float column left of it",
+                hit.x - 1,
+                hit.y,
+                "the cell immediately left of the affordance",
             ),
+            (hit.x, hit.y + 1, "the row below the affordance"),
         ] {
             assert!(
-                !app.click(x, y, 120),
-                "{what} toggled the sidebar; the one control gets the one row"
+                !app.new_session_clicked(x, y, false),
+                "{what} started a new conversation; the one control gets its own cells"
             );
         }
-
-        let header = r.sidebar.y + 1;
         assert!(
-            app.click(r.sidebar.x + 2, header, 120),
-            "the header click did not toggle"
+            app.new_session_clicked(hit.x, hit.y, false),
+            "the [+] did not take a press on the cell it was painted in"
         );
+
+        // While a question is on screen the pointer belongs to it — the same
+        // rule the keyboard follows. Asserted through the same call, because a
+        // `prompt_pending` the hit-test ignores is a control that fires under
+        // an approval prompt.
+        assert!(
+            !app.new_session_clicked(hit.x, hit.y, true),
+            "the [+] fired while a question was pending, so a stray click answers \
+             something the reader is not looking at"
+        );
+
+        // A collapsed sidebar has no cells on screen. The rectangle must go
+        // with the paint rather than being left over from the last one — a
+        // stale rect is a control that works where nothing is drawn.
+        app.toggle_sidebar(120);
         let (rows, _) = cells(&mut app, &v, 120, 30);
         assert!(
-            !rows.iter().any(|r| r.contains("SESSIONS")),
-            "the sidebar is still drawn after a collapse click:\n{}",
-            rows.join("\n")
-        );
-
-        // A user's click is a user's latch: widening must not reopen it.
-        let (rows, _) = cells(&mut app, &v, 200, 40);
-        assert!(
-            !rows.iter().any(|r| r.contains("SESSIONS")),
-            "the automatic rule overrode the user's click:\n{}",
+            !rows.iter().any(|row| row.contains("SESSIONS")),
+            "precondition: the sidebar is still drawn after the toggle:\n{}",
             rows.join("\n")
         );
         assert!(
-            !app.click(r.sidebar.x + 2, header, 200),
-            "a collapsed sidebar has no cells on screen and took a click anyway"
+            !app.new_session_clicked(hit.x, hit.y, false),
+            "a collapsed sidebar has no cells on screen and took a press anyway"
         );
     }
 
@@ -1868,6 +2076,65 @@ mod app_rs {
         );
     }
 
+    /// **The input box grows with what is typed** — `dock_height`'s `width`
+    /// argument, reaching the paint. (A3's other half, and a guarantee that was
+    /// left undefended by the import.)
+    ///
+    /// **The incoming `layout.rs` took `(view, room)` and no width**, so a
+    /// message longer than one line was hidden behind a three-row box: the
+    /// reader types past the end of the line and the text they cannot see is
+    /// still what gets sent. The argument was put back in the import round;
+    /// nothing watched it, and a `None` at the one call site restores the
+    /// defect with every existing test green.
+    ///
+    /// Written through the paint rather than through `dock_height` alone,
+    /// because the failure is a caller passing `None`, not the function
+    /// answering wrongly. The pure half rides along as the control: with no
+    /// width there is nothing to wrap and three rows is the honest answer.
+    #[test]
+    fn the_input_box_grows_with_what_is_typed() {
+        let mut v = view();
+        v.input = format!("{}TAIL-ONLY-AT-THE-END", "a".repeat(200));
+
+        let mut app = App::new((120, 40));
+        app.set_tools(one_tool());
+        let (rows, cursor) = cells(&mut app, &v, 120, 40);
+        let all = rows.join("\n");
+        assert!(
+            all.contains("TAIL-ONLY-AT-THE-END"),
+            "the end of the typed message is off the box; what the reader cannot see \
+             is still what gets sent:\n{all}"
+        );
+        let wrapped = rows.iter().filter(|r| r.contains("aaaaaaaa")).count();
+        assert!(
+            wrapped > 1,
+            "the message wrapped onto {wrapped} row(s), so the box did not grow: the \
+             layout was asked for a height without being told the width"
+        );
+        assert!(cursor.is_some(), "the grown box took the cursor with it");
+
+        // The control, in both directions: absent a width nothing can be
+        // wrapped and three rows is the floor; given one, the answer is the
+        // same function the box paints with.
+        assert_eq!(
+            dock_height(&v, 40, None),
+            3,
+            "a caller that does not know the width got an answer that depends on it"
+        );
+        assert!(
+            dock_height(&v, 40, Some(60)) > 3,
+            "the width was passed in and changed nothing, so the argument is decoration"
+        );
+        let empty = view();
+        assert_eq!(
+            dock_height(&empty, 40, Some(60)),
+            3,
+            "an empty box grew; the placeholder is a hint about what to type, not \
+             something typed, and wrapping it pushes the conversation up before the \
+             reader has pressed a key"
+        );
+    }
+
     /// **A4.** `App::render` returns `None` on a zero-area window instead of
     /// laying out, and every degenerate size is survived.
     ///
@@ -1886,8 +2153,13 @@ mod app_rs {
     /// buys is that the layout below it is never reached with a degenerate
     /// rect, which is insurance against arithmetic that has not been written
     /// yet. What this test does defend is the sweep itself — every mutation
-    /// that makes the layout panic at a small size turns it red, which A3's two
-    /// mutations both did.
+    /// that makes the layout panic at a small size turns it red — though **not
+    /// the mutation §6a names for A3.** Measured 2026-08-27: `let ceiling =
+    /// room / 2;` leaves this green, because the clamp cannot invert while
+    /// `bounded` reads `floor.min(ceiling)` — that `.min` is the line actually
+    /// carrying the guarantee, and removing it turns this red at once. The
+    /// checklist's mutation was written against arithmetic that has since moved;
+    /// the property it was aimed at is still defended, one expression over.
     #[test]
     fn degenerate_windows_are_survived() {
         let v = view();
@@ -1901,14 +2173,10 @@ mod app_rs {
                 );
             }
         }
-        for pane in [
-            Pane::Page(Page::Settings),
-            Pane::Page(Page::DataExplorer),
-            Pane::Page(Page::Memory),
-        ] {
+        for screen in RENDERABLE {
+            let store = tempfile::TempDir::new().expect("tempdir");
             let mut app = App::new((0, 0));
-            app.show_explorer("source  C:/store\nsessions  2 file(s)");
-            app.show(pane);
+            open(&mut app, screen, store.path());
             for (w, h) in [(0u16, 0u16), (1, 1), (5, 3), (24, 8), (200, 2)] {
                 let _ = cells(&mut app, &v, w, h);
             }
@@ -1919,43 +2187,31 @@ mod app_rs {
     // A9 — the degradation ladder
     // -----------------------------------------------------------------------
 
-    /// **A9.** The ladder, and the three gaps measured off the mockup itself.
+    /// **A9.** The degradation ladder.
     ///
     /// The mockup speaks for one window size (~128×41). *"Rows are the scarce
-    /// axis: at 24 rows two of them are a whole approval key row."* The gaps
-    /// were measured from `notes/design/mockup-tui.png` on 2026-08-13 — the
-    /// design note's own sampled table recorded none of them, and the prose
-    /// description of the image was wrong in five recorded places.
+    /// axis: at 24 rows two of them are a whole approval key row."* So every
+    /// rung is a threshold a test can name: the status bar sheds its border,
+    /// the header sheds its subtitle and rule, the main pane sheds its border,
+    /// and the sidebar collapses on its own below `AUTO_COLLAPSE_COLS`.
     ///
-    /// The pane gap is **zero when the sidebar is collapsed**: it is the
-    /// sidebar's, and goes with it, or it becomes a stray two-column stripe.
+    /// **The three gaps went with the mockup they were measured off, and this
+    /// is a (b).** The other half of this test asserted the panes float one
+    /// column inside the window, that two columns of ground sit between the
+    /// sidebar and the main pane, and that a blank row separates the pane from
+    /// the status bar — all measured from `notes/design/mockup-tui.png` on
+    /// 2026-08-13, against a shell that no longer exists. The TUI imported on
+    /// 2026-08-27 carves from a different mock: `layout::regions` splits the
+    /// window edge to edge, the sidebar starts at column 0 and the panes share
+    /// an edge, and the status bar sits directly under the main pane. Nothing
+    /// was lost by accident — the numbers described one picture and a different
+    /// picture was accepted. Restoring them here would be this file imposing a
+    /// superseded mock on the shell the owner chose, which is not what a
+    /// hardening net is for. The rungs below are the half of A9 that is a
+    /// property of the code rather than of an image, and they survived intact.
     #[test]
-    fn the_degradation_ladder_and_the_mockups_gaps_are_in_the_carve() {
+    fn the_degradation_ladder_is_in_the_carve() {
         let v = view();
-        let r = regions(Rect::new(0, 0, 128, 41), sidebar::width(128, false), 3);
-        assert_eq!(
-            r.sidebar.x, 1,
-            "the panes stopped floating inside the window: {r:?}"
-        );
-        assert_eq!(r.sidebar.y, 1, "{r:?}");
-        assert_eq!(r.status.bottom(), 41 - 1, "{r:?}");
-        assert_eq!(
-            r.main.x - r.sidebar.right(),
-            2,
-            "the two columns of ground between the boxes are gone; they do not share \
-             an edge in the image: {r:?}"
-        );
-        assert_eq!(
-            r.status.y - r.main.bottom(),
-            1,
-            "the blank row between the pane's bottom border and the bar's top: {r:?}"
-        );
-        let collapsed = regions(Rect::new(0, 0, 128, 41), 0, 3);
-        assert_eq!(
-            collapsed.main.x, 1,
-            "the pane gap outlived the sidebar and is now a stripe of nothing: {collapsed:?}"
-        );
-
         // Rows first: the status border, then the header's subtitle and rule.
         let r = regions(Rect::new(0, 0, 100, 13), sidebar::width(100, false), 3);
         assert_eq!(r.status.height, 1, "under 14 rows the bar is one row");
@@ -2031,75 +2287,156 @@ mod app_rs {
         assert!(cursor.is_some(), "there is nowhere to answer");
     }
 
-    /// **A15.** The Memory page draws exactly one input box, and it is the
-    /// conversation's, cell for cell.
+    /// **F32. A page that cannot read its store says so, and says which
+    /// store.**
     ///
-    /// **This is a finding, not a feature.** The sidebar row and the mockup
-    /// describe Memory as *"the only page with its own composer"*. There is no
-    /// composer in this repository, and the thing this codebase would actually
-    /// do wrong is draw a second box that looks like one and swallows nothing —
-    /// the "declaration wearing the costume of a mechanism" it refuses
-    /// everywhere else. The dock is drawn once, by `render`, after the pane
-    /// match, for every pane; a page that draws its own is the defect.
+    /// *"A page rendering an error and a page rendering nothing look similar
+    /// and mean opposite things"* — *there is nothing here* and *something went
+    /// wrong* are different instructions to whoever is reading. And the pages
+    /// read different stores, so a shared sentence would leave a reader unable
+    /// to tell which failed.
     ///
-    /// `[send: Enter]` is drawn once per input box, by the box itself, so
-    /// counting it counts boxes. **Expect to adjust on arrival** if the input
-    /// box's own hint changes wording — that string belongs to `view.rs`, which
-    /// is not being replaced, but it is the one literal here that is not this
-    /// file's.
+    /// **This test found the guarantee gone and it was restored in production
+    /// rather than lowered here.** The two arms it used to drive were
+    /// `Frame::memory_page_text` and `Frame::explorer_page_text`, extracted out
+    /// of `launch_tool` precisely so a test could reach them without a
+    /// terminal. The import replaced both pages, and
+    /// `app::memory_view_from` returns the *empty* view for a `Wiki` that
+    /// cannot be opened or read — the same shape as a wiki with nothing in it,
+    /// down to the six zero counts and `No index yet`. So an unreadable store
+    /// rendered as an empty one, which is the opposite claim, and nothing said
+    /// otherwise. `memory::NOTICE_UNREADABLE` and its arm in `memory_view_from`
+    /// are the restoration; `harness::NOTICE_UNREADABLE` is the same repair on
+    /// the other page.
+    ///
+    /// **The failure is provoked, not simulated.** A path that is a *file*
+    /// makes `Wiki::project` fail at `create_dir_all`; an absent directory does
+    /// not, because the store creates itself on first touch — the same trap the
+    /// original version of this test fell into (`bd280d5`), where
+    /// `Some("definitely-not-a-directory")` left both mutants alive because an
+    /// absent store is an *empty* store and returns `Ok`.
+    ///
+    /// ⚠ **Only the memory arm is driven.** The harness feed reads `App`'s
+    /// private `harness_dir`, which no seam outside `app.rs` can aim at a path
+    /// this test controls, so `harness::NOTICE_UNREADABLE` is written and
+    /// unwatched. That is a real gap, recorded rather than papered over.
     #[test]
-    fn memory_draws_one_input_box_and_it_is_the_conversations() {
-        let v = view();
-        let mut chat_app = App::new((120, 40));
-        chat_app.set_tools(one_tool());
-        let (chat_rows, _) = cells(&mut chat_app, &v, 120, 40);
+    fn an_unreadable_store_says_so_and_says_which_store() {
+        use super::super::memory::NOTICE_UNREADABLE;
 
+        let v = view();
+        let page = |root: &std::path::Path| {
+            let mut app = App::new((120, 40));
+            app.set_tools(one_tool());
+            app.toggle_memory(&root.to_string_lossy());
+            let (rows, _) = cells(&mut app, &v, 120, 40);
+            main_text(&rows, &layout_for(&v, 120, 40))
+        };
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let empty = page(dir.path());
+
+        // A file where a project directory should be: the store cannot be
+        // created and cannot be read.
+        let file = dir.path().join("this-is-a-file-not-a-project");
+        std::fs::write(&file, b"").expect("write");
+        let broken = page(&file);
+
+        assert_ne!(
+            broken, empty,
+            "a store that could not be read renders exactly like a store with nothing \
+             in it, so the page is telling the reader the opposite of what happened"
+        );
+        assert!(
+            broken.contains(NOTICE_UNREADABLE),
+            "the page did not report the failure it hit; a blank or bland page reads \
+             as an empty store, which is the opposite claim:\n{broken}"
+        );
+        assert!(
+            NOTICE_UNREADABLE.contains(".emma/memory"),
+            "the failure sentence does not name the store that failed, so a reader \
+             with two pages open cannot tell which one could not be read"
+        );
+        assert!(
+            !empty.contains(NOTICE_UNREADABLE),
+            "an empty store claims it could not be read, which is the same confusion \
+             pointing the other way:\n{empty}"
+        );
+        assert!(
+            broken.contains("could not be read"),
+            "the sentence names a store and not a failure; a count or a bland line \
+             here reads as an empty store:\n{broken}"
+        );
+    }
+
+    /// **A15.** The Memory page draws exactly one input box, and it says what
+    /// that box does not do yet.
+    ///
+    /// **Half of this guarantee was reversed by the import, deliberately, and
+    /// the half that is left is the half that was ever in danger.** The
+    /// sentence used to end "…and it is the conversation's": there was no
+    /// composer in this repository, the dock was drawn once by `render` for
+    /// every pane, and a page drawing its own box would have been "a
+    /// declaration wearing the costume of a mechanism". The imported Memory
+    /// page *is* handed `Regions::main` whole and does bottom-anchor a query
+    /// box of its own — the branch's design, and the conversation's dock is not
+    /// on that screen at all.
+    ///
+    /// So what survives is the countable half — **exactly one box** — plus the
+    /// honesty the old wording was protecting: this box has no retrieval stage
+    /// behind it (plan M2), and the page says so on the key rather than going
+    /// dead. A second box, or a box that silently swallowed a query, is still
+    /// the defect; it is now reachable a different way.
+    ///
+    /// A21 below keeps the other half — that the frame survives a page — from
+    /// the chrome's side, which is where it was really being asserted.
+    #[test]
+    fn memory_draws_one_input_box_and_says_what_it_cannot_do() {
+        use super::super::memory::{NOTICE_M2, PLACEHOLDER};
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
+
+        let v = view();
+        let store = tempfile::TempDir::new().expect("tempdir");
         let mut mem = App::new((120, 40));
         mem.set_tools(one_tool());
-        mem.show_memory("project        C:/src/emma\ngoals asked    12");
-        let (mem_rows, _) = cells(&mut mem, &v, 120, 40);
+        open(&mut mem, Screen::Memory, store.path());
+        let (rows, _) = cells(&mut mem, &v, 120, 40);
+        let body = main_rows(&rows, &layout_for(&v, 120, 40));
 
-        let boxes = mem_rows
-            .iter()
-            .filter(|r| r.contains("[send: Enter]"))
-            .count();
+        let boxes = body.iter().filter(|l| l.contains(PLACEHOLDER)).count();
         assert_eq!(
             boxes,
             1,
-            "the Memory page draws {boxes} input boxes; it has one, and it is the \
-             conversation's:\n{}",
-            mem_rows.join("\n")
+            "the Memory page draws {boxes} query boxes; a page with two input \
+             affordances has one that swallows what is typed into it:\n{}",
+            body.join("\n")
         );
-
-        let r = layout_for(&v, 120, 40);
-        let dock = |rows: &[String]| {
-            (r.dock.y..r.dock.bottom())
-                .map(|y| rows[usize::from(y)].clone())
-                .collect::<Vec<_>>()
-        };
+        // `[send: Enter]` is drawn once per input box, by the box itself, so
+        // counting it counts boxes — the conversation's dock and this page's
+        // query box render the same chrome. One, and the one is the page's:
+        // the placeholder above says whose.
+        let chrome = body.iter().filter(|l| l.contains("[send: Enter]")).count();
         assert_eq!(
-            dock(&mem_rows),
-            dock(&chat_rows),
-            "the Memory page's input dock is not the conversation's — a page-local \
-             input is the composer this repository does not have"
+            chrome, 1,
+            "the Memory page draws {chrome} input boxes; a second one is a place to              type that nothing is listening to:
+{}",
+            body.join("
+")
         );
 
-        // The same for the other two, which is A21's placement constraint seen
-        // from the dock's side: the pane match runs *before* the dock, so a
-        // page that painted outside its own rectangle would show up here as a
-        // dock that differs from the conversation's.
-        for (name, pane) in [
-            ("Settings", Pane::Page(Page::Settings)),
-            ("Data Explorer", Pane::Page(Page::DataExplorer)),
-        ] {
-            let (rows, _) = page_screen(&v, pane, 120, 40);
-            assert_eq!(
-                dock(&rows),
-                dock(&chat_rows),
-                "{name} changed the input dock; a page swaps the middle and leaves the \
-                 chrome alone"
-            );
-        }
+        // The honesty on the key. `s` is the page's Search action; the notice
+        // is what stops the box being a costume.
+        assert!(
+            mem.memory_key(KeyEvent::from(KeyCode::Char('s'))),
+            "the open Memory page let its own Search key fall through"
+        );
+        let (rows, _) = cells(&mut mem, &v, 120, 40);
+        let body = main_text(&rows, &layout_for(&v, 120, 40));
+        assert!(
+            body.contains(NOTICE_M2),
+            "the query box took a search and said nothing about having no retrieval \
+             stage behind it, which is a box that looks like it works:\n{body}"
+        );
     }
 
     /// **A21, and A20's behavioural half.** A page swaps the middle and keeps
@@ -2109,23 +2446,28 @@ mod app_rs {
     /// `QUICK HELP` and the status row exactly as the chat view has them, and
     /// replaces the middle. So a page is not a window, not a mode, and not a
     /// second `App`."* Placement inside `render` is the item: sidebar and
-    /// border before the pane match, dock and hint and status row after it — a
-    /// page drawn last paints over the dock.
+    /// border before the screen dispatch, the status row after it — a page
+    /// drawn over the seam paints over the chrome.
     ///
-    /// `Pane::Chat` being a named variant rather than "no page" is A20, and its
-    /// other half — that the match stays exhaustive, so a new page is a compile
-    /// error at every site that decides what to draw — belongs to the compiler
-    /// and cannot be asserted from here. A `_ =>` arm anywhere in that match
-    /// deletes it with no test failing. Recorded, not faked.
+    /// **A20's shape changed and the behaviour it asked for did not.** There is
+    /// no `Pane` enum any more: the occupant is three fields (`settings_open`,
+    /// `memory`, `harness`) and an `else` for the conversation, so "no page is
+    /// open" is now the conjunction asserted below rather than a named variant.
+    /// The compiler no longer makes a fourth page a compile error at every
+    /// deciding site — the `else` arm takes anything — which is a real loss of
+    /// the exhaustiveness half, and it is recorded here because nothing can
+    /// assert it. What the import buys back is that opening one screen closes
+    /// the others in `toggle_*` rather than by ranking them at paint time, so
+    /// the one-occupant rule is asserted directly below.
     #[test]
     fn a_page_swaps_the_middle_and_keeps_the_frame_and_the_transcript() {
         let v = view();
         let sk = skin();
+        let store = tempfile::TempDir::new().expect("tempdir");
         let mut app = App::new((120, 40));
         app.set_tools(one_tool());
-        assert_eq!(
-            app.pane(),
-            Pane::Chat,
+        assert!(
+            !app.settings_open() && !app.memory_open() && !app.harness_open(),
             "the default occupant is not the conversation"
         );
         app.push_block(vec![Line::raw("a-line-only-the-transcript-has")], &sk);
@@ -2139,8 +2481,8 @@ mod app_rs {
             "precondition: the transcript is not drawn at all"
         );
 
-        app.show(Pane::Page(Page::Settings));
-        let (rows, cursor) = cells(&mut app, &v, 120, 40);
+        open(&mut app, Screen::Settings, store.path());
+        let (rows, _) = cells(&mut app, &v, 120, 40);
         let all = rows.join("\n");
         for (what, needle) in [
             ("the sidebar", "SESSIONS"),
@@ -2157,13 +2499,30 @@ mod app_rs {
             !all.contains("a-line-only-the-transcript-has"),
             "the transcript painted under the page:\n{all}"
         );
+
+        // One occupant at a time, stated by the toggles rather than ranked at
+        // paint time. Opening Memory over Settings must close Settings, or two
+        // screens compete for the one region and the dispatch order decides
+        // silently which one the reader gets.
+        open(&mut app, Screen::Memory, store.path());
         assert!(
-            cursor.is_some(),
-            "a page took the dock's cursor, so there is nowhere to type on it"
+            app.memory_open() && !app.settings_open(),
+            "opening Memory left Settings open behind it"
+        );
+        let (rows, _) = cells(&mut app, &v, 120, 40);
+        let all = rows.join("\n");
+        assert!(
+            all.contains("SESSIONS") && all.contains("MODE"),
+            "the frame did not survive the second page:\n{all}"
         );
 
-        app.show(Pane::Chat);
-        let (rows, _) = cells(&mut app, &v, 120, 40);
+        // Back to the conversation, by the page's own toggle.
+        open(&mut app, Screen::Memory, store.path());
+        assert!(
+            !app.memory_open(),
+            "the toggle did not close the page it opened"
+        );
+        let (rows, cursor) = cells(&mut app, &v, 120, 40);
         let all = rows.join("\n");
         assert!(
             all.contains("a-line-only-the-transcript-has"),
@@ -2171,8 +2530,12 @@ mod app_rs {
              discards state:\n{all}"
         );
         assert!(
-            !all.contains("telemetry"),
+            !all.contains("MODEL PROVIDER"),
             "the page kept painting after it was left:\n{all}"
+        );
+        assert!(
+            cursor.is_some(),
+            "the conversation came back with nowhere to type"
         );
     }
 

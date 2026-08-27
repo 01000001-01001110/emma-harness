@@ -73,29 +73,18 @@ pub mod bindings;
 pub mod chat;
 pub mod diff;
 pub mod frame;
-/// The net over `frame.rs` and `app.rs`, and it is **red on purpose** after the
-/// TUI import of 2026-08-27.
+/// The net over `frame.rs` and `app.rs`. Green as of 2026-08-27, and it earned
+/// the four clusters it was red for.
 ///
-/// Seventeen of its assertions do not compile against the imported `app.rs` and
-/// `frame.rs`, which is the signal the module was written to produce — read its
-/// own doc, and `notes/design/term-hardening-backport.md`. Four clusters:
-/// `Pane`/`Page`/`App::show`/`App::pane` (the page model the import replaced
-/// with one flag per screen), `App::show_memory`/`show_explorer` (text pages
-/// the import replaced with a structured Memory page and no Data Explorer at
-/// all), `App::click` (the collapse-on-header click, whose row the import gave
-/// to the `[+]` New Session control), and `Frame::memory_page_text` /
-/// `explorer_page_text` (the *something went wrong* wording for a store that
-/// cannot be read).
-///
-/// Each needs a decision, not a shim: a stand-in written so these compile would
-/// be a receipt for a path nothing takes.
-///
-/// **The gate is an escape hatch, not a silencer.** It is off by default, so a
-/// plain `cargo test -p emma` still fails loudly here. Building with
-/// `RUSTFLAGS="--cfg emma_guarantees_off"` skips this module so the other 1,020
-/// library tests can be run while the four clusters are outstanding. Delete the
-/// attribute the day they are answered.
-#[cfg(not(emma_guarantees_off))]
+/// It was lifted out of those two files so that replacing them wholesale would
+/// turn it red on arrival, and it did: four defects on the import itself, then
+/// seventeen compile errors that were genuine model changes, then — once those
+/// were reconciled — four more regressions the compiler could not see. The
+/// panic hook had moved after raw mode, `restore_terminal`'s early return was
+/// back to consulting one latch of four, the Settings grid clipped four cards
+/// with nothing saying so, and neither page named the key that leaves it. Read
+/// its own doc and `notes/design/term-hardening-backport.md` for what each item
+/// defends.
 pub mod guarantees;
 pub mod harness;
 pub mod input;

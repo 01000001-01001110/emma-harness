@@ -135,8 +135,46 @@ static PANIC_HOOK: Once = Once::new();
 /// cursor report is window-relative to match, and ratatui addresses every cell
 /// of the viewport that way already. `anchor` uses it on the resize path for
 /// exactly that reason, and only over rows it has just erased.
+/// Chain the terminal restore onto whatever panic hook is already installed.
+///
+/// Separate from `install` so it can be called *first*, before any mode is
+/// enabled. `call_once`, so repeated frames cost nothing and the previous hook
+/// is chained exactly once.
+///
+/// **Restored 2026-08-27.** The TUI import inlined this `call_once` into
+/// `install`, after the `Terminal` was built — so the hook went on after raw
+/// mode and after the alternate screen, and a panic in between had nothing to
+/// undo either. Item F20 of `notes/design/term-hardening-backport.md`.
+fn install_panic_hook() {
+    PANIC_HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            // Before the message, so the message is readable and so the
+            // terminal is echoing again by the time anybody reads it.
+            restore_terminal();
+            previous(info);
+        }));
+    });
+}
+
 pub fn restore_terminal() {
-    if !FRAME_ON.swap(false, Ordering::SeqCst) {
+    // **Each latch answers for itself.** This used to return early unless
+    // `FRAME_ON` was set — and `FRAME_ON` is set *last*, after raw mode, the
+    // alternate screen and mouse capture are already on. So a panic anywhere in
+    // that window left every one of them enabled with the only thing that turns
+    // them off refusing to run: a shell with no echo, on a screen that is not
+    // the user's, which is the failure `CLAUDE.md` says people uninstall over.
+    //
+    // The comment at the install site claimed the `ALT_ON` latch prevented
+    // exactly this. It could not, because it never reached the code that reads
+    // it. Restored 2026-08-27: the TUI import brought back the single-latch
+    // guard, and the hardening net caught it.
+    let was_frame = FRAME_ON.swap(false, Ordering::SeqCst);
+    if !was_frame
+        && !RAW_ON.load(Ordering::SeqCst)
+        && !ALT_ON.load(Ordering::SeqCst)
+        && !MOUSE_ON.load(Ordering::SeqCst)
+    {
         return;
     }
     if RAW_ON.swap(false, Ordering::SeqCst) {
@@ -440,6 +478,12 @@ impl Frame {
         stdout.write_all(b"\r\n").ok()?;
         stdout.flush().ok()?;
 
+        // Installed before the first mode is enabled, not after. A hook that
+        // goes on afterwards cannot answer for a panic in between, and the
+        // window between raw mode and `FRAME_ON` is several fallible writes
+        // long. `call_once` makes this free on every later frame.
+        install_panic_hook();
+
         enable_raw_mode().ok()?;
         RAW_ON.store(true, Ordering::SeqCst);
 
@@ -485,15 +529,6 @@ impl Frame {
             }
         };
 
-        PANIC_HOOK.call_once(|| {
-            let previous = std::panic::take_hook();
-            std::panic::set_hook(Box::new(move |info| {
-                // Before the message, so the message is readable and so the
-                // terminal is echoing again by the time anybody reads it.
-                restore_terminal();
-                previous(info);
-            }));
-        });
         FRAME_ON.store(true, Ordering::SeqCst);
         // After `FRAME_ON`, never before: that flag is what makes
         // [`restore_terminal`] willing to turn these modes off again, so one
@@ -2285,8 +2320,11 @@ mod tests {
         let start = source
             .find("pub fn install(")
             .expect("install was renamed; this assertion is now vacuous");
+        // `FRAME_ON.store(true` rather than the panic hook: the hook moved to
+        // the top of `install` on 2026-08-27 (F20), so it no longer marks the
+        // end of anything.
         let end = source[start..]
-            .find("PANIC_HOOK.call_once")
+            .find("FRAME_ON.store(true")
             .expect("install was restructured; this assertion is now vacuous")
             + start;
         let body: String = source[start..end]

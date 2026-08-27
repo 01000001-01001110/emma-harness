@@ -40,7 +40,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Widget};
 
 use super::palette::Role;
-use super::render::{cols, fit, Skin, ASCII};
+use super::render::{cols, corner_row, fit, Skin, ASCII};
 
 // region: State
 // ---------------------------------------------------------------------------
@@ -186,6 +186,14 @@ pub struct MemoryView {
 /// The subtitle under the title, verbatim from the mock.
 pub const SUBTITLE: &str = "Assistant memory workspace";
 
+/// The key that leaves this page, drawn on it.
+///
+/// **`Alt+m`, not `Esc`.** Esc on this page clears the focus and the add
+/// flow's half-typed text ([`handle_key`]); it does not close anything. The
+/// chord that opened the page is the chord that closes it, and a page naming
+/// the wrong key is worse than a page naming none.
+pub const EXIT_HINT: &str = "Alt+m closes";
+
 /// The action bar's pairs, verbatim from the mock, in the mock's order.
 pub const ACTIONS: [(&str, &str); 8] = [
     ("a", "Add memory"),
@@ -242,6 +250,20 @@ pub const MANAGE_ACTIONS: [(&str, &str); 5] = [
 /// The honest notices. Query and search have no retrieval stage behind them
 /// yet (plan M2); saying so beats a silent key.
 pub const NOTICE_M2: &str = "memory query needs the retrieval stage (M2)";
+/// The store could not be read at all.
+///
+/// **A page rendering nothing and a page rendering a failure look alike and
+/// mean opposite things.** Every count, card and empty state on this page is
+/// built to describe an *empty* wiki — `EMPTY_RECENT`, `NO_INDEX`, six zero
+/// counts — and [`super::app`]'s view builder returns exactly that shape when
+/// `Wiki::project` or `Wiki::view` returns an error. So an unreadable store
+/// renders as a store with nothing in it, and the reader is told the opposite
+/// of what happened. The old text pages carried this sentence and the import
+/// dropped it (F32, `notes/design/term-hardening-backport.md`); it names the
+/// store as well as the failure, because the Harness page has its own and a
+/// shared sentence would leave a reader unable to tell which one failed.
+pub const NOTICE_UNREADABLE: &str =
+    "the memory wiki under .emma/memory could not be read — not the same as empty";
 pub const NOTICE_NO_ROW: &str = "No row selected — Tab and ↑/↓ select one";
 /// The `[?]` help notices, one per key scope.
 pub const HELP_MAIN: &str =
@@ -960,12 +982,8 @@ fn render_grid(area: Rect, buf: &mut Buffer, v: &MemoryView, skin: &Skin, g: &Pa
     // The head: version in the corner, the title, the subtitle, a rule.
     // "Very large" is not a thing a terminal cell can do; one bold accent row
     // is this repository's standing substitute (settings design Q8).
-    let version = fit(&v.version, w, skin.glyphs.ellipsis);
     let head = [
-        Line::from(vec![
-            Span::raw(" ".repeat(w.saturating_sub(cols(&version)))),
-            Span::styled(version, skin.palette.dim()),
-        ]),
+        corner_row(EXIT_HINT, &v.version, w, skin),
         Line::from(Span::styled(
             fit("Memory", w, skin.glyphs.ellipsis),
             skin.palette.bold(Role::Accent),

@@ -1652,6 +1652,10 @@ fn harness_view_from(
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     let Ok(feed) = hs::runs(dir, now) else {
+        // The memory page's rule from this side: an unreadable session
+        // directory and one with no runs in it render the same dashboard, and
+        // they mean opposite things. Say which store failed.
+        v.notice = Some(super::harness::NOTICE_UNREADABLE.to_string());
         return v;
     };
     let offset = hs::local_offset_secs();
@@ -2531,11 +2535,21 @@ fn memory_view_from(cwd: &str) -> super::memory::MemoryView {
         embedding_model: "index-first (none)".to_string(),
         ..MemoryView::default()
     };
+    // ⚠ A FAILURE IS NOT AN EMPTY STORE. `empty` is the shape of a wiki with
+    // nothing in it, so returning it bare for a read error tells the reader the
+    // opposite of what happened — the F32 arm the text pages carried and this
+    // one dropped. The notice is the page's own honesty channel and it names
+    // the store, so the Harness page's identical failure is distinguishable
+    // from this one.
+    let unreadable = MemoryView {
+        notice: Some(super::memory::NOTICE_UNREADABLE.to_string()),
+        ..empty.clone()
+    };
     let Ok(wiki) = Wiki::project(std::path::Path::new(cwd)) else {
-        return empty;
+        return unreadable;
     };
     let Ok(s) = wiki.view() else {
-        return empty;
+        return unreadable;
     };
     // `Category::ALL` and the page's `CATEGORIES` share one order; the index
     // is the entire mapping between the two layers.

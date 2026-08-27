@@ -41,7 +41,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Widget};
 
 use super::palette::Role;
-use super::render::{cols, fit, Skin, ASCII};
+use super::render::{cols, corner_row, fit, Skin, ASCII};
 
 // region: State
 // ---------------------------------------------------------------------------
@@ -251,6 +251,10 @@ pub struct HarnessView {
 /// The subtitle under the title, verbatim from the mock.
 pub const SUBTITLE: &str = "Local Rust orchestration, runtime control, and agent execution";
 
+/// The key that leaves this page, drawn on it — the chord that opened it.
+/// Esc on this page dismisses a notice; it does not close the dashboard.
+pub const EXIT_HINT: &str = "Alt+h closes";
+
 /// The action bar's pairs, verbatim from the mock, in the mock's order.
 pub const ACTIONS: [(&str, &str); 9] = [
     ("a", "Run"),
@@ -292,6 +296,18 @@ pub const NOTICE_READ_ONLY: &str =
     "runs are read-only today: this is session history, not a process manager";
 pub const NOTICE_LOGS: &str = "no logs view yet — the EVENT LOG card is the tail (plan H4)";
 pub const NOTICE_NO_RUN: &str = "No run selected — ↑/↓ selects one";
+/// The session history could not be read at all.
+///
+/// The memory page's `NOTICE_UNREADABLE`, arriving from this side: an
+/// unreadable session directory and a directory with no runs in it produce the
+/// same empty dashboard, and they mean opposite things. It names *this* store,
+/// so a reader who sees one of the two sentences knows which one failed.
+///
+/// ⚠ **Untested from `guarantees.rs`.** The session directory is a private
+/// field with no seam a sibling module can aim at a tempdir, so nothing in the
+/// hardening net drives this arm — see that file's F32 region.
+pub const NOTICE_UNREADABLE: &str =
+    "the session history could not be read — not the same as no runs";
 /// The `[?]` help notices, one per key scope, naming only keys that work.
 pub const HELP_DASH: &str =
     "[i] inspect  [g] graph  [v] view all  [R] refresh  Tab/↑/↓ cycle runs  Esc clears";
@@ -988,12 +1004,8 @@ fn render_grid(area: Rect, buf: &mut Buffer, v: &HarnessView, skin: &Skin, g: &P
     // The head: version in the corner, the title, the subtitle, a rule.
     // "Large" is not a thing a terminal cell can do; one bold accent row is
     // this repository's standing substitute (settings design Q8).
-    let version = fit(&v.version, w, skin.glyphs.ellipsis);
     let head = [
-        Line::from(vec![
-            Span::raw(" ".repeat(w.saturating_sub(cols(&version)))),
-            Span::styled(version, skin.palette.dim()),
-        ]),
+        corner_row(EXIT_HINT, &v.version, w, skin),
         Line::from(Span::styled(
             fit("Harness", w, skin.glyphs.ellipsis),
             skin.palette.bold(Role::Accent),

@@ -857,6 +857,32 @@ pub fn fit(text: &str, budget: usize, ellipsis: &str) -> String {
     out
 }
 
+/// A page's top row: the key that leaves the page on the left, the running
+/// version on the right, both dim.
+///
+/// **The exit key is on the page because a page that does not name its way out
+/// is a page people report as stuck.** The recorded shape of that complaint is
+/// somebody pressing the chord again and saying it *"does not close"*; there is
+/// no scroll, no close affordance and no click target on any of these screens,
+/// so the key is the only way off and the page is the only place it can be
+/// read. Item A11 of `notes/design/term-hardening-backport.md`. The three
+/// pages had it, the 2026-08-27 TUI import did not, and it is restored here —
+/// once, rather than per page, because three copies of a promise drift.
+///
+/// The hint goes first and the version is pushed to whatever is left: at a
+/// width that holds only one of them, the one that matters to somebody who
+/// cannot get out is the one that survives.
+pub fn corner_row(exit: &str, version: &str, w: usize, skin: &Skin) -> Line<'static> {
+    let exit = fit(exit, w, skin.glyphs.ellipsis);
+    let version = fit(version, w.saturating_sub(cols(&exit)), skin.glyphs.ellipsis);
+    let pad = w.saturating_sub(cols(&exit) + cols(&version));
+    Line::from(vec![
+        Span::styled(exit, skin.palette.dim()),
+        Span::raw(" ".repeat(pad)),
+        Span::styled(version, skin.palette.dim()),
+    ])
+}
+
 /// How many screen rows a line takes at this width, wrapping.
 ///
 /// [`Line::width`] measures display columns rather than characters, so a CJK
