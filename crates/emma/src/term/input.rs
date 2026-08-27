@@ -232,6 +232,40 @@ impl Editor {
 
     /// Throw away whatever is half-typed. Called by [`LineSource::drain`], and
     /// the reason it exists: see the module doc.
+    /// The index one word behind the cursor, by `Ctrl-W`'s rule: skip the
+    /// whitespace you are sitting in, then skip the run of non-whitespace
+    /// before it.
+    ///
+    /// **Extracted so that "a word" has one definition.** `Ctrl-W`,
+    /// `Ctrl-Left` and `Ctrl-Backspace` all mean the same boundary, and this
+    /// project has been bitten more than once by one input shape getting two
+    /// answers in two places — a tolerance added to one reader and not its
+    /// siblings. Cheaper to share the rule than to reconcile it later.
+    fn word_start(&self) -> usize {
+        let mut at = self.cursor;
+        while at > 0 && self.chars[at - 1].is_whitespace() {
+            at -= 1;
+        }
+        while at > 0 && !self.chars[at - 1].is_whitespace() {
+            at -= 1;
+        }
+        at
+    }
+
+    /// The index one word ahead of the cursor — the mirror of [`Self::word_start`],
+    /// and deliberately the same two passes in the same order so that moving
+    /// right then left across one word is not off by one.
+    fn word_end(&self) -> usize {
+        let mut at = self.cursor;
+        while at < self.chars.len() && self.chars[at].is_whitespace() {
+            at += 1;
+        }
+        while at < self.chars.len() && !self.chars[at].is_whitespace() {
+            at += 1;
+        }
+        at
+    }
+
     pub fn clear(&mut self) {
         self.chars.clear();
         self.cursor = 0;
@@ -325,14 +359,12 @@ impl Editor {
                 Action::Edit
             }
             KeyCode::Char('w') if ctrl => {
-                while self.cursor > 0 && self.chars[self.cursor - 1].is_whitespace() {
-                    self.chars.remove(self.cursor - 1);
-                    self.cursor -= 1;
-                }
-                while self.cursor > 0 && !self.chars[self.cursor - 1].is_whitespace() {
-                    self.chars.remove(self.cursor - 1);
-                    self.cursor -= 1;
-                }
+                // Computed once: after the drain the buffer is shorter and
+                // `self.cursor` is stale, so asking a second time indexes past
+                // the end.
+                let start = self.word_start();
+                self.chars.drain(start..self.cursor);
+                self.cursor = start;
                 Action::Edit
             }
             KeyCode::Char('a') if ctrl => {
@@ -350,6 +382,47 @@ impl Editor {
             KeyCode::Char(c) => {
                 self.chars.insert(self.cursor, c);
                 self.cursor += 1;
+                Action::Edit
+            }
+            // **Word motion, and the reason all four arms are here rather than
+            // three.** Until 2026-08-27 none of these existed, and none of them
+            // failed either: no decoder compares the *whole* modifier set, only
+            // the bits its own arm names, so `Ctrl-Left` fell through to the
+            // plain `Left` below and moved one column. Every other editor moves
+            // a word, so the box quietly did the narrow thing and nothing said
+            // otherwise. Found by the 4,270-keystroke sweep in
+            // `super::bindings`, not by reading — each arm below is correct in
+            // isolation and the defect lived in what fell past them.
+            //
+            // The two deletes claim their chord with no emptiness guard, as
+            // `Ctrl-W` already does. A guard would be tidier and wrong: an
+            // unclaimed chord falls through to the plain arm below, which is
+            // the exact fall-through this change exists to remove, and it would
+            // do so only on an empty box — the state nobody tests by hand.
+            //
+            // They share `word_start`/`word_end` with `Ctrl-W` above rather
+            // than repeating its two loops, because a second definition of
+            // "where does a word end" is the one-input-two-answers shape this
+            // codebase keeps paying for.
+            KeyCode::Left if ctrl => {
+                self.cursor = self.word_start();
+                Action::Edit
+            }
+            KeyCode::Right if ctrl => {
+                self.cursor = self.word_end();
+                Action::Edit
+            }
+            KeyCode::Backspace if ctrl => {
+                // Computed once: after the drain the buffer is shorter and
+                // `self.cursor` is stale, so asking a second time indexes past
+                // the end.
+                let start = self.word_start();
+                self.chars.drain(start..self.cursor);
+                self.cursor = start;
+                Action::Edit
+            }
+            KeyCode::Delete if ctrl => {
+                self.chars.drain(self.cursor..self.word_end());
                 Action::Edit
             }
             KeyCode::Backspace if self.cursor > 0 => {
@@ -921,6 +994,17 @@ mod tests {
         KeyEvent::from(code)
     }
 
+    fn ctrl_press(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
+
+    /// The text to the right of the cursor. `cursor()` counts characters and
+    /// `text()` indexes bytes, so this walks rather than slices — the two
+    /// coincide only while the fixture stays ASCII.
+    fn after(ed: &Editor) -> String {
+        ed.text().chars().skip(ed.cursor()).collect()
+    }
+
     fn ctrl(c: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
     }
@@ -943,6 +1027,105 @@ mod tests {
         // …and the box is empty afterwards, rather than holding the line that
         // was just sent.
         assert!(ed.is_empty());
+    }
+
+    /// `Ctrl` with an arrow or a delete moves and deletes by **word**.
+    ///
+    /// **All four were missing and none of them failed.** No decoder compares
+    /// the whole modifier set — only the bits its own arm names — so
+    /// `Ctrl-Left` fell past every `ctrl` arm and landed on the plain `Left`
+    /// below it, moving one column. The box did the narrow thing quietly, on
+    /// the chord every other editor uses for the wide one. Found on
+    /// 2026-08-27 by the 4,270-keystroke sweep in [`super::super::bindings`],
+    /// not by reading: each arm is right in isolation, and the defect was in
+    /// what fell past them.
+    ///
+    /// The fixture has two spaces between words, because the rule is
+    /// `Ctrl-W`'s — skip the whitespace you are in, *then* the run of
+    /// non-whitespace — and a single space cannot tell that apart from "skip
+    /// one character then a word".
+    #[test]
+    fn ctrl_with_an_arrow_or_a_delete_works_a_word_at_a_time() {
+        let text = "alpha  beta gamma";
+
+        // Left, from the end: onto the start of the last word, then the one
+        // before it. Not one column, which is what this used to do.
+        let mut ed = Editor::default();
+        for c in text.chars() {
+            ed.key(press(KeyCode::Char(c)));
+        }
+        ed.key(ctrl_press(KeyCode::Left));
+        assert_eq!(after(&ed), *"gamma", "one word back");
+        ed.key(ctrl_press(KeyCode::Left));
+        assert_eq!(after(&ed), *"beta gamma", "two words back");
+
+        // Right is the mirror, and lands in the same place coming back — the
+        // reason `word_end` walks whitespace-then-word in the same order.
+        ed.key(ctrl_press(KeyCode::Right));
+        assert_eq!(after(&ed), *" gamma", "one word forward");
+
+        // Backspace takes the word behind, leaving the separator it walked.
+        let mut ed = Editor::default();
+        for c in text.chars() {
+            ed.key(press(KeyCode::Char(c)));
+        }
+        ed.key(ctrl_press(KeyCode::Backspace));
+        assert_eq!(
+            ed.text(),
+            "alpha  beta ",
+            "the last word, not the last char"
+        );
+
+        // Delete takes the word ahead. Cursor at the very start.
+        let mut ed = Editor::default();
+        for c in text.chars() {
+            ed.key(press(KeyCode::Char(c)));
+        }
+        ed.key(press(KeyCode::Home));
+        ed.key(ctrl_press(KeyCode::Delete));
+        assert_eq!(
+            ed.text(),
+            "  beta gamma",
+            "the first word, not the first char"
+        );
+
+        // The control that stops all of the above passing on a plain arrow:
+        // without `ctrl` the same keys still move and delete by one.
+        let mut ed = Editor::default();
+        for c in text.chars() {
+            ed.key(press(KeyCode::Char(c)));
+        }
+        ed.key(press(KeyCode::Left));
+        assert_eq!(after(&ed), *"a", "plain Left still moves one");
+        ed.key(press(KeyCode::Backspace));
+        // The cursor sits before the final  after the Left above, so this
+        // takes the second  rather than the last character of the line.
+        assert_eq!(
+            ed.text(),
+            "alpha  beta gama",
+            "plain Backspace still takes one"
+        );
+    }
+
+    /// An empty box swallows the word chords rather than letting them fall
+    /// through to the plain arms.
+    ///
+    /// The guard this pins is one line and reads like clutter: the two `ctrl`
+    /// deletes claim their chord whether or not there is anything to remove.
+    /// Adding the obvious emptiness check sends the keystroke to the plain arm
+    /// below — the fall-through this whole change removes — and only on an
+    /// empty box, which is the state nobody tries by hand.
+    #[test]
+    fn the_word_chords_are_claimed_even_with_nothing_to_delete() {
+        for code in [KeyCode::Backspace, KeyCode::Delete] {
+            let mut ed = Editor::default();
+            assert_eq!(
+                ed.key(ctrl_press(code)),
+                Action::Edit,
+                "{code:?} with ctrl was not claimed on an empty box"
+            );
+            assert_eq!(ed.text(), "", "and it invented text out of nothing");
+        }
     }
 
     #[test]

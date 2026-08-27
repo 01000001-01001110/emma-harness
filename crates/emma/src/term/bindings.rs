@@ -452,6 +452,33 @@ pub static UNDRAWN: &[(Chord, Ctx, &str)] = &[
          knows it from every other readline box.",
     ),
     (
+        Chord::ctrl_code(KeyCode::Left),
+        Ctx::IDLE.typing(),
+        "cursor back one word. Added 2026-08-27, after the sweep below showed \
+         `Ctrl-Left` falling through to the plain `Left` arm and moving one \
+         column — the narrow thing, quietly, where every other editor moves a \
+         word. Undrawn because it is the most universal chord in the box and \
+         four more rows would crowd a panel the owner has not asked to widen.",
+    ),
+    (
+        Chord::ctrl_code(KeyCode::Right),
+        Ctx::IDLE.typing(),
+        "cursor forward one word. The mirror of Ctrl-Left; same reason.",
+    ),
+    (
+        Chord::ctrl_code(KeyCode::Backspace),
+        Ctx::IDLE.typing(),
+        "delete the word behind the cursor. The same edit as Ctrl-W, under the \
+         spelling most people reach for first; both share `Editor::word_start` \
+         so there is one definition of where a word begins.",
+    ),
+    (
+        Chord::ctrl_code(KeyCode::Delete),
+        Ctx::IDLE.typing(),
+        "delete the word ahead of the cursor. The forward mirror, and the one \
+         of the four with no readline equivalent to fall back on.",
+    ),
+    (
         Chord::ctrl('a'),
         Ctx::IDLE.typing(),
         "cursor to the start. Readline muscle memory; undrawn.",
