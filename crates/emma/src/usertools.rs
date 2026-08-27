@@ -86,6 +86,7 @@ pub enum Tool {
     FileBrowser,
     Search,
     Memory,
+    Harness,
     DataExplorer,
     Settings,
 }
@@ -99,7 +100,7 @@ impl Tool {
     pub fn in_app(self) -> bool {
         matches!(
             self,
-            Tool::Search | Tool::Memory | Tool::Settings | Tool::DataExplorer
+            Tool::Search | Tool::Memory | Tool::Harness | Tool::Settings | Tool::DataExplorer
         )
     }
 
@@ -133,7 +134,10 @@ impl Tool {
     /// DEF-037 arrived at for `Memory` when *it* was advertised and unrouted.
     /// Put it back the day a page takes the key.
     pub fn routed(self) -> bool {
-        matches!(self, Tool::Search | Tool::Memory | Tool::Settings)
+        matches!(
+            self,
+            Tool::Search | Tool::Memory | Tool::Harness | Tool::Settings
+        )
     }
 
     pub fn label(self) -> &'static str {
@@ -143,6 +147,7 @@ impl Tool {
             Tool::FileBrowser => "File Browser",
             Tool::Search => "Search",
             Tool::Memory => "Memory",
+            Tool::Harness => "Harness",
             Tool::DataExplorer => "Data Explorer",
             Tool::Settings => "Settings",
         }
@@ -155,6 +160,7 @@ impl Tool {
             Tool::FileBrowser => 'f',
             Tool::Search => '/',
             Tool::Memory => 'm',
+            Tool::Harness => 'h',
             Tool::DataExplorer => 'd',
             Tool::Settings => ',',
         }
@@ -162,12 +168,13 @@ impl Tool {
 }
 
 /// Owner's listing order, which is also the sidebar's display order.
-const ALL: [Tool; 7] = [
+const ALL: [Tool; 8] = [
     Tool::Shell,
     Tool::Code,
     Tool::FileBrowser,
     Tool::Search,
     Tool::Memory,
+    Tool::Harness,
     Tool::DataExplorer,
     Tool::Settings,
 ];
@@ -383,7 +390,9 @@ fn plan(tool: Tool, cwd: &Path, m: &dyn Machine) -> Result<Launch, String> {
         Tool::Shell => plan_shell(cwd, m),
         Tool::Code => plan_code(cwd, m),
         Tool::FileBrowser => plan_file_browser(cwd, m),
-        Tool::Search | Tool::Memory | Tool::Settings | Tool::DataExplorer => Err(in_app_note(tool)),
+        Tool::Search | Tool::Memory | Tool::Harness | Tool::Settings | Tool::DataExplorer => {
+            Err(in_app_note(tool))
+        }
     }
 }
 
@@ -651,6 +660,7 @@ fn in_app_detail(tool: Tool) -> String {
     match tool {
         Tool::Search => "search this project, inside Emma".to_string(),
         Tool::Memory => "what Emma remembers about this project, inside Emma".to_string(),
+        Tool::Harness => "every run this project has recorded, inside Emma".to_string(),
         Tool::DataExplorer => "what the session store holds, inside Emma".to_string(),
         Tool::Settings => "what this run resolved, and from where, inside Emma".to_string(),
         // Unreachable by construction; a wrong caller gets words, not a panic.
@@ -1082,7 +1092,7 @@ mod tests {
     }
 
     #[test]
-    fn the_catalogue_lists_all_seven_tools_with_their_fixed_keys() {
+    fn the_catalogue_lists_all_eight_tools_with_their_fixed_keys() {
         // The keys are the shell's contract; a drifted key is a dead key with
         // a working-looking sidebar.
         let m = Fake::new(Os::Windows);
@@ -1096,6 +1106,7 @@ mod tests {
                 (Tool::FileBrowser, 'f'),
                 (Tool::Search, '/'),
                 (Tool::Memory, 'm'),
+                (Tool::Harness, 'h'),
                 (Tool::DataExplorer, 'd'),
                 (Tool::Settings, ','),
             ]
@@ -1104,7 +1115,7 @@ mod tests {
         assert!(entries.iter().all(|e| !e.detail.is_empty()));
         // Both in-app tools say where they run, and a probe failure must never
         // mark them dead — that part was always right.
-        for t in [Tool::Search, Tool::Memory] {
+        for t in [Tool::Search, Tool::Memory, Tool::Harness] {
             let e = entries.iter().find(|e| e.tool == t).unwrap();
             assert!(e.detail.contains("inside Emma"), "{}", e.detail);
         }

@@ -1339,16 +1339,36 @@ impl Frame {
             return;
         };
 
-        // The two in-app pages the imported `app.rs` actually has. `Alt+,` was
-        // ruled a page rather than an editor launch (UI-001), and `Alt+m` was
-        // advertising a chord that only warned until the frame claimed the key.
-        if tool == crate::usertools::Tool::Memory {
-            self.toggle_memory();
-            return;
-        }
-        if tool == crate::usertools::Tool::Settings {
-            self.toggle_settings();
-            return;
+        // **A `match`, not a chain of `if`s, and that is the point.** This was
+        // two `if` arms naming Memory and Settings, with a comment calling them
+        // "the two in-app pages the imported `app.rs` actually has" — and the
+        // import had brought a third. `Alt+h` reached this function, matched
+        // neither arm, fell through to the launcher, and `launch` refused it as
+        // in-app. The Harness page could be closed and never opened: nothing in
+        // the program called `toggle_harness` except `leave_page`.
+        //
+        // Exhaustive on purpose. A new `Tool` variant now fails to compile here
+        // until somebody says where its key goes, which is the guarantee `A20`
+        // lost when the page model became three booleans and an `else`.
+        use crate::usertools::Tool;
+        match tool {
+            Tool::Memory => {
+                self.toggle_memory();
+                return;
+            }
+            Tool::Settings => {
+                self.toggle_settings();
+                return;
+            }
+            Tool::Harness => {
+                self.toggle_harness();
+                return;
+            }
+            // Not pages: `Search` opens the command menu through the editor,
+            // `DataExplorer` is superseded and its row reads `n/a`, and the
+            // rest are real programs the launcher below spawns.
+            Tool::Search | Tool::DataExplorer => {}
+            Tool::Shell | Tool::Code | Tool::FileBrowser => {}
         }
         let frame = Arc::clone(self);
         std::thread::spawn(move || {
@@ -1444,6 +1464,14 @@ impl Frame {
     }
 
     /// Alt+h. Same shape as the Memory toggle: the repo's cwd is the feed.
+    /// `Alt+h`: the Harness page, on or off.
+    ///
+    /// **This existed and nothing called it.** The chord dispatch above named
+    /// Memory and Settings in two `if` arms, so `Alt+h` fell past both to the
+    /// launcher, which refused it as in-app. The page could be closed by
+    /// `leave_page` and never opened — imported, rendered, covered by its own
+    /// module's tests, and unreachable from the running program. The dispatch
+    /// is a `match` now so the next page cannot arrive the same way.
     pub fn toggle_harness(&self) {
         let mut inner = self.lock();
         let cwd = inner.view.status.cwd.clone();

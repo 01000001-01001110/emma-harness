@@ -224,6 +224,21 @@ pub const EMPTY_CONVO: &str = "No conversation yet — memory fills as you chat"
 pub const NO_INDEX: &str = "No index yet — [r] builds one";
 
 /// The query box's placeholder, verbatim from the mock.
+/// The widest speaker label, so the transcript's text starts in one column.
+///
+/// Derived rather than written down: `Speaker` decides the labels, and a
+/// literal here would be a second answer to "how wide is a name" that nothing
+/// keeps in step. `const fn` because a `max` over two `&str` lengths is
+/// something the compiler can do and a reader should not have to.
+const SPEAKER_W: usize = {
+    let (a, b) = ("Emma".len(), "You".len());
+    if a > b {
+        a
+    } else {
+        b
+    }
+};
+
 pub const PLACEHOLDER: &str = "Ask Emma about your memory...";
 /// The tip row's left half, verbatim from the mock (the bulb glyph is the
 /// skin's; this is the text after it).
@@ -1340,10 +1355,18 @@ fn render_convo(area: Rect, buf: &mut Buffer, v: &MemoryView, skin: &Skin, g: &P
             Speaker::Emma => ("Emma", skin.palette.style(Role::Accent)),
             Speaker::You => ("You", skin.palette.bold(Role::Text)),
         };
+        // **Padded to the widest speaker, so the words start in one column.**
+        // `Emma` is four columns and `You` is three, so a fixed two-space gap
+        // put every other line's text one column left of its neighbour's — a
+        // ragged left edge down the middle of the card, which is what the
+        // owner saw first. Measured from the labels rather than written as a
+        // literal: a third speaker, or a translated one, moves the column
+        // without anybody remembering this line exists.
+        let label_w = SPEAKER_W + 2;
         let line = Line::from(vec![
-            Span::styled(format!("{name}  "), style),
+            Span::styled(format!("{name:<pad$}  ", pad = SPEAKER_W), style),
             Span::styled(
-                clip(text, w.saturating_sub(cols(name) + 2), skin),
+                clip(text, w.saturating_sub(label_w), skin),
                 skin.palette.style(Role::Text),
             ),
         ]);
@@ -1980,8 +2003,24 @@ mod tests {
     #[test]
     fn the_transcript_names_its_speakers_and_the_footer_is_the_mocks() {
         let rows = draw(&populated(), 161, 75);
-        row_with(&rows, "Emma  I noted your preference for bullet summaries.");
-        row_with(&rows, "You  Also remember the deploy window.");
+        row_with(&rows, "I noted your preference for bullet summaries.");
+        row_with(&rows, "Also remember the deploy window.");
+
+        // **The words start in one column, whoever is speaking.** This used to
+        // assert the two rows verbatim, two spaces after each name -- which
+        // encoded the bug: `Emma` is four columns and `You` is three, so every
+        // other line's text sat one column left of its neighbour's. The
+        // literal passed because it was copied from the output.
+        //
+        // Asserted as a property so a third speaker, or a translated label,
+        // cannot quietly re-ragged the edge.
+        let (emma_x, _) = locate(&rows, "I noted your preference");
+        let (you_x, _) = locate(&rows, "Also remember the deploy");
+        assert_eq!(
+            emma_x, you_x,
+            "the transcript's text does not start in one column:              Emma at {emma_x}, You at {you_x}"
+        );
+
         let footer = row_with(&rows, "Older messages archived");
         assert!(
             footer.contains("View full history →"),
