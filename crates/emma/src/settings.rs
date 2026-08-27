@@ -74,6 +74,33 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
 
+    /// Whether Emma keeps durable knowledge in the project's memory wiki.
+    ///
+    /// **Absent means on**, and `Option<bool>` is what keeps "never said" and
+    /// "said no" different answers — a settings file written by a build that
+    /// did not know the word must not read as a refusal. Written only when
+    /// set, like `theme`.
+    ///
+    /// Owner ruling, 2026-08-27, and it decides what this key governs: the
+    /// wiki keeps **knowledge distilled from** what Emma read, never the thing
+    /// it read. The fork this was ported from also wrote the verbatim body of
+    /// every successful `WebFetch` under `.emma/memory/raw/web/`; that is not
+    /// here, and `crate::memory`'s module doc carries the argument for why its
+    /// absence is a security fix rather than a missing feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<bool>,
+
+    /// Whether superseded tool results are dropped from the history sent back
+    /// to the model. See [`crate::prune`].
+    ///
+    /// **Absent means off**, which is the opposite default to `memory` above
+    /// and deliberately so. This one changes what the model is shown, so a
+    /// build that starts doing it silently changes answers; the saving it
+    /// claims was measured somewhere else and has not been reproduced here.
+    /// Off until it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prune_history: Option<bool>,
+
     /// The pre-provider spelling. Deserialized and never written back, so it
     /// survives being read and disappears on the first save. Private because
     /// nothing outside this module has any business setting it: it is an input
