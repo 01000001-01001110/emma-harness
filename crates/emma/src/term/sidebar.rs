@@ -165,6 +165,101 @@ pub const TOOL_MISSING: &str = "n/a";
 
 // endregion: State
 
+// region: The mock's TOOLS and QUICK HELP
+// ---------------------------------------------------------------------------
+// The mock's TOOLS and QUICK HELP
+//
+// **A seam, and it is worth naming.** The imported `app.rs` asks this module
+// for both tables — `sidebar::tool_rows(ascii, selected)` and
+// `sidebar::quick_help(ascii)` — because on the branch they lived here. In this
+// tree they lived in the `app.rs` that was replaced, in a different shape:
+// `app::tool_rows` maps a `usertools::Entry` (which knows whether the program
+// is on the box) and `app::keymap` derives the help rows from
+// `super::bindings::CHAT`. Both of those still exist and both are still the
+// authority; what is here is the branch's calling convention over them.
+// ---------------------------------------------------------------------------
+
+/// The screens the mock's TOOLS section can point at. One variant per row, so
+/// "which row is selected" is a fact the shell states rather than a name it
+/// spells; `None` — the chat screen — selects nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tool {
+    Shell,
+    Code,
+    FileBrowser,
+    Search,
+    Memory,
+    Harness,
+    Settings,
+}
+
+/// The glyph, name and chord of each tool row, in the mock's order. The glyph
+/// is per-variant because the ASCII fallback substitutes some of them — the
+/// same split `render::ASCII` exists for — while the name and chord never
+/// vary: a fallback that renamed a tool would be a different sidebar.
+///
+/// The trailing column is the **chord**, not the bare letter the mock drew.
+/// Every one of these bindings is Alt-modified in [`super::input`], so a legend
+/// reading `s` promised that a bare `s` did something — and a bare `s` is how a
+/// sentence starts. Owner ruling, 2026-08-26.
+const TOOLS: [(Tool, &str, &str, &str, &str); 7] = [
+    (Tool::Shell, ">_", ">_", "Shell", "Alt+s"),
+    (Tool::Code, "{}", "{}", "Code", "Alt+c"),
+    (
+        Tool::FileBrowser,
+        "\u{25a4}",
+        "[=]",
+        "File Browser",
+        "Alt+f",
+    ),
+    (Tool::Search, "\u{2315}", "(?)", "Search", "Alt+/"),
+    (Tool::Memory, "\u{22ef}", "...", "Memory", "Alt+m"),
+    (Tool::Harness, "\u{27f3}", "(o)", "Harness", "Alt+h"),
+    (Tool::Settings, "\u{2699}", "(*)", "Settings", "Alt+,"),
+];
+
+/// The mock's TOOLS section: glyph + name, the chord trailing, the current
+/// screen's row selected. `ascii` picks glyphs that survive a legacy code page.
+///
+/// **What this cannot do, and it is a real loss to record rather than paper
+/// over.** This tree's `app::tool_rows` derives each row from a
+/// `usertools::Entry`, so a box with no VS Code on it shows `Code  n/a`
+/// ([`TOOL_MISSING`]) instead of advertising `Alt+c`. That availability probe
+/// is a fact about a *directory* and this function has neither the directory
+/// nor the catalogue. Until the shell threads one in, every row here reads as
+/// available. `app::tool_rows` is still the mapper and is still tested.
+pub fn tool_rows(ascii: bool, selected: Option<Tool>) -> Vec<Row> {
+    TOOLS
+        .iter()
+        .map(|(tool, uni, asc, name, chord)| Row {
+            name: format!("{} {name}", if ascii { asc } else { uni }),
+            trailing: (*chord).to_string(),
+            selected: selected == Some(*tool),
+        })
+        .collect()
+}
+
+/// The mock's QUICK HELP table: the real keymap, nothing aspirational.
+///
+/// **The rows are derived, not typed, and that is this tree's fix rather than
+/// the branch's.** What arrived with the import was six hand-written
+/// `(key, label)` literals. A pair typed by hand carries no reference to the
+/// `match` arm that answers it, so the two drift and nothing says so —
+/// `notes/design/tui-fork-inventory.md` §11 counted a branch's copy of this
+/// panel advertising six keys of which four do nothing, one of them `Ctrl+k`
+/// for a binding that is `Ctrl-U`. The rows come from
+/// [`super::bindings::CHAT`], where each carries the chord it means, and the
+/// tests there drive every one through the real decoders.
+///
+/// `ascii` is accepted and unused: the labels come from the chords, which have
+/// one spelling. It stays in the signature so the caller reads the same on both
+/// sides of the merge.
+pub fn quick_help(_ascii: bool) -> Vec<(String, String)> {
+    super::app::keymap()
+}
+
+// endregion: The mock's TOOLS and QUICK HELP
+
 // region: The session clock
 // ---------------------------------------------------------------------------
 // The session clock
@@ -395,6 +490,17 @@ fn section_break(out: &mut Vec<Line<'static>>, w: usize, skin: &Skin) {
 const HEADER_INDENT: usize = 2;
 const LEAD: usize = 3;
 const RIGHT_PAD: usize = 2;
+
+/// The header affordance's right pad, for `app::new_session_hit`.
+///
+/// **Exposed because the hit-test re-derives this module's geometry and got it
+/// wrong.** The imported `app.rs` placed the `[+]`'s rectangle flush against
+/// the inner right edge; [`header`] leaves [`RIGHT_PAD`] columns of air after
+/// it, so every click landed two columns to the right of the glyph. The test
+/// that caught it — `the_paint_records_where_the_affordance_landed` — exists
+/// for exactly this, and a constant read from here is what stops the two
+/// drifting again.
+pub const HEADER_RIGHT_PAD: u16 = RIGHT_PAD as u16;
 
 /// A section title, indented onto the measured grid, with the collapse
 /// affordance right-aligned when there is one. The affordance keeps its

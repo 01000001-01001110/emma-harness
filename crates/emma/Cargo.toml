@@ -113,3 +113,10 @@ tempfile.workspace = true
 # A dev-dependency on purpose: it must never reach the shipped binary.
 portable-pty = "0.9"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+# `emma_guarantees_off` is declared so `cargo clippy -D warnings` does not
+# refuse the escape hatch on `term::guarantees` as an unknown cfg. It is never
+# set by a build here — see that module's own doc for what it is for and why it
+# should be deleted rather than used.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(emma_guarantees_off)'] }

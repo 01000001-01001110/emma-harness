@@ -1141,9 +1141,12 @@ impl<'a> Agent<'a> {
             // this goal's weighted spend — so nothing on that line is an
             // estimate. It is updated here, after every call, which is the only
             // moment either of them can change.
-            self.s
-                .term
-                .spent(turn.usage.billable_input_tokens(), tokens);
+            self.s.term.spent(
+                turn.usage.billable_input_tokens(),
+                tokens,
+                turn.usage.input_tokens,
+                turn.usage.output_tokens,
+            );
             // One record per turn, whatever the turn contained — a turn that is
             // nothing but tool calls has empty text and used to be written
             // nowhere, which left the fold with a hole exactly where the tool

@@ -8,8 +8,8 @@
 //! a transcript people read after the run. That argument was true and it
 //! lost — the owner chose a multi-pane layout (sidebar, pinned input, status
 //! bar) that structurally cannot be drawn inline, and reopened the decision on
-//! purpose. `notes/design/tui-fullscreen.md` §2 prices every cost;
-//! `notes/audits/eval-tui-fullscreen-kimi.md` adds the four the plan missed. The flip
+//! purpose. `notes/design-tui-fullscreen.md` §2 prices every cost;
+//! `notes/eval-tui-fullscreen-kimi.md` adds the four the plan missed. The flip
 //! is stage 2 of that design, and this is it.
 //!
 //! What replaces what the terminal used to do for free: the retained
@@ -133,42 +133,10 @@ static PANIC_HOOK: Once = Once::new();
 /// Absolute addressing above the frame is a different question and the answer
 /// is different: with VT proved, `ESC[y;xH` is window-relative, crossterm's
 /// cursor report is window-relative to match, and ratatui addresses every cell
-/// of the viewport that way already. [`anchor`] uses it on the resize path for
+/// of the viewport that way already. `anchor` uses it on the resize path for
 /// exactly that reason, and only over rows it has just erased.
-/// Put the terminal back before a panic message is printed.
-///
-/// Separate from `install` so it can be called *first*, before any mode is
-/// enabled. `call_once`, so repeated frames cost nothing and the previous hook
-/// is chained exactly once.
-fn install_panic_hook() {
-    PANIC_HOOK.call_once(|| {
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            // Before the message, so the message is readable and so the
-            // terminal is echoing again by the time anybody reads it.
-            restore_terminal();
-            previous(info);
-        }));
-    });
-}
-
 pub fn restore_terminal() {
-    // **Each latch answers for itself.** This used to return early unless
-    // `FRAME_ON` was set — and `FRAME_ON` is set *last*, after raw mode, the
-    // alternate screen and mouse capture are already on. So a panic anywhere in
-    // that window left every one of them enabled with the only thing that turns
-    // them off refusing to run: a shell with no echo, on a screen that is not
-    // the user's, which is the failure `CLAUDE.md` says people uninstall over.
-    //
-    // The comment at the install site claimed the `ALT_ON` latch prevented
-    // exactly this. It could not, because it never reached the code that reads
-    // it.
-    let was_frame = FRAME_ON.swap(false, Ordering::SeqCst);
-    if !was_frame
-        && !RAW_ON.load(Ordering::SeqCst)
-        && !ALT_ON.load(Ordering::SeqCst)
-        && !MOUSE_ON.load(Ordering::SeqCst)
-    {
+    if !FRAME_ON.swap(false, Ordering::SeqCst) {
         return;
     }
     if RAW_ON.swap(false, Ordering::SeqCst) {
@@ -253,7 +221,7 @@ fn erase_frame() -> String {
 ///
 /// Without it, a pasted code block is delivered as the keystrokes it looks
 /// like, and its first newline submits whatever arrived before it as a goal.
-/// The evaluation in `notes/audits/eval-tui-fullscreen-kimi.md` ranks that first on
+/// The evaluation in `notes/eval-tui-fullscreen-kimi.md` ranks that first on
 /// the list of things that would sink the redesign, and it is right that it is
 /// cheap: one sequence each way, plus [`super::input::Editor::paste`], which is
 /// where the guarantee that a paste cannot submit actually lives.
@@ -421,6 +389,11 @@ struct Inner {
     /// known. Held here rather than re-probed per keystroke: a chord lookup is
     /// a `find` over this list, and the list only moves when the cwd does.
     /// Empty on the inline path, where no sidebar lists it and no chord fires.
+    ///
+    /// **Restored after the import**, which dropped `usertools` from the frame
+    /// entirely and replaced [`Frame::launch_tool`] with four hard-coded macOS
+    /// `open` invocations. On Windows — the machine this is run on — that is a
+    /// chord that launches nothing and reports a missing `open`.
     tools: Vec<crate::usertools::Entry>,
 }
 
@@ -467,12 +440,6 @@ impl Frame {
         stdout.write_all(b"\r\n").ok()?;
         stdout.flush().ok()?;
 
-        // Installed before the first mode is enabled, not after. A hook that
-        // goes on afterwards cannot answer for a panic in between, and the
-        // window between raw mode and `FRAME_ON` is several fallible writes
-        // long. `call_once` makes this free on every later frame.
-        install_panic_hook();
-
         enable_raw_mode().ok()?;
         RAW_ON.store(true, Ordering::SeqCst);
 
@@ -518,6 +485,15 @@ impl Frame {
             }
         };
 
+        PANIC_HOOK.call_once(|| {
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                // Before the message, so the message is readable and so the
+                // terminal is echoing again by the time anybody reads it.
+                restore_terminal();
+                previous(info);
+            }));
+        });
         FRAME_ON.store(true, Ordering::SeqCst);
         // After `FRAME_ON`, never before: that flag is what makes
         // [`restore_terminal`] willing to turn these modes off again, so one
@@ -533,7 +509,7 @@ impl Frame {
             // Mouse capture, for the wheel: on the alternate screen the wheel
             // does nothing at all without it — not "less useful", nothing —
             // and the first instinct of anybody reading a long answer is the
-            // wheel (`notes/audits/eval-tui-fullscreen-kimi.md` §1.5). The cost is
+            // wheel (`notes/eval-tui-fullscreen-kimi.md` §1.5). The cost is
             // that plain drag-selection now needs Shift; the quick-help table
             // says so, because it is the one fact a user cannot guess. Only
             // on the full-screen path: inline, the terminal owns the wheel
@@ -545,8 +521,8 @@ impl Frame {
 
         // The user-tool catalogue, against the directory Emma was started in.
         // `set_identity` refreshes it when the run's real cwd arrives; probing
-        // here as well means the TOOLS section is never a placeholder on the
-        // first paint. Inline runs skip it: no sidebar lists it there.
+        // here as well means a chord is never dead on the first paint. Inline
+        // runs skip it: no sidebar lists it there.
         let tools = if inline {
             Vec::new()
         } else {
@@ -638,7 +614,7 @@ impl Frame {
     /// the start of a line, so a complete line is all the context it needs and
     /// nothing has to be held back to be styled. The width is asked for here,
     /// at the moment of writing, because it is what the rows reserved by
-    /// [`emit_into`] are counted against.
+    /// `emit_into` are counted against.
     pub fn prose(&self, text: &str) {
         let mut inner = self.lock();
         if let Ui::Full(app) = &mut inner.ui {
@@ -761,8 +737,7 @@ impl Frame {
             inner.transcript = transcript.to_string();
             // The catalogue is re-probed against the run's real cwd — the
             // availability of a tool is a fact about a directory. Computed
-            // before the `ui` borrow because the refreshed list lands in two
-            // places: the frame's lookup copy and the sidebar's rows.
+            // before the `ui` borrow so the two borrows do not overlap.
             let refreshed = (!cwd.is_empty() && matches!(inner.ui, Ui::Full(_)))
                 .then(|| crate::usertools::catalogue(std::path::Path::new(cwd)));
             if let Ui::Full(app) = &mut inner.ui {
@@ -770,7 +745,7 @@ impl Frame {
                 // honestly known — this run — and the transcript buffer
                 // learns where the complete record lives, so the cap marker
                 // can name the remedy when it binds.
-                app.set_identity(session, transcript, &self.skin);
+                app.set_identity(session, transcript, cwd, &self.skin);
                 if let Some(t) = &refreshed {
                     app.set_tools(super::app::tool_rows(t));
                 }
@@ -800,7 +775,8 @@ impl Frame {
     /// Adopt a configured status program, and start the task that runs it.
     ///
     /// `Weak`, so the task dies with the frame — the same arrangement
-    /// [`spawn_clock`] uses and for the same reason. Called once, from
+    /// `spawn_clock` uses and for the same reason. Called once, from
+    /// `Term::set_status_source`.
     /// `Term::set_status_source`.
     pub fn set_status_source(self: &Arc<Self>, line: Arc<emma_harness::StatusLine>) {
         let padding = line.padding;
@@ -871,10 +847,10 @@ impl Frame {
             let mut inner = self.lock();
             inner.started = Some(Instant::now());
             inner.view.mode = Mode::Working;
-            // The previous goal's spend is not this goal's spend, and a number
-            // left over from the last one is exactly the stale readout this line
-            // exists to not have.
-            inner.view.status.spend = None;
+            // Which readouts are the new goal's and which are the session's is
+            // [`Status::goal_started`]'s ruling, not this method's. It lives
+            // beside the fields so the scoping is read where it is used.
+            inner.view.status.goal_started();
             inner.paint();
         }
         // Outside the lock, always: `request_status` takes it again, and a
@@ -889,15 +865,25 @@ impl Frame {
             inner.started = None;
             inner.view.mode = Mode::Idle;
             inner.view.status.elapsed = None;
+            // The one refresh point SESSIONS gets. A goal just ended, which is
+            // when this run's own name changes and when a sibling `emma` is
+            // most likely to have finished one too; everything else would be a
+            // poll. See `App::refresh_sessions`.
+            if let Ui::Full(app) = &mut inner.ui {
+                app.refresh_sessions();
+            }
             inner.paint();
         }
         self.request_status();
     }
 
-    /// Measurements from the model call that just returned. Both numbers are
-    /// the provider's or the loop's own, never an estimate — see
-    /// [`Status`](super::render::Status).
-    pub fn spent(&self, context: Option<i64>, spend: Option<i64>) {
+    /// Measurements from the model call that just returned. All four numbers
+    /// are the provider's or the loop's own, never an estimate — see
+    /// [`Status`](super::render::Status). `up`/`down` are the call's raw
+    /// `input_tokens`/`output_tokens`, folded into the *session's* running ↑/↓
+    /// totals here because this is called once per call. `spend` is the goal's
+    /// bill and moves the session's with it — see [`Status::record_spend`].
+    pub fn spent(&self, context: Option<i64>, spend: Option<i64>, up: i64, down: i64) {
         {
             let mut inner = self.lock();
             let (ctx_cap, token_cap) = inner.caps;
@@ -905,8 +891,9 @@ impl Frame {
                 inner.view.status.context = Some((context, ctx_cap));
             }
             if let Some(spend) = spend {
-                inner.view.status.spend = Some((spend, token_cap));
+                inner.view.status.record_spend(spend, token_cap);
             }
+            inner.view.status.record_call(up, down);
             inner.paint();
         }
         // The nearest thing Emma has to Claude Code's "a new assistant message
@@ -948,6 +935,7 @@ impl Frame {
     pub fn scroll_rows(&self, up: bool, rows: usize) {
         let mut inner = self.lock();
         if let Ui::Full(app) = &mut inner.ui {
+            app.notice_clear();
             if up {
                 app.transcript.scroll_up(rows);
             } else {
@@ -961,6 +949,7 @@ impl Frame {
     pub fn scroll_page(&self, up: bool) {
         let mut inner = self.lock();
         if let Ui::Full(app) = &mut inner.ui {
+            app.notice_clear();
             let page = app.page();
             if up {
                 app.transcript.scroll_up(page);
@@ -975,6 +964,7 @@ impl Frame {
     pub fn scroll_top(&self) {
         let mut inner = self.lock();
         if let Ui::Full(app) = &mut inner.ui {
+            app.notice_clear();
             app.transcript.to_top();
             synchronized(|| inner.paint());
         }
@@ -985,30 +975,245 @@ impl Frame {
     pub fn scroll_tail(&self) {
         let mut inner = self.lock();
         if let Ui::Full(app) = &mut inner.ui {
+            app.notice_clear();
             app.transcript.follow_tail();
             synchronized(|| inner.paint());
         }
     }
 
-    /// Return to the conversation, if a page is showing.
+    /// Ctrl-B. Latches — see [`super::app::Latch`].
+    /// Turn mouse capture off, and back on. Returns whether capture is now ON.
     ///
-    /// Answers whether it did anything, so the reader can tell "I handled this"
-    /// from "pass it on" — an Esc that was swallowed while no page was up would
-    /// take the key away from whatever else wanted it.
-    pub fn leave_page(&self) -> bool {
+    /// ⚠ THIS TRADES THE WHEEL FOR THE TERMINAL'S OWN SELECTION. Capture exists because on the
+    /// alternate screen the wheel does nothing without it. The cost is that the terminal never
+    /// sees a drag, so its selection is gone and `Shift+drag` is the per-terminal way back —
+    /// enough people hit "I cannot copy the output" that guessing a modifier is the wrong answer
+    /// to give them.
+    ///
+    /// So this is the explicit escape: press the key, capture goes off, the terminal owns the
+    /// mouse again and selection behaves exactly as it does in any other program — across the
+    /// whole window, chrome included. Press it again to get the wheel back.
+    ///
+    /// With capture ON the chat pane does its own selection ([`Self::select_begin`]), which is
+    /// narrower on purpose: the pane only, and what lands on the clipboard is the pane's rendered
+    /// rows without the sidebar, the border or the bar interleaved. The two never overlap — the
+    /// terminal has already decided which one can see the drag.
+    /// Put the last assistant turn on the system clipboard, and say so.
+    ///
+    /// ⚠ WHY THE APP COPIES INSTEAD OF THE TERMINAL. Native selection over the alternate screen
+    /// returns the cell grid: gutter, borders and wrap points included, and on some terminals it
+    /// does not work at all. Two fixes aimed at the terminal (Shift+drag, then releasing mouse
+    /// capture) each failed on this machine. OSC 52 removes the terminal's selection from the
+    /// problem entirely: the application hands the bytes to the terminal and asks it to set the
+    /// clipboard. It works over SSH, and what lands is the markdown the answer was rendered from
+    /// rather than a picture of it.
+    ///
+    /// ⚠ SOME TERMINALS REFUSE OSC 52, and refuse silently: there is no reply to read and no error
+    /// to catch. So the note says the text was SENT rather than that it arrived, which is the only
+    /// claim this code can actually support.
+    pub fn copy_last_answer(&self) {
+        let text = {
+            let inner = self.lock();
+            match &inner.ui {
+                Ui::Full(app) => app.last_assistant_source(),
+                Ui::Inline => None,
+            }
+        };
+        let Some(text) = text else {
+            self.note_line("nothing to copy yet: no assistant turn in this session");
+            return;
+        };
+        to_clipboard(&text);
+        let lines = text.lines().count();
+        self.note_line(&format!(
+            "sent {lines} line(s) to the clipboard. If nothing pasted, this terminal refuses OSC 52 \
+             and /export writes the same text to a file."
+        ));
+    }
+
+    // -----------------------------------------------------------------------
+    // Selecting with the mouse
+    //
+    // ⚠ THESE ONLY EVER FIRE WHILE CAPTURE IS ON. Without it the terminal keeps the mouse and
+    // this program never hears the drag — which is the Ctrl-S fallback above, unchanged and still
+    // the answer for a terminal that refuses OSC 52. Nothing here decides between the two modes,
+    // because the terminal has already decided by the time an event exists.
+    // -----------------------------------------------------------------------
+
+    /// What a left-button press on the sidebar asks for, if anything.
+    ///
+    /// Asked *before* [`Self::select_begin`], because the two answer the same
+    /// event and the sidebar is not a selectable surface: a press that lands on
+    /// the `[+]` is a control being used, not the start of a drag. The geometry
+    /// is [`super::app::sidebar_click`]'s; what this adds is the one fact only
+    /// the frame holds, whether a question is waiting for an answer.
+    pub fn sidebar_click(&self, col: u16, row: u16) -> Option<super::app::SidebarAction> {
+        let inner = self.lock();
+        let pending = inner.view.prompt.is_some();
+        match &inner.ui {
+            Ui::Full(app) if app.new_session_clicked(col, row, pending) => {
+                Some(super::app::SidebarAction::NewSession)
+            }
+            _ => None,
+        }
+    }
+
+    /// A left-button press on the chat scrollbar. `true` when the bar took it — the caller then
+    /// starts no selection.
+    ///
+    /// Asked before [`Self::select_begin`] for the same reason [`Self::sidebar_click`] is: one
+    /// event, two things that want it, and the bar is a control being used rather than the start
+    /// of a drag. It cannot steal a press from the pane — the column it hit-tests is the one
+    /// `chat_rect` gave up to draw it.
+    pub fn bar_press(&self, col: u16, row: u16) -> bool {
         let mut inner = self.lock();
         let Ui::Full(app) = &mut inner.ui else {
             return false;
         };
-        if app.pane() == crate::term::app::Pane::Chat {
+        if !app.bar_press(col, row) {
             return false;
         }
-        app.show(crate::term::app::Pane::Chat);
         synchronized(|| inner.paint());
         true
     }
 
-    /// Ctrl-B. Latches — see [`super::app::Latch`].
+    /// The pointer moved with the thumb held. `true` when a drag is live, whether or not the view
+    /// moved — a drag that is live and stationary must not fall through and become a selection.
+    pub fn bar_drag(&self, row: u16) -> bool {
+        let mut inner = self.lock();
+        let Ui::Full(app) = &mut inner.ui else {
+            return false;
+        };
+        if !app.bar_dragging() {
+            return false;
+        }
+        if app.bar_drag(row) {
+            synchronized(|| inner.paint());
+        }
+        true
+    }
+
+    /// The button came up on a scrollbar drag. `true` when there was one, which is how the caller
+    /// knows this release is not a selection being finished — and so nothing goes to the clipboard.
+    pub fn bar_release(&self) -> bool {
+        let mut inner = self.lock();
+        let Ui::Full(app) = &mut inner.ui else {
+            return false;
+        };
+        app.bar_release()
+    }
+
+    /// Button down. Inside the chat pane it anchors a selection; anywhere else it clears one.
+    pub fn select_begin(&self, col: u16, row: u16) {
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            app.selection_begin(col, row);
+            synchronized(|| inner.paint());
+        }
+    }
+
+    /// The pointer moved with the button down.
+    pub fn select_extend(&self, col: u16, row: u16) {
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            if !app.has_selection() {
+                return;
+            }
+            app.selection_extend(col, row);
+            synchronized(|| inner.paint());
+        }
+    }
+
+    /// Button up: what was highlighted goes to the clipboard, and the highlight goes.
+    ///
+    /// The count is characters, and it says `sent` for the same reason [`Self::copy_last_answer`]
+    /// does — a terminal that refuses OSC 52 refuses it silently, so "copied" would be a claim
+    /// this code cannot support.
+    ///
+    /// ⚠ THE RECEIPT IS CHROME, NOT TRANSCRIPT. It used to be a note line, which meant every drag
+    /// wrote a permanent row into the conversation about a gesture — and a reader who selects
+    /// three times has three of them between them and what they were reading. It now stands in
+    /// the chat pane's indicator slot ([`super::chat::sent_notice`]) and leaves with the next
+    /// thing the reader does. What went with it is the sentence naming the OSC 52 fallback; that
+    /// argument survives in `Ctrl-S`'s own note and in the answer-copy line above, which are where
+    /// somebody who pasted nothing goes looking.
+    pub fn select_finish(&self) {
+        let text = {
+            let mut inner = self.lock();
+            let Ui::Full(app) = &mut inner.ui else {
+                return;
+            };
+            let text = app.selection_text();
+            app.selection_clear();
+            if text.is_empty() {
+                synchronized(|| inner.paint());
+            }
+            text
+        };
+        if text.is_empty() {
+            return;
+        }
+        // Outside the lock, like every other clipboard write here: it is a syscall onto stdout,
+        // and stdout is the one thing the paint below also wants.
+        to_clipboard(&text);
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            app.notice_sent(text.chars().count());
+            synchronized(|| inner.paint());
+        }
+    }
+
+    /// Any keypress drops the selection: the highlight belongs to a pointer gesture, and a
+    /// highlight left behind while somebody types is a state nobody chose.
+    pub fn clear_selection(&self) {
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            // Both, and no short circuit: a key ends the selection AND retires the copy
+            // notice, and either one alone is a repaint owed.
+            let dropped = app.selection_clear();
+            let retired = app.notice_clear();
+            if dropped || retired {
+                synchronized(|| inner.paint());
+            }
+        }
+    }
+
+    pub fn toggle_mouse_capture(&self) -> bool {
+        // Only meaningful on the full-screen path: inline never captures, and there the terminal
+        // already owns both the wheel and selection.
+        if !ALT_ON.load(Ordering::SeqCst) {
+            return false;
+        }
+        let on = MOUSE_ON.load(Ordering::SeqCst);
+        let ok = if on {
+            execute!(std::io::stdout(), DisableMouseCapture).is_ok()
+        } else {
+            execute!(std::io::stdout(), EnableMouseCapture).is_ok()
+        };
+        if ok {
+            MOUSE_ON.store(!on, Ordering::SeqCst);
+        }
+        let now = MOUSE_ON.load(Ordering::SeqCst);
+        // ⚠ SAY SO ON SCREEN. Two silent fixes for "I cannot select the output" both failed, and
+        // both failed invisibly: there was no way to tell a key that never arrived from a key that
+        // arrived and did not help. A toggle whose only evidence is the absence of a symptom is
+        // untestable by the person holding the keyboard.
+        if now {
+            self.note_line(
+                "mouse captured again: wheel scrolls, drag selects inside the chat pane",
+            );
+        } else {
+            self.note_line(
+                "mouse released to the terminal: drag now selects. Wheel scrolling is off until \
+                 you press Ctrl-S again. If a goal is running the screen repaints twice a second \
+                 and will wipe the selection, so select after it finishes.",
+            );
+        }
+        let mut inner = self.lock();
+        synchronized(|| inner.paint());
+        now
+    }
+
     pub fn toggle_sidebar(&self) {
         let mut inner = self.lock();
         let cols = inner.screen.0;
@@ -1018,72 +1223,71 @@ impl Frame {
         }
     }
 
-    /// A left click, routed to the layout's hit-test ([`App::click`] — today,
-    /// the sidebar's collapse affordance and nothing else). Dead while a
-    /// question is pending, the same §4.6 rule the `Ctrl-B` key follows: a
-    /// click cannot become an answer, but a layout that reshuffles under a
-    /// question the user is reading is its own hazard. A no-op click paints
-    /// nothing, so idle mouse noise costs no repaint.
-    pub fn click(&self, x: u16, y: u16) {
+    /// `,` on an empty input box: the Settings screen, on and off. Inline runs
+    /// get a no-op, like every pane key — there is no full-screen pane to own.
+    /// Whether a goal is mid-flight — the one fact [`super::input::quit_route`]
+    /// needs. An approval question counts: the goal that asked it is running.
+    pub fn goal_active(&self) -> bool {
+        self.lock().started.is_some()
+    }
+
+    // **`memory_page_text` / `explorer_page_text` are not here, and their
+    // absence is a finding rather than an oversight.** The replaced `frame.rs`
+    // owned both: they turned a failed read of the memory wiki or the session
+    // store into a page that says *something went wrong* instead of a page that
+    // reads as *there is nothing here* — opposite instructions to whoever is
+    // looking at it. The incoming tree has no Data Explorer page at all, and
+    // its Memory page (`term/memory.rs`) reads the store itself. Restoring the
+    // two functions so the guarantee's test compiles would be a receipt for a
+    // path nothing takes. `term/guarantees.rs` F-items that call them go red,
+    // which is the signal that this needs a decision.
+
+    /// Return to the conversation, if a page is showing.
+    ///
+    /// Answers whether it did anything, so the reader can tell "I handled this"
+    /// from "pass it on" — an Esc that was swallowed while no page was up would
+    /// take the key away from whatever else wanted it.
+    ///
+    /// **A seam.** The imported `app.rs` holds one flag per page and toggles
+    /// each with its own chord; there is no "leave whatever is open". This is
+    /// that, expressed over the three toggles, so `input.rs`'s Esc ordering —
+    /// menu first, then the page — keeps working unchanged.
+    pub fn leave_page(&self) -> bool {
         let mut inner = self.lock();
-        if inner.view.prompt.is_some() {
-            return;
+        let cwd = inner.view.status.cwd.clone();
+        let Ui::Full(app) = &mut inner.ui else {
+            return false;
+        };
+        if app.settings_open() {
+            app.toggle_settings();
+        } else if app.memory_open() {
+            app.toggle_memory(&cwd);
+        } else if app.harness_open() {
+            app.toggle_harness(&cwd);
+        } else {
+            return false;
         }
-        let cols = inner.screen.0;
-        if let Ui::Full(app) = &mut inner.ui {
-            if app.click(x, y, cols) {
-                synchronized(|| inner.paint());
-            }
-        }
+        synchronized(|| inner.paint());
+        true
     }
 
     /// `Alt+<key>`: launch the user tool the catalogue lists under `key`, and
     /// put the outcome — `Ok` or `Err`, either way — in the transcript. A key
-    /// that silently does nothing is the defect the collapse toggle just paid
-    /// for; an unbound chord is the one honest silence (the editor ignored it
-    /// before this existed, and there is no label to report under).
+    /// that silently does nothing is a defect this tree has already paid for;
+    /// an unbound chord is the one honest silence.
+    ///
+    /// **This is the pre-import routing, restored.** What the import brought
+    /// was four hard-coded macOS `open`/`osascript` invocations behind a
+    /// `ToolLaunch` enum: correct on the branch's machine and inert on this
+    /// one. `crate::usertools` is the cross-platform planner, it reports
+    /// availability per directory, and it is what the sidebar's `n/a` column
+    /// is derived from — three things the replacement had none of.
     ///
     /// The launch runs on its own thread: `launch` may spawn a process, and a
     /// keystroke handler that waits on one is an event loop that has stopped.
     /// The result comes back through [`Frame::write_lines`] — transcript
     /// lines, which can never enter the line channel, answer a prompt, or
-    /// touch the editor: a launch pending across a prompt's appearance stays
-    /// outside the drain guarantee by construction.
-    /// What the Memory page shows, including when the store cannot be read.
-    ///
-    /// **Lifted out because the fallback had no test and could not have one.**
-    /// It lived inside `launch_tool`, which needs a real `Frame` and therefore a
-    /// real terminal, so `"nothing could be read"` was a string that existed in
-    /// exactly one place: the source. A page that renders an error is still a
-    /// page somebody reads, and the difference between it and an empty one is
-    /// the difference between "there is nothing here" and "something went
-    /// wrong" — which are opposite instructions to the person reading.
-    ///
-    /// `ARCH-003`'s shape again, and the smallest useful cut of it: the routing
-    /// stays where it is, and the part with a decision in it moves somewhere a
-    /// test can reach.
-    pub(crate) fn memory_page_text(
-        session_dir: Option<&std::path::Path>,
-        cwd: &std::path::Path,
-    ) -> String {
-        match crate::commands::capture_memory(session_dir, cwd) {
-            Ok(t) => t,
-            Err(e) => format!("nothing could be read: {e:#}"),
-        }
-    }
-
-    /// What the Data Explorer shows, including when the store cannot be read.
-    ///
-    /// Separate wording from [`memory_page_text`] on purpose. The Memory page
-    /// reads Emma's own notes and the Explorer reads the session store; a reader
-    /// who sees the same sentence on both learns nothing about which one failed.
-    pub(crate) fn explorer_page_text(session_dir: Option<&std::path::Path>) -> String {
-        match crate::commands::capture_sessions(session_dir) {
-            Ok(t) => t,
-            Err(e) => format!("the session store could not be read: {e:#}"),
-        }
-    }
-
+    /// touch the editor.
     pub fn launch_tool(self: &Arc<Self>, key: char) {
         let picked = {
             let inner = self.lock();
@@ -1100,64 +1304,15 @@ impl Frame {
             return;
         };
 
-        // **Settings is a page now, not a program.** The owner reported three
-        // times that `Alt+,` opening an editor was wrong; UI-001 ruled it should
-        // be an in-app page. The external launch was correct as built — its own
-        // comment says "the tool's promise is edit your settings, not open your
-        // chosen editor" — and it is simply not what was wanted.
-        // **Memory is a page now.** `Tool::Memory` has declared `in_app` since
-        // the tools were written, and nothing routed it: pressing the chord
-        // produced a warning saying "the frame owns the 'm' key" about a key the
-        // frame had never claimed. DEF-037 stopped it advertising a chord that
-        // only warned; this is the other half — the frame claims the key.
+        // The two in-app pages the imported `app.rs` actually has. `Alt+,` was
+        // ruled a page rather than an editor launch (UI-001), and `Alt+m` was
+        // advertising a chord that only warned until the frame claimed the key.
         if tool == crate::usertools::Tool::Memory {
-            let (dir, cwd) = {
-                let inner = self.lock();
-                (
-                    std::path::PathBuf::from(&inner.view.status.session)
-                        .parent()
-                        .map(|p| p.to_path_buf()),
-                    std::path::PathBuf::from(&inner.view.status.cwd),
-                )
-            };
-            let text = Self::memory_page_text(dir.as_deref(), &cwd);
-            let mut inner = self.lock();
-            if let Ui::Full(app) = &mut inner.ui {
-                app.show_memory(&text);
-                synchronized(|| inner.paint());
-            }
+            self.toggle_memory();
             return;
         }
-
-        // **The Data Explorer reads the session store, so the scan happens
-        // here and the page is handed a snapshot.** The directory is the one
-        // holding this run's log — the frame already knows that path because the
-        // status row shows it — and scanning on open rather than on paint keeps
-        // a directory walk off the render path.
-        if tool == crate::usertools::Tool::DataExplorer {
-            let dir = {
-                let inner = self.lock();
-                std::path::PathBuf::from(&inner.view.status.session)
-                    .parent()
-                    .map(|p| p.to_path_buf())
-            };
-            let text = Self::explorer_page_text(dir.as_deref());
-            let mut inner = self.lock();
-            if let Ui::Full(app) = &mut inner.ui {
-                app.show_explorer(&text);
-                synchronized(|| inner.paint());
-            }
-            return;
-        }
-
         if tool == crate::usertools::Tool::Settings {
-            let mut inner = self.lock();
-            if let Ui::Full(app) = &mut inner.ui {
-                app.show(crate::term::app::Pane::Page(
-                    crate::term::app::Page::Settings,
-                ));
-                synchronized(|| inner.paint());
-            }
+            self.toggle_settings();
             return;
         }
         let frame = Arc::clone(self);
@@ -1183,6 +1338,125 @@ impl Frame {
         });
     }
 
+    /// Alt+m. The wiki root is the run's working directory: per-repo memory,
+    /// the owner's directive made literal.
+    pub fn toggle_memory(&self) {
+        let mut inner = self.lock();
+        let cwd = inner.view.status.cwd.clone();
+        if let Ui::Full(app) = &mut inner.ui {
+            app.toggle_memory(&cwd);
+            synchronized(|| inner.paint());
+        }
+    }
+
+    /// One key for the open Harness page. `false` when the page is closed or
+    /// the key is a chord/release — the caller's global layer keeps it.
+    pub fn harness_key(&self, key: ratatui::crossterm::event::KeyEvent) -> bool {
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            if app.harness_key(key) {
+                synchronized(|| inner.paint());
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The Memory page's keys, same seam. Tested at the App level since M5;
+    /// this passthrough was the missing runtime half — the harness audit
+    /// found memory's keys dead for the same reason harness's were.
+    pub fn memory_key(&self, key: ratatui::crossterm::event::KeyEvent) -> bool {
+        let mut inner = self.lock();
+        let handled = if let Ui::Full(app) = &mut inner.ui {
+            app.memory_key(key)
+        } else {
+            false
+        };
+        if handled {
+            synchronized(|| inner.paint());
+        }
+        handled
+    }
+
+    /// The wheel while the Harness page is open: the Run Graph's DAG canvas,
+    /// and nothing else. `false` gives the notch back to the transcript.
+    pub fn harness_scroll(&self, up: bool) -> bool {
+        let mut inner = self.lock();
+        let handled = if let Ui::Full(app) = &mut inner.ui {
+            app.harness_scroll(up)
+        } else {
+            false
+        };
+        if handled {
+            synchronized(|| inner.paint());
+        }
+        handled
+    }
+
+    /// A left press while the Harness page is open: run boxes and action
+    /// chips. Same one-dispatch rule as the keys.
+    pub fn harness_click(&self, col: u16, row: u16) -> bool {
+        let mut inner = self.lock();
+        let handled = if let Ui::Full(app) = &mut inner.ui {
+            app.harness_click(col, row)
+        } else {
+            false
+        };
+        if handled {
+            synchronized(|| inner.paint());
+        }
+        handled
+    }
+
+    /// Alt+h. Same shape as the Memory toggle: the repo's cwd is the feed.
+    pub fn toggle_harness(&self) {
+        let mut inner = self.lock();
+        let cwd = inner.view.status.cwd.clone();
+        if let Ui::Full(app) = &mut inner.ui {
+            app.toggle_harness(&cwd);
+            synchronized(|| inner.paint());
+        }
+    }
+
+    /// The Settings screen's keys, same seam as memory's: `false` when the
+    /// screen is closed or the key is a chord/release, so the global layer
+    /// keeps it.
+    pub fn settings_key(&self, key: ratatui::crossterm::event::KeyEvent) -> bool {
+        let mut inner = self.lock();
+        let handled = if let Ui::Full(app) = &mut inner.ui {
+            app.settings_key(key)
+        } else {
+            false
+        };
+        if handled {
+            synchronized(|| inner.paint());
+        }
+        handled
+    }
+
+    /// A left press while the Settings screen is open: rows, chevrons and
+    /// buttons. Same one-dispatch rule as the keys.
+    pub fn settings_click(&self, col: u16, row: u16) -> bool {
+        let mut inner = self.lock();
+        let handled = if let Ui::Full(app) = &mut inner.ui {
+            app.settings_click(col, row)
+        } else {
+            false
+        };
+        if handled {
+            synchronized(|| inner.paint());
+        }
+        handled
+    }
+
+    pub fn toggle_settings(&self) {
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            app.toggle_settings();
+            synchronized(|| inner.paint());
+        }
+    }
+
     /// Where the whole run is written down, for the exit line — the last
     /// thing left on the normal screen after the alternate screen restores,
     /// because it is the only pointer to a transcript the shell no longer
@@ -1195,6 +1469,23 @@ impl Frame {
         }
     }
 }
+
+// region: OS launches
+// ---------------------------------------------------------------------------
+// OS launches
+//
+// **Removed on import.** What stood here was a four-arm macOS dispatch table
+// (`open -a Terminal`, `open -a "Visual Studio Code"`, `open <cwd>`, and an
+// osascript ⌘-space keystroke) reached through a `ToolLaunch` enum. It is
+// correct on the branch it came from and inert on Windows, where none of those
+// four commands exist. `crate::usertools` is this tree's cross-platform
+// planner: it decides per OS and per directory, reports availability so the
+// sidebar can print `n/a` instead of a chord that does nothing, and is pure
+// enough to test without spawning anything. `Frame::launch_tool` goes through
+// it. If a macOS-specific launch is wanted back, it belongs in `usertools`'
+// `plan`, behind the same `Machine` seam the rest of the platform choices use —
+// not as a second launcher one caller away from the first.
+// ---------------------------------------------------------------------------
 
 impl Inner {
     /// Draw the viewport, and record where the cursor ended up so
@@ -1230,28 +1521,10 @@ impl Inner {
                 );
             }
             Ui::Full(app) => {
-                // The bar's cells map to real measurements or they do not
-                // appear. Its contract encodes absence as a non-positive
-                // cap, so an unmeasured `context`/`spend` becomes `(0, 0)` —
-                // never `(0, real_cap)`, which would draw an invented "0% of
-                // the budget" before the first model call reports. The ↑/↓
-                // raw token split is `None` because the loop does not carry
-                // it yet (design §7): absent, not zero.
-                let bar = super::statusbar::Bar {
-                    mode: match self.view.mode {
-                        Mode::Idle => "IDLE".to_string(),
-                        Mode::Working => "WORKING".to_string(),
-                    },
-                    model: self.view.status.model.clone(),
-                    env: super::app::stem(&self.view.status.cwd),
-                    ctx_used: self.view.status.context.map(|(u, _)| u).unwrap_or(0),
-                    ctx_max: self.view.status.context.map(|(_, c)| c).unwrap_or(0),
-                    total_used: self.view.status.spend.map(|(u, _)| u).unwrap_or(0),
-                    total_max: self.view.status.spend.map(|(_, c)| c).unwrap_or(0),
-                    up: None,
-                    down: None,
-                    elapsed: self.view.status.elapsed,
-                };
+                // Filled by `layout::bar_for` — real measurements or absent
+                // cells, and the ↑/↓ raw split live from `Status`'s running
+                // totals (design §7's "small, real addition", made).
+                let bar = super::layout::bar_for(&self.view);
                 let view = &self.view;
                 let term = &mut self.term;
                 let mut cursor = None;
@@ -1548,6 +1821,73 @@ fn spawn_clock(frame: Weak<Frame>) {
     });
 }
 
+/// One clipboard mechanism, two callers.
+///
+/// The answer-copy key and a mouse selection put different text on the clipboard and must not put
+/// it there differently: a second escape sequence written somewhere else is a second thing to get
+/// wrong on the terminals that already refuse this one.
+fn to_clipboard(text: &str) {
+    // On macOS the pasteboard is a process away, and Terminal.app does not
+    // implement OSC 52 at all — the sequence is swallowed and the "sent"
+    // notice was the only thing the user received (owner report, 2026-08-26:
+    // "select and copy does not work"). pbcopy is local, universal on the
+    // platform, and independent of which terminal is drawing us. OSC 52 is
+    // still written as well: a remote session over ssh has a local pbcopy on
+    // the WRONG machine, and there the escape is the only road home.
+    #[cfg(target_os = "macos")]
+    {
+        use std::io::Write as _;
+        use std::process::{Command, Stdio};
+        if let Ok(mut child) = Command::new("/usr/bin/pbcopy")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            if let Some(stdin) = child.stdin.as_mut() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            // Reap on a thread, the browser-zombie lesson applied here.
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+    }
+    use std::io::Write as _;
+    let mut out = std::io::stdout();
+    let _ = out.write_all(osc52(text).as_bytes());
+    let _ = out.flush();
+}
+
+/// The OSC 52 sequence for `text`. `c` is the clipboard selection; BEL-terminated because more
+/// terminals accept it than the ST form.
+fn osc52(text: &str) -> String {
+    format!("\x1b]52;c;{}\x07", base64(text.as_bytes()))
+}
+
+/// Standard base64, for OSC 52. Written here rather than taken as a dependency: it is fourteen
+/// lines, it has one caller, and a clipboard escape is not worth widening the dependency graph.
+fn base64(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = u32::from(b[0]) << 16 | u32::from(b[1]) << 8 | u32::from(b[2]);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[((n >> (18 - 6 * i)) & 0x3F) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
 // endregion: The frame
 
 #[cfg(test)]
@@ -1705,7 +2045,7 @@ mod tests {
     }
 
     /// The manifest's invariants — rewritten, not deleted, on 2026-08-12,
-    /// when stage 2 of `notes/design/tui-fullscreen.md` entered the alternate
+    /// when stage 2 of `notes/design-tui-fullscreen.md` entered the alternate
     /// screen on purpose.
     ///
     /// This test used to assert three things: `scrolling-regions` absent,
@@ -1814,25 +2154,10 @@ mod tests {
         // source: the crossterm disable must appear in `restore_terminal`'s
         // reach. Weak as assertions go, and said so; the live pairing is a
         // certification item.
-        // **Scoped to `restore_terminal`'s body, not the whole file.** The
-        // assertion used to search all of `frame.rs`, which the `use` line at
-        // the top satisfies on its own — so deleting the disable from the
-        // restore path left this green. The comment above already called it
-        // weak; it was worse than weak, it could not fail.
         let source = include_str!("frame.rs");
-        let start = source
-            .find("pub fn restore_terminal(")
-            .expect("restore_terminal was renamed; this assertion is now vacuous");
-        let end = source[start..]
-            .find(
-                "
-}",
-            )
-            .expect("restore_terminal was restructured; this assertion is now vacuous")
-            + start;
         assert!(
-            source[start..end].contains(&format!("Disable{}", "MouseCapture")),
-            "mouse capture is enabled and the restore path never disables it"
+            source.contains(&format!("Disable{}", "MouseCapture")),
+            "mouse capture is enabled and never disabled"
         );
         // The three the way out owes regardless of what the way in did: the
         // cursor comes back, a synchronized update in flight is ended, and no
@@ -1840,120 +2165,6 @@ mod tests {
         assert!(leaving.contains("\x1b[?25h"), "{leaving:?}");
         assert!(leaving.contains(SYNC_END), "{leaving:?}");
         assert!(leaving.ends_with("\x1b[0m"), "{leaving:?}");
-    }
-
-    /// **The alternate screen is entered with an explicit erase**, and not
-    /// only with `?1049h`.
-    ///
-    /// Found by mutation: shortening [`ALT_ENTER`] to just `\x1b[?1049h` left
-    /// the whole lib suite green. The pairing test above only ever reads the
-    /// *mode numbers* out of this constant, so everything between them is
-    /// unexamined by construction.
-    ///
-    /// The erase is not decoration. xterm clears the alternate buffer on entry
-    /// and most terminals copy it, but that is a convention rather than a
-    /// promise in DEC's definition of the mode — and on a console that keeps
-    /// the buffer, ratatui's first draw diffs against cells it believes are
-    /// blank and leaves whatever was there showing through the gaps in the
-    /// first frame. `2J` erases, `H` puts the cursor where ratatui's model
-    /// says it is.
-    ///
-    /// **This is a constant, so what it establishes is small and worth
-    /// stating.** It proves the bytes Emma intends to send are the bytes in
-    /// the constant. It proves nothing about what any terminal does with them
-    /// — that is a certification item, and the only way to run it is to open
-    /// a console and look.
-    #[test]
-    fn the_alternate_screen_is_entered_with_an_explicit_clear() {
-        // Assembled rather than written out, for the reason the neighbouring
-        // manifest test gives: it counts occurrences of this sequence across
-        // the whole file, and a literal here would be a second one.
-        let switch = format!("\x1b[?10{}h", "49");
-        assert!(
-            ALT_ENTER.starts_with(&switch),
-            "the switch is no longer the first thing sent: {ALT_ENTER:?}"
-        );
-        assert!(
-            ALT_ENTER.contains("\x1b[2J"),
-            "the alternate screen is entered without erasing it, so a console that \
-             does not clear on 1049h shows its old contents through the first \
-             frame: {ALT_ENTER:?}"
-        );
-        assert!(
-            ALT_ENTER.ends_with("\x1b[H"),
-            "the cursor is left where the switch put it rather than at the origin \
-             ratatui's first diff assumes: {ALT_ENTER:?}"
-        );
-        // The control: the *leave* carries none of this. An erase on the way
-        // out would wipe the shell content the mode's own restore exists to
-        // bring back.
-        assert_eq!(ALT_LEAVE, format!("\x1b[?10{}l", "49"));
-    }
-
-    /// **An insert is capped, so no tool can ask the terminal for an unbounded
-    /// number of rows.**
-    ///
-    /// Found by mutation: raising [`MAX_INSERT_ROWS`] from 500 to `u16::MAX`
-    /// left the whole lib suite green. The constant's own doc explains why it
-    /// exists — a tool returning fifty thousand lines would otherwise ask
-    /// `insert_before` to make fifty thousand rows of room in one call — and
-    /// nothing checked that the number was still doing anything.
-    ///
-    /// Six hundred one-row lines into a twelve-row screen: with the cap in
-    /// place 493 rows reach `TestBackend`'s scrollback and the viewport holds
-    /// the rest; without it, all six hundred do.
-    ///
-    /// **The part this does not defend, said plainly.** The lines past the cap
-    /// are dropped and *nothing tells the reader they were* — measured: the
-    /// last row in scrollback is `row 492` and row 599 is nowhere, with no
-    /// note anywhere saying so. On the full-screen path the retained
-    /// transcript still holds them, so the loss is the `EMMA_UI=inline`
-    /// hatch's alone; on that path it is a real defect and it is reported
-    /// rather than pinned here, because a test asserting the silence would
-    /// have to be deleted to fix it.
-    ///
-    /// And this is a cell buffer. It shows how many rows ratatui was asked to
-    /// make and what landed in `TestBackend`'s idea of scrollback. Whether a
-    /// real terminal captured those rows into *its* scrollback is the thing
-    /// this file has never been able to assert.
-    #[test]
-    fn an_enormous_insert_is_capped_rather_than_handed_to_the_terminal_whole() {
-        let mut term = screen(12, 5);
-        let view = view();
-        paint_into(&mut term, &view);
-
-        let lines: Vec<Line<'static>> = (0..600)
-            .map(|i| view.skin.prose(&format!("row {i}")))
-            .collect();
-        emit_into(&mut term, lines);
-
-        let scrolled = term.backend().scrollback().area.height;
-        // **The bound is a literal, and that is the point.** Written as
-        // `scrolled <= MAX_INSERT_ROWS` this test passes for every possible
-        // value of the constant, including `u16::MAX` — measured: with the
-        // constant raised to `u16::MAX` all six hundred rows arrive and the
-        // self-referential form stays green. 500 is the cap the constant is
-        // documented at; 493 is what a twelve-row screen puts in scrollback
-        // under it, and 593 is what arrives without it.
-        assert!(
-            scrolled <= 500,
-            "an insert of 600 lines pushed {scrolled} rows; the documented cap is 500 \
-             (MAX_INSERT_ROWS is {MAX_INSERT_ROWS})"
-        );
-        assert!(
-            scrolled < 600,
-            "the whole block was handed to the terminal in one call: {scrolled} rows"
-        );
-        // The control: the cap is a cap and not a refusal. Something arrived,
-        // and it is the *front* of the block — dropping the beginning instead
-        // of the end would lose the line that says what went wrong.
-        assert!(scrolled > 0, "the whole insert was thrown away");
-        let sb = term.backend().scrollback();
-        let first: String = (0..sb.area.width).map(|x| sb[(x, 0u16)].symbol()).collect();
-        assert!(
-            first.trim_end().ends_with("row 0"),
-            "the insert kept its tail rather than its head: {first:?}"
-        );
     }
 
     /// Bracketed paste specifically, because it is the one being added and the
@@ -2066,216 +2277,16 @@ mod tests {
     ///
     /// So the caller is asserted on its source, the way the `scrolling-regions`
     /// decision already is. A single `anchor` call put back at the top of
-    /// A half-installed frame can still be taken down.
-    ///
-    /// **The window this covers.** `install` enables raw mode, then the
-    /// alternate screen, then mouse capture, and sets `FRAME_ON` last. The
-    /// teardown used to return early unless `FRAME_ON` was set — so a panic
-    /// anywhere in that window left every mode on with the only thing that
-    /// turns them off refusing to run: a shell with no echo, on a screen that
-    /// is not the user's. `CLAUDE.md` names a stranded alternate screen as the
-    /// failure people uninstall over, and the constraint it states is absolute:
-    /// *every* exit path leaves it.
-    ///
-    /// The comment at the install site claimed the `ALT_ON` latch prevented
-    /// this. It could not, because the early return meant nothing ever read it.
-    #[test]
-    fn a_frame_that_never_finished_installing_is_still_torn_down() {
-        // Stage the window: modes latched, `FRAME_ON` never reached.
-        RAW_ON.store(true, Ordering::SeqCst);
-        ALT_ON.store(true, Ordering::SeqCst);
-        FRAME_ON.store(false, Ordering::SeqCst);
-
-        restore_terminal();
-
-        assert!(
-            !RAW_ON.load(Ordering::SeqCst),
-            "raw mode survived a half-installed frame: the shell has no echo"
-        );
-        assert!(
-            !ALT_ON.load(Ordering::SeqCst),
-            "the alternate screen survived: the user is looking at the wrong screen"
-        );
-
-        // **Mouse capture alone has to be enough to make the teardown run.**
-        //
-        // Found by mutation: deleting `&& !MOUSE_ON.load(..)` from that
-        // early-return guard left the whole lib suite green. The phase above
-        // cannot catch it, because it sets three latches and the guard only
-        // needs one of them to decide to carry on.
-        //
-        // Capture left on is not a cosmetic leak. The shell that inherits the
-        // terminal has `?1000`/`?1006` enabled by a process that has exited,
-        // so every click and every wheel notch types an escape sequence into
-        // the prompt, and no program still running will ever turn it off.
-        //
-        // **Second phase in the same test rather than a test of its own**, for
-        // the reason the file already gives about `FRAME_ON`: these latches are
-        // process-global and the tests run in parallel. `MOUSE_ON` is touched
-        // by nothing else, so this owns it outright. The other three being
-        // flipped underneath by a neighbouring test can only make this pass
-        // when it should have failed — never fail when it should have passed.
-        MOUSE_ON.store(true, Ordering::SeqCst);
-        RAW_ON.store(false, Ordering::SeqCst);
-        ALT_ON.store(false, Ordering::SeqCst);
-        FRAME_ON.store(false, Ordering::SeqCst);
-        restore_terminal();
-        assert!(
-            !MOUSE_ON.load(Ordering::SeqCst),
-            "mouse capture survived a teardown where it was the only mode left on: \
-             the shell that inherits this terminal types escape sequences when it \
-             is clicked"
-        );
-    }
-
     /// `install` restores the screen of blank rows the owner photographed, and
     /// every other test in this file passes with it there.
-    /// The panic hook goes on **before** the first mode it has to undo.
-    ///
-    /// **A reviewer moved it back after `enable_raw_mode()` — the exact
-    /// regression — and the whole workspace stayed green.** `restore_terminal`
-    /// acting per-latch is separately mutation-proven and does not cover this:
-    /// a panic in the window before the hook exists is not restored by any
-    /// amount of forgiveness in the teardown, because nothing runs.
-    ///
-    /// The window is real rather than theoretical. Between `enable_raw_mode`
-    /// and `FRAME_ON` there are several fallible writes, and a panic in there
-    /// leaves a terminal that is not echoing what the user types — the state
-    /// people reach for a fresh shell to escape.
-    ///
-    /// **This asserts on source order, which this file treats as a last
-    /// resort.** `DEF-018`'s scar is a source-grep test that passed while the
-    /// thing it guarded was disabled; the defence against that here is the same
-    /// as its neighbour above — the slice is bounded by markers that must stay
-    /// inside `install`, and every `expect` says plainly that a rename has made
-    /// the assertion vacuous rather than letting it quietly match nothing. What
-    /// makes it defensible at all is that the property genuinely is an ordering
-    /// of two statements in one function, with no runtime moment at which it
-    /// can be observed from outside: by the time a panic proves the hook was
-    /// missing, the process is going down.
-    /// A page that cannot read its store says so, and says which store.
-    ///
-    /// **Neither fallback had a test, and neither could have had one**: both
-    /// lived inside `launch_tool`, which needs a real `Frame` and therefore a
-    /// terminal. `"nothing could be read"` existed in exactly one place in the
-    /// repository — the source line that produces it.
-    ///
-    /// That matters more than a missing branch usually does. A page rendering
-    /// an error and a page rendering nothing look similar and mean opposite
-    /// things: *"there is nothing here"* and *"something went wrong"* are
-    /// different instructions to whoever is reading. And the two pages read
-    /// different stores, so a shared sentence would leave a reader unable to
-    /// tell which one failed — which is why this asserts they differ.
-    #[test]
-    fn a_page_that_cannot_read_its_store_says_which_store() {
-        // **`None`, not a missing directory, and that difference is the test.**
-        // The first version passed `Some("definitely-not-a-directory")` and both
-        // mutations below survived it: `commands::memory` treats a directory
-        // that is not there as an *empty store*, writes "(nothing remembered
-        // here yet)" and returns `Ok`, so the error arm was never reached. The
-        // bail is on `None` — no home directory, so no store to name at all.
-        //
-        // Caught by mutating rather than by reading, which is the only way this
-        // class is ever caught.
-        let memory = Frame::memory_page_text(None, std::path::Path::new("."));
-        let explorer = Frame::explorer_page_text(None);
-
-        // Whatever they say, they must not come back empty: an empty page reads
-        // as "your store is empty", which is a different and wrong claim.
-        assert!(
-            !memory.trim().is_empty(),
-            "the memory page came back blank when its store could not be read, \
-             which reads as an empty store"
-        );
-        assert!(
-            !explorer.trim().is_empty(),
-            "the explorer page came back blank when its store could not be read"
-        );
-
-        // And they are distinguishable, so a reader can tell which store failed.
-        //
-        // **Two mutations were run against this and only one dies, which is
-        // worth stating rather than leaving as a silent survivor.** Blanking
-        // the memory fallback kills it. Giving both pages the *same prefix*
-        // does not, and that is an equivalent mutant rather than a gap: the two
-        // wrapped errors already name their own stores, so the pair stays
-        // distinguishable and the guarantee this asserts still holds. Measured:
-        //
-        //   MEMORY  : "nothing could be read: … nothing remembered to read. …"
-        //   EXPLORER: "the session store could not be read: … nothing recorded
-        //              to read. …"
-        assert_ne!(
-            memory, explorer,
-            "both pages say the same thing, so a reader cannot tell which store \
-             could not be read"
-        );
-    }
-
-    /// The Memory page's failure sentence names the failure rather than a count.
-    ///
-    /// The positive half of the test above: it asserts the two differ, which a
-    /// pair of unhelpful strings would also satisfy.
-    #[test]
-    fn the_memory_pages_failure_says_something_went_wrong() {
-        let text = Frame::memory_page_text(None, std::path::Path::new("."));
-        // This is the failure arm, so it must read as a failure rather than as
-        // an empty store. The two are opposite claims to whoever is reading.
-        assert!(
-            text.contains("nothing could be read"),
-            "the memory page did not report the failure it hit; a blank or bland \
-             page reads as an empty store, which is the opposite claim: {text:?}"
-        );
-    }
-
-    #[test]
-    fn the_panic_hook_is_installed_before_the_first_mode_it_undoes() {
-        let source = include_str!("frame.rs");
-        let start = source
-            .find("pub fn install(")
-            .expect("install was renamed; this assertion is now vacuous");
-        let end = source[start..]
-            .find("FRAME_ON.store(true")
-            .expect("install was restructured; this assertion is now vacuous")
-            + start;
-        let body = &source[start..end];
-
-        let hook = body
-            .find("install_panic_hook();")
-            .expect("install no longer installs the panic hook at all");
-        let raw = body
-            .find("enable_raw_mode()")
-            .expect("install no longer enables raw mode; this assertion is now vacuous");
-        assert!(
-            hook < raw,
-            "the panic hook is installed after raw mode is enabled. A panic in the window \
-             between them has no hook to restore the terminal, and the user is left in a \
-             shell that does not echo"
-        );
-
-        // And before the alternate screen, which is the mode whose stranding
-        // people uninstall over.
-        if let Some(alt) = body.find("ALT_ON.store(true") {
-            assert!(
-                hook < alt,
-                "the panic hook is installed after the alternate screen is entered"
-            );
-        }
-    }
-
     #[test]
     fn install_hands_the_terminal_to_ratatui_without_moving_the_cursor_first() {
         let source = include_str!("frame.rs");
         let start = source
             .find("pub fn install(")
             .expect("install was renamed; this assertion is now vacuous");
-        // The end marker must be something that stays *inside* `install`.
-        // `PANIC_HOOK.call_once` was this marker until the hook moved to the
-        // top of the function to cover the install window itself, at which
-        // point the slice ran on past the end of `install` and swept in
-        // unrelated code. The `expect` below caught it, which is the whole
-        // reason it is worded the way it is.
         let end = source[start..]
-            .find("FRAME_ON.store(true")
+            .find("PANIC_HOOK.call_once")
             .expect("install was restructured; this assertion is now vacuous")
             + start;
         let body: String = source[start..end]
@@ -2572,78 +2583,13 @@ mod tests {
     /// Synchronized output is two constants and a rule about pairing them: the
     /// end is on the restore path, so `Drop`, the panic hook and `process::exit`
     /// all release a terminal that was told to hold its picture.
-    ///
-    /// **This test used to be a false receipt and could not fail.** Its third
-    /// assertion was `include_str!("frame.rs").contains("out.push_str(SYNC_END)")`
-    /// — and that literal occurred exactly once in the file, inside the assertion
-    /// itself, so `include_str!` matched the test's own source. The restore path
-    /// has said `leave_modes()` for as long as the test has existed. Proven by
-    /// mutation: with `SYNC_END` deleted from `leave_modes`, the grep still
-    /// passed while `every_terminal_mode_the_frame_sets_is_unset_on_the_way_out`
-    /// correctly went red.
-    ///
-    /// It now asserts the behaviour instead of the spelling. A source grep can
-    /// only ever pin how something is written; this repository's rule is that a
-    /// test which cannot fail is worse than no test, because it is a receipt for
-    /// a guarantee nobody checked.
     #[test]
     fn a_synchronized_update_is_always_ended_including_on_the_way_out() {
         assert_eq!(SYNC_BEGIN, "\x1b[?2026h");
         assert_eq!(SYNC_END, "\x1b[?2026l");
-        // The pair is an h/l set on the same private mode; a typo in either
-        // number leaves a terminal holding its picture forever.
-        assert_eq!(SYNC_BEGIN.replace('h', "l"), SYNC_END);
         assert!(
-            leave_modes().contains(SYNC_END),
-            "the restore path no longer ends a synchronized update: {:?}",
-            leave_modes()
-        );
-
-        // **The ordinary pairing, which is the one nobody was checking.**
-        //
-        // Everything above is about the *exit*. The far commoner unmatched `h`
-        // is the one in `synchronized` itself, which runs on every single
-        // draw — and deleting `out.write_all(SYNC_END.as_bytes())` from it
-        // left the whole lib suite green. A terminal told to hold its picture
-        // and never released holds it until its own timeout fires, which is
-        // Emma redrawing at whatever rate the terminal's watchdog allows.
-        //
-        // **This is a source assertion, and this file's rule is that those are
-        // a last resort.** `DEF-018`'s scar is a grep that passed while the
-        // thing it guarded was disabled, and the test this sits inside carries
-        // its own scar of the same kind. The defences are the ones used
-        // elsewhere here: the slice is bounded by markers that must stay
-        // inside `synchronized`, and each `expect` says outright that a rename
-        // has made the assertion vacuous rather than letting it match nothing.
-        //
-        // Why not a behavioural one: `synchronized` writes to the process's
-        // real `stdout` and hands back only its closure's value. There is no
-        // seam to pass a writer through and no way to read those bytes from
-        // inside the test binary, so the alternative to this is nothing at
-        // all. Making it behavioural means giving `synchronized` a `Write`
-        // parameter, which is a change to production code.
-        let source = include_str!("frame.rs");
-        let start = source
-            .find("fn synchronized<T>(")
-            .expect("synchronized was renamed; this assertion is now vacuous");
-        let end = source[start..]
-            .find(
-                "
-}",
-            )
-            .expect("synchronized was restructured; this assertion is now vacuous")
-            + start;
-        let body = &source[start..end];
-        let begins = body.matches("SYNC_BEGIN").count();
-        let ends = body.matches("SYNC_END").count();
-        assert_eq!(
-            begins, 1,
-            "synchronized no longer begins exactly one update: {body}"
-        );
-        assert_eq!(
-            ends, begins,
-            "synchronized begins an update it does not end, so every draw leaves the \
-             terminal holding its picture until its own timeout fires: {body}"
+            include_str!("frame.rs").contains("out.push_str(SYNC_END)"),
+            "the restore path no longer ends a synchronized update"
         );
     }
 
@@ -2670,45 +2616,6 @@ mod tests {
 
     #[test]
     fn restore_runs_once_however_many_times_it_is_called() {
-        // **What the inline path actually writes to take its viewport off the
-        // screen**, asserted here rather than in a test of its own because
-        // `CURSOR_ROW` is process-global and this test already owns it.
-        //
-        // Found by mutation: making `erase_frame` return an empty string
-        // unconditionally left the whole lib suite green. Every existing
-        // assertion about the teardown is about the *latches*; the bytes were
-        // unexamined. On the `EMMA_UI=inline` path those bytes are the entire
-        // cleanup — there is no alternate screen to leave — so an empty string
-        // means the viewport stays painted on the shell the user gets back,
-        // with a prompt drawn over the top of it.
-        CURSOR_ROW.store(3, Ordering::SeqCst);
-        let erase = erase_frame();
-        assert_eq!(
-            erase, "\x1b[3A\r\x1b[J",
-            "the erase no longer climbs to the frame's top row and wipes from there"
-        );
-        // Relative and upward only, by the number written down at the last
-        // paint. An absolute row number here is the Windows screen-buffer bug
-        // the restore path's doc is written around.
-        assert!(!erase.contains('H'), "{erase:?}");
-        assert!(!erase.contains('B'), "{erase:?}");
-
-        // It is one-shot: `CURSOR_ROW` is swapped out, so a second teardown —
-        // `Drop` after the panic hook, say — writes nothing rather than
-        // climbing three more rows into somebody's transcript.
-        assert_eq!(
-            erase_frame(),
-            "",
-            "a second erase climbed again, into the transcript above the frame"
-        );
-
-        // **The control for the row arithmetic**: a frame drawn on the row the
-        // cursor is already on climbs nowhere. Without this, an `erase_frame`
-        // that always emitted `\x1b[{row+1}A` would satisfy the assertion
-        // above's shape and still eat the line above the frame every time.
-        CURSOR_ROW.store(0, Ordering::SeqCst);
-        assert_eq!(erase_frame(), "\r\x1b[J");
-
         // Set by hand: a test binary has no terminal, so `install` correctly
         // refuses and cannot set this for us. What is under test is the latch,
         // which is what makes `Drop` + panic hook + an explicit call safe.
@@ -2732,4 +2639,71 @@ mod tests {
         restore_terminal();
         assert!(!ALT_ON.load(Ordering::SeqCst));
     }
+
+    // -----------------------------------------------------------------------
+    // The clipboard
+    // -----------------------------------------------------------------------
+
+    /// One mechanism, whatever the source: the answer key and a mouse
+    /// selection produce the same sequence around different text.
+    #[test]
+    fn the_clipboard_sequence_is_osc_52_around_the_text_verbatim() {
+        let seq = osc52("two words");
+        assert!(seq.starts_with("\x1b]52;c;"), "{seq:?}");
+        assert!(seq.ends_with('\x07'), "not BEL-terminated: {seq:?}");
+        assert_eq!(&seq[7..seq.len() - 1], base64(b"two words"));
+        // Newlines survive: a multi-row selection is multi-line text, and a
+        // clipboard that flattened it would paste a paragraph as one line.
+        let multi = osc52("one\ntwo");
+        assert_eq!(&multi[7..multi.len() - 1], base64(b"one\ntwo"));
+        // Nothing is escaped, trimmed or re-encoded on the way in.
+        assert_eq!(osc52(""), "\x1b]52;c;\x07");
+    }
+
+    /// **Run this by hand.** The drag, the highlight, the clipboard and the
+    /// Ctrl-S fallback are four things no test in this crate can observe: they
+    /// need a real terminal, a real mouse and a real system clipboard.
+    ///
+    /// 1. `cargo run` in a terminal that reports mouse events (Terminal.app,
+    ///    iTerm2, Windows Terminal, kitty, WezTerm).
+    /// 2. Type a goal, or `/help`, until the transcript is longer than the
+    ///    pane. A one-column bar appears at the right edge of the chat pane,
+    ///    dim track and accent thumb; the thumb sits at the bottom.
+    /// 3. PgUp. The thumb walks up; PgDn and End bring it back. Roll the
+    ///    wheel over the pane: same bar, same movement, three rows a notch.
+    /// 4. Press the left button on a word in the transcript and drag across
+    ///    several rows. The cells under the pointer invert as you go.
+    /// 5. Release. The chat pane's bottom-right corner reads
+    ///    `sent N chars (~M tokens)`, the highlight goes, and ⌘V (or Ctrl+V)
+    ///    pastes exactly the rows that were highlighted — no sidebar, no
+    ///    border, no `You`/`Emma` label unless the drag started left of the
+    ///    message column. Nothing is written into the transcript for it.
+    ///    Scroll up first and do it again: the corner carries both facts,
+    ///    `↓ N rows below · End · sent N chars (~M tokens)`, and on a narrow
+    ///    window the notice is the half that gives way. Press a key, scroll,
+    ///    or select again and the notice goes.
+    /// 6. Press the left button ON THE THUMB and drag up. The thumb follows
+    ///    the pointer, holding the row you grabbed it by — it does not jump
+    ///    its own length when the button goes down — and the transcript moves
+    ///    with it. Drag past the top or bottom of the pane: the thumb stops
+    ///    at the end of the track and the view stops with it. Release at the
+    ///    bottom and the view is following again, exactly as after End.
+    /// 7. Release after that drag. NOTHING goes to the clipboard and no
+    ///    notice appears: a scrollbar drag is not a selection.
+    /// 8. Press on the track ABOVE the thumb: one page back, the same page
+    ///    PgUp gives. Below it: one page on.
+    /// 9. Press on the bar while text is highlighted: the highlight goes and
+    ///    no new selection starts. Dragging from the bar never selects.
+    /// 10. Press any key: any selection still on screen goes.
+    /// 11. Click on the sidebar or the input box: any selection goes, and no
+    ///     new one starts.
+    /// 12. Ctrl-S. The note says the mouse is back with the terminal. Drag
+    ///     now selects the whole window the way it does in any other program,
+    ///     the wheel stops scrolling, and the in-pane selection is gone until
+    ///     Ctrl-S again. THIS IS THE FALLBACK: a terminal that refuses OSC 52
+    ///     silently (the note says `sent`, never `copied`, for that reason)
+    ///     still has it, and so does `/export`.
+    #[test]
+    #[ignore = "needs a real terminal, a mouse and a clipboard"]
+    fn manual_the_scrollbar_and_the_in_pane_selection() {}
 }

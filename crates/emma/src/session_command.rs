@@ -911,7 +911,12 @@ fn list(
 /// validation block and the user-tool block, and every one of them has to
 /// survive somebody changing their colours. Same shape, same reason, as
 /// `commands::write_model`.
-fn write_theme(home: &Path, name: &str) -> anyhow::Result<PathBuf> {
+///
+/// `pub(crate)` for the Settings screen's Theme row, which is the second
+/// surface that selects a theme and must write it the same way — two round
+/// trips over one file, minted independently, is how a settings key comes to be
+/// dropped by whichever surface was written second.
+pub(crate) fn write_theme(home: &Path, name: &str) -> anyhow::Result<PathBuf> {
     let mut settings = crate::settings::load(home);
     settings.theme = Some(name.to_string());
     crate::settings::save(home, &settings)

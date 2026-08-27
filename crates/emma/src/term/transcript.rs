@@ -6,7 +6,7 @@
 //! Today the transcript is not Emma's at all. `insert_before` hands each line to
 //! the terminal, the terminal wraps it, keeps tens of thousands of them in
 //! scrollback, scrolls them with the user's own keys and reflows them on resize
-//! — for no code and no memory here. `notes/design/tui-fullscreen.md` §2.1 is
+//! — for no code and no memory here. `notes/design-tui-fullscreen.md` §2.1 is
 //! blunt that this is the single largest thing the alternate screen takes away,
 //! and this module is the whole of the replacement: append, cap, scroll, follow
 //! the tail, re-wrap at a new width.
@@ -242,6 +242,24 @@ pub struct Transcript {
 }
 
 impl Transcript {
+    /// The most recent assistant turn, as the markdown it arrived as.
+    ///
+    /// ⚠ THE SOURCE, NOT THE CELLS. A person copying an answer wants the text, and what is on
+    /// screen is that text after wrapping, with a gutter beside it and a border around it. Native
+    /// terminal selection over a cell grid returns all of that interleaved, which is why this
+    /// module's own notes call `/export` the honest copy path. The source string is what was
+    /// rendered FROM, so it has no wrap points that were not in the original and no furniture.
+    pub fn last_assistant_source(&self) -> Option<String> {
+        self.entries.iter().rev().find_map(|e| match &e.kind {
+            EntryKind::Assistant { source, .. } if !source.trim().is_empty() => {
+                Some(source.clone())
+            }
+            _ => None,
+        })
+    }
+}
+
+impl Transcript {
     pub fn new(cap: Cap) -> Self {
         Self {
             entries: VecDeque::new(),
@@ -261,7 +279,7 @@ impl Transcript {
     ///
     /// Takes a [`Skin`] because it changes the marker's text and therefore its
     /// height, and a height the scroll bounds believe has to be measured rather
-    /// than assumed — see [`Self::total`].
+    /// than assumed — see `total`.
     pub fn record_at(&mut self, path: impl Into<String>, skin: &Skin) {
         self.record = Some(path.into());
         self.remeasure_marker(skin);
@@ -587,6 +605,21 @@ impl Transcript {
         self.follow = true;
     }
 
+    /// Park the offset outright, clamped to the same bound the keys obey.
+    ///
+    /// The scrollbar drag needs this: it computes a position from where the
+    /// pointer is rather than stepping from where the view was, and stepping
+    /// there through `scroll_up`/`scroll_down` would be arithmetic on the
+    /// current offset — two sources for one number, which is the drift this
+    /// module's offset-from-the-tail choice exists to avoid. The follow ruling
+    /// is `scroll_down`'s, unchanged: at the tail the view is pinned again,
+    /// because a bottomed-out view that is not following is a state nobody
+    /// asked for and nobody can see.
+    pub fn scroll_to(&mut self, offset: usize) {
+        self.scroll = offset.min(self.max_scroll());
+        self.follow = self.scroll == 0;
+    }
+
     /// Home: as far back as there is.
     pub fn to_top(&mut self) {
         self.scroll = self.max_scroll();
@@ -616,7 +649,132 @@ impl Transcript {
         let (_, end) = self.window(total, height);
         total.saturating_sub(end)
     }
+
+    /// Total rendered rows — the number the scroll bounds are computed from,
+    /// handed out so the scrollbar can be drawn from the same one.
+    ///
+    /// [`Self::height`] answers the same question by materialising every row;
+    /// this is the running count the buffer already keeps, which is what a
+    /// widget repainted on every frame can afford to ask.
+    pub fn total_rows(&self) -> usize {
+        self.total()
+    }
 }
+
+// region: The scrollbar
+// ---------------------------------------------------------------------------
+// The scrollbar
+//
+// Geometry only, and a pure function of the three numbers the pane already
+// has: how much there is, how much shows, and how far up the view is. It
+// lives beside the scroll state rather than in the painter because it is the
+// *same* state read a second way — a bar computed from an offset of its own
+// is the second scroll position this module exists to not have.
+// ---------------------------------------------------------------------------
+
+/// Where the thumb sits in a track `viewport` rows tall, as `(top, len)` rows
+/// from the top of the pane, or `None` when everything fits.
+///
+/// `offset` is [`Transcript::scroll_offset`] — rows scrolled up *from the
+/// tail* — so a following view puts the thumb at the bottom of the track and
+/// Home puts it at the top. The inversion is the whole subtlety: a bar drawn
+/// as if the offset counted from the top runs backwards, and runs backwards
+/// convincingly enough that only a test asking where the thumb is at both
+/// ends catches it.
+pub fn thumb(content: usize, viewport: u16, offset: usize) -> Option<(u16, u16)> {
+    let track = usize::from(viewport);
+    if track == 0 || content <= track {
+        return None;
+    }
+    // Ceiling, so a proportional thumb on a fifty-thousand-row buffer is one
+    // row rather than none: a scrollbar with no thumb on it has stopped
+    // reporting the position it exists to report.
+    //
+    // ⚠ THE `1` IS ALREADY REDUNDANT and is kept anyway. Mutation-tested
+    // 2026-08-26: replacing `clamp(1, track)` with `min(track)` left every
+    // test green, because `div_ceil` cannot return zero for a non-zero
+    // numerator. It stands as the floor for whoever changes the rounding.
+    let len = (track * track).div_ceil(content).clamp(1, track);
+    // The first visible content row, by the same clamp [`Transcript::window`]
+    // applies: the offset alone over-reports at the top of the buffer, and a
+    // thumb that leaves the track is that over-report made visible.
+    let end = content.saturating_sub(offset).max(track.min(content));
+    let first = end.saturating_sub(track);
+    let span = content - track;
+    let travel = track - len;
+    let top = if span == 0 || travel == 0 {
+        0
+    } else {
+        // Rounded, not truncated, so the two ends are exact: the thumb
+        // reaches the last row of the track at the tail rather than stopping
+        // one short of it.
+        (first * travel + span / 2) / span
+    };
+    Some((top as u16, len as u16))
+}
+
+/// What a press in the scrollbar's column landed on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Grab {
+    /// The thumb, this many rows below its top. Held for the whole drag so
+    /// the thumb stays under the finger that picked it up.
+    Thumb(u16),
+    /// The track above the thumb: a page back.
+    PageUp,
+    /// The track below it: a page on.
+    PageDown,
+}
+
+/// What a press `row` rows down the track asks for, or `None` when there is
+/// no bar to press — the same question [`thumb`] answers for the painter,
+/// asked from the pointer's side.
+///
+/// ⚠ HIT-TESTED AGAINST THE DRAWN THUMB, not against a second position
+/// computed from the offset. The two would agree until the rounding in
+/// [`thumb`] changed, and then a reader would be pressing a thumb the code
+/// believes is a row away — the class of defect nobody reports because it
+/// only shows up at one scroll position in twenty.
+pub fn grab(content: usize, viewport: u16, offset: usize, row: u16) -> Option<Grab> {
+    let (top, len) = thumb(content, viewport, offset)?;
+    if row >= viewport {
+        return None;
+    }
+    if row < top {
+        Some(Grab::PageUp)
+    } else if row < top + len {
+        Some(Grab::Thumb(row - top))
+    } else {
+        Some(Grab::PageDown)
+    }
+}
+
+/// The offset a drag to `row` asks for, holding the thumb `held` rows below
+/// the pointer — [`Grab::Thumb`]'s number, kept from the press.
+///
+/// The inverse of [`thumb`], and it has to be exactly that: a drag maps a
+/// track row to an offset, the paint maps that offset back to a track row,
+/// and if the two disagree the thumb creeps away from the pointer over a long
+/// drag. Both ends are clamped, because a pointer dragged off the pane is an
+/// ordinary drag and refusing it would strand the thumb mid-track.
+pub fn drag_offset(content: usize, viewport: u16, held: u16, row: u16) -> usize {
+    let track = usize::from(viewport);
+    let Some((_, len)) = thumb(content, viewport, 0) else {
+        return 0;
+    };
+    let travel = track - usize::from(len);
+    if travel == 0 {
+        // A thumb that fills its track has one position, and the tail is it.
+        return 0;
+    }
+    let top = usize::from(row.saturating_sub(held)).min(travel);
+    let span = content - track;
+    // Rounded, matching [`thumb`]'s rounding, so the round trip is exact at
+    // every row of the track and not merely at the two ends.
+    let first = (top * span + travel / 2) / travel;
+    span - first.min(span)
+}
+
+// endregion: The scrollbar
 
 // endregion: The buffer
 
@@ -1113,5 +1271,193 @@ mod tests {
         );
         // Printed so the number is on the record even when it passes.
         println!("rewrap: {held} entries, {} rows, {elapsed:?}", t.rows);
+    }
+
+    // -----------------------------------------------------------------------
+    // The scrollbar's geometry
+    // -----------------------------------------------------------------------
+
+    /// A pane that holds everything has nothing to say about position, and a
+    /// bar drawn over a transcript nobody can scroll is furniture claiming a
+    /// state that does not exist.
+    #[test]
+    fn the_thumb_is_absent_until_the_content_overflows_the_pane() {
+        assert_eq!(thumb(0, 10, 0), None);
+        assert_eq!(thumb(9, 10, 0), None);
+        assert_eq!(thumb(10, 10, 0), None);
+        assert!(thumb(11, 10, 0).is_some());
+        // A pane with no rows cannot hold a thumb whatever the content.
+        assert_eq!(thumb(100, 0, 0), None);
+    }
+
+    /// The offset is counted from the tail, so the *following* view is the
+    /// bottom of the track and Home is the top — the mapping a reader checks
+    /// by looking, and the one an offset-from-the-top implementation gets
+    /// backwards.
+    #[test]
+    fn the_thumb_is_at_the_bottom_while_following_and_at_the_top_at_home() {
+        let (top, len) = thumb(100, 10, 0).expect("overflowing");
+        assert_eq!(top + len, 10, "following, the thumb ends at the last row");
+        // `to_top` parks the offset at `max_scroll` — one row short of the
+        // total — and that view is the first `height` rows.
+        let (top, _) = thumb(100, 10, 99).expect("overflowing");
+        assert_eq!(top, 0, "at the top of the buffer the thumb is at the top");
+    }
+
+    /// Proportional, and never nothing: a thumb rounded to zero rows on a
+    /// long transcript is a scrollbar with no position on it.
+    #[test]
+    fn the_thumb_is_proportional_and_never_shorter_than_one_row() {
+        let (_, len) = thumb(40, 20, 0).unwrap();
+        assert_eq!(len, 10, "half the content shown is half the track");
+        let (_, len) = thumb(100_000, 20, 0).unwrap();
+        assert_eq!(len, 1, "a huge transcript keeps one row of thumb");
+        // And the thumb never leaves the track, at any offset.
+        for offset in 0..200 {
+            let (top, len) = thumb(200, 12, offset).unwrap();
+            assert!(
+                top + len <= 12,
+                "offset {offset}: {top}+{len} past the track"
+            );
+            assert!(len >= 1);
+        }
+    }
+
+    /// The bar reads one state, not its own. Three wheel notches and one
+    /// nine-row page land the same offset, so they land the same thumb —
+    /// which is what "tracks the existing scroll state" means when written
+    /// as a test rather than as a comment.
+    #[test]
+    fn a_wheel_notch_and_a_page_move_the_same_scroll_state() {
+        let skin = skin();
+        let mut wheel = Transcript::new(Cap::default());
+        for i in 0..60 {
+            wheel.push(note(&format!("line {i}")), &skin, 40);
+        }
+        let mut page = wheel.clone();
+        for _ in 0..3 {
+            wheel.scroll_up(3);
+        }
+        page.scroll_up(9);
+        assert_eq!(wheel.scroll_offset(), page.scroll_offset());
+        assert_eq!(
+            thumb(wheel.total_rows(), 10, wheel.scroll_offset()),
+            thumb(page.total_rows(), 10, page.scroll_offset())
+        );
+        // And the count the bar is drawn from is the count the scroll bounds
+        // are drawn from: one number, not a second measurement.
+        assert_eq!(wheel.total_rows(), wheel.height(&skin));
+    }
+
+    // -----------------------------------------------------------------------
+    // The scrollbar as a control
+    // -----------------------------------------------------------------------
+
+    /// The three answers a press in the bar's column can have, and the fact
+    /// that decides between them is where the thumb was drawn — not where the
+    /// view is, which is the same number read a different way and would put
+    /// the hit-test one rounding apart from the paint.
+    #[test]
+    fn a_press_hits_the_thumb_it_can_see_and_the_track_either_side_of_it() {
+        // Following: the thumb is at the bottom of a ten-row track.
+        let (top, len) = thumb(100, 10, 0).unwrap();
+        assert_eq!((top, len), (9, 1));
+        assert_eq!(grab(100, 10, 0, 9), Some(Grab::Thumb(0)));
+        assert_eq!(grab(100, 10, 0, 0), Some(Grab::PageUp));
+        assert_eq!(grab(100, 10, 0, 8), Some(Grab::PageUp));
+        // At the top of the buffer the track below the thumb is a page on.
+        assert_eq!(grab(100, 10, 99, 0), Some(Grab::Thumb(0)));
+        assert_eq!(grab(100, 10, 99, 5), Some(Grab::PageDown));
+        // A press on a bar that was never drawn is not a press on anything.
+        assert_eq!(grab(10, 10, 0, 0), None);
+        // Nor is one past the end of the track.
+        assert_eq!(grab(100, 10, 0, 10), None);
+    }
+
+    /// A press two rows into the thumb keeps the thumb two rows under the
+    /// pointer for the rest of the drag. Without the held rows the thumb
+    /// jumps its own length the instant the button goes down, which is the
+    /// defect every scrollbar that feels wrong has.
+    #[test]
+    fn the_thumb_stays_where_it_was_grabbed() {
+        // Forty rows in a twenty-row pane: a ten-row thumb, top at 10.
+        let (top, len) = thumb(40, 20, 0).unwrap();
+        assert_eq!((top, len), (10, 10));
+        assert_eq!(grab(40, 20, 0, 12), Some(Grab::Thumb(2)));
+        // Dragged to row 5 still holding row 2 of the thumb: top 3.
+        let offset = drag_offset(40, 20, 2, 5);
+        assert_eq!(thumb(40, 20, offset).unwrap().0, 3);
+    }
+
+    /// Both ends are exact, because the ends are the two positions a reader
+    /// aims for: the top of the buffer and the tail.
+    #[test]
+    fn a_drag_to_either_end_of_the_track_reaches_that_end() {
+        // Up to the first row: the topmost view there is, and the thumb rides
+        // the top of the track with it.
+        let top_of_buffer = drag_offset(100, 10, 0, 0);
+        assert_eq!(
+            top_of_buffer, 90,
+            "the first row of the buffer is on screen"
+        );
+        assert_eq!(thumb(100, 10, top_of_buffer).unwrap().0, 0);
+        // Down to the last: offset zero, which is the following view — the
+        // same state End puts the transcript in.
+        assert_eq!(drag_offset(100, 10, 0, 9), 0);
+        // And past the end of the track, because a pointer dragged off the
+        // pane is an ordinary drag and clamping is the only honest answer.
+        assert_eq!(drag_offset(100, 10, 0, 200), 0);
+    }
+
+    /// The offset a drag lands on draws the thumb the drag asked for. The two
+    /// functions round in opposite directions and a test that only checks one
+    /// end cannot see the drift; this walks every row of several tracks.
+    #[test]
+    fn every_row_of_the_track_round_trips_through_the_thumb() {
+        // `(25, 20)` and `(31, 20)` are not decoration: at those sizes a
+        // `drag_offset` that truncated where [`thumb`] rounds lands a row out,
+        // and the round numbers either side of them do not notice.
+        for (content, viewport) in [
+            (12, 10),
+            (25, 20),
+            (31, 20),
+            (40, 20),
+            (100, 10),
+            (1000, 10),
+            (100_000, 20),
+        ] {
+            let (_, len) = thumb(content, viewport, 0).unwrap();
+            let travel = viewport - len;
+            for row in 0..viewport {
+                let want = row.min(travel);
+                let offset = drag_offset(content, viewport, 0, row);
+                let got = thumb(content, viewport, offset).unwrap().0;
+                assert_eq!(
+                    got, want,
+                    "content {content} track {viewport}: row {row} asked for {want}, drew {got}"
+                );
+            }
+        }
+    }
+
+    /// A drag sets the offset outright, so it has to make the same follow
+    /// ruling the keys make: at the tail the view is pinned again, anywhere
+    /// else it is not. A drag to the bottom that left the latch off would be
+    /// a view that looks like it is following and silently is not.
+    #[test]
+    fn a_drag_to_the_tail_re_latches_the_follow() {
+        let skin = skin();
+        let mut t = Transcript::new(Cap::default());
+        for i in 0..60 {
+            t.push(note(&format!("line {i}")), &skin, 40);
+        }
+        t.scroll_to(20);
+        assert_eq!(t.scroll_offset(), 20);
+        assert!(!t.is_following());
+        t.scroll_to(0);
+        assert!(t.is_following(), "the tail is the following view");
+        // And the bound is the keys' bound: nothing may scroll past it.
+        t.scroll_to(usize::MAX);
+        assert_eq!(t.scroll_offset(), t.total_rows() - 1);
     }
 }

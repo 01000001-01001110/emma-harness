@@ -73,12 +73,41 @@ pub mod bindings;
 pub mod chat;
 pub mod diff;
 pub mod frame;
+/// The net over `frame.rs` and `app.rs`, and it is **red on purpose** after the
+/// TUI import of 2026-08-27.
+///
+/// Seventeen of its assertions do not compile against the imported `app.rs` and
+/// `frame.rs`, which is the signal the module was written to produce — read its
+/// own doc, and `notes/design/term-hardening-backport.md`. Four clusters:
+/// `Pane`/`Page`/`App::show`/`App::pane` (the page model the import replaced
+/// with one flag per screen), `App::show_memory`/`show_explorer` (text pages
+/// the import replaced with a structured Memory page and no Data Explorer at
+/// all), `App::click` (the collapse-on-header click, whose row the import gave
+/// to the `[+]` New Session control), and `Frame::memory_page_text` /
+/// `explorer_page_text` (the *something went wrong* wording for a store that
+/// cannot be read).
+///
+/// Each needs a decision, not a shim: a stand-in written so these compile would
+/// be a receipt for a path nothing takes.
+///
+/// **The gate is an escape hatch, not a silencer.** It is off by default, so a
+/// plain `cargo test -p emma` still fails loudly here. Building with
+/// `RUSTFLAGS="--cfg emma_guarantees_off"` skips this module so the other 1,020
+/// library tests can be run while the four clusters are outstanding. Delete the
+/// attribute the day they are answered.
+#[cfg(not(emma_guarantees_off))]
 pub mod guarantees;
+pub mod harness;
 pub mod input;
+pub mod inspect;
+pub mod layout;
 pub mod markdown;
+pub mod memory;
 pub mod menu;
 pub mod palette;
 pub mod render;
+pub mod rungraph;
+pub mod settings;
 pub mod sidebar;
 pub mod spacing;
 pub mod statusbar;
@@ -780,8 +809,16 @@ impl Term {
     /// Both are measured — the provider's input count and the loop's own
     /// weighted spend — because a status line with an estimate on it is a
     /// status line that lies at exactly the moment somebody checks it.
-    pub fn spent(&self, context: i64, tokens: i64) {
-        self.meter("spent", |frame| frame.spent(Some(context), Some(tokens)));
+    /// `up`/`down` are the call's own raw `input_tokens`/`output_tokens` — the
+    /// ↑/↓ split the full-screen bar draws. They are separate arguments rather
+    /// than derived from `context` because `context` is the *billable* input
+    /// (uncached + cache writes + cache reads) and the split is deliberately
+    /// the uncached traffic; deriving one from the other would put a number on
+    /// screen that no provider reported.
+    pub fn spent(&self, context: i64, tokens: i64, up: i64, down: i64) {
+        self.meter("spent", |frame| {
+            frame.spent(Some(context), Some(tokens), up, down)
+        });
     }
 
     /// The evidence half of an approval prompt.
@@ -1484,7 +1521,7 @@ mod tests {
         term.banner("b");
         term.goal_started("g");
         term.goal_ended();
-        term.spent(1, 2);
+        term.spent(1, 2, 0, 0);
         term.tool_started("Bash", &json!({ "command": "ls" }));
         term.tool_result(None, "out", false, None);
         term.tool_failed("Bash", "boom");

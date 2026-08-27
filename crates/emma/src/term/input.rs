@@ -43,6 +43,7 @@ use ratatui::crossterm::event::{
 };
 use tokio::sync::mpsc;
 
+use super::app::{self, SidebarAction};
 use super::frame::Frame;
 use super::menu::Menu;
 
@@ -836,12 +837,77 @@ impl LineSource {
                 // A click mutates view state through the frame and never
                 // enters the line channel, same as the wheel.
                 Ok(Event::Mouse(mouse)) => match mouse.kind {
-                    MouseEventKind::ScrollUp => thread_frame.scroll_rows(true, WHEEL_ROWS),
-                    MouseEventKind::ScrollDown => thread_frame.scroll_rows(false, WHEEL_ROWS),
+                    // The Harness page's Run Graph gets first refusal on the
+                    // wheel: while it is open the transcript under it cannot be
+                    // seen, so scrolling it would move something nobody is
+                    // looking at.
+                    MouseEventKind::ScrollUp => {
+                        if !thread_frame.harness_scroll(true) {
+                            thread_frame.scroll_rows(true, WHEEL_ROWS);
+                        }
+                    }
+                    MouseEventKind::ScrollDown => {
+                        if !thread_frame.harness_scroll(false) {
+                            thread_frame.scroll_rows(false, WHEEL_ROWS);
+                        }
+                    }
+                    // **The Shift guard is this tree's and it stays.** The
+                    // imported reader had no such arm: it bid for every plain
+                    // left press. `CLAUDE.md` names Shift-drag as the one
+                    // native selection route left on the alternate screen, so a
+                    // Shift-modified press is refused here even where a
+                    // terminal forwards it, and the in-app selection below
+                    // takes only the unmodified one.
                     MouseEventKind::Down(MouseButton::Left)
                         if !mouse.modifiers.contains(KeyModifiers::SHIFT) =>
                     {
-                        thread_frame.click(mouse.column, mouse.row);
+                        // The pages go first: while one is open the chat pane
+                        // under it cannot be selected anyway, so a press that
+                        // lands on a run box or a settings chevron is that
+                        // control being used and nothing else.
+                        if thread_frame.harness_click(mouse.column, mouse.row) {
+                            continue;
+                        }
+                        if thread_frame.settings_click(mouse.column, mouse.row) {
+                            continue;
+                        }
+                        // Then the sidebar's one control, on the same rule: its
+                        // `[+]` and the chat pane's selection answer the same
+                        // event, and a press on the affordance is not the start
+                        // of a drag.
+                        match thread_frame.sidebar_click(mouse.column, mouse.row) {
+                            Some(SidebarAction::NewSession) => {
+                                thread_frame.note_line(app::NEW_SESSION_NOTICE);
+                                thread_frame.scroll_tail();
+                                thread_frame.draw();
+                                if tx
+                                    .blocking_send(app::NEW_SESSION_COMMAND.to_string())
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            // Then the scrollbar, on the same rule: its column
+                            // is chrome, and a press on it is the bar being
+                            // used. The frame answers because the frame is what
+                            // knows where the bar was painted.
+                            None if thread_frame.bar_press(mouse.column, mouse.row) => {}
+                            None => thread_frame.select_begin(mouse.column, mouse.row),
+                        }
+                    }
+                    MouseEventKind::Drag(MouseButton::Left)
+                        if !mouse.modifiers.contains(KeyModifiers::SHIFT) =>
+                    {
+                        if !thread_frame.bar_drag(mouse.row) {
+                            thread_frame.select_extend(mouse.column, mouse.row);
+                        }
+                    }
+                    // A release that ends a scrollbar drag is not a selection
+                    // being finished, so nothing goes to the clipboard for it.
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        if !thread_frame.bar_release() {
+                            thread_frame.select_finish();
+                        }
                     }
                     _ => {}
                 },

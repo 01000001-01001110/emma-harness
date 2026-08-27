@@ -553,6 +553,66 @@ pub struct Status {
     pub spend: Option<(i64, i64)>,
     /// How long the running goal has been running.
     pub elapsed: Option<std::time::Duration>,
+    /// **Session-scoped, raw.** The provider's own `input_tokens` and
+    /// `output_tokens`, summed across every call *this process* has made by
+    /// [`Status::record_call`] — the ↑/↓ split the full-screen bar draws
+    /// beside the session total. Bare `i64` where the meters are `Option`: a
+    /// session that has not called yet has measured zero traffic, and zero is
+    /// a fact here, not a guess about a cap.
+    ///
+    /// They are raw and uncached: `input_tokens` excludes cache writes and
+    /// reads, so `up + down` is traffic the provider charged full price for
+    /// and is deliberately *not* expected to equal `session_tokens`.
+    pub up: i64,
+    pub down: i64,
+    /// **Session-scoped.** What the whole session has been billed for,
+    /// weighted the same way [`Status::spend`] is — the number the full-screen
+    /// bar's `TOKENS` cell draws, and the reason that cell has no cap: there is
+    /// no session budget for it to be a proportion of.
+    ///
+    /// It never falls and no goal boundary clears it, which is the bug of
+    /// 2026-08-26: the bar read one goal while the owner read it as the
+    /// session's running story. Only a fresh process starts it at zero.
+    pub session_tokens: i64,
+    /// What `session_tokens` stood at when the running goal opened. `spend` is
+    /// the goal's *running* total rather than a per-call delta, so this is how
+    /// both scopes are held at once from the one number `Frame::spent` is
+    /// given.
+    session_base: i64,
+}
+
+impl Status {
+    /// One model call's raw traffic, folded into the session's ↑/↓ totals.
+    /// Called from `Frame::spent`, once per call — the only moment either
+    /// number can change.
+    pub fn record_call(&mut self, input: i64, output: i64) {
+        self.up += input;
+        self.down += output;
+    }
+
+    /// The goal's weighted bill so far, and the budget that ends it — which
+    /// also moves the session's bill, since `goal_spend` is a running total
+    /// measured from the base the goal opened on. Called from `Frame::spent`,
+    /// once per model call.
+    pub fn record_spend(&mut self, goal_spend: i64, cap: i64) {
+        self.spend = Some((goal_spend, cap));
+        self.session_tokens = self.session_base + goal_spend;
+    }
+
+    /// A goal opened: drop what was the last goal's and keep what is the
+    /// session's. Called from `Frame::goal_started`.
+    ///
+    /// **Exactly one field is goal-scoped.** The previous goal's spend is not
+    /// this goal's spend, and a budget meter left reading the last one is the
+    /// stale readout the inline row exists to not have. Everything else here
+    /// is the session's and survives: zeroing the ↑/↓ split and the session
+    /// total on submit was the owner-visible bug of 2026-08-26.
+    pub fn goal_started(&mut self) {
+        // Fold the goal that just ended into the session before its meter is
+        // dropped: after this, `record_spend` counts the new goal from here.
+        self.session_base = self.session_tokens;
+        self.spend = None;
+    }
 }
 
 impl Skin {
@@ -1154,6 +1214,7 @@ mod tests {
             context: Some((12_000, 120_000)),
             spend: Some((34_000, 500_000)),
             elapsed: Some(std::time::Duration::from_secs(72)),
+            ..Status::default()
         }
     }
 

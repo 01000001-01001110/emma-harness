@@ -125,11 +125,15 @@ impl Tool {
     /// manager they no longer need. On a machine with neither installed the
     /// sidebar showed `n/a` beside two chords that worked, which is the
     /// availability contract broken in the direction nobody thinks to check.
+    /// **`DataExplorer` left this list on 2026-08-27, with the TUI import.**
+    /// The incoming `term/app.rs` has no Data Explorer page — the branch
+    /// replaced it with the Harness page — so nothing routes `Alt+d` any more.
+    /// Saying so here is the whole mechanism: the catalogue marks the row
+    /// unavailable and the sidebar prints `n/a`, which is the same answer
+    /// DEF-037 arrived at for `Memory` when *it* was advertised and unrouted.
+    /// Put it back the day a page takes the key.
     pub fn routed(self) -> bool {
-        matches!(
-            self,
-            Tool::Search | Tool::Memory | Tool::Settings | Tool::DataExplorer
-        )
+        matches!(self, Tool::Search | Tool::Memory | Tool::Settings)
     }
 
     pub fn label(self) -> &'static str {
@@ -1384,7 +1388,7 @@ mod tests {
         // probed for is absent.
         let m = Fake::new(Os::Windows);
         let cat = catalogue_on(&cwd(), &m);
-        for tool in [Tool::Settings, Tool::DataExplorer, Tool::Memory] {
+        for tool in [Tool::Settings, Tool::Memory] {
             let e = cat.iter().find(|e| e.tool == tool).expect("in catalogue");
             assert!(
                 e.available,
@@ -1392,6 +1396,23 @@ mod tests {
                 e.label, e.detail
             );
         }
+        // **The Data Explorer is on the other side of that line now**, and
+        // this is the assertion that says so rather than a gap where it used
+        // to be. The TUI import (2026-08-27) brought a `term/app.rs` with no
+        // Data Explorer page — the branch replaced it with the Harness page —
+        // so nothing routes `Alt+d`. `Tool::routed` says so, the catalogue
+        // marks the row unavailable and the sidebar prints `n/a`, which is
+        // exactly the answer DEF-037 reached for `Memory` when it was
+        // advertised and unrouted. A row still listed, so the operator can see
+        // it is intended.
+        let explorer = cat
+            .iter()
+            .find(|e| e.tool == Tool::DataExplorer)
+            .expect("still listed");
+        assert!(
+            !explorer.available,
+            "no page takes Alt+d in this build, so the chord must not be advertised"
+        );
         // And the ones that really do launch still say so honestly.
         for tool in [Tool::Shell, Tool::Code, Tool::FileBrowser] {
             let e = cat.iter().find(|e| e.tool == tool).expect("in catalogue");

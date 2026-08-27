@@ -427,8 +427,49 @@ pub struct Approvals {
     file: Option<PathBuf>,
 }
 
+/// The gate this process is running under, as a number, for the one reader that
+/// cannot be handed an [`Approvals`].
+///
+/// **A global, and it is a narrow one on purpose.** The full-screen status bar
+/// and the Harness page both draw the live posture, and both are painted from
+/// `term/` — which has no route to the `Approvals` the loop owns and must not
+/// grow one, because a renderer holding the gate is a renderer that could
+/// answer a question. What is published here is the *label's* input and nothing
+/// else: it is written once, where the gate is built, and read only to name it.
+///
+/// `0` is the `Ask` default, which is also what an un-built gate would say. That
+/// is the safe direction: a bar reading `ASK` under a bypass would understate
+/// what is running, so [`Approvals::new`] writes it before anything can paint.
+static LIVE_GATE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+fn gate_code(gate: Gate) -> u8 {
+    match gate {
+        Gate::Ask => 0,
+        Gate::SkipAll => 1,
+        Gate::Unattended => 2,
+    }
+}
+
+/// The gate in force, for a caller with no [`Approvals`] to ask. See
+/// [`LIVE_GATE`].
+pub fn current_gate() -> Gate {
+    match LIVE_GATE.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => Gate::SkipAll,
+        2 => Gate::Unattended,
+        _ => Gate::Ask,
+    }
+}
+
+/// What the status bar's MODE cell says. One spelling, shared with the Harness
+/// page, because two independently formatted copies of a posture is how a
+/// screen comes to contradict itself.
+pub fn current_mode_label() -> &'static str {
+    crate::harness_state::gate_label(current_gate())
+}
+
 impl Approvals {
     pub fn new(gate: Gate, asker: Asker) -> Self {
+        LIVE_GATE.store(gate_code(gate), std::sync::atomic::Ordering::Relaxed);
         Self {
             gate,
             asker,

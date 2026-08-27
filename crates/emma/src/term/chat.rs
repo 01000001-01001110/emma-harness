@@ -140,7 +140,7 @@ pub fn message_width(width: u16) -> u16 {
 /// including a block half off the top or bottom, which arrives here as
 /// exactly the rows of it that show, in order. This function places rows,
 /// labels first visible rows, and overlays the indicator; it decides nothing.
-pub fn render(area: Rect, buf: &mut Buffer, t: &Transcript, skin: &Skin) {
+pub fn render(area: Rect, buf: &mut Buffer, t: &Transcript, skin: &Skin, notice: Option<&str>) {
     // A caller handing an area that leaks past the buffer would turn every
     // set below into a panic; painting the intersection is the whole cure.
     let area = area.intersection(buf.area);
@@ -169,10 +169,7 @@ pub fn render(area: Rect, buf: &mut Buffer, t: &Transcript, skin: &Skin) {
         buf.set_line(area.x + gutter, y, &row.line, area.width - gutter);
     }
 
-    let behind = t.behind(area.height);
-    if behind > 0 {
-        indicator(area, buf, behind, skin);
-    }
+    indicator(area, buf, t.behind(area.height), notice, skin);
 }
 
 /// The gutter label for a voice, or none — the decision the module doc
@@ -188,14 +185,63 @@ fn label(voice: Voice, skin: &Skin) -> Option<(&'static str, Style)> {
     }
 }
 
-/// The `↓ N rows below · End` overlay on the pane's last row.
-fn indicator(area: Rect, buf: &mut Buffer, behind: usize, skin: &Skin) {
+/// What the reader has just put on the clipboard, for the indicator slot.
+///
+/// ⚠ `sent`, NEVER `copied`. OSC 52 is refused silently by some terminals —
+/// no reply to read, no error to catch — so delivery is not a fact this
+/// program has, and `frame.rs` limits its wording for the same reason.
+///
+/// The token figure is characters over four and wears a `~` because it is a
+/// rule of thumb, not a count: no tokeniser runs here, and the one that will
+/// eventually see this text belongs to whichever model the reader pastes it
+/// into. The floor of one keeps a short selection from reading `~0 tokens`,
+/// which is a readout saying something is nothing when it is not.
+pub fn sent_notice(chars: usize) -> String {
+    // "copied", because on macOS it now is: pbcopy puts the text on the real
+    // pasteboard and reports failure if it cannot. "sent" was the honest word
+    // when OSC 52 was the only road and no terminal confirms delivery — and
+    // the owner read it as something still requiring a keystroke. Elsewhere
+    // OSC 52 remains fire-and-forget, and "sent" keeps telling that truth.
+    #[cfg(target_os = "macos")]
+    return format!("copied {chars} chars (~{} tokens)", (chars / 4).max(1));
+    #[cfg(not(target_os = "macos"))]
+    format!("sent {chars} chars (~{} tokens)", (chars / 4).max(1))
+}
+
+/// The overlay on the pane's last row: `↓ N rows below · End`, the copy
+/// notice, or both.
+///
+/// ⚠ COMPOSED, NOT RANKED. Both are true at once and each answers a question
+/// the other does not — how much is below and how to get back, against what
+/// just went to the clipboard. Ranking them would answer a question nobody
+/// asked. The rows-below half leads, so the standing fact and the key that
+/// acts on it are the half a narrow pane keeps.
+fn indicator(area: Rect, buf: &mut Buffer, behind: usize, notice: Option<&str>, skin: &Skin) {
     // `Glyphs` has no arrow yet, and growing it belongs to the file that owns
     // the glyph sets — a seam to replace when it does. Until then the set
     // itself says which console this is; the two consts are `PartialEq` for
     // exactly this kind of question.
     let arrow = if skin.glyphs == ASCII { "v" } else { "↓" };
-    let text = format!(" {arrow} {behind} rows below {} End ", skin.glyphs.sep);
+    let sep = skin.glyphs.sep;
+    let scrolled = (behind > 0).then(|| format!("{arrow} {behind} rows below {sep} End"));
+    let text = match (&scrolled, notice) {
+        (None, None) => return,
+        (Some(s), None) => format!(" {s} "),
+        (None, Some(n)) => format!(" {n} "),
+        (Some(s), Some(n)) => format!(" {s} {sep} {n} "),
+    };
+    // Too narrow for the pair: the transient half gives way whole rather than
+    // being cut. A truncated notice would stand as a half-sentence where a
+    // readout belongs, and the cut lands on the tail — which is the `End` a
+    // scrolled reader needs, sacrificed to a message about the clipboard.
+    let text = if cols(&text) > usize::from(area.width) {
+        match &scrolled {
+            Some(s) => format!(" {s} "),
+            None => text,
+        }
+    } else {
+        text
+    };
     let width = cols(&text).min(usize::from(area.width));
     let x = area.x + area.width - width as u16;
     let y = area.y + area.height - 1;
@@ -219,9 +265,20 @@ mod tests {
     /// A transcript wrapped the way a caller keeps one: at the message width
     /// of the pane it will be painted into.
     fn painted(t: &Transcript, skin: &Skin, width: u16, height: u16) -> Buffer {
+        painted_with(t, skin, width, height, None)
+    }
+
+    /// The same, with a notice standing in the indicator slot.
+    fn painted_with(
+        t: &Transcript,
+        skin: &Skin,
+        width: u16,
+        height: u16,
+        notice: Option<&str>,
+    ) -> Buffer {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
-        render(area, &mut buf, t, skin);
+        render(area, &mut buf, t, skin, notice);
         buf
     }
 
@@ -462,7 +519,7 @@ mod tests {
         let outer = Rect::new(0, 0, 60, 12);
         let pane = Rect::new(5, 2, 30, 6);
         let mut buf = Buffer::empty(outer);
-        render(pane, &mut buf, &t, &skin);
+        render(pane, &mut buf, &t, &skin, None);
         for y in outer.y..outer.bottom() {
             for x in outer.x..outer.right() {
                 if !pane.contains(ratatui::layout::Position::new(x, y)) {
@@ -475,7 +532,7 @@ mod tests {
             }
         }
         // And an area that leaks past the buffer is clipped, not a panic.
-        render(Rect::new(50, 8, 30, 30), &mut buf, &t, &skin);
+        render(Rect::new(50, 8, 30, 30), &mut buf, &t, &skin, None);
     }
 
     #[test]
@@ -540,5 +597,108 @@ mod tests {
             "{last:?}"
         );
         assert!(last.is_ascii(), "{last:?}");
+    }
+
+    // -----------------------------------------------------------------------
+    // The copy notice
+    // -----------------------------------------------------------------------
+
+    /// It says `sent`, never `copied`, because OSC 52 is refused silently and
+    /// there is nothing to read back — the same claim `frame.rs` limits
+    /// itself to. The token figure is characters over four, and it wears a
+    /// `~` because that is a rule of thumb and not a count.
+    #[test]
+    fn the_notice_says_what_was_sent_and_estimates_rather_than_counts_tokens() {
+        assert_eq!(sent_notice(128), sent_notice(128)); // shape pinned below, word per platform
+        assert!(sent_notice(128).contains("128 chars (~32 tokens)"));
+        // On macOS the notice DOES claim delivery now, because pbcopy makes
+        // the claim true; elsewhere OSC 52 stays unconfirmed and "sent" holds.
+        #[cfg(target_os = "macos")]
+        assert!(sent_notice(128).contains("copied"), "pbcopy earns the word");
+        #[cfg(not(target_os = "macos"))]
+        assert!(
+            !sent_notice(128).contains("copied"),
+            "the notice claims delivery it cannot confirm"
+        );
+        // A short selection is not nought tokens. Truncation would say so,
+        // and a readout that says a thing is nothing when it is not is the
+        // defect this pane's indicator rules already forbid.
+        assert!(sent_notice(3).contains("3 chars (~1 tokens)"));
+        assert!(sent_notice(1).contains("1 chars (~1 tokens)"));
+    }
+
+    /// At the tail the notice has the slot to itself, right-aligned on the
+    /// pane's last row — where the `↓ N rows below` overlay goes, because
+    /// that is where the reader's eye already is.
+    #[test]
+    fn the_notice_stands_in_the_indicators_slot_when_nothing_is_below() {
+        let skin = skin();
+        let mut t = Transcript::new(Cap::default());
+        for i in 0..30 {
+            t.push(note(&format!("line {i}")), &skin, message_width(80));
+        }
+        assert_eq!(t.behind(5), 0, "this pane is following");
+        let buf = painted_with(&t, &skin, 80, 5, Some(&sent_notice(128)));
+        let last = row(&buf, 4);
+        assert!(last.contains("128 chars (~32 tokens)"), "{last:?}");
+        assert!(
+            last.trim_end().ends_with(")"),
+            "not right-aligned: {last:?}"
+        );
+        assert!(!last.contains("rows below"), "{last:?}");
+    }
+
+    /// COMPOSED, NOT RANKED. Scrolled up, both facts are true and the reader
+    /// needs both: how much is below with the key back, then what just went
+    /// to the clipboard. Dropping either would answer a question nobody
+    /// asked — which of two true things matters more.
+    #[test]
+    fn a_scrolled_reader_keeps_the_rows_below_and_gets_the_notice_too() {
+        let skin = skin();
+        let mut t = Transcript::new(Cap::default());
+        for i in 0..30 {
+            t.push(note(&format!("line {i}")), &skin, message_width(80));
+        }
+        t.scroll_up(10);
+        let behind = t.behind(5);
+        assert!(behind > 0);
+        let buf = painted_with(&t, &skin, 80, 5, Some(&sent_notice(128)));
+        let last = row(&buf, 4);
+        assert!(last.contains(&format!("↓ {behind} rows below")), "{last:?}");
+        assert!(last.contains("End"), "{last:?}");
+        assert!(last.contains("128 chars (~32 tokens)"), "{last:?}");
+        // Order: the standing fact and the key that acts on it come first.
+        let rows_at = last.find("rows below").unwrap();
+        let sent_at = last.find("128 chars").unwrap();
+        assert!(
+            rows_at < sent_at,
+            "the notice pushed the way back along: {last:?}"
+        );
+    }
+
+    /// Too narrow for both, the transient one gives way WHOLE. Truncating the
+    /// composed line would leave `sent 128 cha` on screen — a half-sentence
+    /// standing where a readout should be — and it would eat the `End` the
+    /// reader needs to get back.
+    #[test]
+    fn a_pane_too_narrow_for_both_keeps_the_way_back_and_drops_the_notice() {
+        let skin = skin();
+        let mut t = Transcript::new(Cap::default());
+        for i in 0..30 {
+            t.push(note(&format!("line {i}")), &skin, message_width(30));
+        }
+        t.scroll_up(10);
+        let buf = painted_with(&t, &skin, 30, 5, Some(&sent_notice(128)));
+        let last = row(&buf, 4);
+        assert!(last.contains("rows below"), "{last:?}");
+        assert!(
+            last.contains("End"),
+            "the way back was truncated away: {last:?}"
+        );
+        assert!(
+            !last.contains("sent"),
+            "a truncated notice was painted: {last:?}"
+        );
+        assert!(!last.contains("cha "), "{last:?}");
     }
 }

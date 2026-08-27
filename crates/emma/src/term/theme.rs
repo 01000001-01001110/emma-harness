@@ -270,6 +270,11 @@ pub(super) fn derive_index((r, g, b): (u8, u8, u8)) -> u8 {
 /// directory could silently change what stock Emma looks like.
 const RESERVED: [&str; 1] = ["emma"];
 
+/// The compiled-in theme's name — what an absent `settings.json` key means, and
+/// the one name a file may not claim. `session_command`'s `/theme` calls the
+/// same string `BUILT_IN`; they must stay the same word.
+pub const BUILT_IN: &str = RESERVED[0];
+
 /// Every role name a file may use, including the one that is refused — a typo
 /// of `text` should be told about `text`, not about seven names that do not
 /// include it.
@@ -388,6 +393,47 @@ pub fn load(
 
     let theme = apply(&doc, &selected, path, &mut notices);
     (theme, cap(notices, path))
+}
+
+/// Every theme name this run can select, built-in first, each directory
+/// sorted, no duplicates.
+///
+/// **The Settings screen's Theme row cycles this.** The tree this row arrived
+/// from kept a compiled-in `THEMES` table of `&'static str`, so the row could
+/// step an array; here a theme is a *file*, so the list is a `Vec<String>` read
+/// at the moment the screen opens.
+///
+/// The two rules that decide the order are [`load`]'s, restated because a
+/// cycler that offered a name `load` will not resolve would be a control that
+/// lies: the built-in is first and cannot be shadowed, and yours beats the
+/// project's on a collision. `session_command`'s `/theme` listing answers a
+/// wider question — it shows the shadowed files and says why each is ignored —
+/// and these two must not disagree about which names are *live*.
+pub fn names(home: Option<&Path>, harness_root: Option<&Path>) -> Vec<String> {
+    let mut all = vec![RESERVED[0].to_string()];
+    for dir in [
+        home.map(|h| h.join(".emma").join("themes")),
+        harness_root.map(|r| r.join("themes")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let mut here: Vec<String> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "json"))
+            .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
+            .collect();
+        here.sort();
+        for name in here {
+            if !all.iter().any(|n| n == &name) {
+                all.push(name);
+            }
+        }
+    }
+    all
 }
 
 /// Everything a file says, applied to the built-in one field at a time.
