@@ -72,6 +72,7 @@ pub mod app;
 pub mod chat;
 pub mod diff;
 pub mod frame;
+pub mod guarantees;
 pub mod input;
 pub mod markdown;
 pub mod menu;
