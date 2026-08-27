@@ -1049,7 +1049,7 @@ mod app_rs {
         regions(
             Rect::new(0, 0, w, h),
             sidebar::width(w, hidden(w, latch)),
-            dock_height(v, h),
+            dock_height(v, h, None),
         )
     }
 
@@ -1841,7 +1841,7 @@ mod app_rs {
 
         for room in 0u16..=64 {
             for (what, v) in [("idle", &plain), ("menu", &menu), ("prompt", &prompt)] {
-                let h = dock_height(v, room);
+                let h = dock_height(v, room, None);
                 assert!(
                     h <= room.max(1),
                     "the {what} dock wants {h} rows out of {room}: a dock taller than \
@@ -1851,18 +1851,18 @@ mod app_rs {
         }
         for room in 5u16..=64 {
             assert!(
-                dock_height(&prompt, room) >= 5,
+                dock_height(&prompt, room, None) >= 5,
                 "at {room} rows a pending question got fewer than five rows, which is \
                  the least that holds the question and the keys to answer it"
             );
         }
         assert_eq!(
-            dock_height(&plain, 30),
+            dock_height(&plain, 30, None),
             3,
             "the ordinary dock is the input box's three rows"
         );
         assert_eq!(
-            dock_height(&prompt, 30),
+            dock_height(&prompt, 30, None),
             15,
             "the prompt is capped at half the pane"
         );

@@ -210,7 +210,7 @@ pub fn regions(area: Rect, sidebar_w: u16, dock_h: u16) -> Regions {
 /// is up, and the approval panel's evidence when a question is pending. Capped
 /// at half the pane — the prompt may grow upward into transcript rows (§4.6),
 /// not through them.
-pub fn dock_height(view: &View, room: u16) -> u16 {
+pub fn dock_height(view: &View, room: u16, width: Option<u16>) -> u16 {
     let room = room.max(1);
     // The ceiling would like to be half the window and must never exceed the
     // window: on a degenerate frame half-of-room is below the floors, and a
@@ -224,7 +224,14 @@ pub fn dock_height(view: &View, room: u16) -> u16 {
                 let extra = (m.rows.len() as u16 + u16::from(m.note.is_some())).min(8);
                 bounded(3 + extra, 3)
             }
-            None => 3.min(ceiling),
+            // The typed message decides, through the same function the box
+            // paints with. Absent a width nothing can be wrapped, so the old
+            // three rows are the floor and the answer when the caller does not
+            // know yet.
+            None => match width {
+                Some(w) => bounded(super::view::dock_rows(view, w), 3),
+                None => 3.min(ceiling),
+            },
         },
     }
 }
@@ -432,7 +439,11 @@ impl App {
         let collapsed = hidden(area.width, self.latch);
         self.side.collapsed = collapsed;
         let sb_w = sidebar::width(area.width, collapsed);
-        let r = regions(area, sb_w, dock_height(view, area.height));
+        let r = regions(
+            area,
+            sb_w,
+            dock_height(view, area.height, Some(area.width.saturating_sub(sb_w))),
+        );
         // Written down for the click hit-test: a mouse aims at what was on
         // screen at the last paint, which is exactly this rectangle.
         self.side_rect = r.sidebar;
@@ -1650,7 +1661,7 @@ goals asked    12",
         let r = regions(
             area,
             sidebar::width(120, hidden(120, Latch::default())),
-            dock_height(&v, 40),
+            dock_height(&v, 40, None),
         );
         let slice = |rows: &[String]| {
             (r.dock.y..r.dock.y.saturating_add(r.dock.height))
@@ -1839,7 +1850,7 @@ goals asked    12",
         let r = regions(
             Rect::new(0, 0, 120, 30),
             sidebar::width(120, false),
-            dock_height(&view(), 30),
+            dock_height(&view(), 30, None),
         );
         assert_eq!(app.wrap_width, chat::message_width(r.chat.width));
         assert!(
@@ -1891,13 +1902,13 @@ goals asked    12",
     #[test]
     fn the_dock_grows_for_the_menu_and_the_prompt_but_never_past_half_the_pane() {
         let mut v = view();
-        assert_eq!(dock_height(&v, 30), 3);
+        assert_eq!(dock_height(&v, 30, None), 3);
         v.menu = Some(crate::term::menu::MenuView {
             rows: vec![("help".into(), "about".into()); 4],
             selected: 0,
             note: None,
         });
-        assert_eq!(dock_height(&v, 30), 7);
+        assert_eq!(dock_height(&v, 30, None), 7);
         v.menu = None;
         v.prompt = Some(Prompt {
             title: "Approve Bash".into(),
@@ -1905,7 +1916,11 @@ goals asked    12",
             keys: vec![("y".into(), "yes".into())],
             question: "allow? ".into(),
         });
-        assert_eq!(dock_height(&v, 30), 15, "the prompt is capped at half");
+        assert_eq!(
+            dock_height(&v, 30, None),
+            15,
+            "the prompt is capped at half"
+        );
     }
 
     /// §4.6, in the new frame: the approval panel replaces the input box and

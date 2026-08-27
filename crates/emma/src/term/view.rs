@@ -228,10 +228,18 @@ impl View {
     /// box, menu and streamed tail in the main pane's bottom rows — one input
     /// renderer, two frames, so the two cannot drift.
     pub(crate) fn render_input(&self, area: Rect, buf: &mut Buffer) -> Option<Position> {
-        // Three rows for the box, whatever is left above it. When there is not
-        // even three, the box wins: a stream with nowhere to type is worse than
-        // a stream nobody can see the last line of.
-        let box_rows = 3.min(area.height);
+        // The box takes what the dock gave it, whatever is left above. When
+        // there is not even three, the box wins: a stream with nowhere to type
+        // is worse than a stream nobody can see the last line of.
+        //
+        // **It grows with what is typed, and until 2026-08-27 it did not.** A
+        // single `Line` was rendered into a one-row interior, so a message
+        // wider than the box ran off the right edge and `cursor_at` clamped to
+        // the last column: measured at 60 columns, 90 characters typed, 56
+        // drawn, and the tail — the part being typed *now* — nowhere on
+        // screen. Not a missing nicety; you could not see what you were
+        // writing.
+        let box_rows = area.height.min(dock_rows(self, area.width));
         let [above, boxed] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(box_rows)]).areas(area);
 
@@ -278,11 +286,32 @@ impl View {
         } else {
             Span::styled(self.input.clone(), self.skin.palette.style(Role::Text))
         };
-        Line::from(vec![
-            Span::styled(prefix.to_string(), self.skin.palette.bold(Role::Accent)),
-            typed,
-        ])
-        .render(inner, buf);
+        // Wrapped by column, not by word. A word-wrapped input box moves the
+        // caret to somewhere the typist did not put it the moment a long word
+        // starts, which is worse than a split word.
+        let body = if self.input.is_empty() {
+            PLACEHOLDER.to_string()
+        } else {
+            self.input.clone()
+        };
+        let rows = wrap_columns(&body, usize::from(inner.width).saturating_sub(cols(prefix)));
+        for (n, row) in rows.iter().enumerate().take(usize::from(inner.height)) {
+            let y = inner.y + n as u16;
+            let line = if n == 0 {
+                Line::from(vec![
+                    Span::styled(prefix.to_string(), self.skin.palette.bold(Role::Accent)),
+                    Span::styled(row.clone(), typed.style),
+                ])
+            } else {
+                // Aligned under the first row's text, so the left edge of what
+                // was typed is one column for the whole message.
+                Line::from(vec![
+                    Span::raw(" ".repeat(cols(prefix))),
+                    Span::styled(row.clone(), typed.style),
+                ])
+            };
+            buf.set_line(inner.x, y, &line, inner.width);
+        }
         // The mockup's `[send: Enter]`, right-aligned inside the border — the
         // one key a first-time user cannot see any other way (measured off
         // `notes/design/mockup-tui.png`: dim, flush right, on the input row itself).
@@ -309,9 +338,20 @@ impl View {
         // move by — and the cursor goes on a cell, so the text before it is
         // measured rather than counted. Type a CJK sentence and a counted
         // cursor sits half way back through it.
+        // The caret follows the wrap. `self.cursor` is a character index — what
+        // Left and Right move by — and the cursor goes on a cell, so the text
+        // before it is measured rather than counted: type a CJK sentence and a
+        // counted cursor sits half way back through it.
+        let text_w = usize::from(inner.width).saturating_sub(cols(prefix)).max(1);
+        let before = cols_upto(&self.input, self.cursor);
+        let row = (before / text_w).min(usize::from(inner.height).saturating_sub(1));
         Some(cursor_at(
-            inner,
-            cols(prefix) + cols_upto(&self.input, self.cursor),
+            Rect {
+                y: inner.y + row as u16,
+                height: 1,
+                ..inner
+            },
+            cols(prefix) + before % text_w,
         ))
     }
 
@@ -488,6 +528,53 @@ impl View {
 }
 
 /// Where the cursor lands, clamped so a long line cannot put it off the row.
+/// How many rows the input box wants, borders included.
+///
+/// Shared by [`View::render_input`] and [`super::app::dock_height`] so the
+/// height the layout reserves and the height the box paints into are one
+/// answer rather than two — the one-input-two-answers shape this codebase
+/// keeps paying for, and here it would show up as a box drawing over the
+/// conversation.
+pub(crate) fn dock_rows(view: &View, width: u16) -> u16 {
+    let prefix = 2; // `> `
+    let text_w = usize::from(width).saturating_sub(2 + prefix).max(1);
+    // **The placeholder never grows the box**, though it is drawn in the same
+    // place. It is a hint about what to type, not something typed: wrapping it
+    // would push the conversation up by a row before the user has pressed a
+    // key, and `streamed_prose_shows_its_tail_above_the_box` caught exactly
+    // that. It is cut at the border instead, which is what a hint can afford.
+    if view.input.is_empty() {
+        return 3;
+    }
+    // Two for the borders. `wrap_columns` never returns zero rows, so the box
+    // is never shorter than the three it has always been.
+    2 + wrap_columns(&view.input, text_w).len() as u16
+}
+
+/// Split `text` into rows of at most `width` columns, breaking mid-word.
+///
+/// Always at least one row, so an empty box still has somewhere to put the
+/// caret. Wide characters are never split across a boundary: a half of a CJK
+/// glyph is not a narrow glyph, it is a cell the terminal fills with something
+/// of its own choosing — the same rule [`super::render::fit`] follows.
+pub(crate) fn wrap_columns(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut rows = Vec::new();
+    let mut row = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let w = cols(&ch.to_string());
+        if used + w > width && !row.is_empty() {
+            rows.push(std::mem::take(&mut row));
+            used = 0;
+        }
+        row.push(ch);
+        used += w;
+    }
+    rows.push(row);
+    rows
+}
+
 fn cursor_at(area: Rect, offset: usize) -> Position {
     let x = area.x + (offset as u16).min(area.width.saturating_sub(1));
     Position::new(x, area.y)
@@ -498,6 +585,79 @@ mod tests {
     use super::*;
     use crate::term::palette::{Level, Palette};
     use crate::term::render::UNICODE;
+
+    /// The box grows with what is typed, and the tail stays on screen.
+    ///
+    /// **Measured before it was fixed, on 2026-08-27:** at 60 columns, 90
+    /// characters typed, 56 drawn, and the tail — the part being typed *now* —
+    /// nowhere in the buffer, with the caret pinned to the last column by
+    /// `cursor_at`'s clamp. Not a missing nicety: you could not see what you
+    /// were writing.
+    ///
+    /// The assertions are the three things that were wrong, in the order they
+    /// bite: the tail is visible, the caret is on the row the tail is on, and
+    /// the box got taller to make room.
+    #[test]
+    fn a_long_line_wraps_and_the_box_grows_to_hold_it() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let mut v = view();
+        v.input = (0..9).map(|n| format!("{n}23456789")).collect::<String>();
+        v.cursor = v.input.chars().count();
+        let tail = "823456789";
+
+        let mut term = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut caret = None;
+        term.draw(|f| caret = v.render_input(f.area(), f.buffer_mut()))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        let row = |y: u16| -> String {
+            (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect()
+        };
+        let screen: Vec<String> = (0..buf.area.height).map(row).collect();
+
+        assert!(
+            screen.iter().any(|r| r.contains(tail)),
+            "the end of the typed line is not on screen: {screen:?}"
+        );
+
+        let caret = caret.expect("no caret");
+        assert!(
+            row(caret.y).contains(tail),
+            "the caret is not on the row holding the tail: {:?}",
+            row(caret.y)
+        );
+
+        // Taller than the three rows an empty box takes. Counted from the
+        // border glyphs rather than from the constant, so the assertion is
+        // about what was drawn.
+        let box_rows = screen
+            .iter()
+            .filter(|r| r.contains('\u{2502}') || r.contains('\u{256d}') || r.contains('\u{2570}'))
+            .count();
+        assert!(
+            box_rows > 3,
+            "the box did not grow for a wrapped line: {box_rows} rows"
+        );
+    }
+
+    /// An empty box stays at three rows, and the placeholder is cut rather
+    /// than wrapped.
+    ///
+    /// The control on the test above. The placeholder is a hint about what to
+    /// type, not something typed — wrapping it would push the conversation up
+    /// by a row before the user has pressed a key, which is what
+    /// `streamed_prose_shows_its_tail_above_the_box` caught when this change
+    /// first went in.
+    #[test]
+    fn an_empty_box_does_not_grow_for_its_own_placeholder() {
+        let v = view();
+        assert_eq!(dock_rows(&v, 40), 3, "the placeholder grew the box");
+        assert_eq!(dock_rows(&v, 12), 3, "a narrow window grew it further");
+    }
 
     fn view() -> View {
         let mut v = View::new(Skin::new(Palette::new(Level::Truecolor), UNICODE));
