@@ -309,6 +309,18 @@ impl App {
             // offered a name it could not step back to would be worse.
             self.settings.themes = super::theme::names(self.home.as_deref(), None);
             self.settings.memory_on = stored.memory.unwrap_or(true);
+            // Absent means **off** here, the opposite of `memory` above and
+            // deliberately so — `crate::settings::Settings::prune_history`
+            // carries the argument.
+            self.settings.prune_on = stored.prune_history.unwrap_or(false);
+            // The project's permission rules, read where they are written.
+            // Same law as the rest of this block: on every open, never cached
+            // across one, so a grant made at a prompt since the last look is
+            // on the card the next time it is opened.
+            let (perms, perms_file, perms_read) = permission_rows();
+            self.settings.perms = perms;
+            self.settings.perms_file = perms_file;
+            self.settings.perms_read = perms_read;
             self.settings.test = super::settings::TestState::Idle;
             self.settings.focus = None;
             self.settings.notice = None;
@@ -342,6 +354,7 @@ impl App {
             SettingsAction::Close => self.settings_open = false,
             SettingsAction::Theme(name) => self.settings_theme(name),
             SettingsAction::MemoryCapture(on) => self.settings_memory(on),
+            SettingsAction::PruneHistory(on) => self.settings_prune(on),
             SettingsAction::Save => self.settings_save(),
             SettingsAction::Export => self.settings_export(),
             SettingsAction::Reset => self.settings_reset(),
@@ -443,6 +456,40 @@ impl App {
         }
     }
 
+    /// Store the Prune History toggle, keeping the additive default-**off**
+    /// semantics: Off removes the key (absent means off), On writes `true`.
+    ///
+    /// The mirror of [`Self::settings_memory`], and the asymmetry is the
+    /// point: writing `false` here would leave a key in the file that says
+    /// exactly what its absence says, and a settings file that grows a key
+    /// every time somebody opens a screen is one nobody can diff.
+    fn settings_prune(&mut self, on: bool) {
+        let Some(home) = self.home.clone() else {
+            self.settings.notice =
+                Some("no home directory — settings.json cannot be written here".to_string());
+            return;
+        };
+        let mut stored = crate::settings::load(&home);
+        stored.prune_history = if on { Some(true) } else { None };
+        match crate::settings::save(&home, &stored) {
+            Ok(path) => {
+                self.settings.prune_on = on;
+                self.settings.notice = Some(if on {
+                    format!(
+                        "prune history on — written to {}; in force from the next run",
+                        path.display()
+                    )
+                } else {
+                    format!(
+                        "prune history off — the default; the key is removed from {}",
+                        path.display()
+                    )
+                });
+            }
+            Err(e) => self.settings.notice = Some(format!("settings could not be written: {e}")),
+        }
+    }
+
     /// `[ Save Now ]`: write settings.json as it stands, with a receipt. The
     /// live controls each persist on use, so this is a re-assertion — the
     /// receipt names the file so the choice is visible and removable.
@@ -497,6 +544,9 @@ impl App {
         let mut stored = crate::settings::load(&home);
         stored.theme = None;
         stored.memory = None;
+        // Added with the row: a key this screen can set is a key its Reset
+        // has to clear, or Reset quietly means "most of it".
+        stored.prune_history = None;
         match crate::settings::save(&home, &stored) {
             Ok(path) => {
                 // Nothing to activate: the theme in force is the one this
@@ -505,8 +555,10 @@ impl App {
                 // "cleared to defaults" rather than claiming a repaint.
                 self.settings.theme = super::theme::BUILT_IN.to_string();
                 self.settings.memory_on = true;
+                self.settings.prune_on = false;
                 self.settings.notice = Some(format!(
-                    "reset: theme and memory capture cleared to defaults — written to {}",
+                    "reset: theme, memory capture and prune history cleared to defaults — \
+                     written to {}",
                     path.display()
                 ));
             }
@@ -1096,6 +1148,12 @@ impl App {
         self.settings.version = concat!("v", env!("CARGO_PKG_VERSION")).to_string();
         self.settings.model = view.status.model.clone();
         self.settings.cwd = view.status.cwd.clone();
+        // The two meters, from the same `Status` the status line reads, at the
+        // same moment. Paint-time rather than open-time on purpose: these move
+        // while the screen is up, and a context figure frozen at the toggle is
+        // the stale readout `render.rs`'s status region exists to not have.
+        self.settings.context = view.status.context;
+        self.settings.goal_budget = view.status.spend.map(|(_, cap)| cap);
         // The paint reports where the controls landed; `settings_click`
         // hit-tests against exactly that (the harness's rule).
         self.settings_hits = settings::render_hits(pane, buf, &self.settings, &view.skin);
@@ -2333,6 +2391,82 @@ fn lsp_rows(_stored: &crate::settings::Settings) -> (Vec<super::settings::LspRow
     // Nothing can be unknown while nothing can be enabled by name: the
     // `lsp.enabled` block this reported typos in does not exist here.
     (rows, Vec::new())
+}
+
+/// The TOOL PERMISSIONS card's rows: the rules really in force for this
+/// project, the file a new one is written to, and whether the look happened at
+/// all.
+///
+/// **Read directly rather than through `Harness::load`.** Booting a harness
+/// from the input thread reads every skill, agent and command file under the
+/// root; this needs two JSON documents. It is also the one shape that can
+/// answer honestly when the harness would refuse to boot — a malformed
+/// `settings.local.json` fails `Harness::load` outright, and a Settings screen
+/// that could not open because of it would be the worst possible time to be
+/// unable to look at the file.
+///
+/// The order is the order the rules are consulted — deny, then ask, then
+/// allow — matching `PermissionBlock::into_entries`, so the card reads in
+/// precedence order and a reader does not have to know the precedence to read
+/// the card correctly.
+///
+/// **Nothing here writes.** See `settings::perm_rows` for why that is the
+/// design and not an unfinished half.
+fn permission_rows() -> (Vec<super::settings::PermRow>, Option<String>, bool) {
+    use super::settings::PermRow;
+
+    let Ok(cwd) = std::env::current_dir() else {
+        return (Vec::new(), None, false);
+    };
+    let Ok(root) = emma_harness::discover_from(&cwd, std::env::var_os(emma_harness::ROOT_ENV).map(std::path::PathBuf::from))
+    else {
+        // No harness root: not an error and not a lie. There are no project
+        // rules because there is no project, which the card says.
+        return (Vec::new(), None, true);
+    };
+    let file = crate::permissions::file_for(&root);
+    let mut rows: Vec<PermRow> = Vec::new();
+    // The spine file first (`settings.json` beside the harness), then the
+    // local file — the same two documents `emma_harness::read_permissions`
+    // merges, in the same order.
+    for source in [root.join("settings.json"), file.clone()] {
+        let Ok(raw) = std::fs::read_to_string(&source) else {
+            continue;
+        };
+        let Ok(doc) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            // A malformed file is reported as a row rather than skipped: the
+            // whole point of the card is that a rule nobody can see is a rule
+            // nobody remembers granting, and an unreadable file is the
+            // strongest possible case of that.
+            rows.push(PermRow {
+                rule: format!("{} is malformed", source.display()),
+                verdict: "unread",
+            });
+            continue;
+        };
+        for (list, verdict) in [("deny", "deny"), ("ask", "ask"), ("allow", "allow")] {
+            let Some(items) = doc["permissions"][list].as_array() else {
+                continue;
+            };
+            for item in items {
+                if let Some(rule) = item.as_str() {
+                    rows.push(PermRow {
+                        rule: rule.to_string(),
+                        verdict,
+                    });
+                }
+            }
+        }
+    }
+    // Deny before ask before allow across *both* files, which is how they are
+    // consulted: a deny in the spine outranks an allow in the local file.
+    rows.sort_by_key(|r| match r.verdict {
+        "unread" => 0,
+        "deny" => 1,
+        "ask" => 2,
+        _ => 3,
+    });
+    (rows, Some(file.display().to_string()), true)
 }
 
 /// The Ollama host the Test Connection ping aims at — `ollama.rs`'s own
@@ -4985,19 +5119,23 @@ mod tests {
             "the click must land the key's own write"
         );
         assert_eq!(app.settings.focus, Some((2, 0)), "the click focuses too");
-        // A static row: the permissions value answers with the honest notice.
+        // A static row answers with the honest notice. Font Family rather
+        // than a permission row: card 6's rows are a function of whichever
+        // project the test binary happens to be run from, and a test that is
+        // silently a fact about the developer's checkout is the shape
+        // `guarantees.rs` refuses for the Harness page.
         paint_settings(&mut app);
-        let perms = app
+        let font = app
             .settings_hits
             .controls
             .iter()
-            .find(|(_, h)| *h == super::super::settings::Hit::Act(5, 0))
+            .find(|(_, h)| *h == super::super::settings::Hit::Act(2, 2))
             .map(|(r, _)| *r)
-            .expect("the Shell permission value was painted");
-        assert!(app.settings_click(perms.x, perms.y));
+            .expect("the Font Family value was painted");
+        assert!(app.settings_click(font.x, font.y));
         assert_eq!(
             app.settings.notice.as_deref(),
-            Some(super::super::settings::NOTICE_PERMISSIONS)
+            Some(super::super::settings::NOTICE_FONT)
         );
         // Empty ground falls through — the sidebar's rule.
         assert!(!app.settings_click(0, 0));

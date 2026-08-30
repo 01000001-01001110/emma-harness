@@ -6,10 +6,28 @@
 //! and takes the left of a fifth row), every card a bordered box of `Label … value` rows
 //! with the value right-aligned in the accent, a thin divider where the mock
 //! draws one, and a dim one-line description at the bottom of the cards that
-//! carry one. **A missing row is a deviation**, so a field with no backing
-//! state in the term layer renders the mock's sample value rather than being
-//! dropped; which fields are live and which are samples is the design note's
-//! table, not something to re-derive here.
+//! carry one.
+//!
+//! **The mock's sample values are gone, and that reverses this module's own
+//! policy.** It used to read *"a missing row is a deviation, so a field with no
+//! backing state renders the mock's sample value rather than being dropped"*,
+//! and the row kept its accent — so `Max Context Tokens 8192` and
+//! `Shell  Ask ›` were painted identically to a live `Model`, with the caveat
+//! reachable only by pressing Enter on the row. Owner ruling, 2026-08-27
+//! (`notes/design/settings-wiring.md`): every row ends in exactly one of three
+//! states, and each is visually distinct.
+//!
+//! 1. **Live and editable** — [`Value::Cycler`] or [`Value::Button`], accent,
+//!    and a [`RowKind`] that crosses [`SettingsAction`] to a real write.
+//! 2. **Live and read-only** — [`Value::Plain`], accent, **no** edit
+//!    affordance, and a notice naming where it *is* changed.
+//! 3. **Absent** — [`Value::Absent`], drawn dim rather than in the accent, and
+//!    reading `n/a` or `not set`. Never a plausible placeholder: a placeholder
+//!    is indistinguishable from data once the mockup is out of the room.
+//!
+//! The dim/accent split is the load-bearing half. A reader who presses nothing
+//! must still be able to tell which figures on the page are this run's, and
+//! colour is the only channel a `Label … value` row has left.
 //!
 //! Interaction (settings-live, 2026-08-26) is the memory/harness pattern, two
 //! pure halves. [`handle_key`] mutates focus and notices and returns a
@@ -21,13 +39,25 @@
 //! path, so the two can never disagree about what a control does.
 //!
 //! **Every row answers, and every answer is honest.** The rows with backing —
-//! Theme, Enable Memory, Save, Export, Reset, and Test Connection against a
-//! local Ollama — really act and write real files. The rows without backing
-//! (temperature, context limits, fonts, keybindings, retention, the
-//! permission chevrons) answer with a notice that names the mechanism that
-//! actually exists, never "not implemented" alone. Which row is which is
-//! [`RowKind`], one entry per Kv row, so a test can assert the class table
-//! without parsing a buffer.
+//! Theme, Enable Memory, Prune History, Save, Export, Reset, and Test
+//! Connection against a local Ollama — really act and write real files. The
+//! rows that read a fact this run resolved (model, cwd, provider, the context
+//! cap, the permission rules) show it and draw nothing to press. The rows with
+//! no backing at all say `n/a` in the dim role and answer with a notice that
+//! names the mechanism that actually exists, never "not implemented" alone.
+//! Which row is which is [`RowKind`], one entry per Kv row, so a test can
+//! assert the class table without parsing a buffer.
+//!
+//! **Card 6 is not the mock's card 6, and the difference is a safety claim.**
+//! The mock lists six rows — Shell, Code, File Browser, Search, Memory, Data
+//! Explorer — with `Ask`/`Allow` beside each. Those are `usertools::Tool`
+//! entries: programs *the person* launches with an `Alt` chord, which have no
+//! permission model in this tree and never had one. The thing Emma really
+//! gates is the **model's** tool calls, against the rules in
+//! `<harness>/settings.local.json` and the project's spine file. So the card
+//! shows those rules — the real ones, in precedence order, read-only — and six
+//! invented verdicts about six launcher rows are not on the page. A fabricated
+//! `Allow` on a permission screen is not a cosmetic defect.
 
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -76,6 +106,31 @@ pub struct SettingsView {
     /// The `memory_capture` setting, with its absent-means-on default already
     /// resolved by the caller (`Settings::capture_raws`).
     pub memory_on: bool,
+    /// The `prune_history` setting, absent-means-**off** already resolved by
+    /// the caller. The opposite default to `memory_on`, and deliberately so —
+    /// see `crate::settings::Settings::prune_history`.
+    pub prune_on: bool,
+    /// The permission rules in force for this project, in the order they are
+    /// consulted: deny, then ask, then allow. Read once when the screen opens.
+    ///
+    /// Empty and [`SettingsView::perms_read`] true means a project with no
+    /// rules at all, which is a different fact from "nobody looked" and is
+    /// drawn differently.
+    pub perms: Vec<PermRow>,
+    /// Where a remembered rule is written — `<harness>/settings.local.json`,
+    /// the file `[r]` and `[t]` at an approval prompt write. `None` when the
+    /// harness root could not be discovered.
+    pub perms_file: Option<String>,
+    /// Whether the screen actually read the rules. `false` is the default and
+    /// says `not read` rather than printing a confident `none`.
+    pub perms_read: bool,
+    /// The live context meter: tokens the last call reported, and the cap
+    /// compaction is measured against. `None` until a model call has reported
+    /// one, which the page prints as `not set` — the status line's own rule.
+    pub context: Option<(i64, i64)>,
+    /// The running goal's token budget, from the same status the meter comes
+    /// from. `None` before a goal has been billed for anything.
+    pub goal_budget: Option<i64>,
     /// What the Test Connection button says: untested, reached, or not.
     pub test: TestState,
     /// The focused row, as (card, slot) — slot counts the card's Kv rows.
@@ -94,6 +149,20 @@ pub struct SettingsView {
     /// rather than dropped: a settings file written by a newer Emma is a fact
     /// worth showing, not an error.
     pub lsp_unknown: Vec<String>,
+}
+
+/// One permission rule as card 6 prints it: the rule text exactly as it is
+/// written in the file, and which of the three lists it came from.
+///
+/// The verdict is `&'static str` from `PermissionKind::word` rather than the
+/// enum itself, so this module carries no dependency on the harness crate's
+/// vocabulary and a test can name the string it expects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermRow {
+    /// `Bash(git *)`, `WebFetch(domain:apnews.com)`, `WebSearch`.
+    pub rule: String,
+    /// `deny`, `ask` or `allow`.
+    pub verdict: &'static str,
 }
 
 /// One language on the LANGUAGE SERVERS card: whether it is enabled, and what
@@ -184,8 +253,16 @@ pub const NOTICE_SAMPLING: &str =
     "Sampling is the provider's default today; no temperature or output-cap setting exists yet";
 pub const NOTICE_STREAMING: &str =
     "Streaming is always on; the transcript renders deltas as they arrive";
-pub const NOTICE_CONTEXT: &str = "Context is managed by the session's compaction; the status \
-     bar's ctx meter is the live number, and these rows are the mock's samples";
+/// The cap row's mechanism. Named separately from [`NOTICE_CONTEXT_ABSENT`]
+/// because the two rows on that card are now different *states*, and one
+/// sentence covering both is how the old page ended up calling a live number
+/// and a compiled-in sample the same thing.
+pub const NOTICE_CONTEXT: &str = "The context cap is this run's --max-context; a request past it \
+     compacts the oldest goals down to half the cap, which is why there is no separate threshold";
+pub const NOTICE_CONTEXT_ABSENT: &str = "No number yet: the meter reads the provider's own count \
+     from the last call, so it is set by the first model call of the run and not before";
+pub const NOTICE_OUTPUT_CAP: &str = "Emma has no output-token setting; --max-tokens is the \
+     per-goal spend budget shown below it, not a cap on one response";
 pub const NOTICE_THEME_OWNED: &str =
     "Colours come from the theme: cycle the Theme row, or /theme <name>";
 pub const NOTICE_FONT: &str =
@@ -196,11 +273,31 @@ pub const NOTICE_KEYS: &str =
     "Keybindings are fixed today; the sidebar's QUICK HELP lists them, and no keymap file exists";
 pub const NOTICE_MEMORY_STAGES: &str = "Memory pages live under .emma/memory (Alt+m manages \
      them); retention, auto-recall and scope need the retrieval stage (M2)";
+pub const NOTICE_PRUNE: &str = "Prune History drops superseded tool results from what is sent \
+     back to the model; off unless set, because it changes what the model is shown";
 pub const NOTICE_PERMISSIONS: &str = "Permission rules live in settings.local.json. [r] or [t] \
      at an approval prompt writes one, and it is honoured by every later run in this project";
+/// Why the card is read-only, said on the card rather than in a design note.
+///
+/// **This is the security constraint made visible.** A row that could edit a
+/// permission would be a settings route into an execution decision, and the
+/// only reason it is safe today is that no key on this page writes one.
+pub const NOTICE_PERMISSIONS_READONLY: &str = "This card reads the rules and never writes one: a \
+     permission is granted at the approval prompt, where the call that wants it is on screen";
+/// The gate is consent, not containment — `CLAUDE.md` calls documentation
+/// implying otherwise a defect, and a screen headed TOOL PERMISSIONS is the
+/// most likely place to imply it.
+pub const NOTICE_PERMISSIONS_GATE: &str = "These rules decide what Emma asks about, not what a \
+     tool can do: the gate is a consent interface and never a sandbox";
+pub const NOTICE_PERMISSIONS_NONE: &str = "This project has no permission rules, so every tool \
+     call that declares a risk is asked about; nothing here is denied in advance";
+pub const NOTICE_PERMISSIONS_UNREAD: &str =
+    "Open the screen from inside a project: the rules are read once, from the harness root Emma \
+     discovers at that moment";
 pub const NOTICE_CWD: &str =
     "The working directory is where Emma was started; start Emma elsewhere to change it";
-pub const NOTICE_ENV: &str = "Environment and log level are facts of this run, not settings";
+pub const NOTICE_ENV: &str = "Emma has no environment or log-level setting: there is no \
+     dev/staging/prod concept here and no log level to choose";
 pub const NOTICE_TELEMETRY: &str = "Emma sends no telemetry; there is nothing to switch off";
 pub const NOTICE_LSP: &str = "Language servers are chosen by the lsp.enabled list in \
      settings.json; Emma reads it once at startup, so an edit applies to the next run";
@@ -234,8 +331,15 @@ enum Value {
     Cycler(String),
     /// Bracketed button: `[ Save Now ]`.
     Button(String),
-    /// Value with a trailing right-chevron: `Ask ›` (card 6).
-    Chevron(String),
+    /// A value that does not exist: `n/a`, `not set`, `none`. **Drawn dim
+    /// rather than in the accent**, which is the whole of state 3 — a reader
+    /// who presses nothing can still see that this row is not a fact about the
+    /// run.
+    ///
+    /// The mock's `Ask ›` chevron dress used to live beside these; it is gone
+    /// with the six fabricated verdicts it dressed. A trailing chevron is an
+    /// edit affordance, and there was never a key behind it.
+    Absent(String),
 }
 
 /// What activating a row really does — the class table, one entry per row.
@@ -248,6 +352,8 @@ pub enum RowKind {
     ThemeCycle,
     /// Enter/←/→ flip `memory_capture` in settings.json.
     MemoryToggle,
+    /// Enter/←/→ flip `prune_history` in settings.json.
+    PruneToggle,
     /// A reachability check against a local Ollama host.
     TestConnection,
     /// Write settings.json now, with a receipt.
@@ -295,28 +401,40 @@ fn test_label(t: TestState) -> &'static str {
     }
 }
 
-/// The cards, in the mock's order for the first eight: left column odd, right column even,
-/// top to bottom. Sample values are the mock's; `model`, `cwd`, `provider`,
-/// `theme`, `memory_on` and the test button are live.
+/// The cards, in the mock's order for the first eight: left column odd, right
+/// column even, top to bottom.
+///
+/// Every row is one of the module doc's three states. Live and editable:
+/// Theme, Enable Memory, Prune History, Test Connection, Save, Export, Reset.
+/// Live and read-only: Provider, Model, Streaming, the two context numbers,
+/// Telemetry, Working Directory, and every row of cards 6 and 9. Absent —
+/// `Value::Absent`, dim: Temperature, Max Output Tokens, Response Budget, the
+/// appearance rows below Theme, both keybinding rows, the three memory rows
+/// below Enable Memory, Environment and Log Level.
 fn cards(s: &SettingsView) -> Vec<Card> {
     use RowKind::Note;
-    use Value::{Button, Chevron, Cycler, Plain};
+    use Value::{Absent, Button, Cycler, Plain};
     vec![
         Card {
             header: "1. MODEL PROVIDER",
             rows: vec![
+                // Live and read-only, and the cycler dress is gone with the
+                // pretence: `emma_llm::known()` has exactly one entry in this
+                // build, so a chevron would step from anthropic to anthropic.
                 kv(
                     "Provider",
-                    Cycler(title_case(&s.provider)),
+                    Plain(title_case(&s.provider)),
                     Note(NOTICE_PROVIDER),
                 ),
                 kv("Model", Plain(s.model.clone()), Note(NOTICE_MODEL)),
-                kv("Temperature", Plain("0.70".into()), Note(NOTICE_SAMPLING)),
+                kv("Temperature", Absent("n/a".into()), Note(NOTICE_SAMPLING)),
                 kv(
                     "Max Output Tokens",
-                    Plain("2048".into()),
+                    Absent("n/a".into()),
                     Note(NOTICE_SAMPLING),
                 ),
+                // A fact about the build rather than a setting: there is no
+                // non-streaming path to switch to.
                 kv("Streaming", Plain("On".into()), Note(NOTICE_STREAMING)),
                 CardRow::Divider,
                 kv(
@@ -331,18 +449,62 @@ fn cards(s: &SettingsView) -> Vec<Card> {
             rows: vec![
                 kv(
                     "Max Context Tokens",
-                    Plain("8192".into()),
-                    Note(NOTICE_CONTEXT),
+                    match s.context {
+                        Some((_, cap)) => Plain(cap.to_string()),
+                        None => Absent("not set".into()),
+                    },
+                    Note(match s.context {
+                        Some(_) => NOTICE_CONTEXT,
+                        None => NOTICE_CONTEXT_ABSENT,
+                    }),
                 ),
+                kv(
+                    "Context In Use",
+                    match s.context {
+                        Some((used, _)) => Plain(used.to_string()),
+                        None => Absent("not set".into()),
+                    },
+                    Note(match s.context {
+                        Some(_) => NOTICE_CONTEXT,
+                        None => NOTICE_CONTEXT_ABSENT,
+                    }),
+                ),
+                // The mock's row, kept by name and emptied: Emma has no
+                // per-response output cap, and the number that *is* a budget
+                // is the goal's, on the row below.
                 kv(
                     "Response Budget",
-                    Plain("2048".into()),
+                    Absent("n/a".into()),
+                    Note(NOTICE_OUTPUT_CAP),
+                ),
+                kv(
+                    "Goal Token Budget",
+                    match s.goal_budget {
+                        Some(cap) => Plain(cap.to_string()),
+                        None => Absent("not set".into()),
+                    },
+                    Note(match s.goal_budget {
+                        Some(_) => NOTICE_CONTEXT,
+                        None => NOTICE_CONTEXT_ABSENT,
+                    }),
+                ),
+                // Unconditional whenever there is a cap at all — see
+                // `Agent::compact_if_needed`, which returns early only when
+                // `max_context <= 0`.
+                kv(
+                    "Auto-Summarize",
+                    match s.context {
+                        Some((_, cap)) if cap > 0 => Plain("On".into()),
+                        Some(_) => Plain("Off, no cap".into()),
+                        None => Absent("not set".into()),
+                    },
                     Note(NOTICE_CONTEXT),
                 ),
-                kv("Auto-Summarize", Plain("On".into()), Note(NOTICE_CONTEXT)),
+                // The mock's `70%` was a setting Emma does not have: the
+                // threshold *is* the cap, and the half is the target.
                 kv(
                     "Summarize Threshold",
-                    Plain("70%".into()),
+                    Plain("at the cap".into()),
                     Note(NOTICE_CONTEXT),
                 ),
                 CardRow::Desc("Manage how much context Emma can use.".into()),
@@ -354,33 +516,28 @@ fn cards(s: &SettingsView) -> Vec<Card> {
                 kv("Theme", Cycler(title_case(&s.theme)), RowKind::ThemeCycle),
                 kv(
                     "Accent Color",
-                    Plain("Magenta".into()),
+                    Absent("n/a".into()),
                     Note(NOTICE_THEME_OWNED),
                 ),
-                kv(
-                    "Font Family",
-                    Plain("JetBrains Mono".into()),
-                    Note(NOTICE_FONT),
-                ),
-                kv("Font Size", Plain("14px".into()), Note(NOTICE_FONT)),
-                kv(
-                    "Status Bar",
-                    Plain("Detailed".into()),
-                    Note(NOTICE_STATUSBAR),
-                ),
+                kv("Font Family", Absent("n/a".into()), Note(NOTICE_FONT)),
+                kv("Font Size", Absent("n/a".into()), Note(NOTICE_FONT)),
+                kv("Status Bar", Absent("n/a".into()), Note(NOTICE_STATUSBAR)),
                 CardRow::Desc("Customize Emma's look and feel.".into()),
             ],
         },
         Card {
             header: "4. KEYBINDINGS",
             rows: vec![
+                // Both dresses dropped. A cycler with one preset and a button
+                // that opens nothing are the `QUICK HELP` defect one level
+                // down: an affordance no key answers.
                 kv(
                     "Keybinding Preset",
-                    Cycler("Default".into()),
+                    Absent("n/a".into()),
                     Note(NOTICE_KEYS),
                 ),
-                kv("Edit Keybindings", Button("Open".into()), Note(NOTICE_KEYS)),
-                CardRow::Desc("View or customize keyboard shortcuts.".into()),
+                kv("Edit Keybindings", Absent("n/a".into()), Note(NOTICE_KEYS)),
+                CardRow::Desc("Keys are fixed; the sidebar's QUICK HELP lists them.".into()),
             ],
         },
         Card {
@@ -391,19 +548,27 @@ fn cards(s: &SettingsView) -> Vec<Card> {
                     Plain(if s.memory_on { "On" } else { "Off" }.into()),
                     RowKind::MemoryToggle,
                 ),
+                // New here, and the ruling's "even if they were not before"
+                // half: `prune_history` is personal settings with no UI until
+                // now.
+                kv(
+                    "Prune History",
+                    Plain(if s.prune_on { "On" } else { "Off" }.into()),
+                    RowKind::PruneToggle,
+                ),
                 kv(
                     "Memory Retention",
-                    Plain("30 days".into()),
+                    Absent("n/a".into()),
                     Note(NOTICE_MEMORY_STAGES),
                 ),
                 kv(
                     "Auto-Recall",
-                    Plain("On".into()),
+                    Absent("n/a".into()),
                     Note(NOTICE_MEMORY_STAGES),
                 ),
                 kv(
                     "Memory Scope",
-                    Plain("Project".into()),
+                    Absent("n/a".into()),
                     Note(NOTICE_MEMORY_STAGES),
                 ),
                 CardRow::Desc("Control how Emma remembers information.".into()),
@@ -411,35 +576,16 @@ fn cards(s: &SettingsView) -> Vec<Card> {
         },
         Card {
             header: "6. TOOL PERMISSIONS",
-            rows: vec![
-                kv("Shell", Chevron("Ask".into()), Note(NOTICE_PERMISSIONS)),
-                kv("Code", Chevron("Allow".into()), Note(NOTICE_PERMISSIONS)),
-                kv(
-                    "File Browser",
-                    Chevron("Ask".into()),
-                    Note(NOTICE_PERMISSIONS),
-                ),
-                kv("Search", Chevron("Allow".into()), Note(NOTICE_PERMISSIONS)),
-                kv("Memory", Chevron("Allow".into()), Note(NOTICE_PERMISSIONS)),
-                kv(
-                    "Data Explorer",
-                    Chevron("Ask".into()),
-                    Note(NOTICE_PERMISSIONS),
-                ),
-                CardRow::Desc("Manage tool access and confirmation behavior.".into()),
-            ],
+            rows: perm_rows(s),
         },
         Card {
             header: "7. ENVIRONMENT",
             rows: vec![
                 kv("Working Directory", Plain(s.cwd.clone()), Note(NOTICE_CWD)),
-                kv("Environment", Plain("local".into()), Note(NOTICE_ENV)),
-                kv("Log Level", Plain("Info".into()), Note(NOTICE_ENV)),
-                kv(
-                    "Telemetry",
-                    Plain("Disabled".into()),
-                    Note(NOTICE_TELEMETRY),
-                ),
+                kv("Environment", Absent("n/a".into()), Note(NOTICE_ENV)),
+                kv("Log Level", Absent("n/a".into()), Note(NOTICE_ENV)),
+                // Not a switch that happens to be off: there is no sender.
+                kv("Telemetry", Plain("none sent".into()), Note(NOTICE_TELEMETRY)),
                 CardRow::Desc("Environment and runtime configuration.".into()),
             ],
         },
@@ -458,6 +604,86 @@ fn cards(s: &SettingsView) -> Vec<Card> {
             rows: lsp_rows(s),
         },
     ]
+}
+
+/// How many rules card 6 draws before it stops and says how many are left.
+///
+/// A cap rather than a scroll because the grid does not scroll: a card that
+/// grew to a hundred rows would push every card below it off the screen, and
+/// the overflow notice would then be counting whole cards rather than rules.
+/// The house rule for a cap is the same wherever it appears — name it, name
+/// the loss, name the remedy — which is what [`NOTICE_PERMISSIONS_MORE`] does.
+pub const PERM_ROWS_SHOWN: usize = 8;
+
+pub const NOTICE_PERMISSIONS_MORE: &str = "This card shows the first rules only; no key raises \
+     the cap. Open the file named above to read them all";
+
+/// The TOOL PERMISSIONS card's rows: the real rules, in the order they are
+/// consulted, and the file a new one would be written to.
+///
+/// **Every row is [`RowKind::Note`], and that is the security constraint
+/// rather than an unfinished half.** Editing a permission from here would
+/// write `settings.local.json` — the same file `[r]` and `[t]` at an approval
+/// prompt write — and a settings route into an execution decision is exactly
+/// the shape the `another agent` review found. The keyboard is not a model-reachable
+/// route today, but the write would be a second door to a decision that has
+/// one good door, and the good one has the call that wants the grant on screen
+/// beside it. So this card reads and never writes.
+fn perm_rows(s: &SettingsView) -> Vec<CardRow> {
+    use RowKind::Note;
+    use Value::{Absent, Plain};
+    let mut rows: Vec<CardRow> = Vec::new();
+    if !s.perms_read {
+        rows.push(kv(
+            "Rules",
+            Absent("not read".into()),
+            Note(NOTICE_PERMISSIONS_UNREAD),
+        ));
+        rows.push(CardRow::Desc(
+            "The rules are read from the harness root when the screen opens.".into(),
+        ));
+        return rows;
+    }
+    if s.perms.is_empty() {
+        rows.push(kv(
+            "Rules",
+            Absent("none".into()),
+            Note(NOTICE_PERMISSIONS_NONE),
+        ));
+    } else {
+        for row in s.perms.iter().take(PERM_ROWS_SHOWN) {
+            rows.push(kv(
+                &row.rule,
+                Plain(row.verdict.to_string()),
+                Note(NOTICE_PERMISSIONS_GATE),
+            ));
+        }
+        if s.perms.len() > PERM_ROWS_SHOWN {
+            rows.push(kv(
+                "Not Shown",
+                Absent(format!("{} more", s.perms.len() - PERM_ROWS_SHOWN)),
+                Note(NOTICE_PERMISSIONS_MORE),
+            ));
+        }
+    }
+    rows.push(CardRow::Divider);
+    rows.push(kv(
+        "Rules File",
+        match &s.perms_file {
+            Some(path) => Plain(path.clone()),
+            None => Absent("no harness root".into()),
+        },
+        Note(NOTICE_PERMISSIONS),
+    ));
+    rows.push(kv(
+        "Changed From",
+        Plain("the approval prompt".into()),
+        Note(NOTICE_PERMISSIONS_READONLY),
+    ));
+    rows.push(CardRow::Desc(
+        "Read-only: a grant is made at the prompt, with the call on screen.".into(),
+    ));
+    rows
 }
 
 /// The LANGUAGE SERVERS card's rows: one per language, the unknown keys when
@@ -566,6 +792,10 @@ pub enum SettingsAction {
     /// Store `memory_capture`: `true` removes the key (absent means on),
     /// `false` writes `false`.
     MemoryCapture(bool),
+    /// Store `prune_history`: `false` removes the key (absent means off),
+    /// `true` writes `true`. The mirror image of [`Self::MemoryCapture`],
+    /// because the two defaults are opposite.
+    PruneHistory(bool),
     /// Ping the provider's host and report into the button.
     TestConnection,
     /// Write settings.json now, receipt in the notice.
@@ -645,6 +875,7 @@ fn cycle(v: &mut SettingsView, dir: isize) -> SettingsAction {
     match focused_kind(v) {
         Some(RowKind::ThemeCycle) => SettingsAction::Theme(theme_step(&v.themes, &v.theme, dir)),
         Some(RowKind::MemoryToggle) => SettingsAction::MemoryCapture(!v.memory_on),
+        Some(RowKind::PruneToggle) => SettingsAction::PruneHistory(!v.prune_on),
         Some(RowKind::Note(text)) => {
             v.notice = Some(text.to_string());
             SettingsAction::FocusChanged
@@ -664,6 +895,10 @@ fn activate(v: &mut SettingsView) -> SettingsAction {
         Some(RowKind::MemoryToggle) => {
             v.confirm_reset = false;
             SettingsAction::MemoryCapture(!v.memory_on)
+        }
+        Some(RowKind::PruneToggle) => {
+            v.confirm_reset = false;
+            SettingsAction::PruneHistory(!v.prune_on)
         }
         Some(RowKind::TestConnection) => {
             v.confirm_reset = false;
@@ -1040,7 +1275,7 @@ fn record_hits(
         }
         // Buttons and toggles activate; a static row's value answers with
         // its notice — the same thing Enter does, one dispatch path.
-        Value::Button(_) | Value::Plain(_) | Value::Chevron(_) => {
+        Value::Button(_) | Value::Plain(_) | Value::Absent(_) => {
             hits.controls
                 .push((Rect::new(vx, y, vw16, 1), Hit::Act(card, slot)));
         }
@@ -1068,7 +1303,6 @@ fn kv_line(
     } else {
         ("‹ ", " ›")
     };
-    let chev = if ascii { " >" } else { " ›" };
     let (text, mut style) = match value {
         Value::Plain(v) => (v.clone(), skin.palette.style(Role::Accent)),
         Value::Cycler(v) => (
@@ -1076,7 +1310,10 @@ fn kv_line(
             skin.palette.style(Role::Accent),
         ),
         Value::Button(v) => (format!("[ {v} ]"), skin.palette.bold(Role::Accent)),
-        Value::Chevron(v) => (format!("{v}{chev}"), skin.palette.style(Role::Accent)),
+        // **The one place state 3 is visible without pressing anything.** The
+        // accent is what the eye reads as "this is a fact about the run"; an
+        // absent value must not borrow it.
+        Value::Absent(v) => (v.clone(), skin.palette.dim()),
     };
     // The focused row wears the sidebar's chip band — memory's accent
     // treatment for the row the keys are pointed at.
@@ -1132,10 +1369,33 @@ mod tests {
             provider: "ollama".into(),
             theme: "dracula".into(),
             memory_on: true,
+            prune_on: false,
             test: TestState::Ok,
             lsp: lsp_fixture(),
+            context: Some((41_000, 120_000)),
+            goal_budget: Some(200_000),
+            perms: perm_fixture(),
+            perms_file: Some("/repo/.emma/settings.local.json".into()),
+            perms_read: true,
             ..SettingsView::default()
         }
+    }
+
+    /// Two rules, one of each of the two verdicts a reader most needs to tell
+    /// apart. Stated rather than read from disk for the reason the language
+    /// fixture is: a test that reads the developer's own project is a test
+    /// that answers differently on every machine.
+    fn perm_fixture() -> Vec<PermRow> {
+        vec![
+            PermRow {
+                rule: "Bash(rm *)".into(),
+                verdict: "deny",
+            },
+            PermRow {
+                rule: "WebSearch".into(),
+                verdict: "allow",
+            },
+        ]
     }
 
     /// The seven languages as the screen sees them, one of each state, so a
@@ -1233,10 +1493,10 @@ mod tests {
     fn values_right_align_against_the_card_border() {
         let rows = draw(&view(), 120, 60);
         for (label, value) in [
-            ("Temperature", "0.70"),
-            ("Max Context Tokens", "8192"),
-            ("Memory Scope", "Project"),
-            ("Telemetry", "Disabled"),
+            ("Temperature", "n/a"),
+            ("Max Context Tokens", "120000"),
+            ("Memory Scope", "n/a"),
+            ("Telemetry", "none sent"),
         ] {
             let row = rows
                 .iter()
@@ -1256,27 +1516,123 @@ mod tests {
         }
     }
 
-    /// The mock's affordances: the cyclers' chevrons, the bracketed buttons,
-    /// and card 6's trailing chevrons. The live cyclers carry the view's
-    /// values with their first letter raised.
+    /// **An edit affordance is drawn only where a key answers it.** The mock
+    /// dressed five rows this way; three of them had nothing behind them, and
+    /// a chevron with no handler is the `QUICK HELP` defect this repository
+    /// has already had a bug report about.
+    ///
+    /// The negative half is the half that matters and the half a `contains`
+    /// test cannot express: the provider cycler, the keybinding preset cycler,
+    /// the `[ Open ]` button and the six `Ask ›` / `Allow ›` chevrons must
+    /// **not** be on the page, because no key changes any of them.
     #[test]
-    fn cyclers_buttons_and_chevrons_wear_the_mocks_dress() {
-        let rows = draw(&view(), 130, 60);
-        let all = rows.join("\n");
-        assert!(all.contains("‹ Ollama ›"), "provider cycler missing");
+    fn an_edit_affordance_is_drawn_only_where_a_key_answers_it() {
+        let all = draw(&view(), 130, 60).join("\n");
         assert!(all.contains("‹ Dracula ›"), "theme cycler missing");
-        assert!(all.contains("‹ Default ›"), "preset cycler missing");
-        for b in [
-            "[ OK ]",
-            "[ Open ]",
-            "[ Save Now ]",
-            "[ Export ]",
-            "[ Reset ]",
-        ] {
+        for b in ["[ OK ]", "[ Save Now ]", "[ Export ]", "[ Reset ]"] {
             assert!(all.contains(b), "button {b} missing");
         }
-        assert!(all.contains("Ask ›"), "permission chevron missing");
-        assert!(all.contains("Allow ›"), "permission chevron missing");
+        for dead in [
+            "‹ Ollama ›",
+            "‹ Default ›",
+            "[ Open ]",
+            "Ask ›",
+            "Allow ›",
+        ] {
+            assert!(
+                !all.contains(dead),
+                "{dead} is drawn as editable and no key changes it"
+            );
+        }
+    }
+
+    /// **Nothing on the page reads as a value that is not one.** The mock's
+    /// nineteen sample figures were compiled into the paint path and painted
+    /// in the accent beside the live ones; this is the assertion that they are
+    /// gone, by the strings they were.
+    ///
+    /// It is a whole-page negative rather than a per-row check on purpose: a
+    /// per-row check passes the moment somebody adds a twentieth.
+    #[test]
+    fn the_mocks_sample_figures_are_not_on_the_page() {
+        let all = draw(&view(), 161, 95).join("\n");
+        for sample in [
+            "0.70",          // Temperature
+            "2048",          // Max Output Tokens / Response Budget
+            "8192",          // Max Context Tokens
+            "70%",           // Summarize Threshold
+            "Magenta",       // Accent Color
+            "JetBrains",     // Font Family
+            "14px",          // Font Size
+            "Detailed",      // Status Bar
+            "30 days",       // Memory Retention
+            "Project",       // Memory Scope
+            "Disabled",      // Telemetry
+            "File Browser",  // a permission row about a launcher
+            "Data Explorer", // ditto
+        ] {
+            assert!(
+                !all.contains(sample),
+                "the mock's sample {sample:?} is still painted:\n{all}"
+            );
+        }
+        // `local` and `Info` are the other two, and both are substrings of
+        // strings that legitimately appear (`settings.local.json`), so they
+        // are checked on their own rows rather than across the page.
+        for label in ["Environment", "Log Level"] {
+            let row = draw(&view(), 161, 95)
+                .into_iter()
+                .find(|r| r.contains(label))
+                .unwrap_or_else(|| panic!("{label} not rendered"));
+            assert!(row.contains("n/a"), "{label} still reads: {row:?}");
+        }
+    }
+
+    /// State 3 is visible without pressing anything: an absent value is dim
+    /// and a live one is in the accent.
+    ///
+    /// **This is the guarantee the whole ruling rests on.** Read from the
+    /// rendered cells rather than from [`Value`], because the claim is about
+    /// what a reader sees — a test over the enum would pass over a renderer
+    /// that painted both the same.
+    #[test]
+    fn an_absent_value_is_dim_and_a_live_one_is_not() {
+        let v = view();
+        let area = Rect::new(0, 0, 161, 95);
+        let mut buf = Buffer::empty(area);
+        render(area, &mut buf, &v, &skin());
+        let style_of = |needle: &str| -> Style {
+            for y in 0..area.height {
+                let row: String = (0..area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect();
+                if let Some(x) = row.find(needle) {
+                    // `find` is a byte offset and the card borders are
+                    // multi-byte, so count characters up to it.
+                    let col = row[..x].chars().count() as u16;
+                    return buf[(col, y)].style();
+                }
+            }
+            panic!("{needle} is not on the page");
+        };
+        // The cell carries a resolved background the role's `Style` does not,
+        // so the two are compared on what the role actually sets: the
+        // foreground and the modifiers.
+        let seen = |s: Style| (s.fg, s.add_modifier);
+        let dim = seen(skin().palette.dim());
+        let accent = seen(skin().palette.style(Role::Accent));
+        assert_ne!(dim, accent, "the test cannot tell the two roles apart");
+        // `n/a` on Temperature, and the model, which is this run's.
+        assert_eq!(
+            seen(style_of("n/a")),
+            dim,
+            "an absent value borrows the accent"
+        );
+        assert_eq!(
+            seen(style_of("llama3:8b")),
+            accent,
+            "a live value is not in the accent"
+        );
     }
 
     /// The head block: version top-right, title, subtitle, rule.
@@ -1520,18 +1876,21 @@ mod tests {
             (0, 3, NOTICE_SAMPLING),
             (0, 4, NOTICE_STREAMING),
             (1, 0, NOTICE_CONTEXT),
-            (1, 3, NOTICE_CONTEXT),
+            (1, 2, NOTICE_OUTPUT_CAP),
+            (1, 5, NOTICE_CONTEXT),
             (2, 1, NOTICE_THEME_OWNED),
             (2, 2, NOTICE_FONT),
             (2, 3, NOTICE_FONT),
             (2, 4, NOTICE_STATUSBAR),
             (3, 0, NOTICE_KEYS),
             (3, 1, NOTICE_KEYS),
-            (4, 1, NOTICE_MEMORY_STAGES),
             (4, 2, NOTICE_MEMORY_STAGES),
             (4, 3, NOTICE_MEMORY_STAGES),
-            (5, 0, NOTICE_PERMISSIONS),
-            (5, 5, NOTICE_PERMISSIONS),
+            (4, 4, NOTICE_MEMORY_STAGES),
+            (5, 0, NOTICE_PERMISSIONS_GATE),
+            (5, 1, NOTICE_PERMISSIONS_GATE),
+            (5, 2, NOTICE_PERMISSIONS),
+            (5, 3, NOTICE_PERMISSIONS_READONLY),
             (6, 0, NOTICE_CWD),
             (6, 1, NOTICE_ENV),
             (6, 2, NOTICE_ENV),
@@ -1557,6 +1916,199 @@ mod tests {
         assert!(NOTICE_MODEL.contains("/model"));
         assert!(NOTICE_MEMORY_STAGES.contains(".emma/memory"));
         assert!(NOTICE_STATUSBAR.contains("statusLine"));
+        // And the permission card does not imply enforcement it does not
+        // have — `CLAUDE.md` calls that a defect in its own right.
+        assert!(NOTICE_PERMISSIONS_GATE.contains("never a sandbox"));
+    }
+
+    /// **No key on this page writes a permission.** The security constraint,
+    /// asserted where it can go red: every row of card 6, in every state the
+    /// card has, answers Enter and ←/→ with a notice and never with an action
+    /// that crosses the seam.
+    ///
+    /// A row that became editable would return something other than
+    /// `FocusChanged` here, so this fails the moment the card grows a write —
+    /// which is the only way the failure could be noticed before it shipped.
+    #[test]
+    fn no_key_on_the_permission_card_asks_the_shell_to_write() {
+        let states: [SettingsView; 3] = [
+            view(),
+            SettingsView {
+                perms: Vec::new(),
+                ..view()
+            },
+            SettingsView {
+                perms_read: false,
+                ..view()
+            },
+        ];
+        for (i, base) in states.into_iter().enumerate() {
+            let n = slots(&base, 5);
+            assert!(n > 0, "state {i} drew no rows at all");
+            for slot in 0..n {
+                for code in [KeyCode::Enter, KeyCode::Left, KeyCode::Right] {
+                    let mut v = base.clone();
+                    focus(&mut v, 5, slot);
+                    assert_eq!(
+                        handle_key(&mut v, press(code)),
+                        SettingsAction::FocusChanged,
+                        "state {i} row {slot} asked the shell to act on {code:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The card shows the rules that are really in force, and says which file
+    /// a new one would be written to.
+    ///
+    /// **Differential**, for the reason A14 is: a compiled-in verdict is
+    /// identical on both screens, and a single-render `contains` cannot see
+    /// that at all. Two projects, two rule sets, and neither may show the
+    /// other's.
+    #[test]
+    fn the_permission_card_shows_this_projects_rules_and_not_another_s() {
+        let with = |rule: &str, verdict: &'static str, file: &str| SettingsView {
+            perms: vec![PermRow {
+                rule: rule.into(),
+                verdict,
+            }],
+            perms_file: Some(file.into()),
+            perms_read: true,
+            ..view()
+        };
+        let a = with("Bash(only-in-project-a *)", "allow", "/a/settings.local.json");
+        let b = with("WebFetch(domain:only-in-project-b.test)", "deny", "/b/settings.local.json");
+        let a_text = draw(&a, 200, 95).join("\n");
+        let b_text = draw(&b, 200, 95).join("\n");
+
+        assert!(a_text.contains("only-in-project-a"), "{a_text}");
+        assert!(a_text.contains("/a/settings.local.json"), "{a_text}");
+        assert!(
+            !a_text.contains("only-in-project-b"),
+            "the card shows a rule belonging to a different project — it is a \
+             constant, not this project's:\n{a_text}"
+        );
+        assert!(
+            b_text.contains("only-in-project-b"),
+            "the card did not change when the project did:\n{b_text}"
+        );
+        assert!(
+            !b_text.contains("only-in-project-a"),
+            "the card shows a rule belonging to a different project:\n{b_text}"
+        );
+        // …and the verdict is the rule's own, not a fixed word beside it.
+        assert!(a_text.contains("allow") && !a_text.contains("deny"), "{a_text}");
+        assert!(b_text.contains("deny") && !b_text.contains("allow"), "{b_text}");
+    }
+
+    /// A project with no rules says `none`; a screen that never looked says
+    /// `not read`. Two different facts, drawn differently, and neither is six
+    /// invented verdicts.
+    #[test]
+    fn no_rules_and_never_looked_are_different_answers() {
+        let none = draw(
+            &SettingsView {
+                perms: Vec::new(),
+                ..view()
+            },
+            200,
+            95,
+        )
+        .join("\n");
+        assert!(none.contains("none"), "{none}");
+        assert!(none.contains("settings.local.json"), "{none}");
+
+        let unread = draw(
+            &SettingsView {
+                perms_read: false,
+                perms: Vec::new(),
+                perms_file: None,
+                ..view()
+            },
+            200,
+            95,
+        )
+        .join("\n");
+        assert!(unread.contains("not read"), "{unread}");
+    }
+
+    /// The cap names itself and the loss, rather than truncating in silence.
+    #[test]
+    fn more_rules_than_fit_are_counted_rather_than_dropped_quietly() {
+        let v = SettingsView {
+            perms: (0..PERM_ROWS_SHOWN + 3)
+                .map(|i| PermRow {
+                    rule: format!("Bash(rule-{i} *)"),
+                    verdict: "allow",
+                })
+                .collect(),
+            ..view()
+        };
+        let text = draw(&v, 200, 120).join("\n");
+        assert!(text.contains("3 more"), "the cap is silent:\n{text}");
+        assert!(text.contains("rule-0"), "{text}");
+        assert!(!text.contains("rule-10"), "the cap did not hold:\n{text}");
+    }
+
+    /// The context card carries this run's numbers, and says `not set` before
+    /// a call has reported one. Differential, for A14's reason.
+    #[test]
+    fn the_context_card_shows_this_runs_numbers_and_not_anothers() {
+        let with = |used: i64, cap: i64, budget: i64| SettingsView {
+            context: Some((used, cap)),
+            goal_budget: Some(budget),
+            ..view()
+        };
+        let a = draw(&with(11_111, 222_222, 333_333), 200, 95).join("\n");
+        let b = draw(&with(44_444, 555_555, 666_666), 200, 95).join("\n");
+        for (mine, theirs) in [
+            ("11111", "44444"),
+            ("222222", "555555"),
+            ("333333", "666666"),
+        ] {
+            assert!(a.contains(mine), "{mine} missing:\n{a}");
+            assert!(
+                !a.contains(theirs),
+                "{theirs} belongs to another run — the row is a constant:\n{a}"
+            );
+            assert!(b.contains(theirs), "the row did not change with the run:\n{b}");
+        }
+
+        // And before any call, absent rather than a plausible figure.
+        let cold = draw(
+            &SettingsView {
+                context: None,
+                goal_budget: None,
+                ..view()
+            },
+            200,
+            95,
+        )
+        .join("\n");
+        assert!(cold.contains("not set"), "{cold}");
+        assert!(!cold.contains("120000"), "{cold}");
+    }
+
+    /// Class A: Prune History asks for the opposite of what is shown, both
+    /// directions. The row the ruling's "even if they were not before" half
+    /// added.
+    #[test]
+    fn the_prune_toggle_asks_for_the_flip() {
+        let mut v = view();
+        focus(&mut v, 4, 1);
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Enter)),
+            SettingsAction::PruneHistory(true)
+        );
+        v.prune_on = true;
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Left)),
+            SettingsAction::PruneHistory(false)
+        );
+        // …and it is the *shown* state that is flipped, so the row and the key
+        // cannot disagree about what On means.
+        assert!(draw(&v, 130, 60).join("\n").contains("Prune History"));
     }
 
     /// The provider cycler's ←/→ answer with the honest notice too — the
@@ -1724,8 +2276,10 @@ mod tests {
         render_hits(area, &mut buf, v, &skin())
     }
 
-    /// Every Kv row on every card records a rect: 6+4+5+2+4+6+4+3 = 34 for the
-    /// mock's eight, plus the seven languages and the Found On Disk summary.
+    /// Every Kv row on every card records a rect: 6+6+5+2+5+4+4+3 = 35 for
+    /// the mock's eight (card 6 being the fixture's two rules plus its file
+    /// and provenance rows), plus the seven languages and the Found On Disk
+    /// summary.
     #[test]
     fn every_row_records_a_click_rect() {
         let hits = hits_at(&view(), 161, 95);
@@ -1734,7 +2288,7 @@ mod tests {
             .iter()
             .filter(|(_, h)| matches!(h, Hit::Row(..)))
             .collect();
-        assert_eq!(rows.len(), 42, "one Row rect per Kv row");
+        assert_eq!(rows.len(), 43, "one Row rect per Kv row");
         // The cyclers report chevron rects; the buttons report Act rects.
         assert!(hits.controls.iter().any(|(_, h)| *h == Hit::Prev(2, 0)));
         assert!(hits.controls.iter().any(|(_, h)| *h == Hit::Next(2, 0)));
