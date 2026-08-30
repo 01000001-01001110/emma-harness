@@ -43,6 +43,7 @@ pub mod kind;
 pub mod models;
 pub mod ollama;
 mod retry;
+pub mod roster;
 
 use async_trait::async_trait;
 use auth::ENV_VAR;
@@ -60,6 +61,7 @@ pub use content::{
 pub use kind::{kind, ProviderKind, UnknownProvider, DEFAULT_PROVIDER};
 pub use models::{limits, Limits};
 pub use retry::Retry;
+pub use roster::{ModelInfo, Roster, RosterError};
 
 // region: The request, in prefix order
 // ---------------------------------------------------------------------------

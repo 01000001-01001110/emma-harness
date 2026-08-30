@@ -1,0 +1,389 @@
+{
+  "data": [
+    {
+      "id": "z-ai/glm-5.2:free",
+      "canonical_slug": "z-ai/glm-5.2-20260616",
+      "hugging_face_id": "zai-org/GLM-5.2",
+      "name": "Z.ai: GLM 5.2 (free)",
+      "created": 1781631930,
+      "context_length": 256000,
+      "architecture": {
+        "modality": "text->text",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tokenizer": "Other",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0",
+        "completion": "0"
+      },
+      "top_provider": {
+        "context_length": 256000,
+        "max_completion_tokens": 230400,
+        "is_moderated": false
+      },
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "max_tokens",
+        "min_p",
+        "presence_penalty",
+        "reasoning",
+        "reasoning_effort",
+        "repetition_penalty",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_p"
+      ],
+      "knowledge_cutoff": null,
+      "expiration_date": null,
+      "links": {
+        "details": "/api/v1/models/z-ai/glm-5.2-20260616/endpoints"
+      },
+      "reasoning": {
+        "mandatory": false,
+        "default_enabled": true,
+        "supported_efforts": [
+          "xhigh",
+          "high"
+        ],
+        "default_effort": "high"
+      }
+    },
+    {
+      "id": "tencent/hy4-preview",
+      "canonical_slug": "tencent/hy4-preview-20260827",
+      "hugging_face_id": null,
+      "name": "Tencent: Hy4 preview",
+      "created": 1787897375,
+      "context_length": 1048576,
+      "architecture": {
+        "modality": "text->text",
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tokenizer": "Other",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0.000000834",
+        "completion": "0.000002501",
+        "input_cache_read": "0.000000042"
+      },
+      "top_provider": {
+        "context_length": 1048576,
+        "max_completion_tokens": 64000,
+        "is_moderated": false
+      },
+      "supported_parameters": [
+        "include_reasoning",
+        "max_completion_tokens",
+        "max_tokens",
+        "reasoning",
+        "reasoning_effort",
+        "response_format",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools"
+      ],
+      "knowledge_cutoff": null,
+      "expiration_date": null,
+      "links": {
+        "details": "/api/v1/models/tencent/hy4-preview-20260827/endpoints"
+      },
+      "reasoning": {
+        "mandatory": false,
+        "default_enabled": true,
+        "supported_efforts": [
+          "high",
+          "low",
+          "none"
+        ],
+        "default_effort": "high"
+      }
+    },
+    {
+      "id": "google/lyria-3-pro-preview",
+      "canonical_slug": "google/lyria-3-pro-preview-20260330",
+      "hugging_face_id": null,
+      "name": "Google: Lyria 3 Pro Preview",
+      "created": 1774907286,
+      "context_length": 1048576,
+      "architecture": {
+        "modality": "text+image->text+audio",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "output_modalities": [
+          "text",
+          "audio"
+        ],
+        "tokenizer": "Other",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0",
+        "completion": "0"
+      },
+      "top_provider": {
+        "context_length": 1048576,
+        "max_completion_tokens": 65536,
+        "is_moderated": false
+      },
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "seed",
+        "temperature",
+        "top_p"
+      ],
+      "knowledge_cutoff": null,
+      "expiration_date": null,
+      "links": {
+        "details": "/api/v1/models/google/lyria-3-pro-preview-20260330/endpoints"
+      }
+    },
+    {
+      "id": "nvidia/nemotron-3.5-content-safety:free",
+      "canonical_slug": "nvidia/nemotron-3.5-content-safety-20260604",
+      "hugging_face_id": "nvidia/Nemotron-3.5-Content-Safety",
+      "name": "NVIDIA: Nemotron 3.5 Content Safety (free)",
+      "created": 1780581864,
+      "context_length": 128000,
+      "architecture": {
+        "modality": "text+image->text",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tokenizer": "Other",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0",
+        "completion": "0"
+      },
+      "top_provider": {
+        "context_length": 128000,
+        "max_completion_tokens": 8192,
+        "is_moderated": false
+      },
+      "supported_parameters": [
+        "include_reasoning",
+        "max_tokens",
+        "reasoning",
+        "seed",
+        "temperature",
+        "top_p"
+      ],
+      "knowledge_cutoff": null,
+      "expiration_date": null,
+      "links": {
+        "details": "/api/v1/models/nvidia/nemotron-3.5-content-safety-20260604/endpoints"
+      },
+      "reasoning": {
+        "mandatory": false,
+        "default_enabled": true
+      }
+    },
+    {
+      "id": "openrouter/free",
+      "canonical_slug": "openrouter/free",
+      "hugging_face_id": "",
+      "name": "Free Models Router",
+      "created": 1769917427,
+      "context_length": 200000,
+      "architecture": {
+        "modality": "text+image->text",
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tokenizer": "Router",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0",
+        "completion": "0"
+      },
+      "top_provider": {
+        "context_length": null,
+        "max_completion_tokens": null,
+        "is_moderated": false
+      },
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "logprobs",
+        "max_completion_tokens",
+        "max_tokens",
+        "min_p",
+        "presence_penalty",
+        "reasoning",
+        "reasoning_effort",
+        "repetition_penalty",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_logprobs",
+        "top_p"
+      ],
+      "knowledge_cutoff": null,
+      "expiration_date": null,
+      "links": {
+        "details": "/api/v1/models/openrouter/free/endpoints"
+      }
+    },
+    {
+      "id": "google/gemma-4-31b-it:free",
+      "canonical_slug": "google/gemma-4-31b-it-20260402",
+      "hugging_face_id": "google/gemma-4-31B-it",
+      "name": "Google: Gemma 4 31B (free)",
+      "created": 1775148486,
+      "context_length": 262144,
+      "architecture": {
+        "modality": "text+image+video->text",
+        "input_modalities": [
+          "image",
+          "text",
+          "video"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tokenizer": "Gemma",
+        "instruct_type": null
+      },
+      "pricing": {
+        "prompt": "0",
+        "completion": "0"
+      },
+      "top_provider": {
+        "context_length": 262144,
+        "max_completion_tokens": 32768,
+        "is_moderated": false
+      },
+      "supported_parameters": [
+        "include_reasoning",
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "seed",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_p"
+      ],
+      "knowledge_cutoff": null,
+      "expiration_date": null,
+      "links": {
+        "details": "/api/v1/models/google/gemma-4-31b-it-20260402/endpoints"
+      },
+      "reasoning": {
+        "mandatory": false,
+        "default_enabled": false
+      }
+    },
+    {
+      "id": "fictional/no-pricing-reported",
+      "name": "A roster entry with no pricing block at all",
+      "context_length": 32768,
+      "architecture": {
+        "output_modalities": [
+          "text"
+        ]
+      },
+      "top_provider": {
+        "max_completion_tokens": 4096
+      },
+      "supported_parameters": [
+        "tools",
+        "max_tokens"
+      ]
+    },
+    {
+      "id": "fictional/unknown-key-from-the-future",
+      "name": "A roster entry carrying a key this parser has never seen",
+      "context_length": 65536,
+      "architecture": {
+        "output_modalities": [
+          "text"
+        ],
+        "a_key_added_after_this_file_was_written": {
+          "nested": [
+            1,
+            2,
+            3
+          ]
+        }
+      },
+      "pricing": {
+        "prompt": "0",
+        "completion": "0",
+        "some_new_price_dimension": "0.5"
+      },
+      "top_provider": {
+        "context_length": 65536,
+        "max_completion_tokens": 8192
+      },
+      "supported_parameters": [
+        "tools",
+        "temperature"
+      ],
+      "moderation_policy_v2": "strict"
+    },
+    {
+      "id": "fictional/audio-only-with-tools",
+      "name": "A free, tool-capable model that emits no text at all",
+      "context_length": 8192,
+      "architecture": {
+        "modality": "text->audio",
+        "output_modalities": [
+          "audio"
+        ]
+      },
+      "pricing": {
+        "prompt": "0",
+        "completion": "0"
+      },
+      "top_provider": {
+        "max_completion_tokens": 2048
+      },
+      "supported_parameters": [
+        "tools",
+        "max_tokens"
+      ]
+    },
+    {
+      "this_entry_has_no_id": "and must be skipped rather than sink the parse"
+    }
+  ]
+}
