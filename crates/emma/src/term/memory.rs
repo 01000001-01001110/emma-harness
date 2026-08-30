@@ -2018,7 +2018,7 @@ mod tests {
         let (you_x, _) = locate(&rows, "Also remember the deploy");
         assert_eq!(
             emma_x, you_x,
-            "the transcript's text does not start in one column:              Emma at {emma_x}, You at {you_x}"
+            "the transcript's text does not start in one column: Emma at {emma_x}, You at {you_x}"
         );
 
         let footer = row_with(&rows, "Older messages archived");
