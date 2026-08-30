@@ -152,3 +152,14 @@ banner saying so. They were last revised on 2026-08-10 and at least one of them
 is now wrong: `architecture.md` says seven crates where there are eight. They
 are kept only until the content the HTML site lacks, chiefly installing and
 first run, has been ported across.
+
+## Licence
+
+Apache-2.0 — see [`LICENSE`](LICENSE). You may use, modify and distribute
+Emma, commercially included, and you need nobody's permission to do so.
+
+What the licence does not settle is what *this repository* ships, which is
+governance and is deliberately separate: see [`GOVERNANCE.md`](GOVERNANCE.md).
+The short version is that the final say on what lands here belongs to the
+maintainer, and that forking is a legitimate answer if a decision here is wrong
+for you.
