@@ -38,3 +38,20 @@ __pycache__/
 # structure.
 %SystemDrive%/
 Microsoft/
+
+# The working notes, untracked from 2026-08-30 and kept on disk.
+#
+# 154 files, 9.4MB: lessons, audits, designs, plans, the parity ledger's
+# arguments. They were mined into the owner's vault first -- roughly 4,600
+# lines across `operational-lore/emma-lessons`, `projects/emma-design-decisions`
+# and `research/agent-harness-prior-art`, with the four mockup PNGs copied to
+# `attachments/emma-mockups/` and sha256-verified, since a markdown store
+# cannot carry them.
+#
+# Untracked rather than deleted: they are still the working record on this
+# machine, and `notes/` is where roughly twenty agents were told to write. What
+# leaves is the *repository's* copy, which is what a public tree would carry.
+#
+# **This does not remove them from history.** Every one is still readable by
+# `git log -p` in any clone; that would need a history rewrite and a force-push.
+notes/
