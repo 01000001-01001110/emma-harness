@@ -679,16 +679,28 @@ mod tests {
     //     cargo test -p emma-llm --lib -- --ignored roster
     // -----------------------------------------------------------------------
 
-    /// Where the owner's OpenRouter key lives on this machine. Read at call
-    /// time and never copied anywhere — not into the repository, not into a
-    /// fixture, not into an assertion message.
-    const KEY_FILE: &str = r"a file outside the repository";
+    /// The environment variable naming a file that holds an OpenRouter key.
+    ///
+    /// **The path is not written down here.** It used to be an absolute one
+    /// naming the owner's home directory and his secret store, which was
+    /// correct on exactly one machine and told every reader of a public tree
+    /// where to look. The key itself was never in the repository; the map to
+    /// it was, which is the same mistake one step removed.
+    ///
+    /// Read at call time and never copied anywhere — not into a fixture, not
+    /// into an assertion message. Unset means the test says so and certifies
+    /// nothing, which is the honest outcome for a machine without a key.
+    const KEY_FILE_ENV: &str = "EMMA_OPENROUTER_KEY_FILE";
 
     #[tokio::test]
     #[ignore = "hits the live OpenRouter API and needs a key on disk"]
     async fn the_live_roster_has_the_shape_this_module_claims() {
-        let Ok(raw) = std::fs::read_to_string(KEY_FILE) else {
-            eprintln!("no key file at {KEY_FILE}; nothing certified");
+        let Ok(path) = std::env::var(KEY_FILE_ENV) else {
+            eprintln!("{KEY_FILE_ENV} is unset, so nothing here is certified");
+            return;
+        };
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            eprintln!("{KEY_FILE_ENV} names a file that cannot be read; nothing certified");
             return;
         };
         let key = ApiKey::new(raw.trim());
