@@ -55,3 +55,31 @@ Microsoft/
 # **This does not remove them from history.** Every one is still readable by
 # `git log -p` in any clone; that would need a history rewrite and a force-push.
 notes/
+
+# The parity programme's paperwork, untracked from 2026-08-31 and kept on disk.
+#
+# 833 files, 1.5MB: receipts, run logs, reviewer reports, mutation records and
+# captured evidence. Every one is a claim about a tree fingerprint that no
+# longer exists -- a receipt is pinned to the commit it was taken against, so
+# the whole directory went stale on the next commit and stayed stale. That is
+# the reason the programme was halted, and shipping its bookkeeping to a public
+# clone would hand a stranger 833 files of it.
+#
+# `emma verify` reads `verification/parity/ledger.json`, so that command has no
+# ledger in a fresh clone and says so rather than pretending.
+#
+# `verification/scripts/post_progress.py` is the owner's Discord reporter. It
+# stays on this machine; CLAUDE.md still names it and that instruction is for
+# the owner's tree, not for a clone.
+verification/
+
+# Drafts about the project rather than the project. Four posts, a drafts file
+# and screenshots -- unpublished writing, and nothing here depends on it.
+blog/
+
+# Contributor process rather than a description of the system. AUTHORITY.md is
+# which record wins a disagreement; CONTRACT.md is how a docs page is written.
+# Both are addressed to somebody working *on* this repository, and `docs/` is
+# addressed to somebody trying to understand Emma.
+docs/AUTHORITY.md
+docs/CONTRACT.md
