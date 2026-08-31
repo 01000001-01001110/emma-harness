@@ -1353,11 +1353,21 @@ mod tests {
         // configuration — the failure that arrives with no error message.
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(home.path().join(".emma")).unwrap();
+        let credentials = emma_llm::auth::credentials_path(home.path());
         std::fs::write(
-            emma_llm::auth::credentials_path(home.path()),
+            &credentials,
             r#"{"api_key":"sk-ant-live","brave_search_api_key":"BSA-live"}"#,
         )
         .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            // The live credentials file is owner-only. Inheriting the test
+            // process's umask would instead reproduce a file Emma must refuse,
+            // before the upgrade behaviour this test owns can be reached.
+            std::fs::set_permissions(&credentials, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
         std::fs::write(
             settings::path(home.path()),
             r#"{"model":"claude-sonnet-5"}"#,

@@ -112,7 +112,27 @@ fn run_in_pty(args: &[&str], env: &[(&str, &str)], keys: &[&str], settle: Durati
     {
         let mut writer = pair.master.take_writer().expect("writer");
         for k in keys {
-            writer.write_all(k.as_bytes()).expect("write keys");
+            // **A write to the master after the child is gone is not a defect
+            // in Emma, and on macOS it is an error rather than a no-op.** The
+            // slave's last reader has closed, so the kernel answers `EIO`;
+            // Windows returns success for the same call. This used to be an
+            // `expect`, which turned "the child exited before the keystroke
+            // arrived" -- the ordinary outcome of a build that will not start
+            // interactively here -- into a panic naming nothing.
+            //
+            // Stopping is right and staying silent is not: this file's whole
+            // argument is that an unexercised assertion must be visible, so the
+            // error is printed and the assertions below still run. One of them
+            // reports an absent enter sequence as an environment limitation;
+            // the other still fails if the frame entered and never left, which
+            // is the guarantee, and which a lost keystroke cannot fake.
+            if let Err(e) = writer.write_all(k.as_bytes()) {
+                eprintln!("the pty refused a keystroke ({e}).");
+                eprintln!(
+                    "The child had most likely already exited, so nothing below observed {k:?}."
+                );
+                break;
+            }
             writer.flush().ok();
             std::thread::sleep(Duration::from_millis(120));
         }

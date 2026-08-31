@@ -458,11 +458,13 @@ mod tests {
 
     /// A fake filesystem: only these paths exist.
     ///
-    /// Separators are normalised on both sides. The fixtures name unix paths so
-    /// the unix branch can be exercised, but `PathBuf::join` on a Windows host
-    /// produces `/usr/bin\rust-analyzer` — so a literal comparison would make
-    /// half these tests pass only on unix, which is the half of the matrix
-    /// nobody runs here.
+    /// Separators are normalised on both sides. The fixtures name unix *or*
+    /// Windows paths so each branch can be exercised on any host, but
+    /// `PathBuf::join` uses the host separator — `/usr/bin\rust-analyzer` on
+    /// Windows, `C:\Users\a\.cargo\bin/rust-analyzer.exe` on unix — so a
+    /// literal `PathBuf` comparison would make half these tests pass only on
+    /// the host they were written for. Path equality and substring checks
+    /// go through the same helper, for the same reason.
     fn only(files: &[&str]) -> impl Fn(&Path) -> bool {
         let set: Vec<String> = files.iter().map(|f| normalise(f)).collect();
         move |p: &Path| set.contains(&normalise(&p.to_string_lossy()))
@@ -532,7 +534,7 @@ mod tests {
             &probe,
         );
         let server = resolve_with(None, &e).expect("the extension server");
-        assert_eq!(server.path, PathBuf::from(REAL));
+        assert_eq!(normalise(&server.path.to_string_lossy()), normalise(REAL));
         assert_eq!(server.source, Source::VsCodeExtension);
         assert!(server.version.contains("0.3.3008"), "{server}");
     }
@@ -549,7 +551,7 @@ mod tests {
         let err = resolve_with(None, &e).expect_err("a proxy is not a server");
         assert_eq!(err.kind(), "tool_unavailable");
         let d = err.detail();
-        assert!(d.contains(PROXY), "{d}");
+        assert!(normalise(d).contains(&normalise(PROXY)), "{d}");
         assert!(d.contains("Unknown binary"), "{d}");
         assert!(d.contains("rustup component add rust-analyzer"), "{d}");
         assert!(d.contains(OVERRIDE_ENV), "{d}");

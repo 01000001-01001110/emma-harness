@@ -492,7 +492,17 @@ fn a_hook_block_behind_a_byte_order_mark_still_resolves() {
     } else {
         "guard.sh"
     };
-    std::fs::write(root.join("hooks").join(file), "@echo off\r\n").expect("write hook");
+    let hook = root.join("hooks").join(file);
+    std::fs::write(&hook, "@echo off\r\n").expect("write hook");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Windows gets executability from `.cmd`; unix requires a mode bit. A
+        // missing bit would stop resolution before the BOM guarantee is tried.
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
+            .expect("make hook executable");
+    }
     write(
         &root.join("settings.json"),
         &format!(

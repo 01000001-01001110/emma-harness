@@ -1131,6 +1131,10 @@ mod shell_tests {
     use super::*;
 
     /// A fake filesystem: only these paths exist.
+    ///
+    /// Directories are re-spelled through `host` so `PathBuf::join` parses
+    /// them the way the fixture means. The Windows search order is injected
+    /// (`windows: true`); the host still owns the separator.
     fn env<'a>(
         windows: bool,
         preferred: &[&str],
@@ -1139,15 +1143,48 @@ mod shell_tests {
     ) -> ShellEnv<'a> {
         ShellEnv {
             windows,
-            preferred_dirs: preferred.iter().map(PathBuf::from).collect(),
-            path_dirs: path.iter().map(PathBuf::from).collect(),
+            preferred_dirs: preferred.iter().map(|d| PathBuf::from(host(d))).collect(),
+            path_dirs: path.iter().map(|d| PathBuf::from(host(d))).collect(),
             exists,
         }
     }
 
+    /// Separators are normalised on both sides. The fixtures name Windows
+    /// paths so the Windows branch can be exercised on any host, but
+    /// `PathBuf::join` on unix produces `C:\Git\bin/bash.exe` — a literal
+    /// comparison would make these tests pass only on Windows, which is the
+    /// half of the matrix the suite already ran.
     fn only(files: &[&str]) -> impl Fn(&Path) -> bool {
-        let set: Vec<String> = files.iter().map(|f| f.to_lowercase()).collect();
-        move |p: &Path| set.contains(&p.to_string_lossy().to_lowercase())
+        let set: Vec<String> = files.iter().map(|f| normalise(f)).collect();
+        move |p: &Path| set.contains(&normalise(&p.to_string_lossy()))
+    }
+
+    fn normalise(path: &str) -> String {
+        path.replace('\\', "/").to_lowercase()
+    }
+
+    /// Re-spell a fixture path so the host's `Path` API parses it the way the
+    /// fixture means it.
+    ///
+    /// These tests inject `windows: true` so the Windows order and refusals
+    /// run on any host — that is the point of `ShellEnv`. `PathBuf::join` and
+    /// `Path::parent` still use the **host** separator, so a literal
+    /// `C:\Git\bin\bash.exe` is one filename on unix, whose `file_stem` is
+    /// `C:\Git\bin\bash` and which `join` turns into `C:\Git\bin/bash.exe`.
+    /// The exists predicate then misses, `classify` misses `system32`, and
+    /// the test asserts a different question than it names. **The injected
+    /// flag decides the behaviour; the host decides the spelling.**
+    fn host(path: &str) -> String {
+        path.replace('\\', "/")
+    }
+
+    fn same_path(got: &Path, expected: &str) {
+        assert_eq!(
+            normalise(&got.to_string_lossy()),
+            normalise(expected),
+            "{} ≠ {expected}",
+            got.display()
+        );
     }
 
     /// The whole point of the exercise. WSL's `bash.exe` is first on `PATH` on
@@ -1169,10 +1206,7 @@ mod shell_tests {
             &files,
         );
         let shell = resolve_with(None, &e).expect("git bash");
-        assert_eq!(
-            shell.path,
-            PathBuf::from(r"C:\Program Files\Git\bin\bash.exe")
-        );
+        same_path(&shell.path, r"C:\Program Files\Git\bin\bash.exe");
         assert_eq!(shell.kind, ShellKind::Posix);
 
         // Git gone, WSL still there: a refusal, not WSL.
@@ -1234,7 +1268,10 @@ mod shell_tests {
         let err = resolve_with(None, &e).expect_err("nothing exists");
         let d = err.detail();
         assert!(d.contains("bash"), "{d}");
-        assert!(d.contains(r"C:\Program Files\Git\bin"), "{d}");
+        assert!(
+            normalise(d).contains(&normalise(r"C:\Program Files\Git\bin")),
+            "{d}"
+        );
         assert!(d.contains(OVERRIDE_ENV), "{d}");
     }
 
@@ -1306,7 +1343,8 @@ mod shell_tests {
     fn wsl_is_refused_even_when_asked_for_by_name() {
         let files = only(&[r"C:\Windows\System32\bash.exe"]);
         let e = env(true, &[], &[r"C:\Windows\System32"], &files);
-        for spec in ["wsl", r"C:\Windows\System32\bash.exe"] {
+        let wsl_path = host(r"C:\Windows\System32\bash.exe");
+        for spec in ["wsl", wsl_path.as_str()] {
             let err = resolve_with(Some(spec), &e).expect_err("wsl is refused");
             assert_eq!(err.kind(), "tool_unavailable", "{spec}");
             assert!(err.detail().to_lowercase().contains("wsl"), "{spec}: {err}");
@@ -1325,7 +1363,7 @@ mod shell_tests {
             r"C:\Users\a\AppData\Local\Microsoft\WindowsApps\bash.exe",
             r"C:\Windows\System32\wsl.exe",
         ] {
-            assert_eq!(classify(Path::new(wsl)), ShellKind::Wsl, "{wsl}");
+            assert_eq!(classify(&PathBuf::from(host(wsl))), ShellKind::Wsl, "{wsl}");
         }
         for posix in [
             r"C:\Program Files\Git\bin\bash.exe",
@@ -1333,13 +1371,21 @@ mod shell_tests {
             "/bin/sh",
             "/usr/bin/bash",
         ] {
-            assert_eq!(classify(Path::new(posix)), ShellKind::Posix, "{posix}");
+            assert_eq!(
+                classify(&PathBuf::from(host(posix))),
+                ShellKind::Posix,
+                "{posix}"
+            );
         }
         for ps in [
             r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
             r"C:\Program Files\PowerShell\7\pwsh.exe",
         ] {
-            assert_eq!(classify(Path::new(ps)), ShellKind::PowerShell, "{ps}");
+            assert_eq!(
+                classify(&PathBuf::from(host(ps))),
+                ShellKind::PowerShell,
+                "{ps}"
+            );
         }
     }
 

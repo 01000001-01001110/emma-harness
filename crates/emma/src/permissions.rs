@@ -1498,30 +1498,35 @@ mod tests {
         let r = rules(&["Bash(git *)"], &[], &[]);
         for command in [
             "git push",
-            "git.exe push",
             "\"git\" push",
-            "git.cmd push",
             // Interior quoting, found by review: `trim_matches` stripped the
             // ends only, so this reached the matcher as the program name
             // `gi"t` and evaded the deny with no Deny and no Ask.
             "gi\"t\" push",
+        ] {
+            assert_eq!(
+                r.for_call("Bash", &serde_json::json!({ "command": command })),
+                Some(Decision::Deny),
+                "`{command}` against deny Bash(git *)"
+            );
+        }
+
+        // These suffixes are aliases supplied by Windows program lookup. On
+        // unix they name distinct files, so folding them there would invent a
+        // match the operating system does not make.
+        for command in [
+            "git.exe push",
+            "git.cmd push",
             // Declared in the strip list and previously untested, which a
             // reviewer pointed out is its own gap: dropping them from
             // `normalise_program` used to leave this green.
             "git.bat push",
             "git.com push",
         ] {
-            let expected = if cfg!(windows) || command == "git push" {
+            let expected = if cfg!(windows) {
                 Some(Decision::Deny)
             } else {
-                // On unix `.exe` is not a program-name suffix and case is
-                // meaningful, so only the plain spelling is the same program.
-                // Folding there would invent a match the OS does not make.
-                if command == "\"git\" push" {
-                    Some(Decision::Deny)
-                } else {
-                    None
-                }
+                None
             };
             assert_eq!(
                 r.for_call("Bash", &serde_json::json!({ "command": command })),
