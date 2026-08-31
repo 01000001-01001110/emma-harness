@@ -531,11 +531,7 @@ fn cards(s: &SettingsView) -> Vec<Card> {
                 // Both dresses dropped. A cycler with one preset and a button
                 // that opens nothing are the `QUICK HELP` defect one level
                 // down: an affordance no key answers.
-                kv(
-                    "Keybinding Preset",
-                    Absent("n/a".into()),
-                    Note(NOTICE_KEYS),
-                ),
+                kv("Keybinding Preset", Absent("n/a".into()), Note(NOTICE_KEYS)),
                 kv("Edit Keybindings", Absent("n/a".into()), Note(NOTICE_KEYS)),
                 CardRow::Desc("Keys are fixed; the sidebar's QUICK HELP lists them.".into()),
             ],
@@ -585,7 +581,11 @@ fn cards(s: &SettingsView) -> Vec<Card> {
                 kv("Environment", Absent("n/a".into()), Note(NOTICE_ENV)),
                 kv("Log Level", Absent("n/a".into()), Note(NOTICE_ENV)),
                 // Not a switch that happens to be off: there is no sender.
-                kv("Telemetry", Plain("none sent".into()), Note(NOTICE_TELEMETRY)),
+                kv(
+                    "Telemetry",
+                    Plain("none sent".into()),
+                    Note(NOTICE_TELEMETRY),
+                ),
                 CardRow::Desc("Environment and runtime configuration.".into()),
             ],
         },
@@ -1532,13 +1532,7 @@ mod tests {
         for b in ["[ OK ]", "[ Save Now ]", "[ Export ]", "[ Reset ]"] {
             assert!(all.contains(b), "button {b} missing");
         }
-        for dead in [
-            "‹ Ollama ›",
-            "‹ Default ›",
-            "[ Open ]",
-            "Ask ›",
-            "Allow ›",
-        ] {
+        for dead in ["‹ Ollama ›", "‹ Default ›", "[ Open ]", "Ask ›", "Allow ›"] {
             assert!(
                 !all.contains(dead),
                 "{dead} is drawn as editable and no key changes it"
@@ -1977,8 +1971,16 @@ mod tests {
             perms_read: true,
             ..view()
         };
-        let a = with("Bash(only-in-project-a *)", "allow", "/a/settings.local.json");
-        let b = with("WebFetch(domain:only-in-project-b.test)", "deny", "/b/settings.local.json");
+        let a = with(
+            "Bash(only-in-project-a *)",
+            "allow",
+            "/a/settings.local.json",
+        );
+        let b = with(
+            "WebFetch(domain:only-in-project-b.test)",
+            "deny",
+            "/b/settings.local.json",
+        );
         let a_text = draw(&a, 200, 95).join("\n");
         let b_text = draw(&b, 200, 95).join("\n");
 
@@ -1998,8 +2000,14 @@ mod tests {
             "the card shows a rule belonging to a different project:\n{b_text}"
         );
         // …and the verdict is the rule's own, not a fixed word beside it.
-        assert!(a_text.contains("allow") && !a_text.contains("deny"), "{a_text}");
-        assert!(b_text.contains("deny") && !b_text.contains("allow"), "{b_text}");
+        assert!(
+            a_text.contains("allow") && !a_text.contains("deny"),
+            "{a_text}"
+        );
+        assert!(
+            b_text.contains("deny") && !b_text.contains("allow"),
+            "{b_text}"
+        );
     }
 
     /// A project with no rules says `none`; a screen that never looked says
@@ -2072,7 +2080,10 @@ mod tests {
                 !a.contains(theirs),
                 "{theirs} belongs to another run — the row is a constant:\n{a}"
             );
-            assert!(b.contains(theirs), "the row did not change with the run:\n{b}");
+            assert!(
+                b.contains(theirs),
+                "the row did not change with the run:\n{b}"
+            );
         }
 
         // And before any call, absent rather than a plausible figure.

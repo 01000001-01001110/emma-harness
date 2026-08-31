@@ -2418,8 +2418,10 @@ fn permission_rows() -> (Vec<super::settings::PermRow>, Option<String>, bool) {
     let Ok(cwd) = std::env::current_dir() else {
         return (Vec::new(), None, false);
     };
-    let Ok(root) = emma_harness::discover_from(&cwd, std::env::var_os(emma_harness::ROOT_ENV).map(std::path::PathBuf::from))
-    else {
+    let Ok(root) = emma_harness::discover_from(
+        &cwd,
+        std::env::var_os(emma_harness::ROOT_ENV).map(std::path::PathBuf::from),
+    ) else {
         // No harness root: not an error and not a lie. There are no project
         // rules because there is no project, which the card says.
         return (Vec::new(), None, true);
