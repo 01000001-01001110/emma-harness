@@ -14,11 +14,11 @@
    --------------------------------------------------------------------------- */
 
 /* Cyberpunk: near-black grounds, cyan structure, magenta emphasis.
-   The values are shared with the generated diagrams -- `crates/docsgen`'s
-   `theme.rs` carries the same seven colours, because a diagram that agrees
-   with its page about what cyan means is a diagram a reader can read without
-   a legend. Change one and change the other; nothing enforces it yet, which
-   is worth knowing before assuming they cannot drift.
+   `crates/docsgen`'s `theme.rs` themes the generated diagrams to match this
+   file by eye, not by value: seven of its fourteen hexes appear here under
+   different names, its `DIM` purple appears here not at all, and its cyan is
+   this file's `--observed` rather than its `--line`. Nothing checks either
+   against the other, so changing one leaves the other where it was.
 
    The evidence chips keep their own hues. `--certified` green and
    `--unverified` amber are the one place on the site where colour carries

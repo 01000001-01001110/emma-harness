@@ -156,11 +156,12 @@
     </div>
     <figcaption>
       Generated from the eight <code>Cargo.toml</code> files by
-      <code>crates/docsgen</code>. A test fails when this picture and those
-      manifests disagree, so a manifest change is not committable until the
-      generator has been rerun. Magenta marks <code>crates/emma</code>, the
-      crate everything else is beneath. A dashed edge is a dev-dependency,
-      present only when the tests are built.
+      <code>crates/docsgen</code>. A test in <code>cargo test --workspace</code>
+      fails when this picture and those manifests disagree; nothing stops a
+      stale diagram being committed, but a release cannot be tagged with one.
+      Magenta marks <code>crates/emma</code>, the crate everything else is
+      beneath. A dashed edge is a dev-dependency, present only when the tests
+      are built.
     </figcaption>
   </figure>
   <span class="src">crates/{tool-api,harness,llm,emma}/Cargo.toml, tools/{fs,tasks,web,lsp}/Cargo.toml</span>

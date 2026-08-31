@@ -4,10 +4,9 @@
 //! coordinates like `x="310" y="14"`, so moving a crate meant re-typing
 //! numbers by hand, and the picture drifted while still looking authoritative.
 //!
-//! This is not a graph-layout library. Every diagram here is a handful of
-//! nodes in a few layers, which layered placement with centred rows covers.
-//! A graph needing a force-directed layout to be legible is one a reader will
-//! not follow either.
+//! Places a small graph in centred layers. There is no force-directed layout
+//! and no edge routing; every diagram here is a handful of nodes in a few
+//! rows.
 
 use std::fmt::Write as _;
 
@@ -18,7 +17,7 @@ use crate::theme;
 pub enum Weight {
     /// The ordinary case.
     Plain,
-    /// The one thing this diagram is about. One per diagram -- see
+    /// The highlighted edge or box. One per diagram -- see
     /// [`theme::Palette::ACCENT`].
     Accent,
     /// Real but conditional: a dev-dependency, a platform-only path. Dashed

@@ -15,8 +15,11 @@
 //! `prefers-color-scheme`, so the generator never has to know the reader's
 //! theme.
 //!
-//! The same seven values appear in `docs/assets/docs.css`. Nothing checks that
-//! the two agree.
+//! `docs/assets/docs.css` is themed to match, and it is a match by eye rather
+//! than by value: seven of these fourteen hexes appear there under different
+//! names, `DIM` appears nowhere, and the diagram's cyan `LINE` is the CSS's
+//! `--observed` rather than its `--line`. Nothing checks either file against
+//! the other.
 
 /// One colour, in its light and dark spellings.
 pub struct Duo {
@@ -26,14 +29,12 @@ pub struct Duo {
 
 /// The cyberpunk palette: near-black grounds, cyan structure, magenta emphasis.
 ///
-/// [`Palette::ACCENT`] marks one edge or box per diagram. A diagram that
-/// highlights six things highlights nothing; a second emphasis usually means
-/// two diagrams.
+/// [`Palette::ACCENT`] is used once per diagram. A second emphasis usually
+/// means two diagrams.
 pub struct Palette;
 
 impl Palette {
-    /// Behind the drawing. Dark in both themes: a cyberpunk diagram on white
-    /// is a diagram with a different argument.
+    /// Behind the drawing. Dark in both themes.
     pub const GROUND: Duo = Duo {
         light: "#12101a",
         dark: "#0b0a10",
@@ -59,7 +60,7 @@ impl Palette {
         light: "#7d8fa8",
         dark: "#6b7c94",
     };
-    /// The one thing this diagram is about.
+    /// The highlighted box or edge.
     pub const ACCENT: Duo = Duo {
         light: "#ff2e97",
         dark: "#ff45a3",
@@ -75,8 +76,8 @@ impl Palette {
 
 /// The `<style>` block every generated SVG carries.
 ///
-/// Emitted once per diagram rather than shared, for the reason in the module
-/// doc: a page saved on its own must still render.
+/// Emitted per diagram rather than shared, so a page saved on its own still
+/// renders.
 pub fn style(prefix: &str) -> String {
     let mut s = String::new();
     s.push_str("  <style>\n");

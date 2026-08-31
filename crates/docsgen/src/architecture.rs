@@ -2,7 +2,9 @@
 //!
 //! Members come from the workspace manifest; edges come from each member's
 //! `[dependencies]` and `[dev-dependencies]`. A crate added to the workspace
-//! appears in the diagram without anybody placing it.
+//! gets a box and a row without anybody choosing either -- except this crate,
+//! which `read` skips, so the diagram shows Emma rather than its own
+//! documentation.
 //!
 //! # Why not `cargo metadata`
 //!
@@ -100,9 +102,6 @@ fn internal(manifest: &str, heading: &str) -> Vec<String> {
         .take_while(|l| !l.trim_start().starts_with('['))
         .filter_map(|l| {
             let l = l.trim();
-            if l.starts_with('#') {
-                return None;
-            }
             let name = l.split(['.', ' ', '=']).next()?;
             name.starts_with("emma").then(|| name.to_string())
         })
@@ -262,11 +261,17 @@ mod tests {
         }
     }
 
-    /// **If this breaks:** a comment naming a crate is read as a dependency.
-    /// Several manifests here explain an `emma-` dependency in a comment above
-    /// it.
+    /// **If this breaks:** a line that is not a dependency becomes an edge,
+    /// and the diagram grows a box for something that is not a crate.
+    ///
+    /// This used to assert against a `starts_with('#')` guard that could not
+    /// fail: a TOML comment's first token is `#` or `#something`, neither of
+    /// which passes the `starts_with("emma")` filter, so deleting the guard
+    /// left the test green. The guard is gone and the filter is what the test
+    /// now names. Removing `starts_with("emma")` fails it with
+    /// `left: ["#", "emma-harness"]`.
     #[test]
-    fn a_commented_out_dependency_is_not_an_edge() {
+    fn only_an_emma_prefixed_name_becomes_an_edge() {
         let m = "[package]\nname = \"x\"\n\n[dependencies]\n# emma-llm is not used here\nemma-harness.workspace = true\n";
         assert_eq!(internal(m, "[dependencies]"), vec!["emma-harness"]);
     }
