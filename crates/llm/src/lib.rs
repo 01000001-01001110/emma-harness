@@ -394,6 +394,23 @@ pub enum Mode {
 pub trait Provider: Send + Sync {
     fn model_id(&self) -> &str;
 
+    /// Lines to print before the first call, naming anything about this
+    /// provider that the user did not choose and would want to know.
+    ///
+    /// **Empty by default, because a provider whose endpoint is a constant has
+    /// nothing to disclose.** Anthropic is that case, which is why nothing ever
+    /// asked. Ollama is not: it takes its destination from `OLLAMA_HOST`, so a
+    /// stale value in a shell profile sends the whole conversation — every file
+    /// the model has read — to a machine the user has forgotten about. This is
+    /// the surface that says so.
+    ///
+    /// Disclosure, not a gate. Nothing here refuses; `CLAUDE.md` is explicit
+    /// that this project does not pretend to enforcement it does not have. What
+    /// a printed line prevents is the honest mistake.
+    fn startup_notes(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// `events` is optional in both modes: pass `None` and the call is silent,
     /// pass a sender and retries become visible even in `Batch`.
     async fn send(

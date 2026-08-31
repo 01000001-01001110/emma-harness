@@ -83,7 +83,19 @@ pub fn set_provider(name: &str, key: Option<String>, model: Option<String>) -> R
     let home = auth::home_dir().context(
         "the home directory could not be determined, so there is nowhere to store a key",
     )?;
-    let key = read_key(key, &format!("{} API key (not echoed): ", kind.name()))?;
+    // **A provider that needs no key is not asked for one.** Prompting for a
+    // secret that will be stored and never sent teaches the user that Emma
+    // wants credentials it has no use for, and an empty answer used to fail the
+    // command outright — which is how `set-provider ollama` was unusable even
+    // after the provider was registered.
+    let key = if kind.requires_key() {
+        read_key(key, &format!("{} API key (not echoed): ", kind.name()))?
+    } else {
+        // A key supplied anyway is still stored, because a reverse proxy in
+        // front of a local model is the one deployment where it means
+        // something. Absent is the ordinary case and no longer an error.
+        key.unwrap_or_default()
+    };
     let mut out = std::io::stdout();
     store_provider(&home, kind, &key, model.as_deref(), &mut out)
 }

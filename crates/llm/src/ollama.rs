@@ -933,6 +933,15 @@ impl Provider for OllamaProvider {
         &self.model
     }
 
+    /// The host, when it is not the loopback default.
+    ///
+    /// This is the whole reason the trait grew a startup hook. The inherent
+    /// method below is kept because the stub tests hold an `OllamaProvider`
+    /// rather than an `Arc<dyn Provider>`.
+    fn startup_notes(&self) -> Vec<String> {
+        OllamaProvider::startup_notes(self)
+    }
+
     async fn send(
         &self,
         request: Request,
@@ -1027,8 +1036,10 @@ impl OllamaProvider {
 // ---------------------------------------------------------------------------
 // Identity
 //
-// What `emma set-provider ollama` would look up. Not registered in `KINDS`
-// yet — see the module doc and the test at the bottom of this file.
+// What `emma set-provider ollama` looks up. Registered in `KINDS` since
+// 2026-08-31, once `Provider::startup_notes` and `ProviderKind::requires_key`
+// existed and `main.rs` used both — the two conditions the test at the bottom
+// of this file and the module doc's points 2 and 3 were holding out for.
 // ---------------------------------------------------------------------------
 
 /// Identity, for the provider registry.
@@ -1057,6 +1068,15 @@ impl ProviderKind for Ollama {
 
     fn default_model(&self) -> &'static str {
         DEFAULT_MODEL
+    }
+
+    /// No key, and this is what made registering possible.
+    ///
+    /// `main.rs` used to resolve a key unconditionally, so adding this provider
+    /// to `KINDS` made Emma refuse to start with `no API key for ollama` — a
+    /// local model that needs no credential, blocked by a credential check.
+    fn requires_key(&self) -> bool {
+        false
     }
 
     fn build(&self, _key: ApiKey, model: Option<String>) -> Arc<dyn Provider> {

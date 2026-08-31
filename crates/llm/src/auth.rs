@@ -69,6 +69,19 @@ impl ApiKey {
         Self(key)
     }
 
+    /// The absence of a key, for a provider that needs none.
+    ///
+    /// **Deliberately not `ApiKey::new("")`.** That constructor registers its
+    /// argument for scrubbing, and registering the empty string would put a
+    /// substring of every message this process prints into the scrub list.
+    /// Nothing is remembered here because there is nothing to hide.
+    ///
+    /// A provider whose `requires_key` is false receives this. It must not be
+    /// sent anywhere.
+    pub fn none() -> Self {
+        Self(String::new())
+    }
+
     pub fn expose(&self) -> &str {
         &self.0
     }

@@ -36,6 +36,21 @@ pub trait ProviderKind: Send + Sync {
 
     fn default_model(&self) -> &'static str;
 
+    /// Whether a key must be resolved before [`ProviderKind::build`] is called.
+    ///
+    /// **Defaulted true, because every provider that reaches a network over the
+    /// public internet needs one and forgetting to say so should fail closed.**
+    /// A local provider overrides it. Without this the caller resolves a key
+    /// unconditionally, which is why `ollama.rs` could be written, tested and
+    /// exported while remaining unreachable: registering it made Emma refuse to
+    /// start with `no API key for ollama`.
+    ///
+    /// When this is false the key handed to `build` is a placeholder and must
+    /// not be sent anywhere.
+    fn requires_key(&self) -> bool {
+        true
+    }
+
     fn build(&self, key: ApiKey, model: Option<String>) -> Arc<dyn Provider>;
 }
 
@@ -62,7 +77,7 @@ impl ProviderKind for Anthropic {
 /// Every provider this build can actually run. One entry, and the list is the
 /// point: it is what an unknown name is measured against and what the error
 /// message quotes, so a second provider becomes reachable by appending to it.
-static KINDS: &[&'static dyn ProviderKind] = &[&Anthropic];
+static KINDS: &[&'static dyn ProviderKind] = &[&Anthropic, &crate::ollama::Ollama];
 
 #[derive(Debug, thiserror::Error)]
 #[error("unknown provider `{name}`. This build supports: {}", known().join(", "))]

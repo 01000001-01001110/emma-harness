@@ -309,8 +309,23 @@ async fn run(cli: cli::Cli) -> Result<()> {
         .await;
     }
 
-    let key = auth::load_default(kind)?;
+    // **A provider that needs no key must not be blocked by a key check.**
+    // This used to be an unconditional `load_default`, which is why `ollama`
+    // could be implemented, tested and exported while remaining unreachable:
+    // registering it made Emma refuse to start with `no API key for ollama`.
+    let key = if kind.requires_key() {
+        auth::load_default(kind)?
+    } else {
+        emma_llm::ApiKey::none()
+    };
     let provider: Arc<dyn Provider> = kind.build(key.clone(), Some(resolved.model.clone()));
+    // Said before the first call, not after it. A stale `OLLAMA_HOST` in a
+    // shell profile sends the conversation — and every file the model has read
+    // — to a machine the user has forgotten about; this is the line that names
+    // it. Disclosure, not a gate: nothing here refuses.
+    for note in provider.startup_notes() {
+        term.note(&note);
+    }
     // The one cell everything that resolves a provider *late* reads — today
     // that is `Delegate` and nothing else. Written only by `/model`. See
     // `agent::Running`.
