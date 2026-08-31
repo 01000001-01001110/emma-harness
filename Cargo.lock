@@ -403,6 +403,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "emma-docsgen"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "emma-harness"
 version = "0.1.0"
 dependencies = [

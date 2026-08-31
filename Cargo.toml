@@ -9,6 +9,7 @@ members = [
     "tools/lsp",
     "tools/web",
     "tools/tasks",
+    "crates/docsgen",
 ]
 
 [workspace.package]

@@ -118,7 +118,8 @@ flight, `/exit` to leave.
 
 ## What it does without asking
 
-Emma writes files and runs commands, so this is the part worth reading.
+Emma writes files and runs commands. What follows is what it does without
+stopping to ask you.
 
 Read, Glob and Grep run silently. **Write, Edit and Bash ask**, and the prompt
 shows what will actually happen — the command, the diff, or the path and size.
@@ -175,11 +176,11 @@ Every goal runs under limits, and Emma stops rather than overrunning them.
 
 ## What it cannot do yet
 
-Stated plainly, because the alternative is you finding out.
+Four things it does not do, so you do not find out by hitting them.
 
 - **Done is the model's own claim.** Emma stops when the model says the goal is
-  met. The honest guarantee is that the loop will not stop _before_ that, not
-  that the work is correct. Checking a goal against the project's own tests is
+  met. What the loop guarantees is that it will not stop _before_ the model
+  says so — not that the work is correct. Checking a goal against the project's own tests is
   designed and not built.
 - **Resume brings back the conversation, not the work.** `--resume` restores the
   transcript and the budget already spent. It re-runs nothing.

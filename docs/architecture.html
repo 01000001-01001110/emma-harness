@@ -65,66 +65,102 @@
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 780 400" role="img"
-           aria-label="crates/emma depends on every other crate. tools/tasks and tools/lsp depend on tools/fs. tools/web depends on llm. Every crate depends on emma-tool-api, and llm's dependency on it is a dev-dependency only.">
+      <!-- diagram:architecture -->
+      <svg viewBox="0 0 526 376" role="img" aria-label="8 workspace crates in dependency layers. An arrow points from a crate to something it depends on; nothing points upward. Dashed edges are dev-dependencies, which exist only when the tests are built.">
+        <style>
+          :root {
+            --arch-ground: #12101a;
+            --arch-surface: #1c1930;
+            --arch-line: #31d4f2;
+            --arch-text: #dcf6ff;
+            --arch-muted: #7d8fa8;
+            --arch-accent: #ff2e97;
+            --arch-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --arch-ground: #0b0a10;
+              --arch-surface: #15132a;
+              --arch-line: #22b8d6;
+              --arch-text: #c4e8f5;
+              --arch-muted: #6b7c94;
+              --arch-accent: #ff45a3;
+              --arch-dim: #7a4fd8;
+            }
+          }
+          .arch-ground { fill: var(--arch-ground); }
+          .arch-box { fill: var(--arch-surface); stroke: var(--arch-line); stroke-width: 1.5; }
+          .arch-box-hl { fill: var(--arch-surface); stroke: var(--arch-accent); stroke-width: 2; }
+          .arch-lbl { fill: var(--arch-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .arch-note { fill: var(--arch-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .arch-edge { stroke: var(--arch-line); stroke-width: 1.5; fill: none; }
+          .arch-edge-hl { stroke: var(--arch-accent); stroke-width: 2; fill: none; }
+          .arch-edge-dim { stroke: var(--arch-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
         <defs>
-          <marker id="arch-arrow" viewBox="0 0 10 10" refX="9" refY="5"
-                  markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
+          <marker id="arch-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--arch-line)"/>
           </marker>
-          <marker id="arch-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5"
-                  markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
+          <marker id="arch-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--arch-accent)"/>
+          </marker>
+          <marker id="arch-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--arch-dim)"/>
           </marker>
         </defs>
+        <rect class="arch-ground" x="0" y="0" width="526" height="376"/>
 
-        <rect class="box" x="310" y="14" width="160" height="38" rx="4"/>
-        <text class="lbl" x="390" y="38" text-anchor="middle">crates/emma</text>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 91 258 L 177 322"/>
+        <path class="arch-edge-dim" marker-end="url(#arch-tip-dim)" d="M 274 341 L 252 341"/>
+        <text class="arch-note" x="263" y="337" text-anchor="middle">dev</text>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 54 L 91 220"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 54 L 349 322"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 54 L 177 322"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 54 L 263 220"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 54 L 349 118"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 54 L 177 118"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 54 L 435 220"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 258 L 177 322"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 177 156 L 177 322"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 177 156 L 263 220"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 435 258 L 177 322"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 435 258 L 349 322"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 349 156 L 177 322"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 349 156 L 263 220"/>
+        <rect class="arch-box-hl" x="188" y="16" width="150" height="38" rx="3"/>
+        <text class="arch-lbl" x="263" y="40" text-anchor="middle">crates/emma</text>
 
-        <rect class="box" x="60"  y="112" width="150" height="36" rx="4"/>
-        <text class="lbl" x="135" y="135" text-anchor="middle">harness</text>
-        <rect class="box" x="230" y="112" width="150" height="36" rx="4"/>
-        <text class="lbl" x="305" y="135" text-anchor="middle">tools/tasks</text>
-        <rect class="box" x="400" y="112" width="150" height="36" rx="4"/>
-        <text class="lbl" x="475" y="135" text-anchor="middle">tools/lsp</text>
-        <rect class="box" x="570" y="112" width="150" height="36" rx="4"/>
-        <text class="lbl" x="645" y="135" text-anchor="middle">tools/web</text>
+        <rect class="arch-box" x="102" y="118" width="150" height="38" rx="3"/>
+        <text class="arch-lbl" x="177" y="142" text-anchor="middle">tools/lsp</text>
 
-        <rect class="box" x="230" y="202" width="150" height="36" rx="4"/>
-        <text class="lbl" x="305" y="225" text-anchor="middle">tools/fs</text>
-        <rect class="box" x="570" y="202" width="150" height="36" rx="4"/>
-        <text class="lbl" x="645" y="225" text-anchor="middle">llm</text>
+        <rect class="arch-box" x="274" y="118" width="150" height="38" rx="3"/>
+        <text class="arch-lbl" x="349" y="142" text-anchor="middle">tools/tasks</text>
 
-        <rect class="hl" x="60" y="300" width="660" height="46" rx="4"/>
-        <text class="lbl" x="390" y="320" text-anchor="middle">emma-tool-api</text>
-        <text class="tiny" x="390" y="336" text-anchor="middle">the shared vocabulary</text>
+        <rect class="arch-box" x="16" y="220" width="150" height="38" rx="3"/>
+        <text class="arch-lbl" x="91" y="244" text-anchor="middle">crates/harness</text>
 
-        <path class="edge" d="M 360 52 L 150 112" marker-end="url(#arch-arrow)"/>
-        <path class="edge" d="M 375 52 L 310 112" marker-end="url(#arch-arrow)"/>
-        <path class="edge" d="M 405 52 L 465 112" marker-end="url(#arch-arrow)"/>
-        <path class="edge" d="M 420 52 L 630 112" marker-end="url(#arch-arrow)"/>
-        <path class="edge" d="M 340 48 C 240 60 30 70 30 180 L 30 220 L 224 220" marker-end="url(#arch-arrow)"/>
-        <path class="edge" d="M 442 48 C 560 58 752 70 752 180 L 752 220 L 726 220" marker-end="url(#arch-arrow)"/>
+        <rect class="arch-box" x="188" y="220" width="150" height="38" rx="3"/>
+        <text class="arch-lbl" x="263" y="244" text-anchor="middle">tools/fs</text>
 
-        <path class="edge-hl" d="M 305 148 L 305 196" marker-end="url(#arch-arrow-hl)"/>
-        <path class="edge-hl" d="M 462 148 L 356 196" marker-end="url(#arch-arrow-hl)"/>
-        <text class="sm" x="393" y="180" text-anchor="middle">containment</text>
+        <rect class="arch-box" x="360" y="220" width="150" height="38" rx="3"/>
+        <text class="arch-lbl" x="435" y="244" text-anchor="middle">tools/web</text>
 
-        <path class="edge-hl" d="M 645 148 L 645 196" marker-end="url(#arch-arrow-hl)"/>
-        <text class="sm" x="656" y="178">credentials</text>
+        <rect class="arch-box" x="102" y="322" width="150" height="38" rx="3"/>
+        <text class="arch-lbl" x="177" y="346" text-anchor="middle">crates/tool-api</text>
 
-        <path class="edge" d="M 135 148 L 135 294" marker-end="url(#arch-arrow)"/>
-        <path class="edge" d="M 305 238 L 305 294" marker-end="url(#arch-arrow)"/>
-        <path class="edge" d="M 355 148 L 410 294" marker-end="url(#arch-arrow)"/>
-        <path class="edge" d="M 475 148 L 475 294" marker-end="url(#arch-arrow)"/>
-        <path class="edge" d="M 585 148 L 520 294" marker-end="url(#arch-arrow)"/>
-        <path class="edge-dash" d="M 645 238 L 645 294" marker-end="url(#arch-arrow)"/>
-        <text class="sm" x="656" y="272">dev only</text>
+        <rect class="arch-box" x="274" y="322" width="150" height="38" rx="3"/>
+        <text class="arch-lbl" x="349" y="346" text-anchor="middle">crates/llm</text>
+
       </svg>
+      <!-- /diagram -->
     </div>
     <figcaption>
-      Edges read from the eight <code>Cargo.toml</code> files on 2026-08-16.
-      Pink marks the two that are not obvious from the names.
+      Generated from the eight <code>Cargo.toml</code> files by
+      <code>crates/docsgen</code>. A test fails when this picture and those
+      manifests disagree, so a manifest change is not committable until the
+      generator has been rerun. Magenta marks <code>crates/emma</code>, the
+      crate everything else is beneath. A dashed edge is a dev-dependency,
+      present only when the tests are built.
     </figcaption>
   </figure>
   <span class="src">crates/{tool-api,harness,llm,emma}/Cargo.toml, tools/{fs,tasks,web,lsp}/Cargo.toml</span>

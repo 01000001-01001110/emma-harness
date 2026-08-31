@@ -1,0 +1,18 @@
+[package]
+name = "emma-docsgen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "emma_docsgen"
+path = "src/lib.rs"
+
+[[bin]]
+name = "emma-docsgen"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true

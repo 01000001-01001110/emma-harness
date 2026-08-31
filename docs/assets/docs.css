@@ -13,20 +13,31 @@
    exists to prevent.
    --------------------------------------------------------------------------- */
 
+/* Cyberpunk: near-black grounds, cyan structure, magenta emphasis.
+   The values are shared with the generated diagrams -- `crates/docsgen`'s
+   `theme.rs` carries the same seven colours, because a diagram that agrees
+   with its page about what cyan means is a diagram a reader can read without
+   a legend. Change one and change the other; nothing enforces it yet, which
+   is worth knowing before assuming they cannot drift.
+
+   The evidence chips keep their own hues. `--certified` green and
+   `--unverified` amber are the one place on the site where colour carries
+   meaning a reader must not misread, and folding them into a cyan-magenta
+   scheme would cost that distinction. */
 :root {
-  --ground: #0e0b11;
-  --raise: #16121c;
-  --raise-2: #1d1825;
-  --line: #2c2436;
-  --line-soft: #221c2a;
-  --text: #ece6f2;
-  --dim: #a396b0;
-  --dimmer: #6f6479;
-  --accent: #ff6ec7;
-  --accent-dk: #b53d8b;
-  --certified: #67e0a3;
-  --observed: #6ec4d8;
-  --unverified: #f2b45e;
+  --ground: #0b0a10;
+  --raise: #15132a;
+  --raise-2: #1c1930;
+  --line: #2a3550;
+  --line-soft: #1d2438;
+  --text: #dcf6ff;
+  --dim: #93a7c0;
+  --dimmer: #6b7c94;
+  --accent: #ff2e97;
+  --accent-dk: #b81e6c;
+  --certified: #45f0a8;
+  --observed: #31d4f2;
+  --unverified: #ffb648;
   --mono:
     ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas,
     monospace;
