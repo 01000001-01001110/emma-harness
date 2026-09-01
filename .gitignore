@@ -83,3 +83,18 @@ blog/
 # addressed to somebody trying to understand Emma.
 docs/AUTHORITY.md
 docs/CONTRACT.md
+
+# No images in the repository, by the owner's decision on 2026-09-01. The
+# history was rewritten to remove every one that had ever been committed --
+# four TUI mockups, a blog screenshot, an accidental PowerShell binary cache --
+# along with `notes/`, `verification/` and `blog/`. Re-adding one puts it back
+# in a history that was cleaned to be publishable.
+#
+# `docs/img/emma-session.png` is kept on disk and ignored; it is the session
+# screenshot the README used to open with.
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+docs/img/

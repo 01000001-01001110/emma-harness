@@ -4,8 +4,6 @@ A coding agent you run from a terminal. You type `emma`, it reads its
 configuration from the directory you are standing in, and it works on your goal
 until the goal is met or it runs out of the budget you gave it.
 
-![Emma working on a goal](docs/img/emma-session.png)
-
 ```
 $ emma
 > port the auth middleware to the new session API and make the tests pass
