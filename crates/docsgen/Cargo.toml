@@ -16,3 +16,9 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+# The diagrams are drawn from Rust source, so the source is parsed rather than
+# matched with regexes: an enum variant behind a `#[cfg]`, a doc comment
+# containing a brace, or a field whose type spans two lines all defeat a
+# pattern and none of them defeat a parser. Already in the lock file via serde,
+# so this adds no download.
+syn = { version = "2", features = ["full", "extra-traits", "visit"] }

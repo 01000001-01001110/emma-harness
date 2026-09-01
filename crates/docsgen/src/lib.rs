@@ -34,6 +34,9 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 
 pub mod architecture;
+pub mod pages;
+pub mod rust;
+pub mod shapes;
 pub mod svg;
 pub mod theme;
 
@@ -56,6 +59,7 @@ pub fn render_all(root: &Path) -> Result<Vec<(String, String)>> {
             "tools-containment".to_string(),
             architecture::containment(&crates).render(),
         ),
+        ("tools-lsp".to_string(), pages::tools_lsp(root)?.render()),
     ])
 }
 

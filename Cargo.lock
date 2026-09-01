@@ -407,6 +407,7 @@ name = "emma-docsgen"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "syn 2.0.119",
 ]
 
 [[package]]

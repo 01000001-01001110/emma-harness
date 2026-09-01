@@ -280,39 +280,65 @@
 
 <figure>
   <div class="figwrap">
-    <svg viewBox="0 0 700 240" role="img" aria-label="Readiness has four states. Handshaking means nothing has been heard; Indexing means work is in progress or has not settled; Ready means the server sent quiescent true, or progress settled for 1.5 seconds on a server with no status support; Unknown means nothing arrived within the first-progress grace and is never upgraded to Ready.">
+    <!-- diagram:tools-lsp -->
+    <svg viewBox="0 0 354 172" role="img" aria-label="The 4 readiness states a language-server answer can be produced in: Handshaking, Indexing, Ready, Unknown. Ready is the only one that adds no caveat to the answer; in the others an empty result is not evidence that there is nothing to find.">
+      <style>
+        :root {
+          --lsp-ground: #12101a;
+          --lsp-surface: #1c1930;
+          --lsp-line: #31d4f2;
+          --lsp-text: #dcf6ff;
+          --lsp-muted: #7d8fa8;
+          --lsp-accent: #ff2e97;
+          --lsp-dim: #8a5cf0;
+        }
+        @media (prefers-color-scheme: dark) {
+          :root {
+            --lsp-ground: #0b0a10;
+            --lsp-surface: #15132a;
+            --lsp-line: #22b8d6;
+            --lsp-text: #c4e8f5;
+            --lsp-muted: #6b7c94;
+            --lsp-accent: #ff45a3;
+            --lsp-dim: #7a4fd8;
+          }
+        }
+        .lsp-ground { fill: var(--lsp-ground); }
+        .lsp-box { fill: var(--lsp-surface); stroke: var(--lsp-line); stroke-width: 1.5; }
+        .lsp-box-hl { fill: var(--lsp-surface); stroke: var(--lsp-accent); stroke-width: 2; }
+        .lsp-lbl { fill: var(--lsp-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .lsp-note { fill: var(--lsp-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .lsp-edge { stroke: var(--lsp-line); stroke-width: 1.5; fill: none; }
+        .lsp-edge-hl { stroke: var(--lsp-accent); stroke-width: 2; fill: none; }
+        .lsp-edge-dim { stroke: var(--lsp-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+      </style>
       <defs>
-        <marker id="tl-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+        <marker id="lsp-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--lsp-line)"/>
         </marker>
-        <marker id="tl-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+        <marker id="lsp-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--lsp-accent)"/>
+        </marker>
+        <marker id="lsp-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--lsp-dim)"/>
         </marker>
       </defs>
+      <rect class="lsp-ground" x="0" y="0" width="354" height="172"/>
 
-      <rect class="box" x="14" y="90" width="140" height="36" rx="4" />
-      <text class="lbl" x="30" y="113">Handshaking</text>
+      <rect class="lsp-box" x="16" y="16" width="150" height="38" rx="3"/>
+      <text class="lsp-lbl" x="91" y="40" text-anchor="middle">Handshaking</text>
 
-      <path class="edge" d="M154 108 L214 108" marker-end="url(#tl-arrow)" />
-      <rect class="box" x="214" y="90" width="140" height="36" rx="4" />
-      <text class="lbl" x="230" y="113">Indexing</text>
+      <rect class="lsp-box" x="188" y="16" width="150" height="38" rx="3"/>
+      <text class="lsp-lbl" x="263" y="40" text-anchor="middle">Indexing</text>
 
-      <path class="edge-hl" d="M354 100 L440 60" marker-end="url(#tl-arrow-hl)" />
-      <rect class="hl" x="440" y="34" width="220" height="46" rx="4" />
-      <text class="lbl" x="456" y="54">Ready</text>
-      <text class="tiny" x="456" y="70">quiescent: true, or 1.5 s settled</text>
+      <rect class="lsp-box-hl" x="16" y="118" width="150" height="38" rx="3"/>
+      <text class="lsp-lbl" x="91" y="142" text-anchor="middle">Ready</text>
 
-      <path class="edge-dash" d="M84 90 L84 40 L440 40" marker-end="url(#tl-arrow)" />
-      <text class="tiny" x="96" y="32">nothing at all within the grace</text>
+      <rect class="lsp-box" x="188" y="118" width="150" height="38" rx="3"/>
+      <text class="lsp-lbl" x="263" y="142" text-anchor="middle">Unknown</text>
 
-      <path class="edge" d="M354 116 L440 160" marker-end="url(#tl-arrow)" />
-      <rect class="box" x="440" y="140" width="220" height="46" rx="4" />
-      <text class="lbl" x="456" y="160">Unknown</text>
-      <text class="tiny" x="456" y="176">never upgraded to Ready</text>
-
-      <text class="sm" x="14" y="214">A request runs in every state and comes back Ok, with the readiness attached.</text>
-      <text class="tiny" x="14" y="232">An error would forbid the one correct response, which is to wait and ask again.</text>
     </svg>
+    <!-- /diagram -->
   </div>
   <figcaption>
     The four readiness states. <code>Unknown</code> exists because "no work is
