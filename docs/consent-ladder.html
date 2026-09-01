@@ -202,86 +202,84 @@
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 780 606" role="img"
-           aria-label="The approval ladder: a PreToolUse hook denial, then a deny rule, then the egress question for tools that reach the network, then the bypass flag, then an ask rule, an allow rule, read-only or EXEMPT, a session grant, the unattended denial, and finally the human. The first line that answers wins.">
+      <!-- diagram:consent-ladder -->
+      <svg viewBox="0 0 182 784" role="img" aria-label="The 8 checks Approvals::decide makes, in the order it makes them; the first that answers is the answer and nothing below it gets a say. A PreToolUse hook denial is checked earlier still, in the loop, and is not one of these. An `ask` rule is not a rung either: it sets a flag that skips the three rungs below it rather than returning.">
+        <style>
+          :root {
+            --ladder-ground: #12101a;
+            --ladder-surface: #1c1930;
+            --ladder-line: #31d4f2;
+            --ladder-text: #dcf6ff;
+            --ladder-muted: #7d8fa8;
+            --ladder-accent: #ff2e97;
+            --ladder-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --ladder-ground: #0b0a10;
+              --ladder-surface: #15132a;
+              --ladder-line: #22b8d6;
+              --ladder-text: #c4e8f5;
+              --ladder-muted: #6b7c94;
+              --ladder-accent: #ff45a3;
+              --ladder-dim: #7a4fd8;
+            }
+          }
+          .ladder-ground { fill: var(--ladder-ground); }
+          .ladder-box { fill: var(--ladder-surface); stroke: var(--ladder-line); stroke-width: 1.5; }
+          .ladder-box-hl { fill: var(--ladder-surface); stroke: var(--ladder-accent); stroke-width: 2; }
+          .ladder-lbl { fill: var(--ladder-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .ladder-note { fill: var(--ladder-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .ladder-edge { stroke: var(--ladder-line); stroke-width: 1.5; fill: none; }
+          .ladder-edge-hl { stroke: var(--ladder-accent); stroke-width: 2; fill: none; }
+          .ladder-edge-dim { stroke: var(--ladder-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
         <defs>
-          <marker id="ladder-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
+          <marker id="ladder-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ladder-line)"/>
           </marker>
-          <marker id="ladder-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
+          <marker id="ladder-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ladder-accent)"/>
+          </marker>
+          <marker id="ladder-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ladder-dim)"/>
           </marker>
         </defs>
+        <rect class="ladder-ground" x="0" y="0" width="182" height="784"/>
 
-        <text class="sm" x="60" y="20">one tool call, chosen by the model</text>
+        <path class="ladder-edge" marker-end="url(#ladder-tip)" d="M 91 54 L 91 118"/>
+        <path class="ladder-edge" marker-end="url(#ladder-tip)" d="M 91 156 L 91 220"/>
+        <path class="ladder-edge" marker-end="url(#ladder-tip)" d="M 91 258 L 91 322"/>
+        <path class="ladder-edge" marker-end="url(#ladder-tip)" d="M 91 360 L 91 424"/>
+        <path class="ladder-edge" marker-end="url(#ladder-tip)" d="M 91 462 L 91 526"/>
+        <path class="ladder-edge" marker-end="url(#ladder-tip)" d="M 91 564 L 91 628"/>
+        <path class="ladder-edge" marker-end="url(#ladder-tip)" d="M 91 666 L 91 730"/>
+        <rect class="ladder-box" x="16" y="16" width="150" height="38" rx="3"/>
+        <text class="ladder-lbl" x="91" y="40" text-anchor="middle">rule == Some(Decision::Deny)</text>
 
-        <path class="edge" d="M46 30 L46 536" marker-end="url(#ladder-arrow)"/>
-        <text class="tiny" transform="translate(40,300) rotate(-90)" text-anchor="middle">no answer here — fall through</text>
+        <rect class="ladder-box-hl" x="16" y="118" width="150" height="38" rx="3"/>
+        <text class="ladder-lbl" x="91" y="142" text-anchor="middle">egress(): deny</text>
 
-        <rect class="hl" x="60" y="36" width="400" height="34" rx="3"/>
-        <text class="lbl" x="74" y="58">1 · a PreToolUse hook denied it</text>
-        <path class="edge-hl" d="M460 53 L482 53" marker-end="url(#ladder-arrow-hl)"/>
-        <text class="sm" x="494" y="50">DENY</text>
-        <text class="tiny" x="494" y="64">resolved in the loop, before this file runs</text>
+        <rect class="ladder-box" x="16" y="220" width="150" height="38" rx="3"/>
+        <text class="ladder-lbl" x="91" y="244" text-anchor="middle">gate == Gate::SkipAll</text>
 
-        <rect class="hl" x="60" y="84" width="400" height="34" rx="3"/>
-        <text class="lbl" x="74" y="106">2 · a `deny` rule matches</text>
-        <path class="edge-hl" d="M460 101 L482 101" marker-end="url(#ladder-arrow-hl)"/>
-        <text class="sm" x="494" y="98">DENY</text>
-        <text class="tiny" x="494" y="112">no prompt answer and no flag reaches it</text>
+        <rect class="ladder-box" x="16" y="322" width="150" height="38" rx="3"/>
+        <text class="ladder-lbl" x="91" y="346" text-anchor="middle">rule == Some(Decision::Allow)</text>
 
-        <rect class="box" x="60" y="132" width="400" height="100" rx="3"/>
-        <text class="lbl" x="74" y="152">· · the egress question, if reaches_network</text>
-        <text class="tiny" x="86" y="170">no network_target named → DENY (fail closed)</text>
-        <text class="tiny" x="86" y="186">deny rule for this tool+host → DENY · bypass → ALLOW</text>
-        <text class="tiny" x="86" y="202">ask rule → the prompt · allow rule → ALLOW</text>
-        <text class="tiny" x="86" y="218">session host grant → ALLOW · unattended → DENY · else ask</text>
-        <path class="edge" d="M460 182 L482 182" marker-end="url(#ladder-arrow)"/>
-        <text class="tiny" x="494" y="178">its own grant, its own scope,</text>
-        <text class="tiny" x="494" y="192">its own prompt. Passing it is</text>
-        <text class="tiny" x="494" y="206">not passing the rungs below.</text>
+        <rect class="ladder-box" x="16" y="424" width="150" height="38" rx="3"/>
+        <text class="ladder-lbl" x="91" y="448" text-anchor="middle">read_only: Allow</text>
 
-        <rect class="box" x="60" y="252" width="400" height="34" rx="3"/>
-        <text class="lbl" x="74" y="274">3 · --dangerously-skip-permissions</text>
-        <path class="edge" d="M460 269 L482 269" marker-end="url(#ladder-arrow)"/>
-        <text class="sm" x="494" y="273">ALLOW</text>
+        <rect class="ladder-box" x="16" y="526" width="150" height="38" rx="3"/>
+        <text class="ladder-lbl" x="91" y="550" text-anchor="middle">EXEMPT.contains()</text>
 
-        <rect class="box" x="60" y="300" width="400" height="34" rx="3"/>
-        <text class="lbl" x="74" y="322">4 · an `ask` rule matches</text>
-        <path class="edge-dash" d="M460 317 L482 317" marker-end="url(#ladder-arrow)"/>
-        <text class="tiny" x="494" y="314">forces the prompt: rungs 5, 6</text>
-        <text class="tiny" x="494" y="328">and 7 are skipped</text>
+        <rect class="ladder-box" x="16" y="628" width="150" height="38" rx="3"/>
+        <text class="ladder-lbl" x="91" y="652" text-anchor="middle">session_allowed.lock().contains()</text>
 
-        <path class="edge-dash" d="M60 317 L24 317 L24 557 L54 557" marker-end="url(#ladder-arrow)"/>
+        <rect class="ladder-box" x="16" y="730" width="150" height="38" rx="3"/>
+        <text class="ladder-lbl" x="91" y="754" text-anchor="middle">gate == Gate::Unattended</text>
 
-        <rect class="box" x="60" y="348" width="400" height="34" rx="3"/>
-        <text class="lbl" x="74" y="370">5 · an `allow` rule matches</text>
-        <path class="edge" d="M460 365 L482 365" marker-end="url(#ladder-arrow)"/>
-        <text class="sm" x="494" y="369">ALLOW</text>
-
-        <rect class="box" x="60" y="396" width="400" height="34" rx="3"/>
-        <text class="lbl" x="74" y="418">6 · read_only, or a name in EXEMPT</text>
-        <path class="edge" d="M460 413 L482 413" marker-end="url(#ladder-arrow)"/>
-        <text class="sm" x="494" y="417">ALLOW</text>
-
-        <rect class="box" x="60" y="444" width="400" height="34" rx="3"/>
-        <text class="lbl" x="74" y="466">7 · a session grant from a `y` or an `a`</text>
-        <path class="edge" d="M460 461 L482 461" marker-end="url(#ladder-arrow)"/>
-        <text class="sm" x="494" y="465">ALLOW</text>
-
-        <rect class="box" x="60" y="492" width="400" height="34" rx="3"/>
-        <text class="lbl" x="74" y="514">8 · Gate::Unattended — a `-p` run</text>
-        <path class="edge" d="M460 509 L482 509" marker-end="url(#ladder-arrow)"/>
-        <text class="sm" x="494" y="506">DENY</text>
-        <text class="tiny" x="494" y="520">nobody is there to ask</text>
-
-        <rect class="hl" x="60" y="540" width="400" height="34" rx="3"/>
-        <text class="lbl" x="74" y="562">9 · ask the human</text>
-        <path class="edge-hl" d="M460 557 L482 557" marker-end="url(#ladder-arrow-hl)"/>
-        <text class="sm" x="494" y="561">y / n / a / r / t</text>
-
-        <text class="tiny" x="60" y="594">Rungs 1 and 2 refuse outright. Rung 9 is where everything unanswered lands.</text>
       </svg>
+      <!-- /diagram -->
     </div>
     <figcaption>
       Drawn from the function above and from

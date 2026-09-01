@@ -8,8 +8,9 @@
 //! matching the code on the commit after it is drawn without changing
 //! appearance.
 //!
-//! One of the 31 is generated today: `architecture.html`. The other 30 are
-//! still hand-drawn.
+//! 15 of the 31 are generated today. The rest are still hand-drawn, and each
+//! of those is either waiting for an extractor or is an argument a person made
+//! rather than a structure the source states.
 //!
 //! # Where the generated SVG lives
 //!
@@ -65,6 +66,22 @@ pub fn render_all(root: &Path) -> Result<Vec<(String, String)>> {
             pages::consent::consent_egress(root)?.render(),
         ),
         (
+            "consent-ladder".to_string(),
+            pages::consent::consent_ladder(root)?.render(),
+        ),
+        (
+            "loop-endings".to_string(),
+            pages::loop_::loop_endings(root)?.render(),
+        ),
+        (
+            "loop-memo".to_string(),
+            pages::loop_::loop_memo(root)?.render(),
+        ),
+        (
+            "session-fold".to_string(),
+            pages::loop_::session_fold(root)?.render(),
+        ),
+        (
             "providers-boundary".to_string(),
             pages::providers::providers_boundary(root)?.render(),
         ),
@@ -118,9 +135,13 @@ pub fn inject(page: &str, name: &str, svg: &str) -> Result<String> {
         .collect();
     // **The page's line endings decide, not the generator's.** Seven pages
     // under `docs/` are CRLF and the other 82 are LF; writing an LF into a CRLF
-    // file leaves an island inside it. Nothing renders differently, so it
-    // survives review, and every later diff of that page shows the whole block
-    // as changed.
+    // file leaves a file holding two conventions.
+    //
+    // Only in the working tree: `.gitattributes` carries `* text=auto eol=lf`,
+    // so git normalises on the way in and the stored blob is LF either way.
+    // The first version of this comment claimed every later diff would show the
+    // whole block as changed, and `git show HEAD:docs/tools-edit.html` came
+    // back with no CRLF at all.
     let nl = if page.contains("\r\n") { "\r\n" } else { "\n" };
     let body: String = svg
         .lines()
@@ -188,8 +209,9 @@ mod tests {
 
     /// **If this breaks:** a diagram written into one of the seven CRLF pages
     /// under `docs/` leaves an island of LF inside it. Nothing renders
-    /// differently, so it survives review, and every later diff of that page
-    /// shows the whole block as changed.
+    /// differently and git normalises it away on commit, so the only place it
+    /// is visible is the working tree -- which is where anything reading the
+    /// file raw would see it.
     #[test]
     fn a_crlf_page_keeps_its_line_endings() {
         let page = PAGE.replace('\n', "\r\n");

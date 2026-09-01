@@ -210,23 +210,77 @@ fn cond_text(e: &syn::Expr) -> String {
             cond_text(&b.right)
         ),
         syn::Expr::Unary(u) => format!("!{}", cond_text(&u.expr)),
-        syn::Expr::MethodCall(m) => format!("{}.{}()", cond_text(&m.receiver), m.method),
+        syn::Expr::MethodCall(m) => {
+            // `self` adds nothing to a label inside its own impl, and the
+            // receiver is what tells a reader which thing is being asked --
+            // `EXEMPT.contains()` rather than `.contains()`.
+            let recv = cond_text(&m.receiver);
+            if recv.is_empty() || recv == "self" {
+                format!("{}()", m.method)
+            } else {
+                format!("{recv}.{}()", m.method)
+            }
+        }
         syn::Expr::Field(f) => match &f.member {
             syn::Member::Named(n) => n.to_string(),
             syn::Member::Unnamed(i) => i.index.to_string(),
         },
         syn::Expr::Let(l) => cond_text(&l.expr),
-        syn::Expr::Path(p) => p
-            .path
-            .segments
-            .last()
-            .map(|s| s.ident.to_string())
-            .unwrap_or_default(),
-        syn::Expr::Call(c) => short_call(&syn::Expr::Call(c.clone())),
+        // `.await` is transparent here: the label wants the call, not the fact
+        // that it is asynchronous. Without this the egress rung of
+        // `Approvals::decide` renders as an empty box.
+        syn::Expr::Await(a) => cond_text(&a.base),
+        syn::Expr::Try(t) => cond_text(&t.expr),
+        syn::Expr::Path(p) => path_tail(&p.path),
+        // Arguments are kept for a one-argument call, because they carry the
+        // fact: `rule == Some(Deny)` and `rule == Some(Allow)` are two
+        // different rungs and `rule == Some` is the same box twice.
+        syn::Expr::Call(c) => {
+            let f = cond_text(&c.func);
+            match c.args.len() {
+                1 => {
+                    let a = cond_text(&c.args[0]);
+                    if a.is_empty() {
+                        format!("{f}()")
+                    } else {
+                        format!("{f}({a})")
+                    }
+                }
+                _ => format!("{f}()"),
+            }
+        }
         syn::Expr::Paren(p) => cond_text(&p.expr),
         syn::Expr::Reference(r) => cond_text(&r.expr),
+        syn::Expr::Lit(l) => match &l.lit {
+            syn::Lit::Str(s) => format!("{:?}", s.value()),
+            syn::Lit::Int(i) => i.base10_digits().to_string(),
+            syn::Lit::Bool(b) => b.value.to_string(),
+            _ => String::new(),
+        },
         _ => String::new(),
     }
+}
+
+/// The last segment of a path, or the last two when the leading one is a type
+/// that carries meaning: `Decision::Deny` rather than `Deny`.
+fn path_tail(p: &syn::Path) -> String {
+    let n = p.segments.len();
+    if n >= 2 {
+        let head = &p.segments[n - 2].ident;
+        let tail = &p.segments[n - 1].ident;
+        let head_s = head.to_string();
+        // A module path adds noise; a type path adds the fact. Types are
+        // capitalised in this codebase, which is the only signal available
+        // without resolving names.
+        if head_s.chars().next().is_some_and(char::is_uppercase) {
+            return format!("{head_s}::{tail}");
+        }
+        return tail.to_string();
+    }
+    p.segments
+        .last()
+        .map(|s| s.ident.to_string())
+        .unwrap_or_default()
 }
 
 /// A call or path reduced to its last recognisable name.

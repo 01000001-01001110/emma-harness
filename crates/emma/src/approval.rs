@@ -13,15 +13,24 @@
 //! ```text
 //!   1. a PreToolUse hook denial          policy, checked in the loop
 //!   2. a `deny` rule                     policy, written in a file
-//!   3. --dangerously-skip-permissions    the bypass
-//!   4. an `ask` rule                     forces the question back
-//!   5. an `allow` rule                   the persisted grant
-//!   6. read-only, or EXEMPT              no question to ask
-//!   7. a session grant                   this process, from a `y`/`a`
-//!   8. ask the human
+//!   3. the egress question                a destination, asked independently
+//!   4. --dangerously-skip-permissions    the bypass
+//!   5. an `ask` rule                     forces the question back
+//!   6. an `allow` rule                   the persisted grant
+//!   7. read-only, or EXEMPT              no question to ask
+//!   8. a session grant                   this process, from a `y`/`a`
+//!   9. ask the human
 //! ```
 //!
-//! Rules 2, 4 and 5 are new and live in [`crate::permissions`]; that file holds
+//! **Line 3 was missing from this block until 2026-09-01.** The egress check
+//! sits above the bypass in `decide` and the list did not mention it, so a
+//! block whose own first sentence is "the first line that answers is the
+//! answer" was short one line that answers. It was found by generating
+//! `docs/consent-ladder.html` from `decide`'s guards rather than from this
+//! comment, and `the_ladder_is_the_order_decide_checks_in` now asserts the
+//! drawn order against the function.
+//!
+//! Rules 2, 5 and 6 are new and live in [`crate::permissions`]; that file holds
 //! the syntax and the matcher, this one holds where they are consulted. Two
 //! things about their placement are worth stating rather than deducing:
 //!

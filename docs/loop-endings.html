@@ -132,6 +132,66 @@ if turn.tool_calls().is_empty() {
   <figure>
     <div class="figwrap">
       <!-- diagram:loop-endings -->
+      <svg viewBox="0 0 182 376" role="img" aria-label="4 endings the empty-tool-calls branch of run_goal can produce, in the order the checks run: Done, Stalled, Answered, KicksExhausted. Falling through all 4 sends a kick and continues the loop.">
+        <style>
+          :root {
+            --endings-ground: #12101a;
+            --endings-surface: #1c1930;
+            --endings-line: #31d4f2;
+            --endings-text: #dcf6ff;
+            --endings-muted: #7d8fa8;
+            --endings-accent: #ff2e97;
+            --endings-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --endings-ground: #0b0a10;
+              --endings-surface: #15132a;
+              --endings-line: #22b8d6;
+              --endings-text: #c4e8f5;
+              --endings-muted: #6b7c94;
+              --endings-accent: #ff45a3;
+              --endings-dim: #7a4fd8;
+            }
+          }
+          .endings-ground { fill: var(--endings-ground); }
+          .endings-box { fill: var(--endings-surface); stroke: var(--endings-line); stroke-width: 1.5; }
+          .endings-box-hl { fill: var(--endings-surface); stroke: var(--endings-accent); stroke-width: 2; }
+          .endings-lbl { fill: var(--endings-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .endings-note { fill: var(--endings-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .endings-edge { stroke: var(--endings-line); stroke-width: 1.5; fill: none; }
+          .endings-edge-hl { stroke: var(--endings-accent); stroke-width: 2; fill: none; }
+          .endings-edge-dim { stroke: var(--endings-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
+        <defs>
+          <marker id="endings-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--endings-line)"/>
+          </marker>
+          <marker id="endings-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--endings-accent)"/>
+          </marker>
+          <marker id="endings-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--endings-dim)"/>
+          </marker>
+        </defs>
+        <rect class="endings-ground" x="0" y="0" width="182" height="376"/>
+
+        <path class="endings-edge" marker-end="url(#endings-tip)" d="M 91 54 L 91 118"/>
+        <path class="endings-edge" marker-end="url(#endings-tip)" d="M 91 156 L 91 220"/>
+        <path class="endings-edge" marker-end="url(#endings-tip)" d="M 91 258 L 91 322"/>
+        <rect class="endings-box-hl" x="16" y="16" width="150" height="38" rx="3"/>
+        <text class="endings-lbl" x="91" y="40" text-anchor="middle">Done</text>
+
+        <rect class="endings-box" x="16" y="118" width="150" height="38" rx="3"/>
+        <text class="endings-lbl" x="91" y="142" text-anchor="middle">Stalled</text>
+
+        <rect class="endings-box" x="16" y="220" width="150" height="38" rx="3"/>
+        <text class="endings-lbl" x="91" y="244" text-anchor="middle">Answered</text>
+
+        <rect class="endings-box" x="16" y="322" width="150" height="38" rx="3"/>
+        <text class="endings-lbl" x="91" y="346" text-anchor="middle">KicksExhausted</text>
+
+      </svg>
       <!-- /diagram -->
     </div>
     <figcaption>

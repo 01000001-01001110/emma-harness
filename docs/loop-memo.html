@@ -92,6 +92,62 @@
   <figure>
     <div class="figwrap">
       <!-- diagram:loop-memo -->
+      <svg viewBox="0 0 182 274" role="img" aria-label="The memo is 3 named pieces: run_goal writes it, failed_now holds it, run_tool_call only reads it. Clearing lives in the writer, so a reader of run_tool_call alone sees a permanent blacklist.">
+        <style>
+          :root {
+            --memo-ground: #12101a;
+            --memo-surface: #1c1930;
+            --memo-line: #31d4f2;
+            --memo-text: #dcf6ff;
+            --memo-muted: #7d8fa8;
+            --memo-accent: #ff2e97;
+            --memo-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --memo-ground: #0b0a10;
+              --memo-surface: #15132a;
+              --memo-line: #22b8d6;
+              --memo-text: #c4e8f5;
+              --memo-muted: #6b7c94;
+              --memo-accent: #ff45a3;
+              --memo-dim: #7a4fd8;
+            }
+          }
+          .memo-ground { fill: var(--memo-ground); }
+          .memo-box { fill: var(--memo-surface); stroke: var(--memo-line); stroke-width: 1.5; }
+          .memo-box-hl { fill: var(--memo-surface); stroke: var(--memo-accent); stroke-width: 2; }
+          .memo-lbl { fill: var(--memo-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .memo-note { fill: var(--memo-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .memo-edge { stroke: var(--memo-line); stroke-width: 1.5; fill: none; }
+          .memo-edge-hl { stroke: var(--memo-accent); stroke-width: 2; fill: none; }
+          .memo-edge-dim { stroke: var(--memo-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
+        <defs>
+          <marker id="memo-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--memo-line)"/>
+          </marker>
+          <marker id="memo-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--memo-accent)"/>
+          </marker>
+          <marker id="memo-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--memo-dim)"/>
+          </marker>
+        </defs>
+        <rect class="memo-ground" x="0" y="0" width="182" height="274"/>
+
+        <path class="memo-edge" marker-end="url(#memo-tip)" d="M 91 54 L 91 118"/>
+        <path class="memo-edge" marker-end="url(#memo-tip)" d="M 91 156 L 91 220"/>
+        <rect class="memo-box" x="16" y="16" width="150" height="38" rx="3"/>
+        <text class="memo-lbl" x="91" y="40" text-anchor="middle">run_goal</text>
+
+        <rect class="memo-box-hl" x="16" y="118" width="150" height="38" rx="3"/>
+        <text class="memo-lbl" x="91" y="142" text-anchor="middle">failed_now</text>
+
+        <rect class="memo-box" x="16" y="220" width="150" height="38" rx="3"/>
+        <text class="memo-lbl" x="91" y="244" text-anchor="middle">run_tool_call</text>
+
+      </svg>
       <!-- /diagram -->
     </div>
     <figcaption>

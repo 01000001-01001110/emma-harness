@@ -180,6 +180,72 @@ struct Fold {
   <figure>
     <div class="figwrap">
       <!-- diagram:session-fold -->
+      <svg viewBox="0 0 698 172" role="img" aria-label="The 7 fields of Fold: damage, history, query, in_goal, finished, pending, results. Two lists because the loop keeps two; damage is the records the fold refused, so a resume can say the conversation it rebuilt is known not to match.">
+        <style>
+          :root {
+            --fold-ground: #12101a;
+            --fold-surface: #1c1930;
+            --fold-line: #31d4f2;
+            --fold-text: #dcf6ff;
+            --fold-muted: #7d8fa8;
+            --fold-accent: #ff2e97;
+            --fold-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --fold-ground: #0b0a10;
+              --fold-surface: #15132a;
+              --fold-line: #22b8d6;
+              --fold-text: #c4e8f5;
+              --fold-muted: #6b7c94;
+              --fold-accent: #ff45a3;
+              --fold-dim: #7a4fd8;
+            }
+          }
+          .fold-ground { fill: var(--fold-ground); }
+          .fold-box { fill: var(--fold-surface); stroke: var(--fold-line); stroke-width: 1.5; }
+          .fold-box-hl { fill: var(--fold-surface); stroke: var(--fold-accent); stroke-width: 2; }
+          .fold-lbl { fill: var(--fold-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .fold-note { fill: var(--fold-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .fold-edge { stroke: var(--fold-line); stroke-width: 1.5; fill: none; }
+          .fold-edge-hl { stroke: var(--fold-accent); stroke-width: 2; fill: none; }
+          .fold-edge-dim { stroke: var(--fold-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
+        <defs>
+          <marker id="fold-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fold-line)"/>
+          </marker>
+          <marker id="fold-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fold-accent)"/>
+          </marker>
+          <marker id="fold-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--fold-dim)"/>
+          </marker>
+        </defs>
+        <rect class="fold-ground" x="0" y="0" width="698" height="172"/>
+
+        <rect class="fold-box" x="16" y="16" width="150" height="38" rx="3"/>
+        <text class="fold-lbl" x="91" y="40" text-anchor="middle">damage: Vec&lt;String&gt;</text>
+
+        <rect class="fold-box" x="188" y="16" width="150" height="38" rx="3"/>
+        <text class="fold-lbl" x="263" y="40" text-anchor="middle">history</text>
+
+        <rect class="fold-box" x="360" y="16" width="150" height="38" rx="3"/>
+        <text class="fold-lbl" x="435" y="40" text-anchor="middle">query: Vec&lt;Message&gt;</text>
+
+        <rect class="fold-box" x="532" y="16" width="150" height="38" rx="3"/>
+        <text class="fold-lbl" x="607" y="40" text-anchor="middle">in_goal: bool</text>
+
+        <rect class="fold-box" x="102" y="118" width="150" height="38" rx="3"/>
+        <text class="fold-lbl" x="177" y="142" text-anchor="middle">finished</text>
+
+        <rect class="fold-box-hl" x="274" y="118" width="150" height="38" rx="3"/>
+        <text class="fold-lbl" x="349" y="142" text-anchor="middle">pending</text>
+
+        <rect class="fold-box" x="446" y="118" width="150" height="38" rx="3"/>
+        <text class="fold-lbl" x="521" y="142" text-anchor="middle">results</text>
+
+      </svg>
       <!-- /diagram -->
     </div>
     <figcaption>

@@ -50,6 +50,39 @@ pub fn consent_egress(root: &Path) -> Result<Diagram> {
     ))
 }
 
+/// The approval ladder, read as the guards of `Approvals::decide`.
+///
+/// The order is the design, and it is a property of the function rather than
+/// of the prose beside it: `decide` is a run of `if <cond> { return }` where
+/// the first that answers is the answer. `fn_guards` returns those in order.
+///
+/// This found a gap on arrival. `approval.rs`'s module doc carries a
+/// hand-numbered precedence block of eight steps that does not include the
+/// egress check, which the function performs second -- before the bypass. The
+/// numbered list has since been corrected; this diagram is the reason it can
+/// no longer drift.
+pub fn consent_ladder(root: &Path) -> Result<Diagram> {
+    let path = root.join("crates/emma/src/approval.rs");
+    let file = rust::parse(&path)?;
+    let rungs = rust::fn_guards(&file, "decide")
+        .with_context(|| format!("{} declares the approval ladder", path.display()))?;
+
+    let n = rungs.len();
+    Ok(shapes::ladder(
+        "ladder",
+        format!(
+            "The {n} checks Approvals::decide makes, in the order it makes \
+             them; the first that answers is the answer and nothing below it \
+             gets a say. A PreToolUse hook denial is checked earlier still, in \
+             the loop, and is not one of these. An `ask` rule is not a rung \
+             either: it sets a flag that skips the three rungs below it rather \
+             than returning."
+        ),
+        &rungs,
+        Some("egress()"),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,6 +128,58 @@ mod tests {
             "the caption states the count: {}",
             d.caption
         );
+    }
+
+    /// **If this breaks:** the approval ladder is drawn in an order the gate
+    /// does not check in, which is the only claim the picture makes. Asserted
+    /// against `decide` itself rather than a written list, because the written
+    /// list in `approval.rs` was missing a rung when this was added.
+    #[test]
+    fn the_ladder_is_the_order_decide_checks_in() {
+        let root = root();
+        let file = rust::parse(&root.join("crates/emma/src/approval.rs")).expect("approval.rs");
+        let rungs = rust::fn_guards(&file, "decide").expect("decide has guards");
+
+        let d = consent_ladder(&root).expect("the diagram builds");
+        let drawn: Vec<String> = d.layers.iter().flatten().map(|n| n.id.clone()).collect();
+        assert_eq!(
+            drawn,
+            rungs.iter().map(|r| r.name.clone()).collect::<Vec<_>>(),
+            "the drawn order must be the checked order"
+        );
+        assert!(
+            d.layers.iter().all(|l| l.len() == 1),
+            "a ladder is one rung per row"
+        );
+        assert_eq!(
+            d.edges.len(),
+            rungs.len() - 1,
+            "each rung leads to the next"
+        );
+    }
+
+    /// **If this breaks:** the egress check stops being a rung -- it is the one
+    /// the page is about, and it was absent from the hand-written precedence
+    /// list for long enough to be worth pinning.
+    #[test]
+    fn egress_is_one_of_the_rungs_and_sits_above_the_bypass() {
+        let d = consent_ladder(&root()).expect("the diagram builds");
+        let drawn: Vec<String> = d.layers.iter().flatten().map(|n| n.id.clone()).collect();
+        let egress = drawn.iter().position(|r| r.starts_with("egress"));
+        let bypass = drawn.iter().position(|r| r.contains("SkipAll"));
+        let (Some(egress), Some(bypass)) = (egress, bypass) else {
+            panic!("both rungs must be present: {drawn:?}");
+        };
+        assert!(egress < bypass, "egress is checked first: {drawn:?}");
+    }
+
+    /// **If this breaks:** the ladder page loses its source and draws nothing.
+    #[test]
+    fn a_missing_source_fails_the_ladder_rather_than_emptying_it() {
+        let Err(e) = consent_ladder(Path::new("definitely-not-a-workspace")) else {
+            panic!("a missing tree must not produce a diagram");
+        };
+        assert!(format!("{e:#}").contains("approval.rs"));
     }
 
     /// **If this breaks:** the source file is moved and the generator draws an
