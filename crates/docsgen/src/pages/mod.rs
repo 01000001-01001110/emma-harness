@@ -12,6 +12,12 @@
 //! it needs a person's reading of a function's control flow, it is an argument
 //! rather than a structure, and it belongs in the page's prose where a reader
 //! can see who is making it.
+//!
+//! # One module per chapter
+//!
+//! Split by the chapter of `docs/` a page belongs to, so that four people can
+//! add diagrams at once without editing the same file. `lib.rs` is the only
+//! shared list, and it takes one line per diagram.
 
 use std::path::Path;
 
@@ -20,6 +26,11 @@ use anyhow::{Context, Result};
 use crate::rust;
 use crate::shapes;
 use crate::svg::Diagram;
+
+pub mod consent;
+pub mod loop_;
+pub mod providers;
+pub mod tools;
 
 /// The language server's readiness states, from the enum itself.
 ///
