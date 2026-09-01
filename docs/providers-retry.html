@@ -14,11 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page because these pages open from file://
      with no server, no build step and no JavaScript, so there is nothing to
-     include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
-     is kept short.
+     include a partial with. Adding a page means editing this file and every
+     page's copy of it, so the list is kept short.
      =========================================================================== -->
 <nav class="side">
   <div class="brand">
@@ -82,8 +81,7 @@
   <p class="lede">
     Four attempts, 500 ms doubling, a 20-second ceiling on any single wait
     including one the provider asked for. Three rules govern it, and the third
-    is the one that matters for a program somebody is watching: a retry the
-    user cannot see is indistinguishable from a hang, and a user who cannot
+    governs visibility during an interactive run: a retry the user cannot see is indistinguishable from a hang, and a user who cannot
     tell hits Ctrl-C and loses the work.
   </p>
 

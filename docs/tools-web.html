@@ -14,7 +14,7 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
      file and every page's copy of it — which is the deal, and is why the list
@@ -666,7 +666,7 @@
   ends one. The only processes it can touch are the ones this surface started,
   an id not in the pool is refused, and the effect is to undo the change
   <code>BrowserOpen</code> made, including closing an unauthenticated CDP port.
-  The alternative is a prompt on cleanup, whose failure mode is that somebody
+  The alternative is a prompt on cleanup, where somebody
   answers <code>n</code> and a browser survives with a live remote-control port.
 </p>
 

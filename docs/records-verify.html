@@ -72,7 +72,7 @@
 
   <p>
     On 2026-08-23 nine defects were found in this codebase in one day. Every one
-    came from an independent reviewer and none from the author &mdash; a host
+    came from an independent reviewer and none from the author: a host
     grant that silently covered wherever a page redirected to, a resume that
     reported correct answers as failures, three assertions that could not fail,
     and a configuration key that did nothing with no way to discover it. That is
@@ -91,7 +91,7 @@
     <strong>A reviewer told to check a row agrees with it.</strong> The brief
     instead says to assume the implementer believes the row is finished and to
     find evidence that it is not, and then asks the questions that have actually
-    found things here &mdash; first among them: take each test the row names, and
+    found things here. First among them: take each test the row names, and
     say what <em>one line</em> changed in the production code would leave it
     green. Three false receipts were found by that question in a single day. It
     also asks for <code>file:line</code> on every claim, and says an answer
@@ -117,8 +117,8 @@
   </table>
 
   <p>
-    <code>OVERSTATED</code> not closing a row is the decision worth arguing with,
-    because the behaviour it describes may be perfectly correct. It stays open
+    <code>OVERSTATED</code> leaves a row open even when the behaviour it describes
+    may be correct. It stays open
     anyway: a row whose evidence does not defend it is a false receipt, and a
     gate that accepted those would be measuring paperwork rather than the tree.
   </p>
@@ -126,7 +126,7 @@
   <p>
     <strong>The verdict is the last one in the report, not the first.</strong> A
     model that reasons out loud names several on its way to one, and reading the
-    first turns a thought into a conclusion &mdash; in the closing direction.
+    first turns a thought into a conclusion in the closing direction.
     <span class="chip test">tested</span>
     <code>the_last_verdict_wins_and_a_missing_one_is_not_a_pass</code>, which
     also pins the third case: a reviewer that ends with no verdict line at all is
@@ -154,12 +154,12 @@
     <code>the_rust_fingerprint_agrees_with_the_python_authority</code> runs the
     real script against this repository and compares the two values. They agree.
     If they ever stop, the Python one is the authority and the Rust one is what
-    changes &mdash; the failure message says so. The skip is real and reported:
+    changes; the failure message says so. The skip is real and reported:
     the script is a user-level skill, so a checkout elsewhere has nothing to
     compare against, and saying so beats passing in silence.
   </p>
 
-  <h2 id="cost">It spends money on purpose</h2>
+  <h2 id="cost">Each reviewed row spends money</h2>
 
   <p>
     Each row is a full agent run with tools, so a default that swept the ledger
@@ -173,7 +173,7 @@
     <span class="chip unv">unverified</span> How good these reviews are. One live
     run against <code>claude-opus-5</code> read the module, the tests, the
     mutation spec and the receipt before answering, which is the behaviour the
-    brief asks for &mdash; but one run is not a measurement, and nothing yet
+    brief asks for. One run is not a measurement, and nothing yet
     compares a model&rsquo;s verdict against a review a human already trusted.
     What would settle it: run this over the rows whose defects were found by hand
     today, and see whether it finds them too.

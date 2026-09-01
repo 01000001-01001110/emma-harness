@@ -14,10 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it, which is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -197,7 +197,7 @@ fn compose(width: u16, bar: &amp;Bar, skin: &amp;Skin) -&gt; Line&lt;'static&gt;
     <strong>a cap that is not positive is no cap</strong>, so no percentage or
     meter is drawn against it, and a cell with neither a positive count nor a
     positive cap does not appear at all. <code>up</code>, <code>down</code> and
-    <code>elapsed</code> keep the honest type: <code>None</code> is unknown,
+    <code>elapsed</code> keep a type that can say unknown: <code>None</code> is unknown,
     <code>Some(0)</code> is a measured zero, and the two render differently
     because they are different facts.
   </p>
@@ -303,7 +303,7 @@ fn filled(used: i64, cap: i64, segments: usize) -&gt; usize {
       <code>f.min(segments - 1)</code> on a <code>usize</code> panics when
       <code>segments</code> is zero. <code>context_cell</code> guards it with
       <code>if segments &gt; 0</code>, and the ladder only ever passes 10, 5 or
-      0, so nothing reaches it today. It is worth naming because the same file's
+      0, so nothing reaches it today. It is named because the same file's
       tests argue the opposite standard for a sibling helper:
       <code>group</code> is tested on negative input with the comment
       <em>&ldquo;a helper that panics or garbles on an input it &lsquo;never

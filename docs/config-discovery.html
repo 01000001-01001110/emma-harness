@@ -14,7 +14,7 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
      file and every page's copy of it — which is the deal, and is why the list
@@ -214,8 +214,7 @@ pub fn discover_from(start: &amp;Path, overridden: Option&lt;PathBuf&gt;) -&gt; 
       </svg>
     </div>
     <figcaption>
-      Read off <code>discover_in</code>. The two things worth noticing are on
-      the bottom row: the home directory offers only <code>.emma/</code>, and it
+      Read off <code>discover_in</code>. On the bottom row: the home directory offers only <code>.emma/</code>, and it
       offers it only when somebody put a <code>config.json</code> or a
       <code>personas/</code> there by hand.
     </figcaption>

@@ -105,7 +105,7 @@
         ));
     }
     <span class="c">// Egress before the local question, and independent of it: a tool can</span>
-    <span class="c">// be read-only — genuinely, honestly read-only — and still be the way</span>
+    <span class="c">// be read-only and still be the way</span>
     <span class="c">// something leaves this machine. Every arm below this line assumes the</span>
     <span class="c">// network question has already been answered.</span>
     if let deny @ Verdict::Deny(_) = self.egress(name, meta, target, term).await {
@@ -389,8 +389,8 @@
   <p>
     That is a narrower-than-bypass unattended mode, and nothing announces it.
     <strong>It is no longer tool-wide only.</strong> The narrowing somebody would
-    reach for &mdash; <code>Bash(git log:*)</code>, or
-    <code>"allow": ["Bash(cargo test *)"]</code> in a <code>-p</code> run &mdash;
+    reach for, such as <code>Bash(git log:*)</code> or
+    <code>"allow": ["Bash(cargo test *)"]</code> in a <code>-p</code> run,
     matches, because <code>decide</code> asks <code>for_call</code> and the
     specifier is a word-boundary prefix over the <code>command</code> argument.
   </p>
@@ -399,7 +399,7 @@
     <strong>This paragraph used to say the opposite, and it was right when it was
     written.</strong> Every <code>Bash(...)</code> and <code>Read(...)</code>
     specifier parsed to <code>Spec::Unsupported</code>: announced at boot, and
-    then matching nothing in any list &mdash; <code>deny</code> included.
+    then matching nothing in any list, including <code>deny</code>.
     Measured against a real settings file, <strong>62 of its 64 rules were
     inert</strong>. So a reader who acted on the old sentence would have believed
     two wrong things at once: that a narrow allow was impossible, and that a

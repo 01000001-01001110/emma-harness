@@ -14,10 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it, which is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -434,7 +434,7 @@ pub fn hidden(total_cols: u16, latch: Latch) -&gt; bool {
   <h2 id="render">What <code>App::render</code> does, in order</h2>
 
   <p>
-    Nine steps, and two of them are seams worth naming. It refuses a zero-sized
+    Nine steps, and two of them are seams. It refuses a zero-sized
     area; asks <code>hidden</code> and <code>sidebar::width</code>; carves;
     writes down <code>side_rect</code>; draws the sidebar; draws the main pane's
     border, header and rule; sets <code>wrap_width</code> and

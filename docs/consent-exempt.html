@@ -88,7 +88,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
 
   <p>
     The two task tools rewrite <code>.emma/tasks/tasks.md</code>. They declare
-    <code>read_only: false</code>, which is honest, and were not declared
+    <code>read_only: false</code> and were not declared
     <code>read_only: true</code> to dodge the gate. A tool that misreports itself
     leaves the gate protecting nothing in general rather than only for that tool,
     which is why the hole is a list of names in one place rather than a lie in a
@@ -190,7 +190,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
         </defs>
 
         <rect class="box" x="30" y="20" width="420" height="30" rx="3"/>
-        <text class="lbl" x="44" y="40">hook denial · deny rule — refuse anything</text>
+        <text class="lbl" x="44" y="40">hook denial · deny rule: refuse anything</text>
         <text class="tiny" x="470" y="40">configurable, and can be removed</text>
 
         <rect class="box" x="30" y="62" width="420" height="30" rx="3"/>
@@ -198,11 +198,11 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
         <text class="tiny" x="470" y="82">permit anything the two above did not name</text>
 
         <rect class="hl" x="30" y="104" width="420" height="30" rx="3"/>
-        <text class="lbl" x="44" y="124">the prompt — y runs it, whatever it is</text>
+        <text class="lbl" x="44" y="124">the prompt: y runs it, whatever it is</text>
         <text class="tiny" x="470" y="124">rm -rf / arrives here like any command</text>
 
         <rect class="box" x="30" y="146" width="420" height="30" rx="3"/>
-        <text class="lbl" x="44" y="166">EXEMPT — always allow, keyed by name</text>
+        <text class="lbl" x="44" y="166">EXEMPT: always allow, keyed by name</text>
         <text class="tiny" x="470" y="166">TaskCreate, TaskUpdate</text>
 
         <path class="edge-dash" d="M30 200 L450 200"/>

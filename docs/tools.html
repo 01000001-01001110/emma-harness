@@ -14,7 +14,7 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
      file and every page's copy of it — which is the deal, and is why the list
@@ -67,8 +67,13 @@
 <p class="eyebrow">Doing work</p>
 <h1>Tools</h1>
 <p class="lede">
-  Twenty-one tools across four crates, behind one trait with seven methods,
-  two of which have defaults. This chapter is what a tool <em>declares</em>
+  Twenty-three tools across four crates, behind one trait with seven methods,
+  two of which have defaults. Twenty-two register without a Brave Search key,
+  because <code>WebSearch</code> withdraws itself and says so rather than
+  failing when called. <span class="chip cert">certified</span>:
+  <code>emma config check</code> against an empty home lists 22 and names the
+  missing key; the page said twenty-one until 2026-09-01, which counted
+  neither <code>BashOutput</code> nor <code>KillShell</code>. This chapter is what a tool <em>declares</em>
   about itself and what it does when called. Whether a human is asked first is
   <a href="consent.html">the gate's business</a>, not the tool's.
 </p>
@@ -114,7 +119,7 @@ tool schema    ce26c5f39467e4f0</code></pre>
 </p>
 
 <p>
-  Two rules run through every crate and are worth carrying into any page below.
+  Two rules run through every crate and apply on every page below.
   <strong>Emptiness is a result</strong>: a read of an empty file, a glob
   matching nothing, a grep with no hits and a search with no results all
   succeed. And <strong>a cut says what was lost and what would get it back</strong>,

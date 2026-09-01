@@ -14,7 +14,7 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
      file and every page's copy of it — which is the deal, and is why the list
@@ -81,7 +81,7 @@
     </nav>
 
   <p class="lede">
-    In the order worth checking, because each step rules out the ones below it.
+    Check in this order, because each step rules out the ones below it.
     The first question is not "is my key spelled right", it is "did Emma read the
     file I edited at all", and it is the common answer.
   </p>
@@ -157,7 +157,7 @@ no model was called.</code></pre>
   </p>
 
   <p>
-    A fourth cause is narrower and worth knowing because it has no message at
+    A fourth cause is narrower and has no message at
     all: the home directory's <code>.emma/</code> is only a harness when it holds
     a <code>config.json</code> or a <code>personas/</code>. A
     <code>~/.emma/</code> holding a stored key and a settings file is walked past,
@@ -315,9 +315,9 @@ no model was called.</code></pre>
   <code>ce0dd69</code>, scratch <code>.claude/</code> harness, 2026-08-22. Paths
   elided for width; nothing else altered. <strong>The previous certification on
   this block showed a warning line the current binary cannot produce</strong>
-  &mdash; it was honest of its own build and went on looking green for weeks
-  after the behaviour moved, which is the failure mode a dated certification
-  has, and the reason a reader who tries to reproduce one is doing the site a
+  &mdash; it was accurate at its own build and went on looking green for weeks
+  after the behaviour moved. A dated certification goes on looking green
+  long after the thing it measured has moved, and the reason a reader who tries to reproduce one is doing the site a
   favour.
 
   <p>
@@ -336,7 +336,7 @@ no model was called.</code></pre>
   </p>
 
   <div class="note warn">
-    <span class="h">The fifth one does not print, and it is worth knowing about</span>
+    <span class="h">The fifth one does not print</span>
     <p>
       A <code>statusLine</code> Emma refused produces a sentence, and
       <code>config check</code> never asks for it. The report comes back

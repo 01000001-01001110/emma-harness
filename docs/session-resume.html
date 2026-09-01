@@ -476,8 +476,7 @@ pub fn restore_records(records: &amp;[Value]) -&gt; Resumed {
 
   <p>
     <strong>No tool is replayed.</strong> The region header in
-    <code>session.rs</code> states the absence as a decision rather than leaving
-    it to be noticed.
+    <code>session.rs</code> states explicitly that tools are not replayed.
   </p>
 
   <pre><code><span class="c">// crates/emma/src/session.rs — the Resume region header</span>
@@ -525,7 +524,7 @@ let resuming_a_goal_in_flight = !resumed.messages.is_empty();
 let mut query: Vec&lt;Message&gt; = open_query(resumed.messages, opening);</code></pre>
 
   <p>
-    Two costs, both stated rather than discovered. A restored prefix pays full
+    Two costs. A restored prefix pays full
     price on every call of the resumed goal instead of the 0.1× cache read it
     would otherwise get, and a resume that comes back over
     <code>max_context</code> runs that goal at that size because compaction

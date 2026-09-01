@@ -106,8 +106,8 @@
       <tr>
         <td><strong>The <code>chars / 4</code> token estimate.</strong> Called
             an under-count in both <code>agent.rs</code> and
-            <code>anthropic.rs</code>; nobody has measured the real ratio. It
-            now matters more, because a per-model floor of 4,096 means an
+            <code>anthropic.rs</code>; nobody has measured the real ratio. Its
+            effect is larger now because a per-model floor of 4,096 means an
             under-count withholds a marker from a 16 KB prefix rather than a
             2 KB one.</td>
         <td>Count a real prefix with <code>count_tokens</code> and compare
@@ -168,7 +168,7 @@
       <tr>
         <td><strong>What a <code>Shift+drag</code> selection actually
             contains.</strong> Mouse capture takes plain drag-selection, and
-            Shift gives back the terminal's own, which takes whole rows &mdash;
+            Shift gives back the terminal's own, which takes whole rows with
             sidebar columns, borders and gutter interleaved into every line. How
             bad that is with the sidebar open has never been recorded.</td>
         <td>Drag with Shift on a real console and paste into an editor. The
@@ -192,7 +192,7 @@
             Emma might run on allows a colon in a name, that name is refused when
             it would have worked. See
             <a href="tools-containment.html#streams">Containment</a>.</td>
-        <td>Run the same probe on a FAT32 or exFAT volume &mdash; a USB stick
+        <td>Run the same probe on a FAT32 or exFAT volume; a USB stick
             will do.</td>
       </tr>
       <tr>
@@ -244,7 +244,7 @@
   <p>
     These are marked <span class="chip test">tested</span> or
     <span class="chip cert">certified</span> elsewhere on the site, and the
-    marks are honest, but the person who wrote the page did not personally
+    marks reflect repository evidence, but the person who wrote the page did not personally
     re-run the thing. The distinction matters because a test's own claim about
     what it catches is itself a claim.
   </p>

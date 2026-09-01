@@ -14,10 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it, which is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -232,7 +232,7 @@
     <li>
       <a href="terminal-diff.html">What a write would change</a>
       <span>
-        Six cases where an honest diff cannot be produced and each says so. A
+        Six cases where a diff cannot be produced without fabricating one, and each says so. A
         bounded LCS, a budget split down the middle for a coarse patch, and the
         one line that is never cut.
       </span>
@@ -249,8 +249,7 @@
       <a href="terminal-sidebar.html">The sidebar</a>
       <span>
         Three sections on a grid measured off the image, a name that truncates
-        so a date can survive, and four empty-state sentences that are ASCII on
-        purpose.
+        so a date can survive, and four empty-state sentences in ASCII.
       </span>
     </li>
     <li>
@@ -274,7 +273,7 @@
       <span>
         Settings, the Data Explorer and Memory replace the middle and nothing
         else. Each draws only what Emma has, and names in words the panel it is
-        refusing to draw &mdash; an empty one would read as a number kept
+        refusing to draw. An empty one would read as a number kept
         somewhere else.
       </span>
     </li>
@@ -461,9 +460,17 @@
             <strong>Shift-drag</strong>, listed in the quick-help table because
             it is the one fact a user cannot guess. It selects the raw cell
             grid, so it is clean only with the sidebar collapsed.
-            <code>/export</code> is the intended copy path and has not landed.
+            <code>/export</code> is the copy path, and it has landed:
+            <code>session_command.rs:1053</code> implements
+            <code>export_conversation</code>, dispatched from the
+            <code>Export</code> arm at <code>:340</code>, and
+            <code>emma --help</code> lists it. This row said it had not landed
+            until 2026-09-01, while
+            <a href="terminal-copying.html">the copying page</a> documented the
+            implementation &mdash; two pages of one site disagreeing about
+            whether a command exists.
           </td>
-          <td><span class="chip unv">unverified</span></td>
+          <td><span class="chip cert">certified</span></td>
         </tr>
         <tr>
           <td>

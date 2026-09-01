@@ -234,8 +234,8 @@ pub struct SessionLog {
     file: Arc&lt;Mutex&lt;Option&lt;File&gt;&gt;&gt;,</code></pre>
 
   <p>
-    The ordering that argument protects is the one the whole format is for. A
-    record goes down before the thing it describes happens, so a run killed
+    Record-before-action ordering is what the format requires. A record goes down
+    before the thing it describes happens, so a run killed
     between the two leaves a claim that a tool was about to run and no claim
     that it did. Reverse the order and the file would sometimes assert a tool
     ran when the process died first. An <code>await</code> between the append

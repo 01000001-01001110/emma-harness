@@ -502,16 +502,16 @@ fn recover_from_a_model_change(&amp;mut self, e: &amp;LlmError) -&gt; bool {
 }</code></pre>
 
   <p>
-    Four guards, and the file says which are doing work. Only after a change,
-    otherwise an ordinary malformed request costs somebody their tool traffic.
-    Only on a message naming a signature or a thinking block. Both were confirmed
-    by mutation, per the function's own doc: remove either and a test goes red.
-    The third guard, the <code>is_model_bound</code> scan, is documented as
-    redundant and kept: what actually bounds this to a single attempt is
-    <code>compact</code> answering <code>Compacted::Nothing</code> once the
-    conversation is already summaries, and a conversation with no model-bound
-    block is one compaction has nothing left to take out of. Every mutation of
-    that check is invisible for that reason.
+    Four guards. Only after a change, otherwise an ordinary malformed request
+    costs somebody their tool traffic. Only on a message naming a signature or
+    a thinking block. Both were confirmed by mutation, per the function's own
+    doc: remove either and a test goes red. The third guard, the
+    <code>is_model_bound</code> scan, is documented as redundant and kept: what
+    bounds this to a single attempt is <code>compact</code> answering
+    <code>Compacted::Nothing</code> once the conversation is already summaries,
+    and a conversation with no model-bound block is one compaction has nothing
+    left to take out of. Every mutation of that check is invisible for that
+    reason.
     <span class="chip test">tested</span> per the doc's own record of the
     mutations; not a mutation watched during this write-up, since this task did
     not change source.

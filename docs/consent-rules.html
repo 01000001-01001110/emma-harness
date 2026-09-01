@@ -244,14 +244,14 @@
     <strong>This variant used to hold the two shapes people actually write.</strong>
     <code>Bash(git *)</code> and <code>Read(./src/**)</code> both parsed to
     <code>Spec::Unsupported</code>, which means they were announced at boot and
-    then matched nothing &mdash; including in <code>deny</code> lists. Measured
+    then matched nothing, including in <code>deny</code> lists. Measured
     against a real settings file: <strong>62 of its 64 rules were inert</strong>.
-    ARCH-002 gave both shapes real matchers, and what remains here is the
-    genuinely unknown specifier rather than the common case.
+    ARCH-002 gave both shapes real matchers, and what remains here is an unknown
+    specifier rather than the common case.
     <span class="chip test">tested</span>
     <code>the_shapes_that_used_to_be_inert_now_evaluate</code> parses a
     Claude-Code-shaped deny list and asserts a <code>rm</code> call is denied and
-    a <code>./src</code> read is allowed, with no boot note left to make &mdash; an
+    a <code>./src</code> read is allowed, with no boot note left to make. An
     announcement that fires on a rule which works is how announcements stop
     being read.
   </p>
@@ -525,7 +525,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
   <p>
     Both matchers read <em>argument text</em>. <code>Bash</code> hands that text
     to a shell, and the fs tools resolve their path long after the gate has
-    decided &mdash; so a rule can be evaded by writing the same thing differently,
+    decided. A rule can therefore be evaded by writing the same thing differently,
     and that is a property of the shape rather than a bug in it.
   </p>
 
@@ -533,24 +533,24 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     <strong>The command half.</strong> <code>Bash(git *)</code> does not match
     <code>env git push</code>, <code>cd . &amp;&amp; git push</code>,
     <code>GIT_SSH_COMMAND=x git push</code>, <code>echo hi | git push</code>, or
-    <code>/usr/bin/git push</code> &mdash; every one of which plainly runs git.
+    <code>/usr/bin/git push</code>. Every one plainly runs git.
     The fix is <em>not</em> a shell parser: quoting, substitution and operator
     precedence are the shell's business, and a half-parser gives rules a meaning
     that differs from what the shell actually does. What happens instead is
     narrower. When a <code>deny</code> rule for the tool carries a command prefix
-    and the command is <strong>composed</strong> &mdash; chained, piped,
+    and the command is <strong>composed</strong> (chained, piped,
     substituted, led by an environment assignment, a wrapper such as
-    <code>env</code> or <code>sh</code>, or a path-qualified binary &mdash; and no
+    <code>env</code> or <code>sh</code>, or a path-qualified binary), and no
     deny actually matched, the answer is <code>Ask</code>. Not <code>Deny</code>:
-    the rule genuinely did not match, and claiming it did would be the same
-    dishonesty pointing the other way. What is refused is passing <em>quietly</em>.
+    the rule did not match, and claiming it did would be false. What is refused
+    is passing <em>quietly</em>.
     <span class="chip test">tested</span>
     <code>a_composed_command_cannot_slip_past_a_deny_prefix</code> walks seven
     evasions and asserts each becomes a question.
   </p>
 
   <p>
-    <code>is_composed</code> is deliberately over-broad. A false positive costs a
+    <code>is_composed</code> is over-broad. A false positive costs a
     question a human answers; a false negative is a deny rule that did not fire.
   </p>
 
@@ -558,22 +558,21 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     <strong>Three ordinary spellings walked past it in silence until
     2026-08-23</strong>, and the page said at the time that only one evasion was
     uncaught. An independent reviewer drove the matcher directly against a
-    <code>Bash(git *)</code> deny and got <code>None</code> &mdash; no deny, no
-    question, no boot note &mdash; for a newline separator, a bare subshell, and
+    <code>Bash(git *)</code> deny and got <code>None</code>: no deny, no
+    question, and no boot note for a newline separator, a bare subshell, and
     the <code>command</code> builtin.
   </p>
 
   <p>
-    The newline is the one worth understanding, because the evidence was being
-    destroyed before the check ran. <code>command_of</code> normalises with
+    The newline bypass happened because the evidence was being destroyed before
+    the check ran. <code>command_of</code> normalises with
     <code>split_whitespace().join(" ")</code> so a prefix can be compared against
     the result, and that collapse turns a newline into a space: <code>echo
     hi\ngit push</code> arrived at <code>is_composed</code> as <code>echo hi git
     push</code>, one command whose first word is <code>echo</code>. Adding the
     token alone would have fixed nothing. The call site now passes the raw
-    argument, and the token is in the list as well, because a function called
-    <code>is_composed</code> should be right about its own input rather than
-    right about one caller's.
+    argument, and the token is in the list as well. <code>is_composed</code> now
+    receives the raw input rather than one caller's normalised form.
     <span class="chip test">tested</span>
     <code>an_ordinary_shell_spelling_cannot_walk_past_a_deny_rule</code> asserts
     the <em>decision</em> rather than <code>is_composed</code>, because the bug
@@ -589,8 +588,8 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     <code>setsid</code>, <code>stdbuf</code>, <code>ionice</code> and
     <code>busybox</code>. The cost is a question on a command containing a
     bracket for some other reason, and only where a <code>deny</code> prefix rule
-    for that tool already exists &mdash; which is the trade the paragraph above
-    states. The test's control asserts three plain commands stay clean under a
+    for that tool already exists. This is the trade the paragraph above
+    states. The test's control asserts three plain commands stay unprompted under a
     live deny rule, because a prompt that fires when it should not is how an
     operator learns to answer without reading.
   </p>
@@ -599,15 +598,15 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     <strong>One command evasion is still not caught, and cannot be by this
     shape.</strong>
     <code>git -C . push</code> against a rule reading <code>Bash(git push *)</code>
-    is an ordinary spelling with nothing suspicious in it &mdash; a genuine prefix
+    is an ordinary spelling with nothing suspicious in it: a genuine prefix
     mismatch. Treating an option sitting between two words a rule names as
     unjudgeable would make every flag a prompt. That is the boundary of prefix
-    matching over argument text; the honest options are to widen the heuristic
+    matching over argument text; the options are to widen the heuristic
     endlessly, to match after resolution, or to say plainly that a
     command-prefix deny narrows to the spellings it names. This paragraph is the
     third.
     <span class="chip unv">unverified</span>
-    <em>What would settle it:</em> nothing settles it &mdash; it is a statement
+    <em>What would settle it:</em> nothing settles it; it is a statement
     about what the shape can express, not a claim about a run.
   </p>
 
@@ -615,9 +614,9 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     <strong>The path half.</strong> <code>./src/x</code> and <code>src/x</code> are
     one file to the tool and were two strings to the matcher, so a deny protected
     only the spelling the operator happened to use. Both the rule pattern and the
-    call's path are now normalised before matching &mdash; separators become
-    <code>/</code>, repeated separators collapse, <code>./</code> segments go
-    &mdash; so the rule and the call meet in one spelling.
+    call's path are now normalised before matching: separators become
+    <code>/</code>, repeated separators collapse, and <code>./</code> segments go.
+    The rule and the call then meet in one spelling.
     <span class="chip test">tested</span>
     <code>a_path_rule_is_not_defeated_by_respelling_the_same_file</code> crosses
     two rule spellings with five call spellings and asserts all ten deny.
@@ -632,14 +631,14 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     A <code>..</code> component <strong>in the call</strong>, or an absolute call
     against a relative rule, is <strong>refused rather than resolved</strong>:
     the same <code>Ask</code> the composed commands get. A <code>..</code> in the
-    <em>rule</em> is a different matter and gets a different answer &mdash; it is
+    <em>rule</em> is a different matter and gets a different answer: it is
     a parse error, because a pattern that can never be evaluated is not a rule.
     An earlier version asked the question of both sides, and one <code>..</code>
     in one rule then turned every unrelated read into a prompt.
     <span class="chip test">tested</span>
     <code>a_path_a_rule_cannot_be_compared_against_asks_rather_than_passes</code>
     asserts three such paths answer <code>Deny</code> or <code>Ask</code> and
-    never silence, and that an ordinary relative path is still judged &mdash; a
+    never silence, while an ordinary relative path is still judged. A
     gate that asks about everything is a gate nobody reads.
   </p>
 
@@ -660,7 +659,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     <strong>The tool decides, not the punctuation.</strong> Only <code>Bash</code>
     runs a command, so only <code>Bash(...)</code> is a prefix; every other tool
     addresses a path, so its specifier is a glob. The first version asked whether
-    the text contained a separator or a glob character instead &mdash; which made
+    the text contained a separator or a glob character instead, which made
     <code>Read(Cargo.toml)</code> a <em>command</em> prefix, matched against a
     <code>command</code> argument that a <code>Read</code> call does not have. It
     matched nothing at all, silently, on a rule naming one file by name.
@@ -669,9 +668,9 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
   <p>
     That was one of seven bypasses a cross-model review returned against the
     first version of the path matcher, all seven with exact inputs. Five were
-    holes; <strong>two were the opposite &mdash; a rule answering where it should
-    have stayed quiet</strong>, which matters as much, because a gate that asks
-    about everything is a gate nobody reads.
+    holes; <strong>two were the opposite: a rule answering where it should
+    have stayed quiet</strong>. A gate that asks about everything is a gate nobody
+    reads.
   </p>
 
   <div class="tw">
@@ -693,7 +692,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     <span class="chip test">tested</span>
     <code>the_respelling_bypasses_a_review_found_are_all_closed</code> keeps each
     of the seven as the exact input the review gave, rather than a paraphrase of
-    it &mdash; the paraphrase is what the original code was already written
+    it. The paraphrase is what the original code was already written
     against. Five mutations were run against the guards it covers: dropping the
     drive letter from <code>is_absolute</code>, keeping trailing dots, making the
     glob case-sensitive, moving the ladder back behind the preflight, and

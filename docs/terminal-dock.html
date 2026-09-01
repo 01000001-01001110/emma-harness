@@ -14,10 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it, which is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -190,8 +190,8 @@
     line: the pane keys, the tool chords, the four menu keys, and every mouse
     event. Each mutates view state through the frame and returns, so
     <em>&ldquo;a scroll cannot become a line, so it cannot answer a
-    question&rdquo;</em>, and the drain guarantee is untouched by construction
-    rather than by care.
+    question&rdquo;</em>, and the drain guarantee is untouched because those
+    keystrokes never enter the channel.
   </p>
 
   <p>
@@ -276,7 +276,7 @@
     lines, asserts fifty joined breaks, asserts no newline survived, and then
     asserts it takes an actual Enter to send it. It no longer asserts
     <code>Action::Edit</code>, because <code>paste</code> returns the loss
-    instead &mdash; a paste cannot submit, so the action was the one thing a
+    instead. A paste cannot submit, so the action was the one thing a
     caller could already work out.
     <code>control_bytes_in_a_paste_never_reach_the_line</code> pins the exact
     surviving string, <code>safe[31mred text tabbed</code>, which shows the
@@ -286,8 +286,8 @@
 
   <p>
     <code>a_paste_that_lost_something_says_what_and_a_clean_one_says_nothing</code>
-    carries the reporting, and the clean case is the load-bearing half of it: a
-    note on every paste is noise, and noise is what gets ignored, which would
+    carries the reporting, and the clean case is the half a reader will see most:
+    a note on every paste is noise, and noise is what gets ignored, which would
     leave the real notes unread. Four mutations go red on four different
     assertions &mdash; always silent, always speaking, breaks counted per
     character instead of per run, and control bytes dropped without being
@@ -681,7 +681,7 @@
     <strong>One of its arms is now driven anyway.</strong> The paste arm was
     lifted out as <code>on_paste</code>, taking a narrow <code>Surface</code>
     trait that <code>Frame</code> implements and a test satisfies with a
-    recorder &mdash; so what the arm <em>does</em> is asserted rather than only
+    recorder, so what the arm <em>does</em> is asserted rather than only
     what it decides. That distinction is the whole of <code>ARCH-003</code>: a
     reviewer deleted the line carrying the paste note to the screen and the
     entire workspace stayed green, because the decision had a test and the

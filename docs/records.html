@@ -95,7 +95,7 @@
     <code>STATUS.md</code>.
   </p>
 
-  <h2 id="rules">The rules that keep the code honest</h2>
+  <h2 id="rules">Rules for durable records</h2>
 
   <h3>Comments carry the why, not the what</h3>
 
@@ -108,7 +108,7 @@
   <h3>A test that cannot fail is a false receipt</h3>
 
   <p>
-    Every behaviour gets a test, and the tests that matter must go red when the
+    Every behaviour gets a test, and tests that claim a guarantee must go red when the
     guarantee is removed. The way to know is to break the code, watch the test
     fail, and put it back. Report which mutations were run and what happened.
   </p>
@@ -141,8 +141,8 @@
   <p>
     Explicitly, in a section of its own, with what would settle it. Every page
     on this site ends with one, and they are collected on
-    <a href="unverified.html">What is not verified</a>. This matters most for
-    anything drawn on a terminal, because a cell buffer is not a console.
+    <a href="unverified.html">What is not verified</a>. Terminal claims require
+    this distinction because a cell buffer is not a console.
   </p>
 
   <h3>Do not fabricate</h3>

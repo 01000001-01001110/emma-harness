@@ -79,8 +79,8 @@
 <span class="c">// ---------------------------------------------------------------------------</span>
 <span class="c">// The footer, which the subagent did not write</span>
 <span class="c">//</span>
-<span class="c">// The part of this design that matters. A subagent's deliverable is by</span>
-<span class="c">// construction a description of work rather than the work, and the failure that</span>
+<span class="c">// A subagent's deliverable is a description of work rather than the work, and</span>
+<span class="c">// the failure that</span>
 <span class="c">// produces is documented rather than hypothetical: *"subagents imply they read</span>
 <span class="c">// file content but demonstrably did not — they infer behavior from filenames,</span>
 <span class="c">// variable names, or comments instead of tracing actual code logic"*</span>
@@ -90,15 +90,15 @@
 <span class="c">// assertion that looks like a verification: a run that hallucinated a conclusion</span>
 <span class="c">// will hallucinate a plausible list of files to go with it. The harness already</span>
 <span class="c">// knows. Every one of these numbers comes out of the records the *loop* wrote</span>
-<span class="c">// during that run — `Facts::from` takes them and nothing else, and takes no</span>
+<span class="c">// during that run; `Facts::from` takes them and nothing else, and takes no</span>
 <span class="c">// text the model produced.</span>
 <span class="c">//</span>
 <span class="c">// **Every recorded tool call appears in exactly one footer category, and a</span>
 <span class="c">// call can be described coarsely but can never vanish.** That is the invariant</span>
 <span class="c">// the categories are arranged around, and it is a repair rather than an</span>
 <span class="c">// original virtue: the categories are keyed on argument names, so for a while</span>
-<span class="c">// any call carrying none of `file_path`/`pattern`/`command` — `WebFetch(url)`,</span>
-<span class="c">// `WebSearch(query)`, `Skill`, every `Task*` — was counted in `tool_calls` and</span>
+<span class="c">// any call carrying none of `file_path`/`pattern`/`command` (`WebFetch(url)`,</span>
+<span class="c">// `WebSearch(query)`, `Skill`, every `Task*`) was counted in `tool_calls` and</span>
 <span class="c">// named nowhere, which reads as `files read: none` under a paragraph</span>
 <span class="c">// describing five fetches. Coarseness is visible and self-correcting; a parent</span>
 <span class="c">// reading `other tool calls: Frobnicate ×2` knows the record is coarse.</span>
@@ -107,8 +107,8 @@
 <span class="c">//</span>
 <span class="c">// **What it proves and what it does not.** It proves what was looked at, what</span>
 <span class="c">// was run, and how the run ended. It does not prove the conclusion follows from</span>
-<span class="c">// any of it. The worst case of this whole design is that the footer becomes the</span>
-<span class="c">// thing everyone trusts — `done · 14 files · 3 commands` reads like verification</span>
+<span class="c">// any of it. The footer can become the</span>
+<span class="c">// thing everyone trusts: `done · 14 files · 3 commands` reads like verification</span>
 <span class="c">// and is only attendance. It reports counts rather than adjectives for that</span>
 <span class="c">// reason, and nothing anywhere claims the conclusion was checked.</span>
 <span class="c">// ---------------------------------------------------------------------------</span></code></pre>
@@ -130,7 +130,7 @@
         </defs>
 
         <rect class="ghost" x="300" y="14" width="466" height="182" rx="4"/>
-        <text class="tiny" x="312" y="32">the nested run — its own registry, instructions, budgets, DoneCheck, provider</text>
+        <text class="tiny" x="312" y="32">the nested run: its own registry, instructions, budgets, DoneCheck, provider</text>
 
         <rect class="hl" x="14" y="52" width="248" height="40" rx="3"/>
         <text class="lbl" x="28" y="70">parent loop</text>
@@ -140,7 +140,7 @@
         <text class="tiny" x="266" y="62">brief()</text>
 
         <rect class="box" x="326" y="46" width="416" height="36" rx="3"/>
-        <text class="lbl" x="340" y="69">Agent::run_goal — the second loop</text>
+        <text class="lbl" x="340" y="69">Agent::run_goal: the second loop</text>
 
         <path class="edge" d="M430 82 L430 108" marker-end="url(#ftr-arrow)"/>
         <path class="edge-hl" d="M640 82 L640 108" marker-end="url(#ftr-arrow-hl)"/>
@@ -156,7 +156,7 @@
         <text class="sm" x="558" y="164">sub.denied · goal_finished</text>
 
         <path class="edge" d="M422 176 L422 232 L150 232 L150 268" marker-end="url(#ftr-arrow)"/>
-        <text class="tiny" x="172" y="226">the agent's own account — carried verbatim, never parsed</text>
+        <text class="tiny" x="172" y="226">the agent's own account: carried verbatim, never parsed</text>
 
         <path class="edge-hl" d="M644 176 L644 300 L568 300" marker-end="url(#ftr-arrow-hl)"/>
 
@@ -172,7 +172,7 @@
         <text class="sm" x="28" y="324">under it</text>
 
         <path class="edge" d="M140 330 L140 356" marker-end="url(#ftr-arrow)"/>
-        <text class="tiny" x="14" y="374">the parent's model — which read neither the transcript nor a file the sub opened</text>
+        <text class="tiny" x="14" y="374">the parent's model, which read neither the transcript nor a file the sub opened</text>
       </svg>
     </div>
     <figcaption>
@@ -200,16 +200,16 @@ struct Facts {
     files: Vec&lt;String&gt;,
     searches: Vec&lt;String&gt;,
     <span class="c">/// Where it went. `url` is `WebFetch`'s argument name, and egress is the</span>
-    <span class="c">/// class of call the rest of this design treats as the sensitive one — a</span>
+    <span class="c">/// class of call the rest of this design treats as sensitive. A</span>
     <span class="c">/// footer that reported five fetches as `files read: none` was</span>
-    <span class="c">/// under-reporting precisely there.</span>
+    <span class="c">/// under-reporting the fetches.</span>
     fetched: Vec&lt;String&gt;,
     <span class="c">/// Every call whose arguments matched no probe above, tallied by the tool</span>
-    <span class="c">/// name **the loop recorded**. Coarse on purpose, and the reason it exists</span>
-    <span class="c">/// is in the region doc: a call may be described coarsely, never omitted.</span>
+    <span class="c">/// name **the loop recorded**. The region doc sets the required granularity:</span>
+    <span class="c">/// a call may be described coarsely, never omitted.</span>
     other: BTreeMap&lt;String, usize&gt;,
     <span class="c">/// The command, and the exit status its result reported. `None` is a command</span>
-    <span class="c">/// whose result never arrived — interrupted, or refused.</span>
+    <span class="c">/// whose result never arrived (interrupted or refused).</span>
     commands: Vec&lt;(String, Option&lt;i64&gt;)&gt;,
     denied: Vec&lt;String&gt;,
 }</code></pre>
@@ -220,8 +220,7 @@ struct Facts {
     <code>commands</code> does not: two identical <code>cargo test</code> runs
     are two entries, because their exit statuses can differ and collapsing them
     would hide the second. <code>other</code> is a tally rather than a list,
-    since the thing worth reporting about an unrecognised call is that it
-    happened and how often.
+    since an unrecognised call records only that it happened and how often.
   </p>
 
   <h2 id="from">Facts::from, and the mutation to try on it</h2>
@@ -253,7 +252,7 @@ struct Facts {
                     <span class="c">// **The last arm is the one that makes the convention</span>
                     <span class="c">// safe.** Keying on argument names means a tool naming its</span>
                     <span class="c">// arguments something else falls through every probe, and</span>
-                    <span class="c">// until this arm existed it fell through into silence —</span>
+                    <span class="c">// until this arm existed it fell through into silence:</span>
                     <span class="c">// Emma's own `WebFetch(url)` and `WebSearch(query)` among</span>
                     <span class="c">// them, which is how five fetches footered as</span>
                     <span class="c">// `files read: none` over `5 tool calls`. The residual is</span>
@@ -371,10 +370,10 @@ struct Facts {
   <p>
     <span class="chip cert">certified</span> The right-hand column was built by
     reading every <code>input_schema</code> in the tree rather than from memory:
-    of the 23 tools registered here &mdash; 24 in a tree with a skill in it, since
-    <code>Skill</code> is registered only when the harness resolved some &mdash; 13 carry one
+    of the 23 tools registered here (24 in a tree with a skill in it, since
+    <code>Skill</code> is registered only when the harness resolved some), 13 carry one
     of the five probed names
-    and 10 fall in the residual &mdash; <code>BashOutput</code> and
+    and 10 fall in the residual. <code>BashOutput</code> and
     <code>KillShell</code> arrived with <code>ARCH-001</code> and neither takes a
     probed name. Repeat it by extracting the top-level
     <code>properties</code> keys from each <code>fn input_schema</code> under
@@ -453,8 +452,7 @@ struct Facts {
         <span class="c">// "touched", not "read": `Write` and `Edit` carry `file_path` too, so</span>
         <span class="c">// a written file has always landed in this list. The neutral word</span>
         <span class="c">// costs nothing and stops the over-claim; splitting read from written</span>
-        <span class="c">// would need the tool-name knowledge this file has deliberately</span>
-        <span class="c">// refused.</span>
+        <span class="c">// would need the tool-name knowledge this file refuses.</span>
         out.push_str(&amp;listed("files touched", &amp;self.files));
         out.push_str(&amp;listed("searched for", &amp;self.searches));
         out.push_str(&amp;listed("fetched", &amp;self.fetched));
@@ -467,7 +465,7 @@ struct Facts {
             })
             .collect();
         out.push_str(&amp;listed("commands run", &amp;commands));
-        <span class="c">// The residual. Named only when there is something in it — an empty</span>
+        <span class="c">// The residual. Named only when there is something in it; an empty</span>
         <span class="c">// bucket has nothing to disclose, and the categories above already say</span>
         <span class="c">// `none` for themselves.</span>
         if !self.other.is_empty() {
@@ -518,14 +516,14 @@ struct Facts {
     Four categories say <code>none</code> when they are empty. The residual stays
     quiet instead, and so does <code>refused or blocked</code>: an empty bucket
     has nothing to disclose, and <code>other tool calls: none</code> on every
-    footer is noise rather than honesty. <span class="chip test">tested</span>
+    footer adds noise without disclosing anything. <span class="chip test">tested</span>
     The empty-record test asserts <code>files touched: none</code> and
     <code>fetched: none</code> are present and that <code>other tool calls</code>
     is absent.
   </p>
 
-<pre><code><span class="c">/// A capped list, and an honest count when it is capped. Never present a cut</span>
-<span class="c">/// list as a whole one — the same discipline `read.md` and `bash.md` state.</span>
+<pre><code><span class="c">/// A capped list reports its full count. Never present a cut</span>
+<span class="c">/// list as a whole one; the same discipline `read.md` and `bash.md` state.</span>
 fn listed(what: &amp;str, items: &amp;[String]) -&gt; String {
     if items.is_empty() {
         return format!("{what}: none\n");
@@ -561,7 +559,7 @@ fn listed(what: &amp;str, items: &amp;[String]) -&gt; String {
 <span class="c">/// **Scans the opening lines rather than only the first.** `Bash` prepends its</span>
 <span class="c">/// shell banner to every result, so the status has never been on line one, and</span>
 <span class="c">/// a parser that read only line one returned `None` for every command ever run</span>
-<span class="c">/// by a subagent — which is why the footer reported "no result" throughout.</span>
+<span class="c">/// by a subagent, which is why the footer reported "no result" throughout.</span>
 fn exit_status(content: &amp;str) -&gt; Option&lt;i64&gt; {
     content
         .lines()
@@ -602,7 +600,7 @@ fn string(value: &amp;Value, key: &amp;str) -&gt; String {
     <span class="h">This mechanism had never once fired in production</span>
     <p>
       The parser read line one, and <code>Bash</code> prepends its shell banner
-      to every result &mdash; so the status has never been on line one. Every
+      to every result, so the status has never been on line one. Every
       command ever run by a subagent yielded <code>None</code>, and the footer
       said <code>no result</code> throughout, which reads as
       <em>"the command did not run"</em> rather than <em>"this parser cannot find
@@ -610,12 +608,12 @@ fn string(value: &amp;Value, key: &amp;str) -&gt; String {
     </p>
     <p>
       <strong>What did not catch it.</strong> The tests passed, because their
-      fixtures put the status on line one &mdash; they were written from the
+      fixtures put the status on line one. They were written from the
       doc comment rather than from a real <code>Bash</code> result. The page you
       are reading described the parser accurately, and the parser was wrong. And
       the failure looked exactly like the normal case for a subagent that had
       been refused, so there was nothing anomalous to notice.
-      <strong>A mechanism whose failure mode is indistinguishable from its
+      <strong>A mechanism whose failure is indistinguishable from its
       quiet success has no symptom at all</strong>, and the only thing that finds
       one is checking it against real output.
     </p>

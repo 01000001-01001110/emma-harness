@@ -155,9 +155,8 @@ struct Fold {
 }</code></pre>
 
   <p>
-    The collapse this doc describes as removed is worth stating as a reversal,
-    because the removed version is the obvious design and it will be proposed
-    again. A finished goal used to become two lines of prose the instant it
+    The removed collapse is documented here because it is the obvious
+    alternative. A finished goal used to become two lines of prose the instant it
     finished, in the loop, and the fold carried its own copy of that rule so a
     resume would produce the same shape. Two implementations of one decision,
     and the failure mode was silent: move either one and <code>--resume</code>
@@ -169,7 +168,7 @@ struct Fold {
   <p>
     <code>damage</code> is the field a previous quote of this struct left out.
     A malformed <code>compacted</code> record still prints to stderr and
-    refuses to act, which is the right refusal; without the field, nothing
+    refuses to act, which is the intended refusal; without the field, nothing
     downstream could tell it had happened, so a test guarding it asserted only
     that the fold did not panic. The sentences collect here so a resumed run
     can say the conversation it rebuilt is known not to match the one that
@@ -288,8 +287,8 @@ match r["kind"].as_str().unwrap_or_default() {
   <p>
     The timing of <code>close_goal</code> is the subtle one. A
     <code>goal_finished</code> record does not close the goal; the
-    <em>next</em> <code>goal</code> record does. That is not tidiness, it is
-    agreement with the loop: after a goal ends the loop still holds that goal's
+    <em>next</em> <code>goal</code> record does. That matches the loop: after a
+    goal ends the loop still holds that goal's
     <code>query</code> and would send it again unchanged if nothing else
     happened. A fold that closed early would disagree with the last call of a
     one-goal session, which is the commonest session there is.
@@ -385,9 +384,9 @@ match r["kind"].as_str().unwrap_or_default() {
       that abandoned the splice. A <code>messages</code> field that would not
       deserialise yielded an empty vector and the splice still removed
       <code>drop_messages</code> messages off the front, so a malformed record
-      deleted conversation rather than being ignored — the one arm whose
-      damage mode was deletion while every neighbour dropped the bad record
-      and no more. Both defaults are gone. A missing count and an unreadable
+      deleted conversation rather than being ignored — the arm that deleted
+      conversation on malformed input while other arms dropped bad records and
+      no more. Both defaults are gone. A missing count and an unreadable
       replacement now each refuse the whole arm, say so on stderr, and leave
       the conversation alone — which is still not a silent no-op, because the
       refusal names the consequence: the rebuilt conversation will not match

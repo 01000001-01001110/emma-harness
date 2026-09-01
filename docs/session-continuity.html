@@ -210,8 +210,8 @@ pub fn differences(
 
   <p>
     Each line names the field, the old value, the new one and what the
-    difference costs. The cost sentences are the part worth having: a hash pair
-    tells a user something changed and not what it means for the conversation
+    difference costs. The cost sentences explain what each change means: a hash
+    pair tells a user something changed and not what it means for the conversation
     they are about to continue. An empty recorded value produces no line, so a
     file from before a field existed is silent rather than noisy.
     <span class="chip test">tested</span>
@@ -406,8 +406,7 @@ impl FirstRun {
     <code>a_machine_that_has_never_run_emma_is_a_first_run</code> covers a
     missing directory, a <code>None</code> directory and an empty one.
     <code>a_new_project_on_a_machine_with_history_is_still_a_first_run</code>
-    is the case that decides whether the welcome is worth having: a session
-    recorded from elsewhere yields <code>NoneFromHere</code>, and once something
+    is the case the welcome targets: a session recorded from elsewhere yields <code>NoneFromHere</code>, and once something
     has run here the answer becomes <code>None</code>.
     <code>each_reason_says_which_one_it_was</code> asserts the two sentences
     differ in the way a reader needs.

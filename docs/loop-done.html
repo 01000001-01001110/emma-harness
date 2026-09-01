@@ -352,8 +352,8 @@ fn is_decoration(c: char) -&gt; bool {
     that case and expensive in the one nobody had written down — a marker
     followed by its own retraction, "Actually wait — the tests still fail",
     ended the goal <code>Done</code> with the correction sitting where nobody
-    would read it. The half of the old argument worth keeping survives in the
-    detail: trailing <em>blank</em> lines still do not cost the claim, because
+    would read it.     One detail from the old rule survives in the scan: trailing <em>blank</em>
+    lines still do not cost the claim, because
     the scan walks back to the last line with anything on it. A footer after
     the marker now does cost it, and buys a kick rather than a wrong answer.
     <code>eq_ignore_ascii_case</code> means <code>goal complete</code> counts,
@@ -483,10 +483,8 @@ fn could_become_marker(line: &amp;str) -&gt; bool {
 }</code></pre>
 
   <p>
-    Three arms, and the third is the one worth pausing on.
-    <code>str::get(..n)</code> returns <code>None</code> both when the string is
-    shorter than <code>n</code> and when <code>n</code> lands inside a multi-byte
-    character. The <code>t.len() &lt;= MARKER.len()</code> guard separates them,
+    Three arms. The third separates a line whose bytes run past the marker's
+    length from one that is still a prefix.
     so a line whose bytes run past the marker's length is not it, and a shorter
     line is compared as a prefix.
   </p>
@@ -582,8 +580,8 @@ fn could_become_marker(line: &amp;str) -&gt; bool {
 
   <p>
     <code>notes/research/loops-goals-and-cost.md</code> collected the numbers
-    behind "LLM-as-judge is brittle". They are worth having before anyone builds
-    the judge check, because the failure is not that a judge is a coin flip. It
+    behind "LLM-as-judge is brittle". Read them before anyone builds the judge
+    check, because the failure is not that a judge is a coin flip. It
     is that the reassuring number is the wrong number.
   </p>
 

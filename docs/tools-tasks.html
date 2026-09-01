@@ -14,7 +14,7 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
      file and every page's copy of it — which is the deal, and is why the list
@@ -157,7 +157,7 @@
 
 <p>
   An id that is not in the file is an argument error rather than an empty
-  result, and that is the one worth arguing for. Returning nothing would teach
+  result. Returning nothing would teach
   the model that the task it just created has vanished, and its next move would
   be to create it again. A missing file, no tasks at all, and no tasks matching
   a filter are all <code>Ok</code>.
@@ -390,8 +390,8 @@
     }</code></pre>
 
 <p>
-  The second panic in that function is the one worth reading. After
-  <code>2^32</code> salts with a free handle known to exist, it says so rather
+  The second panic in that function fires after
+  <code>2^32</code> salts with a free handle known to exist. It says so rather
   than writing <code>unreachable!</code>, because nothing proves FNV-1a reaches
   every handle within that many salts and an <code>unreachable!</code> would be
   a claim about a hash function.
@@ -414,7 +414,7 @@
 <p>
   You cannot lock a file a person is editing in VS Code. An advisory lock the
   editor does not take part in protects nothing, and a mandatory one turns their
-  save into an error dialog. So the only honest strategy is to hold the file as
+  save into an error dialog. The strategy is to hold the file as
   briefly as possible and to notice when it moved.
 </p>
 

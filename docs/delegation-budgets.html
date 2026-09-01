@@ -94,16 +94,16 @@ const SUB_ITERATIONS: u32 = 20;
 
 <span class="c">/// The most of the *remaining* goal budget one delegation may spend: half.</span>
 <span class="c">/// Half rather than all, so a subagent that runs away leaves the parent enough</span>
-<span class="c">/// to report what happened and finish — the same argument shape as `compact`</span>
+<span class="c">/// to report what happened and finish, the same argument shape as `compact`</span>
 <span class="c">/// targeting half the context cap.</span>
 const SUB_TOKEN_SHARE: i64 = 2;
 
 <span class="c">/// Below this much remaining allowance a delegation refuses to start.</span>
 <span class="c">///</span>
-<span class="c">/// A delegation launched with nothing left returns a perfectly good answer into</span>
+<span class="c">/// A delegation launched with nothing left returns an answer into</span>
 <span class="c">/// a goal that then immediately ends, and the work is lost from the conversation</span>
 <span class="c">/// even though it was paid for. The refusal is a `tool_result` the model can</span>
-<span class="c">/// read and route around — never a missing tool, which would be a capability</span>
+<span class="c">/// read and route around; never a missing tool, which would be a capability</span>
 <span class="c">/// that silently disappears late in every goal.</span>
 const MIN_REMAINING_TOKENS: i64 = 20_000;
 
@@ -166,7 +166,7 @@ const FOOTER_ITEMS: usize = 12;
             wall_clock: SUB_WALL_CLOCK.min(self.nest.budgets.wall_clock),
             <span class="c">// One nudge. A subagent that has stopped without claiming completion</span>
             <span class="c">// has usually said most of what it found, and the parent gets that</span>
-            <span class="c">// text either way — a second and third nudge spends the parent's</span>
+            <span class="c">// text either way. A second and third nudge spends the parent's</span>
             <span class="c">// budget arguing with a run the parent cannot see.</span>
             max_kicks: 1,
             max_context: self.nest.budgets.max_context,
@@ -227,9 +227,9 @@ const FOOTER_ITEMS: usize = 12;
 <span class="c">/// delegates to.</span>
 <span class="c">///</span>
 <span class="c">/// **Why it is not a local.** `run_goal` kept `let mut tokens` and tested it</span>
-<span class="c">/// after every call, which is exactly right for a loop that is the only thing</span>
-<span class="c">/// spending. A delegation is a second loop spending the same budget, and it</span>
-<span class="c">/// cannot reach a local — so the owner's ruling that a subagent spends the</span>
+<span class="c">/// after every call while that loop was the only thing spending. A delegation</span>
+<span class="c">/// is a second loop spending the same budget, and it</span>
+<span class="c">/// cannot reach a local, so the owner's ruling that a subagent spends the</span>
 <span class="c">/// parent's budget is either this type or an `if call.name == "Delegate"` in</span>
 <span class="c">/// `run_tool_call` adding the tool's self-reported cost. The second is the loop</span>
 <span class="c">/// branching on a tool's identity, which the module doc forbids and which this</span>
@@ -272,7 +272,7 @@ impl Spend {
         self.counted.load(Ordering::SeqCst)
     }
 
-    <span class="c">/// The per-goal reset. Local by design — see the type's doc.</span>
+    <span class="c">/// The per-goal reset is local; see the type's doc.</span>
     pub fn set(&amp;self, tokens: i64) {
         self.counted.store(tokens, Ordering::SeqCst);
     }
@@ -280,8 +280,8 @@ impl Spend {
   <span class="src">crates/emma/src/agent.rs — Spend, quoted entire with its doc</span>
 
   <p>
-    <code>add</code> walks up the chain and <code>set</code> does not, and that
-    asymmetry is the whole mechanism. If <code>set</code> propagated, a nested
+    <code>add</code> walks up the chain and <code>set</code> does not. If
+    <code>set</code> propagated, a nested
     goal opening would zero the meter of the goal paying for it. If
     <code>add</code> did not, a delegation would be a way to spend past the
     parent's cap. Because the charge lands as it happens, the parent's
@@ -290,7 +290,7 @@ impl Spend {
   </p>
 
   <p>
-    The alternative the type's doc rejects is worth naming: a
+    The type's doc rejects an alternative: a
     <code>run_tool_call</code> that adds a tool's self-reported cost when the
     tool's name is <code>Delegate</code>. That is the loop branching on a tool's
     identity, which the module doc forbids and which this project has already
@@ -401,7 +401,7 @@ impl Spend {
             ))),
             <span class="c">// Everything else did work and did not claim completion. The text is</span>
             <span class="c">// usually most of the answer, and throwing it away to return a clean</span>
-            <span class="c">// error throws away everything that was paid for — so it is carried,</span>
+            <span class="c">// error throws away everything that was paid for, so it is carried,</span>
             <span class="c">// under an ending that says not to re-issue the same brief.</span>
             _ =&gt; Err(ToolError::Failed(format!(
                 "the delegated agent stopped without finishing: {}\n\nWhat it had at that \

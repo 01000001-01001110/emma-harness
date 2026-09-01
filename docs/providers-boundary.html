@@ -14,11 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page because these pages open from file://
      with no server, no build step and no JavaScript, so there is nothing to
-     include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
-     is kept short.
+     include a partial with. Adding a page means editing this file and every
+     page's copy of it, so the list is kept short.
      =========================================================================== -->
 <nav class="side">
   <div class="brand">
@@ -188,8 +187,8 @@ pub struct Request {
 
   <p>
     The cache is an exact prefix match, so anything that varies per turn has to
-    sit after everything that does not. That is the whole argument for the
-    order. Keeping <code>history</code> and <code>query</code> as separate
+    sit after everything that does not. Prefix caching requires this field order.
+    Keeping <code>history</code> and <code>query</code> as separate
     fields is what lets the renderer find the end of the stable part without
     inspecting messages to guess where a turn began.
   </p>
@@ -251,7 +250,7 @@ pub struct Request {
   </p>
 
   <p>
-    The four constructors differ in what they promise, not just in convenience.
+    The four constructors differ in what they promise.
     <code>Message::assistant</code> takes blocks because rebuilding a turn from
     its text loses the thinking signature and makes the <em>next</em> call
     fail. <code>Message::assistant_text</code> exists beside it for turns Emma
@@ -276,10 +275,9 @@ pub fn tool_results(results: Vec&lt;ToolResult&gt;) -&gt; Self { … }</code></p
 
   <p>
     <code>Message::user</code> is the fourth and is a one-line wrapper around
-    <code>Content::Text</code>. It is uninteresting except for what it does not
-    do: a plain user message stays a JSON string on the wire rather than
-    becoming a one-element block array, which is a byte difference the cache
-    would notice. <span class="chip cert">certified</span> by the golden body
+    <code>Content::Text</code>. A plain user message stays a JSON string on the
+    wire rather than becoming a one-element block array, which is a byte
+    difference the cache would notice. <span class="chip cert">certified</span> by the golden body
     in <code>the_whole_request_body_is_pinned_byte_for_byte</code>, where the
     two user messages render as <code>"content":"HISTORY …"</code> and not as
     arrays. Grep the test for <code>"content":"</code>.
@@ -318,9 +316,8 @@ pub(crate) fn rank(self) -&gt; u8 {
   <h2 id="render">Where the ask meets the model</h2>
 
   <p>
-    <code>send</code> is two lines: render the body, execute it. Everything
-    interesting about the outgoing request is in <code>render</code>, and it is
-    short enough to read whole.
+    <code>send</code> is two lines: render the body, execute it. The outgoing
+    request is built in <code>render</code>, and it is short enough to read whole.
   </p>
 
   <p class="faint">crates/llm/src/anthropic.rs · <code>AnthropicProvider::render</code></p>

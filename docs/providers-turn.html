@@ -14,11 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page because these pages open from file://
      with no server, no build step and no JavaScript, so there is nothing to
-     include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
-     is kept short.
+     include a partial with. Adding a page means editing this file and every
+     page's copy of it, so the list is kept short.
      =========================================================================== -->
 <nav class="side">
   <div class="brand">
@@ -290,9 +289,8 @@ fn turn_from_message(msg: &amp;Value) -&gt; Result&lt;AssistantTurn, LlmError&gt
     2026-08-23, and batch is the mode <code>-p</code> runs in.</strong> The
     streaming path had refused an empty <code>stop_reason</code> since
     <code>DEF-020</code>; this decoder read it with
-    <code>unwrap_or_default()</code> and passed the empty string on. So the
-    guarded path was the one with somebody watching, and the unguarded one was
-    the path in a script.
+    <code>unwrap_or_default()</code> and passed the empty string on. Streaming
+    refused empty <code>stop_reason</code>; batch did not until 2026-08-23.
   </p>
 
   <p>
@@ -328,9 +326,9 @@ fn turn_from_message(msg: &amp;Value) -&gt; Result&lt;AssistantTurn, LlmError&gt
     finished answer, with no truncation signal anywhere downstream and no way to
     tell it apart from a model that genuinely said that. A failure is
     recoverable &mdash; <code>Protocol</code> is retried like any other &mdash;
-    and a confident half-sentence is not. That asymmetry is the whole argument
-    for erroring rather than defaulting, and it is the same one this project
-    applies to a truncated tool result.
+    and a confident half-sentence is not. That asymmetry is why an empty
+    <code>stop_reason</code> is an error rather than a default, and it is the
+    same one this project applies to a truncated tool result.
   </p>
 
   <p class="faint">crates/llm/src/anthropic.rs · <code>turn_from_content</code></p>
@@ -578,9 +576,8 @@ fn parse_tool_input(json: &amp;str) -&gt; Result&lt;Value, LlmError&gt; {
 
   <p>
     That is the test that would catch a divergence between the two paths, and
-    it is worth being precise about what it cannot catch: both sides are
-    fixtures written by the same author, so a key the real API sends and
-    neither fixture carries is invisible to it. That is exactly the shape of
+    What it cannot catch: both sides are fixtures written by the same author, so
+    a key the real API sends and neither fixture carries is invisible to it. That is exactly the shape of
     the failure on <a href="providers-content.html">the previous page</a>.
   </p>
 

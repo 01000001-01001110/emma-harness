@@ -99,7 +99,7 @@
 <span class="c">/// same reason `Settings` is: `category`, `version`, `color` and whatever else</span>
 <span class="c">/// Claude Code grows are not Emma's business, and refusing to boot over them</span>
 <span class="c">/// would make this compatibility feature an obstacle. **It must never gain</span>
-<span class="c">/// `deny_unknown_fields`** — measured against a real library of 90 agent files,</span>
+<span class="c">/// `deny_unknown_fields`**. Measured against a real library of 90 agent files,</span>
 <span class="c">/// `category` and `version` appear throughout and every one of them would have</span>
 <span class="c">/// been a boot failure.</span>
 <span class="c">///</span>
@@ -178,7 +178,7 @@ pub(crate) struct AgentFront {
 <pre><code><span class="c">/// Claude Code writes `tools` either as a YAML list or as one comma-separated</span>
 <span class="c">/// string. Both are common in the wild; accepting one and silently ignoring the</span>
 <span class="c">/// other would produce an empty allowlist, which under Emma's rules means "no</span>
-<span class="c">/// tools at all" — a spectacular way to fail quietly.</span>
+<span class="c">/// tools at all", which fails quietly.</span>
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum Tools {
@@ -204,8 +204,8 @@ impl Tools {
     <span class="c">///</span>
     <span class="c">/// This is the trap in the format and it is live. `tools:` with no value</span>
     <span class="c">/// parses as YAML null and never reaches here; `tools: []` and `tools: ""`</span>
-    <span class="c">/// do, and under Emma's rules an empty allowlist means *no tools at all* —</span>
-    <span class="c">/// which is the failure the note on [`Tools`] predicts, arriving through the</span>
+    <span class="c">/// do, and under Emma's rules an empty allowlist means *no tools at all*.</span>
+    <span class="c">/// This is the failure the note on [`Tools`] predicts, arriving through the</span>
     <span class="c">/// value rather than through the spelling. In Claude Code an absent `tools`</span>
     <span class="c">/// means inherit everything, and a present-but-empty one is the same</span>
     <span class="c">/// statement written differently: nobody writes `tools: []` meaning "this</span>
@@ -252,14 +252,14 @@ impl Tools {
 <pre><code><span class="c">/// Split an agent file into the frontmatter Emma reads and the body it puts in</span>
 <span class="c">/// the prompt.</span>
 <span class="c">///</span>
-<span class="c">/// The frontmatter is **stripped**, and that is the one place the "nothing is</span>
-<span class="c">/// trimmed or re-wrapped" rule is bent. It is bent knowingly: `model:` and</span>
+<span class="c">/// The frontmatter is **stripped**, the one exception to the "nothing is</span>
+<span class="c">/// trimmed or re-wrapped" rule: `model:` and</span>
 <span class="c">/// `tools:` are configuration, and sending them to the model as standing</span>
 <span class="c">/// instructions would be telling it about machinery it cannot use. A file with</span>
-<span class="c">/// no frontmatter is all body, which is also the correct answer.</span>
+<span class="c">/// no frontmatter is all body.</span>
 <span class="c">/// **Line endings are tolerated, and that is not tidiness.** This required</span>
-<span class="c">/// `---\n` exactly, so every CRLF agent file — which is every one of them on a</span>
-<span class="c">/// Windows machine, and 90 out of 90 in the library this was measured against —</span>
+<span class="c">/// `---\n` exactly, so every CRLF agent file (every one of them on a</span>
+<span class="c">/// Windows machine, and 90 out of 90 in the library this was measured against)</span>
 <span class="c">/// fell through to "no frontmatter": its `tools` was ignored, its `description`</span>
 <span class="c">/// was invisible, and its `name:`, `model:` and `category:` lines were handed to</span>
 <span class="c">/// the model as standing instructions. Nothing failed; the file simply did not</span>
@@ -324,8 +324,8 @@ fn open_frontmatter(text: &amp;str) -&gt; Option&lt;&amp;str&gt; {
     found with <code>rest.find("\n---")</code>, which matches anywhere in the
     file rather than only at a line start followed by a line end, so a body line
     beginning <code>---</code> ends the frontmatter early. And the frontmatter is
-    <strong>stripped</strong> from the body, which bends the crate's
-    "nothing is trimmed or re-wrapped" rule knowingly: <code>model:</code> and
+    <strong>stripped</strong> from the body, the crate's exception to the
+    "nothing is trimmed or re-wrapped" rule: <code>model:</code> and
     <code>tools:</code> are configuration, and sending them to the model as
     standing instructions would be telling it about machinery it cannot use.
   </p>
@@ -338,10 +338,10 @@ fn open_frontmatter(text: &amp;str) -&gt; Option&lt;&amp;str&gt; {
 <span class="c">///</span>
 <span class="c">/// **The file stem is the name, and a `name:` in frontmatter that disagrees</span>
 <span class="c">/// loses.** The stem is what `EMMA_PERSONA` names, what `agent_path` builds,</span>
-<span class="c">/// and the only one of the two guaranteed unique — two files may declare the</span>
+<span class="c">/// and the only one of the two guaranteed unique. Two files may declare the</span>
 <span class="c">/// same `name`, and a catalogue keyed on a value that can collide silently</span>
-<span class="c">/// drops one of them. The disagreement is worth saying out loud rather than</span>
-<span class="c">/// resolving quietly, so `load_agents` notes it.</span>
+<span class="c">/// drops one of them. `load_agents` reports the disagreement instead of</span>
+<span class="c">/// resolving it quietly.</span>
 <span class="c">///</span>
 <span class="c">/// Top-level `*.md` only. A real library has subdirectories under `agents/`</span>
 <span class="c">/// (23 of them, 205 files, on the machine this was measured against) and</span>
@@ -540,7 +540,7 @@ pub(crate) fn load_agents(root: &amp;Path) -&gt; Result&lt;(Vec&lt;crate::AgentD
   <p>
     An agent type's instructions are the project's standing instructions and
     then the file's body, in that order. Both halves, because standing rules
-    about evidence and honesty are not persona-specific: a delegated agent that
+    about evidence and accurate reporting are not persona-specific: a delegated agent that
     does not inherit <em>report what the checks actually said</em> is one that
     reports what they were expected to say. A file with an empty body gets the
     project's instructions alone.
@@ -598,7 +598,7 @@ fn one_line(text: &amp;str) -&gt; String {
     The objection this answers is that a description cannot vary by machine
     because it is hashed. <code>Registry::schema_hash</code>'s own doc says it is
     a change detector for a human reading a log rather than an identity; the
-    constraint that matters is byte-stability between calls on one machine, and
+    required constraint is byte-stability between calls on one machine, and
     sorting satisfies it. <code>one_line</code> is used twice more, on a task
     line for the terminal and on a command for the footer, and it counts
     <code>chars</code> rather than bytes, so a description of 300 emoji is
@@ -641,7 +641,7 @@ fn one_line(text: &amp;str) -&gt; String {
       <code>claude.rs</code> is six functions and two types, all quoted above:
       <code>into_vec</code>, <code>allowlist</code>, <code>split_agent</code>,
       <code>open_frontmatter</code>, <code>agents</code>,
-      <code>agent_path</code>, <code>load_agents</code> — seven, counting
+      <code>agent_path</code>, <code>load_agents</code>: seven, counting
       <code>agent_path</code>, which is three lines and joins a path.
     </li>
   </ul>

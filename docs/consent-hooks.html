@@ -81,8 +81,7 @@
   <p>
     A hook that cannot be run safely stops the boot rather than failing at the
     moment it is needed. That is the same ruling every other refusal in the
-    harness crate makes: the honest answer to an ambiguous configuration is not
-    to start.
+    harness crate makes: an ambiguous configuration stops startup.
   </p>
 
   <pre><code>pub(crate) fn contain(root: &amp;Path, what: &amp;str, command: &amp;str) -&gt; Result&lt;PathBuf, String&gt; {
@@ -148,12 +147,12 @@
       implements a larger set including <code>SessionStart</code>,
       <code>Stop</code> and <code>PreCompact</code>. Emma implements three, and a
       config naming any of the rest is a startup error listing the three that
-      work, never a silent skip &mdash; unless
+      work, never a silent skip, unless
       <code>EMMA_CLAUDE_HOOKS=skip-unknown</code> is set, which converts the
       refusal into a boot that <em>names each hook it dropped</em>. Still not a
       silent skip; that is the property, and it is the one thing the opt-in does
-      not relax. It is an environment variable rather than a config key on
-      purpose, so a repository cannot turn it on for the person cloning it.</li>
+      not relax. It is an environment variable rather than a config key, so a
+      repository cannot turn it on for the person cloning it.</li>
     <li><code>contain</code> resolves the command.</li>
     <li>A <code>UserPromptSubmit</code> hook carrying a non-empty matcher fails the
       boot, because there is no tool name to match on that event. Claude Code
@@ -248,7 +247,7 @@
     The first two rulings are one condition at the end of <code>run</code>:
   </p>
 
-  <pre><code><span class="c">// Asymmetric on purpose, and this is the whole hook design in four lines.</span>
+  <pre><code><span class="c">// The two hook stages are asymmetric.</span>
 <span class="c">// A `PreToolUse` hook that denies — or that times out, crashes, or</span>
 <span class="c">// answers with garbage — stops the call: ambiguity resolves to deny,</span>
 <span class="c">// because a broken policy check must not degrade into no policy check. A</span>
@@ -531,9 +530,8 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
 
     let status;
     {
-        <span class="c">// Both pipes, concurrently with the wait. The buffers are borrowed</span>
-        <span class="c">// rather than owned by the futures precisely so that abandoning a read</span>
-        <span class="c">// keeps the bytes it already collected.</span>
+        <span class="c">// Both pipes, concurrently with the wait. The futures borrow the buffers,</span>
+        <span class="c">// so abandoning a read keeps the bytes it already collected.</span>
         let both = async {
             tokio::join!(
                 async {

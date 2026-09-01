@@ -117,8 +117,8 @@ pub reaches_network: bool,</code></pre>
   <p>
     Flipping the web tools to <code>read_only: false</code> was the obvious
     alternative and was refused. A gate that fires on every page read teaches the
-    operator to answer without reading, and that habit carries into the
-    <code>Write</code> prompt, which is the one that matters. The second axis
+    operator to answer without reading, and that habit carries into
+    <code>Write</code> prompts that can authorise file changes. The second axis
     costs one prompt per host instead of one per page.
   </p>
   <span class="src">crates/tool-api/src/lib.rs — ToolMeta::read_only</span>

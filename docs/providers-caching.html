@@ -14,11 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page because these pages open from file://
      with no server, no build step and no JavaScript, so there is nothing to
-     include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
-     is kept short.
+     include a partial with. Adding a page means editing this file and every
+     page's copy of it, so the list is kept short.
      =========================================================================== -->
 <nav class="side">
   <div class="brand">
@@ -355,7 +354,7 @@ fn mark_breakpoint(content: &amp;mut Value) -&gt; bool {
     A marked user string therefore renders as
     <code>[{"type":"text","text":…,"cache_control":{"type":"ephemeral"}}]</code>
     while an unmarked one stays a bare string. Both forms are in the golden
-    request body, which is what makes that literal worth its length.
+    request body, which is why that literal appears in the golden body test.
     <span class="chip cert">certified</span>: read
     <code>the_whole_request_body_is_pinned_byte_for_byte</code>, where the
     history user message is <code>"content":"&lt;&lt;H&gt;&gt;"</code> and the
@@ -462,8 +461,7 @@ fn chars_of(messages: &amp;[Message]) -&gt; usize {
   <span class="src">notes/research/caching-mechanics.md §"What can and cannot carry a marker", §TTL, §Concurrency</span>
 
   <p>
-    One more clause is worth knowing because it is the one Emma is safe on:
-    changes invalidate their own tier and below. Touching the tool array or
+    One more clause Emma satisfies: changes invalidate their own tier and below. Touching the tool array or
     switching model invalidates everything; changing a message invalidates only
     the messages cache. Caches are model-scoped, so there is no cross-model
     reuse at all. <span class="chip unv">unverified</span> from the same

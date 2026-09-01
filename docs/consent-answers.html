@@ -204,8 +204,8 @@ loop {
     <span class="h">Two of those four had never been executed by a test</span>
     <p>
       Until 2026-08-23 nothing in this repository could reach the block above.
-      Changing the empty-line arm to <code>Answer::Yes</code> &mdash; so that
-      pressing Return at any prompt approves the call &mdash; left all 85 tests
+      Changing the empty-line arm to <code>Answer::Yes</code>, so that
+      pressing Return at any prompt approves the call, left all 85 tests
       in <code>approval</code> and <code>permissions</code> green. So did
       accepting <code>r</code> and <code>t</code> on a prompt that offered
       neither.
@@ -214,7 +214,7 @@ loop {
       Not a forgotten test. <code>ask</code> drains before it prints the
       question (below), and the only test constructor,
       <code>LineSource::scripted</code>, pre-fills the channel and drops the
-      sender &mdash; so every scripted line is type-ahead by construction, the
+      sender; every scripted line is therefore type-ahead by construction, the
       drain eats it, and <code>next()</code> finds a closed channel. Every one
       of the forty-five gate tests therefore exercises the policy above this
       block and none of them the parser inside it.
@@ -441,7 +441,7 @@ loop {
   <h2 id="rest">The rest of the type</h2>
 
   <p>
-    Four items on <code>Approvals</code> carry no argument worth a paragraph.
+    Four items on <code>Approvals</code> need no paragraph of their own.
     <code>new</code> builds a gate with empty sets and no rules;
     <code>with_rules</code> is a separate builder step rather than two more
     parameters, so that every existing caller still means "ask about everything";
@@ -475,7 +475,7 @@ loop {
     fall-through produces, not the <code>"not one of y / n / a / r"</code>
     notice itself, so the wording a user actually reads is still unchecked.
     <em>What would settle it:</em> the same test, asserting against the
-    recording <code>Term</code>'s notes &mdash; which is a cell buffer, so it
+    recording <code>Term</code>'s notes. That is a cell buffer, so it
     settles the wording and not the console.
   </p>
 

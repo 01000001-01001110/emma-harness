@@ -76,8 +76,7 @@
     The loop is <code>Agent::run_goal</code>, one function of about 370 lines.
     Every decision about what ends a goal is visible in one place rather than
     distributed across helpers that each look harmless. Everything a tool call
-    does is <code>Agent::run_tool_call</code>. Those two are worth reading
-    together, because the memo rule is split between them and reads as nonsense
+    does is <code>Agent::run_tool_call</code>. Read those two together, because the memo rule is split between them and reads as nonsense
     in either alone.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, <code>Agent::run_tool_call</code></span>
@@ -129,7 +128,7 @@
     <li>
       <a href="loop-kick.html">The kick</a>
       <span>What the model is told when it stops without claiming completion,
-      why the list of what has already failed is the part that matters, and the
+      why the list of what has already failed is included, and the
       two bounds that stop it firing forever.</span>
     </li>
     <li>

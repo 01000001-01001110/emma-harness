@@ -104,7 +104,7 @@
             "properties": {
                 "agent": {
                     "type": "string",
-                    <span class="c">// The closed enum, and it is the security property — the same</span>
+                    <span class="c">// The closed enum is the security property, the same</span>
                     <span class="c">// one `skill.rs` names. A `Delegate` taking a free-text system</span>
                     <span class="c">// prompt, or a free-text tool list, is a self-modifying-prompt</span>
                     <span class="c">// tool with a friendly description, and worse than the</span>
@@ -193,7 +193,7 @@
 <span class="c">/// read them.</span>
 <span class="c">///</span>
 <span class="c">/// Composed here rather than in `Goal::opening`, which is *the user's words and</span>
-<span class="c">/// nothing else* and must stay that way — the note above it records what a</span>
+<span class="c">/// nothing else* and must stay that way; the note above it records what a</span>
 <span class="c">/// preamble on every input cost. This text is not a user's words: it is a work</span>
 <span class="c">/// order the calling model wrote, and the fields are its own.</span>
 fn brief(args: &amp;Value) -&gt; String {
@@ -250,8 +250,8 @@ fn brief(args: &amp;Value) -&gt; String {
 <pre><code><span class="c">/// [`MarkerClaim`], plus the one thing a subagent has to be told that a parent</span>
 <span class="c">/// does not.</span>
 <span class="c">///</span>
-<span class="c">/// The framing goes in the **contract** — which `standing_contract` puts in the</span>
-<span class="c">/// system prompt, where it is cached — and never on the brief. `Goal::opening`</span>
+<span class="c">/// The framing goes in the **contract**, which `standing_contract` puts in the</span>
+<span class="c">/// system prompt where it is cached, and never on the brief. `Goal::opening`</span>
 <span class="c">/// is the user's words and nothing else; here the "user" is a work order, and</span>
 <span class="c">/// prepending to it would still be an instruction the caller did not write.</span>
 struct SubagentClaim {
@@ -276,7 +276,7 @@ impl DoneCheck for SubagentClaim {
             "\n\nYou are working on behalf of another agent, which cannot see any of this. \
              Your final message is the only thing that reaches it: no transcript, no tool \
              output, no file you read. Write it so it stands alone, and name the files you \
-             read and the commands you ran — it will be shown a record of both, and a claim \
+             read and the commands you ran; it will be shown a record of both, and a claim \
              that disagrees with the record is worse than no claim.",
         );
         if let Some(deliver) = &amp;self.deliver {
@@ -288,9 +288,9 @@ impl DoneCheck for SubagentClaim {
     }
 
     async fn verdict(&amp;self, goal: &amp;Goal, text: &amp;str) -&gt; Done {
-        <span class="c">// Deliberately the marker and nothing more. A check that also judged the</span>
+        <span class="c">// This checks the marker and nothing more. A check that also judged the</span>
         <span class="c">// answer against `deliver` would be a heuristic wearing a mechanism's</span>
-        <span class="c">// clothes — and it is `open_count`'s failure in a new costume: a model</span>
+        <span class="c">// clothes. It is `open_count`'s failure in a new costume: a model</span>
         <span class="c">// that learns running a command ends the loop will run one. The footer</span>
         <span class="c">// is where a `deliver` is checked, by the parent, against a record.</span>
         MarkerClaim.verdict(goal, text).await
@@ -354,7 +354,7 @@ impl DoneCheck for SubagentClaim {
     <span class="c">/// where a human most wants to see the brief before it runs: it is about to</span>
     <span class="c">/// spend a slice of the budget on instructions the *model* composed.</span>
     <span class="c">///</span>
-    <span class="c">/// `idempotent: false` follows, and the pair is legal — `Registry::register`</span>
+    <span class="c">/// `idempotent: false` follows, and the pair is legal; `Registry::register`</span>
     <span class="c">/// refuses only `read_only: true` with `idempotent: false`.</span>
     <span class="c">///</span>
     <span class="c">/// **`reaches_network: false`, and it is the arguable one.** A delegation</span>
@@ -362,12 +362,12 @@ impl DoneCheck for SubagentClaim {
     <span class="c">/// it still declares `false`. Its own traffic goes to the provider, on the</span>
     <span class="c">/// same key and host the parent is already using ungated, and declaring</span>
     <span class="c">/// `true` would demand a `NetworkTarget` and produce a prompt to approve</span>
-    <span class="c">/// `api.anthropic.com` whose only possible answer is yes — which is how an</span>
+    <span class="c">/// `api.anthropic.com` whose only possible answer is yes, which is how an</span>
     <span class="c">/// operator learns to answer without reading. Any sub-tool that reaches a</span>
     <span class="c">/// real host asks the same gate, in the same process, against the same</span>
     <span class="c">/// `hosts_allowed` set, because `Approvals` is one shared object: egress is</span>
     <span class="c">/// gated at the leaf, where the host is known, not at the delegation, where</span>
-    <span class="c">/// it is not. And it is `Bash`'s precedent — `Bash` can `curl` and declares</span>
+    <span class="c">/// it is not. It follows `Bash`'s precedent: `Bash` can `curl` and declares</span>
     <span class="c">/// `false`, because `read_only: false` already puts the thing in front of a</span>
     <span class="c">/// human, and a truthful destination would require predicting what a model</span>
     <span class="c">/// will decide to do.</span>
@@ -415,10 +415,10 @@ impl DoneCheck for SubagentClaim {
 
 <pre><code><span class="c">/// The prose half of the description.</span>
 <span class="c">///</span>
-<span class="c">/// Roughly half of it is about when *not* to call this, and that ratio is</span>
-<span class="c">/// deliberate: the measured direction of the effect on code-centric tasks is</span>
-<span class="c">/// negative — 49–54% single-agent against 10% and 3% multi-agent on SWE-bench</span>
-<span class="c">/// Lite, at nine times the spend — and Anthropic's own multi-agent write-up</span>
+<span class="c">/// Roughly half of it is about when *not* to call this. The measured direction</span>
+<span class="c">/// of the effect on code-centric tasks is</span>
+<span class="c">/// negative: 49–54% single-agent against 10% and 3% multi-agent on SWE-bench</span>
+<span class="c">/// Lite, at nine times the spend. Anthropic's own multi-agent write-up</span>
 <span class="c">/// carves coding out of its own headline result. A feature nobody calls costs a</span>
 <span class="c">/// paragraph of prompt; a feature called for two-file questions costs a multiple</span>
 <span class="c">/// of every goal.</span>
@@ -432,32 +432,32 @@ conclusion.
 
 It starts with none of this conversation: not what you have read, not what the \
 user said, not what you have already tried. It runs on its own until it is \
-finished, and the only thing that comes back is text — its report, plus a \
+finished, and the only thing that comes back is text: its report, plus a \
 record of what it actually did. Nothing it read enters this conversation.
 
 **Reach for this when the answer is small and the evidence is large.** \"Which \
 of these forty files still calls the old constructor\", \"why does this suite \
-fail on Windows and not on Linux\" — questions where finding out means dozens \
+fail on Windows and not on Linux\": questions where finding out means dozens \
 of reads whose contents you will never need again.
 
 **Do not reach for it otherwise.** A question you can answer with one `Grep` \
 costs one `Grep`; delegating it costs a second agent's whole startup and a \
 brief you have to write. If you already have the file open, answer from it. If \
 the work is a single edit, make the edit. And do not delegate the check that \
-verifies your own work — run that yourself, and read its exit status.
+verifies your own work; run that yourself, and read its exit status.
 
 - `agent` is which kind of agent to send this to. Each has its own standing \
 instructions and its own tools; the list is below.
 - `task` is the work, written for someone who has never seen this conversation, \
 because that is exactly who reads it. State the goal and what a finished answer \
 looks like.
-- `context` is what you already know that it would otherwise rediscover — one \
+- `context` is what you already know that it would otherwise rediscover: one \
 short fact per entry. Paths worth starting from, the command that failed and \
 what it printed, a decision already made, and anything you already tried that \
 did not work. Prefer a path over a paste: it can read the file itself, and what \
 it reads will be current. Do not paste this conversation.
-- `deliver` is what the answer must contain. Be concrete — \"the file and line \
-where X is decided\", \"the failing assertion, verbatim\" — because you cannot \
+- `deliver` is what the answer must contain. Be concrete: \"the file and line \
+where X is decided\", \"the failing assertion, verbatim\", because you cannot \
 see its work and will have nothing else to judge the answer by. Ask for places \
 to look wherever that will do: a list of paths is something you can check by \
 reading one of them, and an explanation is something you cannot check at all.
@@ -469,7 +469,7 @@ that ran out of budget still writes a confident final paragraph, and that \
 paragraph is a partial answer wearing the clothes of a complete one.
 
 It works in the same directory as you, under the same approval rules, and \
-spends from the same budget as this goal — so a long delegation can end the \
+spends from the same budget as this goal, so a long delegation can end the \
 goal. One runs at a time.";</code></pre>
   <span class="src">crates/emma/src/delegate.rs — DESCRIPTION and its doc comment, quoted entire</span>
 

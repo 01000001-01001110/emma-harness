@@ -84,8 +84,8 @@
     states about every tool: nothing there reads a tool's identity, its
     <code>ToolError::kind</code>, or its exit status. A loop carrying
     <code>if call.name == "Delegate"</code> would be re-acquiring knowledge two
-    other parts of the codebase paid to remove. What nesting needs — a shared
-    token meter, a namespaced log, a subordinate terminal — arrives as values in
+    other parts of the codebase paid to remove. What nesting needs (a shared
+    token meter, a namespaced log, and a subordinate terminal) arrives as values in
     <code>Setup</code>, not as branches inside the loop.
   </p>
   <span class="src">crates/emma/src/delegate.rs — module doc; crates/emma/src/agent.rs — module doc</span>
@@ -108,7 +108,7 @@
   <p>
     <code>Nest</code> is the parent's half of the arrangement, built once in
     <code>main.rs</code> and handed to <code>Delegate::new</code>. Its doc names
-    a reason per field, which is the part worth reading:
+    a reason per field:
   </p>
 
 <pre><code><span class="c">/// Everything a nested run borrows from the process it is nested in.</span>
@@ -176,12 +176,12 @@ struct AgentType {
     name: String,
     description: String,
     <span class="c">/// The project's standing instructions and then the agent file's body. Both</span>
-    <span class="c">/// halves on purpose: standing rules about evidence and honesty are not</span>
+    <span class="c">/// halves: standing rules about evidence and accurate reporting are not</span>
     <span class="c">/// persona-specific, and a delegated agent that does not inherit *report</span>
     <span class="c">/// what the checks actually said* is one that reports what they were</span>
     <span class="c">/// expected to say.</span>
     instructions: String,
-    <span class="c">/// This type's own tools. Never contains [`NAME`] — see the module doc.</span>
+    <span class="c">/// This type's own tools. Never contains [`NAME`]; see the module doc.</span>
     tools: Registry,
     <span class="c">/// The client for the model this type's file named, or `None` for "the</span>
     <span class="c">/// parent's, whatever it is when the delegation runs".</span>
@@ -301,15 +301,15 @@ struct AgentType {
     <span class="c">///</span>
     <span class="c">/// So a subordinate terminal shares the frame, the skin and the stdin path,</span>
     <span class="c">/// and swallows exactly four calls: `set_budgets`, `goal_started`,</span>
-    <span class="c">/// `goal_ended` and `spent`. It swallows the assistant's prose as well —</span>
-    <span class="c">/// `delta`, `text`, `end_of_text` — because a delegation reports once at the</span>
+    <span class="c">/// `goal_ended` and `spent`. It also swallows the assistant's prose</span>
+    <span class="c">/// (`delta`, `text`, `end_of_text`) because a delegation reports once at the</span>
     <span class="c">/// end rather than streaming a second conversation into the first.</span>
     <span class="c">///</span>
     <span class="c">/// **What it must not swallow is the approval prompt.** A subagent inherits</span>
     <span class="c">/// the gate, and a prompt the user cannot see is the same defect as a prompt</span>
     <span class="c">/// they cannot evaluate, with the argument already made. `prompt_header`,</span>
     <span class="c">/// `prompt_question`, `prompt_network_question` and `prompt_answered` render</span>
-    <span class="c">/// exactly as they do for the parent, and so do the tool lines and notes —</span>
+    <span class="c">/// exactly as they do for the parent, and so do the tool lines and notes;</span>
     <span class="c">/// the sub's activity becomes ordinary lines on the parent's transcript.</span>
     pub fn subordinate(&amp;self) -&gt; Self {
         Self {
@@ -366,8 +366,8 @@ struct AgentType {
 <pre><code>    <span class="c">///</span>
     <span class="c">/// **Why the `kind`s are namespaced.** [`fold_records`] and</span>
     <span class="c">/// [`restore_records`] match on `kind` and both have a `_ =&gt; {}` arm, so</span>
-    <span class="c">/// `sub.assistant` and `sub.model_call` are ignored for free — which is the</span>
-    <span class="c">/// whole mechanism. Written under the parent's own names the damage would</span>
+    <span class="c">/// `sub.assistant` and `sub.model_call` are ignored without another branch.</span>
+    <span class="c">/// Written under the parent's own names the damage would</span>
     <span class="c">/// not be subtle: a sub `assistant` record arriving between the parent's</span>
     <span class="c">/// `tool_call` and its `tool_result` calls `close_turn`, which places the</span>
     <span class="c">/// parent's held turn *without* its results, `answered()` fails, and the</span>

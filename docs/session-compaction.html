@@ -71,7 +71,7 @@
     Whole finished goals, replaced oldest-first with their goal text, their
     final answer and a fixed sentence saying the tool traffic is gone. No model
     is asked anything. The design note for this feature recommended the
-    opposite, and saying so is most of what this page is for.
+    opposite, and that reversal is the main subject of this page.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>compact_if_needed</code>, <code>compact</code>, <code>summarise</code>, <code>estimate</code></span>
 
@@ -504,9 +504,8 @@ self.s.log.append(
       <code>agent.rs</code> makes them: it would spend the budget of whichever
       goal happens to be running; it can fail in the middle of one; and it
       produces a claim about the conversation where the mechanical version
-      produces a record of it. The note conceded the same failure mode, that the
-      summary is written by the same process that is being summarised and will
-      sometimes be wrong. It offered two mitigations and described neither as a
+      produces a record of it. The note also warned that a model-written summary
+      can be wrong. It offered two mitigations and described neither as a
       fix.
     </li>
     <li>

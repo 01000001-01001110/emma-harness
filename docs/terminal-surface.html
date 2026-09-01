@@ -14,10 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it, which is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -300,7 +300,7 @@ fn fallback_reason(
 
   <p>
     Detection alone was tried for the code page and was correct and useless. A
-    normal PowerShell window reports code page 437, so the honest answer was
+    normal PowerShell window reports code page 437, so the answer was
     always no and the box was always <code>+---+</code>. The module records the
     premise the old code got wrong: <em>&ldquo;a legacy code page is not a
     property of the terminal, it is a setting, and it is ours to set for the
@@ -338,7 +338,7 @@ fn adopt_utf8_output() -&gt; bool {
   <span class="src">crates/emma/src/term.rs — <code>adopt_utf8_output</code>, <code>CP_UTF8</code>, <code>ORIGINAL_CP</code></span>
 
   <p>
-    Three outcomes, and the middle one is the interesting refusal. A console
+    Three outcomes, and the middle one is the refusal that is easy to miss. A console
     that was <em>already</em> 65001 returns true without recording an original,
     so <code>restore_console_cp</code> leaves it alone on the way out: it was
     not Emma's to change. A <code>GetConsoleOutputCP</code> of zero means no
@@ -445,7 +445,7 @@ p.err 84 bytes, 0 escape bytes:  b'&gt; say the single word: ok\n\n= goal comple
     (<code>set_budgets</code>, <code>goal_started</code>,
     <code>goal_ended</code>, <code>spent</code>) and three are the assistant's
     prose (<code>delta</code>, <code>text</code>, <code>end_of_text</code>).
-    The meters are the interesting half. The doc names the defect it exists to
+    The meters are the half that can go wrong. The doc names the defect it exists to
     fix: a nested agent driving them would re-point the context and token
     meters at the sub's caps for the rest of the process, stop the parent's
     clock while the parent is still running, and feed the live line a per-goal
@@ -583,7 +583,7 @@ p.err 84 bytes, 0 escape bytes:  b'&gt; say the single word: ok\n\n= goal comple
   </p>
 
   <p>
-    Two things about it are worth carrying. The needle is assembled rather than
+    Two things about it. The needle is assembled rather than
     written out <em>&ldquo;because this file is its own haystack&rdquo;</em>,
     which is the same technique the manifest test uses. And the doc names the
     exception rather than leaving it to be discovered: a block's

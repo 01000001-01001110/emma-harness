@@ -14,11 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page because these pages open from file://
      with no server, no build step and no JavaScript, so there is nothing to
-     include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
-     is kept short.
+     include a partial with. Adding a page means editing this file and every
+     page's copy of it, so the list is kept short.
      =========================================================================== -->
 <nav class="side">
   <div class="brand">
@@ -403,8 +402,8 @@ pub fn clamp_effort(&amp;self, requested: Effort) -&gt; Option&lt;Effort&gt; {
     <code>a_model_without_xhigh_is_never_sent_xhigh</code> and
     <code>a_model_with_no_effort_parameter_is_sent_no_output_config</code>,
     each reading the recorded request body from a loopback stub. The unit tests
-    pin the table; those pin that the table is what the socket sees, which is
-    the part a wrong wiring would break while every table test still passed.
+    pin the table; those     pin that the table is what the socket sees, which a wrong wiring would break
+    while table tests still passed.
     <span class="chip test">tested</span>
   </p>
 

@@ -14,7 +14,7 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
      file and every page's copy of it — which is the deal, and is why the list
@@ -311,8 +311,8 @@ fn open_frontmatter(text: &amp;str) -&gt; Option&lt;&amp;str&gt; {
   <span class="src">crates/harness/src/claude.rs — <code>split_agent</code>, <code>open_frontmatter</code></span>
 
   <p>
-    Three failure shapes come out of one function and they are distinguishable,
-    which is the point of the third return value. No frontmatter at all returns
+    Three failure shapes come out of one function and they are distinguishable.
+    The third return value separates them. No frontmatter at all returns
     the whole text as body with no error. Frontmatter that opens and never closes
     does the same. Frontmatter that opens, closes, and will not parse returns the
     body plus the YAML error, and <code>load_agents</code> turns that into a note

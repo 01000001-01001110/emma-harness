@@ -138,8 +138,8 @@
       <s><code>Fold</code>'s compacted arm turns an unreadable record into
       deletion.</s> <strong>Fixed.</strong> Both damaged shapes now refuse
       loudly and leave the conversation alone, rather than rebuilding a
-      different one from defaults. The line that made it worth doing before
-      anything wrote such a record: this arm is the only defaulting that changes
+      different one from defaults. The fix came before anything wrote such a
+      record because this arm is the only defaulting that changes
       what was <em>sent</em>, and a conversation quietly missing turns is not a
       failure anybody can see.
     </li>
@@ -182,7 +182,7 @@
       <tr><td><strong>A pre-call headroom check</strong></td>
           <td>Turns the token tripwire into a bound, using the provider's reported input rather than the character estimate. Sequenced first in the loops plan.</td></tr>
       <tr><td><strong><code>emma stats</code></strong></td>
-          <td>Emma has never measured itself. The session log already records the right fields; what is missing is a rollup a person can read.</td></tr>
+          <td>Emma has never measured itself. The session log already records the fields needed for a rollup; what is missing is a view a person can read.</td></tr>
       <tr><td><strong>Scheduled runs</strong></td>
           <td>A scheduler line calling <code>emma -p</code>, not a daemon. Most of the survival story already exists.</td></tr>
     </tbody>
@@ -226,7 +226,7 @@
       <tr><td>Feature-building in an autonomous loop</td>
           <td>The direction the model takes is unpredictable, and the source advocating loops says so itself.</td></tr>
       <tr><td>Preventing a loop from editing its own success check</td>
-          <td>Prevention would be a sandbox claim, and <code>Bash</code> defeats any tool-level gate in one line. Detection at verdict time is the honest version.</td></tr>
+          <td>Prevention would be a sandbox claim, and <code>Bash</code> defeats any tool-level gate in one line. Detection at verdict time reports the mutation instead.</td></tr>
       <tr><td>An always-on sandbox crate</td>
           <td>The obvious candidate turned out to be GPL-3.0-or-later once its actual licence file was opened.</td></tr>
       <tr><td>A strict wire decoder</td>

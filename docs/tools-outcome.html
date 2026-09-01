@@ -14,7 +14,7 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
      file and every page's copy of it — which is the deal, and is why the list
@@ -181,7 +181,7 @@
 </p>
 
 <p>
-  Two rows above are worth pausing on. <code>Read</code> of an empty file
+  Two rows above illustrate a pattern. <code>Read</code> of an empty file
   returns a genuinely empty <code>content</code>, not a sentence saying the file
   is empty, because anything written there would be indistinguishable from file
   content the next time the model quotes it back. The empty-<code>Grep</code>
@@ -229,7 +229,7 @@
   states: a reason implies the flag, the bare flag leaves
   <code>truncation</code> at <code>None</code>, and a plain outcome claims
   nothing. Making the fields public and settable independently would not break
-  it, which is worth knowing: the test guards the constructors, not the struct.
+  the test: the test guards the constructors, not the struct.
 </p>
 
 <h2 id="weak">The weaker form, and who used to use it</h2>
@@ -243,7 +243,7 @@
 </p>
 
 <p>
-  What it cost is worth keeping, because it is the argument for the strong form
+  What it cost is the argument for the strong form
   rather than a preference for it. Both LSP renderers explained their cut in
   prose inside <code>content</code>, so the <em>model</em> was not left guessing.
   The human watching the terminal was, and so was the runtime's own note, which
@@ -280,8 +280,8 @@
 
 <p>
   <strong>The chip above used to certify the opposite</strong>, and it was
-  honest of its own commit &mdash; the grep really did return eight lines then.
-  That is the failure mode a dated certification has: it goes on looking green
+  accurate at its own commit &mdash; the grep really did return eight lines then.
+  A dated certification goes on looking green
   long after the thing it measured has moved, and this page's whole credibility
   rests on the green ones meaning something. It was found by a docs audit rather
   than by anything that could fail on its own.

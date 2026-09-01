@@ -14,10 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it, which is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -245,7 +245,7 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
   </p>
 
   <p>
-    The property that matters for the pane as a whole is asserted on the
+    The property for the pane as a whole is asserted on the
     assembled <em>lines</em> rather than on the buffer, and the test says why:
     <em>&ldquo;<code>set_line</code> clips, and a clipped overrun is exactly the
     invisible defect this test exists to catch.&rdquo;</em>
@@ -344,7 +344,7 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
     is wider than the pane, <em>&ldquo;and a truncated explanation is half an
     explanation, which is the defect the sentence exists to prevent.&rdquo;</em>
     A single word wider than the pane is still clipped with a mark, because
-    there is no honest wrap for it.
+    wrapping it would invent a break.
     <span class="chip test">tested</span>:
     <code>an_empty_section_explains_itself_rather_than_showing_a_bare_header</code>
     draws an empty <code>State</code> at 30 columns, flattens the rows, and

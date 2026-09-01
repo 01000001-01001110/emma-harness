@@ -14,10 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it, which is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -88,12 +88,12 @@
 
   <p class="lede">
     <code>Alt+,</code>, <code>Alt+d</code> and <code>Alt+m</code> each replace the
-    middle of the frame with a page and nothing else &mdash; the sidebar, the
+    middle of the frame with a page and nothing else. The sidebar, the
     dock and the status row stay exactly where they were, and <code>Esc</code>
     puts the conversation back with its scroll position intact. All three used
     to launch a program on the machine, or claim they would. What they draw is
-    only what Emma actually has, and each one names in words what it is
-    deliberately not drawing.
+    only what Emma actually has, and each one names in words the panel it is
+    not drawing.
   </p>
 
   <h2 id="seam">One field, not a second application</h2>
@@ -122,7 +122,7 @@ pub enum Pane {
 
   <p>
     <strong><code>Chat</code> is a named variant rather than the absence of a
-    page</strong>, and that is the part doing work. A fourth page added tomorrow
+    page</strong>. A fourth page added tomorrow
     is a compile error at every site that decides what to draw, instead of
     falling silently through to the transcript.
     <span class="chip test">tested</span>
@@ -148,11 +148,10 @@ pub enum Pane {
     <strong>The snapshot is taken when the page opens, never on paint.</strong>
     Reading the store is a directory walk and real file I/O; the frame repaints
     on every keystroke, every stream chunk and every resize, so a page that
-    rescanned each time would put that walk on the render path. It is also the
-    more honest of the two: a table that changed under the reader between two
-    repaints would be worse than one that is plainly as of when it was opened,
-    and the subtitle says <em>&ldquo;as of opening this page&rdquo;</em> for
-    exactly that reason.
+    rescanned each time would put that walk on the render path. A table that
+    changed under the reader between two repaints would be worse than one that
+    is plainly as of when it was opened, and the subtitle says
+    <em>&ldquo;as of opening this page&rdquo;</em> for that reason.
   </p>
 
   <p>
@@ -278,7 +277,7 @@ pub enum Pane {
 
   <p>
     An ignored test prints all three, for the question the assertions cannot
-    answer &mdash; <em>does this read well</em>:
+    answer. <em>Does this read well:</em>
   </p>
 
   <pre><code>cargo test -p emma --lib term::app::tests::show_the_pages -- --ignored --nocapture</code></pre>

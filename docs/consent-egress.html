@@ -95,7 +95,7 @@
     let Some(target) = target else {
         <span class="c">// Fail closed. A tool that declares egress and cannot say where is</span>
         <span class="c">// asking for a grant nobody can write down, and the alternative</span>
-        <span class="c">// reading — "no target, so nothing to gate" — hands silent network</span>
+        <span class="c">// reading "no target, so nothing to gate" hands silent network</span>
         <span class="c">// access to whichever tool forgets to implement one method.</span>
         return Verdict::Deny(format!(
             "{name} reaches the network but did not name the host this call would \
@@ -137,8 +137,8 @@
         ));
     }
 
-    <span class="c">// The two grants on offer, and they are deliberately different sizes.</span>
-    <span class="c">// The narrow one is the host the user is looking at — the natural answer</span>
+    <span class="c">// The two grants on offer have different scopes.</span>
+    <span class="c">// The narrow one is the host the user is looking at, the natural answer</span>
     <span class="c">// for a `WebFetch` on `apnews.com`. The wide one is every call to this</span>
     <span class="c">// tool, any host, which is "all web searches in the directory" as it was</span>
     <span class="c">// asked for; it is a separate keystroke because guessing which one</span>
@@ -156,7 +156,7 @@
         .ask(name, term, Question::Network(&amp;target.host), &amp;offers)
         .await
     {
-        <span class="c">// `a` grants no more here than `y` does — see `Question::Network`.</span>
+        <span class="c">// `a` grants no more here than `y` does; see `Question::Network`.</span>
         Some(Answer::Yes | Answer::AlwaysThisTool) =&gt; {
             self.hosts_allowed.lock().await.insert(target.host.clone());
             term.note(&amp;format!(
@@ -335,7 +335,7 @@
     <code>Rules::for_egress(tool, host)</code> matches a bare <code>Tool</code>
     rule for that tool and any of its <code>domain:</code> rules.
     <code>Rules::for_call(tool, args)</code>, which answers the local question,
-    matches bare rules plus the command and path shapes &mdash; and its
+    matches bare rules plus the command and path shapes, and its
     <code>Spec::Domain</code> arm is <code>false</code>, so a
     <code>domain:</code> rule never becomes permission to run a tool. The
     separation is the same one it always was; what changed is that the local

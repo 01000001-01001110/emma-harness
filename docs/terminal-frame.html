@@ -14,10 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it, which is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -385,8 +385,8 @@ const ALT_LEAVE: &amp;str = "\x1b[?1049l";</code></pre>
   </p>
 
   <p>
-    The cost of bracketed paste left on is worth stating plainly, because it
-    outlives the process: a shell inheriting it receives <code>ESC[200~</code>
+    The cost of bracketed paste left on outlives the process: a shell inheriting
+    it receives <code>ESC[200~</code>
     around everything anybody pastes into it, forever, from a program that has
     exited. Mouse capture cannot ride in the pairing test, because on Windows
     the enable is a console-mode change rather than bytes, so its pairing is
@@ -472,8 +472,8 @@ const ALT_LEAVE: &amp;str = "\x1b[?1049l";</code></pre>
   </p>
 
   <p>
-    <strong>The hook moved, and where it sits is the whole of the property.</strong>
-    It used to go on after the modes were enabled &mdash; and a hook installed
+    <strong>The hook moved, and where it sits is the property.</strong>
+    It used to go on after the modes were enabled, and a hook installed
     afterwards cannot answer for a panic in between, which is several fallible
     writes long. Combined with the old <code>FRAME_ON</code>-only restore guard,
     a panic in that window stranded raw mode and the alternate screen with
@@ -527,7 +527,7 @@ const ALT_LEAVE: &amp;str = "\x1b[?1049l";</code></pre>
   </p>
 
   <p>
-    The failure worth naming is an unmatched <code>h</code>: a terminal that
+    An unmatched <code>h</code> is the failure: a terminal that
     never sees the <code>l</code> stops updating. Every terminal implementing
     the mode implements a timeout for that reason, and <code>SYNC_END</code> is
     also on the restore path.
@@ -538,8 +538,8 @@ const ALT_LEAVE: &amp;str = "\x1b[?1049l";</code></pre>
   </p>
 
   <p>
-    <strong>It used to assert on this file's own source text</strong> &mdash;
-    that the string <code>out.push_str(SYNC_END)</code> still appeared &mdash;
+    <strong>It used to assert on this file's own source text</strong>:
+    that the string <code>out.push_str(SYNC_END)</code> still appeared,
     and that is a false receipt of the exact kind this repository has a name
     for: the grep matched a literal that also existed inside the assertion
     itself, so the test could not fail. Behaviour is checked now, not spelling.
@@ -574,8 +574,8 @@ const ALT_LEAVE: &amp;str = "\x1b[?1049l";</code></pre>
     slices the source between <code>pub fn install(</code> and
     <code>PANIC_HOOK.call_once</code>, strips comments, and refuses
     <code>anchor(</code>. Both <code>expect</code> messages say the assertion
-    has become vacuous if the anchor points move, which is the honest failure
-    mode for a source-grep test.
+    has become vacuous if the anchor points move, which is the failure a
+    source-grep test has when the search window moves.
     <span class="chip test">tested</span>
   </p>
 
@@ -645,7 +645,7 @@ fn resize_target(pinned: bool, screen_rows: u16, height: u16) -&gt; Option&lt;u1
   </p>
 
   <p>
-    The <code>Bar</code> construction encodes one rule worth reading. An
+    The <code>Bar</code> construction encodes one rule. An
     unmeasured <code>context</code> or <code>spend</code> becomes
     <code>(0, 0)</code>, never <code>(0, real_cap)</code>, <em>&ldquo;which
     would draw an invented &lsquo;0% of the budget&rsquo; before the first model

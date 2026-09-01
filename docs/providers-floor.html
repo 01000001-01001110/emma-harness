@@ -14,11 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page because these pages open from file://
      with no server, no build step and no JavaScript, so there is nothing to
-     include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
-     is kept short.
+     include a partial with. Adding a page means editing this file and every
+     page's copy of it, so the list is kept short.
      =========================================================================== -->
 <nav class="side">
   <div class="brand">
@@ -128,10 +127,9 @@ claude-haiku-4-5: 4129 tokens, marker present -&gt; cache_creation = <span class
   <span class="src">notes/lessons/a-provider-feature-can-be-accepted-and-inert.md; commit <code>bb78857</code></span>
 
   <p>
-    The generalisable part, and the reason the lesson exists: <strong>when a
-    provider feature is advisory rather than mandatory, its failure mode is
-    silence, and the only detector is the usage counter it was supposed to
-    move.</strong> A test asserting that the marker was sent passes forever. A
+    The generalisable part: <strong>when a provider feature is advisory rather
+    than mandatory, failure is silent, and the only detector is the usage
+    counter it was supposed to move.</strong> A test asserting that the marker was sent passes forever. A
     test asserting that the marker moved the counter runs only against the real
     API.
   </p>
@@ -227,8 +225,8 @@ const MIN_CACHEABLE: &amp;[(&amp;str, usize)] = &amp;[
       claimed floor and one 30 tokens over, with <code>count_tokens</code> for
       the sizing and <code>max_tokens: 1</code> so no output is generated, then
       read <code>cache_creation_input_tokens</code>. Under a cent per model.
-      Because the floors move with model generations, a new row measured is
-      worth more than a new row pattern-matched from the row above it.
+      Because the floors move with model generations, measure a new row rather
+      than copying the row above it.
     </p>
   </div>
 

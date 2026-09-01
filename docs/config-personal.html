@@ -14,7 +14,7 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
      file and every page's copy of it — which is the deal, and is why the list
@@ -417,7 +417,7 @@ pub struct ToolSettings {
     is a concession to the world rather than to the rule: those variables really
     do hold command lines, so a value there that does not resolve <em>as a
     whole</em> is skipped and the chain continues to the probe. Skipped, not
-    split. Two smaller behaviours are worth knowing: a <code>.cmd</code> or
+    split. Two smaller behaviours: a <code>.cmd</code> or
     <code>.bat</code> target is refused with a sentence saying to point the
     setting at the underlying <code>.exe</code>, because a script cannot own a
     console window; and <code>settings.json</code> is re-read on every call

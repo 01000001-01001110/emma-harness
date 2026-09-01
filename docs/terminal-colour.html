@@ -14,10 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it, which is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -183,7 +183,7 @@
 
   <p>
     That console exists. It is a terminal, it is not redirected, and it does not
-    process escape sequences &mdash; so every SGR byte Emma wrote landed on the
+    process escape sequences, so every SGR byte Emma wrote landed on the
     screen as literal text. The ladder could not catch it, because every input
     the ladder reads was truthfully saying "this is a terminal". The only signal
     that distinguishes the case is whether virtual-terminal processing could
@@ -204,7 +204,7 @@
   <p>
     The environment is an argument rather than a global, which is what makes the
     whole ladder testable; <code>Level::detect</code> is the one place that reads
-    the real process &mdash; and on Windows it does one thing before the ladder,
+    the real process, and on Windows it does one thing before the ladder,
     described below. The order is <em>&ldquo;so the honest signals beat the
     hopeful ones&rdquo;</em>: an explicit override first, since the person
     setting <code>EMMA_COLORS</code> is looking at a terminal Emma guessed wrong
@@ -259,7 +259,7 @@
     <em>arguments</em> for them stayed here, and the region comment says why:
     they are arguments about what a role means, <em>&ldquo;and the person most
     likely to reverse one by accident is somebody editing a theme file who never
-    opens the loader.&rdquo;</em> Four of them are worth carrying.
+    opens the loader.&rdquo;</em> Four of them travel with the role.
   </p>
 
   <ul class="body">
@@ -281,8 +281,8 @@
       a warning somebody has to re-learn.
     </li>
     <li>
-      <code>Text</code> has no value reachable here at all, and that is the
-      point. The rest of this page is about that short-circuit.
+      <code>Text</code> has no value reachable here at all. The rest of this
+      page is about that short-circuit.
     </li>
   </ul>
 
@@ -473,8 +473,13 @@
 
   <p>
     <code>Palette</code> is two fields, a <code>Level</code> and a
-    <code>Theme</code>, and it is <code>Copy</code>. Roughly thirty call sites
-    pass one by value, and the <code>Skin</code> that holds one is stored in
+    <code>Theme</code>, and it is <code>Copy</code>. Fifty-five call sites
+    construct one and pass it by value &mdash; 36 outside
+    <code>term/palette.rs</code> itself, which holds the other 19.
+    <span class="chip cert">certified</span>:
+    <code>rg -n "Palette::new" crates/emma/src | wc -l</code> returns 55 on
+    2026-09-01. The page said "roughly thirty" until then, which was a hedge
+    rather than a count. and the <code>Skin</code> that holds one is stored in
     widgets across the module. A <code>Theme</code> holding a
     <code>String</code> would end that and cascade through every signature in
     <code>term/</code>, which is why themes are resolved to fixed-size data at
@@ -491,8 +496,9 @@
     colourless terminal still separates a note from a line somebody has to
     read), <code>bold</code>, and the two pair functions above.
     <code>Palette::new(level)</code> and <code>Palette::with_theme(level,
-    BUILTIN)</code> are the same thing, which is what keeps the thirty
-    <code>Palette::new</code> call sites honest.
+    BUILTIN)</code> are the same thing, which keeps all 55
+    <code>Palette::new</code> call sites interchangeable with
+    <code>with_theme</code>.
   </p>
 
   <h2 id="table">The whole built-in palette, pinned</h2>

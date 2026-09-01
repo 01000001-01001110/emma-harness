@@ -14,7 +14,7 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
      file and every page's copy of it — which is the deal, and is why the list
@@ -132,7 +132,7 @@
 </p>
 
 <p>
-  The failure mode of argv exec is that the model emits <code>sh -c "…"</code>
+  Argv exec fails when the model emits <code>sh -c "…"</code>
   as the argv anyway, which is a shell with the safety story removed and
   nobody's caps applied. The injection argument also does not survive the threat
   model: there is no untrusted string being interpolated, the model composes the
@@ -164,7 +164,7 @@
 </p>
 
 <p>
-  The rebuild has a cost worth stating: a command that depends on an environment
+  The rebuild has a cost: a command that depends on an environment
   variable the user set will not see it, and nothing in the result says so.
   Sixteen names is the whole of what a POSIX command line can rely on here.
 </p>
@@ -514,7 +514,7 @@ spawned  Git\usr\bin\bash.exe
         <td><code>KillShell</code></td>
         <td><code>bash_id</code></td>
         <td>Signals the shell it started &mdash; <strong>never a process
-        tree</strong> &mdash; and the outcome says which. Deliberately does not
+        tree</strong> &mdash; and the outcome says which. Does not
         claim <code>read_only</code>: signalling a process is exactly the local
         damage the bit exists to flag.</td>
       </tr>
@@ -536,7 +536,7 @@ spawned  Git\usr\bin\bash.exe
   <code>MAX_TASK_OUTPUT_BYTES</code> is 256&nbsp;KiB per task, dropping from the
   front and moving the read cursor with the bytes it pointed at. The number of
   remembered tasks had no bound at all until 2026-08-23: a dead task stays
-  findable by design, so a long session held every handle it ever made.
+  findable after exit, so a long session held every handle it ever made.
   <code>MAX_REMEMBERED_TASKS</code> is 64, and <strong>only finished tasks are
   ever evicted</strong> &mdash; losing the handle to a live process means losing
   the ability to kill it, which is worse than the leak the bound exists for.

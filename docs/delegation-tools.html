@@ -82,7 +82,7 @@
 fn resolve_tools(def: &amp;AgentDef, candidates: &amp;[Arc&lt;dyn Tool&gt;]) -&gt; (Registry, Vec&lt;String&gt;) {
     let mut registry = Registry::new();
     let Some(wanted) = def.tools.as_deref() else {
-        <span class="c">// Absent — and, deliberately, empty — means inherit. See</span>
+        <span class="c">// Absent and empty both mean inherit. See</span>
         <span class="c">// `claude::Tools::allowlist`, which is where that ruling is argued.</span>
         for tool in candidates {
             registry.register(tool.clone());
@@ -150,8 +150,8 @@ fn resolve_tools(def: &amp;AgentDef, candidates: &amp;[Arc&lt;dyn Tool&gt;]) -&g
     <span class="h">The design said read-only. The code went the other way.</span>
     <p>
       <code>notes/design/subagents-mechanism.md</code> §5 specifies a fixed,
-      read-only child registry — <code>Read</code>, <code>Glob</code>,
-      <code>Grep</code> and no more — and its closing "what I could not resolve"
+      read-only child registry (<code>Read</code>, <code>Glob</code>,
+      <code>Grep</code> and no more), and its closing "what I could not resolve"
       list recommends that as the default. The interface note took the same
       position. Neither shipped. The registry is per agent type, built from the
       file's <code>tools</code> list, and an absent or empty list inherits the
@@ -197,14 +197,14 @@ fn resolve_tools(def: &amp;AgentDef, candidates: &amp;[Arc&lt;dyn Tool&gt;]) -&g
     <span class="c">/// catalogue quietly shorter than the directory is the gap nobody notices</span>
     <span class="c">/// until the model cannot find an agent that is plainly there.</span>
     <span class="c">///</span>
-    <span class="c">/// **Unknown tool names are filtered, not fatal, and this diverges from</span>
-    <span class="c">/// `Harness::select_tools` deliberately.** A persona's list is the</span>
+    <span class="c">/// **Unknown tool names are filtered, not fatal, unlike</span>
+    <span class="c">/// `Harness::select_tools`.** A persona's list is the</span>
     <span class="c">/// operator's own boot-time choice and a typo in it is worth refusing to</span>
     <span class="c">/// start over. An agent library is ninety files somebody accumulated for a</span>
     <span class="c">/// different program: measured against a real one, its files name</span>
     <span class="c">/// `TodoWrite`, `Task`, `repl`, `artifacts` and `brave_web_search`, none of</span>
     <span class="c">/// which this binary registers, and bailing would mean Emma does not start</span>
-    <span class="c">/// in that directory at all — a rule that fires on correct configuration is</span>
+    <span class="c">/// in that directory at all. A rule that fires on correct configuration is</span>
     <span class="c">/// an outage, not a safety property.</span>
     <span class="c">///</span>
     <span class="c">/// Matching is case-insensitive first, because 14 of those files spell them</span>

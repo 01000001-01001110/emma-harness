@@ -14,10 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it, which is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -167,7 +167,7 @@
       <thead><tr><th>Method</th><th>Glyph &amp; role</th><th>The decision in it</th></tr></thead>
       <tbody>
         <tr><td><code>goal</code></td><td><code>&#9654;</code> Accent</td><td>The user's own words, bold accent.</td></tr>
-        <tr><td><code>tool_started</code></td><td><code>&#9670;</code> Info</td><td>Name in bold, the one interesting argument after it.</td></tr>
+        <tr><td><code>tool_started</code></td><td><code>&#9670;</code> Info</td><td>Name in bold, the identifying argument after it.</td></tr>
         <tr><td><code>tool_ok</code></td><td>none, Dim</td><td>The body indented and dimmed: evidence, not prose, and the eye should be able to skip it.</td></tr>
         <tr><td><code>tool_failed</code></td><td><code>&#10007;</code> Err</td><td>A <code>ToolError</code>. Red, and the glyph says so before the words do.</td></tr>
         <tr><td><code>tool_refused</code></td><td><code>&#8856;</code> Warn</td><td>The human said no. Nothing broke, so yellow, and the sentence says who decided.</td></tr>
@@ -336,8 +336,8 @@ pub fn for_stream(skin: &amp;Skin, line: &amp;Line&lt;'_&gt;) -&gt; String {
   <p>
     <code>Skin::status</code> is the <em>inline</em> viewport's bottom row, and
     the full-screen successor to it is <a href="terminal-status.html">a
-    different module</a>. Its rule is stated as the reason the row is worth
-    having at all: a field whose value is not known is absent, and a line that
+    different module</a>. Its rule is stated as the reason the row exists: a
+    field whose value is not known is absent, and a line that
     does not fit drops fields in a stated order rather than being cut
     mid-number. Every field of <code>Status</code> is an <code>Option</code> for
     the same reason: <em>&ldquo;a readout that is stale is worse than a readout
@@ -480,8 +480,7 @@ pub fn for_stream(skin: &amp;Skin, line: &amp;Line&lt;'_&gt;) -&gt; String {
       no-op, because <em>&ldquo;<code>separate()</code> on the inline path had to
       be a declaration because the terminal owned the rows; here the buffer owns
       them and the rule is structural.&rdquo;</em> The module's own doc still
-      describes the pre-2026-08-12 world throughout, which is worth knowing
-      before reading it.
+      describes the pre-2026-08-12 world throughout.
       <span class="chip cert">certified</span>: <code>spacing.rs</code>'s module
       doc says <em>&ldquo;Both output paths hold one of these: the viewport, and
       the plain-lines fallback&rdquo;</em>, and <code>Frame::separate</code>

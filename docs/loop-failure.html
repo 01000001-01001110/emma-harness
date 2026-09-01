@@ -627,10 +627,10 @@ fn failure_result(id: &amp;str, tool: &amp;str, kind: &amp;str, detail: &amp;str
 }</code></pre>
 
   <p>
-    Two halves with two jobs. <code>is_error</code> is the flag the API and the
-    model's training key on; the JSON body says which failure it was and what to
-    do instead. A failure rendered without the flag reads to the model as a
-    successful call that returned odd text.
+    <code>is_error</code> is the flag the API and the model's training key on;
+    the JSON body says which failure it was and what to do instead. A failure
+    rendered without the flag reads to the model as a successful call that
+    returned odd text.
     <span class="chip test">tested</span>
     <code>a_failure_block_is_flagged_and_typed</code>, a unit test in
     <code>agent.rs</code> itself, asserts the flag survives to

@@ -14,10 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it, which is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -89,7 +89,7 @@
   <p class="lede">
     The sidebar's middle section lists seven entries in a fixed order. Three
     start a program on the machine; four run inside Emma and say so rather than
-    pretending to launch &mdash; Search, and the three
+    pretending to launch: Search, and the three
     <a href="terminal-pages.html">tool pages</a>. Three rules carry the design, and every one exists
     because breaking it fails silently. The sharpest of them cost twenty-two
     green tests and a canary in the wrong stream to find.
@@ -118,9 +118,9 @@
     Settings opened <code>~/.emma/settings.json</code> in the configured editor,
     the Data Explorer opened the file manager on <code>~/.emma</code>, and Memory
     opened nothing at all while claiming it would. Each is a page in the frame
-    now &mdash; see <a href="terminal-pages.html">the tool pages</a>. The launches
-    were deliberate and correct as built; the owner ruled on 2026-08-23 that they
-    should be pages, which is a different thing from their having been wrong.
+    now. See <a href="terminal-pages.html">the tool pages</a>. The launches
+    worked as built; the owner ruled on 2026-08-23 that they should be pages,
+    which is a different thing from their having been wrong.
   </p>
 
   <p>
@@ -189,8 +189,8 @@ Data Explorer [d] available=true -- explorer at C:\Users\owner\.emma
 Settings      [,] available=true -- code on C:\Users\owner\.emma\settings.json</code></pre>
 
   <p>
-    <code>Code</code> resolving to <code>code</code> is the design working: on
-    Windows the PATH probe had to find <code>code.cmd</code> rather than a bare
+    <code>Code</code> resolving to <code>code</code> is the PATH probe matching
+    the spawn: on Windows it had to find <code>code.cmd</code> rather than a bare
     <code>code</code>, or the catalogue would have promised a launch the spawn
     could not perform.
   </p>
@@ -217,8 +217,8 @@ Settings      [,] available=true -- code on C:\Users\owner\.emma\settings.json</
   </p>
 
   <p>
-    The test fixture's own helper carries the seam's honest limit, and it is
-    worth reading because it is the kind of thing usually left undiscovered:
+    The test fixture's own helper carries the seam's limit, and it is
+    the kind of thing usually left undiscovered:
   </p>
 
   <p class="faint">crates/emma/src/usertools.rs &middot; the test helper <code>host</code></p>
@@ -474,7 +474,7 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
   </p>
 
   <p>
-    Two refusals are worth reading. A <strong>terminal editor on unix</strong>
+    Two refusals. A <strong>terminal editor on unix</strong>
     is refused rather than launched, and the message names the editor and where
     it came from so the fix is obvious. <code>is_terminal_editor</code> is a
     list rather than a heuristic, and the asymmetry is priced: <em>&ldquo;a wrong
@@ -563,7 +563,7 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
     an existing one byte-for-byte alone &mdash; <em>&ldquo;load/save would
     reformat it, and a settings file that mutates on open is one nobody can
     diff.&rdquo;</em> Nothing opens that file on Emma's behalf now, so nothing
-    needs to create it first. <strong>The consequence is worth stating:</strong>
+    needs to create it first. <strong>The consequence:</strong>
     a machine that has never had a <code>settings.json</code> written still has
     none after opening the Settings page, and the page shows the resolved
     defaults rather than a file.
@@ -583,7 +583,7 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
     items, five probe helpers, sixteen planning functions, three spawning
     functions and the reaper's <code>Drop</code>, plus two inside
     <code>new_console</code>.
-    <span class="chip cert">certified</span> &mdash; redo it with
+    <span class="chip cert">certified</span>. Redo it with
     <code>wc -l crates/emma/src/usertools.rs</code> and
     <code>head -983 crates/emma/src/usertools.rs | grep -c "^\s*\(pub \)\?fn "</code>,
     less the three items inside the inner test module.

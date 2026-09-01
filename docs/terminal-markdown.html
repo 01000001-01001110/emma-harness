@@ -14,10 +14,10 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     It is duplicated per page. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it, which is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -88,7 +88,8 @@
 
   <p class="lede">
     The model writes markdown. This is as much of it as a terminal transcript
-    can carry honestly, and the boundary that makes it possible is the newline:
+    can carry without inventing structure, and the boundary that makes it
+    possible is the newline:
     every block this file recognises is decided by the <em>start</em> of a line,
     so one complete line is all the context any of them needs, and the only
     state crossing lines is whether a fence is open.
@@ -162,7 +163,7 @@
   <span class="src">crates/emma/src/term/markdown.rs — <code>Markdown::line</code></span>
 
   <p>
-    The fence check is first, and that ordering is the whole of the state
+    The fence check is first, and that ordering is the state
     machine: inside a fence, nothing else is recognised. The last arm is prose,
     which is why every shape that is <em>nearly</em> something renders as a
     paragraph rather than as a mistake. The recognisers are narrow:
@@ -388,7 +389,7 @@ fn code_rows(text: &amp;str, width: usize, skin: &amp;Skin) -&gt; Vec&lt;Line&lt
   </p>
 
   <p>
-    Two mechanisms inside it are worth naming. <code>tokens</code> splits the
+    Two mechanisms inside it. <code>tokens</code> splits the
     styled spans into runs of whitespace and runs of not-whitespace, carrying
     each span's style, so a wrap can happen between words without losing where a
     style boundary was. And <code>pending</code> holds the space

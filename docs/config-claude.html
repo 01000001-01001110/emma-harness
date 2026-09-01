@@ -14,7 +14,7 @@
      inside <div class="shell">, and change exactly one thing: add class
      "here" to the <a> for the page you are writing.
 
-     It is duplicated per page on purpose. These pages must open from file://
+     Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
      file and every page's copy of it — which is the deal, and is why the list
@@ -344,8 +344,8 @@ pub(crate) fn translate_command(root: &amp;Path, name: &amp;str, raw: &amp;str) 
 
   <p>
     Three prefixes are stripped and after that the string has to be a plain
-    relative path. Whitespace is refused as a class rather than as a list, and
-    the set that produced that decision is worth reading, because it is a scar:
+    relative path. Whitespace is refused as a class rather than as a list. The
+    set that produced that decision follows:
   </p>
 
   <p class="faint">crates/harness/src/claude.rs · <code>SHELL_METACHARACTERS</code></p>
@@ -385,8 +385,7 @@ const SHELL_METACHARACTERS: &amp;[char] = &amp;[
 
   <p>
     This is the one place a file in the home directory reaches into a project
-    run, and it is worth being exact about what crosses.
-    <code>~/.claude/settings.json</code> contributes its <code>deny</code> list.
+    run. <code>~/.claude/settings.json</code> contributes its <code>deny</code> list.
     It never contributes <code>allow</code> and never contributes
     <code>ask</code>. It is not read as a harness, does not supply hooks, does
     not supply a status line, and does not supply agents or skills.
