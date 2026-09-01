@@ -182,6 +182,64 @@ pub fn diagram(crates: &[Crate]) -> Diagram {
     }
 }
 
+/// The crates that depend on `tools/fs`, which is where `path::resolve` lives.
+///
+/// A filtered view of the same manifest reading as [`diagram`], rather than a
+/// second source. The claim the page makes -- that every containment check
+/// goes through one implementation -- is exactly "these crates depend on
+/// `emma-tools-fs`", so the picture is that dependency edge and nothing else.
+///
+/// `Bash` is not drawn. It is a shell, it can leave the root, and no
+/// dependency edge says so; the page says it in prose where a reader can see
+/// it is a caveat rather than a box.
+pub fn containment(crates: &[Crate]) -> Diagram {
+    const FS: &str = "emma-tools-fs";
+
+    let mut dependents: Vec<&Crate> = crates
+        .iter()
+        .filter(|c| c.name != FS && c.deps.iter().any(|d| d == FS))
+        .collect();
+    dependents.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let edges = dependents
+        .iter()
+        .map(|c| Edge {
+            from: c.name.clone(),
+            to: FS.to_string(),
+            weight: Weight::Plain,
+            label: String::new(),
+        })
+        .collect();
+
+    let n = dependents.len();
+    let names: Vec<&str> = dependents.iter().map(|c| c.path.as_str()).collect();
+    Diagram {
+        prefix: "cont".into(),
+        caption: format!(
+            "{n} crates depend on tools/fs: {}. Each reaches path::resolve \
+             through that dependency, so there is one containment check rather \
+             than one per tool.",
+            names.join(", ")
+        ),
+        layers: vec![
+            dependents
+                .iter()
+                .map(|c| Node {
+                    id: c.name.clone(),
+                    label: c.path.clone(),
+                    weight: Weight::Plain,
+                })
+                .collect(),
+            vec![Node {
+                id: FS.to_string(),
+                label: "tools/fs".into(),
+                weight: Weight::Accent,
+            }],
+        ],
+        edges,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,6 +317,32 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// **If this breaks:** the containment page shows a crate that does not
+    /// depend on `tools/fs`, or omits one that does -- either way a reader is
+    /// told the wrong set of tools shares the check.
+    ///
+    /// Asserted against the real manifests, and against the membership rule
+    /// rather than a hard-coded list: a new tool crate depending on
+    /// `emma-tools-fs` must appear without this test being edited.
+    #[test]
+    fn containment_draws_exactly_the_crates_that_depend_on_tools_fs() {
+        let crates = read(&root()).expect("the workspace parses");
+        let d = containment(&crates);
+        let drawn: Vec<&str> = d.layers[0].iter().map(|n| n.id.as_str()).collect();
+        let expected: Vec<&str> = crates
+            .iter()
+            .filter(|c| c.name != "emma-tools-fs")
+            .filter(|c| c.deps.iter().any(|dep| dep == "emma-tools-fs"))
+            .map(|c| c.name.as_str())
+            .collect();
+        assert!(!expected.is_empty(), "no crate depends on emma-tools-fs");
+        for name in &expected {
+            assert!(drawn.contains(name), "{name} is missing: {drawn:?}");
+        }
+        assert_eq!(drawn.len(), expected.len(), "{drawn:?} vs {expected:?}");
+        assert_eq!(d.layers[1].len(), 1, "tools/fs is the only crate below");
     }
 
     /// **If this breaks:** a line that is not a dependency becomes an edge,

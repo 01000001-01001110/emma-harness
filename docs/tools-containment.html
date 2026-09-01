@@ -83,10 +83,10 @@
 </nav>
 
 <p class="lede">
-  <code>tools/fs/src/path.rs</code> is 206 lines and six functions, and it is
+  <code>tools/fs/src/path.rs</code> is 478 lines and 12 functions, and it is
   the only answer in the workspace to "is this path inside the root".
-  <code>tools/tasks</code> and <code>tools/lsp</code> both depend on
-  <code>tools/fs</code> to reach it.
+  <code>crates/emma</code>, <code>tools/lsp</code> and <code>tools/tasks</code>
+  all depend on <code>tools/fs</code> to reach it.
 </p>
 
 <p>
@@ -99,48 +99,77 @@
 
 <figure>
   <div class="figwrap">
-    <svg viewBox="0 0 640 250" role="img" aria-label="tools/tasks and tools/lsp both depend on tools/fs so that path::resolve is the single containment implementation; the resolved path is the one the caller then uses for I/O. Bash starts inside the root but is a shell and can walk out, and hard links and bind mounts are outside what the check can see.">
+    <!-- diagram:tools-containment -->
+    <svg viewBox="0 0 526 172" role="img" aria-label="3 crates depend on tools/fs: crates/emma, tools/lsp, tools/tasks. Each reaches path::resolve through that dependency, so there is one containment check rather than one per tool.">
+      <style>
+        :root {
+          --cont-ground: #12101a;
+          --cont-surface: #1c1930;
+          --cont-line: #31d4f2;
+          --cont-text: #dcf6ff;
+          --cont-muted: #7d8fa8;
+          --cont-accent: #ff2e97;
+          --cont-dim: #8a5cf0;
+        }
+        @media (prefers-color-scheme: dark) {
+          :root {
+            --cont-ground: #0b0a10;
+            --cont-surface: #15132a;
+            --cont-line: #22b8d6;
+            --cont-text: #c4e8f5;
+            --cont-muted: #6b7c94;
+            --cont-accent: #ff45a3;
+            --cont-dim: #7a4fd8;
+          }
+        }
+        .cont-ground { fill: var(--cont-ground); }
+        .cont-box { fill: var(--cont-surface); stroke: var(--cont-line); stroke-width: 1.5; }
+        .cont-box-hl { fill: var(--cont-surface); stroke: var(--cont-accent); stroke-width: 2; }
+        .cont-lbl { fill: var(--cont-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .cont-note { fill: var(--cont-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .cont-edge { stroke: var(--cont-line); stroke-width: 1.5; fill: none; }
+        .cont-edge-hl { stroke: var(--cont-accent); stroke-width: 2; fill: none; }
+        .cont-edge-dim { stroke: var(--cont-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+      </style>
       <defs>
-        <marker id="tp-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+        <marker id="cont-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--cont-line)"/>
         </marker>
-        <marker id="tp-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+        <marker id="cont-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--cont-accent)"/>
+        </marker>
+        <marker id="cont-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--cont-dim)"/>
         </marker>
       </defs>
+      <rect class="cont-ground" x="0" y="0" width="526" height="172"/>
 
-      <rect class="box" x="12" y="16" width="150" height="34" rx="4" />
-      <text class="lbl" x="28" y="38">tools/tasks</text>
-      <rect class="box" x="12" y="70" width="150" height="34" rx="4" />
-      <text class="lbl" x="28" y="92">tools/lsp</text>
-      <rect class="box" x="12" y="124" width="150" height="34" rx="4" />
-      <text class="lbl" x="28" y="146">tools/fs</text>
+      <path class="cont-edge" marker-end="url(#cont-tip)" d="M 91 54 L 263 118"/>
+      <path class="cont-edge" marker-end="url(#cont-tip)" d="M 263 54 L 263 118"/>
+      <path class="cont-edge" marker-end="url(#cont-tip)" d="M 435 54 L 263 118"/>
+      <rect class="cont-box" x="16" y="16" width="150" height="38" rx="3"/>
+      <text class="cont-lbl" x="91" y="40" text-anchor="middle">crates/emma</text>
 
-      <path class="edge" d="M162 33 L240 33 L240 129 L286 129" marker-end="url(#tp-arrow)" />
-      <path class="edge" d="M162 87 L215 87 L215 129 L286 129" marker-end="url(#tp-arrow)" />
-      <path class="edge" d="M162 141 L286 141" marker-end="url(#tp-arrow)" />
+      <rect class="cont-box" x="188" y="16" width="150" height="38" rx="3"/>
+      <text class="cont-lbl" x="263" y="40" text-anchor="middle">tools/lsp</text>
 
-      <rect class="hl" x="286" y="112" width="200" height="58" rx="4" />
-      <text class="lbl" x="302" y="134">path::resolve</text>
-      <text class="tiny" x="302" y="152">normalise · canonicalise · contain</text>
+      <rect class="cont-box" x="360" y="16" width="150" height="38" rx="3"/>
+      <text class="cont-lbl" x="435" y="40" text-anchor="middle">tools/tasks</text>
 
-      <path class="edge-hl" d="M486 141 L556 141" marker-end="url(#tp-arrow-hl)" />
-      <text class="sm" x="500" y="126">the path</text>
-      <text class="sm" x="500" y="160">used for I/O</text>
+      <rect class="cont-box-hl" x="188" y="118" width="150" height="38" rx="3"/>
+      <text class="cont-lbl" x="263" y="142" text-anchor="middle">tools/fs</text>
 
-      <path class="edge-dash" d="M88 158 L88 206" marker-end="url(#tp-arrow)" />
-      <rect class="box" x="12" y="206" width="150" height="34" rx="4" />
-      <text class="lbl" x="28" y="228">Bash</text>
-      <text class="sm" x="176" y="222">starts in the root; `cd ..` leaves</text>
-      <text class="tiny" x="176" y="238">hard links and bind mounts: not detectable</text>
     </svg>
+    <!-- /diagram -->
   </div>
   <figcaption>
-    Three crates, one containment check. <code>resolve</code> returns the path
-    the caller then uses for I/O; checking one path and operating on another is
-    the classic way this check becomes decorative. Drawn from
-    <code>tools/fs/src/path.rs</code>, <code>tools/tasks/src/store.rs</code> and
-    <code>tools/lsp/src/tools.rs</code>.
+    The crates that depend on <code>tools/fs</code>, generated from the
+    workspace manifests by <code>crates/docsgen</code>; a tool crate that takes
+    that dependency appears here without anybody drawing it.
+    <code>resolve</code> returns the path the caller then uses for I/O, and
+    checking one path while operating on another is how this check becomes
+    decorative. <code>Bash</code> is absent because no dependency edge can
+    express it &mdash; it is a shell, and it can leave the root.
   </figcaption>
 </figure>
 

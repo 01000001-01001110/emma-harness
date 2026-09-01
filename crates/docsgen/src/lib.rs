@@ -47,10 +47,16 @@ pub const CLOSE: &str = "<!-- /diagram -->";
 /// Every diagram this generator knows how to draw, by the name in its marker.
 pub fn render_all(root: &Path) -> Result<Vec<(String, String)>> {
     let crates = architecture::read(root)?;
-    Ok(vec![(
-        "architecture".to_string(),
-        architecture::diagram(&crates).render(),
-    )])
+    Ok(vec![
+        (
+            "architecture".to_string(),
+            architecture::diagram(&crates).render(),
+        ),
+        (
+            "tools-containment".to_string(),
+            architecture::containment(&crates).render(),
+        ),
+    ])
 }
 
 /// Replace the marked block for `name` in `page`, returning the new text.
