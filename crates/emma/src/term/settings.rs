@@ -624,8 +624,8 @@ pub const NOTICE_PERMISSIONS_MORE: &str = "This card shows the first rules only;
 /// **Every row is [`RowKind::Note`], and that is the security constraint
 /// rather than an unfinished half.** Editing a permission from here would
 /// write `settings.local.json` — the same file `[r]` and `[t]` at an approval
-/// prompt write — and a settings route into an execution decision is exactly
-/// the shape the `another agent` review found. The keyboard is not a model-reachable
+/// prompt write — and a settings route into an execution decision is the
+/// shape a review of another agent found. The keyboard is not a model-reachable
 /// route today, but the write would be a second door to a decision that has
 /// one good door, and the good one has the call that wants the grant on screen
 /// beside it. So this card reads and never writes.
