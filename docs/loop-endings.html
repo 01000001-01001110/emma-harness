@@ -131,55 +131,15 @@ if turn.tool_calls().is_empty() {
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 700 320" role="img" aria-label="Four rules in a fixed order after a turn with no tool calls: the done verdict, then the stall rule, then the answered rule, then the kick budget. Falling through all four sends a kick and continues the loop.">
-        <rect class="hl" x="16" y="16" width="336" height="46" rx="4" />
-        <text class="lbl" x="28" y="38">1 · done.verdict(goal, text)</text>
-        <text class="tiny" x="28" y="55">the completion claim, whatever check is in force</text>
-        <path class="edge" d="M352 39 H448" marker-end="url(#en-arrow)" />
-        <rect class="box" x="448" y="23" width="236" height="32" rx="3" />
-        <text class="sm" x="460" y="44">Done::Yes → Ending::Done</text>
-
-        <path class="edge" d="M184 62 V88" marker-end="url(#en-arrow)" />
-        <rect class="box" x="16" y="88" width="336" height="46" rx="4" />
-        <text class="lbl" x="28" y="110">2 · tool_calls_since_kick == 0 &amp;&amp; kicked</text>
-        <text class="tiny" x="28" y="127">nudged, and did nothing about it</text>
-        <path class="edge" d="M352 111 H448" marker-end="url(#en-arrow)" />
-        <rect class="box" x="448" y="95" width="236" height="32" rx="3" />
-        <text class="sm" x="460" y="116">→ Ending::Stalled</text>
-
-        <path class="edge" d="M184 134 V160" marker-end="url(#en-arrow)" />
-        <rect class="box" x="16" y="160" width="336" height="46" rx="4" />
-        <text class="lbl" x="28" y="182">3 · !worked</text>
-        <text class="tiny" x="28" y="199">no tool attempted anywhere in this goal</text>
-        <path class="edge" d="M352 183 H448" marker-end="url(#en-arrow)" />
-        <rect class="box" x="448" y="167" width="236" height="32" rx="3" />
-        <text class="sm" x="460" y="188">→ Ending::Answered</text>
-
-        <path class="edge" d="M184 206 V232" marker-end="url(#en-arrow)" />
-        <rect class="box" x="16" y="232" width="336" height="46" rx="4" />
-        <text class="lbl" x="28" y="254">4 · kicks &gt;= max_kicks</text>
-        <text class="tiny" x="28" y="271">the nudge budget is spent</text>
-        <path class="edge" d="M352 255 H448" marker-end="url(#en-arrow)" />
-        <rect class="box" x="448" y="239" width="236" height="32" rx="3" />
-        <text class="sm" x="460" y="260">→ Ending::KicksExhausted</text>
-
-        <path class="edge-hl" d="M184 278 V302 H448" marker-end="url(#en-arrow-hl)" />
-        <text class="sm" x="460" y="306">otherwise: kick, and continue</text>
-
-        <defs>
-          <marker id="en-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
-          </marker>
-          <marker id="en-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
-          </marker>
-        </defs>
-      </svg>
+      <!-- diagram:loop-endings -->
+      <!-- /diagram -->
     </div>
     <figcaption>
-      The ladder in source order. Moving a rung changes what the endings mean
-      rather than reordering equivalent checks, and the paragraphs below say
-      what each move would cost.
+      The endings the empty-tool-calls branch of <code>run_goal</code> can
+      produce, in the order the checks run — not the declaration order of
+      <code>Ending</code>. Moving a rung changes what the endings mean rather
+      than reordering equivalent checks, and the paragraphs below say what
+      each move would cost.
     </figcaption>
   </figure>
 

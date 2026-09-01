@@ -241,46 +241,71 @@
 
 <figure>
   <div class="figwrap">
-    <svg viewBox="0 0 700 260" role="img" aria-label="A parsed task line keeps its original bytes plus three offsets: the status glyph, the end of the last word, and the handle's range. A status change overwrites one byte in place; stamping a handle inserts it at the text end; only a change to the words forfeits the original and re-emits the line canonically.">
+    <!-- diagram:tools-tasks -->
+    <svg viewBox="0 0 526 172" role="img" aria-label="A parsed task line keeps 3 byte offsets into its original (glyph_at, text_end, handle_at) and 3 edit flags (status, handle, text). A status change splices one byte; a handle splices a range; new words re-emit the line canonically.">
+      <style>
+        :root {
+          --tools-tasks-ground: #12101a;
+          --tools-tasks-surface: #1c1930;
+          --tools-tasks-line: #31d4f2;
+          --tools-tasks-text: #dcf6ff;
+          --tools-tasks-muted: #7d8fa8;
+          --tools-tasks-accent: #ff2e97;
+          --tools-tasks-dim: #8a5cf0;
+        }
+        @media (prefers-color-scheme: dark) {
+          :root {
+            --tools-tasks-ground: #0b0a10;
+            --tools-tasks-surface: #15132a;
+            --tools-tasks-line: #22b8d6;
+            --tools-tasks-text: #c4e8f5;
+            --tools-tasks-muted: #6b7c94;
+            --tools-tasks-accent: #ff45a3;
+            --tools-tasks-dim: #7a4fd8;
+          }
+        }
+        .tools-tasks-ground { fill: var(--tools-tasks-ground); }
+        .tools-tasks-box { fill: var(--tools-tasks-surface); stroke: var(--tools-tasks-line); stroke-width: 1.5; }
+        .tools-tasks-box-hl { fill: var(--tools-tasks-surface); stroke: var(--tools-tasks-accent); stroke-width: 2; }
+        .tools-tasks-lbl { fill: var(--tools-tasks-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .tools-tasks-note { fill: var(--tools-tasks-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .tools-tasks-edge { stroke: var(--tools-tasks-line); stroke-width: 1.5; fill: none; }
+        .tools-tasks-edge-hl { stroke: var(--tools-tasks-accent); stroke-width: 2; fill: none; }
+        .tools-tasks-edge-dim { stroke: var(--tools-tasks-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+      </style>
       <defs>
-        <marker id="tk-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+        <marker id="tools-tasks-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-tasks-line)"/>
         </marker>
-        <marker id="tk-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+        <marker id="tools-tasks-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-tasks-accent)"/>
+        </marker>
+        <marker id="tools-tasks-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-tasks-dim)"/>
         </marker>
       </defs>
+      <rect class="tools-tasks-ground" x="0" y="0" width="526" height="172"/>
 
-      <rect class="box" x="14" y="18" width="660" height="40" rx="4" />
-      <text class="lbl" x="30" y="43">-   [ ]  port the auth middleware  `#a3f1`</text>
+      <rect class="tools-tasks-box" x="16" y="16" width="150" height="38" rx="3"/>
+      <text class="tools-tasks-lbl" x="91" y="40" text-anchor="middle">glyph_at: usize</text>
 
-      <path class="edge-hl" d="M78 58 L78 92" marker-end="url(#tk-arrow-hl)" />
-      <text class="tiny" x="34" y="108">glyph_at</text>
-      <text class="tiny" x="34" y="123">one byte, replaced in place</text>
+      <rect class="tools-tasks-box" x="188" y="16" width="150" height="38" rx="3"/>
+      <text class="tools-tasks-lbl" x="263" y="40" text-anchor="middle">text_end: usize</text>
 
-      <path class="edge-hl" d="M300 58 L300 92" marker-end="url(#tk-arrow-hl)" />
-      <text class="tiny" x="250" y="108">text_end</text>
-      <text class="tiny" x="250" y="123">a handle is inserted here</text>
+      <rect class="tools-tasks-box" x="360" y="16" width="150" height="38" rx="3"/>
+      <text class="tools-tasks-lbl" x="435" y="40" text-anchor="middle">handle_at</text>
 
-      <path class="edge-hl" d="M470 58 L470 92" marker-end="url(#tk-arrow-hl)" />
-      <text class="tiny" x="425" y="108">handle_at</text>
-      <text class="tiny" x="425" y="123">a range, replaced whole</text>
+      <rect class="tools-tasks-box" x="16" y="118" width="150" height="38" rx="3"/>
+      <text class="tools-tasks-lbl" x="91" y="142" text-anchor="middle">status: bool</text>
 
-      <rect class="box" x="14" y="150" width="200" height="40" rx="4" />
-      <text class="lbl" x="30" y="168">edit.status</text>
-      <text class="tiny" x="30" y="183">splice one byte</text>
+      <rect class="tools-tasks-box" x="188" y="118" width="150" height="38" rx="3"/>
+      <text class="tools-tasks-lbl" x="263" y="142" text-anchor="middle">handle: bool</text>
 
-      <rect class="box" x="236" y="150" width="200" height="40" rx="4" />
-      <text class="lbl" x="252" y="168">edit.handle</text>
-      <text class="tiny" x="252" y="183">insert or replace a range</text>
+      <rect class="tools-tasks-box-hl" x="360" y="118" width="150" height="38" rx="3"/>
+      <text class="tools-tasks-lbl" x="435" y="142" text-anchor="middle">text: bool</text>
 
-      <rect class="hl" x="458" y="150" width="216" height="40" rx="4" />
-      <text class="lbl" x="474" y="168">edit.text</text>
-      <text class="tiny" x="474" y="183">the one canonical re-emit</text>
-
-      <text class="sm" x="14" y="225">Splices run from the far end inwards, so no offset has to be adjusted for an earlier edit.</text>
-      <text class="tiny" x="14" y="243">It happens not to matter today, and a rule that depends on that is a rule waiting for the first splice that changes a length.</text>
     </svg>
+    <!-- /diagram -->
   </div>
   <figcaption>
     <code>TaskLine::render</code>. An untouched line takes the early return and

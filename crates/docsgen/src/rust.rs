@@ -134,6 +134,149 @@ pub fn const_value(file: &syn::File, name: &str) -> Result<String> {
     find(&file.items, name).with_context(|| format!("no `const {name}` in this file"))
 }
 
+/// The early-return guards of a function, in the order they are checked.
+///
+/// A precedence ladder is not prose about a function, it is the function: a run
+/// of `if <cond> { return <verdict> }` at the top of a body, where the first
+/// one that answers is the answer. Reading them back gives a diagram of the
+/// order that cannot disagree with the code, which the module doc's hand-kept
+/// numbered list can and does.
+///
+/// `name` is the condition as source text; `detail` is the returned value when
+/// it is simple enough to name. A guard whose body does not return is not a
+/// guard and is skipped -- it is a step in the function, not a rung.
+///
+/// One level of nesting is flattened: `if !forced { if a {..} if b {..} }` in
+/// `Approvals::decide` is three rungs, not one, and drawing it as one would
+/// lose the order this exists to show.
+pub fn fn_guards(file: &syn::File, name: &str) -> Result<Vec<Item>> {
+    let body =
+        fn_body(&file.items, name).with_context(|| format!("no `fn {name}` in this file"))?;
+    let mut out = Vec::new();
+    collect_guards(&body, &mut out, true);
+    if out.is_empty() {
+        bail!("`fn {name}` has no early-return guards to draw");
+    }
+    Ok(out)
+}
+
+fn collect_guards(stmts: &[syn::Stmt], out: &mut Vec<Item>, descend: bool) {
+    for stmt in stmts {
+        let syn::Stmt::Expr(syn::Expr::If(iff), _) = stmt else {
+            continue;
+        };
+        let returns = block_returns(&iff.then_branch);
+        if let Some(verdict) = returns {
+            out.push(Item {
+                name: cond_text(&iff.cond),
+                doc: String::new(),
+                detail: verdict,
+            });
+        } else if descend {
+            // A guard whose body is itself guards -- the `if !forced` block.
+            collect_guards(&iff.then_branch.stmts, out, false);
+        }
+    }
+}
+
+/// The value an early-return block returns, when the block is one `return`.
+///
+/// `None` for a block that does other work first: that is a branch rather than
+/// a rung, and putting it on the ladder would claim an ordering the function
+/// does not have.
+fn block_returns(b: &syn::Block) -> Option<String> {
+    let mut found = None;
+    for stmt in &b.stmts {
+        if let syn::Stmt::Expr(syn::Expr::Return(r), _) = stmt {
+            found = Some(r.expr.as_ref().map(|e| short_call(e)).unwrap_or_default());
+        }
+    }
+    found
+}
+
+/// A condition as short readable text.
+fn cond_text(e: &syn::Expr) -> String {
+    match e {
+        syn::Expr::Binary(b) => format!(
+            "{} {} {}",
+            cond_text(&b.left),
+            match b.op {
+                syn::BinOp::Eq(_) => "==",
+                syn::BinOp::Ne(_) => "!=",
+                syn::BinOp::And(_) => "&&",
+                syn::BinOp::Or(_) => "||",
+                _ => "?",
+            },
+            cond_text(&b.right)
+        ),
+        syn::Expr::Unary(u) => format!("!{}", cond_text(&u.expr)),
+        syn::Expr::MethodCall(m) => format!("{}.{}()", cond_text(&m.receiver), m.method),
+        syn::Expr::Field(f) => match &f.member {
+            syn::Member::Named(n) => n.to_string(),
+            syn::Member::Unnamed(i) => i.index.to_string(),
+        },
+        syn::Expr::Let(l) => cond_text(&l.expr),
+        syn::Expr::Path(p) => p
+            .path
+            .segments
+            .last()
+            .map(|s| s.ident.to_string())
+            .unwrap_or_default(),
+        syn::Expr::Call(c) => short_call(&syn::Expr::Call(c.clone())),
+        syn::Expr::Paren(p) => cond_text(&p.expr),
+        syn::Expr::Reference(r) => cond_text(&r.expr),
+        _ => String::new(),
+    }
+}
+
+/// A call or path reduced to its last recognisable name.
+fn short_call(e: &syn::Expr) -> String {
+    match e {
+        syn::Expr::Call(c) => {
+            let f = cond_text(&c.func);
+            if f.is_empty() {
+                String::new()
+            } else {
+                f
+            }
+        }
+        syn::Expr::Path(p) => p
+            .path
+            .segments
+            .last()
+            .map(|s| s.ident.to_string())
+            .unwrap_or_default(),
+        syn::Expr::MethodCall(m) => m.method.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn fn_body(items: &[syn::Item], name: &str) -> Option<Vec<syn::Stmt>> {
+    for item in items {
+        match item {
+            syn::Item::Fn(f) if f.sig.ident == name => return Some(f.block.stmts.clone()),
+            syn::Item::Impl(i) => {
+                for it in &i.items {
+                    if let syn::ImplItem::Fn(f) = it {
+                        if f.sig.ident == name {
+                            return Some(f.block.stmts.clone());
+                        }
+                    }
+                }
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner)) = &m.content {
+                    if let Some(found) = fn_body(inner, name) {
+                        return Some(found);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Whether a function of this name exists anywhere in the file, including
 /// inside an `impl`.
 ///
@@ -358,6 +501,67 @@ mod tests {
         assert_eq!(const_value(&f, "A").expect("A"), "40");
         assert_eq!(const_value(&f, "B").expect("B"), "22.4");
         assert_eq!(const_value(&f, "C").expect("C in an impl"), "3");
+    }
+
+    /// **If this breaks:** a precedence ladder is drawn in an order the
+    /// function does not check in, which is the one thing such a diagram
+    /// exists to state.
+    #[test]
+    fn guards_come_back_in_the_order_the_function_checks_them() {
+        let f = file(
+            "impl A {\n\
+             fn decide(&self) -> V {\n\
+             let rule = look();\n\
+             if rule == Deny { return V::Deny; }\n\
+             if self.gate == SkipAll { return V::Allow; }\n\
+             V::Ask\n\
+             }\n}",
+        );
+        let g = fn_guards(&f, "decide").expect("decide has guards");
+        assert_eq!(g.len(), 2, "{g:?}");
+        assert_eq!(g[0].name, "rule == Deny");
+        assert_eq!(g[1].name, "gate == SkipAll");
+    }
+
+    /// **If this breaks:** a nested block of guards collapses to one rung and
+    /// the ladder loses the steps inside it. `Approvals::decide` puts three
+    /// rungs inside `if !forced`.
+    #[test]
+    fn one_level_of_nested_guards_is_flattened_into_the_ladder() {
+        let f = file(
+            "fn d() -> V {\n\
+             if a { return V::A; }\n\
+             if !forced {\n\
+             if b { return V::B; }\n\
+             if c { return V::C; }\n\
+             }\n\
+             V::D\n}",
+        );
+        let g = fn_guards(&f, "d").expect("guards");
+        assert_eq!(
+            g.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+            ["a", "b", "c"],
+            "{g:?}"
+        );
+    }
+
+    /// **If this breaks:** an `if` that does work rather than answering is put
+    /// on the ladder, claiming an ordering the function does not have.
+    #[test]
+    fn a_branch_that_does_not_return_is_not_a_rung() {
+        let f = file("fn d() -> V {\n if a { log(); }\n if b { return V::B; }\n V::C\n}");
+        let g = fn_guards(&f, "d").expect("guards");
+        assert_eq!(g.len(), 1, "{g:?}");
+        assert_eq!(g[0].name, "b");
+    }
+
+    /// **If this breaks:** a function with no ladder in it is drawn as an
+    /// empty one rather than refusing.
+    #[test]
+    fn a_function_without_guards_is_an_error() {
+        let f = file("fn d() -> V { V::C }");
+        assert!(fn_guards(&f, "d").is_err());
+        assert!(fn_guards(&f, "absent").is_err());
     }
 
     /// **If this breaks:** a diagram names a step whose function was renamed

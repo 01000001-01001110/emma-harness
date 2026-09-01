@@ -67,7 +67,7 @@
     A harness decides what the model sees before you type anything, what it can
     reach for, and what you look at while it works. In most harnesses those
     decisions are made once, elsewhere, for everyone. Emma is the case where
-    they are yours. Four things follow.
+    they are yours. Five things follow.
   </p>
 
   <h3>Spend less context on the harness</h3>
@@ -115,6 +115,63 @@
     <code>WebFetch</code> renders in real Chrome, and five tools drive a live
     page: open, read, act, fill, close. A harness that can only fetch HTML is
     guessing at anything rendered client-side. See <a href="tools.html">Tools</a>.
+  </p>
+
+  <h3>Any model, any provider</h3>
+
+  <p>
+    Emma has no provider compiled into its loop. A <code>Provider</code> is a
+    trait with two required methods, and the loop builds its requests from
+    Emma's own shapes rather than from any vendor's wire format &mdash; so a
+    second provider is an implementation of that trait, not a fork of the
+    agent.
+  </p>
+
+  <p>
+    Two exist. Anthropic over the Messages API, and
+    <a href="providers.html">Ollama</a> against a model on your own machine,
+    which needs no key and sends nothing off the box.
+    <span class="chip cert">certified</span>: a goal run end to end on
+    <code>gemma4:12b</code> over loopback read a file through the
+    <code>Read</code> tool and answered in two calls at no cost, and the same
+    binary pointed at another machine's Ollama named that destination before
+    the first call. Anything speaking the OpenAI API, OpenRouter included, is
+    not wired up yet.
+  </p>
+
+  <p>
+    The boundary is where the work went. Ollama does not speak the Messages
+    API: a tool definition nests under <code>function</code> instead of
+    carrying <code>input_schema</code>, a call arrives already decoded, and a
+    result goes back as its own message rather than as a block inside a user
+    turn. Translating those is one file. What it showed is that the abstraction
+    holds &mdash; and what it cost is recorded in
+    <a href="providers-boundary.html">the provider boundary</a>, including the
+    three places the trait did not fit and had to grow.
+  </p>
+
+  <h3>Rust, and what that buys a program a model drives</h3>
+
+  <p>
+    A model proposes edits faster than a person can review them, so the
+    question is what catches a wrong one. Rust answers a large class of them at
+    compile time: an added enum variant breaks every <code>match</code> that
+    did not consider it, a moved value cannot be read afterwards, and an
+    ignored <code>Result</code> is a warning rather than a silent branch. Each
+    is a mistake an agent makes and a test suite might not.
+  </p>
+
+  <p>
+    The type system is also somewhere to put a rule so that breaking it stops
+    the build. <code>ApiKey</code> has no <code>Display</code> and a
+    <code>Debug</code> that prints nothing, so a key cannot reach a log through
+    a <code>{:?}</code> three layers up; reading it takes
+    <code>expose()</code>, which is a word a reviewer notices.
+  </p>
+
+  <p>
+    One binary follows from it too: no runtime to install, no interpreter
+    version to match, and the same artefact on Windows, macOS and Linux.
   </p>
 
   <h3>Nothing hosted, nothing you cannot change</h3>

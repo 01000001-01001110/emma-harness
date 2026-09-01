@@ -378,81 +378,93 @@ pub(crate) fn rank(self) -&gt; u8 {
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 760 330" role="img"
-           aria-label="A Request's four content fields and its two asks enter render(); the four become system and messages, the two asks are lowered against the model's row before becoming max_tokens and output_config, and the rendered body's keys come out in serde_json's sorted order: max_tokens, messages, model, output_config, system, tools.">
+      <!-- diagram:providers-boundary -->
+      <svg viewBox="0 0 1214 172" role="img" aria-label="A Request's 7 fields are rendered into a body whose 7 keys are sorted for the cache. Pink marks keys that may be absent: output_config, stream.">
+        <style>
+          :root {
+            --bnd-ground: #12101a;
+            --bnd-surface: #1c1930;
+            --bnd-line: #31d4f2;
+            --bnd-text: #dcf6ff;
+            --bnd-muted: #7d8fa8;
+            --bnd-accent: #ff2e97;
+            --bnd-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --bnd-ground: #0b0a10;
+              --bnd-surface: #15132a;
+              --bnd-line: #22b8d6;
+              --bnd-text: #c4e8f5;
+              --bnd-muted: #6b7c94;
+              --bnd-accent: #ff45a3;
+              --bnd-dim: #7a4fd8;
+            }
+          }
+          .bnd-ground { fill: var(--bnd-ground); }
+          .bnd-box { fill: var(--bnd-surface); stroke: var(--bnd-line); stroke-width: 1.5; }
+          .bnd-box-hl { fill: var(--bnd-surface); stroke: var(--bnd-accent); stroke-width: 2; }
+          .bnd-lbl { fill: var(--bnd-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .bnd-note { fill: var(--bnd-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .bnd-edge { stroke: var(--bnd-line); stroke-width: 1.5; fill: none; }
+          .bnd-edge-hl { stroke: var(--bnd-accent); stroke-width: 2; fill: none; }
+          .bnd-edge-dim { stroke: var(--bnd-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
         <defs>
-          <marker id="bnd-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          <marker id="bnd-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--bnd-line)"/>
           </marker>
-          <marker id="bnd-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          <marker id="bnd-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--bnd-accent)"/>
+          </marker>
+          <marker id="bnd-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--bnd-dim)"/>
           </marker>
         </defs>
+        <rect class="bnd-ground" x="0" y="0" width="1214" height="172"/>
 
-        <text class="tiny" x="14" y="16">Request</text>
-        <rect class="box" x="14" y="26" width="180" height="26" rx="4" />
-        <text class="sm" x="26" y="44">instructions</text>
-        <rect class="box" x="14" y="58" width="180" height="26" rx="4" />
-        <text class="sm" x="26" y="76">tools</text>
-        <rect class="box" x="14" y="90" width="180" height="26" rx="4" />
-        <text class="sm" x="26" y="108">history</text>
-        <rect class="box" x="14" y="122" width="180" height="26" rx="4" />
-        <text class="sm" x="26" y="140">query</text>
-        <rect class="hl" x="14" y="166" width="180" height="26" rx="4" />
-        <text class="sm" x="26" y="184">max_tokens: 32_000</text>
-        <rect class="hl" x="14" y="198" width="180" height="26" rx="4" />
-        <text class="sm" x="26" y="216">effort: XHigh</text>
-        <text class="tiny" x="14" y="242">asks, not settings</text>
+        <path class="bnd-edge" marker-end="url(#bnd-tip)" d="M 607 54 L 91 118"/>
+        <path class="bnd-edge" marker-end="url(#bnd-tip)" d="M 607 54 L 263 118"/>
+        <path class="bnd-edge" marker-end="url(#bnd-tip)" d="M 607 54 L 435 118"/>
+        <path class="bnd-edge-dim" marker-end="url(#bnd-tip-dim)" d="M 607 54 L 607 118"/>
+        <path class="bnd-edge-dim" marker-end="url(#bnd-tip-dim)" d="M 607 54 L 779 118"/>
+        <path class="bnd-edge" marker-end="url(#bnd-tip)" d="M 607 54 L 951 118"/>
+        <path class="bnd-edge" marker-end="url(#bnd-tip)" d="M 607 54 L 1123 118"/>
+        <rect class="bnd-box-hl" x="532" y="16" width="150" height="38" rx="3"/>
+        <text class="bnd-lbl" x="607" y="40" text-anchor="middle">Request</text>
 
-        <line class="edge" x1="196" y1="88" x2="272" y2="88" marker-end="url(#bnd-arrow)" />
-        <line class="edge-hl" x1="196" y1="196" x2="272" y2="196" marker-end="url(#bnd-arrow-hl)" />
+        <rect class="bnd-box" x="16" y="118" width="150" height="38" rx="3"/>
+        <text class="bnd-lbl" x="91" y="142" text-anchor="middle">max_tokens</text>
 
-        <rect class="box" x="274" y="26" width="180" height="122" rx="4" />
-        <text class="lbl" x="288" y="48">system_field</text>
-        <text class="lbl" x="288" y="70">messages_field</text>
-        <text class="tiny" x="288" y="90">cache markers, gated on</text>
-        <text class="tiny" x="288" y="104">min_cacheable_tokens(model)</text>
-        <text class="tiny" x="288" y="130">tools travel verbatim</text>
+        <rect class="bnd-box" x="188" y="118" width="150" height="38" rx="3"/>
+        <text class="bnd-lbl" x="263" y="142" text-anchor="middle">messages</text>
 
-        <rect class="hl" x="274" y="166" width="180" height="58" rx="4" />
-        <text class="lbl" x="288" y="188">models::limits(model)</text>
-        <text class="tiny" x="288" y="208">clamp down, never up</text>
+        <rect class="bnd-box" x="360" y="118" width="150" height="38" rx="3"/>
+        <text class="bnd-lbl" x="435" y="142" text-anchor="middle">model</text>
 
-        <line class="edge" x1="456" y1="88" x2="524" y2="88" marker-end="url(#bnd-arrow)" />
-        <line class="edge-hl" x1="456" y1="196" x2="524" y2="196" marker-end="url(#bnd-arrow-hl)" />
+        <rect class="bnd-box" x="532" y="118" width="150" height="38" rx="3"/>
+        <text class="bnd-lbl" x="607" y="142" text-anchor="middle">output_config</text>
 
-        <text class="tiny" x="526" y="16">rendered body, key order as sent</text>
-        <rect class="hl" x="526" y="26" width="216" height="24" rx="4" />
-        <text class="sm" x="538" y="43">"max_tokens"</text>
-        <rect class="box" x="526" y="54" width="216" height="24" rx="4" />
-        <text class="sm" x="538" y="71">"messages"</text>
-        <rect class="box" x="526" y="82" width="216" height="24" rx="4" />
-        <text class="sm" x="538" y="99">"model"</text>
-        <rect class="hl" x="526" y="110" width="216" height="24" rx="4" />
-        <text class="sm" x="538" y="127">"output_config"  (may be absent)</text>
-        <rect class="box" x="526" y="138" width="216" height="24" rx="4" />
-        <text class="sm" x="538" y="155">"system"</text>
-        <rect class="box" x="526" y="166" width="216" height="24" rx="4" />
-        <text class="sm" x="538" y="183">"tools"</text>
-        <rect class="box" x="526" y="194" width="216" height="24" rx="4" />
-        <text class="sm" x="538" y="211">"stream"  (Mode::Stream only)</text>
-        <text class="tiny" x="526" y="238">sorted, because serde_json's map is</text>
-        <text class="tiny" x="526" y="252">ordered: identical requests, identical bytes</text>
+        <rect class="bnd-box" x="704" y="118" width="150" height="38" rx="3"/>
+        <text class="bnd-lbl" x="779" y="142" text-anchor="middle">stream</text>
 
-        <line class="edge-dash" x1="14" y1="278" x2="742" y2="278" />
-        <text class="tiny" x="14" y="298">The four content fields keep their prefix order inside "system" and "messages".</text>
-        <text class="tiny" x="14" y="314">The two asks never reach the wire unlowered.</text>
+        <rect class="bnd-box" x="876" y="118" width="150" height="38" rx="3"/>
+        <text class="bnd-lbl" x="951" y="142" text-anchor="middle">system</text>
+
+        <rect class="bnd-box" x="1048" y="118" width="150" height="38" rx="3"/>
+        <text class="bnd-lbl" x="1123" y="142" text-anchor="middle">tools</text>
+
       </svg>
+      <!-- /diagram -->
     </div>
     <figcaption>
-      What <code>render</code> does to a <code>Request</code>. Pink marks the
-      values a model's row can change. The key order on the right is not the
-      order of the <code>json!</code> literal in the source: serde_json's map
-      is ordered, so the body comes out sorted, which is what makes two
-      identical requests render identical bytes for the cache to match on.
-      Drawn from <code>render</code> and confirmed against the golden body in
-      <code>the_whole_request_body_is_pinned_byte_for_byte</code>, which opens
-      <code>{"max_tokens":32000,"messages":[…</code>.
+      What <code>render</code> puts on the wire for a <code>Request</code>.
+      The field count and key names come from <code>struct Request</code> and
+      the <code>json!</code> object in <code>render</code>; keys are sorted
+      because serde_json's map is ordered. Dashed edges mark
+      <code>output_config</code> and <code>stream</code>, which are absent on
+      some requests. Drawn from <code>anthropic.rs</code> and
+      <code>lib.rs</code>.
     </figcaption>
   </figure>
   <span class="src">crates/llm/src/anthropic.rs — <code>render</code>, <code>the_whole_request_body_is_pinned_byte_for_byte</code></span>

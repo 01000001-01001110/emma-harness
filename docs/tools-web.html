@@ -461,49 +461,74 @@
 
 <figure>
   <div class="figwrap">
-    <svg viewBox="0 0 700 270" role="img" aria-label="Every browser verb runs inside a Live guard whose finish method reads the page's URL, disconnects, and records the landing host in the pool. Because network_target reads the host from the pool rather than from the call's arguments, a grant for example.com stops covering the session once a click lands on evil.example, and the next call asks again.">
+    <!-- diagram:tools-web -->
+    <svg viewBox="0 0 182 376" role="img" aria-label="Every browser verb runs through 4 steps ending at network_target: connect, finish (which reads the page URL), arrived_at on the pool, then the next call's host question.">
+      <style>
+        :root {
+          --tools-web-ground: #12101a;
+          --tools-web-surface: #1c1930;
+          --tools-web-line: #31d4f2;
+          --tools-web-text: #dcf6ff;
+          --tools-web-muted: #7d8fa8;
+          --tools-web-accent: #ff2e97;
+          --tools-web-dim: #8a5cf0;
+        }
+        @media (prefers-color-scheme: dark) {
+          :root {
+            --tools-web-ground: #0b0a10;
+            --tools-web-surface: #15132a;
+            --tools-web-line: #22b8d6;
+            --tools-web-text: #c4e8f5;
+            --tools-web-muted: #6b7c94;
+            --tools-web-accent: #ff45a3;
+            --tools-web-dim: #7a4fd8;
+          }
+        }
+        .tools-web-ground { fill: var(--tools-web-ground); }
+        .tools-web-box { fill: var(--tools-web-surface); stroke: var(--tools-web-line); stroke-width: 1.5; }
+        .tools-web-box-hl { fill: var(--tools-web-surface); stroke: var(--tools-web-accent); stroke-width: 2; }
+        .tools-web-lbl { fill: var(--tools-web-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .tools-web-note { fill: var(--tools-web-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .tools-web-edge { stroke: var(--tools-web-line); stroke-width: 1.5; fill: none; }
+        .tools-web-edge-hl { stroke: var(--tools-web-accent); stroke-width: 2; fill: none; }
+        .tools-web-edge-dim { stroke: var(--tools-web-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+      </style>
       <defs>
-        <marker id="tw-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+        <marker id="tools-web-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-web-line)"/>
         </marker>
-        <marker id="tw-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+        <marker id="tools-web-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-web-accent)"/>
+        </marker>
+        <marker id="tools-web-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-web-dim)"/>
         </marker>
       </defs>
+      <rect class="tools-web-ground" x="0" y="0" width="182" height="376"/>
 
-      <rect class="box" x="12" y="20" width="150" height="34" rx="4" />
-      <text class="lbl" x="28" y="42">Live::connect</text>
-      <path class="edge" d="M87 54 L87 88" marker-end="url(#tw-arrow)" />
-      <rect class="box" x="12" y="88" width="150" height="34" rx="4" />
-      <text class="lbl" x="28" y="110">one verb</text>
-      <path class="edge-hl" d="M87 122 L87 156" marker-end="url(#tw-arrow-hl)" />
-      <rect class="hl" x="12" y="156" width="150" height="46" rx="4" />
-      <text class="lbl" x="28" y="176">Live::finish</text>
-      <text class="tiny" x="28" y="192">reads page.url(), even on failure</text>
+      <path class="tools-web-edge" marker-end="url(#tools-web-tip)" d="M 91 54 L 91 118"/>
+      <path class="tools-web-edge" marker-end="url(#tools-web-tip)" d="M 91 156 L 91 220"/>
+      <path class="tools-web-edge" marker-end="url(#tools-web-tip)" d="M 91 258 L 91 322"/>
+      <rect class="tools-web-box" x="16" y="16" width="150" height="38" rx="3"/>
+      <text class="tools-web-lbl" x="91" y="40" text-anchor="middle">connect</text>
 
-      <path class="edge-hl" d="M162 179 L246 179" marker-end="url(#tw-arrow-hl)" />
-      <rect class="hl" x="246" y="156" width="180" height="46" rx="4" />
-      <text class="lbl" x="262" y="176">pool.arrived_at(id, url)</text>
-      <text class="tiny" x="262" y="192">session.host moves</text>
+      <rect class="tools-web-box-hl" x="16" y="118" width="150" height="38" rx="3"/>
+      <text class="tools-web-lbl" x="91" y="142" text-anchor="middle">finish</text>
 
-      <path class="edge" d="M336 156 L336 110 L432 110" marker-end="url(#tw-arrow)" />
-      <rect class="box" x="432" y="92" width="240" height="36" rx="4" />
-      <text class="lbl" x="448" y="108">next call: network_target</text>
-      <text class="tiny" x="448" y="122">reads the pool, not the arguments</text>
+      <rect class="tools-web-box" x="16" y="220" width="150" height="38" rx="3"/>
+      <text class="tools-web-lbl" x="91" y="244" text-anchor="middle">arrived_at</text>
 
-      <path class="edge-hl" d="M552 92 L552 56" marker-end="url(#tw-arrow-hl)" />
-      <rect class="hl" x="432" y="20" width="240" height="36" rx="4" />
-      <text class="lbl" x="448" y="42">a fresh question, per host</text>
+      <rect class="tools-web-box" x="16" y="322" width="150" height="38" rx="3"/>
+      <text class="tools-web-lbl" x="91" y="346" text-anchor="middle">network_target</text>
 
-      <text class="sm" x="12" y="238">The re-ask is one call late: the bytes for the redirect have already gone.</text>
-      <text class="tiny" x="12" y="256">What it protects is everything after — the payload needs BrowserRead, and BrowserRead asks.</text>
     </svg>
+    <!-- /diagram -->
   </div>
   <figcaption>
-    <code>Live</code> is a guard rather than a helper taking a closure, so the
-    verb's result can only be got out by going through <code>finish</code>.
-    Forgetting the recording is a compile error rather than a review item. Drawn
-    from <code>tools/web/src/browser/tools.rs</code> and
+    <code>connect</code>, <code>finish</code>, <code>arrived_at</code>, and
+    <code>network_target</code> — the four functions the source names across
+    the guard and the pool. Drawn from
+    <code>tools/web/src/browser/tools.rs</code> and
     <code>pool.rs</code>.
   </figcaption>
 </figure>

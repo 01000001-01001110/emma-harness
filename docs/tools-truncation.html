@@ -114,51 +114,70 @@
 
 <figure>
   <div class="figwrap">
-    <svg viewBox="0 0 700 250" role="img" aria-label="A tool that cuts writes one sentence and uses it twice: appended to content, which the model reads, and stored in truncation, which the runtime quotes verbatim into the model's result note and onto the terminal line. Building both from one string is what stops the two from disagreeing about which cap bound.">
+    <!-- diagram:tools-truncation -->
+    <svg viewBox="0 0 354 172" role="img" aria-label="One reason string from `truncated_because` reaches content and truncation, the two ToolOutcome fields the runtime passes on verbatim.">
+      <style>
+        :root {
+          --tools-truncation-ground: #12101a;
+          --tools-truncation-surface: #1c1930;
+          --tools-truncation-line: #31d4f2;
+          --tools-truncation-text: #dcf6ff;
+          --tools-truncation-muted: #7d8fa8;
+          --tools-truncation-accent: #ff2e97;
+          --tools-truncation-dim: #8a5cf0;
+        }
+        @media (prefers-color-scheme: dark) {
+          :root {
+            --tools-truncation-ground: #0b0a10;
+            --tools-truncation-surface: #15132a;
+            --tools-truncation-line: #22b8d6;
+            --tools-truncation-text: #c4e8f5;
+            --tools-truncation-muted: #6b7c94;
+            --tools-truncation-accent: #ff45a3;
+            --tools-truncation-dim: #7a4fd8;
+          }
+        }
+        .tools-truncation-ground { fill: var(--tools-truncation-ground); }
+        .tools-truncation-box { fill: var(--tools-truncation-surface); stroke: var(--tools-truncation-line); stroke-width: 1.5; }
+        .tools-truncation-box-hl { fill: var(--tools-truncation-surface); stroke: var(--tools-truncation-accent); stroke-width: 2; }
+        .tools-truncation-lbl { fill: var(--tools-truncation-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .tools-truncation-note { fill: var(--tools-truncation-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .tools-truncation-edge { stroke: var(--tools-truncation-line); stroke-width: 1.5; fill: none; }
+        .tools-truncation-edge-hl { stroke: var(--tools-truncation-accent); stroke-width: 2; fill: none; }
+        .tools-truncation-edge-dim { stroke: var(--tools-truncation-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+      </style>
       <defs>
-        <marker id="tc-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+        <marker id="tools-truncation-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-truncation-line)"/>
         </marker>
-        <marker id="tc-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+        <marker id="tools-truncation-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-truncation-accent)"/>
+        </marker>
+        <marker id="tools-truncation-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-truncation-dim)"/>
         </marker>
       </defs>
+      <rect class="tools-truncation-ground" x="0" y="0" width="354" height="172"/>
 
-      <rect class="hl" x="10" y="96" width="180" height="52" rx="4" />
-      <text class="lbl" x="26" y="120">one `reason` string</text>
-      <text class="tiny" x="26" y="137">built once, in the tool</text>
+      <path class="tools-truncation-edge" marker-end="url(#tools-truncation-tip)" d="M 177 54 L 91 118"/>
+      <path class="tools-truncation-edge" marker-end="url(#tools-truncation-tip)" d="M 177 54 L 263 118"/>
+      <rect class="tools-truncation-box-hl" x="102" y="16" width="150" height="38" rx="3"/>
+      <text class="tools-truncation-lbl" x="177" y="40" text-anchor="middle">truncated_because</text>
 
-      <path class="edge-hl" d="M190 112 L268 66" marker-end="url(#tc-arrow-hl)" />
-      <path class="edge-hl" d="M190 132 L268 178" marker-end="url(#tc-arrow-hl)" />
+      <rect class="tools-truncation-box" x="16" y="118" width="150" height="38" rx="3"/>
+      <text class="tools-truncation-lbl" x="91" y="142" text-anchor="middle">content: String</text>
 
-      <rect class="box" x="268" y="42" width="180" height="48" rx="4" />
-      <text class="lbl" x="284" y="64">content += [truncated: …]</text>
-      <text class="tiny" x="284" y="80">the bytes the model reads</text>
+      <rect class="tools-truncation-box" x="188" y="118" width="150" height="38" rx="3"/>
+      <text class="tools-truncation-lbl" x="263" y="142" text-anchor="middle">truncation</text>
 
-      <rect class="box" x="268" y="154" width="180" height="48" rx="4" />
-      <text class="lbl" x="284" y="176">truncation = Some(reason)</text>
-      <text class="tiny" x="284" y="192">the struct the runtime reads</text>
-
-      <path class="edge" d="M448 66 L520 66" marker-end="url(#tc-arrow)" />
-      <rect class="box" x="520" y="48" width="160" height="36" rx="4" />
-      <text class="lbl" x="536" y="70">the model</text>
-
-      <path class="edge" d="M448 178 L490 178 L490 130 L520 130" marker-end="url(#tc-arrow)" />
-      <rect class="box" x="520" y="112" width="160" height="36" rx="4" />
-      <text class="lbl" x="536" y="134">result note</text>
-
-      <path class="edge" d="M448 190 L520 190" marker-end="url(#tc-arrow)" />
-      <rect class="box" x="520" y="172" width="160" height="36" rx="4" />
-      <text class="lbl" x="536" y="194">terminal line</text>
     </svg>
+    <!-- /diagram -->
   </div>
   <figcaption>
-    The reason is built once and used twice. <code>Read</code>'s
-    <code>render</code> says so in a comment: "One sentence, said twice on
-    purpose… Building both from the same string is what stops the two from
-    drifting into two different stories about which cap bound." Drawn from
-    <code>tools/fs/src/read.rs</code> and
-    <code>crates/tool-api/src/lib.rs</code>.
+    <code>truncated_because</code> fills <code>ToolOutcome::content</code> and
+    <code>ToolOutcome::truncation</code> from one string; the runtime passes
+    both on verbatim. <code>Read</code>'s <code>render</code> says why in a
+    comment. Drawn from <code>crates/tool-api/src/lib.rs</code>.
   </figcaption>
 </figure>
 

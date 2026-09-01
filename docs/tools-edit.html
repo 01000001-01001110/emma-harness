@@ -328,46 +328,75 @@
 
 <figure>
   <div class="figwrap">
-    <svg viewBox="0 0 700 300" role="img" aria-label="An addressed edit passes four gates before the write: the read state must not be Never, the endpoints must still hash to what the model claimed, the whole run of lines must appear intact somewhere in the harness's record, and no line in the range may be longer than Read will show. Stale is allowed through.">
+    <!-- diagram:tools-edit -->
+    <svg viewBox="0 0 182 376" role="img" aria-label="An addressed edit passes 4 gates before the write: read state must not be Never (never read in this session.), the 2 fields of Address must still match, contains_run must see the whole run, and no line may exceed MAX_LINE_CHARS (2000). Stale is allowed through.">
+      <style>
+        :root {
+          --tools-edit-ground: #12101a;
+          --tools-edit-surface: #1c1930;
+          --tools-edit-line: #31d4f2;
+          --tools-edit-text: #dcf6ff;
+          --tools-edit-muted: #7d8fa8;
+          --tools-edit-accent: #ff2e97;
+          --tools-edit-dim: #8a5cf0;
+        }
+        @media (prefers-color-scheme: dark) {
+          :root {
+            --tools-edit-ground: #0b0a10;
+            --tools-edit-surface: #15132a;
+            --tools-edit-line: #22b8d6;
+            --tools-edit-text: #c4e8f5;
+            --tools-edit-muted: #6b7c94;
+            --tools-edit-accent: #ff45a3;
+            --tools-edit-dim: #7a4fd8;
+          }
+        }
+        .tools-edit-ground { fill: var(--tools-edit-ground); }
+        .tools-edit-box { fill: var(--tools-edit-surface); stroke: var(--tools-edit-line); stroke-width: 1.5; }
+        .tools-edit-box-hl { fill: var(--tools-edit-surface); stroke: var(--tools-edit-accent); stroke-width: 2; }
+        .tools-edit-lbl { fill: var(--tools-edit-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .tools-edit-note { fill: var(--tools-edit-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .tools-edit-edge { stroke: var(--tools-edit-line); stroke-width: 1.5; fill: none; }
+        .tools-edit-edge-hl { stroke: var(--tools-edit-accent); stroke-width: 2; fill: none; }
+        .tools-edit-edge-dim { stroke: var(--tools-edit-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+      </style>
       <defs>
-        <marker id="te-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+        <marker id="tools-edit-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-edit-line)"/>
         </marker>
-        <marker id="te-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+        <marker id="tools-edit-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-edit-accent)"/>
+        </marker>
+        <marker id="tools-edit-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-edit-dim)"/>
         </marker>
       </defs>
+      <rect class="tools-edit-ground" x="0" y="0" width="182" height="376"/>
 
-      <rect class="box" x="10" y="16" width="190" height="34" rx="4" />
-      <text class="lbl" x="26" y="38">read state ≠ Never</text>
-      <text class="sm" x="212" y="38">Stale is allowed through</text>
+      <path class="tools-edit-edge" marker-end="url(#tools-edit-tip)" d="M 91 54 L 91 118"/>
+      <path class="tools-edit-edge" marker-end="url(#tools-edit-tip)" d="M 91 156 L 91 220"/>
+      <path class="tools-edit-edge" marker-end="url(#tools-edit-tip)" d="M 91 258 L 91 322"/>
+      <rect class="tools-edit-box" x="16" y="16" width="150" height="38" rx="3"/>
+      <text class="tools-edit-lbl" x="91" y="40" text-anchor="middle">Never</text>
 
-      <path class="edge" d="M105 50 L105 78" marker-end="url(#te-arrow)" />
-      <rect class="box" x="10" y="78" width="190" height="34" rx="4" />
-      <text class="lbl" x="26" y="100">1 · endpoints match</text>
-      <text class="sm" x="212" y="100">the model's own claim, 16 bits</text>
+      <rect class="tools-edit-box-hl" x="16" y="118" width="150" height="38" rx="3"/>
+      <text class="tools-edit-lbl" x="91" y="142" text-anchor="middle">Address: 2 fields</text>
 
-      <path class="edge" d="M105 112 L105 140" marker-end="url(#te-arrow)" />
-      <rect class="box" x="10" y="140" width="190" height="34" rx="4" />
-      <text class="lbl" x="26" y="162">2 · run seen intact</text>
-      <text class="sm" x="212" y="162">the tracker's record, 64 bits, anywhere</text>
+      <rect class="tools-edit-box" x="16" y="220" width="150" height="38" rx="3"/>
+      <text class="tools-edit-lbl" x="91" y="244" text-anchor="middle">contains_run</text>
 
-      <path class="edge" d="M105 174 L105 202" marker-end="url(#te-arrow)" />
-      <rect class="box" x="10" y="202" width="190" height="34" rx="4" />
-      <text class="lbl" x="26" y="224">3 · no line over 2000</text>
-      <text class="sm" x="212" y="224">measured against the file, not the sighting</text>
+      <rect class="tools-edit-box" x="16" y="322" width="150" height="38" rx="3"/>
+      <text class="tools-edit-lbl" x="91" y="346" text-anchor="middle">MAX_LINE_CHARS: 2000</text>
 
-      <path class="edge-hl" d="M105 236 L105 264" marker-end="url(#te-arrow-hl)" />
-      <rect class="hl" x="10" y="264" width="190" height="30" rx="4" />
-      <text class="lbl" x="26" y="284">splice, then write</text>
-      <text class="sm" x="212" y="284">refused again if the result equals the original</text>
     </svg>
+    <!-- /diagram -->
   </div>
   <figcaption>
-    The addressed path, from <code>by_address</code>. Each check catches a
-    different lie, and each refusal names the line, what was expected, and what
-    is there instead. Drawn from <code>tools/fs/src/edit.rs</code> and
-    <code>tools/fs/src/session.rs</code>.
+    The addressed path, from <code>by_address</code>. Each gate names a
+    different source item — <code>ReadState::Never</code>,
+    <code>Address</code>, <code>contains_run</code>, and
+    <code>MAX_LINE_CHARS</code> — and each refusal names the line, what was
+    expected, and what is there instead.
   </figcaption>
 </figure>
 

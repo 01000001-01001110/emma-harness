@@ -307,60 +307,77 @@ pub fn clamp_effort(&amp;self, requested: Effort) -&gt; Option&lt;Effort&gt; {
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 760 236" role="img"
-           aria-label="An xhigh ask against three models. On Opus 5, which supports all five levels, xhigh is sent. On Opus 4.6, which has max but not xhigh, the best level at or below the ask is high, so high is sent and max is never reached upward. On Haiku 4.5, whose effort set is empty, there is no level at or below the ask and no output_config is sent at all.">
+      <!-- diagram:providers-models -->
+      <svg viewBox="0 0 526 172" role="img" aria-label="An XHigh ask from Request::new against 3 models: claude-opus-5 → effort: &quot;xhigh&quot;; claude-opus-4-6 → effort: &quot;high&quot;; claude-haiku-4-5 → no output_config.">
+        <style>
+          :root {
+            --mdl-ground: #12101a;
+            --mdl-surface: #1c1930;
+            --mdl-line: #31d4f2;
+            --mdl-text: #dcf6ff;
+            --mdl-muted: #7d8fa8;
+            --mdl-accent: #ff2e97;
+            --mdl-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --mdl-ground: #0b0a10;
+              --mdl-surface: #15132a;
+              --mdl-line: #22b8d6;
+              --mdl-text: #c4e8f5;
+              --mdl-muted: #6b7c94;
+              --mdl-accent: #ff45a3;
+              --mdl-dim: #7a4fd8;
+            }
+          }
+          .mdl-ground { fill: var(--mdl-ground); }
+          .mdl-box { fill: var(--mdl-surface); stroke: var(--mdl-line); stroke-width: 1.5; }
+          .mdl-box-hl { fill: var(--mdl-surface); stroke: var(--mdl-accent); stroke-width: 2; }
+          .mdl-lbl { fill: var(--mdl-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .mdl-note { fill: var(--mdl-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .mdl-edge { stroke: var(--mdl-line); stroke-width: 1.5; fill: none; }
+          .mdl-edge-hl { stroke: var(--mdl-accent); stroke-width: 2; fill: none; }
+          .mdl-edge-dim { stroke: var(--mdl-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
         <defs>
-          <marker id="mdl-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          <marker id="mdl-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--mdl-line)"/>
           </marker>
-          <marker id="mdl-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          <marker id="mdl-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--mdl-accent)"/>
+          </marker>
+          <marker id="mdl-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--mdl-dim)"/>
           </marker>
         </defs>
+        <rect class="mdl-ground" x="0" y="0" width="526" height="172"/>
 
-        <text class="tiny" x="14" y="18">the ask, from Request::new</text>
-        <rect class="hl" x="14" y="26" width="120" height="30" rx="4" />
-        <text class="lbl" x="28" y="46">xhigh</text>
+        <path class="mdl-edge" marker-end="url(#mdl-tip)" d="M 263 54 L 91 118"/>
+        <path class="mdl-edge" marker-end="url(#mdl-tip)" d="M 263 54 L 263 118"/>
+        <path class="mdl-edge-dim" marker-end="url(#mdl-tip-dim)" d="M 263 54 L 435 118"/>
+        <rect class="mdl-box-hl" x="188" y="16" width="150" height="38" rx="3"/>
+        <text class="mdl-lbl" x="263" y="40" text-anchor="middle">XHigh</text>
 
-        <line class="edge-hl" x1="136" y1="41" x2="176" y2="41" marker-end="url(#mdl-arrow-hl)" />
-        <line class="edge-hl" x1="136" y1="41" x2="176" y2="118" marker-end="url(#mdl-arrow-hl)" />
-        <line class="edge-hl" x1="136" y1="41" x2="176" y2="196" marker-end="url(#mdl-arrow-hl)" />
+        <rect class="mdl-box" x="16" y="118" width="150" height="38" rx="3"/>
+        <text class="mdl-lbl" x="91" y="142" text-anchor="middle">claude-opus-5</text>
 
-        <text class="tiny" x="180" y="20">supported set, ascending</text>
-        <rect class="box" x="180" y="26" width="330" height="32" rx="4" />
-        <text class="sm" x="192" y="47">low  medium  high  xhigh  max</text>
-        <text class="tiny" x="520" y="46">claude-opus-5</text>
+        <rect class="mdl-box" x="188" y="118" width="150" height="38" rx="3"/>
+        <text class="mdl-lbl" x="263" y="142" text-anchor="middle">claude-opus-4-6</text>
 
-        <rect class="box" x="180" y="102" width="330" height="32" rx="4" />
-        <text class="sm" x="192" y="123">low  medium  high  ·····  max</text>
-        <text class="tiny" x="520" y="122">claude-opus-4-6</text>
+        <rect class="mdl-box" x="360" y="118" width="150" height="38" rx="3"/>
+        <text class="mdl-lbl" x="435" y="142" text-anchor="middle">claude-haiku-4-5</text>
 
-        <rect class="box" x="180" y="180" width="330" height="32" rx="4" />
-        <text class="sm" x="192" y="201">(empty)</text>
-        <text class="tiny" x="520" y="200">claude-haiku-4-5</text>
-
-        <line class="edge" x1="512" y1="42" x2="600" y2="42" marker-end="url(#mdl-arrow)" />
-        <line class="edge" x1="512" y1="118" x2="600" y2="118" marker-end="url(#mdl-arrow)" />
-        <line class="edge" x1="512" y1="196" x2="600" y2="196" marker-end="url(#mdl-arrow)" />
-
-        <rect class="hl" x="602" y="26" width="144" height="32" rx="4" />
-        <text class="sm" x="614" y="47">effort: "xhigh"</text>
-        <rect class="hl" x="602" y="102" width="144" height="32" rx="4" />
-        <text class="sm" x="614" y="123">effort: "high"</text>
-        <rect class="box" x="602" y="180" width="144" height="32" rx="4" />
-        <text class="sm" x="614" y="201">no output_config</text>
-
-        <text class="tiny" x="180" y="76">the ask is met exactly</text>
-        <text class="tiny" x="180" y="152">best level at or below the ask: high, never max</text>
-        <text class="tiny" x="180" y="230">the field itself is the 400, so no value is safe</text>
       </svg>
+      <!-- /diagram -->
     </div>
     <figcaption>
-      One request, three models, three different bytes. The 4.6 row is the case
-      a ceiling comparison gets wrong: it supports <code>max</code>, so
-      "supports something above <code>xhigh</code>" is true and
-      <code>xhigh</code> is still a 400. Drawn from <code>clamp_effort</code>,
-      <code>TABLE</code> and <code>render</code>.
+      One <code>XHigh</code> ask from <code>Request::new</code>, three models,
+      three different bytes. Outcomes are computed from each row's
+      <code>efforts</code> slice in <code>TABLE</code> and
+      <code>Limits::clamp_effort</code> — Opus&nbsp;4.6 lands on
+      <code>high</code> because its set has no <code>xhigh</code>, and Haiku
+      4.5 omits <code>output_config</code> entirely. Drawn from
+      <code>models.rs</code>.
     </figcaption>
   </figure>
 

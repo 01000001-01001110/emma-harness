@@ -235,50 +235,65 @@
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 760 300" role="img"
-           aria-label="Two grant sets. session_allowed holds tool names and covers one tool reaching anywhere; hosts_allowed holds host names and covers one host reached by anything. Neither can answer the other's question.">
+      <!-- diagram:consent-egress -->
+      <svg viewBox="0 0 354 70" role="img" aria-label="The 2 in-process grant sets declared on Approvals: session_allowed, hosts_allowed. Each is a Mutex&lt;HashSet&lt;String&gt;&gt;, keeping the grants in separate fields.">
+        <style>
+          :root {
+            --egress-ground: #12101a;
+            --egress-surface: #1c1930;
+            --egress-line: #31d4f2;
+            --egress-text: #dcf6ff;
+            --egress-muted: #7d8fa8;
+            --egress-accent: #ff2e97;
+            --egress-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --egress-ground: #0b0a10;
+              --egress-surface: #15132a;
+              --egress-line: #22b8d6;
+              --egress-text: #c4e8f5;
+              --egress-muted: #6b7c94;
+              --egress-accent: #ff45a3;
+              --egress-dim: #7a4fd8;
+            }
+          }
+          .egress-ground { fill: var(--egress-ground); }
+          .egress-box { fill: var(--egress-surface); stroke: var(--egress-line); stroke-width: 1.5; }
+          .egress-box-hl { fill: var(--egress-surface); stroke: var(--egress-accent); stroke-width: 2; }
+          .egress-lbl { fill: var(--egress-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .egress-note { fill: var(--egress-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .egress-edge { stroke: var(--egress-line); stroke-width: 1.5; fill: none; }
+          .egress-edge-hl { stroke: var(--egress-accent); stroke-width: 2; fill: none; }
+          .egress-edge-dim { stroke: var(--egress-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
         <defs>
-          <marker id="egress-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
+          <marker id="egress-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--egress-line)"/>
           </marker>
-          <marker id="egress-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
+          <marker id="egress-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--egress-accent)"/>
+          </marker>
+          <marker id="egress-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--egress-dim)"/>
           </marker>
         </defs>
+        <rect class="egress-ground" x="0" y="0" width="354" height="70"/>
 
-        <text class="sm" x="20" y="24">answered `a` at a local prompt</text>
-        <text class="sm" x="410" y="24">answered `y` or `a` at a network prompt</text>
+        <rect class="egress-box" x="16" y="16" width="150" height="38" rx="3"/>
+        <text class="egress-lbl" x="91" y="40" text-anchor="middle">session_allowed</text>
 
-        <rect class="box" x="20" y="40" width="300" height="70" rx="3"/>
-        <text class="lbl" x="34" y="64">session_allowed: HashSet&lt;String&gt;</text>
-        <text class="tiny" x="34" y="86">{ "Write" }  —  one tool, anywhere</text>
-        <text class="tiny" x="34" y="102">read only by the local question</text>
+        <rect class="egress-box-hl" x="188" y="16" width="150" height="38" rx="3"/>
+        <text class="egress-lbl" x="263" y="40" text-anchor="middle">hosts_allowed</text>
 
-        <rect class="hl" x="410" y="40" width="330" height="70" rx="3"/>
-        <text class="lbl" x="424" y="64">hosts_allowed: HashSet&lt;String&gt;</text>
-        <text class="tiny" x="424" y="86">{ "docs.rs" }  —  one host, any tool</text>
-        <text class="tiny" x="424" y="102">read only by the egress question</text>
-
-        <path class="edge" d="M170 116 L170 168" marker-end="url(#egress-arrow)"/>
-        <path class="edge-hl" d="M575 116 L575 168" marker-end="url(#egress-arrow-hl)"/>
-
-        <rect class="box" x="20" y="174" width="300" height="58" rx="3"/>
-        <text class="tiny" x="34" y="196">Write again → allowed, no prompt</text>
-        <text class="tiny" x="34" y="216">Bash → asked. The grant named Write.</text>
-
-        <rect class="box" x="410" y="174" width="330" height="58" rx="3"/>
-        <text class="tiny" x="424" y="196">WebFetch to docs.rs → allowed, no prompt</text>
-        <text class="tiny" x="424" y="216">WebFetch to evil.example → asked again</text>
-
-        <path class="edge-dash" d="M320 203 L404 203"/>
-        <text class="tiny" x="326" y="256">Neither set is consulted by the other's question, and both die with the process.</text>
-        <text class="tiny" x="20" y="278">`/clear` keeps both and names them: `session_grants` returns the two lists, each sorted.</text>
       </svg>
+      <!-- /diagram -->
     </div>
     <figcaption>
-      Drawn from the two <code>Mutex&lt;HashSet&lt;String&gt;&gt;</code> fields on
-      <code>Approvals</code> and from the arms in <code>decide</code> and
-      <code>egress</code> that read them.
+      Drawn from the <code>Mutex&lt;HashSet&lt;String&gt;&gt;</code> fields on
+      <code>Approvals</code>. These are the in-process grant sets;
+      <code>hosts_allowed</code> is highlighted because this page is about
+      egress.
     </figcaption>
   </figure>
 

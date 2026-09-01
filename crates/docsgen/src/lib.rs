@@ -60,6 +60,38 @@ pub fn render_all(root: &Path) -> Result<Vec<(String, String)>> {
             architecture::containment(&crates).render(),
         ),
         ("tools-lsp".to_string(), pages::tools_lsp(root)?.render()),
+        (
+            "consent-egress".to_string(),
+            pages::consent::consent_egress(root)?.render(),
+        ),
+        (
+            "providers-boundary".to_string(),
+            pages::providers::providers_boundary(root)?.render(),
+        ),
+        (
+            "providers-credentials".to_string(),
+            pages::providers::providers_credentials(root)?.render(),
+        ),
+        (
+            "providers-models".to_string(),
+            pages::providers::providers_models(root)?.render(),
+        ),
+        (
+            "tools-edit".to_string(),
+            pages::tools::tools_edit(root)?.render(),
+        ),
+        (
+            "tools-tasks".to_string(),
+            pages::tools::tools_tasks(root)?.render(),
+        ),
+        (
+            "tools-truncation".to_string(),
+            pages::tools::tools_truncation(root)?.render(),
+        ),
+        (
+            "tools-web".to_string(),
+            pages::tools::tools_web(root)?.render(),
+        ),
     ])
 }
 
@@ -84,18 +116,24 @@ pub fn inject(page: &str, name: &str, svg: &str) -> Result<String> {
         .rev()
         .take_while(|c| *c == ' ')
         .collect();
+    // **The page's line endings decide, not the generator's.** Seven pages
+    // under `docs/` are CRLF and the other 82 are LF; writing an LF into a CRLF
+    // file leaves an island inside it. Nothing renders differently, so it
+    // survives review, and every later diff of that page shows the whole block
+    // as changed.
+    let nl = if page.contains("\r\n") { "\r\n" } else { "\n" };
     let body: String = svg
         .lines()
         .map(|l| {
             if l.is_empty() {
-                String::from("\n")
+                nl.to_string()
             } else {
-                format!("{indent}{l}\n")
+                format!("{indent}{l}{nl}")
             }
         })
         .collect();
     Ok(format!(
-        "{}\n{body}{indent}{}",
+        "{}{nl}{body}{indent}{}",
         &page[..after],
         &page[end..]
     ))
@@ -146,6 +184,30 @@ mod tests {
         assert!(!out.contains("old"), "{out}");
         assert!(out.contains("<p>before</p>"), "{out}");
         assert!(out.contains("<p>after</p>"), "{out}");
+    }
+
+    /// **If this breaks:** a diagram written into one of the seven CRLF pages
+    /// under `docs/` leaves an island of LF inside it. Nothing renders
+    /// differently, so it survives review, and every later diff of that page
+    /// shows the whole block as changed.
+    #[test]
+    fn a_crlf_page_keeps_its_line_endings() {
+        let page = PAGE.replace('\n', "\r\n");
+        let out = inject(&page, "x", "<svg>\nnew\n</svg>").expect("markers");
+        assert!(out.contains("<svg>"), "{out:?}");
+        assert_eq!(
+            out.replace("\r\n", "").matches('\n').count(),
+            0,
+            "a lone LF reached a CRLF page: {out:?}"
+        );
+    }
+
+    /// **If this breaks:** an LF page gains carriage returns because the
+    /// generator assumed the platform rather than reading the file.
+    #[test]
+    fn an_lf_page_does_not_gain_carriage_returns() {
+        let out = inject(PAGE, "x", "<svg>\nnew\n</svg>").expect("markers");
+        assert!(!out.contains('\r'), "{out:?}");
     }
 
     /// **If this breaks:** a page loses its markers in an edit and the
