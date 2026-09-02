@@ -1172,6 +1172,172 @@ mod tests {
         json!({ "kind": "sub.tool_call", "id": id, "tool": tool, "args": args })
     }
 
+    /// A tool that exists only to be named in an allowlist.
+    ///
+    /// `name()` returns `&'static str`, so the set of candidates a test can
+    /// build is fixed at compile time rather than generated.
+    struct Named(&'static str, bool);
+
+    #[async_trait::async_trait]
+    impl Tool for Named {
+        fn name(&self) -> &'static str {
+            self.0
+        }
+        fn description(&self) -> &str {
+            "a candidate for an agent's tool list"
+        }
+        fn input_schema(&self) -> Value {
+            json!({ "type": "object", "properties": {} })
+        }
+        fn meta(&self) -> ToolMeta {
+            ToolMeta {
+                read_only: self.1,
+                reaches_network: false,
+                idempotent: self.1,
+            }
+        }
+        async fn invoke(
+            &self,
+            _ctx: &ToolCtx,
+            _args: Value,
+        ) -> anyhow::Result<Result<ToolOutcome, ToolError>> {
+            unreachable!("resolve_tools never invokes a tool")
+        }
+    }
+
+    /// The candidate set every test below resolves against: two that only read
+    /// and three that change the machine.
+    fn candidates() -> Vec<Arc<dyn Tool>> {
+        vec![
+            Arc::new(Named("Read", true)) as Arc<dyn Tool>,
+            Arc::new(Named("Grep", true)),
+            Arc::new(Named("Write", false)),
+            Arc::new(Named("Edit", false)),
+            Arc::new(Named("Bash", false)),
+        ]
+    }
+
+    fn agent(tools: Option<Vec<&str>>) -> AgentDef {
+        AgentDef {
+            name: "explorer".into(),
+            description: "reads things".into(),
+            instructions: String::new(),
+            tools: tools.map(|t| t.into_iter().map(str::to_string).collect()),
+            model: None,
+            max_turns: None,
+            max_tokens: None,
+        }
+    }
+
+    /// **If this breaks:** an agent file that names no tools stops inheriting,
+    /// and every subagent in a `.claude/` directory written for Claude Code
+    /// silently loses its tools.
+    ///
+    /// The branch is worth pinning for the opposite reason too, which the
+    /// second half states: inheriting means inheriting `Write`, `Edit` and
+    /// `Bash`, so omitting the key is a grant rather than a restriction. That
+    /// is Claude Code's meaning and the compatibility is the point, but it is
+    /// the kind of default a reader should find asserted rather than inferred.
+    #[test]
+    fn an_agent_that_names_no_tools_inherits_every_candidate_including_the_writing_ones() {
+        let all = candidates();
+        let (registry, dropped) = resolve_tools(&agent(None), &all);
+
+        assert!(
+            dropped.is_empty(),
+            "nothing was asked for, so nothing missed"
+        );
+        let mut names = registry.names();
+        names.sort_unstable();
+        assert_eq!(names, ["Bash", "Edit", "Grep", "Read", "Write"]);
+        assert!(
+            registry.get("Bash").is_some() && registry.get("Write").is_some(),
+            "omitting `tools:` grants shell and write access, not just reads"
+        );
+    }
+
+    /// **If this breaks:** the split of responsibility between the harness and
+    /// this resolver has moved, and nobody notices until an agent file with
+    /// `tools: []` behaves differently from one that omits the key.
+    ///
+    /// `AgentDef::tools` is documented as `None` for both spellings, and this
+    /// pins where that collapse happens: **not here.** Reaching this function
+    /// as `Some(vec![])` selects nothing, so the harness parser is the thing
+    /// that must map an empty list to `None`. Asserting the resolver inherits
+    /// on an empty list would hide a regression in the parser.
+    #[test]
+    fn an_empty_list_selects_nothing_here_because_the_harness_maps_it_first() {
+        let all = candidates();
+        let (registry, _) = resolve_tools(&agent(Some(vec![])), &all);
+        assert_eq!(
+            registry.names().len(),
+            0,
+            "an empty Some(vec![]) selects nothing; only None inherits, and the              harness is what maps an empty list to None"
+        );
+    }
+
+    /// **If this breaks:** a named tool list stops restricting, and an agent
+    /// declared read-only gets `Bash`.
+    #[test]
+    fn a_named_list_admits_only_what_it_names() {
+        let all = candidates();
+        let (registry, dropped) = resolve_tools(&agent(Some(vec!["Read", "Grep"])), &all);
+
+        assert!(dropped.is_empty(), "both names exist: {dropped:?}");
+        let mut names = registry.names();
+        names.sort_unstable();
+        assert_eq!(names, ["Grep", "Read"]);
+        assert!(
+            registry.get("Bash").is_none(),
+            "a list that does not name Bash must not yield Bash"
+        );
+    }
+
+    /// **If this breaks:** a typo in an agent file silently yields fewer tools
+    /// than the author asked for, and nothing tells them which.
+    #[test]
+    fn a_name_that_matches_nothing_is_reported_rather_than_ignored() {
+        let all = candidates();
+        let (registry, dropped) =
+            resolve_tools(&agent(Some(vec!["Read", "Teleport", "Bash"])), &all);
+
+        assert_eq!(dropped, ["Teleport"], "the unmatched name comes back");
+        let mut names = registry.names();
+        names.sort_unstable();
+        assert_eq!(names, ["Bash", "Read"], "the matches still resolve");
+    }
+
+    /// **If this breaks:** the tool schema's bytes start depending on the order
+    /// somebody typed a list in, and the cached prompt prefix misses for two
+    /// agent files that select the same tools.
+    ///
+    /// `resolve_tools` iterates the candidates rather than the request for this
+    /// reason; the assertion is that two orderings produce one schema hash.
+    #[test]
+    fn the_order_of_a_tool_list_does_not_change_the_schema() {
+        let all = candidates();
+        let (a, _) = resolve_tools(&agent(Some(vec!["Read", "Bash", "Grep"])), &all);
+        let (b, _) = resolve_tools(&agent(Some(vec!["Grep", "Read", "Bash"])), &all);
+        assert_eq!(a.names(), b.names(), "same set, same order");
+        assert_eq!(
+            a.schema_hash(),
+            b.schema_hash(),
+            "a re-ordered list must not move the cached prefix"
+        );
+    }
+
+    /// **If this breaks:** `tools: [read]` in a hand-written agent file stops
+    /// matching `Read`, and the file that worked yesterday resolves to nothing.
+    #[test]
+    fn a_tool_name_matches_without_regard_to_case() {
+        let all = candidates();
+        let (registry, dropped) = resolve_tools(&agent(Some(vec!["read", "BASH"])), &all);
+        assert!(dropped.is_empty(), "{dropped:?}");
+        let mut names = registry.names();
+        names.sort_unstable();
+        assert_eq!(names, ["Bash", "Read"]);
+    }
+
     fn result(id: &str, content: &str) -> Value {
         json!({
             "kind": "sub.tool_result",
