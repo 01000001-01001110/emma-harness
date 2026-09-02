@@ -219,7 +219,8 @@
     An unreadable override resolves to <code>Ansi16</code> rather than to
     truecolor, and the comment carries the reasoning in seven words:
     <em>&ldquo;an unreadable value is not permission to guess loudly.&rdquo;</em>
-    <span class="chip test">tested</span>: four tests over
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>: four tests over
     <code>Level::of</code>, including
     <code>the_override_beats_every_other_signal</code>, which sets
     <code>EMMA_COLORS=256</code> against <code>NO_COLOR</code> and
@@ -231,7 +232,9 @@
     from promoting a sixteen-colour console, and
     <code>Palette::with_theme</code> has no way to detect anything, so the
     property holds by signature.
-    <span class="chip test">tested</span>:
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>
+  <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>:
     <code>a_theme_chooses_colours_and_never_how_many_of_them_there_are</code>.
   </p>
 
@@ -336,17 +339,22 @@
     the short-circuit, truecolor returns <code>Color::Rgb</code> and 256 returns
     <code>Color::Indexed</code>, neither of which can ever equal
     <code>Color::Reset</code>.
-    <span class="chip test">tested</span>, and its sibling
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>
+  <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>, and its sibling
     <code>ordinary_text_is_never_given_a_colour_at_any_fidelity</code> holds the
     <code>Role::Text</code> half at all four levels.
   </p>
 
   <p>
     <span class="chip unv">unverified</span>: the mutation itself was not run
-    for this page. What would settle it is moving the two-line early return
-    below the <code>match</code>, running
-    <code>cargo test -p emma --lib term::palette</code>, watching those two go
-    red, and putting it back.
+    for this page because this round does not edit <code>.rs</code> files.
+    <em>What would settle it:</em> move the two-line early return below the
+    <code>match</code> in <code>crates/emma/src/term/palette.rs</code>, run
+    <code>cargo test -p emma --lib term::palette</code>, watch
+    <code>with_no_colour_nothing_a_theme_could_say_reaches_the_screen</code> and
+    <code>ordinary_text_is_never_given_a_colour_at_any_fidelity</code> go red,
+    and put it back.
   </p>
 
   <h2 id="pairs">The two backgrounds</h2>
@@ -397,7 +405,9 @@
   </p>
 
   <p>
-    <span class="chip test">tested</span>:
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>
+  <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>:
     <code>the_selection_band_is_the_measured_pair_at_every_fidelity</code> pins
     all four, and closes with a property rather than a literal, that the band is
     never equal to <code>chip(Role::Accent)</code> at any fidelity. That is the
@@ -446,6 +456,8 @@
     <em>declares</em> those two indices is that this function would otherwise
     quietly change what Emma looks like.&rdquo;</em>
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>
+  <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>
   </p>
 
   <div class="note">
@@ -483,7 +495,8 @@
     widgets across the module. A <code>Theme</code> holding a
     <code>String</code> would end that and cascade through every signature in
     <code>term/</code>, which is why themes are resolved to fixed-size data at
-    load. <span class="chip test">tested</span>:
+    load. <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>:
     <code>a_palette_is_still_copy</code> asserts it of
     <code>Palette</code>, <code>Theme</code> and <code>Level</code> through a
     <code>fn assert_copy&lt;T: Copy&gt;()</code>.
@@ -513,6 +526,8 @@
     palette. Somebody who changes a colour on purpose edits this table and says
     so; nobody changes one by accident.&rdquo;</em>
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>
+  <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>
   </p>
 
   <h2 id="coverage">Coverage</h2>

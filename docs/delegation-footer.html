@@ -391,6 +391,7 @@ struct Facts {
     self-correcting, because a parent reading <code>other tool calls: Frobnicate
     ×2</code> knows the record is coarse. Silence is not.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/delegate.rs">crates/emma/src/delegate.rs</a>
   </p>
   <span class="src">crates/emma/src/delegate.rs — tests::the_arguments_emmas_own_web_tools_use_reach_the_footer, tests::a_call_whose_arguments_match_no_probe_is_named_coarsely_rather_than_dropped</span>
 
@@ -404,6 +405,7 @@ struct Facts {
     recognised call is in its own category and <em>not</em> also in the residual,
     because a parent who reads <code>Read ×3</code> beside three named files
     learns nothing and doubts both. <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/delegate.rs">crates/emma/src/delegate.rs</a>
   </p>
   <span class="src">crates/emma/src/delegate.rs — tests::every_recorded_call_lands_in_exactly_one_footer_category, tests::a_recognised_call_is_in_its_own_category_and_not_also_in_the_residual</span>
 
@@ -499,6 +501,7 @@ struct Facts {
     partial, and a run with no record of how it stopped says <em>"unknown — no
     record of how this run stopped"</em> rather than implying success.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/delegate.rs">crates/emma/src/delegate.rs</a>
   </p>
   <span class="src">crates/emma/src/delegate.rs — tests::an_ending_that_is_not_done_is_called_out_rather_than_merely_named, tests::a_run_with_no_record_of_its_ending_says_so_rather_than_implying_success</span>
 
@@ -517,6 +520,7 @@ struct Facts {
     quiet instead, and so does <code>refused or blocked</code>: an empty bucket
     has nothing to disclose, and <code>other tool calls: none</code> on every
     footer adds noise without disclosing anything. <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/delegate.rs">crates/emma/src/delegate.rs</a>
     The empty-record test asserts <code>files touched: none</code> and
     <code>fetched: none</code> are present and that <code>other tool calls</code>
     is absent.
@@ -546,6 +550,7 @@ fn listed(what: &amp;str, items: &amp;[String]) -&gt; String {
     <code>… and 18 more</code>. Never a cut list presented as a whole one, which
     is the discipline <code>read.md</code> and <code>bash.md</code> already
     state. <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/delegate.rs">crates/emma/src/delegate.rs</a>
     <code>a_long_file_list_is_cut_and_says_it_was</code> drives 30 distinct
     paths and asserts both strings.
   </p>
@@ -594,6 +599,7 @@ fn string(value: &amp;Value, key: &amp;str) -&gt; String {
     beside a final message reading "the tests pass" is a contradiction the parent
     can see, and it is the most common lie a coding subagent can tell.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/delegate.rs">crates/emma/src/delegate.rs</a>
   </p>
 
   <div class="note warn">
@@ -699,6 +705,7 @@ spent: 3 model calls, 7319 tokens, 12s</code></pre>
     <code>cargo test → exit</code> appears nowhere, so the footer has not echoed
     the model's account of a command back as though it were a record.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/delegate.rs">crates/emma/src/delegate.rs</a>
   </p>
 
 <pre><code>    assert_eq!(run.outcome.ending, Ending::Done);
@@ -780,10 +787,12 @@ spent: 3 model calls, 7319 tokens, 12s</code></pre>
     </li>
     <li>
       <span class="chip unv">unverified</span> Nothing tests the
-      <code>sub.denied</code> path against a real refusal.
+      <code>sub.denied</code> path against a real refusal at the approval gate.
+      <span class="chip test">tested</span>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/delegate.rs">crates/emma/src/delegate.rs</a>
       <code>a_refused_call_is_in_the_footer_because_the_parent_cannot_see_the_prompt</code>
-      feeds a hand-written record, and no integration test declines a sub's call
-      at the gate. <em>What would settle it:</em> a scripted approval queue answering
+      covers hand-written records only.
+      <em>What would settle the gate path:</em> a scripted approval queue answering
       <code>n</code> to a sub's <code>Write</code>, asserting <code>refused or
       blocked</code> in the parent's tool result.
     </li>

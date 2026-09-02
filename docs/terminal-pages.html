@@ -126,9 +126,12 @@ pub enum Pane {
     is a compile error at every site that decides what to draw, instead of
     falling silently through to the transcript.
     <span class="chip test">tested</span>
-    <code>the_pane_seam_paints_the_chat_view_and_leaves_the_frame_alone</code>
-    renders both occupants at the same size and asserts every row outside the
-    chat region is byte-identical between them.
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/guarantees.rs">crates/emma/src/term/guarantees.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/guarantees.rs">crates/emma/src/term/guarantees.rs</a>
+    <code>a_page_swaps_the_middle_and_keeps_the_frame_and_the_transcript</code>
+    renders both occupants at the same size and asserts the frame and transcript
+    survive a page swap (the old name was
+    <code>the_pane_seam_paints_the_chat_view_and_leaves_the_frame_alone</code>).
   </p>
 
   <h2 id="text-page">Two of the three are the same page twice</h2>
@@ -206,11 +209,15 @@ pub enum Pane {
 
   <p>
     <span class="chip test">tested</span>
-    <code>the_memory_page_says_it_has_no_index_rather_than_inventing_one</code>
-    asserts the rendered buffer contains the sentence about having no index, and
-    <code>the_explorer_page_draws_its_snapshot_and_names_what_it_omits</code>
-    does the same for the query box. Both are assertions on painted cells, not on
-    the strings that were passed in.
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/guarantees.rs">crates/emma/src/term/guarantees.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/guarantees.rs">crates/emma/src/term/guarantees.rs</a>
+    <code>each_pages_disclosure_belongs_to_that_page_alone</code> asserts the
+    Memory page carries <code>NO_INDEX</code> on painted cells, and
+    <code>memory_draws_one_input_box_and_says_what_it_cannot_do</code> asserts
+    the search key's honesty notice. The test names on this page when it was
+    written (<code>the_memory_page_says_it_has_no_index_rather_than_inventing_one</code>,
+    <code>the_explorer_page_draws_its_snapshot_and_names_what_it_omits</code>)
+    no longer exist — the Data Explorer page was removed 2026-08-27.
   </p>
 
   <p>
@@ -304,11 +311,13 @@ pub enum Pane {
 
   <p>
     <span class="chip unv">unverified</span> Behaviour at very narrow widths is
-    untested for all three pages. The report lines are painted unwrapped and are
-    clipped by the chat region&rsquo;s width, so a narrow terminal loses the
-    right-hand end of a row rather than wrapping it. <em>What would settle it:</em>
-    render each page at 40 columns and decide whether clipping or wrapping is
-    wanted.
+    untested for all three pages named in the lede. Settings at 80×24 is covered
+    by <code>a_page_that_runs_out_of_room_says_how_much_is_missing</code> in
+    <code>term/guarantees.rs</code>; Memory compresses rather than clips. At 40
+    columns specifically, nobody has rendered each remaining page and decided
+    whether clipping or wrapping is wanted.
+    <em>What would settle it:</em> render Settings and Memory at 40 columns on
+    a <code>TestBackend</code> and inspect the painted cells.
   </p>
 
   <footer class="pg">

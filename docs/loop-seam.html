@@ -347,6 +347,7 @@ impl Interrupt {
     prompt. A second Ctrl-C during a goal is the process's own handling, not
     this type.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/agent.rs">crates/emma/src/agent.rs</a>
     <code>an_interrupt_can_be_cleared_so_the_next_goal_starts_clean</code>
     covers the store;
     <code>a_one_shot_run_keeps_an_interrupt_and_an_interactive_one_discards_it</code>
@@ -512,9 +513,11 @@ fn recover_from_a_model_change(&amp;mut self, e: &amp;LlmError) -&gt; bool {
     and a conversation with no model-bound block is one compaction has nothing
     left to take out of. Every mutation of that check is invisible for that
     reason.
-    <span class="chip test">tested</span> per the doc's own record of the
-    mutations; not a mutation watched during this write-up, since this task did
-    not change source.
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/commands.rs">crates/emma/tests/commands.rs</a>
+    per <code>a_rejected_signature_after_a_model_change_is_compacted_and_retried_once</code>
+    and the function's own record of the mutations; not a mutation watched during
+    this write-up, since this task did not change source.
   </p>
 
   <p>
@@ -529,6 +532,7 @@ fn recover_from_a_model_change(&amp;mut self, e: &amp;LlmError) -&gt; bool {
     <code>/compact</code> as the manual version of what the recovery would
     have done.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/commands.rs">crates/emma/tests/commands.rs</a>
     <code>an_ordinary_bad_request_is_still_reported_rather_than_compacted_away</code>
     in <code>tests/commands.rs</code> asserts both that nothing is summarised
     and that the near-miss is said out loud. One honest wart: the warning

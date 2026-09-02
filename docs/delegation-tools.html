@@ -349,21 +349,31 @@ fn resolve_tools(def: &amp;AgentDef, candidates: &amp;[Arc&lt;dyn Tool&gt;]) -&g
 
   <ul class="body">
     <li>
-      <span class="chip unv">unverified</span> Both branches, as above. This is
-      the least-covered code on any page in this chapter, and the untested branch
-      is the one that grants <code>Write</code>, <code>Edit</code> and
-      <code>Bash</code>.
+      <span class="chip test">tested</span>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+      The named-tools branch is covered by
+      <code>a_subagent_is_offered_only_the_tools_its_agent_file_names</code>.
+      The inherit branch (<code>tools: None</code> on the agent file → every
+      candidate registered, <code>dropped</code> empty) still has no direct unit
+      test over <code>resolve_tools</code>.
     </li>
     <li>
-      <span class="chip unv">unverified</span> The claim that the persona filter
-      runs before agent types are resolved is read off the order of statements in
-      <code>Delegate::new</code> and the order of calls in <code>main.rs</code>.
-      No test passes a <code>persona_allowed</code> that excludes a tool an agent
-      file asks for. <em>What would settle it:</em> a
-      <code>Delegate::new</code> call with
-      <code>Some(&amp;["Read".into()])</code> and an agent file naming
-      <code>Bash</code>, asserting <code>Bash</code> is in <code>dropped</code>
-      rather than in the registry.
+      <span class="chip unv">unverified</span> Both branches, as above — inherit
+      specifically. This is the least-covered code on any page in this chapter,
+      and the untested branch is the one that grants <code>Write</code>,
+      <code>Edit</code> and <code>Bash</code> when the file names nothing.
+    </li>
+    <li>
+      <span class="chip test">tested</span>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+      The persona filter reaches one level down:
+      <code>an_agent_type_cannot_reach_a_tool_the_persona_excluded</code> calls
+      <code>Delegate::new</code> with an agent file naming both
+      <code>Read</code> and <code>Write</code> and
+      <code>Some(&amp;["Read".into()])</code>, asserting
+      <code>tools_of("explorer")</code> is <code>["Read"]</code> only. Ran
+      <code>cargo test -p emma --test delegate persona_excluded</code> on
+      2026-09-02: <code>test an_agent_type_cannot_reach_a_tool_the_persona_excluded ... ok</code>.
     </li>
     <li>
       <span class="chip unv">unverified</span> The <code>debug_assert</code>

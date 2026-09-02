@@ -257,7 +257,23 @@ pub reaches_network: bool,</code></pre>
   </p>
 
   <pre><code>pub async fn request(&amp;self, tool: &amp;dyn Tool, args: &amp;Value, term: &amp;Term) -&gt; Verdict {
-    let target = tool.network_target(args);
+    <span class="c">// **Guarded for the same reason `validate_args` is**: this is a tool's</span>
+    <span class="c">// own code reading model-written JSON, and a panic here took the</span>
+    <span class="c">// session down while `DEF-007` claimed the class was closed. Denying is</span>
+    <span class="c">// the safe answer -- a tool that cannot say where it would connect is a</span>
+    <span class="c">// tool nobody can approve.</span>
+    let Ok(target) =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tool.network_target(args)))
+    else {
+        return Verdict::Deny(
+            Decider::Unevaluable,
+            format!(
+                "{} panicked when asked where it would connect, so it was not run. That is \
+                 a bug in the tool; nothing about the call can be approved on its word.",
+                tool.name()
+            ),
+        );
+    };
     let verdict = self
         .decide(tool.name(), tool.meta(), target, args, term)
         .await;
@@ -304,15 +320,22 @@ pub reaches_network: bool,</code></pre>
   <h2 id="unsettled">What is not settled here</h2>
 
   <p>
-    <span class="chip unv">unverified</span> That the tool crates' tests actually
-    pin every declaration was read out of the doc comment on
-    <code>ToolMeta::reaches_network</code> and not checked against the tool
-    crates. <em>What would settle it:</em> for each of the six tools declaring
-    <code>reaches_network: true</code> and each tool declaring
-    <code>read_only: true</code>, name the test in its own crate that fails when
-    the bit is flipped, and run it.
+    <span class="chip cert">certified</span> The tests do <em>not</em> pin every
+    declaration. <code>Skill</code> is registered as a tool and declares
+    <code>read_only: true</code>, but its module contains no test:
   </p>
-  <span class="src">crates/tool-api/src/lib.rs — ToolMeta::reaches_network, final bullet</span>
+  <pre><code>rg -n 'read_only: true' crates/emma/src/skill.rs
+71:            read_only: true,
+
+rg -n '#\[cfg\(test\)\]|#\[test\]|tokio::test' crates/emma/src/skill.rs
+<span class="c"># exit 1; no output</span></code></pre>
+  <p>
+    This refutes the page's former claim that each declaration has a test which
+    fails when its bit is flipped. The network tools and the other read-only
+    tools have declaration tests, but <code>Skill</code>'s bit can drift without
+    a tool-local test noticing.
+  </p>
+  <span class="src">crates/emma/src/skill.rs — Tool::meta; crates/emma/src/main.rs — Skill registration</span>
 
   <footer class="pg">
     Emma 0.1.0 · read at commit <code>a3eba74</code> ·

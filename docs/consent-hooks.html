@@ -499,7 +499,7 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
     on 2026-08-14, logged in <code>notes/plans/process-lifetime.md</code> §6. The
     "before" half needs the reverted code to reproduce, so nobody can run it
     again as it stands. The "after" half is on demand:
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/tests/exec_lifetime.rs">crates/harness/tests/exec_lifetime.rs</a>
     <code>cargo test -p emma-harness --test exec_lifetime
     certify_the_misreport_rate_over_twenty_trials -- --ignored</code> loops twenty
     times and asserts <code>misreported == 0</code> and
@@ -530,8 +530,9 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
 
     let status;
     {
-        <span class="c">// Both pipes, concurrently with the wait. The futures borrow the buffers,</span>
-        <span class="c">// so abandoning a read keeps the bytes it already collected.</span>
+        <span class="c">// Both pipes, concurrently with the wait. The buffers are borrowed</span>
+        <span class="c">// rather than owned by the futures precisely so that abandoning a read</span>
+        <span class="c">// keeps the bytes it already collected.</span>
         let both = async {
             tokio::join!(
                 async {
@@ -682,15 +683,20 @@ where
     away is still alive seconds later. tokio also gives a child's stdio
     <em>overlapped</em> I/O on Windows, so an unfinished read is a cancelled
     future rather than a thread stuck in a blocking <code>ReadFile</code>.
-    <span class="chip test">tested</span> by six Windows fixtures in
-    <code>crates/harness/tests/exec_lifetime.rs</code>, among them
+    Historically mutation-<span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/tests/exec_lifetime.rs">crates/harness/tests/exec_lifetime.rs</a>
+    by six Windows fixtures, among them
     <code>a_hook_that_exited_zero_is_not_reported_as_timed_out_because_a_grandchild_holds_the_pipe</code>,
     <code>a_daemonizing_hooks_child_is_still_running_after_emma_walks_away</code>
     and
     <code>a_timed_out_hooks_descendants_survive_by_ruling_not_by_accident</code>.
-    <span class="chip cert">certified</span> All six pass:
-    <code>cargo test -p emma-harness --test exec_lifetime</code>, run on
-    2026-08-16.
+    The historical receipt says all six passed on 2026-08-16.
+    <span class="chip cert">certified</span> That is not a current passing
+    receipt on this account:
+    <code>cargo test -p emma-harness --test exec_lifetime -- --nocapture</code>
+    reports 1 passed, 5 failed and 2 ignored. Each failure says the grandchild
+    never recorded its pids and “the fixture did not stage the defect.” The
+    failure is in fixture setup, before the asserted lifetime behaviour, so it
+    neither confirms nor refutes that behaviour here.
   </p>
   <span class="src">crates/harness/tests/exec_lifetime.rs; notes/plans/process-lifetime.md §2, §6</span>
 
@@ -710,15 +716,18 @@ where
       <span class="chip unv">unverified</span> The unix arm is compile-checked
       only. The daemonizing fixtures are <code>#[cfg(windows)]</code>, and the
       file carries a <code>#[cfg(not(windows))]</code> test whose whole job is to
-      say so. On Windows nothing pins the 200 ms grace either, because nothing
-      makes its removal observable: deleting it leaves every fixture green,
-      including a 100-trial probe of a hook whose last write and exit are the same
-      instant, at 0 of 100 lost either way. <em>What would settle both:</em> a
-      Linux or WSL run of the same fixtures, where the readiness-based path means
-      the bytes wait in the kernel for a poll the randomised <code>select!</code>
-      may not reach before the wait wins, and where a write-looping daemon is
-      expected to die on its first post-abandonment write unless it ignores
-      <code>SIGPIPE</code>.
+      say so. WSL could not supply the missing machine:
+      <code>wsl.exe --status</code> returned
+      <code>Wsl/EnumerateDistros/Service/E_ACCESSDENIED</code>.
+      On Windows nothing pins the 200 ms grace either, because deleting it leaves
+      every fixture green, including the 100-trial last-write probe.
+      <em>What would settle both:</em> add Unix versions of the daemon,
+      inherited-pipe and last-write fixtures using <code>sh</code>; on Linux run
+      <code>cargo test -p emma-harness --test exec_lifetime -- --nocapture</code>;
+      set <code>EXEC_DRAIN_GRACE_MS</code> to zero and require the last-write
+      fixture to fail; restore 200 and require it to pass; and assert a
+      write-looping daemon without a <code>SIGPIPE</code> handler dies after Emma
+      drops its reader.
     </p>
     <span class="src">crates/harness/src/hooks.rs — EXEC_DRAIN_GRACE_MS; crates/harness/tests/exec_lifetime.rs::the_process_lifetime_fixtures_are_windows_only_and_this_says_so</span>
   </div>
@@ -746,8 +755,12 @@ where
     answered. <code>StatusLine::run</code> calls the same <code>exec</code>, so it
     inherits both the fix and the ruling, and a status script runs on a debounced
     trigger many times per session, so one that daemonizes accumulates a process
-    per burst. One behaviour for both shipped. <em>What would settle it:</em> the
-    owner's ruling on whether the daemonize permission covers the status line.
+    per burst. One behaviour for both shipped. <em>What would settle it:</em>
+    record an owner decision answering exactly: “May a configured status-line
+    command intentionally leave descendants running after each invocation?” If
+    no, give <code>StatusLine::run</code> a descendant-reaping contract and a
+    repeated-trigger fixture; if yes, document the accumulation cost beside the
+    setting.
   </p>
   <span class="src">notes/plans/process-lifetime.md §4, header</span>
 
@@ -755,21 +768,24 @@ where
 
   <ul class="body">
     <li>
-      <span class="chip unv">unverified</span> The claim that Claude Code
-      discards a timed-out <code>UserPromptSubmit</code> hook's output and lets
-      the prompt through is quoted from the doc comment on
-      <code>run_prompt</code> and was not checked against Claude Code's
-      documentation for this page. <em>What would settle it:</em> the paragraph of
-      that documentation, quoted with its URL, in
-      <code>notes/design/claude-code-compatibility.md</code>.
+      <span class="chip cert">certified</span> Claude Code's current
+      <a href="https://code.claude.com/docs/en/hooks#userpromptsubmit">hook reference</a>
+      says that a timed-out <code>UserPromptSubmit</code> command, HTTP or MCP
+      hook is canceled, its output is discarded, and the prompt still reaches
+      Claude without that context. That directly supports the compatibility
+      claim on this page.
     </li>
     <li>
       <span class="chip unv">unverified</span> Nothing on this page was observed
-      from a running Emma with a real hook attached. The event payloads, the
-      notices and the boot errors are read from source and from the harness
-      crate's tests. <em>What would settle it:</em> a session with one hook per
-      event in <code>.emma/hooks/</code>, one of them written to crash, and the
-      console output pasted.
+      from a running Emma with a real hook attached. The event payloads, notices
+      and boot errors are read from source and tests.
+      <em>What would settle it:</em> in a disposable project configure one
+      <code>UserPromptSubmit</code>, <code>PreToolUse</code> and
+      <code>PostToolUse</code> command under <code>.emma/</code>; make the first
+      echo context, the second deny, and the third exit nonzero. Run one
+      interactive paid-provider session, trigger all three, and paste the console
+      output plus the recorded hook rows. This requires a real interactive model
+      run and was not attempted.
     </li>
   </ul>
 

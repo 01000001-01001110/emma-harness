@@ -175,27 +175,81 @@
         };
         return Ok(Self { tool, spec });
     }
-    <span class="c">// **A path-shaped specifier is decided by the tool, and by nothing else.**</span>
-    <span class="c">// Only `Bash` runs a command; everything else addresses a path.</span>
+    <span class="c">// **A path-shaped specifier is decided by the tool, and by nothing</span>
+    <span class="c">// else.** The first version asked whether the text held a separator or</span>
+    <span class="c">// a glob character, which made `Read(Cargo.toml)` a *command* prefix —</span>
+    <span class="c">// matched against a `command` argument that a `Read` call does not</span>
+    <span class="c">// have, so it matched nothing at all, silently. A review supplied it as</span>
+    <span class="c">// a working bypass of a deny rule naming one file.</span>
+    <span class="c">//</span>
+    <span class="c">// **The fix for that kept the punctuation test as an extra disjunct for</span>
+    <span class="c">// `Bash`, and thereby rebuilt the same defect facing the other way.**</span>
+    <span class="c">// `Bash(rm -rf /)`, `Bash(curl https://*)`, `Bash(./deploy.sh)` — every</span>
+    <span class="c">// one contains a separator, so every one compiled to a `Spec::Path`</span>
+    <span class="c">// glob, and a `Bash` call carries `command` rather than `file_path`, so</span>
+    <span class="c">// `path_of` returned `None` and the rule could never fire. Two</span>
+    <span class="c">// independent reviewers found it on the same afternoon; one measured the</span>
+    <span class="c">// owner's real `settings.json` and reported **24 of 53 `Bash` rules</span>
+    <span class="c">// silently inert**, deny rules among them. It was worse than the state</span>
+    <span class="c">// it replaced: `Spec::Unsupported` is announced at boot, `Spec::Path` is</span>
+    <span class="c">// not, so the rules went from loud-and-inert to silent-and-inert.</span>
+    <span class="c">//</span>
+    <span class="c">// Claude Code has no path form for `Bash` — the inner text is a command,</span>
+    <span class="c">// always. So the tool decides alone, with no punctuation clause to grow</span>
+    <span class="c">// an exception back into.</span>
     if tool != "Bash" {
+        <span class="c">// **A backslash in a path rule means two different things on two</span>
+        <span class="c">// platforms, so it means nothing here.** `globset` escapes with it</span>
+        <span class="c">// on unix and treats it as a separator on Windows — so</span>
+        <span class="c">// `Read(src/a\*b)` names a literal asterisk on one machine and the</span>
+        <span class="c">// directory `src/a` on the other, from the same settings file. A</span>
+        <span class="c">// cross-model review found the first half of that and reported it</span>
+        <span class="c">// as a plain bug; it is worse than a bug, because either reading is</span>
+        <span class="c">// defensible and the file cannot say which it meant. Refused, with</span>
+        <span class="c">// the fix in the message, rather than resolved by guessing.</span>
         if inner.contains('\\') {
-            bail!("`{raw}` contains a backslash, which means an escape on unix and a separator on Windows — write the path with `/`");
+            bail!(
+                "`{raw}` contains a backslash, which means an escape on unix and a separator on Windows — write the path with `/`"
+            );
         }
+        <span class="c">// A `..` cannot be matched before the path is resolved, and a rule</span>
+        <span class="c">// that can never be evaluated is refused loudly rather than kept as</span>
+        <span class="c">// something that quietly matches nothing.</span>
         if inner.split(['/', '\\']).any(|seg| seg == "..") {
-            bail!("`{raw}` contains `..`, which cannot be matched before the path is resolved — write the path without it");
+            bail!(
+                "`{raw}` contains `..`, which cannot be matched before the path is resolved — write the path without it"
+            );
         }
+        <span class="c">// The compiled pattern is normalised and the raw text is kept for</span>
+        <span class="c">// display, so a rule reads back exactly as written while matching</span>
+        <span class="c">// the same file however the call spells it.</span>
+        <span class="c">// Case-insensitive on Windows because the filesystem is: a rule</span>
+        <span class="c">// naming `src/main.rs` and a call naming `SRC/Main.rs` are one file</span>
+        <span class="c">// there, and a case-sensitive matcher is one the operating system</span>
+        <span class="c">// disagrees with. Done in the builder rather than by folding the</span>
+        <span class="c">// pattern, which would rewrite a `[A-Z]` class into a different one.</span>
         if let Ok(g) = globset::GlobBuilder::new(&amp;normalise_pattern(inner))
             .case_insensitive(cfg!(windows))
             .build()
         {
-            return Ok(Self { tool, spec: Spec::Path(inner.to_string(), g.compile_matcher()) });
+            return Ok(Self {
+                tool,
+                spec: Spec::Path(inner.to_string(), g.compile_matcher()),
+            });
         }
     }
-    <span class="c">// A command prefix. `git *`, `npm run test:*`, and the bare `git` form.</span>
-    let prefix = inner.strip_suffix(":*").or_else(|| inner.strip_suffix('*')).unwrap_or(inner);
+    <span class="c">// A command prefix. `git *`, `npm run test:*`, and the bare `git` form</span>
+    <span class="c">// that people write meaning the same thing.</span>
+    let prefix = inner
+        .strip_suffix(":*")
+        .or_else(|| inner.strip_suffix('*'))
+        .unwrap_or(inner);
     let prefix = normalise_command(prefix);
     if !prefix.is_empty() {
-        return Ok(Self { tool, spec: Spec::Command(inner.to_string(), prefix) });
+        return Ok(Self {
+            tool,
+            spec: Spec::Command(inner.to_string(), prefix),
+        });
     }
     Ok(Self {
         tool,
@@ -210,7 +264,7 @@
     error for the star says why, and it is the sharpest sentence in the file: a
     <code>*</code> there is the rule that matches everything, which in the
     <code>allow</code> list is one typo away from approving the whole tool surface.
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_glob_in_the_tool_position_is_refused</code> runs <code>*</code>,
     <code>*(domain:x)</code>, <code>Web*</code> and <code>mcp__*</code> and
     asserts each error mentions "exactly" or "tool name".
@@ -221,7 +275,7 @@
     Anything that is not a clean parse is an error rather than a rule that matches
     nothing. The distinction is about the <code>deny</code> list: a rule the
     operator wrote and Emma dropped without a word is a protection they believe
-    they have. <span class="chip test">tested</span>
+    they have. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_malformed_rule_is_refused_rather_than_silently_inert</code> asserts an
     error for ten spellings, including <code>""</code>, <code>"   "</code>,
     <code>WebFetch(</code>, <code>WebFetch(domain:apnews.com</code>,
@@ -248,7 +302,7 @@
     against a real settings file: <strong>62 of its 64 rules were inert</strong>.
     ARCH-002 gave both shapes real matchers, and what remains here is an unknown
     specifier rather than the common case.
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>the_shapes_that_used_to_be_inert_now_evaluate</code> parses a
     Claude-Code-shaped deny list and asserts a <code>rm</code> call is denied and
     a <code>./src</code> read is allowed, with no boot note left to make. An
@@ -262,7 +316,7 @@
     nothing can reach is an arm nothing checks: a mutation flipping it to
     <code>true</code> went undetected until the test existed, and that is how
     <code>Bash(rm *)</code> would one day start matching every call to
-    <code>Bash</code>. <span class="chip test">tested</span>
+    <code>Bash</code>. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>an_unsupported_rule_that_reaches_a_list_anyway_still_matches_nothing</code>
     adopts <code>Bash(git log:*)</code> and asserts <code>for_tool</code> and two
     <code>for_egress</code> calls all answer <code>None</code>. Flipping the arm
@@ -274,7 +328,7 @@
     Rendering round-trips: <code>Display</code> for <code>Rule</code> prints
     <code>Tool</code>, <code>Tool(domain:raw)</code> or <code>Tool(spec)</code>,
     and the pattern keeps the text it was written as so the rule renders back
-    exactly as the file will show it. <span class="chip test">tested</span>
+    exactly as the file will show it. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_rule_round_trips_through_its_own_text</code> parses four spellings,
     asserts each renders to itself, and re-parses the rendering to the same value.
     The written file is the user interface; a rule that renders back as something
@@ -308,7 +362,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     <code>deny</code>. A broad <code>allow</code> still covers every host a narrow
     <code>deny</code> does not name. This is the clause people get wrong, and if
     it inverted, every <code>deny</code> list in every settings file would become
-    a default rather than a refusal. <span class="chip test">tested</span>
+    a default rather than a refusal. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>deny_beats_allow_however_specific_the_allow_is</code> checks both
     arrangements and then asserts the broad allow still answers for a host the
     narrow deny does not name. <code>ask_sits_between_them_and_beats_allow</code>
@@ -330,7 +384,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     <code>None</code> is what sends a call on down the ladder. A rule set that
     answered <code>Allow</code> for a tool nobody wrote a rule about would be the
     whole gate switched off by an empty file.
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>silence_is_not_a_decision</code> asserts <code>None</code> from both
     lookups on an empty set, and that <code>is_empty</code> agrees.
   </p>
@@ -354,7 +408,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     compensates, and <code>main</code> prints every one through the
     <em>warning</em> channel at startup rather than the note channel, since each
     is a line somebody wrote that is not doing what they think.
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_bad_rule_costs_that_rule_and_not_the_boot</code> parses
     <code>WebFetch(</code> beside <code>WebSearch</code> and asserts the good rule
     still answers and the note names the source file.
@@ -367,7 +421,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     not want. A <code>deny</code> or <code>ask</code> it cannot evaluate costs
     them a protection they think they have, and that one says <em>blocks
     NOTHING</em> in capitals and suggests the bare tool name as the spelling that
-    would cover every call. <span class="chip test">tested</span>
+    would cover every call. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_specifier_that_still_cannot_be_evaluated_is_announced</code>
     asserts both wordings and that neither rule reached a list.
   </p>
@@ -407,7 +461,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     the file it was written in, because by the time a rule misfires there is no
     other route back to the document holding it. The merged set composes because
     <code>deny</code> beats <code>allow</code> at match time whichever file each
-    came from. <span class="chip test">tested</span>
+    came from. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/permissions.rs">crates/emma/tests/permissions.rs</a>
     <code>a_deny_rule_in_the_project_file_beats_an_allow_in_the_local_one</code>,
     in the integration tests.
   </p>
@@ -442,15 +496,23 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
   <p>
     <code>ask</code> is left out with <code>allow</code> rather than with
     <code>deny</code>: it is not restrictive enough to be worth importing and not
-    permissive enough to be dangerous. A file that cannot be read is skipped
-    rather than fatal, since the only thing taken from it is restrictions, so
-    failing to read it can only make Emma ask more often.
+    permissive enough to be dangerous. An absent file or a path that is not a
+    file is skipped; invalid JSON grants nothing and emits a note.
     <code>home</code> is threaded as a parameter rather than read from the
     environment, because a test that reads the real <code>HOME</code> either
     mutates shared state in a threaded test binary or answers differently on
     different machines, and both have happened here.
-    <span class="chip test">tested</span> in
-    <code>crates/harness/tests/permissions.rs</code>.
+    <code>the_user_scope_contributes_deny_and_never_allow</code> and
+    <code>a_missing_or_unreadable_user_settings_file_is_not_a_failure</code>
+    cover those cases.
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/tests/permissions.rs">crates/harness/tests/permissions.rs</a>
+    <span class="chip unv">unverified</span> Despite its name, the second test
+    does not create an existing file whose read fails; its own comment records
+    that gap. <em>What would settle it:</em> on Unix create the settings file,
+    apply <code>chmod 000</code>, call <code>user_permissions</code>, assert no
+    entries and one note naming the file and lost deny rules, then restore its
+    mode in cleanup. On Windows do the equivalent with a temporary denying ACL
+    and restore the ACL before deleting the fixture.
   </p>
   <span class="src">crates/harness/src/lib.rs — user_permissions; crates/harness/tests/permissions.rs</span>
 
@@ -488,7 +550,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     file and what is wrong with it, and the grant lasts the session instead.
     <code>kind_of</code> exists to name the shape found before the mutable borrow
     starts, so the refusal can say "holds a JSON number" rather than only "is not
-    an object". <span class="chip test">tested</span>
+    an object". <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_file_that_cannot_be_parsed_is_left_exactly_as_it_was</code> writes all
     four shapes, asserts each error names its file, and asserts the bytes on disk
     are unchanged.
@@ -498,7 +560,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
   <p>
     The write goes to a sibling temporary file, <code>*.json.emma-tmp</code>, and
     is renamed over the target, so an interrupted run cannot leave half a settings
-    file behind. <span class="chip test">tested</span>
+    file behind. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_missing_file_is_created_with_only_what_was_granted_in_it</code>
     asserts the created file byte for byte and then asserts the directory holds
     exactly one entry, which is what catches a temporary file surviving the
@@ -511,7 +573,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     <code>permissions.allow</code>, for a caller that wants to say whether a grant
     would be new. Any problem reading it answers with an empty set, because it is
     cosmetic and <code>remember</code> is where the refusals live.
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>what_is_written_is_what_is_read_back_next_boot</code> writes a rule,
     reads it back through <code>already_written</code>, re-parses it into a
     <code>Rules</code>, and asserts it allows <code>apnews.com</code> and not
@@ -544,7 +606,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     deny actually matched, the answer is <code>Ask</code>. Not <code>Deny</code>:
     the rule did not match, and claiming it did would be false. What is refused
     is passing <em>quietly</em>.
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_composed_command_cannot_slip_past_a_deny_prefix</code> walks seven
     evasions and asserts each becomes a question.
   </p>
@@ -573,7 +635,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     token alone would have fixed nothing. The call site now passes the raw
     argument, and the token is in the list as well. <code>is_composed</code> now
     receives the raw input rather than one caller's normalised form.
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>an_ordinary_shell_spelling_cannot_walk_past_a_deny_rule</code> asserts
     the <em>decision</em> rather than <code>is_composed</code>, because the bug
     lived in the seam between the two. Four mutations go red: the call site
@@ -606,8 +668,13 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     command-prefix deny narrows to the spellings it names. This paragraph is the
     third.
     <span class="chip unv">unverified</span>
-    <em>What would settle it:</em> nothing settles it; it is a statement
-    about what the shape can express, not a claim about a run.
+    <em>What would settle it:</em> add a behavioural case beside
+    <code>a_composed_command_cannot_slip_past_a_deny_prefix</code> with
+    <code>Bash(git push *)</code> denying <code>git push origin main</code> but
+    returning no decision for <code>git -C . push origin main</code>. Then change
+    the prefix matcher to recognize that spelling and require the second
+    assertion to fail before restoring it. That demonstrates the expressiveness
+    boundary without claiming the command did not run.
   </p>
 
   <p>
@@ -617,7 +684,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     call's path are now normalised before matching: separators become
     <code>/</code>, repeated separators collapse, and <code>./</code> segments go.
     The rule and the call then meet in one spelling.
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_path_rule_is_not_defeated_by_respelling_the_same_file</code> crosses
     two rule spellings with five call spellings and asserts all ten deny.
     Removing the normalisation on the call side turns it red, along with two
@@ -635,7 +702,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     a parse error, because a pattern that can never be evaluated is not a rule.
     An earlier version asked the question of both sides, and one <code>..</code>
     in one rule then turned every unrelated read into a prompt.
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_path_a_rule_cannot_be_compared_against_asks_rather_than_passes</code>
     asserts three such paths answer <code>Deny</code> or <code>Ask</code> and
     never silence, while an ordinary relative path is still judged. A
@@ -648,8 +715,12 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     would settle whether they are the same file. Closing that means matching
     after resolution, which needs the gate to run later than it does.
     <span class="chip unv">unverified</span>
-    <em>What would settle it:</em> a design that moves the path decision to the
-    tool, where the resolved path exists.
+    <em>What would settle it:</em> specify a pre-invocation contract by which an
+    fs tool returns its resolved target to the gate; add a case with a relative
+    rule and an equivalent absolute call that denies; mutate the tool to return
+    the unresolved spelling and require the case to fail; then restore it. Until
+    the gate receives that resolved target, no execution can distinguish
+    “unimplemented” from “implemented incorrectly.”
   </p>
   <span class="src">crates/emma/src/permissions.rs &mdash; is_composed, normalise_path, path_unjudgeable, Rules::for_call</span>
 
@@ -689,7 +760,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
   </div>
 
   <p>
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>the_respelling_bypasses_a_review_found_are_all_closed</code> keeps each
     of the seven as the exact input the review gave, rather than a paraphrase of
     it. The paraphrase is what the original code was already written
@@ -701,11 +772,16 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
 
   <p>
     <span class="chip unv">unverified</span> The Windows arms of this are the only
-    ones exercised: the suite has never run on macOS or Linux, so the unix
+    ones exercised: the suite has never run on macOS or Linux, so the Unix
     reading of a backslash and the case-<em>sensitive</em> branch are argued from
-    <code>globset</code>'s documentation rather than observed.
-    <em>What would settle it:</em> running <code>cargo test -p emma --lib
-    permissions</code> on either.
+    <code>globset</code>'s documentation rather than observed. WSL was attempted
+    here, but <code>wsl.exe --status</code> returned
+    <code>Wsl/EnumerateDistros/Service/E_ACCESSDENIED</code>.
+    <em>What would settle it:</em> on Linux or macOS run
+    <code>cargo test -p emma --lib permissions -- --nocapture</code>, record the
+    passing count, then make <code>normalise_pattern</code> case-insensitive and
+    accept backslashes, require the Unix-specific assertions to fail, restore
+    both branches and rerun green.
   </p>
   <span class="src">crates/emma/src/permissions.rs &mdash; Rule::parse, normalise_path, normalise_pattern, is_absolute, path_unjudgeable, Rules::for_call</span>
 
@@ -749,15 +825,24 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
       <span class="chip unv">unverified</span> The mutation results quoted above
       were recorded at commit <code>20ac400</code> by an earlier author and were
       not re-run for this page, which does not change source.
-      <em>What would settle it:</em> repeating each named mutation on a branch and
-      pasting the failing test names.
+      <em>What would settle it:</em> one at a time, drop the Windows drive-letter
+      check, keep trailing dots, force case-sensitive Windows globs, move the
+      ladder behind the preflight, and accept a backslash path rule. After each
+      change run <code>cargo test -p emma --lib permissions -- --nocapture</code>,
+      paste the failing test name, restore the source and rerun it green before
+      applying the next mutation.
     </li>
     <li>
       <span class="chip unv">unverified</span> That a <code>.emma/</code> project
       never acquires a <code>.claude/</code> directory is read from
       <code>file_for</code> and the harness discovery order, not observed.
-      <em>What would settle it:</em> a run in a directory holding both, answering
-      <code>r</code> once, and listing both directories afterwards.
+      <em>What would settle it:</em> in a disposable directory create both
+      <code>.emma/settings.json</code> and <code>.claude/settings.json</code>
+      with distinguishable harmless keys, record recursive listings and file
+      hashes, run an interactive paid-provider session that prompts for a write,
+      answer <code>r</code>, then list and hash both trees again. The new allow
+      rule must appear only in <code>.emma/settings.local.json</code>, and no
+      <code>.claude</code> byte may change.
     </li>
   </ul>
 

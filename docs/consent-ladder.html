@@ -98,17 +98,20 @@
     <span class="c">// A `deny` rule first, above the bypass. See the precedence block at the</span>
     <span class="c">// top of the file: written policy outranks a flag somebody typed.</span>
     if rule == Some(Decision::Deny) {
-        return Verdict::Deny(format!(
-            "A `deny` permission rule forbids {name}. It was not run, and no answer at a \
+        return Verdict::Deny(
+            Decider::Rule,
+            format!(
+                "A `deny` permission rule forbids {name}. It was not run, and no answer at a \
              prompt can change that — it is written down in a settings file. Do not retry \
              it; tell the user which rule is in the way if they need to know."
-        ));
+            ),
+        );
     }
     <span class="c">// Egress before the local question, and independent of it: a tool can</span>
-    <span class="c">// be read-only and still be the way</span>
+    <span class="c">// be read-only — genuinely, honestly read-only — and still be the way</span>
     <span class="c">// something leaves this machine. Every arm below this line assumes the</span>
     <span class="c">// network question has already been answered.</span>
-    if let deny @ Verdict::Deny(_) = self.egress(name, meta, target, term).await {
+    if let deny @ Verdict::Deny(..) = self.egress(name, meta, target, term).await {
         return deny;
     }
     if self.gate == Gate::SkipAll {
@@ -136,11 +139,14 @@
         }
     }
     if self.gate == Gate::Unattended {
-        return Verdict::Deny(format!(
-            "{name} needs approval and this is a non-interactive run (-p), so there is \
+        return Verdict::Deny(
+            Decider::NoOneToAsk,
+            format!(
+                "{name} needs approval and this is a non-interactive run (-p), so there is \
              nobody to ask. It was not run. Use a read-only tool, or tell the user what \
              needs approving and stop."
-        ));
+            ),
+        );
     }
 
     <span class="c">// On this question the narrow rule and the tool-wide one are the same</span>
@@ -179,15 +185,19 @@
             self.keep(rule, term).await;
             Verdict::Allow
         }
-        Some(Answer::No) =&gt; Verdict::Deny(format!(
-            "The user declined this {name} call. It was not run. Do not retry it \
+        Some(Answer::No) =&gt; Verdict::Deny(
+            Decider::Human,
+            format!(
+                "The user declined this {name} call. It was not run. Do not retry it \
              unchanged — take a different approach, or ask what they would prefer."
-        )),
+            ),
+        ),
         <span class="c">// End of input, or a scripted run that ran out of answers. Silence</span>
         <span class="c">// is not consent.</span>
-        None =&gt; Verdict::Deny(format!(
-            "No approval was given for this {name} call, so it was not run."
-        )),
+        None =&gt; Verdict::Deny(
+            Decider::NoAnswer,
+            format!("No approval was given for this {name} call, so it was not run."),
+        ),
     }
 }</code></pre>
   <span class="src">crates/emma/src/approval.rs — Approvals::decide, quoted entire</span>
@@ -335,8 +345,9 @@
     The bypass cannot be set from configuration or the environment. The short
     <code>--yes</code> spelling is accepted only alongside <code>-p</code>, so the
     interactive path cannot reach the bypass without typing the whole word.
-    <span class="chip test">tested</span> Rejecting bare <code>--yes</code> is
-    asserted in <code>cli.rs</code>, which checks the error names
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/cli.rs">crates/emma/src/cli.rs</a>
+    <code>the_short_bypass_cannot_be_reached_interactively</code> rejects bare
+    <code>--yes</code> and checks the error names
     <code>--dangerously-skip-permissions</code>.
   </p>
   <span class="src">crates/emma/src/cli.rs — parse, tests around line 637</span>
@@ -355,7 +366,7 @@
     The argument for moving it: a deny rule is something the operator wrote down
     and can go and read, and the bypass is a flag typed to get a script through.
     Claude Code makes the same ruling, that if a tool is denied at any level no
-    other level can allow it. <span class="chip test">tested</span>
+    other level can allow it. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     <code>a_deny_rule_beats_the_bypass_flag</code> builds a
     <code>Gate::SkipAll</code> gate with an empty answer queue, asserts
     <code>Bash</code> is denied on the local axis and
@@ -411,7 +422,7 @@
     <a href="consent-rules.html#boundary">the rules page</a>, and it is a real
     boundary rather than a to-do: a command-prefix deny narrows to the spellings
     it names, and what it cannot judge it asks about rather than passing quietly.
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>the_shapes_that_used_to_be_inert_now_evaluate</code> parses a
     Claude-Code-shaped deny list and asserts a <code>rm</code> call is denied and
     a <code>./src</code> read allowed, with no boot note left to make.
@@ -420,14 +431,15 @@
 
   <p>
     <span class="chip unv">unverified</span> The block's position above the
-    denial is mutation-proven: moving the <code>Gate::Unattended</code> return
-    above it turned three tests red at <code>20ac400</code>. All three exercise
-    <code>read_only</code> or <code>EXEMPT</code>, and the
-    <code>allow</code>-rule arm has no test at any gate but
-    <code>Gate::Ask</code>. <em>What would settle it:</em> a test building
-    <code>Approvals</code> with <code>Gate::Unattended</code>, an empty answer
-    queue and an <code>allow</code> rule for a writing tool, asserting
-    <code>Allow</code>.
+    denial has mutation receipts for <code>read_only</code> and
+    <code>EXEMPT</code>, but the <code>allow</code>-rule arm still has no test
+    under <code>Gate::Unattended</code>.
+    <em>What would settle it:</em> add
+    <code>an_allow_rule_answers_even_when_unattended</code> beside the approval
+    tests, build <code>Approvals</code> with <code>Gate::Unattended</code>, an
+    empty answer queue and an allow rule for a writing tool, and assert
+    <code>Allow</code>. Then move the unattended denial above the allow arm,
+    require that test to fail, restore the source and require it to pass.
   </p>
   <span class="src">crates/emma/src/approval.rs — tests::a_read_only_tool_is_never_asked_about_even_unattended, tests::the_exemption_covers_the_task_writers_and_nothing_that_touches_the_tree, tests::unattended_denies_a_writer_and_says_why</span>
 
@@ -518,8 +530,9 @@ match self
   <p>
     A source-order assertion was written inside <code>approval.rs</code> first and
     then removed: it passed against a mutation that disabled the denial outright,
-    which makes it worse than nothing. The guarantee is held behaviourally
-    instead, in the integration tests. <span class="chip test">tested</span>
+    which makes it worse than nothing. The guarantee is held behaviourally by
+    <code>a_hook_denial_outranks_an_allow_rule_that_covers_the_call</code>.
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/permissions.rs">crates/emma/tests/permissions.rs</a>
   </p>
   <span class="src">crates/emma/src/approval.rs — the comment where that test used to be; crates/emma/tests/permissions.rs::a_hook_denial_outranks_an_allow_rule_that_covers_the_call; crates/emma/tests/loop.rs</span>
 
@@ -530,13 +543,20 @@ match self
       <span class="chip unv">unverified</span> Which gate a run is in is decided
       in <code>main.rs</code>, above the seam the scripted-provider tests reach.
       A wrong <code>Gate</code> chosen there would be invisible to every test on
-      this page. <em>What would settle it:</em> an integration test that runs
-      <code>emma -p</code> and <code>emma -p --yes</code> as processes and
-      compares the two verdicts on the same writing tool.
+      this page. <em>What would settle it:</em> an integration test with a
+      scripted provider that asks for the same writing tool twice, first spawning
+      <code>emma -p</code> and then <code>emma -p --yes</code>. Assert the first
+      process records <code>NoOneToAsk</code>, the second runs the tool, and
+      neither waits on stdin; then swap the two <code>Gate</code> selections in
+      <code>main.rs</code> and require the test to fail before restoring it.
     </li>
     <li>
       <span class="chip unv">unverified</span> The <code>allow</code>-under-<code>-p</code>
       mode has no test, as above. It also has no documentation outside this page.
+      The exact unit-level settlement is the
+      <code>an_allow_rule_answers_even_when_unattended</code> test described
+      above; the process-level settlement is the paired invocation immediately
+      before this item.
     </li>
     <li>
       <span class="chip cert">certified</span> <code>cargo test -p emma --lib</code>

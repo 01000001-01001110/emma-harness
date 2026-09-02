@@ -180,6 +180,7 @@
 
 <p>
   <span class="chip test">tested</span>
+  <a href="https://github.com/01000001-01001110/emma-harness/blob/master/tools/web/src/fetch.rs">tools/web/src/fetch.rs</a>
   <code>status_codes_land_in_the_right_class</code> walks all five, and
   <code>a_rejected_key_never_appears_in_the_message</code> asserts the env var
   name is present. Collapsing any two classes sends the model to retry the one
@@ -316,6 +317,7 @@
 
 <p>
   <span class="chip test">tested</span>
+  <a href="https://github.com/01000001-01001110/emma-harness/blob/master/tools/web/src/fetch.rs">tools/web/src/fetch.rs</a>
   <code>the_renderers_reason_reaches_the_outcome_intact</code> guards the join
   where the reason can be dropped on the floor.
   <code>every_cap_that_bound_is_reported_not_only_the_first</code> drives two
@@ -418,6 +420,7 @@
     reaches <code>file:///</code> and localhost, from a session the user opened
     for something else.
     <span class="chip test">tested</span>
+  <a href="https://github.com/01000001-01001110/emma-harness/blob/master/tools/web/src/fetch.rs">tools/web/src/fetch.rs</a>
     <code>navigating_a_session_is_held_to_the_same_url_policy_as_opening_one</code>
     drives four refused URLs through the real <code>run</code> and asserts
     <code>bad_arguments</code> each time, then the same two through
@@ -439,16 +442,18 @@
   back; the way through is to call <code>WebFetch</code> on the destination, so
   the host being read is the host in the prompt.
   <span class="chip test">tested</span>
+  <a href="https://github.com/01000001-01001110/emma-harness/blob/master/tools/web/src/fetch.rs">tools/web/src/fetch.rs</a>
   <code>a_redirect_to_another_host_is_refused_and_an_ordinary_one_is_not</code>
   asserts the silent cases first &mdash; a scheme upgrade, a path change, a case
   difference &mdash; because a guard that fired on those would be switched off
   within a day. Two mutations go red: the comparison removed, and the comparison
-  weakened to a suffix match.
+  weakened to a suffix match. Ran
+  <code>cargo test -p emma-tools-web --lib a_redirect_to_another_host</code> on
+  2026-09-02: ok.
   <span class="chip unv">unverified</span> No test drives a real Chrome
-  through a real redirect. What would settle it: a loopback stub serving a 302
-  to a different host, run through <code>WebFetch::run</code> with a browser.
-  The guard is also only as good as what Chrome reports &mdash; a navigation
-  that failed has no destination to check, and that case passes.
+  through a real redirect. <em>What would settle it:</em> a loopback stub serving
+  a 302 to a different host, run through <code>WebFetch::run</code> with a
+  browser attached.
 </p>
 
 <p>
@@ -535,6 +540,7 @@
 
 <p>
   <span class="chip test">tested</span>
+  <a href="https://github.com/01000001-01001110/emma-harness/blob/master/tools/web/src/fetch.rs">tools/web/src/fetch.rs</a>
   <code>a_session_read_names_the_host_the_session_is_on_now</code> moves a
   session to <code>evil.example</code> and asserts the gate is told the new
   host. Its failure message names the defect it guards against: "the gate was
@@ -609,6 +615,7 @@
   are different claims, and a profile directory holds the session's cookies. This
   module's own note is that a browser Emma opened may hold a login.
   <span class="chip test">tested</span>
+  <a href="https://github.com/01000001-01001110/emma-harness/blob/master/tools/web/src/fetch.rs">tools/web/src/fetch.rs</a>
   <code>a_profile_that_cannot_be_removed_is_recorded_and_a_removed_one_is_not</code>
   produces the failure rather than mocking it, by putting a <em>file</em> where
   the directory should be so <code>remove_dir_all</code> fails for a reason the
@@ -630,6 +637,7 @@
   <code>Option&lt;String&gt;</code> so the silence of an ordinary run is testable
   too.
   <span class="chip test">tested</span>
+  <a href="https://github.com/01000001-01001110/emma-harness/blob/master/tools/web/src/fetch.rs">tools/web/src/fetch.rs</a>
   <code>close_reports_a_profile_it_could_not_remove</code> and
   <code>kill_all_now_reports_a_profile_it_could_not_remove</code> drive the two
   teardowns end to end with a file parked where the profile should be;
@@ -693,6 +701,7 @@
 
 <p>
   <span class="chip test">tested</span>
+  <a href="https://github.com/01000001-01001110/emma-harness/blob/master/tools/web/src/fetch.rs">tools/web/src/fetch.rs</a>
   <code>no_tool_in_this_surface_offers_a_way_to_submit_a_form</code> walks every
   property name in every schema, however deeply nested, because the hazard is a
   <code>submit</code> flag appearing inside <code>fields[]</code> where a

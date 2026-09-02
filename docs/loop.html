@@ -179,16 +179,19 @@
 
   <p>
     <span class="chip unv">unverified</span> Nothing in this chapter was
-    certified against a live provider call. The suite passes at commit
-    <code>a3eba74</code>: <code>cargo test -p emma --test loop</code> printed
-    <code>22 passed; 0 failed</code> and <code>cargo test -p emma --lib</code>
-    printed <code>477 passed; 0 failed; 3 ignored</code>. No mutations were run,
-    because this pass was not permitted to change source, so every
+    certified against a live provider call. The suite passes at this checkout:
+    <code>cargo test -p emma --test loop</code> printed
+    <code>test result: ok. 35 passed; 0 failed</code> and
+    <code>cargo test -p emma --lib</code> printed
+    <code>test result: ok. 1065 passed; 0 failed; 14 ignored</code> on
+    2026-09-02. No mutations were run, because this pass was not permitted to
+    change source, so every
     <span class="chip test">tested</span> chip in the chapter means "a test
     covers this and its author recorded it as mutation-checked" rather than "I
     watched it go red". <code>tests/loop.rs</code>'s header is where that record
-    lives. What would settle it: for each guarantee, delete it, run the named
-    test, confirm the failure, restore.
+    lives. What would settle it: for each guarantee, delete it in
+    <code>agent.rs</code>, run the named test, confirm the failure, restore —
+    requires a source edit this round cannot make.
   </p>
   <span class="src">crates/emma/tests/loop.rs — module doc</span>
 

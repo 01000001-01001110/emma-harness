@@ -384,6 +384,7 @@ for component in lexical_normalize(&amp;joined).components() {
   yields Prefix, RootDir, Normal, Normal, and the legitimate colon is never
   examined.
   <span class="chip test">tested</span>
+  <a href="https://github.com/01000001-01001110/emma-harness/blob/master/tools/fs/tests/containment.rs">tools/fs/tests/containment.rs</a>
   <code>a_stream_named_in_a_directory_component_is_refused_too</code> goes red
   when the loop is narrowed back to <code>next_back()</code>, while
   <code>an_ordinary_nested_path_is_not_caught_by_the_stream_refusal</code> stays
@@ -507,7 +508,8 @@ for component in lexical_normalize(&amp;joined).components() {
 </div>
 
 <p>
-  <span class="chip test">tested</span> Two cases, because one does not cover
+  <span class="chip test">tested</span>
+  <a href="https://github.com/01000001-01001110/emma-harness/blob/master/tools/fs/tests/containment.rs">tools/fs/tests/containment.rs</a> Two cases, because one does not cover
   the other and mutation proved it. A directory swapped for a link pointing
   <em>out</em> is refused by <code>resolve</code> itself, so disabling the
   drift comparison left that test green; the second case &mdash; a link to a
@@ -567,7 +569,8 @@ for component in lexical_normalize(&amp;joined).components() {
 <h2 id="tests">Every escape is attempted rather than assumed</h2>
 
 <p>
-  <span class="chip test">tested</span> <code>tools/fs/tests/containment.rs</code>
+  <span class="chip test">tested</span>
+  <a href="https://github.com/01000001-01001110/emma-harness/blob/master/tools/fs/tests/containment.rs">tools/fs/tests/containment.rs</a> <code>tools/fs/tests/containment.rs</code>
   tries <code>..</code> leading and buried mid-path, an absolute path elsewhere
   on the machine, a symlinked file and a symlinked directory read through, a
   file created through a symlinked directory, and <code>Glob</code> and

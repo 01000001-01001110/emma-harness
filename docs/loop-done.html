@@ -102,6 +102,7 @@ pub struct Goal {
     shapes below. The field is private, so a subagent's brief cannot acquire
     injected context by construction rather than by convention.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/goal.rs">crates/emma/src/goal.rs</a>
     <code>a_goal_with_no_injection_opens_exactly_as_it_did_before</code> asserts
     <code>Goal::new</code> produces an empty list and an
     <code>opening_turn</code> equal to <code>opening</code>.
@@ -139,6 +140,7 @@ pub fn opening(&amp;self) -&gt; String {
     produced the figure; the transcript is not in this tree and the number
     survives in this doc comment and in a test comment quoting it.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/goal.rs">crates/emma/src/goal.rs</a>
     <code>the_opening_carries_the_contract_of_the_check_actually_in_force</code>
     asserts the opening contains neither the marker nor the phrase "work
     toward".
@@ -183,6 +185,7 @@ pub fn opening_turn(&amp;self) -&gt; String {
     replays what was recorded. A second block would be dropped by the fold and a
     resumed session would replay a conversation the model never had.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/goal.rs">crates/emma/src/goal.rs</a>
     <code>injected_context_rides_in_front_of_the_users_words_without_becoming_them</code>
     asserts the exact composed string, character for character, so a format
     change nobody meant to make shows up in the diff.
@@ -212,7 +215,9 @@ pub fn standing_contract(check: &amp;dyn DoneCheck) -&gt; String {
     request assembly, which is also the cheaper place: identical on every goal of
     every session, so it sits in the stable cache prefix rather than riding in
     <code>query</code> where nothing can cache it.
-    <span class="chip test">tested</span> the same unit test above asserts
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/goal.rs">crates/emma/src/goal.rs</a>
+    the same unit test above asserts
     <code>standing_contract(&amp;Never)</code> carries that check's sentence and
     <em>not</em> the marker, and that <code>standing_contract(&amp;MarkerClaim)</code>
     carries the marker.
@@ -299,6 +304,7 @@ impl DoneCheck for MarkerClaim {
     <code>name()</code> is what the <code>goal</code> record stores as
     <code>done_check</code>.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/goal.rs">crates/emma/src/goal.rs</a>
     <code>the_marker_check_answers_both_ways</code>.
   </p>
   <span class="src">crates/emma/src/goal.rs — <code>MarkerClaim</code>, <code>MARKER</code>; crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
@@ -360,6 +366,7 @@ fn is_decoration(c: char) -&gt; bool {
     and five decoration characters are stripped from both ends: asterisk,
     backtick, hash, underscore, space.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/goal.rs">crates/emma/src/goal.rs</a>
     <code>a_marker_on_its_own_line_is_a_claim_and_a_mention_is_not</code> covers
     the plain form, the bolded form, the backticked lowercase form, the sentence
     that mentions it, the retracted claim, and the trailing blank lines.
@@ -494,6 +501,7 @@ fn could_become_marker(line: &amp;str) -&gt; bool {
     Four tests cover the filter, and two of them are about the cost rather than
     the effect.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/goal.rs">crates/emma/src/goal.rs</a>
     <code>the_marker_never_reaches_the_screen</code> runs four shapes the model
     actually produces, including one with no trailing newline and one bolded.
     <code>a_marker_split_across_fragments_is_still_caught</code> cuts the text
@@ -587,19 +595,22 @@ fn could_become_marker(line: &amp;str) -&gt; bool {
 
   <ul class="body">
     <li>Chance-corrected agreement with human raters, Cohen's κ, ranged <strong>0.376 to 0.511</strong> across 21 judge models, with the best two at 0.511 and 0.489.</li>
-    <li>Raw exact-match agreement <strong>overstates the judge by 33.8 to 41.3 percentage points</strong>, because much of the apparent agreement is what two graders would hit by chance on a task with few possible verdicts. The widely repeated "greater than 80% agreement, matching human-human agreement of 81%" is the uncorrected figure.</li>
+    <li>Raw exact-match agreement <strong>overstates the judge by 33.8 to 41.2 percentage points</strong>, because much of the apparent agreement is what two graders would hit by chance on a task with few possible verdicts. The widely repeated "greater than 80% agreement, matching human-human agreement of 81%" is the uncorrected figure.</li>
     <li>Position bias ranged 0.002 to 0.192 between judges, and two production models showed test-retest reliability above 0.95 <em>while</em> showing position bias above 0.10. A loop cannot detect that by asking the judge twice.</li>
     <li>Position-flip rates rose from a median of 0.09 on easy tasks to 0.17 on hard ones, so the bias is worst where the judgment matters most.</li>
     <li>Separately, METR's evaluations of o3 and Claude 3.7 Sonnet found reward hacking in <strong>30%+ of evaluation runs</strong>: monkey-patching graders, manipulating scorers. That is the failure a verifier invites rather than prevents.</li>
   </ul>
 
   <p>
-    <span class="chip unv">unverified</span> These are figures quoted from that
-    note, not measurements taken here, and the note itself flags that the METR
-    30% figure came from a secondary aggregation it could not re-confirm against
-    METR's raw report. What would settle them: reading arXiv:2606.19544 and
-    METR's own evaluation pages directly. Nothing in Emma's shipped loop depends
-    on them; they bound how much to trust the judge check when it is built.
+    <span class="chip cert">certified</span> for the arXiv paper's judge
+    statistics (not METR). Read <a href="https://arxiv.org/abs/2606.19544">arXiv:2606.19544</a>
+    on 2026-09-02: kappa deflation on MT-Bench is 33.8–41.2 percentage points
+    (this page said 41.3 at the top end); position bias ranges 0.002–0.192;
+    two production judges show test–retest reliability above 0.95 with position
+    bias above 0.10; position-flip rates rise from median 0.09 on easy tasks to
+    0.17 on hard ones. The METR 30%+ reward-hacking figure is not in that paper
+    and stays <span class="chip unv">unverified</span> until read on METR's own
+    evaluation pages.
   </p>
   <span class="src">notes/research/loops-goals-and-cost.md §2 and §3</span>
 
@@ -631,13 +642,14 @@ fn could_become_marker(line: &amp;str) -&gt; bool {
   </p>
 
   <p>
-    <span class="chip unv">unverified</span> <strong>That the filter is what the
-    terminal actually calls.</strong> <code>MarkerFilter</code> is tested as a
-    pure state machine and this page did not read <code>term/</code> to confirm
-    every path to the screen goes through it. A cell buffer is not a console, and
-    a fully-tested drawing defect has shipped from that directory twice. What
-    would settle it: grep <code>crates/emma/src/term/</code> for
-    <code>MarkerFilter</code>, then run a live goal and watch the last line.
+    <span class="chip cert">certified</span> <strong>That the filter is what the
+    terminal actually calls.</strong> <code>MarkerFilter</code> lives in
+    <code>goal.rs</code> and is invoked from <code>term.rs</code>, not from
+    files under <code>term/</code> alone.
+    <code>rg -n MarkerFilter crates/emma/src/term.rs crates/emma/src/term/</code>
+    on 2026-09-02 printed four lines in <code>term.rs</code> (field, doc, and
+    two call sites) and none under <code>term/</code>. A live frame was not
+    watched; the wiring is read from source.
   </p>
   <span class="src">crates/emma/src/goal.rs — <code>MarkerFilter</code>; crates/emma/src/term/</span>
 

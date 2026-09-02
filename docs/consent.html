@@ -221,24 +221,43 @@
   </div>
 
   <p>
-    Twenty-one code blocks quote the source or the shipped binary's output
-    instead of paraphrasing, among them <code>Approvals::decide</code> and
-    <code>Approvals::egress</code> entire, because in both of those the order of
-    the statements is the property being described.
-    <span class="chip unv">unverified</span> Thirteen of the twenty-one, the whole
-    functions, were diffed against their source ranges at commit
-    <code>a3eba74</code> and matched line for line, comments included. That was a
-    real check and it is <strong>no longer a current one</strong>: at least three
-    of the thirteen have changed since: <code>Approvals::decide</code>'s
-    opening statement, <code>Rule::parse</code>'s two new branches, and
-    <code>user_permissions</code>'s whole shape. Each was found by a docs audit
-    rather than by anything that could fail on its own. The blocks named
-    have been brought back into line one at a time; the <em>claim of
-    byte-identity across all thirteen</em> has not been re-run, so it is amber
-    until it has.
-    <em>What would settle it:</em> re-diffing each quoted block against its
-    source range at the current commit, which is a script nobody has written.
+    Thirteen designated code blocks quote whole source functions rather than
+    paraphrasing them, among them <code>Approvals::decide</code> and
+    <code>Approvals::egress</code>, because in those functions statement order is
+    the property being described. Five had drifted:
+    <code>Approvals::request</code>, <code>Approvals::decide</code>,
+    <code>Approvals::egress</code>, <code>Rule::parse</code> and hook
+    <code>exec</code>. They have been replaced from the current source.
+    <span class="chip cert">certified</span> An HTML-decoding audit now finds all
+    thirteen verbatim after restoring their source indentation:
   </p>
+  <pre><code>@'
+from pathlib import Path
+import re, html
+maps = [
+ ('consent-axes.html',2,'crates/tool-api/src/lib.rs'),
+ ('consent-axes.html',4,'crates/emma/src/approval.rs'),
+ ('consent-ladder.html',1,'crates/emma/src/approval.rs'),
+ ('consent-egress.html',1,'crates/emma/src/approval.rs'),
+ ('consent-answers.html',2,'crates/emma/src/approval.rs'),
+ ('consent-rules.html',1,'crates/emma/src/permissions.rs'),
+ ('consent-rules.html',2,'crates/emma/src/permissions.rs'),
+ ('consent-matching.html',1,'crates/emma/src/permissions.rs'),
+ ('consent-matching.html',2,'crates/emma/src/permissions.rs'),
+ ('consent-matching.html',3,'crates/emma/src/permissions.rs'),
+ ('consent-hooks.html',1,'crates/harness/src/hooks.rs'),
+ ('consent-hooks.html',4,'crates/harness/src/hooks.rs'),
+ ('consent-hooks.html',5,'crates/harness/src/hooks.rs')]
+for page, index, source in maps:
+    block = re.findall(r'&lt;pre&gt;&lt;code&gt;(.*?)&lt;/code&gt;&lt;/pre&gt;',
+        Path('docs', page).read_text(), re.S)[index-1]
+    plain = html.unescape(re.sub(r'&lt;[^&gt;]+&gt;', '', block))
+    src = Path(source).read_text()
+    assert any('\n'.join((' '*n + line if line else '')
+        for line in plain.splitlines()) in src for n in (0,4,8,12))
+print('summary: 13/13 exact after restoring source indentation')
+'@ | python -
+summary: 13/13 exact after restoring source indentation</code></pre>
 
   <p>
     <strong>The lesson in the chip itself.</strong> A quoted function is a
@@ -263,9 +282,13 @@
       <code>Spec::Unsupported =&gt; false</code> to <code>true</code>; and relaxing
       the host label-count check from <code>==</code> to <code>&gt;=</code>. The
       named tests and what went red are on the pages above.
-      <span class="chip unv">unverified</span> None of it was repeated for this
-      chapter, which does not change source. <em>What would settle it:</em> the
-      same treatment on a branch for each other named test.
+      <span class="chip unv">unverified</span> No mutation was repeated in this
+      settlement because its scope forbids changing Rust files.
+      <em>What would settle it:</em> on a disposable branch, apply one documented
+      production mutation at a time, run only the named backing test and paste
+      the red result, restore the Rust source, rerun the same test green, and only
+      then move to the next chip. A passing suite without the red half does not
+      settle a tested claim.
       <span class="chip cert">certified</span> The suite the mutations were run
       against still passes: <code>cargo test -p emma --lib</code> at commit
       <code>a3eba74</code> reports 477 passed, 0 failed, 3 ignored, of which 31

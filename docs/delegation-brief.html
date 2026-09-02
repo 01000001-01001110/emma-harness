@@ -391,6 +391,7 @@ impl DoneCheck for SubagentClaim {
     follows, and the pair is legal: <code>Registry::register</code> refuses only
     <code>read_only: true</code> beside <code>idempotent: false</code>.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
     <code>delegation_is_gated_and_the_prompt_shows_the_brief</code> asserts the
     call reaches the prompt and that the brief is in it.
   </p>
@@ -521,11 +522,15 @@ goal. One runs at a time.";</code></pre>
       <span class="chip unv">unverified</span> The benchmark figures, as above.
     </li>
     <li>
-      <span class="chip unv">unverified</span> No test asserts what
-      <code>brief()</code> produces. Its shape is read off the function, and the
-      contract clause is likewise unasserted. <em>What would settle it:</em> a
-      unit test over <code>brief</code> with all four arguments, one with an
-      empty context array, and one with a non-string context entry.
+      <span class="chip test">tested</span>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+      <code>the_brief_carries_what_the_caller_knows_and_what_it_asked_for</code>
+      drives a delegation with <code>context</code> and <code>deliver</code> set,
+      then a control with an empty <code>context</code> array and no
+      <code>deliver</code>, and asserts what reached the sub-run transcript.
+      Ran <code>cargo test -p emma --test delegate brief_carries</code> on
+      2026-09-02: <code>test the_brief_carries_what_the_caller_knows_and_what_it_asked_for ... ok</code>.
+      A non-string <code>context</code> entry is still unasserted.
     </li>
     <li>
       <span class="chip unv">unverified</span> Whether a provider ever ignores

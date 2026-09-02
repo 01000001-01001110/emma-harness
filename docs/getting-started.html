@@ -74,10 +74,23 @@
   <p>
     There is no installer and no published crate. Take the binary from
     <code>target/release/</code> and put it on your path, or run it in place.
-    Rust 1.97 or newer builds it; the Mac has built it on 1.97.1.
-    <span class="chip unv">unverified</span>: no minimum version is pinned
-    anywhere, and nobody has tried an older toolchain. What would settle it:
-    build against a few older versions and record the first that fails.
+    The former “Rust 1.97 or newer” statement was stale.
+    <span class="chip cert">certified</span> A minimum is pinned:
+    <code>rg -n '^rust-version' Cargo.toml</code> prints
+    <code>18:rust-version = "1.82"</code>.
+    <span class="chip cert">certified</span> The only installed older-than-1.97
+    toolchain also builds the release:
+  </p>
+  <pre><code>rustc +1.94.1 --version
+rustc 1.94.1 (125d55dc5 2026-01-15)
+cargo +1.94.1 build --release
+Finished &#96;release&#96; profile [optimized] target(s) in 27.66s</code></pre>
+  <p>
+    <span class="chip unv">unverified</span> The pin is not yet a demonstrated
+    MSRV. <em>What would settle it:</em> install or otherwise provide Rust 1.82,
+    run <code>cargo +1.82 build --release</code> and record the result; then run
+    the same build with 1.81 and require Cargo's rust-version refusal. Only
+    1.94.1 and stable were installed here, so the boundary could not be run.
   </p>
 
   <h2 id="key">Give it a key</h2>

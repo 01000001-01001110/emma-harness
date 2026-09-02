@@ -76,11 +76,11 @@
   <h3>Spend less context on the harness</h3>
 
   <p>
-    Claude Code sends on the order of 30,000 tokens of system prompt before the
-    first user word. <span class="chip unv">unverified</span>: the figure is
-    widely reported, not measured here. Every token of that is one you paid for
-    and cannot use for the actual work, and it is paid again on every uncached
-    call.
+    Claude Code is widely reported to send on the order of 30,000 tokens before
+    the first user word. <span class="chip unv">unverified</span>: no request
+    body from that product was measured here. Every token of that is one you paid
+    for and cannot use for the actual work, and it is paid again on every
+    uncached call.
   </p>
 
   <div class="note warn">
@@ -92,10 +92,13 @@
       <span class="chip unv">unverified</span>
     </p>
     <p>
-      What would settle it: render one real request and count the system field
-      and tool schemas with <code>/v1/messages/count_tokens</code>. That is the
-      same method that bracketed the cache floors, and costs about the same: a
-      fraction of a cent.
+      What would settle it: capture Emma's exact first-request JSON before
+      transport, isolate its <code>system</code> and <code>tools</code> fields,
+      and submit that body to Anthropic's
+      <code>/v1/messages/count_tokens</code> with the actual model and API key.
+      Record the returned <code>input_tokens</code>. Capture Claude Code's first
+      request by the same method and count the same fields, then compare the two
+      returned numbers. This is a paid API operation and was not run.
     </p>
   </div>
 

@@ -96,7 +96,7 @@
     green. Three false receipts were found by that question in a single day. It
     also asks for <code>file:line</code> on every claim, and says an answer
     without any is unusable.
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/verify.rs">crates/emma/tests/verify.rs</a>
     <code>the_brief_asks_a_reviewer_to_disprove_rather_than_confirm</code>
     asserts on the text, because here the text <em>is</em> the mechanism.
   </p>
@@ -127,7 +127,7 @@
     <strong>The verdict is the last one in the report, not the first.</strong> A
     model that reasons out loud names several on its way to one, and reading the
     first turns a thought into a conclusion in the closing direction.
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/verify.rs">crates/emma/tests/verify.rs</a>
     <code>the_last_verdict_wins_and_a_missing_one_is_not_a_pass</code>, which
     also pins the third case: a reviewer that ends with no verdict line at all is
     recorded as exactly that, rather than smoothed into a failure. Saying the row
@@ -175,8 +175,12 @@
     mutation spec and the receipt before answering, which is the behaviour the
     brief asks for. One run is not a measurement, and nothing yet
     compares a model&rsquo;s verdict against a review a human already trusted.
-    What would settle it: run this over the rows whose defects were found by hand
-    today, and see whether it finds them too.
+    What would settle it: select the ledger row IDs whose defects were first
+    found by hand, preserve those human verdicts as the answer key, then run
+    <code>emma verify --rows ID1,ID2 --limit 2</code> with the intended reviewer
+    model. Score each final verdict against the answer key and retain every
+    receipt. Repeat on a second reviewer before claiming a rate. Each selected
+    row is a billed model run, so this was not run here.
   </p>
 
   <p>
@@ -184,6 +188,10 @@
     several at once is the obvious next thing and is not done: the terminal is
     one terminal, and interleaved transcripts would make a review nobody can
     follow, which is a receipt nobody believes.
+    <em>What would settle it:</em> define one transcript sink per row, dispatch
+    two fixed dry fixtures concurrently, assert each sink contains only its own
+    row ID and complete report, then compare wall time with the sequential run.
+    Do not enable billed concurrency until that no-interleaving test passes.
   </p>
 
 </div>

@@ -234,10 +234,16 @@
       <strong>Three crates document this separately:</strong> <code>tools/fs</code>,
       <code>tools/lsp</code> and <code>tools/web</code> each warn about it in
       their own words, which is what a missing shared abstraction looks like
-      from below. Backlog item 17.
+      from below.       Backlog item 17.
       <span class="chip unv">unverified</span>. The failure is described in
-      three comments; no test reproduces it. What would settle it: construct two
-      tools separately, exercise the shared state, and assert the divergence.
+      three comments (<code>tools/fs/src/lib.rs</code>,
+      <code>tools/lsp/src/lib.rs</code>, and the browser pool in
+      <code>tools/web</code>); no test reproduces separate construction.
+      What would settle it: construct two <code>Write</code> tools with two
+      different <code>ReadTracker</code> handles (or four LSP tools with four
+      pools), exercise read-then-write on the same path, and assert the second
+      tool does not see the first tool's session state — a test this round
+      cannot add because another worker owns the Rust.
     </p>
   </div>
 
@@ -297,14 +303,22 @@
       The dependency edges were read from the manifests on 2026-08-16 and are
       accurate for commit <code>20ac400</code>. A manifest change moves them and
       nothing here notices.
-      <span class="chip unv">unverified</span>. What would settle it
-      continuously: a test that reads the manifests and asserts the edge set.
+      <span class="chip cert">certified</span>.
+      <code>cargo test -p emma-docsgen --lib architecture</code> printed
+      <code>test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 56 filtered out</code>
+      on 2026-09-02 (<code>every_member_is_read_from_the_real_workspace</code>,
+      <code>the_real_workspace_has_the_edges_its_manifests_declare</code>,
+      <code>nothing_is_drawn_above_a_crate_that_depends_on_it</code>, and two more).
     </li>
     <li>
       "No tool crate depends on the harness" rests on the manifests, not on a
-      test that would fail if someone added the dependency. It would fail at
-      compile time for a cyclic edge, but a non-cyclic one would simply appear.
-      <span class="chip unv">unverified</span>
+      test that would fail if someone added the dependency.
+      <span class="chip cert">certified</span> on 2026-09-02:
+      <code>rg -n "harness|emma-harness" tools/*/Cargo.toml</code> printed nothing
+      for all four tool crates. It would fail at compile time for a cyclic edge,
+      but a non-cyclic one would simply appear.
+      <span class="chip unv">unverified</span> as a continuous guard — no test
+      watches for it.
     </li>
     <li>
       The <code>ToolCtx</code> hazard and the <code>main.rs</code> policy count

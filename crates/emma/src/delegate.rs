@@ -1272,7 +1272,7 @@ mod tests {
         assert_eq!(
             registry.names().len(),
             0,
-            "an empty Some(vec![]) selects nothing; only None inherits, and the              harness is what maps an empty list to None"
+            "Some(vec![]) selects nothing here; only None inherits"
         );
     }
 

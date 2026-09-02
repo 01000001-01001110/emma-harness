@@ -337,6 +337,7 @@ match self
     configured policy and cannot be approved away"</em>, so a model that would
     otherwise ask the user to approve it is told not to bother.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
     <code>a_hook_denial_overrides_every_approval</code> and
     <code>a_hook_denial_outranks_a_network_grant</code> in
     <code>tests/loop.rs</code> assert the ordering; the consent side of it is on
@@ -363,6 +364,7 @@ match self
     against the interrupt, and the model reads <code>tool_panicked</code> or
     <code>cancelled</code> and continues.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
     <code>a_tool_that_panics_is_an_observation_and_the_goal_continues</code>
     and <code>an_interrupt_reaches_a_tool_that_is_already_running</code>, both
     in <code>tests/loop.rs</code>.
@@ -398,6 +400,7 @@ match self
       rather than run: nothing about a call can be approved on the word of a
       tool that cannot answer the question.
       <span class="chip test">tested</span>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
       <code>a_tool_that_panics_before_it_runs_is_an_observation_too</code> uses
       a fixture that panics <em>before</em> <code>invoke</code>, and asserts the
       goal completes, the model is told, <em>and that <code>invoke</code> was
@@ -632,6 +635,7 @@ fn failure_result(id: &amp;str, tool: &amp;str, kind: &amp;str, detail: &amp;str
     rendered without the flag reads to the model as a successful call that
     returned odd text.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/agent.rs">crates/emma/src/agent.rs</a>
     <code>a_failure_block_is_flagged_and_typed</code>, a unit test in
     <code>agent.rs</code> itself, asserts the flag survives to
     <code>ContentBlock::ToolResult(b).to_value()</code> and, in the same test,
@@ -697,6 +701,7 @@ fn truncation_note(reason: Option&lt;&amp;str&gt;) -&gt; String {
     admits that nobody named a limit rather than sending the model to guess at
     one.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/agent.rs">crates/emma/src/agent.rs</a>
     <code>a_stated_reason_reaches_the_model_verbatim</code> asserts the reason
     string survives unmodified and that the generic line contains "did not say
     which limit".
@@ -830,12 +835,14 @@ fn log_hooks(&amp;self, turn_id: &amp;str, runs: &amp;[emma_harness::HookRun]) {
   <h2 id="unverified">What is not verified here</h2>
 
   <p>
-    <span class="chip unv">unverified</span> <strong>Whether any real tool ever
-    returns the outer <code>Err</code>.</strong> The <code>tool_fault</code>
-    path is reachable by type and no test in <code>tests/loop.rs</code> scripts
-    it. What would settle it: grep the tool crates for a tool whose
-    <code>invoke</code> returns <code>Err</code> at the outer level, and if none
-    does, say so on this page instead.
+    <span class="chip cert">certified</span> <strong>No shipped tool returns the
+    outer <code>Err</code>.</strong> The <code>tool_fault</code> path is
+    reachable by type, and every production <code>invoke</code> in
+    <code>tools/</code> wraps its inner result in <code>Ok(...)</code>.
+    <code>rg -n "async fn invoke" tools/ -A 5 | rg "return Err|^\s+Err\("</code>
+    printed nothing on 2026-09-02 (<code>NO_OUTER_ERR_IN_INVOKE</code>).
+    Failures are always <code>Ok(Err(ToolError))</code> and become
+    <code>tool_failed</code>, not <code>tool_fault</code>.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code>; tools/</span>
 

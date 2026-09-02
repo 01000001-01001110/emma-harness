@@ -175,6 +175,7 @@ impl Default for Budgets {
     <p>
       The mechanism is covered.
       <span class="chip test">tested</span>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
       <code>the_token_budget_stops_the_loop_and_the_run_is_charged_for_what_it_spent</code>
       sets a budget of 15, scripts two calls costing 10 each, and asserts the
       outcome is <code>Ending::Tokens</code> with 20 spent, an overshoot of one

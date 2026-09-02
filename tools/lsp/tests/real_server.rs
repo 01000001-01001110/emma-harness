@@ -53,6 +53,8 @@ pub fn build() -> Config {
 }
 "#;
 
+const CARGO_TOML: &str = "[package]\nname = \"lsp-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n";
+
 /// Sets up a real server over a one-file crate, or `None` if there is none
 /// installed.
 async fn fixture() -> Option<(Sandbox, Arc<Pool>)> {
@@ -64,10 +66,7 @@ async fn fixture() -> Option<(Sandbox, Arc<Pool>)> {
         }
     }
     let sandbox = Sandbox::new();
-    sandbox.write(
-        "Cargo.toml",
-        "[package]\nname = \"lsp-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n",
-    );
+    sandbox.write("Cargo.toml", CARGO_TOML);
     sandbox.write("src/lib.rs", LIB_RS);
     let pool = Arc::new(Pool::new());
     // Start it here so the first tool call is not also the one paying for the
@@ -192,26 +191,57 @@ async fn definition_hover_and_symbols_answer_for_real() {
 ///
 /// The fake-server version of this test (`tests/tools.rs`) proves the *tool*
 /// writes nothing, which is worth having and is not the interesting half: the
-/// risk is not Emma's code, it is rust-analyzer's. Left to its defaults it runs
-/// `cargo check` on save, executes the analysed project's `build.rs`, and builds
-/// its proc macros — a compiler writing megabytes into `target/`, started by a
-/// tool the approval gate waves through. `client::INIT_OPTIONS` turns all three
-/// off, and this is the test that the switches are spelled the way this version
-/// of rust-analyzer reads them.
+/// risk is not Emma's code, it is rust-analyzer's. Left to its defaults it
+/// runs `cargo check` on save, executes the analysed project's `build.rs`,
+/// and builds its proc macros — a compiler writing megabytes into `target/`,
+/// started by a tool the approval gate waves through. `client::INIT_OPTIONS`
+/// turns all three off, and `client::tests::the_dangerous_switches_are_off`
+/// pins the spelling.
 ///
-/// Measured on 2026-08-11 against 0.3.3008: a full index and a satisfied
-/// reference query added no file to the project — not even a `Cargo.lock`, which
-/// a bare `cargo metadata --offline` in the same directory does create.
+/// The one write the server does make, measured rather than assumed:
+/// rust-analyzer builds the crate graph by running `cargo metadata`, and cargo
+/// materializes `Cargo.lock` whenever it is missing or out of date with
+/// `Cargo.toml` — the same write `cargo build` makes on first run. The
+/// original version of this test asserted "no file added, not even a
+/// `Cargo.lock`", and that was a fact about the servers it happened to be
+/// measured against:
 ///
-/// What it does *not* cover, stated rather than implied: rust-analyzer keeps a
-/// cache under its own data directory, outside the project and outside this
+/// - 2026-08-11, 0.3.3008: a full index and a satisfied reference query added
+///   no file — not even a `Cargo.lock`, which a bare `cargo metadata --offline`
+///   in the same directory does create.
+/// - 2026-09-02, 0.3.3033 (0.3.3025 still writes nothing): `Cargo.lock` is
+///   created when absent, refreshed when stale, and left byte-identical when
+///   valid; nothing else in the project changes, with dependencies or without,
+///   and no `target/` appears.
+///
+/// Whether that write fits the bit is a question about what `read_only` asks,
+/// and [`emma_tool_api::ToolMeta`]'s own documentation answers it: the bit
+/// asks "can this damage this machine", not whether every byte stays put —
+/// the reading that lets `WebFetch` declare it while driving a browser. A
+/// lockfile carries no project content. There is also no rust-analyzer switch
+/// that stops the metadata call writing one: `--locked` and `--frozen` never
+/// reach it, because rust-analyzer hardcodes `locked: false` for exactly
+/// that invocation. The honest alternative — dropping the bit so the gate
+/// prompts on every code-intelligence call — is the cost `ToolMeta` records
+/// and refuses for the web tools: a gate that fires constantly trains the
+/// operator to click through it. The cost of keeping the bit, stated because
+/// it is not nothing: a crate that omits its lockfile gains an untracked one
+/// the first time these tools run against it.
+///
+/// What it does *not* cover, stated rather than implied: rust-analyzer keeps
+/// a cache under its own data directory, outside the project and outside this
 /// fingerprint. `read_only` asks whether a call can damage this machine, and a
 /// cache in the server's own directory is not that.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_real_server_writes_nothing_into_the_project() {
+async fn a_real_server_writes_nothing_but_the_cargo_lock() {
     let Some((sandbox, pool)) = fixture().await else {
         return;
     };
+
+    // Half one: no lockfile. The one file the server may add is Cargo.lock,
+    // and what lands there has to be a genuine lockfile for this crate — the
+    // cargo metadata write the doc above argues for, not some other file
+    // wearing the name.
     let before = support::fingerprint(sandbox.root());
     assert!(!before.is_empty(), "the fixture is empty");
 
@@ -227,17 +257,57 @@ async fn a_real_server_writes_nothing_into_the_project() {
         .invoke(&sandbox.ctx, json!({ "file_path": "src/lib.rs" }))
         .await;
 
-    let after = support::fingerprint(sandbox.root());
-    let added: Vec<&String> = after
-        .iter()
-        .map(|(name, _)| name)
-        .filter(|name| !before.iter().any(|(b, _)| b == *name))
-        .collect();
+    let lock = std::fs::read_to_string(sandbox.root().join("Cargo.lock"))
+        .expect("the server materialized a lockfile, as measured on 0.3.3033");
     assert!(
-        added.is_empty(),
-        "rust-analyzer wrote into the project, so read_only: true is a lie: {added:?}"
+        lock.contains("name = \"lsp-fixture\""),
+        "Cargo.lock does not describe this crate: {lock}"
     );
-    assert_eq!(before, after, "rust-analyzer changed a file in the project");
+
+    let after = support::fingerprint(sandbox.root());
+    let mut unexpected: Vec<&String> = Vec::new();
+    for (name, bytes) in &after {
+        match before.iter().find(|(b, _)| b == name) {
+            Some((_, original)) if *original != *bytes => unexpected.push(name),
+            None if name.as_str() != "Cargo.lock" => unexpected.push(name),
+            _ => {}
+        }
+    }
+    assert!(
+        unexpected.is_empty(),
+        "rust-analyzer wrote into the project beyond Cargo.lock: {unexpected:?}"
+    );
+
+    // Half two: a valid lockfile already present. Measured on 0.3.3033 it is
+    // left byte-identical; this half fails if a future server starts rewriting
+    // current lockfiles. rust-analyzer builds the project model with cargo, so
+    // a machine without cargo cannot run this half either — and says so.
+    let locked = Sandbox::new();
+    locked.write("Cargo.toml", CARGO_TOML);
+    locked.write("src/lib.rs", LIB_RS);
+    let generated = std::process::Command::new("cargo")
+        .args(["generate-lockfile", "--offline"])
+        .current_dir(locked.root())
+        .output();
+    if generated.is_ok_and(|o| o.status.success()) {
+        let before = support::fingerprint(locked.root());
+        let pool = Arc::new(Pool::new());
+        let client = pool.client(&locked.canonical()).await.expect("started");
+        let _ = tokio::time::timeout(Duration::from_secs(180), client.wait_ready()).await;
+        let _ = Hover::new(pool)
+            .invoke(
+                &locked.ctx,
+                json!({ "file_path": "src/lib.rs", "line": 4, "symbol": "Config" }),
+            )
+            .await;
+        assert_eq!(
+            before,
+            support::fingerprint(locked.root()),
+            "rust-analyzer changed a project that already had a valid lockfile"
+        );
+    } else {
+        eprintln!("SKIPPED: lockfile-present half — cargo generate-lockfile did not succeed");
+    }
 }
 
 /// The `Edit`-then-ask rhythm, which is the one that finds a stale document

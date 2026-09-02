@@ -180,6 +180,7 @@
     <code>invoke</code> twice directly and joins the two futures, so the
     serialisation being asserted is the tool's own.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
   </p>
 
 <pre><code><span class="c">///</span>
@@ -261,6 +262,7 @@ async fn two_delegations_never_overlap() {
     is the behavioural test, which asks for the worst case: an agent file that
     names <code>Delegate</code> in its own <code>tools</code> list.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
     <code>an_agent_type_cannot_be_given_the_delegate_tool_even_by_name</code>
     builds such a type and asserts <code>Delegate</code> is absent from
     <code>tools_of</code>.
@@ -315,6 +317,13 @@ async fn two_delegations_never_overlap() {
   <h2 id="unsettled">What is not settled here</h2>
 
   <ul class="body">
+    <li>
+      <span class="chip test">tested</span>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+      <code>two_delegations_never_overlap</code> asserts the permit (mutation-checked
+      in its doc). The interleaved-prompt failure on a real console is still
+      unverified below.
+    </li>
     <li>
       <span class="chip unv">unverified</span> The interleaved prompt, as above.
     </li>

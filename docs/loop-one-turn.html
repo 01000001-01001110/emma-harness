@@ -305,10 +305,14 @@ async fn call_model(&amp;self, request: Request) -&gt; Result&lt;Option&lt;Assis
     if none did, the whole turn is printed at once. That covers a provider or a
     mode that returns a complete turn with no stream, and it is why the same
     text is never drawn twice.
-    <span class="chip unv">unverified</span> for the non-streaming path: no
-    provider in this tree was exercised here with streaming off during this
-    write-up. What would settle it: run a goal under a provider constructed
-    without an event channel and check the answer appears exactly once.
+    <span class="chip cert">certified</span> for the non-streaming path:
+    <code>tests/support/mod.rs</code>'s <code>Fake</code> provider ignores the
+    event channel (<code>_events: Option&lt;mpsc::Sender&lt;Event&gt;&gt;</code>),
+    so every <code>cargo test -p emma --test loop</code> run exercises
+    <code>streamed == false</code> and draws the turn once via
+    <code>term.text</code>. On 2026-09-02
+    <code>cargo test -p emma --test loop a_conversational_turn_is_answered_not_stalled</code>
+    printed <code>test result: ok. 1 passed; 0 failed</code>.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::call_model</code>, <code>Agent::on_event</code></span>
 
@@ -410,6 +414,7 @@ if self.s.spend.get() &gt; self.s.budgets.max_tokens {
     rejected on the <em>next</em> call, which puts the symptom one step away
     from the change that caused it.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
     <code>the_assistant_turn_is_echoed_back_exactly_as_it_arrived</code>
     asserts the intact <code>tool_use</code> block is in the message that was
     sent back, not merely somewhere in the transcript. The test file's header
@@ -615,17 +620,18 @@ outcome</code></pre>
   <h2 id="unverified">What is not verified here</h2>
 
   <p>
-    <span class="chip unv">unverified</span> <strong>Ctrl-C during a tool
-    call.</strong> The interrupt is tested at the top of each iteration and
-    raced inside <code>call_model</code>. It is not passed to
-    <code>ToolCtx</code>, whose three fields are <code>cwd</code>,
-    <code>session_id</code> and <code>turn_id</code>, so a Ctrl-C pressed
-    during a long <code>Bash</code> run looks like it can only be observed when
-    that call returns. Read from the source, not reproduced. What would settle
-    it: run a goal whose tool sleeps 60 seconds, press Ctrl-C at 5, and time how
-    long the process takes to report <code>interrupted</code>.
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
+    <strong>Ctrl-C during a tool call.</strong>
+    <code>run_tool_call</code> races <code>interrupt.wait()</code> against
+    <code>invoke</code> in a <code>tokio::select!</code>; it is still not passed
+    through <code>ToolCtx</code>. <code>an_interrupt_reaches_a_tool_that_is_already_running</code>
+    scripts a ten-second tool, trips the interrupt at 150ms, and asserts the
+    goal finishes in under five seconds. On 2026-09-02
+    <code>cargo test -p emma --test loop an_interrupt_reaches_a_tool_that_is_already_running</code>
+    printed <code>test result: ok. 1 passed; 0 failed</code>.
   </p>
-  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code>; crates/tool-api/src/lib.rs — <code>ToolCtx</code></span>
+  <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code>; crates/emma/tests/loop.rs</span>
 
   <p>
     <span class="chip unv">unverified</span> <strong>The starvation the

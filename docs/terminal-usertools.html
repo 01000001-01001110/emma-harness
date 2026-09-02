@@ -141,6 +141,7 @@
     happened is a fake receipt&rdquo;</em>. What changed is that the frame now
     intercepts all three before they reach it.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>
     <code>the_catalogue_lists_all_seven_tools_with_their_fixed_keys</code>, whose
     assertion has been through all three states and carries the history: it
     first claimed both in-app tools were available <em>because their keys are
@@ -169,13 +170,8 @@
   </p>
 
   <p>
-    <span class="chip unv">unverified</span> The certification below was run on
-    2026-08-16 and its last three rows are <strong>superseded</strong>: Settings,
-    Data Explorer and Memory no longer resolve a program, so
-    <code>available=true</code> for them now means &ldquo;the frame routes this
-    key&rdquo; rather than &ldquo;a program was found&rdquo;. The first four rows
-    still describe what the probe does. <em>What would settle it:</em> re-running
-    the ignored probe test on a machine and pasting the current output.
+    <span class="chip cert">certified</span> Re-run on 2026-09-02:
+    <code>cargo test -p emma --lib usertools::tests::certify -- --ignored --nocapture</code>
   </p>
 
   <pre><code>$ cargo test -p emma --lib usertools::tests::certify -- --ignored --nocapture
@@ -184,9 +180,10 @@ Shell         [s] available=true -- powershell in C:\src\emma\crates\emma
 Code          [c] available=true -- code in C:\src\emma\crates\emma
 File Browser  [f] available=true -- explorer at C:\src\emma\crates\emma
 Search        [/] available=true -- search this project, inside Emma
-Memory        [m] available=true -- this project's memory, inside Emma
-Data Explorer [d] available=true -- explorer at C:\Users\owner\.emma
-Settings      [,] available=true -- code on C:\Users\owner\.emma\settings.json</code></pre>
+Memory        [m] available=true -- what Emma remembers about this project, inside Emma
+Harness       [h] available=true -- every run this project has recorded, inside Emma
+Data Explorer [d] available=false -- what the session store holds, inside Emma
+Settings      [,] available=true -- what this run resolved, and from where, inside Emma</code></pre>
 
   <p>
     <code>Code</code> resolving to <code>code</code> is the PATH probe matching
@@ -325,7 +322,8 @@ Settings      [,] available=true -- code on C:\Users\owner\.emma\settings.json</
     paths cannot contain a quote: <em>&ldquo;an argument is not always a path,
     and a quoting bug here is an argv boundary moving — exactly the class of
     failure this module refuses everywhere else.&rdquo;</em>
-    <span class="chip test">tested</span>:
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>:
     <code>quoting_matches_the_commandlinetoargvw_rules</code> pins seven cases
     including a trailing backslash inside quotes and an embedded quote with
     backslashes in front of it.
@@ -402,7 +400,8 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
     process group so a signal aimed at Emma's group is not also aimed at the
     child. <code>Window</code> is not consulted there, because both variants
     detach the same way and <code>NewConsole</code> is never planned on unix.
-    <span class="chip test">tested</span>:
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>:
     <code>gui_launches_are_detached_and_shells_get_their_own_console</code>
     walks five tools on both unix flavours and asserts every plan is
     <code>Detached</code>.
@@ -454,7 +453,8 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
     wider world does put command lines in them: a value there that does not
     resolve <em>as a whole</em> is skipped and the chain continues.
     <strong>Skipped, not split.</strong>
-    <span class="chip test">tested</span>:
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>:
     <code>an_editor_env_var_holding_a_command_line_is_skipped_not_split</code>
     sets <code>EDITOR=vim -u NONE</code> with <code>vim</code> on PATH and
     asserts the chain falls through to <code>code</code>, so
@@ -493,7 +493,8 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
     exists to close. It is checked twice, at planning time so the catalogue can
     say so, and again inside <code>new_console::spawn</code>, <em>&ldquo;which is
     the layer that must hold even if a future plan forgets to ask.&rdquo;</em>
-    <span class="chip test">tested</span>:
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>:
     <code>a_cmd_script_cannot_be_promised_a_console_window</code> also asserts
     the other half, that a GUI editor as a <code>.cmd</code> shim stays fine,
     because it takes the <code>Detached</code> path where std handles cmd.exe
@@ -530,7 +531,8 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
     <em>&ldquo;Without this, that <code>mode &amp; 0o111</code> had no test on
     any platform, and dropping it would have turned every readable file on
     <code>PATH</code> into an installed editor.&rdquo;</em>
-    <span class="chip test">tested</span>, one <code>cfg</code>-gated test per
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>, one <code>cfg</code>-gated test per
     platform, both against a real temporary directory.
   </p>
 
@@ -549,7 +551,8 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
     <code>launch</code> prefixes <code>opened&nbsp;</code>. <em>&ldquo;One
     string, two tenses, so the promise and the receipt cannot drift
     apart.&rdquo;</em>
-    <span class="chip test">tested</span>:
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>:
     <code>launch_returns_what_happened_in_words</code> compares against
     <code>format!("opened pwsh in {}", cwd().display())</code>, and three
     sibling tests prove no spawner is reached for an in-app tool, an unavailable
@@ -583,18 +586,22 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
     items, five probe helpers, sixteen planning functions, three spawning
     functions and the reaper's <code>Drop</code>, plus two inside
     <code>new_console</code>.
-    <span class="chip cert">certified</span>. Redo it with
-    <code>wc -l crates/emma/src/usertools.rs</code> and
-    <code>head -983 crates/emma/src/usertools.rs | grep -c "^\s*\(pub \)\?fn "</code>,
-    less the three items inside the inner test module.
+    <span class="chip cert">certified</span>. Re-counted on 2026-09-02:
+    <code>wc -l crates/emma/src/usertools.rs</code> → 1681;
+    <code>head -983 crates/emma/src/usertools.rs | grep -c "^\s*\(pub \)\?fn "</code>
+    → 47 function items before the test module (the page's 45 figure is stale).
   </p>
 
   <p>
-    <span class="chip unv">unverified</span> Whether every one of those 45 is
-    still <em>named</em> somewhere on this page. It was true of the 50 when the
-    page was written and four have gone since, but nobody has re-walked the list
-    against the prose. <em>What would settle it:</em> read the two lists side by
-    side.
+    <span class="chip unv">unverified</span> Whether every function item is
+    still <em>named</em> somewhere on this page. Side-by-side on 2026-09-02:
+    ten are not named in the prose —
+    <code>browser_program</code>, <code>editor_window</code>,
+    <code>in_app_detail</code>, <code>in_app_note</code>, <code>launch_on</code>,
+    <code>plan_code</code>, <code>plan_file_browser</code>, <code>plan_shell</code>,
+    <code>probe_first</code>, <code>resolve_editor</code>.
+    <em>What would settle it:</em> add them or delete the claim that the list is
+    complete.
   </p>
 
   <p>

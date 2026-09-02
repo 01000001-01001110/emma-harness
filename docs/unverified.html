@@ -90,9 +90,12 @@
             No measurement of the system field or tool schemas exists, and there
             is no <code>emma stats</code>. The comparison figure for Claude Code
             (~30,000 tokens) is widely reported and equally unmeasured here.</td>
-        <td>Render one real request and count the system field and tool schemas
-            with <code>/v1/messages/count_tokens</code>. Same method that
-            bracketed the cache floors. See <a href="index.html#goal">the goals</a>.</td>
+        <td>Capture each product's exact first-request JSON before transport,
+            isolate the <code>system</code> and <code>tools</code> fields, submit
+            each body to <code>/v1/messages/count_tokens</code> with the actual
+            model and API key, and compare the returned
+            <code>input_tokens</code>. This is a paid API operation. See
+            <a href="index.html#goal">the goals</a>.</td>
       </tr>
       <tr>
         <td><strong>Eight of the ten per-model cache floors.</strong> Only
@@ -143,8 +146,12 @@
         <td><strong>The unix arm of the hook fix.</strong> Windows has no
             SIGPIPE, which is what makes abandoning the pipe safe there. On unix,
             closing the read end can kill a daemon that later writes.</td>
-        <td>Run the <code>leak.cmd</code> equivalent on Linux and check whether
-            the daemon survives.</td>
+        <td>WSL was attempted here; <code>wsl.exe --status</code> returned
+            <code>Wsl/EnumerateDistros/Service/E_ACCESSDENIED</code>. On Linux,
+            add <code>sh</code> versions of the inherited-pipe, last-write and
+            daemon fixtures, run the suite, set the drain grace to zero and
+            require the last-write case to fail, restore it, and verify the
+            daemon's post-abandonment <code>SIGPIPE</code> result.</td>
       </tr>
       <tr>
         <td><strong>Chrome is never reaped on unix.</strong> The child is
@@ -256,7 +263,9 @@
       Four pages ran fresh mutations of their own; the others did not, because
       six agents shared one working tree and could not safely break the code.
       <strong>What would settle it:</strong> run the named mutations one at a
-      time on a clean tree.
+      time on a disposable branch: paste the named test's red result, restore
+      the production source, and paste its green result before starting the next.
+      The HTML-only settlement did not authorize those Rust edits.
     </li>
     <li>
       The live cache-floor certification is quoted from a status entry and a

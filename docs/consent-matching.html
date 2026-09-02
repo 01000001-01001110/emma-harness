@@ -141,7 +141,7 @@ fn label_wise(&amp;self, host: &amp;[&amp;str]) -&gt; bool {
     <code>a_domain_rule_does_not_match_a_lookalike_host</code>,
     <code>a_star_inside_a_label_cannot_cross_a_dot</code> and
     <code>what_is_written_is_what_is_read_back_next_boot</code>.
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
   </p>
   <span class="src">crates/emma/src/permissions.rs — DomainPattern::matches; tests as named</span>
 
@@ -210,7 +210,7 @@ fn label_wise(&amp;self, host: &amp;[&amp;str]) -&gt; bool {
   </table>
   </div>
   <p>
-    <span class="chip test">tested</span> Every cell above is an assertion in one
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a> Every cell above is an assertion in one
     of three tests, listed below. The near misses define the boundary: if one of them
     started matching, a user who approved <code>example.com</code> would have
     approved an attacker.
@@ -262,7 +262,7 @@ fn label_wise(&amp;self, host: &amp;[&amp;str]) -&gt; bool {
     will still ask</em> for allow. The two wordings exist for the same reason the
     unsupported branch has two: an allow that evaluates to nothing costs a prompt,
     a deny that evaluates to nothing costs a protection.
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_unicode_domain_rule_is_announced_and_the_deny_wording_is_the_loud_one</code>
     and <code>an_unbracketed_ipv6_rule_is_announced_with_the_brackets_it_needs</code>
     assert both wordings and both suggested spellings.
@@ -281,7 +281,7 @@ fn label_wise(&amp;self, host: &amp;[&amp;str]) -&gt; bool {
     also ends the attempt. Where the rewrite cannot be computed the suggestion is
     omitted rather than guessed at, because hand-punycoding is how
     <code>xn--bcher-kva</code> becomes <code>xn--bucher-kva</code>.
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_rewrite_that_cannot_be_computed_is_omitted_rather_than_invented</code>
     asserts the note for two such rules contains "blocks NOTHING" and does not
     contain "Write `".
@@ -304,7 +304,7 @@ fn label_wise(&amp;self, host: &amp;[&amp;str]) -&gt; bool {
       matcher a Unicode host directly, which the test matrix pins.
       <code>idna</code> is used at boot, in the warning path only.
       <strong>The matcher itself is unchanged.</strong>
-      <span class="chip test">tested</span> The last clause is an assertion:
+      <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a> The last clause is an assertion:
       <code>a_unicode_domain_rule_is_announced_and_the_deny_wording_is_the_loud_one</code>
       ends by asserting <code>for_egress("WebFetch", "bücher.example")</code> is
       still <code>Some(Decision::Deny)</code>.
@@ -348,7 +348,7 @@ fn label_wise(&amp;self, host: &amp;[&amp;str]) -&gt; bool {
 
   <p>
     The floor for "the warning does not fire on ordinary configuration" is a unit
-    test. <span class="chip test">tested</span>
+    test. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>an_ordinary_ascii_rule_says_nothing_at_boot</code> parses six rules
     including <code>domain:*.example.com</code>,
     <code>domain:xn--bcher-kva.example</code>, <code>domain:127.0.0.*</code> and
@@ -360,21 +360,46 @@ fn label_wise(&amp;self, host: &amp;[&amp;str]) -&gt; bool {
 
   <ul class="body">
     <li>
-      <span class="chip unv">unverified</span> The claim that hosts always arrive
-      already punycoded and already bracketed rests on
-      <code>Url::host_str</code>'s documented behaviour and on the web tools
-      building their <code>NetworkTarget</code> from a parsed <code>Url</code>.
-      It was not traced through every one of the six network-declaring tools for
-      this page. <em>What would settle it:</em> reading each tool's
-      <code>network_target</code> and confirming none of them constructs a host
-      from raw argument text.
+      <span class="chip cert">certified</span> All six network-declaring tools
+      were traced. This command finds their six <code>network_target</code>
+      implementations and every relevant URL-to-host seam:
+      <pre><code>rg -n 'fn network_target|url::Url::parse|parsed\.host_str|session_target\(|host_of\(' \
+  tools/web/src/fetch.rs tools/web/src/search.rs \
+  tools/web/src/browser/tools.rs tools/web/src/browser/pool.rs
+tools/web/src/browser/tools.rs:252:    fn network_target(...)
+tools/web/src/browser/tools.rs:254:        let parsed = url::Url::parse(url).ok()?;
+tools/web/src/browser/tools.rs:256:            parsed.host_str()?,
+tools/web/src/browser/tools.rs:398:    fn network_target(...)
+tools/web/src/browser/tools.rs:399:        session_target(...)
+tools/web/src/browser/tools.rs:569:    fn network_target(...)
+tools/web/src/browser/tools.rs:575:            let parsed = url::Url::parse(url).ok()?;
+tools/web/src/browser/tools.rs:577:                parsed.host_str()?,
+tools/web/src/browser/tools.rs:585:        session_target(...)
+tools/web/src/browser/tools.rs:819:    fn network_target(...)
+tools/web/src/search.rs:155:    fn network_target(...)
+tools/web/src/search.rs:157:        let host = url::Url::parse(&amp;self.base_url)
+tools/web/src/fetch.rs:216:    fn network_target(...)
+tools/web/src/fetch.rs:218:        let parsed = url::Url::parse(url).ok()?;
+tools/web/src/fetch.rs:220:            parsed.host_str()?,
+tools/web/src/browser/pool.rs:743:pub fn host_of(url: &amp;str) -&gt; Option&lt;String&gt; {
+tools/web/src/browser/pool.rs:744:    let parsed = url::Url::parse(url).ok()?;
+tools/web/src/browser/pool.rs:745:    let host = parsed.host_str()?;</code></pre>
+      <code>WebFetch</code>, <code>WebSearch</code>, browser open and browser
+      navigation parse a URL directly. Browser read, fill and non-navigation
+      actions use the session host, which <code>host_of</code> derives from the
+      final parsed URL. None constructs a host from raw argument text.
     </li>
     <li>
-      <span class="chip unv">unverified</span> The <code>idna</code> behaviour
-      quoted above, that <code>b*cherü.example</code> converts without error, is
-      recorded in <code>notes/plans/silent-wrong-answers.md</code> and was not
-      re-run here. <em>What would settle it:</em> a three-line program calling
-      <code>idna::domain_to_ascii</code> on that string and printing the result.
+      <span class="chip cert">certified</span> The <code>idna</code> edge was
+      re-run against the workspace's built dependency:
+      <pre><code>$idnaRlib = Get-ChildItem target/debug/deps/libidna-*.rlib |
+  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$probeExe = Join-Path $env:TEMP 'emma-idna-probe.exe'
+'fn main() { println!("{:?}", idna::domain_to_ascii("b*cher\u{00fc}.example")); }' |
+  rustc --edition=2021 - -L dependency=target/debug/deps \
+  --extern "idna=$($idnaRlib.FullName)" -o $probeExe
+&amp; $probeExe
+Ok("xn--b*cher-8ya.example")</code></pre>
     </li>
   </ul>
 

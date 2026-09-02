@@ -115,13 +115,14 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
       it does.
     </p>
     <p>
-      The test is written about what is <em>not</em> on the list. It asserts
+      <code>the_exemption_covers_the_task_writers_and_nothing_that_touches_the_tree</code>
+      is written about what is <em>not</em> on the list. It asserts
       <code>Bash</code>, <code>Write</code> and <code>Edit</code> are absent and
       that all three are still gated under <code>Gate::Unattended</code>, which is
       what would catch a later edit adding a tool that writes the user's source
       tree. It also loops over <code>EXEMPT</code> itself and asserts each entry
       is allowed, so shrinking the list to nothing would fail too.
-      <span class="chip test">tested</span>
+      <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     </p>
     <span class="src">crates/emma/src/approval.rs — Approvals::decide; tests::the_exemption_covers_the_task_writers_and_nothing_that_touches_the_tree</span>
   </div>
@@ -134,7 +135,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     <code>ask</code> rule reaches them, because the <code>ask</code> check sits
     above the exemption in <code>decide</code>. Every call, exempt or not, is
     written to the session log by the loop.
-    <span class="chip test">tested</span>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     <code>an_ask_rule_reaches_even_a_read_only_tool_and_an_exempt_one</code> puts
     <code>Read</code> and <code>EXEMPT[0]</code> in the <code>ask</code> list with
     an empty answer queue and asserts both are denied, which they can only be if
@@ -155,16 +156,21 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
   </p>
 
   <p>
-    <span class="chip cert">certified</span> No backlog item names a write-scope
-    axis. At commit <code>a3eba74</code>,
-    <code>grep -in "write scope\|scope of a write\|write-scope"
-    notes/improvements.md</code> exits 1 with no output.
-    <span class="chip unv">unverified</span> That no item describes the same idea
-    in other words: the file's 36 headed entries were not all read for this page.
-    <em>What would settle it:</em> reading the backlog through and either filing
-    the item or citing the one that already covers it.
+    <span class="chip cert">certified</span> The former claim was wrong: backlog
+    item 39 names the write-scope axis explicitly and says it is the mechanism
+    meant to retire <code>EXEMPT</code>.
   </p>
-  <span class="src">crates/emma/src/approval.rs — EXEMPT; notes/improvements.md</span>
+  <pre><code>rg -n -A 12 '^### 39\. The write-scope' notes/improvements.md
+905:### 39. The write-scope &#96;ToolMeta&#96; axis exists only as a comment
+907:**Status:** open. Found 2026-08-16, &#96;docs/consent-exempt.html&#96;.
+909-&#96;EXEMPT&#96;'s own comment says the list should be deleted when a write-scope axis
+910-lands. That axis appears nowhere in this file, so **the thing meant to retire a
+911-known hole is invisible to the backlog that tracks the hole.**
+913-This is item 14's other half. Item 14 asks for a floor beneath the gate;
+914-&#96;EXEMPT&#96; is a ceiling above it, keyed by tool name rather than by any property a
+915-tool declares. A write-scope axis would let the gate ask what a tool does rather
+916-than what it is called, which is what makes the name-keyed list deletable.</code></pre>
+  <span class="src">crates/emma/src/approval.rs — EXEMPT; notes/improvements.md — item 39</span>
 
   <h2 id="floor">The opposite shape does not exist</h2>
 
@@ -278,23 +284,29 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
 
   <p>
     <span class="chip unv">unverified</span> Nothing has been copied and nothing
-    has been built. The survey read roughly 2,700 of pie's ~75,000 Rust lines,
-    about 4%, and executed none of it. It names its own weakest claim: "wired
-    unconditionally at <code>main.rs:753</code>" is one grep hit plus the absence
-    of a bypass-flag hit, with 5,100 unread lines of
-    <code>main.rs</code> and <code>commands.rs</code> that could hold one.
-    <em>What would settle it:</em> reading pie's <code>main.rs</code> around 753
-    and its <code>commands.rs</code> through before adapting anything out of them.
+    has been built. The survey's weakest claim remains the historical statement
+    that pie wired the guard unconditionally at <code>main.rs:753</code>; the
+    referenced revision is not present in this workspace.
+    <em>What would settle it:</em> obtain the full SHA for pie revision
+    <code>b72579680bdf</code> without using this repository's Git state, open the
+    raw files for that exact SHA, read <code>main.rs</code> around line 753 and
+    all of <code>commands.rs</code>, then record every configuration or flag that
+    can bypass the guard. No current-file reading can settle a historical-source
+    claim.
   </p>
   <span class="src">notes/research/survey-pie.md §5</span>
 
   <p>
-    <span class="chip unv">unverified</span> The Zed and
-    <code>agent-code</code> descriptions come from
-    <code>notes/research/survey-harnesses-2.md</code> §4 and were not re-read from either
-    project for this page. <em>What would settle it:</em> opening Zed's
-    <code>tool_permissions</code> documentation and <code>agent-code</code>'s
-    blocking code and quoting the lines.
+    <span class="chip cert">certified</span> The current primary sources support
+    both descriptions. Zed's
+    <a href="https://zed.dev/docs/ai/tool-permissions">tool-permissions reference</a>
+    documents regex-based allow, deny and confirm rules; its built-in security
+    rules run first and include a non-overridable recursive-root deletion block.
+    <code>agent-code</code>'s
+    <a href="https://github.com/avala-ai/agent-code/blob/main/crates/lib/src/permissions/mod.rs">permissions source</a>
+    defines <code>PROTECTED_DIRS</code> with <code>.git/</code>,
+    <code>.husky/</code> and <code>node_modules/</code>, identifies its write
+    tools, and denies paths under those directories.
   </p>
 
   <footer class="pg">

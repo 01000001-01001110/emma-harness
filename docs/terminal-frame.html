@@ -171,7 +171,8 @@
   <p>
     The third assertion counts the alternate screen's enter and leave sequences,
     comments stripped, and demands one of each.
-    <span class="chip test">tested</span> A second occurrence of the enter
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/frame.rs">crates/emma/src/term/frame.rs</a> A second occurrence of the enter
     bytes would be <em>&ldquo;an entry outside the latch's knowledge&rdquo;</em>,
     which is exactly what the restore path cannot survive.
   </p>
@@ -280,7 +281,8 @@ const ALT_LEAVE: &amp;str = "\x1b[?1049l";</code></pre>
     and <code>Drop</code> racing each other costs nothing: the second caller
     reads <code>false</code> and returns. <code>FRAME_ON</code> guards the whole
     function, so a restore on a run that never drew writes not one byte.
-    <span class="chip test">tested</span>:
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/frame.rs">crates/emma/src/term/frame.rs</a>:
     <code>restoring_a_terminal_that_was_never_drawn_on_writes_nothing</code> and
     <code>restore_runs_once_however_many_times_it_is_called</code>, the second
     of which flips <code>FRAME_ON</code> and <code>ALT_ON</code> by hand,
@@ -531,7 +533,8 @@ const ALT_LEAVE: &amp;str = "\x1b[?1049l";</code></pre>
     never sees the <code>l</code> stops updating. Every terminal implementing
     the mode implements a timeout for that reason, and <code>SYNC_END</code> is
     also on the restore path.
-    <span class="chip test">tested</span>:
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/frame.rs">crates/emma/src/term/frame.rs</a>:
     <code>a_synchronized_update_is_always_ended_including_on_the_way_out</code>
     pins both constants and then asserts that
     <code>leave_modes()</code> actually contains <code>SYNC_END</code>.
@@ -577,6 +580,7 @@ const ALT_LEAVE: &amp;str = "\x1b[?1049l";</code></pre>
     has become vacuous if the anchor points move, which is the failure a
     source-grep test has when the search window moves.
     <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/frame.rs">crates/emma/src/term/frame.rs</a>
   </p>
 
   <p>
@@ -613,7 +617,8 @@ fn resize_target(pinned: bool, screen_rows: u16, height: u16) -&gt; Option&lt;u1
     <code>Inner::paint</code> from ratatui's own idea of where the viewport is,
     <em>&ldquo;because that is the number <code>insert_before</code> moves and
     the only one that can answer &lsquo;has it arrived yet&rsquo;.&rdquo;</em>
-    <span class="chip test">tested</span>:
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/frame.rs">crates/emma/src/term/frame.rs</a>:
     <code>a_resized_window_puts_a_pinned_frame_back_on_its_last_rows</code> over
     three size changes, and
     <code>a_resized_window_leaves_an_unpinned_frame_under_its_own_output</code>
@@ -671,7 +676,8 @@ fn resize_target(pinned: bool, screen_rows: u16, height: u16) -&gt; Option&lt;u1
     <code>rows_used</code>, which counts display columns rather than characters,
     and caps a single insert at <code>MAX_INSERT_ROWS = 500</code>, the backstop
     for a tool that returns fifty thousand lines.
-    <span class="chip test">tested</span>:
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/frame.rs">crates/emma/src/term/frame.rs</a>:
     <code>a_wrapped_transcript_line_gets_all_the_rows_it_needs</code> asserts
     that a hundred-character line arrives whole across three rows <em>and</em>
     that the viewport under it is unbroken.
@@ -690,7 +696,9 @@ fn resize_target(pinned: bool, screen_rows: u16, height: u16) -&gt; Option&lt;u1
       <code>boxes_in</code> counts a whole corner rather than one glyph to get
       past it, and the doc says which way round it is: <em>&ldquo;for once the
       test screen shows a defect the terminal will not have, rather than hiding
-      one it will.&rdquo;</em> <span class="chip test">tested</span> that a
+      one it will.&rdquo;</em> <span class="chip test">tested</span>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/frame.rs">crates/emma/src/term/frame.rs</a>
+      that a
       genuinely duplicated box still fails, because a duplicated box brings its
       border with it.
     </p>
@@ -791,7 +799,8 @@ fn resize_target(pinned: bool, screen_rows: u16, height: u16) -&gt; Option&lt;u1
     a question and the keys to answer it. Below that the fallback is a better
     product than a viewport occupying most of the screen, which is why
     <code>fallback_reason</code> refuses under eight rows outright.
-    <span class="chip test">tested</span>:
+    <span class="chip test">tested</span>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/frame.rs">crates/emma/src/term/frame.rs</a>:
     <code>the_viewport_is_a_third_of_the_window_within_reason</code>, at 40, 24,
     9 and 120.
   </p>

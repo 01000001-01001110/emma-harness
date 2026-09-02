@@ -172,9 +172,11 @@ fn validate_position_args(tool: &str, args_v: &Value, keys: &[&str]) -> Result<(
 /// whole browser, because the question the bit actually asks is "can this damage
 /// this machine". The answer here is no, and it is no *by construction* rather
 /// than by hope: `client::INIT_OPTIONS` turns off `cargo check`, build scripts
-/// and proc macros, which are the three ways rust-analyzer writes to a project
-/// or runs its code. `tests/read_only.rs` asserts the tree is byte-identical
-/// after every read tool has been run against it, the same way `tools/fs` does.
+/// and proc macros, which are the three ways rust-analyzer runs the analysed
+/// project's code or fills its build directory. The one file the server still
+/// writes, `Cargo.lock`, is measured and argued in `tests/real_server.rs` —
+/// together with why it stays inside the bit. The fake-server suite
+/// (`tests/tools.rs`) proves the tools themselves write nothing.
 ///
 /// **`reaches_network: false`**, made true by `--offline` on every cargo
 /// invocation. Without it `cargo metadata` fetches from crates.io for a project

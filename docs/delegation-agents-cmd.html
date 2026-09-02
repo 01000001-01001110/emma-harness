@@ -404,16 +404,23 @@ const RECENT: usize = 10;</code></pre>
 
   <ul class="body">
     <li>
-      <span class="chip unv">unverified</span> Every number in the table above
-      comes from a single delegation, so the per-run averages are that one run
-      and nothing has been exercised at scale. A tally that summed wrongly across
-      sessions would look identical here. <em>What would settle it:</em> the
-      integration test
-      <code>what_a_delegation_cost_can_be_read_back_across_sessions</code> covers
-      two sessions; a live corpus does not exist.
+      <span class="chip test">tested</span>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+      Cross-session totals are not exercised at scale &mdash; a live corpus does
+      not exist &mdash; but a tally that summed wrongly across sessions would not
+      match what the integration test asserts. Ran
+      <code>cargo test -p emma --test delegate what_a_delegation_cost</code> on
+      2026-09-02:
+      <code>test what_a_delegation_cost_can_be_read_back_across_sessions ... ok</code>
+      (one clean session plus one deliberately unreadable file named in the
+      report).
     </li>
     <li>
-      <span class="chip test">tested</span> The empty case is asserted by
+      <span class="chip test">tested</span>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+      The empty case is asserted by
       <code>asking_what_delegation_cost_before_delegating_anything_says_so</code>,
       and the cross-session read by
       <code>what_a_delegation_cost_can_be_read_back_across_sessions</code>.

@@ -242,12 +242,14 @@
   </div>
 
   <p>
-    <span class="chip cert">certified</span> The crate's own suite is 72 tests
-    and they all pass: <code>cargo test -p emma-llm</code>, run on the owner's
-    Windows machine on 2026-08-16 against commit <code>a3eba74</code>, reported
-    <em>72 passed; 0 failed</em>. Two of those tests are
-    <code>#[cfg(unix)]</code> and were therefore not compiled on that run,
-    which <a href="providers-credentials.html">credentials</a> says plainly.
+    <span class="chip cert">certified</span> The crate's own suite is 132 tests
+    and they all pass: <code>cargo test -p emma-llm --lib</code>, run on
+    2026-09-02, printed
+    <em>test result: ok. 132 passed; 0 failed; 1 ignored</em>. Two of the
+    credential-path tests are <code>#[cfg(unix)]</code> and were therefore not
+    compiled on that Windows run, which
+    <a href="providers-credentials.html">credentials</a> says plainly. (This
+    page previously said 72; the count was stale.)
   </p>
 
   <h2 id="unverified">What is not verified</h2>

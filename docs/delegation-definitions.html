@@ -277,13 +277,12 @@ pub(crate) fn split_agent(text: &amp;str) -&gt; (AgentFront, &amp;str, Option&lt
     let Some(rest) = open_frontmatter(text) else {
         return (AgentFront::default(), text, None);
     };
-    let Some(end) = rest.find("\n---") else {
+    let Some((yaml, body)) = close_frontmatter(rest) else {
         return (AgentFront::default(), text, None);
     };
-    let body = rest[end + 4..].trim_start_matches(['\r', '\n']);
-    match serde_yaml::from_str(&amp;rest[..end]) {
-        Ok(front) =&gt; (front, body, None),
-        Err(e) =&gt; (AgentFront::default(), body, Some(e.to_string())),
+    match serde_yaml::from_str(yaml) {
+        Ok(front) => (front, body, None),
+        Err(e) => (AgentFront::default(), body, Some(e.to_string())),
     }
 }
 
@@ -293,19 +292,13 @@ fn open_frontmatter(text: &amp;str) -&gt; Option&lt;&amp;str&gt; {
     let rest = rest.strip_prefix('\r').unwrap_or(rest);
     rest.strip_prefix('\n')
 }</code></pre>
-  <span class="src">crates/harness/src/claude.rs — split_agent, open_frontmatter, quoted entire</span>
+  <span class="src">crates/harness/src/claude.rs — split_agent, open_frontmatter, close_frontmatter</span>
 
   <p>
-    <span class="chip cert">certified</span> Counted from disk today: of the 90
-    files in <code>~/.claude/agents/</code>, <strong>86 contain CRLF and 4 do
-    not</strong>, so under the old opener exactly 4 of 90 parsed and 86 were
-    silently inert. Repeat it with
-    <code>python -c "import glob;fs=glob.glob('~/.claude/agents/*.md');
-    print(sum(1 for f in fs if b'\r\n' in open(f,'rb').read()), len(fs))"</code>
-    with the path expanded. <code>split_agent</code>'s own doc records 90 out of
-    90 as CRLF when it was written; the directory reads 86 today, so one of the
-    two numbers is stale by construction and the byte count is the one that was
-    re-run.
+    <span class="chip cert">certified</span> Re-run on 2026-09-02 with the path
+    expanded:
+    <code>python -c "import glob,os;fs=glob.glob(os.path.expanduser('~/.claude/agents/*.md'));print(sum(1 for f in fs if b'\r\n' in open(f,'rb').read()), len(fs))"</code>
+    printed <code>86 90</code> — 86 CRLF, 4 LF-only, 90 top-level files.
   </p>
   <span class="src">crates/harness/src/claude.rs — split_agent; ~/.claude/agents/</span>
 
@@ -610,31 +603,47 @@ fn one_line(text: &amp;str) -&gt; String {
 
   <ul class="body">
     <li>
-      <span class="chip unv">unverified</span> The early-close behaviour of
-      <code>rest.find("\n---")</code> is read off the source, not run. No test in
-      <code>claude.rs</code> covers a body containing a line of three dashes.
-      <em>What would settle it:</em> a unit test over <code>split_agent</code>
-      with <code>---</code> inside the body, asserting where the body starts.
+      <span class="chip test">tested</span>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/src/claude.rs">crates/harness/src/claude.rs</a>
+      Early-close on a <code>----</code> line inside frontmatter is covered by
+      <code>a_rule_inside_a_block_is_not_a_closing_fence</code>; an empty block
+      whose fences must not become body text is covered in
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/tests/claude_compat.rs">crates/harness/tests/claude_compat.rs</a>
+      by <code>an_empty_frontmatter_block_closes_and_its_fences_are_not_content</code>.
+      Ran both on 2026-09-02:
+      <code>cargo test -p emma-harness --lib a_rule_inside_a_block ... ok</code> and
+      <code>cargo test -p emma-harness --test claude_compat an_empty_frontmatter ... ok</code>.
+      A <code>---</code> rule line in the body after the closing fence is not
+      parsed by <code>close_frontmatter</code> at all.
     </li>
     <li>
       <span class="chip unv">unverified</span> The 90-file figures are one
-      library on one machine, and the counts on this page were re-run against it
-      today. <em>What would settle the wider claim:</em> nothing available here;
-      it is a statement about other people's directories.
+      library on one machine. <em>What would settle the wider claim:</em> nothing
+      available here; it is a statement about other people's directories.
     </li>
     <li>
-      <span class="chip unv">unverified</span> Nothing on this page has been
-      checked against Claude Code's current agent-file documentation. The format
-      claims here come from the code's own comments and from the files on disk.
-      <em>What would settle it:</em> reading the published format spec beside a
-      dated note of when.
+      <span class="chip cert">certified</span> Read
+      <a href="https://code.claude.com/docs/en/sub-agents">code.claude.com/docs/en/sub-agents</a>
+      on 2026-09-02 beside this page. The published spec agrees on the shape
+      (YAML frontmatter, markdown body), required <code>name</code> and
+      <code>description</code>, optional <code>tools</code> as an allowlist with
+      inherit when omitted, and optional <code>model</code>. Emma's
+      <code>Tools::allowlist</code> additionally treats empty
+      (<code>tools:</code>, <code>tools: []</code>, <code>tools: ""</code>) as
+      inherit rather than "no tools", which is argued on
+      <a href="delegation-tools.html">resolve_tools</a> and tested in
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/tests/agent_types.rs">crates/harness/tests/agent_types.rs</a>.
     </li>
     <li>
-      <span class="chip unv">unverified</span> <code>claude.rs</code> has no
-      test module at all, so every claim on this page about how a file parses
-      rests on reading the code and on running the binary against real files.
-      <em>What would settle it:</em> unit tests over <code>split_agent</code> and
-      <code>Tools::allowlist</code>, which are pure functions and cost nothing.
+      <span class="chip test">tested</span>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/src/claude.rs">crates/harness/src/claude.rs</a>
+      and
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/tests/agent_types.rs">crates/harness/tests/agent_types.rs</a>
+      — this page's claim that <code>claude.rs</code> had no test module was
+      wrong when written; <code>close_frontmatter</code> now has four unit tests
+      in <code>claude.rs</code>, and <code>Tools::allowlist</code> / agent-file
+      shapes are covered in <code>agent_types.rs</code> and
+      <code>claude_compat.rs</code>.
     </li>
     <li>
       <span class="chip cert">certified</span> The agents half of
