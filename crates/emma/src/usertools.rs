@@ -1,11 +1,17 @@
 //! The sidebar's user tools — things the *person* invokes, not the model.
 //!
 //! `Shell` opens a shell in the working directory, `Code` opens the configured
-//! editor, `FileBrowser` opens the OS file manager on the project,
-//! `DataExplorer` opens the same file manager on Emma's own data directory,
-//! and `Settings` opens `~/.emma/settings.json` in something that can edit it.
-//! `Search` and `Memory` are not launches at all — they run inside Emma, and
-//! this module says so instead of pretending to start a program.
+//! editor, and `FileBrowser` opens the OS file manager on the project.
+//! `Search`, `Memory`, `Harness` and `Settings` are not launches at all: they
+//! run inside Emma, and this module says so instead of pretending to start a
+//! program.
+//!
+//! `DataExplorer` is the odd one and this sentence used to be wrong about it.
+//! It said the tool opened a file manager on Emma's data directory, which was
+//! true until 2026-08-23 and has not been since. Today it is listed, marked
+//! unavailable by [`Tool::routed`], and pressing its key prints a line saying
+//! there is nothing to open. [`Tool::routed`] carries the argument for why an
+//! advertised, unrouted row stays visible instead of vanishing.
 //!
 //! Three rules carry the whole design, and every one exists because breaking
 //! it fails silently:

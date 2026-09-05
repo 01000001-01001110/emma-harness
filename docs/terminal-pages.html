@@ -87,11 +87,14 @@
     </nav>
 
   <p class="lede">
-    <code>Alt+,</code>, <code>Alt+d</code> and <code>Alt+m</code> each replace the
+    <code>Alt+,</code> and <code>Alt+m</code> each replace the
     middle of the frame with a page and nothing else. The sidebar, the
     dock and the status row stay exactly where they were, and <code>Esc</code>
-    puts the conversation back with its scroll position intact. All three used
-    to launch a program on the machine, or claim they would. What they draw is
+    puts the conversation back with its scroll position intact. A third
+    chord, <code>Alt+d</code>, used to do the same for a Data Explorer page;
+    that page was removed 2026-08-27, so the sidebar now shows the row as
+    <code>n/a</code>, and pressing the chord anyway only prints a warning
+    that there is nothing to open. What the surviving pages draw is
     only what Emma actually has, and each one names in words the panel it is
     not drawing.
   </p>
@@ -134,16 +137,17 @@ pub enum Pane {
     <code>the_pane_seam_paints_the_chat_view_and_leaves_the_frame_alone</code>).
   </p>
 
-  <h2 id="text-page">Two of the three are the same page twice</h2>
+  <h2 id="text-page">Two of the three were the same page twice</h2>
 
   <p>
-    The Data Explorer and Memory both read the session store and both draw a
-    captured report with a footer. <code>text_page</code> is that shape, taking a
-    title, a subtitle and the footer lines; the footer is per page because
-    <em>what each one refuses to draw</em> is the part a reader most needs told.
-    The text itself is one <code>Vec&lt;String&gt;</code> on <code>App</code>,
-    not one per page. Only one page shows at a time, and a second buffer
-    would be a second thing to forget to clear.
+    Before the Data Explorer page was removed 2026-08-27, it and Memory both
+    read the session store and both drew a captured report with a footer.
+    <code>text_page</code> was that shape, taking a
+    title, a subtitle and the footer lines; the footer was per page because
+    <em>what each one refused to draw</em> was the part a reader most needed told.
+    The text itself was one <code>Vec&lt;String&gt;</code> on <code>App</code>,
+    not one per page. Only one page showed at a time, and a second buffer
+    would have been a second thing to forget to clear.
   </p>
   <span class="src">crates/emma/src/term/app.rs &mdash; <code>App::text_page</code>, <code>App::show_explorer</code>, <code>App::show_memory</code></span>
 
@@ -160,11 +164,13 @@ pub enum Pane {
   <p>
     <strong>The page and the command cannot disagree, because there is one
     implementation.</strong> The text comes from a <code>commands::*</code>
-    writer (<code>commands::sessions</code> and
+    writer (<code>commands::sessions</code>, kept alive by the
+    <code>emma sessions</code> CLI command now that the Data Explorer page it
+    used to feed is gone, and
     <code>commands::memory</code>, both writer-shaped like
     <code>commands::agents</code>), captured into a string by
     <code>capture_sessions</code> / <code>capture_memory</code>. The frame paints
-    what a command would have printed.
+    what the memory command would have printed.
   </p>
   <span class="src">crates/emma/src/commands.rs &mdash; <code>sessions</code>, <code>memory</code>, <code>capture_sessions</code>, <code>capture_memory</code></span>
 
@@ -194,9 +200,9 @@ pub enum Pane {
           <td>Seven of the mockup&rsquo;s panels have nothing behind them yet, and are named. A switch that changes nothing is worse on a settings page than anywhere else, because that is where a user goes <em>expecting</em> their change to take.</td>
         </tr>
         <tr>
-          <td>Data Explorer</td>
-          <td>A real count of real files in the session store: sessions, records, kinds, and any records that could not be read.</td>
-          <td>The query box, typed columns, elapsed time and chart. A query surface over a store with no query engine would be the most convincing thing on the page and the least real.</td>
+          <td>Data Explorer (removed 2026-08-27)</td>
+          <td>Drew a real count of real files in the session store: sessions, records, kinds, and any records that could not be read.</td>
+          <td>The query box, typed columns, elapsed time and chart. A query surface over a store with no query engine would have been the most convincing thing on the page and the least real.</td>
         </tr>
         <tr>
           <td>Memory</td>
@@ -221,21 +227,26 @@ pub enum Pane {
   </p>
 
   <p>
-    The Data Explorer counts through <code>SessionLog::read_reporting</code>
-    rather than <code>read</code>, so a session with unreadable records is
-    reported as damaged rather than counted as clean. An explorer that tallied
-    only what parsed would describe a damaged library as a tidy one.
+    The removed Data Explorer counted through
+    <code>SessionLog::read_reporting</code> rather than <code>read</code>, so a
+    session with unreadable records was reported as damaged rather than
+    counted as clean. The <code>emma sessions</code> command, which shares the
+    same writer, still counts this way: an explorer that tallied only what
+    parsed would describe a damaged library as a tidy one.
   </p>
 
   <h2 id="keys">Getting in, and getting back out</h2>
 
   <p>
     The chords are the tools&rsquo; own, unchanged: the sidebar advertises
-    <code>Alt+,</code>, <code>Alt+d</code> and <code>Alt+m</code>, and
-    <code>Frame::launch_tool</code> intercepts those three before they reach
-    <code>usertools::launch</code>. The scan happens there. The frame
-    already knows the session path because the status row shows it, and
-    the page is handed a finished snapshot.
+    <code>Alt+,</code>, <code>Alt+d</code> and <code>Alt+m</code>, but only
+    two of them are intercepted before they reach
+    <code>usertools::launch</code>: <code>Frame::launch_tool</code> handles
+    <code>Alt+,</code> and <code>Alt+m</code> itself. <code>Alt+d</code> falls
+    through to <code>usertools::launch</code>, which refuses it, because no
+    page has taken that key since the Data Explorer was removed. Where a page
+    does open, the frame already knows the session path because the status
+    row shows it, and the page is handed a finished snapshot.
   </p>
   <span class="src">crates/emma/src/term/frame.rs &mdash; <code>Frame::launch_tool</code>, <code>Frame::leave_page</code></span>
 

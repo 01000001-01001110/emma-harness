@@ -106,7 +106,7 @@
         <tr><td>File Browser</td><td><code>Alt+f</code></td><td>The OS file manager on the project.</td></tr>
         <tr><td>Search</td><td><code>/</code></td><td>Nothing. Runs inside Emma; the frame owns the key.</td></tr>
         <tr><td>Memory</td><td><code>Alt+m</code></td><td>Nothing. A page inside Emma.</td></tr>
-        <tr><td>Data Explorer</td><td><code>Alt+d</code></td><td>Nothing. A page inside Emma.</td></tr>
+        <tr><td>Data Explorer</td><td><code>Alt+d</code></td><td>Nothing. Its page was removed 2026-08-27; the key routes to no page and the sidebar shows <code>n/a</code>.</td></tr>
         <tr><td>Settings</td><td><code>Alt+,</code></td><td>Nothing. A page inside Emma.</td></tr>
       </tbody>
     </table>
@@ -117,8 +117,11 @@
     <strong>Three of these used to launch programs and now do not.</strong>
     Settings opened <code>~/.emma/settings.json</code> in the configured editor,
     the Data Explorer opened the file manager on <code>~/.emma</code>, and Memory
-    opened nothing at all while claiming it would. Each is a page in the frame
-    now. See <a href="terminal-pages.html">the tool pages</a>. The launches
+    opened nothing at all while claiming it would. Settings and Memory are
+    pages in the frame now; see <a href="terminal-pages.html">the tool
+    pages</a>. The Data Explorer became a page the same way and then lost that
+    page too, on 2026-08-27, so it is the one row on this table that neither
+    launches a program nor opens a page. The launches
     worked as built; the owner ruled on 2026-08-23 that they should be pages,
     which is a different thing from their having been wrong.
   </p>
@@ -139,7 +142,10 @@
     <code>launch</code> still refuses an in-app tool rather than returning
     success, because <em>&ldquo;returning <code>Ok</code> for a launch that never
     happened is a fake receipt&rdquo;</em>. What changed is that the frame now
-    intercepts all three before they reach it.
+    intercepts Settings and Memory before they reach it. Data Explorer is not
+    intercepted: it still falls through to <code>usertools::launch</code>,
+    which refuses it, because the Data Explorer page it once opened is gone
+    and nothing has taken its place.
     <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>
     <code>the_catalogue_lists_all_seven_tools_with_their_fixed_keys</code>, whose
@@ -193,13 +199,13 @@ Settings      [,] available=true -- what this run resolved, and from where, insi
   </p>
 
   <p>
-    The last three lines are the superseded ones. <code>Settings</code> reads
-    <code>code on &hellip;settings.json</code> there because it still resolved an
-    editor; it does not any more, and neither does the Data Explorer resolve a
-    file manager. On this run both happened to be installed, which is why the
-    defect stayed invisible: with neither on the machine, the two rows would have
-    read <code>available=false</code> and the sidebar <code>n/a</code>, beside two
-    chords that worked.
+    The Data Explorer row is the one line here that is
+    <code>available=false</code> unconditionally: <code>Tool::routed</code>
+    excludes it because its page was removed 2026-08-27, so no PATH probe and
+    no installed program changes that answer, unlike the three launchers
+    above it. Settings and Memory read <code>available=true</code> because a
+    page exists to route their keys to, not because of anything found on this
+    machine.
   </p>
 
   <h2 id="seam">The machine is a trait</h2>
