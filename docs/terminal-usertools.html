@@ -87,15 +87,16 @@
     </nav>
 
   <p class="lede">
-    The sidebar's middle section lists seven entries in a fixed order. Three
-    start a program on the machine; four run inside Emma and say so rather than
-    pretending to launch: Search, and the three
-    <a href="terminal-pages.html">tool pages</a>. Three rules carry the design;
-    breaking any of them fails silently. The sharpest took twenty-two green
+    The sidebar's middle section lists eight entries in a fixed order. Three
+    start a program on the machine. Five run inside Emma and say so rather than
+    pretending to launch: Search, the three
+    <a href="terminal-pages.html">tool pages</a>, and Data Explorer, which is
+    listed, marked unavailable, and has had no page since 2026-08-27. Three
+    rules carry the design; breaking any of them fails silently. The sharpest took twenty-two green
     tests and a canary in the wrong stream to find.
   </p>
 
-  <h2 id="catalogue">Seven entries, always all seven</h2>
+  <h2 id="catalogue">Eight entries, always all eight</h2>
 
   <div class="tw">
     <table>
@@ -148,7 +149,7 @@
     and nothing has taken its place.
     <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>
-    <code>the_catalogue_lists_all_seven_tools_with_their_fixed_keys</code>, whose
+    <code>the_catalogue_lists_all_eight_tools_with_their_fixed_keys</code>, whose
     assertion has been through all three states and carries the history: it
     first claimed both in-app tools were available <em>because their keys are
     live in the frame</em>. That assertion, not the behaviour, held the defect

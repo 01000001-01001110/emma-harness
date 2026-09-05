@@ -98,43 +98,6 @@ artefact.** A green suite over source he is not executing says nothing about
 what is in front of him, and a report from him is always about the binary he
 has. Ask which one that is before reading any code.
 
-## Report the round to the project channel when the turn is done
-
-**Post to the project's Discord channel every round.** Owner ruling,
-2026-08-23: *"At each of these I want an update in discord"* — each round, not
-only at the end of a long turn, and not each commit inside a round. A round is
-one reply to the owner: whatever was finished between one message and the next.
-The webhook lives in `EMMA_PROGRESS_WEBHOOK` in `.env`, which `.gitignore`
-covers.
-
-```bash
-python verification/scripts/post_progress.py <<'EOF'
-**Emma** — what actually happened this round, in Discord markdown.
-EOF
-```
-
-The message goes on stdin so a round's text is never baked into a file, and the
-script reads the credential itself. **A User-Agent is not optional**: without one
-Discord's edge answers `403 error code: 1010`, a browser-signature ban that reads
-as "this webhook is dead" rather than "add a header". That cost a diagnosis
-once; the script carries the header and the reason.
-
-**The URL never goes in a file git tracks, and that includes this one.** A
-webhook is a credential: anyone holding it can post as the project. This
-repository is private today, which is not the same as safe — a credential in a
-commit is in every clone and every future state of that repository, and
-`git rm` does not remove it from history. `.env` is where the repo already keeps
-this class of thing.
-
-**Say what happened, not what was attempted.** The same rule as everywhere else
-here: a round that fixed two things and left a third broken says so. A progress
-report that reads as uniformly successful is the one nobody believes twice, and
-this one is addressed to somebody who was not watching — which makes an
-overstatement harder to catch and therefore worse.
-
-Post the outcome, the evidence, and what is still open. If a round produced
-nothing worth reading, post nothing.
-
 ## The premise the rules follow from
 
 **This codebase has no author's memory, and every reader is a stranger —

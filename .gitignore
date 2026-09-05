@@ -68,9 +68,9 @@ notes/
 # `emma verify` reads `verification/parity/ledger.json`, so that command has no
 # ledger in a fresh clone and says so rather than pretending.
 #
-# `verification/scripts/post_progress.py` is the owner's Discord reporter. It
-# stays on this machine; CLAUDE.md still names it and that instruction is for
-# the owner's tree, not for a clone.
+# `verification/scripts/` holds the owner's own tooling and stays on this
+# machine. CLAUDE.md used to name one of those scripts; that instruction was
+# removed on 2026-09-05 and nothing tracked references the directory now.
 verification/
 
 # Drafts about the project rather than the project. Four posts, a drafts file

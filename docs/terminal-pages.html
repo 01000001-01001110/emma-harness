@@ -87,69 +87,84 @@
     </nav>
 
   <p class="lede">
-    <code>Alt+,</code> and <code>Alt+m</code> each replace the
-    middle of the frame with a page and nothing else. The sidebar, the
-    dock and the status row stay exactly where they were, and <code>Esc</code>
-    puts the conversation back with its scroll position intact. A third
-    chord, <code>Alt+d</code>, used to do the same for a Data Explorer page;
-    that page was removed 2026-08-27, so the sidebar now shows the row as
-    <code>n/a</code>, and pressing the chord anyway only prints a warning
-    that there is nothing to open. What the surviving pages draw is
-    only what Emma actually has, and each one names in words the panel it is
-    not drawing.
+    <code>Alt+,</code>, <code>Alt+m</code> and <code>Alt+h</code> each replace
+    the middle of the frame with a page and nothing else: Settings, Memory and
+    the Harness dashboard. The sidebar, the dock and the status row stay exactly
+    where they were, and <code>Esc</code> puts the conversation back with its
+    scroll position intact. A fourth chord, <code>Alt+d</code>, used to do the
+    same for a Data Explorer page. That page was removed 2026-08-27, so the
+    sidebar shows the row as <code>n/a</code> and pressing the chord prints a
+    line saying there is nothing to open. What the three pages draw is only what
+    Emma actually has, and each one names in words the panel it is not
+    drawing.
   </p>
 
-  <h2 id="seam">One field, not a second application</h2>
+  <h2 id="seam">A page is a field on <code>App</code>, not a second application</h2>
 
   <p>
-    The main region&rsquo;s occupant is a single value on <code>App</code>:
+    <strong>This section described a design that has been reversed, and saying
+    so is the point of keeping it.</strong> The main region&rsquo;s occupant used
+    to be one value, a <code>Pane</code> enum whose <code>Page</code> variant
+    named Settings, Data Explorer and Memory. Neither enum exists now. What
+    replaced them is one field per page:
   </p>
 
-  <pre><code>pub enum Page { Settings, DataExplorer, Memory }
-
-pub enum Pane {
-    #[default]
-    Chat,
-    Page(Page),
-}</code></pre>
-  <span class="src">crates/emma/src/term/app.rs &mdash; <code>enum Pane</code>, <code>App::render</code></span>
+  <pre><code>settings_open: bool,
+memory: Option&lt;super::memory::MemoryView&gt;,
+harness: Option&lt;super::harness::HarnessView&gt;,</code></pre>
+  <span class="src">crates/emma/src/term/app.rs &mdash; <code>App</code>'s page fields, <code>App::toggle_settings</code>, <code>App::toggle_memory</code>, <code>App::toggle_harness</code></span>
 
   <p>
-    <code>App::render</code> lays the frame out first (border, sidebar,
-    dock, hint, status) and only then matches on <code>self.pane</code> to
-    decide what fills the space between them. A page is not a separate window
-    or a second <code>App</code>. Nothing about the surrounding frame
+    Three pages, and Data Explorer is not among them. Settings is a
+    <code>bool</code> because its interaction state lives in a
+    <code>SettingsView</code> that is always present. Memory and Harness are
+    <code>Option</code>s because each one is rebuilt from disk when it opens, so
+    the absence of the value and the absence of the page are the same fact.
+  </p>
+
+  <p>
+    What survives the reversal is the part that mattered. <code>App::render</code>
+    lays the frame out first, border, sidebar, dock, hint and status, and only
+    then decides what fills the space between them. A page is not a separate
+    window or a second <code>App</code>, and nothing about the surrounding frame
     is reachable from a page&rsquo;s drawing code, which is why a page cannot
-    accidentally move the status row.
+    move the status row by accident.
   </p>
 
   <p>
-    <strong><code>Chat</code> is a named variant rather than the absence of a
-    page</strong>. A fourth page added tomorrow
-    is a compile error at every site that decides what to draw, instead of
-    falling silently through to the transcript.
-    <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/guarantees.rs">crates/emma/src/term/guarantees.rs</a>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/guarantees.rs">crates/emma/src/term/guarantees.rs</a>
+    What the reversal cost is the compile error. The old enum meant a fourth
+    page was a build failure at every site that decided what to draw, rather
+    than a silent fall-through to the transcript. Three independent fields do
+    not give that, and adding a fourth page now means finding the sites by
+    reading. I have not decided whether that trade was worth it.
+    <span class="chip test">tested</span>:
     <code>a_page_swaps_the_middle_and_keeps_the_frame_and_the_transcript</code>
-    renders both occupants at the same size and asserts the frame and transcript
-    survive a page swap (the old name was
-    <code>the_pane_seam_paints_the_chat_view_and_leaves_the_frame_alone</code>).
+    in <code>crates/emma/src/term/guarantees.rs</code> renders both occupants at
+    the same size and asserts the frame and the transcript survive a page swap.
+    That test still holds and is what the section above rests on.
   </p>
 
-  <h2 id="text-page">Two of the three were the same page twice</h2>
+  <h2 id="text-page">Two pages were once the same page twice</h2>
 
   <p>
-    Before the Data Explorer page was removed 2026-08-27, it and Memory both
-    read the session store and both drew a captured report with a footer.
-    <code>text_page</code> was that shape, taking a
-    title, a subtitle and the footer lines; the footer was per page because
-    <em>what each one refused to draw</em> was the part a reader most needed told.
-    The text itself was one <code>Vec&lt;String&gt;</code> on <code>App</code>,
-    not one per page. Only one page showed at a time, and a second buffer
-    would have been a second thing to forget to clear.
+    <strong>This is history, and the code it describes is gone.</strong> Data
+    Explorer and Memory both read the session store and both drew a captured
+    report with a footer, so they shared one <code>text_page</code> shape taking
+    a title, a subtitle and per-page footer lines. The footer was per page
+    because <em>what each one refused to draw</em> was the part a reader most
+    needed told. The text was one <code>Vec&lt;String&gt;</code> on
+    <code>App</code> rather than one per page, since only one page showed at a
+    time and a second buffer is a second thing to forget to clear.
   </p>
-  <span class="src">crates/emma/src/term/app.rs &mdash; <code>App::text_page</code>, <code>App::show_explorer</code>, <code>App::show_memory</code></span>
+
+  <p>
+    Data Explorer was removed on 2026-08-27, which took away half the reason for
+    a shared shape, and the pages that remain no longer share one.
+    <code>text_page</code> and <code>show_explorer</code> are not in the tree.
+    Memory has its own <code>MemoryView</code>, Harness its own
+    <code>HarnessView</code>, and each is built by its own module.
+  </p>
+  <span class="src">crates/emma/src/term/memory.rs &mdash; <code>MemoryView</code>; crates/emma/src/term/harness.rs &mdash; <code>HarnessView</code></span>
 
   <p>
     <strong>The snapshot is taken when the page opens, never on paint.</strong>
@@ -166,7 +181,7 @@ pub enum Pane {
     implementation.</strong> The text comes from a <code>commands::*</code>
     writer (<code>commands::sessions</code>, kept alive by the
     <code>emma sessions</code> CLI command now that the Data Explorer page it
-    used to feed is gone, and
+    fed is gone, and
     <code>commands::memory</code>, both writer-shaped like
     <code>commands::agents</code>), captured into a string by
     <code>capture_sessions</code> / <code>capture_memory</code>. The frame paints
@@ -209,13 +224,17 @@ pub enum Pane {
           <td>What was asked in this project, how many sessions, how many compactions and clears.</td>
           <td>Similarity scores, an embedding model name, retrieval latency, index coverage. Emma has no embedding index and no retrieval; she keeps a record of what was asked and what happened, which is a real thing to show and a different one.</td>
         </tr>
+        <tr>
+          <td>Harness</td>
+          <td>The mock's full chrome: an action bar, six cards, an event log and a trace band. RUNTIME STATUS is live today, since the binary, the version and the workspace are things Emma knows.</td>
+          <td>The rest of the numbers. ACTIVE RUNS, WORKER POOL, TASK QUEUE, TOOL GATES and RESOURCES render from a <code>HarnessView</code> that is empty until a backend exists, so the cards keep their shape and show honest zeros and one-line dim empty states. Drawing the mock's sample runs as though they were real would be the status bar's own rule broken at page size.</td>
+        </tr>
       </tbody>
     </table>
   </div>
 
   <p>
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/guarantees.rs">crates/emma/src/term/guarantees.rs</a>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/term/guarantees.rs">crates/emma/src/term/guarantees.rs</a>
     <code>each_pages_disclosure_belongs_to_that_page_alone</code> asserts the
     Memory page carries <code>NO_INDEX</code> on painted cells, and
@@ -224,6 +243,16 @@ pub enum Pane {
     written (<code>the_memory_page_says_it_has_no_index_rather_than_inventing_one</code>,
     <code>the_explorer_page_draws_its_snapshot_and_names_what_it_omits</code>)
     no longer exist. The Data Explorer page was removed 2026-08-27.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> for the Harness row above.
+    <code>each_pages_disclosure_belongs_to_that_page_alone</code> opens Settings
+    and Memory and reads their painted cells; it does not open Harness, so
+    nothing asserts that the dashboard's empty states say what they say. Adding
+    a third arm to that test, opening Harness with an empty
+    <code>HarnessView</code> and asserting one card's empty line, would settle
+    it.
   </p>
 
   <p>
@@ -294,16 +323,20 @@ pub enum Pane {
   <h2 id="look">Looking at them</h2>
 
   <p>
-    An ignored test prints all three, for the question the assertions cannot
-    answer. <em>Does this read well:</em>
+    An ignored test prints the Settings screen, for the question the assertions
+    cannot answer. <em>Does this read well:</em>
   </p>
 
-  <pre><code>cargo test -p emma --lib term::app::tests::show_the_pages -- --ignored --nocapture</code></pre>
+  <pre><code>cargo test -p emma --lib term::app::tests::dump_the_settings_screen -- --ignored --nocapture</code></pre>
 
   <p>
     It asserts nothing, and what it shows is the cell buffer rather than a
     console: no colour, no proof that the chord arrived, no tearing. Everything
-    it draws is already covered by the three tests above it.
+    it draws is already covered by the tests above it.
+    <span class="chip unv">unverified</span>: Memory and Harness have no
+    equivalent dump, so the only way anybody has looked at those two is by
+    running Emma and pressing the key. A test that prints each of them would
+    cost a few lines and settle it.
   </p>
 
   <h2 id="unverified">What has not been checked</h2>
