@@ -359,6 +359,84 @@
   </p>
   <span class="src">crates/emma/src/term/diff.rs &mdash; <code>an_addition_and_a_removal_differ_in_gutter_as_well_as_in_colour</code>, <code>Change::to_text</code></span>
 
+  <h3>The colon refusal has not been checked against a non-NTFS Windows filesystem</h3>
+
+  <p>
+    The alternate-data-stream refusal is <code>#[cfg(windows)]</code> and treats
+    a colon in any normal component as naming an NTFS stream. On unix a colon is
+    an ordinary character in a file name and refusing it would break real paths,
+    which is why the check is Windows-only.
+    <span class="chip unv">unverified</span>: whether any non-NTFS Windows
+    filesystem Emma might run on treats <code>:</code> as ordinary has not been
+    checked, and if one does, this refuses a name that would have worked.
+    Running the same probe on a FAT32 or exFAT volume would settle it.
+  </p>
+  <span class="src">tools/fs/src/path.rs &mdash; <code>resolve</code></span>
+
+  <h3><code>display</code> rewrites a backslash a unix filename is allowed to contain</h3>
+
+  <p>
+    The separator swap is unconditional. A unix filename may legally contain a
+    backslash, and <code>display</code> rewrites it to a forward slash, so the
+    model is told a spelling <code>resolve</code> will not find. A round trip
+    through <code>Glob</code> and <code>Read</code> would then fail on a file
+    that exists.
+    <span class="chip unv">unverified</span>: recorded by a platform sweep, and
+    no test covers it. Create a file named <code>a\b.txt</code> on Linux and
+    round-trip the name through <code>Glob</code> and <code>Read</code>.
+  </p>
+  <span class="src">tools/fs/src/path.rs &mdash; <code>display</code></span>
+
+  <h3>Deleting <code>still_contained</code> leaves the whole workspace green</h3>
+
+  <p>
+    The recheck exists to narrow the window between resolving a path and writing
+    to it. That it is <em>called</em> is asserted by reading the code and by
+    nothing else: remove the call from <code>write.rs</code> and every test still
+    passes. On the happy path the guard is a no-op by construction, because the
+    tool resolved the path at the top of the call and nothing between there and
+    here moves it, so no ordinary test can distinguish a wired guard from a
+    deleted one.
+    <span class="chip unv">unverified</span>: what would settle it is a test that
+    wins the race on demand, which is the thing that cannot be built. A weaker
+    check that can be: assert the call site exists, and say in the test that it
+    is a wiring check rather than a behaviour one.
+  </p>
+  <span class="src">tools/fs/src/path.rs &mdash; <code>still_contained</code>; tools/fs/src/write.rs</span>
+
+  <h3>Nothing catches a tool built outside its crate's builder</h3>
+
+  <p>
+    Each crate's builder is the only supported way to construct its set of
+    tools, and nothing enforces that &mdash; not the compiler, not the registry's
+    coherence check, not any test. A member built directly compiles and then
+    silently stops sharing session state. <code>ToolCtx</code>'s own doc names
+    it: a <code>Write</code> built with the wrong tracker refuses nothing, and it
+    compiles.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span>, and it is a claim about the absence
+    of a test, which is the hardest kind to be sure of: it was made by reading
+    the four crates' test files rather than by exhaustive search. Build a member
+    with a private tracker in a scratch branch, run
+    <code>cargo test --workspace</code>, and confirm the suite stays green.
+  </p>
+  <span class="src">crates/tool-api/src/lib.rs &mdash; <code>ToolCtx</code>; tools/fs/src/session.rs; tools/lsp/src/lib.rs; tools/web/src/browser/mod.rs</span>
+
+  <h3>No test drives a real Chrome through a real redirect</h3>
+
+  <p>
+    The cross-origin re-ask compares the digest's <code>final_url</code> against
+    the host the gate was asked about and refuses when they differ. The mutation
+    tests cover that comparison, and they cover it through stubs.
+    <span class="chip unv">unverified</span>: nothing has been through a real
+    browser and a real redirect. A loopback stub serving a 302 to a different
+    host, run through <code>WebFetch::run</code> with a browser attached, would
+    settle it.
+  </p>
+  <span class="src">tools/web/src/fetch.rs &mdash; <code>WebFetch::run</code></span>
+
   <h2 id="planned">Planned, with the reasoning written down</h2>
 
   <p>

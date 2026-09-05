@@ -354,12 +354,9 @@
 </p>
 
 <p>
-  <span class="chip unv">unverified</span> "Nothing catches a bypassed builder"
-  is a claim about the absence of a test, made by reading the four crates' test
-  files rather than by exhaustive search, and an absence is the hardest thing
-  to be sure of. Settled by writing a member with a private tracker in a
-  scratch branch, running <code>cargo test --workspace</code>, and confirming
-  the suite stays green.
+  Nothing catches a caller that bypasses the builders. A member built alone
+  compiles, passes every test, and silently stops sharing; it is listed under
+  <a href="roadmap.html#hazards">named hazards</a> rather than described here.
 </p>
 </div>
 </main>

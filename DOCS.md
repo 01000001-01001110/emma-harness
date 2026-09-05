@@ -54,8 +54,15 @@ claims, and the mark now says which.
 
 A page with no amber chips anywhere is not a page that got everything right; it
 is a page that has not been honest yet. The chips are how this site stays
-trustworthy as it ages — an amber chip is a standing invitation to go and settle
+trustworthy as it ages: an amber chip is a standing invitation to go and settle
 something, and it is supposed to be uncomfortable.
+
+**One exception, added 2026-09-05.** A failure the code names and does not
+remove now lives on `roadmap.html#hazards` rather than in the middle of the page
+that explains the mechanism, and the amber goes with it. Some pages are
+therefore all green while pointing at amber a click away, which is honest. What
+is not allowed is a page that is all green and points at nothing: if you moved a
+hazard out, the sentence you left behind names it and links the list.
 
 ## Chapters and their pages
 

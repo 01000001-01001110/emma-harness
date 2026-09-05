@@ -392,12 +392,12 @@ for component in lexical_normalize(&amp;joined).components() {
 </p>
 
 <p>
-  It is <code>#[cfg(windows)]</code>. On unix a colon is an ordinary character
-  in a file name and refusing it would break real paths.
-  <span class="chip unv">unverified</span> Whether any non-NTFS Windows
-  filesystem Emma might run on treats <code>:</code> as ordinary has not been
-  checked; if one does, this refuses a name that would have worked. What would
-  settle it is running the same probe on a FAT32 or exFAT volume.
+  It is <code>#[cfg(windows)]</code> because on unix a colon is an ordinary
+  character in a file name and refusing it would break real paths. The hazard
+  the check cannot rule out — a non-NTFS Windows filesystem that treats
+  <code>:</code> as ordinary would be refused a name that would have worked —
+  is listed under <a href="roadmap.html#hazards">named hazards</a> rather than
+  described here.
 </p>
 
 <h2 id="existing">The variant that demands the file be there</h2>
@@ -437,20 +437,11 @@ for component in lexical_normalize(&amp;joined).components() {
 </p>
 <span class="src">tools/fs/src/path.rs — <code>display</code></span>
 
-<div class="note warn">
-  <span class="h">Suspected defect: the separator swap is unconditional</span>
-  <p>
-    A unix filename may legally contain a backslash. <code>display</code>
-    rewrites it to a forward slash, so the model is told a spelling
-    <code>resolve</code> will not find, and a round trip through
-    <code>Glob</code> and <code>Read</code> would fail on a file that exists.
-    Recorded by the platform sweep; no test covers it.
-    <span class="chip unv">unverified</span> Settled by creating a file named
-    <code>a\b.txt</code> on Linux and round-tripping the name through
-    <code>Glob</code> and <code>Read</code>.
-  </p>
-</div>
-<span class="src">notes/lessons/a-fake-machine-still-parses-paths-with-the-hosts-separator.md §4</span>
+<p>
+  The separator swap is unconditional, and a unix filename may legally contain
+  a backslash. What that costs is listed under
+  <a href="roadmap.html#hazards">named hazards</a> rather than described here.
+</p>
 
 <h2 id="cannot">What containment cannot catch</h2>
 
@@ -522,13 +513,10 @@ for component in lexical_normalize(&amp;joined).components() {
 </p>
 
 <p>
-  <span class="chip unv">unverified</span> <strong>That the guard is called at
-  all.</strong> Deleting <code>still_contained(&hellip;)</code> from
-  <code>write.rs</code> leaves the whole workspace green. On the happy path the
-  guard is a no-op by construction: the tool resolved the path at the top
-  of the call and nothing between there and here moves it, so its wiring
-  is asserted by reading the code and nothing else. <em>What would settle it:</em>
-  a test that wins the race on demand, which is the thing that cannot be built.
+  Whether the recheck runs at all is unproven: deleting
+  <code>still_contained(&hellip;)</code> from <code>write.rs</code> leaves the
+  whole workspace green. It is listed under
+  <a href="roadmap.html#hazards">named hazards</a> rather than described here.
 </p>
 
 <div class="note">
@@ -595,8 +583,9 @@ for component in lexical_normalize(&amp;joined).components() {
 <h2 id="unverified">What is not verified here</h2>
 
 <p>
-  <span class="chip unv">unverified</span> The backslash-in-a-unix-filename
-  defect above. Nobody has run it.
+  The backslash-in-a-unix-filename defect is listed under
+  <a href="roadmap.html#hazards">named hazards</a> with its chip and its
+  settling experiment.
 </p>
 
 <p>

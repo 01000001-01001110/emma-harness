@@ -449,10 +449,9 @@
   weakened to a suffix match. Ran
   <code>cargo test -p emma-tools-web --lib a_redirect_to_another_host</code> on
   2026-09-02: ok.
-  <span class="chip unv">unverified</span> No test drives a real Chrome
-  through a real redirect. <em>What would settle it:</em> a loopback stub serving
-  a 302 to a different host, run through <code>WebFetch::run</code> with a
-  browser attached.
+  That no test drives a real Chrome through a real redirect is a named hazard,
+  listed under <a href="roadmap.html#hazards">named hazards</a> rather than
+  described here.
 </p>
 
 <p>
