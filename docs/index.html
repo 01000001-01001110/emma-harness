@@ -59,15 +59,19 @@
         <h1>Emma, the harness</h1>
 
         <p class="lede">
-          Part of learning track is Rust, and since claude code is closed source,
-          maybe we need a new harness. The goal of Emma is to be a codeing assistant harness.
+          Part of my learning track is Rust, and since claude code is closed source,
+          maybe it was time to see what I could build myself with the help of claude
+          to guide me and teach me Rust along the way.
 
-          Right now, Emma is a coding assistant for one person on one machine,
-          model-agnostic and written in Rust: with a goal-holding loop,
-          its tools, a consent gate, and a terminal.
+          The goal of Emma is to be an extendable coding assistant harness.
+
+          Right now, Emma is model-agnostic and written in Rust:
+          with a goal-holding loop I am not proud of, but for now it works,
+          its own tools, a consent gate, and a terminal.
 
           It runs against any provider you point it at (a paid API or a model
           on your own machine), and every part of it is yours to extend.
+
           All of it in one binary you have complete control over.
         </p>
 
@@ -143,6 +147,9 @@
           <code>WebFetch</code> renders in real Chrome, and five tools drive a live
           page: open, read, act, fill, close. A harness that can only fetch HTML is
           guessing at anything rendered client-side. See <a href="tools.html">Tools</a>.
+
+          This was part of another project where I built a plugin that uses rust to wrap Chrome.
+          Chromehand is the name for that plugin, I have integrated the binary directly into Emma.
         </p>
 
         <h3>Any model, any provider</h3>
