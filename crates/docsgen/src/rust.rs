@@ -162,19 +162,44 @@ pub fn fn_guards(file: &syn::File, name: &str) -> Result<Vec<Item>> {
 
 fn collect_guards(stmts: &[syn::Stmt], out: &mut Vec<Item>, descend: bool) {
     for stmt in stmts {
-        let syn::Stmt::Expr(syn::Expr::If(iff), _) = stmt else {
-            continue;
-        };
-        let returns = block_returns(&iff.then_branch);
-        if let Some(verdict) = returns {
-            out.push(Item {
-                name: cond_text(&iff.cond),
-                doc: String::new(),
-                detail: verdict,
-            });
-        } else if descend {
-            // A guard whose body is itself guards -- the `if !forced` block.
-            collect_guards(&iff.then_branch.stmts, out, false);
+        match stmt {
+            // `let Some(x) = e else { return … }` is the same rung as an `if`
+            // that returns, and it was invisible here until 2026-09-04. The
+            // danger was not the shape being missed but being missed *among*
+            // `if` guards: a function mixing both drew a partial ladder, which
+            // is a confident picture of the wrong order. Nothing shipped had
+            // that mix -- checked against every function the ladders read --
+            // and the next one would not have been so lucky.
+            syn::Stmt::Local(local) => {
+                let Some(init) = &local.init else { continue };
+                let Some((_, diverge)) = &init.diverge else {
+                    continue;
+                };
+                let syn::Expr::Block(b) = diverge.as_ref() else {
+                    continue;
+                };
+                let Some(verdict) = block_returns(&b.block) else {
+                    continue;
+                };
+                out.push(Item {
+                    name: cond_text(&init.expr),
+                    doc: String::new(),
+                    detail: verdict,
+                });
+            }
+            syn::Stmt::Expr(syn::Expr::If(iff), _) => {
+                if let Some(verdict) = block_returns(&iff.then_branch) {
+                    out.push(Item {
+                        name: cond_text(&iff.cond),
+                        doc: String::new(),
+                        detail: verdict,
+                    });
+                } else if descend {
+                    // A guard whose body is itself guards -- `if !forced`.
+                    collect_guards(&iff.then_branch.stmts, out, false);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -575,6 +600,48 @@ mod tests {
         assert_eq!(g.len(), 2, "{g:?}");
         assert_eq!(g[0].name, "rule == Deny");
         assert_eq!(g[1].name, "gate == SkipAll");
+    }
+
+    /// **If this breaks:** a `let … else { return … }` stops counting as a
+    /// rung, and a function that mixes it with `if` guards draws a ladder that
+    /// is confidently short -- the worst outcome for a picture whose only claim
+    /// is an order.
+    ///
+    /// Reported by a reviewer on 2026-09-04, which is also when it was checked
+    /// against every function the shipped ladders read: none mixed the two, so
+    /// nothing drawn was partial. That was luck rather than design.
+    #[test]
+    fn a_let_else_that_returns_is_a_rung_like_any_other() {
+        let f = file(
+            "fn d() -> V {
+             let Some(a) = first() else { return V::A; };
+             if b { return V::B; }
+             let Ok(c) = second() else { return V::C; };
+             V::D
+}",
+        );
+        let g = fn_guards(&f, "d").expect("guards");
+        assert_eq!(
+            g.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+            ["first()", "b", "second()"],
+            "the two let-else rungs sit in source order around the if: {g:?}"
+        );
+    }
+
+    /// **If this breaks:** an ordinary `let` with no `else` is counted as a
+    /// guard, and the ladder grows rungs the function does not check.
+    #[test]
+    fn a_plain_let_binding_is_not_a_rung() {
+        let f = file(
+            "fn d() -> V {
+ let x = work();
+ if b { return V::B; }
+ V::C
+}",
+        );
+        let g = fn_guards(&f, "d").expect("guards");
+        assert_eq!(g.len(), 1, "{g:?}");
+        assert_eq!(g[0].name, "b");
     }
 
     /// **If this breaks:** a nested block of guards collapses to one rung and
