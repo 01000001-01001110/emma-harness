@@ -81,7 +81,7 @@
           A harness decides what the model sees before you type anything, what it can
           reach for, and what you look at while it works. In most harnesses those
           decisions are made once, elsewhere, for everyone. Emma is the case where
-          they are yours. Five things follow.
+          they are yours.
         </p>
 
         <h3>Spend less context on the harness</h3>
@@ -95,48 +95,27 @@
           uncached call.
         </p>
 
-        <div class="note warn">
-          <span class="h">Half of Emma's prompt is now counted, and the other half is the hard half</span>
-          <p>
-            <span class="chip test">tested</span> The <code>tools</code> array Emma
-            sends is <strong>29,505 bytes over 16 tools</strong>, measured on
-            2026-09-05 by
-            <code>crates/emma/tests/prompt_size.rs</code>, which builds the registry
-            the way <code>main</code> builds it and sums the wire definitions. That is
-            a floor: it excludes the browser, <code>WebSearch</code> and
-            <code>Skill</code>, none of which register without a Chrome, a Brave key or
-            a harness.
-          </p>
-          <p>
-            This went uncounted for months on a stated reason that was mostly wrong.
-            The claim was that settling it needed the
-            <code>/v1/messages/count_tokens</code> endpoint with a real key, and a
-            captured Claude Code request to compare against. Neither is needed for the
-            byte count &mdash; the registry assembles with no network and no
-            credential &mdash; and the difficulty of the comparison was doing the work
-            of an excuse for the part that was easy. The endpoint had already been used
-            against this project on 2026-08-11, on the
-            <a href="tools-edit.html#cost">Edit</a> page.
-          </p>
-          <p>
-            <span class="chip unv">unverified</span>: bytes are not tokens, and the
-            <code>system</code> field is not in this figure because it depends on which
-            persona and which done-check a run selects. Submit the exact first-request
-            body to <code>count_tokens</code> and record the returned
-            <code>input_tokens</code>. The comparison with Claude Code is a separate
-            piece of work and needs its request captured off the wire.
-          </p>
-        </div>
+        <p>
+          Emma's own side of that is <strong>29,505 bytes of tool definitions across
+          16 tools</strong>. <span class="chip test">tested</span> by
+          <code>crates/emma/tests/prompt_size.rs</code>, which builds the registry the
+          way <code>main</code> builds it and adds up what goes on the wire. It is a
+          floor rather than a total: the browser, <code>WebSearch</code> and
+          <code>Skill</code> are not in it, because none of them register without a
+          Chrome, a search key or a harness. Bytes are not tokens, and the rest of
+          that measurement is on
+          <a href="unverified.html">What is not verified</a>.
+        </p>
 
         <p>
-          One related figure in the source is easy to misread. A bare
-          <code>Hello</code> once cost <strong>22,083 tokens</strong>, and that was
-          behaviour rather than prompt size: Emma used to prepend "Work toward this
-          goal. You have tools; use them" to every input, so a greeting sent the model
-          to run <code>pwd &amp;&amp; ls -la</code> and read the task file before
-          answering. Moving that text into the standing contract fixed it. The rule it
-          left behind: a preamble applied to every input is an instruction the user
-          did not write and cannot see.
+          Size is not the whole story, and one number here taught me that. A bare
+          <code>Hello</code> once cost <strong>22,083 tokens</strong>. The prompt was
+          not the problem. Emma used to paste "Work toward this goal. You have tools;
+          use them" onto the front of everything you typed, so saying hello sent the
+          model off to run <code>pwd &amp;&amp; ls -la</code> and read the task file
+          before it would answer. Moving that sentence into the standing contract
+          fixed it. What I took from it: anything prepended to every input is an
+          instruction the user did not write and cannot see.
         </p>
         <span class="src">crates/emma/src/goal.rs — <code>opening</code>, <code>standing_contract</code></span>
 
@@ -147,7 +126,9 @@
           <code>WebFetch</code> renders in real Chrome, and five tools drive a live
           page: open, read, act, fill, close. A harness that can only fetch HTML is
           guessing at anything rendered client-side. See <a href="tools.html">Tools</a>.
+        </p>
 
+        <p>
           This was part of another project where I built a plugin that uses rust to wrap Chrome.
           Chromehand is the name for that plugin, I have integrated the binary directly into Emma.
         </p>
@@ -237,8 +218,7 @@
         <p>
           The approval gate is a consent interface rather than a sandbox. It enforces
           nothing a tool does not declare about itself, and <code>Bash</code> can do
-          anything. <a href="consent.html">The consent page</a> says where that ends,
-          in more detail than most readers will expect.
+          anything. <a href="consent.html">The consent page</a> says where that ends.
         </p>
 
         <p>
