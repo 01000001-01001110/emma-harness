@@ -1,7 +1,7 @@
 # The chromehand fork
 
 `src/chromehand/` is a fork of **chromehand** (binary name `browser-miner`),
-Alan's own project at `a sibling checkout`. Forked from commit `9c93827`
+Alan's own project, a sibling repository on his machine. Forked from commit `9c93827`
 on **2026-08-09**, MIT (the upstream `Cargo.toml` declares `license = "MIT"`;
 it ships no `LICENSE` file to copy).
 

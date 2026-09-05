@@ -60,7 +60,8 @@ proposed material until the owner says otherwise.
 AUTHORITY: the commit message that carried the change
 
 Was `notes/design/`. Rationale now travels with its diff, where it cannot drift
-from the code it explains. Older rationale is in `git log -p -- notes/design/`.
+from the code it explains. Older rationale is on the owner's disk and in his
+vault; it is not in this repository's history.
 
 Design notes explain why a decision was made. They do not prove the
 implementation still follows it.
@@ -69,7 +70,7 @@ implementation still follows it.
 AUTHORITY: none in this repository
 
 The surveys and research notes were mined into the owner's knowledge store
-before removal; `git log -p -- notes/research/` still has them.
+before removal. They are not in this repository's history.
 
 Research does not establish current behavior.
 
@@ -91,8 +92,9 @@ An entry is not approved work merely because it exists.
 CHANGELOG.md = user-visible changes
 git = implementation history
 
-Every removed record above is still readable in this repository's history.
-Taking a file out of the tree does not take it out of the commits that carried
-it, so `git log -p -- notes/` reaches any of them. A citation elsewhere in this
-repository naming a path under `notes/` means a file that was removed on
-2026-08-30, not a broken reference.
+None of the removed records above is in this repository's history: it was
+rewritten on 2026-09-01 to drop them from every commit, and `git log -p --
+notes/` returns nothing in a clone. This file said otherwise until 2026-09-05.
+A citation elsewhere in this repository naming a path under `notes/` names a
+file that was removed on 2026-08-30 and that a reader cannot open; each such
+citation now says so where it stands.

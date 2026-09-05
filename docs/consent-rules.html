@@ -264,7 +264,7 @@
     error for the star says why, and it is the sharpest sentence in the file: a
     <code>*</code> there is the rule that matches everything, which in the
     <code>allow</code> list is one typo away from approving the whole tool surface.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_glob_in_the_tool_position_is_refused</code> runs <code>*</code>,
     <code>*(domain:x)</code>, <code>Web*</code> and <code>mcp__*</code> and
     asserts each error mentions "exactly" or "tool name".
@@ -275,7 +275,7 @@
     Anything that is not a clean parse is an error rather than a rule that matches
     nothing. The distinction is about the <code>deny</code> list: a rule the
     operator wrote and Emma dropped without a word is a protection they believe
-    they have. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    they have. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_malformed_rule_is_refused_rather_than_silently_inert</code> asserts an
     error for ten spellings, including <code>""</code>, <code>"   "</code>,
     <code>WebFetch(</code>, <code>WebFetch(domain:apnews.com</code>,
@@ -302,7 +302,7 @@
     against a real settings file: <strong>62 of its 64 rules were inert</strong>.
     ARCH-002 gave both shapes real matchers, and what remains here is an unknown
     specifier rather than the common case.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>the_shapes_that_used_to_be_inert_now_evaluate</code> parses a
     Claude-Code-shaped deny list and asserts a <code>rm</code> call is denied and
     a <code>./src</code> read is allowed, with no boot note left to make. An
@@ -316,7 +316,7 @@
     nothing can reach is an arm nothing checks: a mutation flipping it to
     <code>true</code> went undetected until the test existed, and that is how
     <code>Bash(rm *)</code> would one day start matching every call to
-    <code>Bash</code>. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    <code>Bash</code>. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>an_unsupported_rule_that_reaches_a_list_anyway_still_matches_nothing</code>
     adopts <code>Bash(git log:*)</code> and asserts <code>for_tool</code> and two
     <code>for_egress</code> calls all answer <code>None</code>. Flipping the arm
@@ -328,7 +328,7 @@
     Rendering round-trips: <code>Display</code> for <code>Rule</code> prints
     <code>Tool</code>, <code>Tool(domain:raw)</code> or <code>Tool(spec)</code>,
     and the pattern keeps the text it was written as so the rule renders back
-    exactly as the file will show it. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    exactly as the file will show it. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_rule_round_trips_through_its_own_text</code> parses four spellings,
     asserts each renders to itself, and re-parses the rendering to the same value.
     The written file is the user interface; a rule that renders back as something
@@ -362,7 +362,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     <code>deny</code>. A broad <code>allow</code> still covers every host a narrow
     <code>deny</code> does not name. This is the clause people get wrong, and if
     it inverted, every <code>deny</code> list in every settings file would become
-    a default rather than a refusal. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    a default rather than a refusal. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>deny_beats_allow_however_specific_the_allow_is</code> checks both
     arrangements and then asserts the broad allow still answers for a host the
     narrow deny does not name. <code>ask_sits_between_them_and_beats_allow</code>
@@ -384,7 +384,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     <code>None</code> is what sends a call on down the ladder. A rule set that
     answered <code>Allow</code> for a tool nobody wrote a rule about would be the
     whole gate switched off by an empty file.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>silence_is_not_a_decision</code> asserts <code>None</code> from both
     lookups on an empty set, and that <code>is_empty</code> agrees.
   </p>
@@ -408,7 +408,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     compensates, and <code>main</code> prints every one through the
     <em>warning</em> channel at startup rather than the note channel, since each
     is a line somebody wrote that is not doing what they think.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_bad_rule_costs_that_rule_and_not_the_boot</code> parses
     <code>WebFetch(</code> beside <code>WebSearch</code> and asserts the good rule
     still answers and the note names the source file.
@@ -421,7 +421,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     not want. A <code>deny</code> or <code>ask</code> it cannot evaluate costs
     them a protection they think they have, and that one says <em>blocks
     NOTHING</em> in capitals and suggests the bare tool name as the spelling that
-    would cover every call. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    would cover every call. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_specifier_that_still_cannot_be_evaluated_is_announced</code>
     asserts both wordings and that neither rule reached a list.
   </p>
@@ -461,7 +461,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     the file it was written in, because by the time a rule misfires there is no
     other route back to the document holding it. The merged set composes because
     <code>deny</code> beats <code>allow</code> at match time whichever file each
-    came from. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/permissions.rs">crates/emma/tests/permissions.rs</a>
+    came from. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/permissions.rs">crates/emma/tests/permissions.rs</a>
     <code>a_deny_rule_in_the_project_file_beats_an_allow_in_the_local_one</code>,
     in the integration tests.
   </p>
@@ -505,7 +505,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     <code>the_user_scope_contributes_deny_and_never_allow</code> and
     <code>a_missing_or_unreadable_user_settings_file_is_not_a_failure</code>
     cover those cases.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/tests/permissions.rs">crates/harness/tests/permissions.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/harness/tests/permissions.rs">crates/harness/tests/permissions.rs</a>
     <span class="chip unv">unverified</span> Despite its name, the second test
     does not create an existing file whose read fails; its own comment records
     that gap. <em>What would settle it:</em> on Unix create the settings file,
@@ -550,7 +550,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     file and what is wrong with it, and the grant lasts the session instead.
     <code>kind_of</code> exists to name the shape found before the mutable borrow
     starts, so the refusal can say "holds a JSON number" rather than only "is not
-    an object". <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    an object". <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_file_that_cannot_be_parsed_is_left_exactly_as_it_was</code> writes all
     four shapes, asserts each error names its file, and asserts the bytes on disk
     are unchanged.
@@ -560,7 +560,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
   <p>
     The write goes to a sibling temporary file, <code>*.json.emma-tmp</code>, and
     is renamed over the target, so an interrupted run cannot leave half a settings
-    file behind. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    file behind. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_missing_file_is_created_with_only_what_was_granted_in_it</code>
     asserts the created file byte for byte and then asserts the directory holds
     exactly one entry. That catches a temporary file surviving the
@@ -573,7 +573,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     <code>permissions.allow</code>, for a caller that wants to say whether a grant
     would be new. Any problem reading it answers with an empty set, because it is
     cosmetic and <code>remember</code> is where the refusals live.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>what_is_written_is_what_is_read_back_next_boot</code> writes a rule,
     reads it back through <code>already_written</code>, re-parses it into a
     <code>Rules</code>, and asserts it allows <code>apnews.com</code> and not
@@ -606,7 +606,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     deny actually matched, the answer is <code>Ask</code>. Not <code>Deny</code>:
     the rule did not match, and claiming it did would be false. What is refused
     is passing <em>quietly</em>.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_composed_command_cannot_slip_past_a_deny_prefix</code> walks seven
     evasions and asserts each becomes a question.
   </p>
@@ -635,7 +635,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     token alone would have fixed nothing. The call site now passes the raw
     argument, and the token is in the list as well. <code>is_composed</code> now
     receives the raw input rather than one caller's normalised form.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>an_ordinary_shell_spelling_cannot_walk_past_a_deny_rule</code> asserts
     the <em>decision</em> rather than <code>is_composed</code>, because the bug
     lived in the seam between the two. Four mutations go red: the call site
@@ -684,7 +684,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     call's path are now normalised before matching: separators become
     <code>/</code>, repeated separators collapse, and <code>./</code> segments go.
     The rule and the call then meet in one spelling.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_path_rule_is_not_defeated_by_respelling_the_same_file</code> crosses
     two rule spellings with five call spellings and asserts all ten deny.
     Removing the normalisation on the call side turns it red, along with two
@@ -702,7 +702,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     a parse error, because a pattern that can never be evaluated is not a rule.
     An earlier version asked the question of both sides, and one <code>..</code>
     in one rule then turned every unrelated read into a prompt.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_path_a_rule_cannot_be_compared_against_asks_rather_than_passes</code>
     asserts three such paths answer <code>Deny</code> or <code>Ask</code> and
     never silence, while an ordinary relative path is still judged. A
@@ -760,7 +760,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
   </div>
 
   <p>
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>the_respelling_bypasses_a_review_found_are_all_closed</code> keeps each
     of the seven as the exact input the review gave, rather than a paraphrase of
     it. The paraphrase is what the original code was already written

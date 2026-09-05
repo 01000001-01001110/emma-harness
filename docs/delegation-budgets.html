@@ -190,7 +190,7 @@ const FOOTER_ITEMS: usize = 12;
     never a tool that disappears from the schema (a capability quietly vanishing
     late in every goal).
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
     <code>a_delegation_refuses_to_start_when_the_goal_has_almost_nothing_left</code>.
   </p>
   <span class="src">crates/emma/tests/delegate.rs::a_delegation_refuses_to_start_when_the_goal_has_almost_nothing_left; crates/tool-api/src/lib.rs — ToolError</span>
@@ -211,7 +211,7 @@ const FOOTER_ITEMS: usize = 12;
     "its own" means the sub compacts its own chapters independently, against the
     same numeric cap.
   </p>
-  <span class="src">crates/emma/src/delegate.rs — Delegate::sub_budgets; notes/design/subagents-mechanism.md — the dated header</span>
+  <span class="src">crates/emma/src/delegate.rs — Delegate::sub_budgets; notes/design/subagents-mechanism.md — the dated header (removed from the repository 2026-08-30, history included; the owner holds it)</span>
 
   <p>
     The wall clock is <code>min(5 minutes, the parent's remaining
@@ -300,7 +300,7 @@ impl Spend {
 
   <p>
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
     <code>a_subagents_spend_charges_the_parents_meter</code> drives a
     100-token parent call, a 7,000-token sub call, a 300-token sub answer and a
     100-token parent answer, and asserts 7,500 on the parent's meter and 7,500
@@ -382,7 +382,7 @@ impl Spend {
 
   <p>
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
     A resumed parent adds back what its
     delegations spent from <code>cost_tokens</code>, since a resume that dropped
     it would come back with a meter missing everything its subagents spent.
@@ -436,7 +436,7 @@ impl Spend {
     memo rule stated in prose because the memo itself only catches identical
     calls).
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
     <code>a_subagent_that_ran_out_of_budget_is_not_reported_as_a_finished_one</code>.
   </p>
   <span class="src">crates/emma/tests/delegate.rs::a_subagent_that_ran_out_of_budget_is_not_reported_as_a_finished_one; crates/emma/src/agent.rs — the memo</span>
@@ -455,7 +455,7 @@ impl Spend {
   <ul class="body">
     <li>
       <span class="chip test">tested</span>
-      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
       Sub-run wall clock and kick count are on the delegation record and asserted by
       <code>a_sub_run_gets_its_own_wall_clock_and_a_single_nudge</code> (ran
       2026-09-02: ok). That is not the same as observing a sub sleep past the

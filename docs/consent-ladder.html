@@ -345,7 +345,7 @@
     The bypass cannot be set from configuration or the environment. The short
     <code>--yes</code> spelling is accepted only alongside <code>-p</code>, so the
     interactive path cannot reach the bypass without typing the whole word.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/cli.rs">crates/emma/src/cli.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/cli.rs">crates/emma/src/cli.rs</a>
     <code>the_short_bypass_cannot_be_reached_interactively</code> rejects bare
     <code>--yes</code> and checks the error names
     <code>--dangerously-skip-permissions</code>.
@@ -366,7 +366,7 @@
     The argument for moving it: a deny rule is something the operator wrote down
     and can go and read, and the bypass is a flag typed to get a script through.
     Claude Code makes the same ruling, that if a tool is denied at any level no
-    other level can allow it. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
+    other level can allow it. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     <code>a_deny_rule_beats_the_bypass_flag</code> builds a
     <code>Gate::SkipAll</code> gate with an empty answer queue, asserts
     <code>Bash</code> is denied on the local axis and
@@ -384,7 +384,7 @@
     <code>20ac400</code>; the change was reverted. This page does not mutate
     source.
   </p>
-  <span class="src">crates/emma/src/approval.rs — tests; notes/plan records at 20ac400</span>
+  <span class="src">crates/emma/src/approval.rs — tests; notes/plan records at 20ac400 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
 
   <h2 id="unattended">An <code>allow</code> rule answers before the unattended denial</h2>
 
@@ -422,7 +422,7 @@
     <a href="consent-rules.html#boundary">the rules page</a>. A command-prefix
     deny narrows to the spellings it names; what it cannot judge it asks about
     instead of passing quietly.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>the_shapes_that_used_to_be_inert_now_evaluate</code> parses a
     Claude-Code-shaped deny list and asserts a <code>rm</code> call is denied and
     a <code>./src</code> read allowed, with no boot note left to make.
@@ -532,7 +532,7 @@ match self
     passed against a mutation that disabled the denial outright. Behaviour is
     covered by
     <code>a_hook_denial_outranks_an_allow_rule_that_covers_the_call</code>.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/permissions.rs">crates/emma/tests/permissions.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/permissions.rs">crates/emma/tests/permissions.rs</a>
   </p>
   <span class="src">crates/emma/src/approval.rs — the comment where that test used to be; crates/emma/tests/permissions.rs::a_hook_denial_outranks_an_allow_rule_that_covers_the_call; crates/emma/tests/loop.rs</span>
 

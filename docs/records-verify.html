@@ -96,7 +96,7 @@
     green. Three false receipts were found by that question in a single day. It
     also asks for <code>file:line</code> on every claim, and says an answer
     without any is unusable.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/verify.rs">crates/emma/tests/verify.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/verify.rs">crates/emma/tests/verify.rs</a>
     <code>the_brief_asks_a_reviewer_to_disprove_rather_than_confirm</code>
     asserts on the text, because here the text <em>is</em> the mechanism.
   </p>
@@ -127,7 +127,7 @@
     <strong>The verdict is the last one in the report, not the first.</strong> A
     model that reasons out loud names several on its way to one, and reading the
     first turns a thought into a conclusion in the closing direction.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/verify.rs">crates/emma/tests/verify.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/verify.rs">crates/emma/tests/verify.rs</a>
     <code>the_last_verdict_wins_and_a_missing_one_is_not_a_pass</code>, which
     also pins the third case: a reviewer that ends with no verdict line at all is
     recorded as exactly that, rather than smoothed into a failure. Saying the row

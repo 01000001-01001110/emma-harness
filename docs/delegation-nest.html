@@ -346,7 +346,7 @@ struct AgentType {
     <code>prompt_network_question</code> and <code>prompt_answered</code> render
     exactly as they do for the parent, and so do tool lines and notes.
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
     <code>constructing_an_agent_never_moves_the_status_meters</code> and
     <code>a_nested_run_moves_no_meter_and_still_reaches_the_keyboard</code> hold
     both halves: no meter event recorded, and the approval prompt still reached.
@@ -405,7 +405,7 @@ struct AgentType {
     <code>close_turn</code>, place the parent's held turn without its results,
     fail <code>answered()</code>, and drop the parent's whole turn from every
     resume of that session. <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
     <code>folding_a_session_containing_a_delegation_returns_the_parents_conversation</code>
     asserts the parent's message list is unchanged.
   </p>

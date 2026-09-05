@@ -432,7 +432,7 @@ if self.s.spend.get() &gt; self.s.budgets.max_tokens {
     rejected on the <em>next</em> call, which puts the symptom one step away
     from the change that caused it.
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
     <code>the_assistant_turn_is_echoed_back_exactly_as_it_arrived</code>
     asserts the intact <code>tool_use</code> block is in the message that was
     sent back, not merely somewhere in the transcript. The test file's header
@@ -639,7 +639,7 @@ outcome</code></pre>
 
   <p>
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
     <strong>Ctrl-C during a tool call.</strong>
     <code>run_tool_call</code> races <code>interrupt.wait()</code> against
     <code>invoke</code> in a <code>tokio::select!</code>; it is still not passed

@@ -214,7 +214,7 @@
     other reading, "no target, so nothing to gate", would hand silent network
     access to whichever tool forgets to implement <code>network_target</code>.
     The denial text tells the model this is a defect in that tool rather than
-    something to route around. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
+    something to route around. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     <code>a_tool_that_declares_egress_and_names_no_host_is_denied</code> queues
     two <code>Yes</code> answers, so a gate that fell through to a prompt would
     have allowed the call, and asserts the reason contains "did not name the
@@ -237,7 +237,7 @@
     Keying both grants on one set would mean approving <code>WebFetch</code> once
     approved every host it is later pointed at, which the field's own comment
     names as the grant this design refuses to offer.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     <code>the_first_call_to_a_host_asks_and_later_ones_do_not</code> queues one
     <code>Yes</code> for three calls.
     <code>a_second_host_is_a_second_question</code> queues one for two hosts and
@@ -372,7 +372,7 @@
     question now reads the arguments, so <code>Bash(git *)</code> and
     <code>Read(./src/**)</code> answer it. <code>for_tool</code> still exists and
     is no longer what the gate consults. No tool in the surface both writes and
-    names a host today. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
+    names a host today. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     <code>a_domain_rule_does_not_become_permission_to_run_the_tool</code>
     constructs a hypothetical <code>Uploader</code> with
     <code>read_only: false, reaches_network: true</code>, allows
@@ -384,7 +384,7 @@
 
   <p>
     The two questions are asked in sequence, so a tool declaring both bits faces
-    both. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
+    both. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     <code>a_tool_that_both_writes_and_reaches_answers_for_both</code> queues one
     <code>Yes</code>, which the host question consumes, and asserts the call is
     still denied when the write question finds an empty queue. Its comment says
@@ -398,7 +398,7 @@
   <p>
     The unattended denial names the host as well as the reason, because a message
     saying only "approval was needed" leaves the model unable to tell the user
-    what to approve. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
+    what to approve. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     <code>unattended_denies_egress_and_names_the_host</code> asserts the sentence
     contains both <code>docs.rs</code> and <code>-p</code>.
   </p>

@@ -604,11 +604,11 @@ fn one_line(text: &amp;str) -&gt; String {
   <ul class="body">
     <li>
       <span class="chip test">tested</span>
-      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/src/claude.rs">crates/harness/src/claude.rs</a>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/harness/src/claude.rs">crates/harness/src/claude.rs</a>
       Early-close on a <code>----</code> line inside frontmatter is covered by
       <code>a_rule_inside_a_block_is_not_a_closing_fence</code>; an empty block
       whose fences must not become body text is covered in
-      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/tests/claude_compat.rs">crates/harness/tests/claude_compat.rs</a>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/harness/tests/claude_compat.rs">crates/harness/tests/claude_compat.rs</a>
       by <code>an_empty_frontmatter_block_closes_and_its_fences_are_not_content</code>.
       Ran both on 2026-09-02:
       <code>cargo test -p emma-harness --lib a_rule_inside_a_block ... ok</code> and
@@ -632,13 +632,13 @@ fn one_line(text: &amp;str) -&gt; String {
       (<code>tools:</code>, <code>tools: []</code>, <code>tools: ""</code>) as
       inherit rather than "no tools", which is argued on
       <a href="delegation-tools.html">resolve_tools</a> and tested in
-      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/tests/agent_types.rs">crates/harness/tests/agent_types.rs</a>.
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/harness/tests/agent_types.rs">crates/harness/tests/agent_types.rs</a>.
     </li>
     <li>
       <span class="chip test">tested</span>
-      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/src/claude.rs">crates/harness/src/claude.rs</a>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/harness/src/claude.rs">crates/harness/src/claude.rs</a>
       and
-      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/tests/agent_types.rs">crates/harness/tests/agent_types.rs</a>.
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/harness/tests/agent_types.rs">crates/harness/tests/agent_types.rs</a>.
       This page's claim that <code>claude.rs</code> had no test module was
       wrong when written; <code>close_frontmatter</code> now has four unit tests
       in <code>claude.rs</code>, and <code>Tools::allowlist</code> / agent-file

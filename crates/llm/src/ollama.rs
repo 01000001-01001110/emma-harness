@@ -1160,8 +1160,11 @@ mod tests {
         }
 
         for loud in [
-            "http://192.168.1.50:11434",
-            "http://10.0.0.7:11434",
+            // Documentation-range addresses (RFC 5737), like the `example.com`
+            // and `2001:db8::` neighbours below, so nothing in this list can
+            // be mistaken for a machine somebody owns.
+            "http://198.51.100.50:11434",
+            "http://203.0.113.7:11434",
             "https://ollama.example.com",
             "http://box.lan:11434",
             "http://[2001:db8::1]:11434",

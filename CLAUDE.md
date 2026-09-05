@@ -258,11 +258,14 @@ says what changed, never what was abandoned halfway.
   Their content was mined into the owner's vault before removal; the files
   remain on his machine, ignored.
 
-**Everything above is still readable in this repository's history.** Removing a
-file from the tree does not remove it from the commits that carried it, so
-`git log -p -- notes/` is the way back to any of it. That is a fact about what a
-clone contains, and worth knowing before assuming the repository is free of
-it.
+**None of it is in this repository's history either.** The history was
+rewritten on 2026-09-01 to drop `notes/`, `verification/`, `blog/` and every
+image from every commit, so `git log -p -- notes/` returns nothing in a clone.
+This paragraph said the opposite until 2026-09-05, and four other files
+repeated it; an independent review caught that `git log --all -- notes/` was
+empty. The files exist on the owner's disk, ignored, and their durable content
+is in his vault. A citation to `notes/` anywhere in this repository names
+something a reader cannot open.
 
 Read the relevant one before starting. Several of them exist specifically
 because a plausible idea was refuted, and repeating the refuted idea is the most

@@ -211,7 +211,7 @@ if turn.tool_calls().is_empty() {
     rule above it and every one-shot goal, the ones where nothing needed
     changing, collapses into an ending nothing downstream treats as success.
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
     <code>a_first_turn_that_claims_completion_is_still_done</code>.
   </p>
 
@@ -224,7 +224,7 @@ if turn.tool_calls().is_empty() {
     human typing a new goal, so reading the budget here would end every resumed
     run on its first stop and report it as a stall.
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
     <code>a_model_that_abandons_started_work_twice_is_believed</code> asserts
     <code>kicks == 1</code>, which proves the stall rule fired rather than the
     count running out.
@@ -239,7 +239,7 @@ if turn.tool_calls().is_empty() {
     <em>goal</em> rather than per turn, so one tool call anywhere earlier makes
     every later stop a stall however conversational the sentence it stopped on.
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
     by
     <code>a_conversational_turn_is_answered_not_stalled</code>, and the
     narrowness has its own test,
@@ -406,7 +406,7 @@ pub fn message(&amp;self, b: &amp;Budgets) -&gt; String {
     Four of the nine interpolate a number from <code>Budgets</code>. The
     test asserts that.
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/agent.rs">crates/emma/src/agent.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/agent.rs">crates/emma/src/agent.rs</a>
     <code>every_ending_says_which_limit_fired</code> checks that
     <code>KicksExhausted</code>, <code>Iterations</code>, <code>Tokens</code> and
     <code>Deadline</code> each contain an ASCII digit. That is a weak assertion
@@ -419,7 +419,7 @@ pub fn message(&amp;self, b: &amp;Budgets) -&gt; String {
     <code>Iterations</code> and <code>Tokens</code> are worded differently, and
     a second test guards the difference.
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/agent.rs">crates/emma/src/agent.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/agent.rs">crates/emma/src/agent.rs</a>
     <code>the_token_budget_is_described_as_the_tripwire_it_is</code> asserts the
     tokens message contains the word "after", and separately that the iterations
     message still contains "limit", so a tidy-up that unified the two would make
@@ -447,7 +447,7 @@ pub fn message(&amp;self, b: &amp;Budgets) -&gt; String {
     the provider's side and nothing local ever learned the number, so a
     resumed session under-counts by exactly that call.
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/agent.rs">crates/emma/src/agent.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/agent.rs">crates/emma/src/agent.rs</a>
     <code>the_interrupted_ending_does_not_claim_a_partial_turn_was_saved</code>
     asserts the old sentence is gone and that "abandoned" and "cost" are both
     said. The string in the source is one long literal with runs of spaces

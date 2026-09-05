@@ -934,11 +934,26 @@ async fn run_verification(
     print_brief: bool,
 ) -> Result<()> {
     let ledger_path = cwd.join("verification").join("parity").join("ledger.json");
-    let ledger: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&ledger_path)
-            .with_context(|| format!("reading {}", ledger_path.display()))?,
-    )
-    .with_context(|| format!("parsing {}", ledger_path.display()))?;
+    // The ledger is the owner's parity paperwork and is not in the repository:
+    // `verification/` is gitignored, so a clone has no such file. Say that,
+    // rather than surfacing a bare "No such file" for a directory the reader
+    // has never heard of.
+    let raw = match std::fs::read_to_string(&ledger_path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::bail!(
+                concat!(
+                    "`emma verify` reads {}, which this repository does not ship: it is the ",
+                    "owner's parity ledger, kept outside version control. There is nothing ",
+                    "to verify here."
+                ),
+                ledger_path.display()
+            );
+        }
+        Err(e) => return Err(e).with_context(|| format!("reading {}", ledger_path.display())),
+    };
+    let ledger: serde_json::Value =
+        serde_json::from_str(&raw).with_context(|| format!("parsing {}", ledger_path.display()))?;
 
     // The fingerprint first, so "already reviewed" can mean "reviewed against
     // this tree" rather than "reviewed once, some time, about something".

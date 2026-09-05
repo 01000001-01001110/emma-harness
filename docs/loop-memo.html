@@ -269,7 +269,7 @@ pub(crate) fn memo_key_of(name: &amp;str, input: &amp;Value) -&gt; String {
     <code>serde_json</code>'s <code>Display</code>, which means whitespace in the
     model's original JSON is already gone by the time a key is built.
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/agent.rs">crates/emma/src/agent.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/agent.rs">crates/emma/src/agent.rs</a>
     <code>the_memo_key_separates_different_arguments</code> asserts that two
     identical calls agree and that <code>ls</code> and <code>ls -a</code> do not.
   </p>
@@ -299,7 +299,7 @@ pub(crate) fn memo_key_of(name: &amp;str, input: &amp;Value) -&gt; String {
     A stricter memo, one that never forgets, passes the first test. It fails the
     second.
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
     <code>a_failed_call_is_not_repeated_with_the_same_arguments</code> scripts
     the identical call twice and asserts the tool was reached once.
     <code>a_failed_call_may_be_repeated_once_something_else_has_succeeded</code>

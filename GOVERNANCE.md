@@ -66,6 +66,7 @@ else's behalf.
 Roughly twenty agents wrote most of this code, and the written record exists
 because no author's memory backs it. Most of it is now in the commit messages;
 the lessons and audits that used to sit under `notes/` were removed from the
-tree on 2026-08-30 and are reachable with `git log -p -- notes/`. When a comment here explains why an obvious approach was
+repository on 2026-08-30, history included, and live in the owner's own
+records. When a comment here explains why an obvious approach was
 rejected, it is generally because that approach was tried and reversed, and the
 reversal is recorded rather than remembered.

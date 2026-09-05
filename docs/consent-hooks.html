@@ -481,7 +481,7 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
     a <code>kill(-pgid)</code> drop-guard. The plan records it as dead so it is not
     rebuilt.
   </p>
-  <span class="src">notes/plans/process-lifetime.md §1, §7</span>
+  <span class="src">notes/plans/process-lifetime.md §1, §7 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
 
   <p>
     The defect was never that a grandchild lives. It was that <code>exec</code>
@@ -499,7 +499,7 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
     on 2026-08-14, logged in <code>notes/plans/process-lifetime.md</code> §6. The
     "before" half needs the reverted code to reproduce, so nobody can run it
     again as it stands. The "after" half is on demand:
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/tests/exec_lifetime.rs">crates/harness/tests/exec_lifetime.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/harness/tests/exec_lifetime.rs">crates/harness/tests/exec_lifetime.rs</a>
     <code>cargo test -p emma-harness --test exec_lifetime
     certify_the_misreport_rate_over_twenty_trials -- --ignored</code> loops twenty
     times and asserts <code>misreported == 0</code> and
@@ -511,7 +511,7 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
     this Windows box. The twenty-trial certification is one of the two skipped. It
     was not executed for this page.
   </p>
-  <span class="src">notes/plans/process-lifetime.md header, §6; crates/harness/tests/exec_lifetime.rs::certify_the_misreport_rate_over_twenty_trials</span>
+  <span class="src">notes/plans/process-lifetime.md header, §6; crates/harness/tests/exec_lifetime.rs::certify_the_misreport_rate_over_twenty_trials (removed from the repository 2026-08-30, history included; the owner holds it)</span>
 
   <h2 id="exec">The order in <code>exec</code></h2>
 
@@ -667,7 +667,7 @@ where
     away is still alive seconds later. tokio also gives a child's stdio
     <em>overlapped</em> I/O on Windows, so an unfinished read is a cancelled
     future rather than a thread stuck in a blocking <code>ReadFile</code>.
-    Historically mutation-<span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/tests/exec_lifetime.rs">crates/harness/tests/exec_lifetime.rs</a>
+    Historically mutation-<span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/harness/tests/exec_lifetime.rs">crates/harness/tests/exec_lifetime.rs</a>
     by six Windows fixtures, among them
     <code>a_hook_that_exited_zero_is_not_reported_as_timed_out_because_a_grandchild_holds_the_pipe</code>,
     <code>a_daemonizing_hooks_child_is_still_running_after_emma_walks_away</code>
@@ -682,7 +682,7 @@ where
     failure is in fixture setup, before the asserted lifetime behaviour, so it
     neither confirms nor refutes that behaviour here.
   </p>
-  <span class="src">crates/harness/tests/exec_lifetime.rs; notes/plans/process-lifetime.md §2, §6</span>
+  <span class="src">crates/harness/tests/exec_lifetime.rs; notes/plans/process-lifetime.md §2, §6 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
 
   <div class="note warn">
     <span class="h">The unix edge</span>
@@ -732,7 +732,7 @@ where
     clause in the transcript telling the operator to look. That is a report, not a
     bound.
   </p>
-  <span class="src">crates/harness/src/hooks.rs — exec; notes/plans/process-lifetime.md §3, §5</span>
+  <span class="src">crates/harness/src/hooks.rs — exec; notes/plans/process-lifetime.md §3, §5 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
 
   <p>
     <span class="chip unv">unverified</span> One question is open rather than
@@ -746,7 +746,7 @@ where
     repeated-trigger fixture; if yes, document the accumulation cost beside the
     setting.
   </p>
-  <span class="src">notes/plans/process-lifetime.md §4, header</span>
+  <span class="src">notes/plans/process-lifetime.md §4, header (removed from the repository 2026-08-30, history included; the owner holds it)</span>
 
   <h2 id="unsettled">What else is not settled here</h2>
 

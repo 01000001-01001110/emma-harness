@@ -72,7 +72,7 @@
     shape: there is no name, pattern or command in Emma that a rule, a flag and a
     remembered grant cannot together permit.
   </p>
-  <span class="src">crates/emma/src/approval.rs — EXEMPT; notes/improvements.md item 14</span>
+  <span class="src">crates/emma/src/approval.rs — EXEMPT; notes/improvements.md item 14 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
 
   <h2 id="list">The list</h2>
 
@@ -122,7 +122,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
       what would catch a later edit adding a tool that writes the user's source
       tree. It also loops over <code>EXEMPT</code> itself and asserts each entry
       is allowed, so shrinking the list to nothing would fail too.
-      <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
+      <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     </p>
     <span class="src">crates/emma/src/approval.rs — Approvals::decide; tests::the_exemption_covers_the_task_writers_and_nothing_that_touches_the_tree</span>
   </div>
@@ -135,7 +135,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     <code>ask</code> rule reaches them, because the <code>ask</code> check sits
     above the exemption in <code>decide</code>. Every call, exempt or not, is
     written to the session log by the loop.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     <code>an_ask_rule_reaches_even_a_read_only_tool_and_an_exempt_one</code> puts
     <code>Read</code> and <code>EXEMPT[0]</code> in the <code>ask</code> list with
     an empty answer queue and asserts both are denied, which they can only be if
@@ -170,7 +170,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
 914-&#96;EXEMPT&#96; is a ceiling above it, keyed by tool name rather than by any property a
 915-tool declares. A write-scope axis would let the gate ask what a tool does rather
 916-than what it is called, which is what makes the name-keyed list deletable.</code></pre>
-  <span class="src">crates/emma/src/approval.rs — EXEMPT; notes/improvements.md — item 39</span>
+  <span class="src">crates/emma/src/approval.rs — EXEMPT; notes/improvements.md — item 39 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
 
   <h2 id="floor">The opposite shape does not exist</h2>
 
@@ -261,7 +261,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     <code>;</code>, <code>&amp;&amp;</code>, <code>||</code> and <code>|</code>;
     and roughly forty dangerous-command cases beside a false-positive suite.
   </p>
-  <span class="src">notes/improvements.md item 14 · notes/research/survey-pie.md §1.1 · notes/research/survey-harnesses-2.md §4</span>
+  <span class="src">notes/improvements.md item 14 · notes/research/survey-pie.md §1.1 · notes/research/survey-harnesses-2.md §4 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
 
   <p>
     Pie was read at commit <code>b725796</code> and is <strong>MIT, plain, no
@@ -269,7 +269,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     copied with attribution. It is a stated 1:1 port of a TypeScript upstream, so
     a copied file attributes both.
   </p>
-  <span class="src">notes/improvements.md item 14 · notes/research/survey-pie.md</span>
+  <span class="src">notes/improvements.md item 14 · notes/research/survey-pie.md (removed from the repository 2026-08-30, history included; the owner holds it)</span>
 
   <div class="note">
     <span class="h">The counter-argument, recorded because it may win</span>
@@ -294,7 +294,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
       category. Emma has no such category, and the gap is tracked under
       <a href="roadmap.html#hazards">named hazards</a> rather than argued here.
     </p>
-    <span class="src">notes/improvements.md item 14 · notes/research/survey-pie.md §1.1, §2.1</span>
+    <span class="src">notes/improvements.md item 14 · notes/research/survey-pie.md §1.1, §2.1 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
   </div>
 
   <h2 id="unsettled">What is not settled here</h2>
@@ -311,7 +311,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     can bypass the guard. No current-file reading can settle a historical-source
     claim.
   </p>
-  <span class="src">notes/research/survey-pie.md §5</span>
+  <span class="src">notes/research/survey-pie.md §5 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
 
   <p>
     <span class="chip cert">certified</span> The current primary sources support

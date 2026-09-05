@@ -342,7 +342,7 @@ impl DoneCheck for SubagentClaim {
       <span class="chip cert">certified</span> <code>emma agents</code> reports
       <code>delegations 1</code> across 100 session files, run today.
     </p>
-    <span class="src">notes/improvements.md item 6; crates/emma/src/delegate.rs — brief, SubagentClaim::contract</span>
+    <span class="src">notes/improvements.md item 6; crates/emma/src/delegate.rs — brief, SubagentClaim::contract (removed from the repository 2026-08-30, history included; the owner holds it)</span>
   </div>
 
   <h2 id="meta">What the gate is told</h2>
@@ -391,7 +391,7 @@ impl DoneCheck for SubagentClaim {
     follows, and the pair is legal: <code>Registry::register</code> refuses only
     <code>read_only: true</code> beside <code>idempotent: false</code>.
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
     <code>delegation_is_gated_and_the_prompt_shows_the_brief</code> asserts the
     call reaches the prompt and that the brief is in it.
   </p>
@@ -523,7 +523,7 @@ goal. One runs at a time.";</code></pre>
     </li>
     <li>
       <span class="chip test">tested</span>
-      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
       <code>the_brief_carries_what_the_caller_knows_and_what_it_asked_for</code>
       drives a delegation with <code>context</code> and <code>deliver</code> set,
       then a control with an empty <code>context</code> array and no

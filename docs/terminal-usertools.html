@@ -148,7 +148,7 @@
     which refuses it, because the Data Explorer page it once opened is gone
     and nothing has taken its place.
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>
     <code>the_catalogue_lists_all_eight_tools_with_their_fixed_keys</code>, whose
     assertion has been through all three states and carries the history: it
     first claimed both in-app tools were available <em>because their keys are
@@ -330,7 +330,7 @@ Settings      [,] available=true -- what this run resolved, and from where, insi
     and a quoting bug here is an argv boundary moving, the same class of
     failure this module refuses everywhere else.&rdquo;</em>
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>:
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>:
     <code>quoting_matches_the_commandlinetoargvw_rules</code> pins seven cases
     including a trailing backslash inside quotes and an embedded quote with
     backslashes in front of it.
@@ -407,7 +407,7 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
     child. <code>Window</code> is not consulted there, because both variants
     detach the same way and <code>NewConsole</code> is never planned on unix.
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>:
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>:
     <code>gui_launches_are_detached_and_shells_get_their_own_console</code>
     walks five tools on both unix flavours and asserts every plan is
     <code>Detached</code>.
@@ -460,7 +460,7 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
     resolve <em>as a whole</em> is skipped and the chain continues.
     <strong>Skipped, not split.</strong>
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>:
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>:
     <code>an_editor_env_var_holding_a_command_line_is_skipped_not_split</code>
     sets <code>EDITOR=vim -u NONE</code> with <code>vim</code> on PATH and
     asserts the chain falls through to <code>code</code>, so
@@ -500,7 +500,7 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
     say so, and     again inside <code>new_console::spawn</code>, in case a future plan skips
     the planning-time check.
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>:
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>:
     <code>a_cmd_script_cannot_be_promised_a_console_window</code> also asserts
     the other half, that a GUI editor as a <code>.cmd</code> shim stays fine,
     because it takes the <code>Detached</code> path where std handles cmd.exe
@@ -538,7 +538,7 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
     any platform, and dropping it would have turned every readable file on
     <code>PATH</code> into an installed editor.&rdquo;</em>
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>, one <code>cfg</code>-gated test per
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>, one <code>cfg</code>-gated test per
     platform, both against a real temporary directory.
   </p>
 
@@ -558,7 +558,7 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
     string, two tenses, so the promise and the receipt cannot drift
     apart.&rdquo;</em>
     <span class="chip test">tested</span>
-    <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>:
+    <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>:
     <code>launch_returns_what_happened_in_words</code> compares against
     <code>format!("opened pwsh in {}", cwd().display())</code>, and three
     sibling tests prove no spawner is reached for an in-app tool, an unavailable

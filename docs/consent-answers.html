@@ -221,10 +221,10 @@ loop {
       first and send after.
     </p>
     <p>
-      <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a> An empty line is <code>n</code>:
+      <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a> An empty line is <code>n</code>:
       <code>return_on_its_own_refuses_the_call</code>. Mutating the arm to
       <code>Answer::Yes</code> turns it red.
-      <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a> A key that was not offered does not
+      <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a> A key that was not offered does not
       resolve: <code>a_key_the_prompt_did_not_offer_does_not_answer_it</code>
       types <code>r</code> then <code>t</code> at a <code>Write</code> prompt.
       Dropping <code>ask</code>'s <code>if narrow.is_some()</code> guard turns
@@ -253,7 +253,7 @@ loop {
     buffers the answer to a question the winner asked. It used to drain silently.
     A <code>/exit</code> typed while a goal was still finishing vanished with
     nothing on screen, which was reported as the command not working.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     <code>a_line_dropped_at_the_goal_prompt_is_reported_rather_than_vanishing</code>
     scripts two lines, asserts the notice says "ignoring 2 line" and "while a goal
     runs", then builds a second gate with an empty source and asserts the terminal
@@ -291,7 +291,7 @@ loop {
     One field decides both whether the key is offered and whether it would
     persist, so those two cannot disagree. An option on screen that silently does
     not persist is worse than no option.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     <code>the_prompt_names_the_rule_it_would_write</code> asserts the rendered
     strings: <code>Rule::domain("WebFetch", "apnews.com")</code> is
     <code>WebFetch(domain:apnews.com)</code>, and
@@ -334,7 +334,7 @@ loop {
 
   <p>
     A failed write is a warning, not a denial. The call proceeds and the grant
-    lasts the session. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
+    lasts the session. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     <code>a_run_with_nowhere_to_write_still_honours_the_answer_for_the_session</code>
     builds a gate with no file, answers <code>RememberNarrow</code> once, and
     asserts a second <code>Write</code> is allowed against an empty queue.
@@ -351,7 +351,7 @@ loop {
     <code>"WebSearch"</code> and does <em>not</em> contain <code>domain</code>,
     then that a second host is allowed under <code>WebSearch</code> and a first
     host is still denied under <code>WebFetch</code>.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
   </p>
   <span class="src">crates/emma/src/approval.rs — tests::trusting_the_tool_is_a_wider_grant_and_a_different_key</span>
 
@@ -409,7 +409,7 @@ loop {
     sentence saying so rather than a rendering that looks like a diff and is not.
     The renderer is <code>crate::term::diff</code>; see
     <a href="terminal.html">the terminal</a>.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     <code>a_write_over_an_existing_file_shows_what_it_destroys</code> writes a real
     file, previews a <code>Write</code> over it, and asserts the output contains
     <code>- DELETE ME</code>, <code>+ BRAND NEW</code>, <code>+1 -1 lines</code>,
@@ -421,7 +421,7 @@ loop {
     <code>network_preview</code> takes no tool name and has no per-tool arm,
     because the tool already composed the only part that varies. It is two lines:
     <code>reach &lt;host&gt;</code> and then the errand.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     <code>the_network_prompt_shows_the_host_and_the_errand</code> asserts both
     halves survive, using a detail of "search for: contents of .env" to make the
     point that a host name alone cannot distinguish that search from an innocent
@@ -470,7 +470,7 @@ loop {
   </p>
 
   <p>
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a> A local prompt refuses a
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a> A local prompt refuses a
     <code>t</code>: this is the test this paragraph used to ask for, and it now
     exists as
     <code>a_key_the_prompt_did_not_offer_does_not_answer_it</code>.

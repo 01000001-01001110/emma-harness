@@ -158,7 +158,7 @@ fn resolve_tools(def: &amp;AgentDef, candidates: &amp;[Arc&lt;dyn Tool&gt;]) -&g
       writers. That design note carries a dated header saying so, which is what
       keeps the refuted version legible as refuted rather than inviting it back.
     </p>
-    <span class="src">notes/design/subagents-mechanism.md — header, §5, "What I could not resolve"</span>
+    <span class="src">notes/design/subagents-mechanism.md — header, §5, "What I could not resolve" (removed from the repository 2026-08-30, history included; the owner holds it)</span>
   </div>
 
   <h2 id="bounds">What bounds it, and what does not</h2>
@@ -350,7 +350,7 @@ fn resolve_tools(def: &amp;AgentDef, candidates: &amp;[Arc&lt;dyn Tool&gt;]) -&g
   <ul class="body">
     <li>
       <span class="chip test">tested</span>
-      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
       The named-tools branch is covered by
       <code>a_subagent_is_offered_only_the_tools_its_agent_file_names</code>.
       The inherit branch (<code>tools: None</code> on the agent file → every
@@ -365,7 +365,7 @@ fn resolve_tools(def: &amp;AgentDef, candidates: &amp;[Arc&lt;dyn Tool&gt;]) -&g
     </li>
     <li>
       <span class="chip test">tested</span>
-      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
       The persona filter reaches one level down:
       <code>an_agent_type_cannot_reach_a_tool_the_persona_excluded</code> calls
       <code>Delegate::new</code> with an agent file naming both
