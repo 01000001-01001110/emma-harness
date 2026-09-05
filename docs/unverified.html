@@ -87,14 +87,19 @@
     <tbody>
       <tr>
         <td><strong>Emma's system prompt is smaller than the alternative.</strong>
-            No measurement of the system field or tool schemas exists, and there
-            is no <code>emma stats</code>. The comparison figure for Claude Code
-            (~30,000 tokens) is widely reported and equally unmeasured here.</td>
-        <td>Capture each product's exact first-request JSON before transport,
-            isolate the <code>system</code> and <code>tools</code> fields, submit
-            each body to <code>/v1/messages/count_tokens</code> with the actual
-            model and API key, and compare the returned
-            <code>input_tokens</code>. This is a paid API operation. See
+            The <code>tools</code> half is measured now: 29,505 bytes over 16
+            tools on 2026-09-05, by
+            <code>crates/emma/tests/prompt_size.rs</code>. What is still
+            unmeasured is the conversion to tokens, the <code>system</code> field
+            (which varies with persona and done-check), and the comparison figure
+            for Claude Code (~30,000 tokens), which is widely reported and never
+            counted here.</td>
+        <td>Submit Emma's exact first-request body to
+            <code>/v1/messages/count_tokens</code> and record the returned
+            <code>input_tokens</code>; the endpoint was already used against this
+            project on 2026-08-11. Claude Code's half needs its request captured
+            off the wire, and is the reason this sat unmeasured while the byte
+            count needed neither a key nor a network. See
             <a href="index.html#goal">the goals</a>.</td>
       </tr>
       <tr>
