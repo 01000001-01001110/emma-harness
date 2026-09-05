@@ -85,32 +85,31 @@
   <span class="src">crates/emma/src/delegate.rs — module doc; crates/emma/src/agent.rs</span>
 
   <p>
-    One delegation runs at a time, held by a one-permit semaphore, because two
-    approval prompts racing for one stdin is a screen showing the second call's
-    evidence above the first call's question. A subagent cannot delegate, and
-    that is a property of construction order rather than a depth counter: child
-    registries are built from tools resolved before <code>Delegate</code>
+    I hold one delegation at a time with a one-permit semaphore, because two
+    approval prompts racing for one stdin gives you a screen showing the second
+    call's evidence above the first call's question. A subagent cannot delegate,
+    and that is a property of construction order rather than a depth counter:
+    child registries are built from tools resolved before <code>Delegate</code>
     exists.
   </p>
 
   <p>
-    The part that makes any of it checkable is the footer. A subagent's
-    deliverable is by construction a description of work rather than the work,
-    and asking it to cite what it read produces an assertion that looks like a
-    verification. So the parent composes the record itself, out of what the loop
-    wrote while the child ran, and the child's own words are never an input to
-    it. There is a test whose scripted subagent claims in fluent prose to have
-    read two files and run the test suite while calling no tool at all; the
-    footer under that claim says <code>files touched: none</code>.
+    The part I made checkable is the footer. A subagent's deliverable is by
+    construction a description of work rather than the work, and asking it to
+    cite what it read produces an assertion that looks like a verification. So
+    the parent composes the record itself, out of what the loop wrote while the
+    child ran, and the child's own words are never an input to it. There is a
+    test whose scripted subagent claims in fluent prose to have read two files
+    and run the test suite while calling no tool at all; the footer under that
+    claim says <code>files touched: none</code>.
   </p>
   <span class="src">crates/emma/src/delegate.rs — the footer region; crates/emma/tests/delegate.rs::the_footer_is_the_harnesss_record_and_not_the_subagents_account</span>
 
   <p>
-    Roughly half of the tool's own description is about when <em>not</em> to call
-    it. The measured direction of the effect on code-centric tasks is negative,
-    and the description says so in its own words: reach for it when the answer is
-    small and the evidence is large, and never delegate the check that verifies
-    your own work.
+    Roughly half of the tool's own description is about when <em>not</em> to
+    call it. I wrote it that way because the measured direction on code-centric
+    tasks is negative. Reach for it when the answer is small and the evidence
+    is large. Never delegate the check that verifies your own work.
   </p>
   <span class="src">crates/emma/src/delegate.rs — DESCRIPTION</span>
 

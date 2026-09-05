@@ -58,22 +58,22 @@
 
   <p class="lede">
     Emma writes files and runs commands. A tool surface that is read-only by
-    construction bounds the worst a rogue turn can do to reading something the
-    user was already entitled to read, and needs no gate to achieve that. Emma
-    inverts that property, and this machinery stands in its place.
+    construction bounds the worst a rogue turn can do to reading something you
+    were already entitled to read, and needs no gate to achieve that. I inverted
+    that property, and this machinery stands in its place.
   </p>
   <span class="src">crates/emma/src/approval.rs — module doc</span>
 
   <div class="note warn">
     <span class="h">What the gate does not enforce</span>
     <p>
-      <strong>It is a consent interface, not a sandbox.</strong> It asks a tool
+      <strong>It is a consent interface.</strong> It does not sandbox. It asks a tool
       two questions: can you damage this machine, do you send bytes off it. It
       believes both answers. Nothing here stops a tool from opening a socket or
       writing a file after declaring it would not. <code>Bash</code> declares
       <code>read_only: false</code> and <code>reaches_network: false</code>, and
       can do anything a shell can do, including <code>curl</code>. What the gate
-      produces is that a human saw the command before it ran.
+      produces is that you saw the command before it ran.
     </p>
     <p>
       <strong>There is no unconditional deny anywhere in Emma.</strong> A
@@ -85,9 +85,9 @@
     </p>
     <p>
       Other harnesses do enforce: <code>codex-rs</code> sandboxes with Seatbelt
-      on macOS, Landlock on Linux and restricted tokens on Windows. Emma has no
-      equivalent, and everything in this chapter describes what is checked and in
-      what order, not what is prevented.
+      on macOS, Landlock on Linux and restricted tokens on Windows. I have not
+      built an equivalent, and everything in this chapter describes what is
+      checked and in what order, not what is prevented.
     </p>
     <span class="src">crates/tool-api/src/lib.rs — ToolMeta · notes/improvements.md item 9</span>
   </div>
@@ -111,9 +111,9 @@
   </p>
 
   <p>
-    Every page below repeats three facts. The gate believes what a tool declares
-    about itself. <code>Bash</code> can do anything. Nothing in Emma is an
-    unconditional deny.
+    Every page below repeats the same warnings. The gate believes what a tool
+    declares about itself. <code>Bash</code> can do anything, and nothing in
+    Emma is an unconditional deny.
   </p>
 
   <h2 id="pages">The pages</h2>
@@ -261,12 +261,12 @@ summary: 13/13 exact after restoring source indentation</code></pre>
 
   <p>
     <strong>The lesson in the chip itself.</strong> A quoted function is a
-    snapshot, and it rots without any signal; the page keeps its confident
-    <code>src</code> line pointing at a file that has moved underneath it. Twelve
-    of the twenty-five findings in the audit that prompted this were exactly
-    that. Pages whose subject <em>is</em> the code still quote whole functions, and
-    the cost is now written down where it can be
-    weighed.
+    snapshot, and it rots without any signal. I learned that the hard way: the
+    page keeps a confident <code>src</code> line pointing at a file that has
+    moved underneath it. Twelve of the twenty-five findings in the audit that
+    prompted this were exactly that. Pages whose subject <em>is</em> the code
+    still quote whole functions, and the cost is now written down where it can
+    be weighed.
   </p>
 
   <h2 id="unsettled">What is not settled, across the chapter</h2>

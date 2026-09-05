@@ -57,7 +57,7 @@
   <h1>Getting started</h1>
 
   <p class="lede">
-    Build it, give it a key, point it at a directory, state a goal.
+    Build it, give it a key, point it at a directory, and state a goal.
   </p>
 
   <div class="key">
@@ -74,7 +74,7 @@
   <p>
     There is no installer and no published crate. Take the binary from
     <code>target/release/</code> and put it on your path, or run it in place.
-    The former “Rust 1.97 or newer” statement was stale.
+    I had a stale note here about Rust 1.97 or newer.
     <span class="chip cert">certified</span> A minimum is pinned:
     <code>rg -n '^rust-version' Cargo.toml</code> prints
     <code>18:rust-version = "1.82"</code>.
@@ -108,9 +108,9 @@ emma set-provider anthropic --key -</code></pre>
     Keys are stored per provider under <code>~/.emma/</code>, so switching
     providers does not lose the key for the one you left. The file is merged
     rather than replaced when a key is written, and Emma refuses to overwrite a
-    credentials file it cannot parse. That behaviour exists because an earlier
-    version replaced the whole document and silently deleted an unrelated key
-    that lived in it.
+    credentials file it cannot parse. I changed that after an earlier version
+    replaced the whole document and silently deleted an unrelated key that
+    lived in it.
   </p>
   <span class="src">crates/llm/src/auth.rs — <code>store</code></span>
 
@@ -220,7 +220,8 @@ emma --resume
 emma --resume sess-1786385316950-34808</code></pre>
 
   <p>
-    The conversation comes back. <strong>The tools do not re-run.</strong>
+    When you resume, the conversation comes back. <strong>The tools do not
+    re-run.</strong>
     Nothing is replayed, so a file the previous session wrote is still written
     and a command it ran is not run again. <a href="session.html">Sessions</a>
     covers what is restored and what is lost.
@@ -254,9 +255,9 @@ emma --resume sess-1786385316950-34808</code></pre>
       is the only route.
     </li>
     <li>
-      No <code>emma stats</code>. Emma records what every call cost and has no
-      command that reads it back, so "what did today cost" has no answer short
-      of parsing the session files yourself.
+      No <code>emma stats</code> yet. Emma records what every call cost and I
+      have not built a command that reads it back, so "what did today cost" has
+      no answer short of parsing the session files yourself.
     </li>
     <li>
       Nothing has been run on macOS. The suite is cross-platform by reading

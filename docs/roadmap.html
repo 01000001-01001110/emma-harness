@@ -57,25 +57,26 @@
   <h1>Roadmap &amp; defects</h1>
 
   <p class="lede">
-    What is known to be wrong, what is planned, and what was investigated and
-    refused. This page is the whole of it: the backlog used to live in
-    <code>notes/improvements.md</code>, which left the repository on
+    What I know is wrong with Emma, what I mean to do about it, and what I looked
+    at and decided against. This page is the whole backlog now. It used to live
+    in <code>notes/improvements.md</code>, which left the repository on
     2026-08-30.
   </p>
 
   <h2 id="defects">Known defects</h2>
 
   <p>
-    Every entry here is reproducible or citable. Nothing is listed on suspicion
-    alone.
+    Every entry here can be reproduced or points at the line it lives on. I keep
+    suspicions out of this section, because a defect list I have to second-guess
+    is one I stop reading.
   </p>
 
   <h3>Emma says things that are not true</h3>
 
   <p>
-    Three messages instruct a user to do something impossible, which is the
-    sharpest class of defect this project has, given what the harness claims
-    about itself.
+    Three messages tell you to do something you cannot do. Of everything on this
+    page these bother me most, because the whole argument for Emma is that it
+    says what it is actually doing.
   </p>
 
   <ul class="body">
@@ -99,12 +100,12 @@
   <h3>Bounds that are looser than they read</h3>
 
   <p>
-    Two fields of the same struct describe ceilings and enforce tripwires. The
-    token budget is checked after a call returns, so a real run overshot 500,000
-    to 579,565. <code>wall_clock</code> is checked only at the top of an
-    iteration, so it bounds when the loop declines to start another one rather
-    than how long a goal takes. Neither <code>tool.invoke</code> nor the model
-    call carries a deadline.
+    Two fields of the same struct read like ceilings and behave like tripwires.
+    The token budget is checked after a call comes back, so a real run went past
+    500,000 and stopped at 579,565. <code>wall_clock</code> is checked at the top
+    of an iteration, which bounds when the loop declines to start another one
+    rather than how long a goal takes. Neither <code>tool.invoke</code> nor the
+    model call carries a deadline.
   </p>
 
   <p>

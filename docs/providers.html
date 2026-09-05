@@ -67,12 +67,11 @@
   <h1>Providers &amp; models</h1>
 
   <p class="lede">
-    One trait, one implementation, and a great deal of care about bytes.
-    Everything Emma knows about the Anthropic Messages API lives in
-    <code>crates/llm</code>; the loop sees a <code>Request</code> go in and an
-    <code>AssistantTurn</code> come out. Two of the mistakes this chapter
-    records were invisible to a green test suite, and one of them was invisible
-    to everything except the invoice.
+    One trait, one implementation, and a lot of care about bytes. Everything
+    Emma knows about the Anthropic Messages API lives in <code>crates/llm</code>;
+    the loop sees a <code>Request</code> go in and an <code>AssistantTurn</code>
+    come out. Two of the mistakes documented here were invisible to a green test
+    suite. One was invisible to everything except the invoice.
   </p>
 
   <div class="key">
@@ -93,23 +92,24 @@
   <h2 id="shape">The shape of it</h2>
 
   <p>
-    Rust has no official Anthropic SDK, so this crate speaks the Messages API
-    over raw HTTP, which is the documented path for unsupported languages. One
-    provider exists; a second is planned and not built. The seam that would
-    make a second one a new file rather than a refactor of the loop is that
-    nothing outside <code>anthropic.rs</code> knows the wire shape, which took
-    deleting a <code>serde_json::Value</code> field off the turn type and
-    typing every content block instead.
+    Rust has no official Anthropic SDK, so I had this crate speak the Messages
+    API over raw HTTP, the documented path for unsupported languages. Two
+    providers exist now, Anthropic and Ollama. The seam I wanted is that a
+    second provider is a new file rather than a refactor of the loop: nothing
+    outside <code>anthropic.rs</code> knows the wire shape, and
+    <code>ollama.rs</code> is what proved it. That took deleting
+    a <code>serde_json::Value</code> field off the turn type and typing every
+    content block instead.
   </p>
 
   <p>
-    Two things a reader should carry into the sub-pages. First, the ordering:
-    a <code>Request</code> names instructions, tools, history and query in that
+    Two things you should carry into the sub-pages. First, the ordering: a
+    <code>Request</code> names instructions, tools, history and query in that
     order because the provider's cache is an exact prefix match, and anything
     varying per turn has to sit after everything that does not. Second, the
     direction of a guess: when Emma does not know a model, it guesses a
-    <em>low</em> output ceiling and a <em>high</em> cache floor, because the
-    first failure is a 400 the user sees and the second is a bill nobody sees.
+    <em>low</em> output ceiling and a <em>high</em> cache floor. The first
+    failure is a 400 you see. The second is a bill nobody sees.
   </p>
 
   <h2 id="pages">The pages</h2>
@@ -248,8 +248,8 @@
     <em>test result: ok. 132 passed; 0 failed; 1 ignored</em>. Two of the
     credential-path tests are <code>#[cfg(unix)]</code> and were therefore not
     compiled on that Windows run, which
-    <a href="providers-credentials.html">credentials</a> says plainly. (This
-    page previously said 72; the count was stale.)
+    <a href="providers-credentials.html">credentials</a> says plainly. (I had this
+    page at 72; the count was stale.)
   </p>
 
   <h2 id="unverified">What is not verified</h2>

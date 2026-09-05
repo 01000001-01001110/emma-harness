@@ -69,8 +69,8 @@
   <p class="lede">
     One append-only JSONL file per session, written as the run happens. It is
     what <code>--resume</code> folds back into a message list, what compaction
-    edits, and, since the interactive frame moved to the alternate screen, the
-    only surviving record of a run once Emma exits.
+    edits, and, since I moved the interactive frame to the alternate screen,
+    the only surviving record of a run once Emma exits.
   </p>
   <span class="src">crates/emma/src/session.rs · the compaction path in crates/emma/src/agent.rs</span>
 
@@ -84,8 +84,9 @@
   <h2 id="shape">The shape of it</h2>
 
   <p>
-    Stage 2 of the full-screen TUI gave up terminal scrollback, and the line
-    Emma prints on exit names this file as the record instead. There is no
+    When I moved the interactive frame to the alternate screen, Emma gave up
+    terminal scrollback, and the line Emma prints on exit names this file as
+    the record instead. There is no
     second copy of what the model said: the styled run goes with the alternate
     screen, and what is left is the JSONL.
   </p>
@@ -93,11 +94,11 @@
 
   <p>
     The format is one JSON object per line and the type that owns it is
-    <code>SessionLog</code>. There is no database, and the module doc argues
-    that rather than assuming it: one process, one user, one writer, and no
+    <code>SessionLog</code>. There is no database. I argued in the module doc
+    rather than assuming one: one process, one user, one writer, and no
     crash-recovery requirement, because a crashed run is re-run and what it was
     doing is in the working tree where you can see it. Three changes would
-    reverse the argument the same day, and one of them, queries across sessions,
+    reverse my argument the same day, and one of them, queries across sessions,
     already costs a directory scan.
   </p>
   <span class="src">crates/emma/src/session.rs — module doc</span>
@@ -157,11 +158,11 @@
       <a href="session-compaction.html">Compaction without a model call</a>
       <span>Whole goals oldest-first, what a folded goal loses, the guard for a
       compaction that would not shrink anything, and the design note that
-      recommended a model-call summariser and was overruled.</span>
+      recommended a model-call summariser, which I overruled.</span>
     </li>
     <li>
       <a href="session-corpus.html">The corpus, as it actually is</a>
-      <span>103 files on the owner's machine, 48 of them empty, zero
+      <span>103 files on my machine, 48 of them empty, zero
       <code>compacted</code> records and exactly one <code>delegation</code>,
       counted at a stated minute with the script attached.</span>
     </li>
@@ -203,8 +204,8 @@
   <p>
     <span class="chip unv">unverified</span> Nothing here was certified against
     a live provider call. The largest gap is
-    that automatic compaction has never fired outside a test on the only machine
-    whose corpus was available, so every claim about the trigger rests on tests
+    that automatic compaction has never fired outside a test on my machine, so
+    every claim about the trigger rests on tests
     with an artificially small cap. The mutations that prove the fold's
     turn-placement rule were run by an earlier pass over this chapter and not
     re-run by this one, which was not permitted to change source. Each page ends

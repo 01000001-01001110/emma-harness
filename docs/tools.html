@@ -72,10 +72,11 @@
   because <code>WebSearch</code> withdraws itself and says so rather than
   failing when called. <span class="chip cert">certified</span>:
   <code>emma config check</code> against an empty home lists 22 and names the
-  missing key; the page said twenty-one until 2026-09-01, which counted
-  neither <code>BashOutput</code> nor <code>KillShell</code>. This chapter is what a tool <em>declares</em>
-  about itself and what it does when called. Whether a human is asked first is
-  <a href="consent.html">the gate's business</a>, not the tool's.
+  missing key; I had this page at twenty-one until 2026-09-01, and it counted
+  neither <code>BashOutput</code> nor <code>KillShell</code>. This chapter is
+  what a tool <em>declares</em> about itself and what it does when called.
+  Whether you get asked first is <a href="consent.html">the gate's business</a>,
+  not the tool's.
 </p>
 
 <div class="key">
@@ -113,13 +114,13 @@ tool schema    ce26c5f39467e4f0</code></pre>
   <code>tools/tasks</code> is four tools over one markdown file.
   <code>tools/web</code> is two stateless tools plus five that drive a live
   Chrome. <code>tools/lsp</code> is four that ask rust-analyzer instead of
-  guessing from text. Each crate exposes one builder function, and calling it
-  is the only supported way to get the set, because three of the four share
-  mutable state that <code>ToolCtx</code> has no room for.
+  guessing from text. Each crate exposes one builder function. Calling it is the
+  only supported way to get the set, because three of the four share mutable
+  state that <code>ToolCtx</code> has no room for.
 </p>
 
 <p>
-  Two rules run through every crate and apply on every page below.
+  Two rules I run through every crate apply on every page below.
   <strong>Emptiness is a result</strong>: a read of an empty file, a glob
   matching nothing, a grep with no hits and a search with no results all
   succeed. And <strong>a cut says what was lost and what would get it back</strong>,
@@ -204,10 +205,10 @@ tool schema    ce26c5f39467e4f0</code></pre>
   <code>classify</code>'s unit test passes on every platform for the same
   reason the defect exists, and that the browser crate's two live numbers rest
   on prose and on a handful of runs nobody kept.
-  <span class="chip unv">unverified</span> The claim that these are the
-  <em>largest</em> gaps is a judgement, not a count. Settled by an audit that
-  lists every behavioural claim across the eleven pages and marks the ones with
-  no repeatable evidence behind them.
+  <span class="chip unv">unverified</span> I think these are the <em>largest</em>
+  gaps, and that is a judgement, not a count. Settled by an audit that lists
+  every behavioural claim across the eleven pages and marks the ones with no
+  repeatable evidence behind them.
 </p>
 
 <footer class="pg">

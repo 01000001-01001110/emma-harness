@@ -181,11 +181,11 @@
   <h3><code>tools/tasks</code> and <code>tools/lsp</code> depend on <code>tools/fs</code></h3>
 
   <p>
-    Both need to decide whether a path is inside the working directory, and
-    path containment has one implementation rather than three. Containment
-    written twice is containment that disagrees with itself on the third
-    unusual input: a symlink, a UNC path, a trailing dot. That disagreement
-    surfaces as one tool refusing what another allowed.
+    Both need to decide whether a path is inside the working directory, and I
+    put path containment in one place rather than three. Written twice it
+    disagrees with itself on the third unusual input: a symlink, a UNC path, a
+    trailing dot. That disagreement surfaces as one tool refusing what another
+    allowed.
   </p>
 
   <h3><code>tools/web</code> depends on <code>llm</code>, and not for the model</h3>
@@ -211,13 +211,13 @@
   <h2 id="toolapi">Why <code>tool-api</code> is small</h2>
 
   <p>
-    Every crate above it depends on it, so anything added there is added to
-    everything, and every tool has to answer it. That cost is why
-    <code>ToolMeta</code> carries less than it could.
+    I keep <code>tool-api</code> small because every crate above it depends on
+    it, so anything added there is added to everything, and every tool has to
+    answer it. That is why <code>ToolMeta</code> carries less than it could.
   </p>
 
   <p>
-    <code>needs_approval</code> was removed after it turned out nothing read it:
+    I removed <code>needs_approval</code> after it turned out nothing read it:
     the approval gate derives what it needs from the two axes a tool already
     declares, and a third field that only looked like it mattered is a field
     fifteen tools maintain for no reader.
@@ -226,7 +226,7 @@
   <div class="note warn">
     <span class="h">The gap this leaves: <code>ToolCtx</code> has no session slot</span>
     <p>
-      There is nowhere in the context for per-session state, so read-tracking
+      I have not added a session slot to <code>ToolCtx</code>, so read-tracking
       and anything else a tool needs to remember across calls has no home.
     </p>
     <p>
@@ -238,7 +238,7 @@
   <h2 id="split">The library and the binary</h2>
 
   <p>
-    Everything that makes a decision lives in the library. <code>main.rs</code>
+    I put everything that makes a decision in the library. <code>main.rs</code>
     parses arguments and starts things. The reason is testability: a scripted
     <code>Provider</code> can drive an entire goal (tool calls, approvals,
     compaction, endings) with no network and no API key, which is how most of

@@ -74,8 +74,8 @@
 
   <p>
     The loop is <code>Agent::run_goal</code>, one function of about 370 lines.
-    Every decision about what ends a goal is visible in one place rather than
-    distributed across helpers that each look harmless. Everything a tool call
+    I kept every decision about what ends a goal visible in one place rather
+    than spread across helpers that each look harmless. Everything a tool call
     does is <code>Agent::run_tool_call</code>. Read those two together, because the memo rule is split between them and reads as nonsense
     in either alone.
   </p>
@@ -90,8 +90,9 @@
   <span class="src">crates/emma/src/goal.rs</span>
 
   <p>
-    Four properties hold across the whole chapter and each is here because it was
-    paid for somewhere else first. A session is one conversation and a goal is a
+    Four properties hold across the whole chapter, and each is here because I
+    paid for it somewhere else first. A session is one conversation and a goal
+    is a
     turn in it. A tool failure is a <code>tool_result</code>, never an abort. A
     call that failed is not repeated identically until something else has
     succeeded. An assistant turn is echoed back exactly as it came. The fifth,
