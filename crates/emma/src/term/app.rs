@@ -609,6 +609,19 @@ impl App {
         self.ollama_host_override = Some(host);
     }
 
+    /// Aim the harness feeds at a session directory a test owns.
+    ///
+    /// This file's own tests assign `harness_dir` directly, being inside the
+    /// module that declares it. `term::guarantees` is a sibling and cannot, so
+    /// anything it asserted about the Harness page would have been a claim
+    /// about whatever `~/.emma/sessions` happened to hold on the machine
+    /// running the suite — which is why that file recorded the page as
+    /// undefended rather than write the assertion. This is the seam it named.
+    #[cfg(test)]
+    pub(crate) fn set_harness_dir(&mut self, dir: std::path::PathBuf) {
+        self.harness_dir = dir;
+    }
+
     /// Open or close the Memory page. Opening reads the project wiki fresh —
     /// creating it on first touch, which is when the built-in schema installs —
     /// so what the page shows is what is on disk right now.
@@ -3307,6 +3320,37 @@ mod tests {
     #[ignore]
     fn dump_the_settings_screen() {
         for row in draw_settings(161, 75) {
+            println!("{row}");
+        }
+    }
+
+    /// The same service for the Memory page, which until 2026-09-05 nobody
+    /// could look at without running Emma.
+    ///
+    /// Seeded rather than empty: an empty wiki renders the honest empty state,
+    /// which the assertions already cover and which shows a reader nothing
+    /// about the row layout, the counts or the category column. The store is
+    /// `memory_rig`'s tempdir, so this reads no wiki belonging to anyone.
+    #[test]
+    #[ignore]
+    fn dump_the_memory_screen() {
+        let (_dir, _wiki, mut app) = memory_rig(&[
+            ("Deploy window", Category::Facts),
+            ("Reviews", Category::Workflows),
+        ]);
+        for row in draw(&mut app, &view(), 161, 75).0 {
+            println!("{row}");
+        }
+    }
+
+    /// And for the Harness dashboard, off `harness_rig`'s session directory —
+    /// two runs, one finished and one still going, so the six cards are drawn
+    /// with data rather than with their empty states.
+    #[test]
+    #[ignore]
+    fn dump_the_harness_screen() {
+        let (_dir, mut app, _now) = harness_rig();
+        for row in draw(&mut app, &view(), 161, 75).0 {
             println!("{row}");
         }
     }

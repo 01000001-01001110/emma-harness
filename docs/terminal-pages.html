@@ -246,13 +246,17 @@ harness: Option&lt;super::harness::HarnessView&gt;,</code></pre>
   </p>
 
   <p>
-    <span class="chip unv">unverified</span> for the Harness row above.
-    <code>each_pages_disclosure_belongs_to_that_page_alone</code> opens Settings
-    and Memory and reads their painted cells; it does not open Harness, so
-    nothing asserts that the dashboard's empty states say what they say. Adding
-    a third arm to that test, opening Harness with an empty
-    <code>HarnessView</code> and asserting one card's empty line, would settle
-    it.
+    <span class="chip test">tested</span> for the Harness row above, since
+    2026-09-05. <code>each_pages_disclosure_belongs_to_that_page_alone</code>
+    now opens all three pages: its third arm points the Harness page at an empty
+    session directory and asserts <code>EMPTY_RUNS</code> is on its painted
+    cells and on neither of the other two. That arm needed a seam
+    (<code>App::set_harness_dir</code>) before it could be honest, because the
+    page reads a private field that otherwise resolves to the real
+    <code>~/.emma/sessions</code> &mdash; an assertion about the developer's machine
+    rather than about the page. Removing the empty-state render from
+    <code>harness.rs</code> turns the arm red, which is what I checked before
+    moving this chip.
   </p>
 
   <p>
@@ -333,10 +337,12 @@ harness: Option&lt;super::harness::HarnessView&gt;,</code></pre>
     It asserts nothing, and what it shows is the cell buffer rather than a
     console: no colour, no proof that the chord arrived, no tearing. Everything
     it draws is already covered by the tests above it.
-    <span class="chip unv">unverified</span>: Memory and Harness have no
-    equivalent dump, so the only way anybody has looked at those two is by
-    running Emma and pressing the key. A test that prints each of them would
-    cost a few lines and settle it.
+    <span class="chip test">tested</span>: Memory and Harness have the same
+    dumps now &mdash; <code>dump_the_memory_screen</code> and
+    <code>dump_the_harness_screen</code>, ignored, in the same module. Both are
+    driven off the tempdir rigs the page tests already use, so each prints a
+    screen with data in it rather than an empty one, and neither reads a store
+    belonging to anybody. They assert nothing either; looking is the whole job.
   </p>
 
   <h2 id="unverified">What has not been checked</h2>

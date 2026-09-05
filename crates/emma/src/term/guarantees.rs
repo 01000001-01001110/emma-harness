@@ -1074,41 +1074,55 @@ mod app_rs {
     /// loop; nothing outside this module has it, and no production code is
     /// reachable through it that a caller could not reach directly.
     ///
-    /// **Two members, and both absences are deliberate.**
+    /// **One absence left, and it is a deletion rather than a gap.**
     ///
     /// `DataExplorer` is gone by owner ruling, 2026-08-27: superseded by the
     /// three Harness mocks and archived at
     /// `notes/archive/mockup-data-explorer.md`. `usertools::Tool::routed()`
     /// dropped it the same day.
     ///
-    /// ⚠ `Harness` is absent for a worse reason — this file cannot reach it
-    /// honestly. `toggle_harness` reads the session directory held in `App`'s
-    /// private `harness_dir`, whose only test seam is the field itself,
-    /// reachable from `app.rs`'s own test module and from nowhere else. Driven
-    /// from here it would read the real `~/.emma/sessions`, so every assertion
-    /// would be a claim about whatever the developer's machine happened to have
-    /// run. A page loop that is silently a function of the box is worse than a
-    /// loop that is honestly two long. **So the Harness page is undefended by
-    /// this net**; a `set_harness_dir` seam is what would close it.
+    /// `Harness` was absent until 2026-09-05, and for a reason worth keeping
+    /// because it is the shape of every gap this file records: `toggle_harness`
+    /// reads the session directory held in `App`'s private `harness_dir`, and
+    /// this module is a sibling of `app.rs`, not a child of it. Driven from
+    /// here the page would have read the real `~/.emma/sessions`, so every
+    /// assertion would have been a claim about whatever the developer's machine
+    /// had last run — a page loop silently a function of the box, which is
+    /// worse than a loop honestly two long. `App::set_harness_dir` is the seam
+    /// that note asked for, and [`open`] aims the page at a tempdir through it.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Screen {
         Settings,
         Memory,
+        Harness,
     }
 
     /// Every screen in [`Screen`] — what the "each page" guarantees loop over.
-    const RENDERABLE: [Screen; 2] = [Screen::Settings, Screen::Memory];
+    const RENDERABLE: [Screen; 3] = [Screen::Settings, Screen::Memory, Screen::Harness];
 
     /// Put `app` on `screen`, through the real toggles. Called twice, it closes
     /// what it opened: these are toggles, not setters.
     ///
-    /// The memory root is a caller-owned tempdir, never the repository: opening
-    /// the page *creates* `.emma/memory` under whatever it is handed, which is
-    /// how the built-in schema installs on first touch.
-    fn open(app: &mut App, screen: Screen, memory_root: &std::path::Path) {
+    /// `store` is a caller-owned tempdir, never the repository, and each page
+    /// reads it as its own kind of store: Memory *creates* `.emma/memory` under
+    /// whatever it is handed, which is how the built-in schema installs on
+    /// first touch, and Harness reads it as the session directory. An empty
+    /// directory is a legitimate state for both — the pages' empty states are
+    /// what it produces, and an unreadable store is a different claim they each
+    /// make in their own words.
+    fn open(app: &mut App, screen: Screen, store: &std::path::Path) {
         match screen {
             Screen::Settings => app.toggle_settings(),
-            Screen::Memory => app.toggle_memory(&memory_root.to_string_lossy()),
+            Screen::Memory => app.toggle_memory(&store.to_string_lossy()),
+            Screen::Harness => {
+                // Both halves matter: the session directory decides what the
+                // feed reads, and the cwd decides which runs are *this* repo's.
+                // Pointing them at the same empty tempdir is what makes the
+                // empty dashboard a fact about the fixture rather than about
+                // the machine.
+                app.set_harness_dir(store.to_path_buf());
+                app.toggle_harness(&store.to_string_lossy());
+            }
         }
     }
 
@@ -1123,6 +1137,7 @@ mod app_rs {
         match screen {
             Screen::Settings => super::super::settings::EXIT_HINT,
             Screen::Memory => super::super::memory::EXIT_HINT,
+            Screen::Harness => super::super::harness::EXIT_HINT,
         }
     }
 
@@ -1498,8 +1513,19 @@ mod app_rs {
     /// its own screen and on neither of the other's. **Expect to adjust on
     /// arrival if a page's subject changes** — a Memory page that grew a real
     /// embedding index would rightly stop saying it has no index.
+    ///
+    /// **Harness is the third arm, added 2026-09-05 with `set_harness_dir`.**
+    /// It is not driven with a key because it does not need to be: over an
+    /// empty session directory the dashboard's six cards keep their chrome and
+    /// each says in one line what it has none of, so the empty state is the
+    /// page's whole disclosure. That makes it the sharpest of the three for the
+    /// failure this test is about — the card is drawn either way, and only the
+    /// dim line separates "nothing has run in this repo" from a card that
+    /// silently rendered nothing, or from the mock's sample day rendered as if
+    /// it were real.
     #[test]
     fn each_pages_disclosure_belongs_to_that_page_alone() {
+        use super::super::harness::EMPTY_RUNS;
         use super::super::memory::{NOTICE_M2, NO_INDEX};
         use super::super::settings::NOTICE_PROVIDER;
         use ratatui::crossterm::event::{KeyCode, KeyEvent};
@@ -1559,6 +1585,32 @@ mod app_rs {
             "Settings is claiming the memory store has no index, which is not its \
              store to report on:\n{settings}"
         );
+
+        // Harness, third: it needs no key to speak, because its whole dashboard
+        // over an empty session directory *is* the disclosure. Six cards keep
+        // their chrome and each says in one dim line what it has none of
+        // (`harness.rs`'s module doc, and `EMPTY_RUNS` at the top of its
+        // constants block). The card is drawn either way, so the empty state is
+        // the only thing that distinguishes "nothing has run here" from a
+        // dashboard quietly rendering a sample day.
+        let mut app = App::new((120, 40));
+        app.set_tools(one_tool());
+        open(&mut app, Screen::Harness, store.path());
+        let (rows, _) = cells(&mut app, &v, 120, 40);
+        let harness = main_text(&rows, &layout_for(&v, 120, 40));
+        assert!(
+            harness.contains(EMPTY_RUNS),
+            "the Harness page stopped saying it has no runs ({EMPTY_RUNS:?}); an \
+             ACTIVE RUNS card with an empty body reads as a card that failed to \
+             load:\n{harness}"
+        );
+        for (name, screen) in [("Settings", &settings), ("Memory", &memory)] {
+            assert!(
+                !screen.contains(EMPTY_RUNS),
+                "{name} is reporting on the session store ({EMPTY_RUNS:?}), which is \
+                 not its store to report on:\n{screen}"
+            );
+        }
     }
 
     // A13 — **deleted, not rewritten.** The guarantee was "the Data Explorer
