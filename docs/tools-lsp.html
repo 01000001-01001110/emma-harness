@@ -620,6 +620,61 @@
   a real <code>Registry</code>.
 </p>
 
+<h2 id="proto">The wire, and the argument reader beside it</h2>
+
+<p>
+  <code>tools/lsp/src/proto.rs</code> is the whole of LSP's transport in about
+  fifty lines: JSON-RPC 2.0 messages inside <code>Content-Length</code> frames
+  over stdio. A client crate was considered and refused for the reason a
+  dependency usually gets refused here. It would bring a generated model of
+  every LSP type, of which this crate uses six, and the parts that are actually
+  hard, readiness and lifecycle and containment, are not the parts a client
+  crate solves.
+</p>
+<span class="src">tools/lsp/src/proto.rs — module doc, <code>read_message</code>, <code>write_message</code>, <code>Frame</code></span>
+
+<p>
+  Three details in the framing have each cost somebody a day. Header names are
+  matched case-insensitively, because the spec says <code>Content-Length</code>
+  and servers have shipped <code>content-length</code>, and the failure when the
+  match is exact is a hang rather than an error, since a frame whose length was
+  not parsed is a frame nobody consumes. The body is read with
+  <code>read_exact</code> into a byte buffer, because <code>Content-Length</code>
+  counts bytes: reading it as a string and counting <code>char</code>s
+  desynchronises the stream permanently on the first non-ASCII doc comment, and
+  everything after that frame is garbage. And a short read at the header is
+  end-of-stream rather than an error, because the server exiting is an ordinary
+  event that has to be told apart from a corrupt frame. One means it died and
+  the other means it is confused, and they reach the model as different
+  sentences.
+  <span class="chip cert">certified</span>: <code>Frame</code> is an enum
+  distinguishing the two, and <code>MAX_MESSAGE_BYTES</code> is
+  <code>64 * 1024 * 1024</code>, so a server answering
+  <code>Content-Length: 4294967296</code> is refused rather than allocated for.
+</p>
+<span class="src">tools/lsp/src/proto.rs — <code>MAX_MESSAGE_BYTES</code>, <code>Frame</code></span>
+
+<p>
+  <code>tools/lsp/src/args.rs</code> is a near-copy of
+  <code>tools/fs/src/args.rs</code>, and a copy rather than a shared crate on
+  the same call <code>tools/tasks</code> made: <code>args</code> is private in
+  both, the whole of it is thirty lines of <code>match</code>, and the property
+  that matters is that the messages are the same shape rather than that the code
+  is. Making it public to save this file would export a module whose only job is
+  producing one crate's error prose. Two conventions carry across because the
+  model depends on them. An explicit JSON <code>null</code> is treated as
+  absent, and everything in the file is pure, so it can run in
+  <code>validate_args</code> before any process is started. Unknown keys are
+  refused rather than ignored, because a silently dropped
+  <code>occurrence</code> looks to the model exactly like a parameter that had
+  no effect, and it concludes the behaviour is impossible rather than that it
+  misspelled the key.
+  <span class="chip cert">certified</span>: <code>deny_unknown</code> collects
+  the keys not in the known list, sorts them, and returns
+  <code>ToolError::BadArguments</code> when the list is non-empty.
+</p>
+<span class="src">tools/lsp/src/args.rs — module doc, <code>deny_unknown</code></span>
+
 <h2 id="unverified">What is not verified here</h2>
 
 <p>

@@ -568,6 +568,54 @@ pub fn hidden(total_cols: u16, latch: Latch) -&gt; bool {
     <code>chat_height - 1</code>, one row of continuity.
   </p>
 
+  <h2 id="extracted">Where the arithmetic lives now</h2>
+
+  <p>
+    The carve, the latch and the dock height are no longer declared in
+    <code>app.rs</code>. They sit in <code>crates/emma/src/term/layout.rs</code>,
+    440 lines, and <code>app.rs</code> imports them: line 77 of that file reads
+    <code>dock_height, hidden, regions, Latch, Regions, SLIM_HEADER_ROWS,
+    SLIM_STATUS_ROWS</code> from the module. So the functions this page quotes
+    are the same functions, in a different file, and a reader grepping
+    <code>app.rs</code> for <code>fn regions</code> will find nothing.
+    <span class="chip cert">certified</span>:
+    <code>grep -n "^pub fn " crates/emma/src/term/layout.rs</code> lists
+    <code>hidden</code>, <code>regions</code>, <code>dock_height</code>,
+    <code>compose</code> and <code>bar_for</code>; the same grep over
+    <code>app.rs</code> finds none of them.
+  </p>
+  <span class="src">crates/emma/src/term/layout.rs — <code>regions</code>, <code>hidden</code>, <code>dock_height</code>, <code>Latch</code>, <code>Regions</code></span>
+
+  <p>
+    The extraction has a reason the module doc states. The full-screen frame is
+    a sidebar, a main region and a bottom status bar, and which screen occupies
+    the main region varies while the chrome around it does not.
+    <code>compose</code> is the one seam that paints the chrome and hands the
+    main region to whichever screen is up. It exists because the settings screen
+    had already grown its own copy of the status-bar rendering and had quietly
+    stopped honouring a configured status program, which is the drift the seam
+    ends. <code>bar_for</code> chooses the status bar's contents from the
+    <code>View</code>, so the choice happens once rather than per screen.
+    <span class="chip unv">unverified</span> Whether every screen now goes
+    through <code>compose</code> rests on reading the call sites, not on a test
+    that fails when one does not. A test that renders each <code>Mode</code> and
+    asserts the status row is present would settle it, and that test is not in
+    the file.
+  </p>
+  <span class="src">crates/emma/src/term/layout.rs — module doc, <code>compose</code>, <code>bar_for</code></span>
+
+  <p>
+    Three constants in <code>layout.rs</code> encode the small-window
+    thresholds: <code>SLIM_STATUS_ROWS</code> at 14 rows, below which the status
+    bar loses its border and becomes one row rather than three;
+    <code>SLIM_HEADER_ROWS</code> at 12 rows, below which the header is one line
+    and the rule disappears; and <code>UNBORDERED_COLS</code> at 60 columns,
+    below which the main pane loses its border.
+    <span class="chip cert">certified</span>: the three
+    <code>pub const</code> items are declared with those values.
+  </p>
+  <span class="src">crates/emma/src/term/layout.rs — <code>SLIM_STATUS_ROWS</code>, <code>SLIM_HEADER_ROWS</code>, <code>UNBORDERED_COLS</code></span>
+
   <h2 id="coverage">Coverage</h2>
 
   <p>

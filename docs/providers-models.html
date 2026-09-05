@@ -407,6 +407,75 @@ pub fn clamp_effort(&amp;self, requested: Effort) -&gt; Option&lt;Effort&gt; {
     <span class="chip test">tested</span>
   </p>
 
+  <h2 id="roster">Asking a provider what it has, instead of remembering</h2>
+
+  <p>
+    The table above was transcribed by hand on a date, and its own doc names
+    what should replace it: an endpoint that reports the same facts.
+    <code>crates/llm/src/roster.rs</code> is that seam, built against
+    OpenRouter's <code>GET {base}/models</code>. It answers three questions the
+    table guesses at, which ids exist, which cost nothing, and what each will
+    accept, and it is library-only. Nothing in the binary calls it today, so no
+    part of Emma's behaviour changes because it is there.
+    <span class="chip cert">certified</span> as uncalled:
+    <code>grep -rn "roster::" crates tools</code> outside the module and the
+    docs generator returns one line, the <code>pub use</code> in
+    <code>crates/llm/src/lib.rs</code> that re-exports its three types. Nothing
+    calls <code>fetch</code>.
+  </p>
+  <span class="src">crates/llm/src/roster.rs — module doc, <code>fetch</code>, <code>OPENROUTER_BASE_URL</code></span>
+
+  <p>
+    The trap it records is worth more than the endpoint. Measured against the
+    live roster on 2026-08-30, 396 models: filtering on the id suffix
+    <code>:free</code> returns 18, and filtering on
+    <code>pricing.prompt</code> and <code>pricing.completion</code> both being
+    zero returns 21, of which three cannot run a turn of Emma's loop because
+    they do not list <code>tools</code> in <code>supported_parameters</code>.
+    Two are music models and one is a content-safety classifier, and handing any
+    of them a tool-calling request is a 400 on the first call. Price-zero and
+    tool support and text output together returns 18 usable models, and it is a
+    different 18 from the suffix's. The two filters agree on the count and
+    disagree on the set, so a test asserting <code>18</code> would pass over
+    either. The tests in the file assert on membership and never on a length.
+    <span class="chip obs">observed</span>: one live capture on 2026-08-30,
+    recorded in the module doc. The transcript is not in the tree, so the
+    numbers cannot be re-derived without another fetch.
+  </p>
+  <span class="src">crates/llm/src/roster.rs — module doc, <code>ModelInfo::usable</code>, <code>Roster::free</code></span>
+
+  <p>
+    Two admissions travel with it. Zero prompt and completion price is not the
+    same as a free call: one of those music models bills whole songs on a
+    dimension that is neither field, so a future text model billed per request
+    would read as free here. And a free model is rate-limited hard. Two of four
+    live calls that day came back 429 within a minute, per model. A roster entry
+    says a model exists and costs nothing, never that it will answer.
+    <code>Roster::fetched_at_ms</code> is not optional for the same reason a
+    compiled-in sample value is a defect: the price reported is the price at
+    fetch time, so <code>Roster::age_ms</code> exists to make "when" arithmetic
+    rather than a guess. A fetch failure is a <code>RosterError</code> the
+    caller renders as a notice, never a boot failure and never a panic.
+    <span class="chip cert">certified</span>: <code>fetch</code> returns
+    <code>Result&lt;Roster, RosterError&gt;</code> and the file contains no
+    <code>panic!</code> or <code>unwrap</code> on the response path.
+  </p>
+  <span class="src">crates/llm/src/roster.rs — <code>Roster::fetched_at_ms</code>, <code>Roster::age_ms</code>, <code>RosterError</code></span>
+
+  <p>
+    Every field is read out of a <code>Value</code> by hand rather than through
+    a derived <code>Deserialize</code>. That is the strict-decoder scar from
+    <a href="providers-content.html">typed content blocks</a> applied one file
+    over: an entry carrying a key this parser has never seen survives whole, and
+    an entry that cannot be read costs that entry rather than the roster.
+    <span class="chip unv">unverified</span> Whether a genuinely malformed
+    OpenRouter entry appears in practice is not known here. Capturing a live
+    response and feeding it to <code>Roster::parse</code> with one entry
+    corrupted would show whether the rest survives, and that test is not in the
+    file today.
+  </p>
+  <span class="src">crates/llm/src/roster.rs — <code>Roster::parse</code>, <code>ModelInfo</code></span>
+
   <h2 id="coverage">Coverage</h2>
 
   <p>

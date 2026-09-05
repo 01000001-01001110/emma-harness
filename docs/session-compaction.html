@@ -631,6 +631,102 @@ pub fn clear(&amp;mut self) -&gt; Cleared {
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::clear</code>, <code>Cleared</code>; crates/emma/src/session_command.rs — <code>clear</code></span>
 
+  <h2 id="prune">The third thing, which rewrites rather than shortens</h2>
+
+  <p>
+    <code>crates/emma/src/prune.rs</code> is a transform over the outbound
+    history that neither compaction nor <code>/clear</code> touches. Every tool
+    result Emma has received is re-sent on every later call, so a result's cost
+    is its size multiplied by the number of calls still to come, and an earlier
+    <code>Read</code> of a file a later <code>Read</code> has replaced is paid
+    for again on every remaining turn while saying nothing the newer copy does
+    not. Three transforms act on that: <code>supersede_reads</code> stubs an
+    older read covered by a newer one, <code>fold_edits</code> rewrites a
+    superseded edit's input, and <code>collapse_failures</code> replaces a
+    repeated rejection with a sentence.
+    <span class="chip cert">certified</span>: the three functions are declared
+    in the file and <code>prune</code> is its only public entry point.
+  </p>
+  <span class="src">crates/emma/src/prune.rs — <code>prune</code>, <code>supersede_reads</code>, <code>fold_edits</code>, <code>collapse_failures</code>, <code>Report</code></span>
+
+  <p>
+    It ships off, and the reason is a measurement that contradicted the claim it
+    was ported on. The fork this came from says 81.8% of byte-turns across 25
+    recorded runs were carried by superseded <code>Read</code> results. Those
+    recordings were not in the archive, so the harness at the foot of the file
+    re-derived the figure against a different corpus, the operator's own 156
+    session files, on 2026-08-26: superseded reads carry 2.4% of byte-turns
+    there, 245,728 <code>tool_result</code> bytes of 10,104,760 over the 36
+    sessions that used a tool at all, and all three transforms together reach
+    2.5%. The best single session was 5.1% and most were 0.0%. Neither number
+    refutes the other. The payoff depends on what the session did: a run that
+    reads one file eleven times to make four edits is the shape that pays, and a
+    run that greps, builds and reads each file once is this corpus.
+    <span class="chip obs">observed</span>: one run of the in-file
+    <code>measurement</code> harness over a home directory nobody kept. Re-run
+    it against any corpus and it prints that corpus's own number.
+  </p>
+
+  <p>
+    The same run found a bug in the port, which is the argument for measuring at
+    all. On the first pass all three transforms together removed fewer bytes
+    than <code>supersede_reads</code> alone, 245,356 against 245,694, because a
+    short rejection like <code>"denied"</code> is smaller than the sentence
+    explaining it was dropped, so the rewrite grew the request and lost the
+    original text at once. No fixture in the file could have caught it: every
+    one used a short result. <code>claim_stub</code> is the fix and the same run
+    now reports 2.5% against 2.4%.
+  </p>
+
+  <p>
+    Two invariants hold the whole file. It rewrites and never deletes, because a
+    <code>tool_result</code> whose <code>tool_use_id</code> has no matching
+    <code>tool_use</code> is rejected by Anthropic, so dropping one side of a
+    pair is not an option even when only one side holds the bytes. Every
+    function mutates the contents of a block that is already there, and the
+    transform takes <code>&amp;mut [Message]</code> rather than a
+    <code>Vec</code> so the type carries the length invariant. And nothing here
+    touches the session log: <code>Agent::conversation</code> stays faithful to
+    what was recorded, because the fold of the log has to equal it, and only the
+    outbound request is rewritten. Despite the module's name there is no
+    <code>std::fs</code> in the file.
+    <span class="chip cert">certified</span>:
+    <code>grep -n "std::fs" crates/emma/src/prune.rs</code> matches twice, once
+    in the module doc's own sentence and once inside the
+    <code>#[ignore]</code>d measurement test that walks a session corpus.
+    Nothing on the transform path touches a file, and <code>prune</code>'s
+    signature takes <code>&amp;mut [Message]</code>.
+  </p>
+
+  <p>
+    One deviation from the fork is a correctness fix rather than a port
+    artefact. The fork modelled a <code>Read</code> with no <code>limit</code>
+    as reaching infinity, so an unbounded re-read from line 1 covered any
+    earlier read of the same file. A live <code>Read</code> shows at most
+    <code>MAX_LINES</code> whatever the arguments say, so an unbounded read of a
+    5,000-line file stops at 2,000, and stubbing an earlier
+    <code>offset: 3000</code> read against it would delete the only copy of
+    those lines while claiming a newer one exists. <code>Window</code> is
+    bounded at both ends, with the cap read from <code>tools/fs</code> itself so
+    the two cannot drift.
+  </p>
+
+  <div class="note warn">
+    <span class="h">nothing in the loop calls it</span>
+    <p>
+      <code>prune</code> has no caller outside its own tests. The settings
+      screen writes <code>prune_history</code> into <code>settings.json</code>
+      and <code>app.rs</code> reads it back into a row, but no request path
+      passes a message list through this module.
+      <span class="chip cert">certified</span>:
+      <code>grep -rn "prune" crates/emma/src/agent.rs</code> prints nothing, and
+      the only matches for <code>prune_history</code> outside
+      <code>settings.rs</code> are in <code>term/app.rs</code> and
+      <code>term/settings.rs</code>. So the measurement above describes what the
+      transform would save, not what any run has saved.
+    </p>
+  </div>
+
   <h2 id="estimator">The estimator, and where its error lands</h2>
 
   <pre><code><span class="c">// crates/emma/src/agent.rs</span>

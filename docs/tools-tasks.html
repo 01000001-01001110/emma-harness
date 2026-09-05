@@ -565,6 +565,71 @@
   the tree around a list call.
 </p>
 
+<h2 id="modules">The three modules this page has not named</h2>
+
+<p>
+  <code>tools/tasks/src/get.rs</code> is <code>TaskGet</code>: one task, with
+  the prose a human wrote under it. An id that is not in the file is
+  <code>BadArguments</code> rather than an empty result, because the call named
+  something that is not there, which is a fact about the call and not about the
+  world. It is the difference between there being no tasks, a perfectly good
+  <code>Ok</code> from <code>TaskList</code>, and asking for
+  <code>#a3f1</code> when there is no <code>#a3f1</code>. An empty result for a
+  bad id would teach the model that the task it just created has vanished, and
+  its next move would be to create it again.
+</p>
+<span class="src">tools/tasks/src/get.rs — module doc, <code>TaskGet</code></span>
+
+<p>
+  <code>tools/tasks/src/update.rs</code> is <code>TaskUpdate</code>, and it
+  ticks a completed task's box where it sits. Not deleted, not moved to a
+  <code>## Done</code> section. Deleting throws away the note the person wrote
+  underneath and is the one irreversible operation in the crate; the argument
+  for it is that a file which only grows becomes noise, but the noise that
+  matters is in the model's context and <code>TaskList</code> already defaults
+  to open tasks. Moving to a section relocates the note and reshuffles an order
+  somebody chose, every time a task completes, and it makes the file's structure
+  carry data, so a person who reorganises the headings changes the record
+  without meaning to. An unknown id is <code>BadArguments</code>, and so is an
+  update that changes nothing, because a tool reporting success for a no-op is
+  lying about what it did.
+  <span class="chip cert">certified</span>: <code>STATUSES</code> in that file
+  is <code>pending</code>, <code>in_progress</code>, <code>completed</code>, and
+  <code>KEYS</code> is <code>id</code>, <code>status</code>, <code>text</code>.
+</p>
+<span class="src">tools/tasks/src/update.rs — module doc, <code>TaskUpdate</code>, <code>STATUSES</code></span>
+
+<p>
+  <code>tools/tasks/src/render.rs</code> decides how a task reads back.
+  <code>TaskList</code> is the call the loop makes most and its output lands in
+  the context window again on every turn it is made, so <code>line</code> emits
+  the checkbox, the handle and the text and nothing else:
+  <code>[~] #a3f1  port the auth middleware</code>. Notes are left to
+  <code>TaskGet</code>, since they are the part a person writes at length and
+  paying for them every turn is how a task list becomes the reason a session
+  runs out of room. <code>counts</code> puts the pending, in-progress and
+  completed totals first, so a model that reads one line of the result already
+  knows whether anything is outstanding.
+</p>
+<span class="src">tools/tasks/src/render.rs — <code>line</code>, <code>counts</code>, <code>block</code></span>
+
+<p>
+  <code>tools/tasks/src/args.rs</code> is the argument reader, worded to match
+  <code>tools/fs</code> and duplicated rather than shared because
+  <code>emma-tools-fs</code> keeps its own <code>args</code> module private and
+  this crate does not own that crate. The wording is copied rather than rewritten, because the
+  model learns the shape of one argument error and then reads every other one,
+  and a second dialect of the same message costs that for nothing. The file says
+  where this ends. If a third tool crate appears, it belongs in
+  <code>tool-api</code>.
+  <span class="chip unv">unverified</span> Whether the three copies have stayed
+  identical was not checked. Diffing <code>tools/fs/src/args.rs</code>,
+  <code>tools/tasks/src/args.rs</code> and <code>tools/lsp/src/args.rs</code>
+  side by side would settle it, and a divergence would be the first sign the
+  shared-crate moment has arrived.
+</p>
+<span class="src">tools/tasks/src/args.rs — module doc, <code>deny_unknown</code>, <code>object</code></span>
+
 <h2 id="unverified">What is not verified here</h2>
 
 <p>

@@ -553,6 +553,119 @@ tap: Option&lt;Records&gt;,</code></pre>
     <a href="session-resume.html">restore</a> for numbers rather than messages.
   </p>
 
+  <h2 id="runfacts">Four more records, written for a reader that draws a picture</h2>
+
+  <p>
+    <code>crates/emma/src/runfacts.rs</code> defines the records a run graph can
+    be drawn from. Its name is the argument: the fork called this
+    <code>telemetry</code>, a word meaning measurements sent somewhere, and this
+    sends nothing anywhere. Every record goes to the local session JSONL, with
+    no network, no prompt text and no hostname. A user reading
+    <code>telemetry.rs</code> in a coding agent would reasonably assume they
+    were being reported on, and being wrong about that in the reassuring
+    direction is the worse error.
+    <span class="chip test">tested</span>: a test in the file strips comment
+    lines from its own source and asserts the remainder contains none of
+    <code>reqwest</code>, <code>TcpStream</code>, <code>UdpSocket</code>,
+    <code>Command::new</code>, <code>std::env</code> or <code>hostname</code>,
+    so the name and the code cannot drift apart quietly.
+  </p>
+  <span class="src">crates/emma/src/runfacts.rs — module doc</span>
+
+  <p>
+    The rule the file keeps is that a screen must never claim what the store
+    cannot back, so a field that would have to be estimated is absent rather
+    than guessed. What that has already refused: no <code>retries</code>,
+    because nothing retries a delegation; no <code>host</code>, because nothing
+    in the workspace asks the operating system its name and adding a crate to
+    invent one would be inventing the field; no <code>threads</code>, because a
+    nested run is a future on the same runtime; and no ETA, because there is no
+    completion-rate model here and a number derived from one would be an
+    estimate wearing a measurement's clothes.
+  </p>
+
+  <p>
+    Addressing reuses ids this file already carries rather than correlating
+    anything new. The root node is the session's own goal, addressed by the
+    session id, and it is implicit: nothing spawns it, so nothing writes a
+    <code>node_spawn</code> for it and its records are the un-prefixed ones. A
+    nested node is one delegation, addressed by the <code>sub_id</code> that
+    <code>SessionLog::subagent</code> stamps onto every record that run writes,
+    built as <code>sub-&lt;parent turn id&gt;-&lt;n&gt;</code>. Delegation
+    cannot nest today, because the child registry is built without the
+    <code>Delegate</code> tool at all, so every <code>parent_node_id</code>
+    written is the root. The field is written anyway rather than implied, so the
+    day nesting becomes possible the reader needs no change.
+    <span class="chip unv">unverified</span> Whether anything reads these
+    records was not checked here. The two terminal views that would draw them,
+    <code>term/inspect.rs</code> and <code>term/rungraph.rs</code>, render from
+    their own view types and say the harness behind them does not exist yet.
+    Grepping for the record kinds outside this module would settle it.
+  </p>
+  <span class="src">crates/emma/src/runfacts.rs — the addressing scheme; crates/emma/src/session.rs — <code>SessionLog::new_id</code>, <code>SessionLog::subagent</code></span>
+
+  <h2 id="harnessstate">Reading the file back into runs</h2>
+
+  <p>
+    <code>crates/emma/src/harness_state/mod.rs</code> is the read-only
+    derivation over the records described on this page. It adds no record and
+    decides nothing: nothing in it starts a run, ends one, or asks the model
+    anything, and every number comes off the same session JSONL that
+    <code>emma agents</code> counts and <code>--resume</code> folds. The harness
+    its fork's mocks draw does not exist here. There is no worker pool, no task
+    queue and no DAG, so <code>runs</code> returns goals in a session and the
+    delegations inside them, and a card the log cannot feed stays empty. Nearly
+    every field is an <code>Option</code> carrying the reason it is optional.
+    <span class="chip cert">certified</span>:
+    <code>grep -c "Option&lt;" crates/emma/src/harness_state/mod.rs</code>
+    is non-zero across the struct definitions, and the module contains no
+    provider call.
+  </p>
+  <span class="src">crates/emma/src/harness_state/mod.rs — module doc, <code>runs</code>, <code>RunStatus</code></span>
+
+  <p>
+    One inference lives there and it is named. A session file records that a
+    goal started and, later, that it finished. It never records that the process
+    is alive. So running is read off the clock: an unfinished goal whose file
+    has been written to within <code>STALE_AFTER_MS</code> is
+    <code>RunStatus::Running</code>, and one quiet longer than that is
+    <code>RunStatus::Stalled</code>. Not failed, because nothing said it failed,
+    and not running, because nothing has said anything.
+  </p>
+
+  <p>
+    Its damage account is better than the fork's because the reader underneath
+    it is. <code>SessionLog::read_reporting</code> returns line numbers rather
+    than a count, so a page can say which lines to look at, and it exempts a
+    torn tail keyed on the trailing byte rather than on the line's position,
+    which is what a crash mid-write leaves and is not damage. The fork's counter
+    had no such notion, so every live session being written to at the moment of
+    the read would have reported one damaged line. The cost is stated in the
+    module rather than hidden: <code>read_reporting</code> also prints to
+    stderr, which under the full-screen frame is not somewhere a person is
+    looking, and a page polling a damaged file calls it again on every poll.
+    Nothing in <code>harness_state</code> can fix that, because the print is in
+    <code>session.rs</code>.
+    <span class="chip unv">unverified</span> Whether the repeated stderr print
+    is visible in practice depends on a caller that polls, and no such caller
+    was found while writing this. Running a page against a session file with a
+    corrupt line and watching stderr would settle it.
+  </p>
+  <span class="src">crates/emma/src/harness_state/mod.rs — <code>STALE_AFTER_MS</code>; crates/emma/src/session.rs — <code>SessionLog::read_reporting</code></span>
+
+  <p>
+    <code>crates/emma/src/harness_state/tests.rs</code> covers that reader
+    against fixture session files in temporary directories, written in the
+    record shapes <code>agent.rs</code> and <code>delegate.rs</code> actually
+    append, including the keys the module ignores, so a test cannot pass against
+    a record shape the loop does not write. One test in it does not use fixtures
+    at all: <code>the_real_session_directory_reads_without_inventing_anything</code>
+    runs every feed over the real <code>~/.emma/sessions</code> and is
+    <code>#[ignore]</code>d, because a test whose input is a home directory
+    passes or fails for reasons unrelated to the change under review.
+  </p>
+  <span class="src">crates/emma/src/harness_state/tests.rs — module doc, <code>the_real_session_directory_reads_without_inventing_anything</code></span>
+
   <h2 id="coverage">What this page covers</h2>
 
   <p>

@@ -531,6 +531,163 @@ pub struct Harness {
     would be a second implementation of the matcher.
   </p>
 
+  <h2 id="platform">Two more file trees under the project directory</h2>
+
+  <p>
+    The seven kinds above are what the loader reads. Two more stores exist in
+    the crate, each with its own format and its own failure modes, and a reader
+    who greps for either currently finds no page. They reach a run by different
+    routes, and one of them does not reach it at all.
+  </p>
+
+  <p>
+    <code>crates/emma/src/platform.rs</code> has no caller.
+    <span class="chip cert">certified</span>:
+    <code>grep -rn "platform" crates/emma/src --include=*.rs</code> outside
+    <code>platform.rs</code> matches the <code>pub mod</code> line in
+    <code>lib.rs</code> and prose using the word in its ordinary sense, and
+    nothing else. The wiki underneath it does have callers: the terminal's
+    memory screen constructs a <code>Wiki</code> in
+    <code>term/app.rs</code> and routes every mutation through it, and
+    <code>platform.rs</code> builds a starter page from a survey.
+    <span class="chip cert">certified</span>: <code>Wiki::project</code> is
+    called at three places in <code>term/app.rs</code>, two of them outside the
+    test module. The module doc in <code>memory/mod.rs</code> still says nothing
+    in the crate calls into it, and that sentence is now false.
+  </p>
+
+  <p>
+    <code>crates/emma/src/platform.rs</code> writes
+    <code>.platform/context.yaml</code>, a mechanical description of what the
+    <em>repository</em> is. No model call anywhere in it: every field is
+    something the process looked up in a manifest, a README or a directory
+    entry, and a field that would have to be guessed is absent rather than
+    inferred. It is not about the machine, and the file says why. The stub it
+    replaced claimed to record "what this machine is", and
+    <code>.platform/context.yaml</code> sits inside the project directory and is
+    meant to be committed, so a machine fact written into it is a fact about
+    whoever ran <code>emma init</code> last presented to everyone else as a fact
+    about the project. It would also flip on every teammate's refresh. What is
+    on this machine is <code>usertools</code>'s question, answered per process
+    and never written down.
+  </p>
+  <span class="src">crates/emma/src/platform.rs — module doc, <code>DIR</code>, <code>FILE</code>, <code>survey</code>, <code>write</code></span>
+
+  <p>
+    The file has two zones separated by a comment line. Everything above the
+    curated fence is derived and rewritten on every refresh; everything from the
+    fence down is written by a person and never touched. Two zones rather than
+    one merged document, because merging is how a sentence somebody wrote gets
+    lost, and because the derived half has to be allowed to be wrong and thrown
+    away. A file that has lost the fence is refused rather than rewritten, and
+    so is one that cannot be read at all: not valid UTF-8, a directory, no
+    permission. That second refusal is a change from the branch this came from,
+    where any read error fell through to the create path and overwrote the
+    curated zone with a fresh empty one, so a file saved as UTF-16 in Notepad
+    was one <code>emma init</code> away from losing its prose. The write is to a
+    sibling temporary file followed by a rename, for the same reason.
+    <span class="chip unv">unverified</span> The UTF-16 case is the module's
+    account of the branch's behaviour and was not reproduced here. Saving a
+    <code>context.yaml</code> as UTF-16 and running the write path would settle
+    what this tree does with it.
+  </p>
+  <span class="src">crates/emma/src/platform.rs — the curated fence, <code>write</code>, <code>Wrote</code></span>
+
+  <p>
+    <code>crates/emma/src/memory/mod.rs</code> is a per-repository wiki of
+    distilled durable knowledge under <code>&lt;repo&gt;/.emma/memory/</code>,
+    with <code>Wiki::global</code> opening the same layout under a home
+    directory for facts that outlive one project. The root is a parameter rather
+    than a global, so a test never touches the real one. One subtraction from
+    the fork it was ported from is a security fix rather than a preference: the
+    fork also wrote the verbatim body of every successful <code>WebFetch</code>
+    into <code>.emma/memory/raw/web/</code>, and verbatim remote text inside the
+    working tree is untrusted input sitting where a later read treats it as the
+    project's own notes. The fork guarded it with a secret strip its own comment
+    declares is not a boundary. A distilled page is written by whoever learned
+    the thing, which removes the surface instead of filtering it.
+  </p>
+  <span class="src">crates/emma/src/memory/mod.rs — module doc, <code>Wiki::project</code>, <code>Wiki::global</code>, <code>SCHEMA</code></span>
+
+  <p>
+    Four properties decide how it fails. <code>index.md</code> is regenerated
+    from <code>pages/</code> after every mutation, so it cannot drift from the
+    ground truth by construction rather than by discipline, and
+    <code>log.md</code> is append-only. A malformed page is reported rather than
+    dropped: <code>Wiki::list</code> returns the pages it could read together
+    with a <code>Malformed</code> for each one it could not, with the reason, and
+    <code>index.md</code> gets a section for them, because a parse failure in
+    this layer must never look like a memory the user never had. Nothing
+    deletes; <code>Wiki::archive</code> moves a file into <code>archive/</code>
+    whole, and <code>Wiki::create</code> numbers a colliding slug against
+    <code>pages/</code> and <code>archive/</code> together, so a new memory
+    cannot land on one archived years earlier. And everything written is
+    plaintext markdown inside the repository, unencrypted and committable, which
+    is why the built-in schema tells the model in as many words never to write a
+    secret into it.
+    <span class="chip test">tested</span>: the store's own test file asserts the
+    schema text contains <code>CONTRADICTION</code> and
+    <code>Never write a secret</code>, and that a user's edited
+    <code>schema.md</code> is not overwritten by a later open.
+  </p>
+  <span class="src">crates/emma/src/memory/mod.rs — <code>Wiki::list</code>, <code>Wiki::archive</code>, <code>Wiki::create</code>, <code>Malformed</code>, <code>Wiki::rebuild_index</code></span>
+
+  <p>
+    Three private modules sit under it.
+    <code>crates/emma/src/memory/page.rs</code> is one memory on disk: the
+    frontmatter, the title, the body, and the slug a title turns into. Its
+    frontmatter reader is hand-written rather than handed to
+    <code>serde_yaml</code>, and that is a change from the fork, whose argument
+    was that the crate costs nothing. True of the workspace and false of this
+    crate, which does not depend on <code>serde_yaml</code>. What is left is a
+    parser for four keys whose writer is fifty lines away. Three rules answer
+    the hard key, <code>source:</code>, which holds URLs: a value is the rest of
+    its line with no comment stripping, because a <code>#</code> in a
+    frontmatter value is far more likely to be a URL fragment; the writer quotes
+    anything that is not plainly a word, so a round trip cannot lose a colon, a
+    leading dash or a trailing space; and <code>pinned</code> is
+    <code>true</code> or <code>false</code> and nothing else, so
+    <code>yes</code> reads as a malformed page, which is the answer
+    <code>serde_yaml</code> gives the harness's frontmatter one crate over. It
+    tolerates CRLF and a leading UTF-8 BOM, because a frontmatter parser in this
+    workspace once dropped 86 of 90 real files by matching
+    <code>---\n</code> byte-exactly against fixtures written on LF.
+  </p>
+  <span class="src">crates/emma/src/memory/page.rs — module doc, <code>Front</code>, <code>render</code>, <code>Category</code></span>
+
+  <p>
+    <code>crates/emma/src/memory/index.rs</code> renders <code>index.md</code>
+    from a listing and nothing else, so the rebuild and any future incremental
+    writer have one definition of what the file should say. It groups by
+    category in a fixed order and prints every category even when empty, reading
+    <code>_none yet_</code>, because a wiki that shows five headings and hides
+    the sixth reads as if the sixth is not allowed.
+    <code>crates/emma/src/memory/clock.rs</code> is eighty-two lines producing
+    today's date as <code>YYYY-MM-DD</code> without a date crate: there is no
+    <code>chrono</code>, <code>time</code> or <code>jiff</code> in the lock
+    file, and the wiki needs one thing from a calendar. It is Howard Hinnant's
+    civil-from-days, in UTC rather than local time, because a wiki is committed
+    and read on other machines and a log whose ordering depends on the reader's
+    timezone disagrees with itself across a team. A clock before the epoch reads
+    as the epoch rather than panicking, since a wrong date on a memory is a
+    blemish and a crash is a lost memory.
+    <span class="chip cert">certified</span>: no date crate appears in
+    <code>Cargo.lock</code> for this workspace under those three names, and
+    <code>clock.rs</code> imports only <code>std::time</code>.
+  </p>
+  <span class="src">crates/emma/src/memory/index.rs — <code>render</code>; crates/emma/src/memory/clock.rs — <code>civil_from_days</code>, <code>iso_from_days</code>, <code>today</code></span>
+
+  <p>
+    <code>crates/emma/src/memory/tests.rs</code> covers the store against
+    temporary directories, touching neither the repository's own
+    <code>.emma/</code> nor the real home. They run against a real filesystem
+    rather than a fake one because every guarantee the module makes is a claim
+    about files: that a slug cannot collide with an archived one, that a rename
+    moved rather than copied, that a page written on one machine parses on
+    another. A fake filesystem agrees with whoever wrote it about all three.
+  </p>
+  <span class="src">crates/emma/src/memory/tests.rs — module doc</span>
+
   <h2 id="notverified">What this page did not settle</h2>
 
   <ul class="body">

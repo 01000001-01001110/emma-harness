@@ -376,7 +376,7 @@ pub(crate) fn rank(self) -&gt; u8 {
   <figure>
     <div class="figwrap">
       <!-- diagram:providers-boundary -->
-      <svg viewBox="0 0 1214 172" role="img" aria-label="A Request's 7 fields are rendered into a body whose 7 keys are sorted for the cache. Pink marks keys that may be absent: output_config, stream.">
+      <svg viewBox="0 0 1214 172" role="img" aria-label="A Request's 8 fields are rendered into a body whose 7 keys are sorted for the cache. Pink marks keys that may be absent: output_config, stream.">
         <style>
           :root {
             --bnd-ground: #12101a;
@@ -545,6 +545,112 @@ impl std::fmt::Debug for AnthropicProvider {
     story is on <a href="providers-credentials.html">credentials</a>.
   </p>
   <span class="src">crates/llm/src/anthropic.rs — <code>a_formatted_error_never_contains_the_key</code></span>
+
+  <h2 id="ollama">The second implementation, and the three places the trait had to give</h2>
+
+  <p>
+    <code>crates/llm/src/ollama.rs</code> is the other <code>Provider</code> in
+    the tree, and it is the only thing that could show the boundary was one.
+    Ollama does not speak the Messages API, so pointing
+    <code>with_base_url</code> at it would not have worked: it has its own
+    <code>/api/chat</code>, a tool definition nests under <code>function</code>
+    rather than carrying <code>input_schema</code>, a tool call arrives in
+    <code>message.tool_calls[]</code> with its arguments already decoded instead
+    of as a <code>tool_use</code> block, and a tool result goes back as a whole
+    message with <code>role: "tool"</code> rather than as a
+    <code>tool_result</code> inside a user turn. Translating those four
+    differences is the file's job, and everything else on this page crossed
+    without contortion.
+  </p>
+  <span class="src">crates/llm/src/ollama.rs — module doc, <code>OllamaProvider::send</code></span>
+
+  <p>
+    Three things did not cross, and each became a change to the trait rather
+    than a workaround inside the file.
+  </p>
+
+  <ol class="body">
+    <li>
+      <b><code>env_var</code> means the variable that outranks the stored
+      <em>key</em>.</b> Returning <code>OLLAMA_HOST</code> from it would have
+      sent the host through <code>auth::load_default</code> and into an
+      <code>ApiKey</code>, whose constructor registers the string for scrubbing
+      from every error this process prints. The destination would then read as
+      <code>[redacted]</code> everywhere, which is the reverse of what the
+      module is for. <code>Ollama::env_var</code> returns
+      <code>OLLAMA_API_KEY</code>, a name Ollama itself does not use and which
+      only means anything in front of a reverse proxy.
+      <span class="chip cert">certified</span>: read the method and its doc
+      comment in <code>ollama.rs</code>.
+    </li>
+    <li>
+      <b>A provider had no way to say it needs no key.</b>
+      <code>main.rs</code> resolved one unconditionally, so registering Ollama
+      made Emma refuse to start with <code>no API key for ollama</code>.
+      <code>ProviderKind::requires_key</code> now exists with a default of
+      <code>true</code>, so a provider that reaches the public internet fails
+      closed by saying nothing, and <code>main.rs</code> hands a placeholder key
+      to the one that overrides it.
+      <span class="chip cert">certified</span>:
+      <code>crates/llm/src/kind.rs</code> declares the defaulted method and
+      <code>crates/emma/src/main.rs</code> branches on it before
+      <code>build</code>.
+    </li>
+    <li>
+      <b>A provider had no way to say anything at startup.</b> The trait was
+      <code>model_id</code> and <code>send</code>, because Anthropic's endpoint
+      is a constant and nothing ever asked.
+      <code>Provider::startup_notes</code> is defaulted empty, and
+      <code>OllamaProvider::startup_notes</code> fills it: a destination that is
+      not loopback is named before the first call, along with where it came
+      from, so a stale <code>OLLAMA_HOST</code> in a shell profile cannot
+      quietly ship the conversation to a machine the user forgot about. It is a
+      disclosure surface and not a gate. Nothing in the file refuses.
+      <span class="chip cert">certified</span>:
+      <code>main.rs</code> loops over <code>provider.startup_notes()</code> and
+      prints each through <code>term.note</code> before the run begins.
+    </li>
+  </ol>
+  <span class="src">crates/llm/src/ollama.rs — <code>Ollama::env_var</code>, <code>Ollama::requires_key</code>, <code>OllamaProvider::startup_notes</code>; crates/llm/src/kind.rs — <code>ProviderKind::requires_key</code>; crates/llm/src/lib.rs — <code>Provider::startup_notes</code></span>
+
+  <p>
+    Two of this page's asks are dropped rather than faked.
+    <code>Caching</code> is a Messages-API billing feature, so
+    <code>Usage.cache_*</code> stay zero on this path instead of reporting hits
+    that did not happen, and any cost computed from them would otherwise be
+    wrong. <code>Effort</code> has no Ollama equivalent and is not approximated,
+    because a model either has a thinking phase or it does not. What is passed
+    through is <code>max_tokens</code>, as <code>num_predict</code>, and that
+    knob caps thinking and answer together. A thinking model given a budget
+    sized for the answer alone spends it on reasoning and returns empty content,
+    which reads as a model that cannot follow instructions rather than as a
+    harness that cut it off.
+    <span class="chip unv">unverified</span> The empty-content failure is the
+    file's own account of the trap and no run recorded here has hit it. A local
+    thinking model with <code>--max-tokens</code> set low, and the returned
+    content inspected, would settle it.
+  </p>
+  <span class="src">crates/llm/src/ollama.rs — module doc, <code>REQUEST_TIMEOUT</code>, <code>DEFAULT_NUM_CTX</code></span>
+
+  <p>
+    Three constants in the file encode decisions rather than measurements.
+    <code>DEFAULT_HOST</code> is the literal <code>http://127.0.0.1:11434</code>
+    rather than <code>localhost</code>, because a name resolves through the
+    box's resolver and on Windows commonly answers <code>::1</code> first
+    against a server bound only to the v4 address.
+    <code>DEFAULT_NUM_CTX</code> is 32,768 because Ollama's own default is small
+    enough that an agent conversation overruns it in a few turns, and the
+    overrun is silent: the server drops the front of the prompt, so the model
+    loses its instructions rather than returning an error.
+    <code>REQUEST_TIMEOUT</code> is 3,600 seconds, and the file says outright
+    that the figure is not measured in this tree.
+    <span class="chip cert">certified</span>: all three are <code>const</code> items in
+    <code>ollama.rs</code> with those values.
+    <span class="chip unv">unverified</span> Whether an hour is the right bound
+    is not settled; timing a long-form answer on the target machine would
+    replace the guess with a number.
+  </p>
+  <span class="src">crates/llm/src/ollama.rs — <code>DEFAULT_HOST</code>, <code>DEFAULT_NUM_CTX</code>, <code>REQUEST_TIMEOUT</code>, <code>DEFAULT_MODEL</code></span>
 
   <h2 id="fake">A scripted provider drives the loop with no socket and no key</h2>
 
