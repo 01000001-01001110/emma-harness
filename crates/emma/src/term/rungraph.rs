@@ -1,7 +1,7 @@
 //! The Run Graph page: the owner's mock, cell for cell.
 //!
-//! The third harness view (`notes/plan-harness.md` H0, design in
-//! `notes/design-rungraph-page.md`): a box-drawn execution DAG on the left,
+//! The third harness view (harness plan H0, design in
+//! the Run Graph page design): a box-drawn execution DAG on the left,
 //! the SELECTED NODE inspector on the right, a five-panel strip beneath, and
 //! the page command bar, with every label, glyph and affordance from the
 //! mock.

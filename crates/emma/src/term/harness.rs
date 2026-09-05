@@ -1,6 +1,6 @@
 //! The Harness dashboard: the owner's mock, cell for cell.
 //!
-//! The mock is the acceptance criterion (`notes/design-harness-page.md`), the
+//! The mock is the acceptance criterion (the Harness page design), the
 //! standing rule Settings and Memory were built under: action bar, six cards
 //! in a two-column grid (ACTIVE RUNS, WORKER POOL, RUNTIME STATUS, TASK
 //! QUEUE, TOOL GATES, RESOURCES), a full-width band holding EVENT LOG and

@@ -25,7 +25,7 @@
 //! # The colours are data; the three rules above are not
 //!
 //! Which hex a role has comes from a [`Theme`](super::theme::Theme) — the
-//! built-in one, or a file somebody wrote (`notes/design/themes.md`). What a
+//! built-in one, or a file somebody wrote (the themes design). What a
 //! theme cannot do is reach any of the three rules. It never colours
 //! [`Role::Text`], it never paints a lone background, and it is never consulted
 //! at all on a terminal with no colour to spend. Those are enforced twice on
@@ -39,7 +39,7 @@
 //! The accent and the secondary grey are the owner's mockup, sampled from the
 //! image rather than described: `#fd548f` on the wordmark, `#e56383` on a
 //! border, `#fb5797` on a meter — one hue with antialias variance, taken here as
-//! the single value `#f5548f`. `notes/design/tui-fullscreen.md` §8.1 is the
+//! the single value `#f5548f`. The full-screen design's accent section is the
 //! argument; this file is where it lands.
 //!
 //! **The safety vocabulary did not move.** `Ok`, `Warn`, `Err` and `Info` are
@@ -327,7 +327,7 @@ impl Palette {
 
     /// The other one: the sidebar's selected-session band, border to border.
     ///
-    /// Measured off `notes/design/mockup-tui.png` (2026-08-13) — accent text on a
+    /// Measured off the approved TUI mockup (2026-08-13) — accent text on a
     /// barely-raised near-black, rgb(25,27,30) against the rgb(13,15,19)
     /// ground — and deliberately *not* [`Palette::chip`]'s dark-on-pink, which
     /// an earlier draft reused and which reads as a second approval prompt.
@@ -382,7 +382,7 @@ const BAND_ANSI16_BG: Color = Color::DarkGray;
 /// greyscale ramp (232–255, value `8 + 10i`).
 ///
 /// **Only pairs come through here, and only for their 256-colour half.** A
-/// role's index is declared by the theme, because `notes/design/themes.md` §2.3
+/// role's index is declared by the theme, because the themes design measured
 /// measured this function against the seven hexes Emma ships and found it
 /// reproduces five of them exactly and disagrees with two by a shade of the
 /// same hue — good enough to derive from, not good enough to overwrite a
@@ -797,7 +797,7 @@ mod tests {
     }
 
     /// The 256-colour derivation, against the seven hexes
-    /// `notes/design/themes.md` §2.3 measured — the one measured claim in that
+    /// the themes design measured — the one measured claim in that
     /// document, reproduced here so it is a receipt rather than a citation.
     ///
     /// Five reproduce the shipping index exactly. Two do not, and the document

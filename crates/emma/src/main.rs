@@ -1109,9 +1109,9 @@ async fn run_verification(
     // summary that reads as uniformly successful is the one nobody believes
     // twice.
     term.note(&format!(
-        "{upheld} upheld, {against} not upheld, {unusable} without a verdict. Receipts are in \
-         verification/receipts/ and the reports beside them in verification/reviews/. A receipt is \
-         one model's reading and not a fact — the report is there so you can disagree with it."
+        "{upheld} upheld, {against} not upheld, {unusable} without a verdict. Each receipt sits \
+         beside the report it came from, in the ledger's own directory. A receipt is one model's \
+         reading and not a fact — the report is there so you can disagree with it."
     ));
     Ok(())
 }

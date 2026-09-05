@@ -2,8 +2,8 @@
 //!
 //! **This module exists because those two files are being replaced.** The Mac
 //! branch's versions are the base for the merged tree
-//! (`notes/design/tui-fork-integration.md`), and
-//! `notes/design/term-hardening-backport.md` counted what that costs: 65
+//! (the TUI fork-integration design), and
+//! the term-hardening backport checklist counted what that costs: 65
 //! hardening items, **57 of which had no test outside the file being
 //! replaced**. A test living inside a file that is about to be overwritten is
 //! deleted by the overwrite, and the guarantee it defended disappears with
@@ -38,7 +38,7 @@
 //! **A compile error here is a success, not a mishap.** If the incoming
 //! `frame.rs` has no `erase_frame`, this file stops compiling, and that is the
 //! loudest possible signal that an item on the checklist needs a decision. Read
-//! `notes/design/term-hardening-backport.md` and either re-apply the fix or
+//! the term-hardening backport checklist and either re-apply the fix or
 //! record why the item no longer applies.
 //!
 //! # What this file is not
@@ -53,7 +53,7 @@
 // region: frame.rs
 // ---------------------------------------------------------------------------
 // `frame.rs`'s share of the silent-loss list — §1a of
-// `notes/design/term-hardening-backport.md`. Each test names its checklist id,
+// the term-hardening backport checklist. Each test names its checklist id,
 // the guarantee in behaviour terms, and the symptom it defends against.
 //
 // **Almost everything here reads source text, and that is a consequence of
@@ -308,7 +308,7 @@ mod frame_rs {
     /// does not echo what they type, on a screen that is not theirs.
     ///
     /// **This is the item the incoming file already has wrong.** The audit
-    /// (`notes/audits/2026-08-27-divergent-emma-fork.md` §2.6, quoted in §1a)
+    /// (the divergent-fork audit, quoted in the checklist's opening section)
     /// puts `enable_raw_mode()` at its `:433`, `ALT_ON` at `:442` and the hook
     /// at `:478` — a forty-five-line unhooked window — and its own test
     /// *locates* the call without ever asserting its position, which is the
@@ -907,7 +907,7 @@ mod frame_rs {
 
 // region: app.rs
 // ---------------------------------------------------------------------------
-// `app.rs` — the 25 items of `notes/design/term-hardening-backport.md` §2a.
+// `app.rs` — the 25 items of the term-hardening backport checklist's app section.
 //
 // **Every one of the 25 had its only test inside `app.rs`.** Not one of them
 // had a defender anywhere else in the workspace, which makes this file the
@@ -1078,7 +1078,7 @@ mod app_rs {
     ///
     /// `DataExplorer` is gone by owner ruling, 2026-08-27: superseded by the
     /// three Harness mocks and archived at
-    /// `notes/archive/mockup-data-explorer.md`. `usertools::Tool::routed()`
+    /// the archived Data Explorer mockup record. `usertools::Tool::routed()`
     /// dropped it the same day.
     ///
     /// `Harness` was absent until 2026-09-05, and for a reason worth keeping
@@ -1178,8 +1178,8 @@ mod app_rs {
     /// it both programs were installed and nothing looked wrong.
     ///
     /// Written as a property over the **real catalogue** rather than the three
-    /// pages, because the same shape is `notes/design/tui-fork-inventory.md`
-    /// §11's finding about the incoming tree's QUICK HELP panel — four of six
+    /// pages, because the same shape is the fork inventory's finding about
+    /// the incoming tree's QUICK HELP panel — four of six
     /// advertised keys resolve to no handler at all. The implication asserted
     /// here (advertised ⇒ decodable) holds however many tools the catalogue
     /// grows, and does not care which of them the machine can launch. The three
@@ -1277,7 +1277,7 @@ mod app_rs {
             "n/a",
             "the sidebar still advertises a chord for the Data Explorer and no \
              page takes it: owner ruling 2026-08-27, superseded by the Harness \
-             mocks and archived at notes/archive/mockup-data-explorer.md"
+             mocks and archived in the Data Explorer mockup record"
         );
     }
 
@@ -1617,7 +1617,7 @@ mod app_rs {
     // names the four things it will not draw, one by one", and the Data
     // Explorer no longer exists: owner ruling, 2026-08-27, the three Harness
     // mocks supersede it, and the page is archived at
-    // `notes/archive/mockup-data-explorer.md`. `usertools::Tool::routed()`
+    // the archived Data Explorer mockup record. `usertools::Tool::routed()`
     // dropped it the same day, so the sidebar prints `n/a` where its chord was.
     // There is no page to make the claim, no query box to be missing from it,
     // and nothing to assert. The *shape* of the guarantee — a page that refuses
@@ -2251,7 +2251,7 @@ mod app_rs {
     /// is a (b).** The other half of this test asserted the panes float one
     /// column inside the window, that two columns of ground sit between the
     /// sidebar and the main pane, and that a blank row separates the pane from
-    /// the status bar — all measured from `notes/design/mockup-tui.png` on
+    /// the status bar — all measured from the approved TUI mockup on
     /// 2026-08-13, against a shell that no longer exists. The TUI imported on
     /// 2026-08-27 carves from a different mock: `layout::regions` splits the
     /// window edge to edge, the sidebar starts at column 0 and the panes share

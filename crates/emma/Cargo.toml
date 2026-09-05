@@ -58,10 +58,10 @@ emma-tools-lsp.workspace = true
 # `web_tools`, and the registration in `main.rs` that reports what it left out.
 emma-tools-web.workspace = true
 # The terminal UI. Two interactive frames since 2026-08-12 (stage 2 of
-# notes/design/tui-fullscreen.md): the default is `Viewport::Fullscreen` on the
+# the full-screen design): the default is `Viewport::Fullscreen` on the
 # alternate screen — the owner chose a multi-pane layout that cannot be drawn
-# inline, knowing it costs terminal scrollback and native mouse selection; the
-# design's §2 prices the trade and term/ carries the replacements — and the old
+# inline, knowing it costs terminal scrollback and native mouse selection; that
+# design's record prices the trade and term/ carries the replacements — and the old
 # `Viewport::Inline` frame survives behind `EMMA_UI=inline` for one release as
 # the soak-period escape hatch.
 #
@@ -109,7 +109,7 @@ tempfile.workspace = true
 #
 # Licence checked at the source rather than the badge, per the house rule:
 # wezterm's `pty` crate is plain MIT (LICENSE.md, Wez Furlong), grepped for the
-# non-standard clauses `notes/improvements.md` warns about and clean.
+# non-standard clauses the backlog warns about and clean.
 #
 # A dev-dependency on purpose: it must never reach the shipped binary.
 portable-pty = "0.9"

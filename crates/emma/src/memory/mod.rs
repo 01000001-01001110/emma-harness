@@ -1,7 +1,7 @@
 //! A per-repository wiki of **distilled durable knowledge**.
 //!
 //! Ported from a divergent fork reviewed on 2026-08-27
-//! (`notes/audits/2026-08-27-divergent-emma-fork.md`), with one deliberate
+//! (the divergent-fork audit reviewed on 2026-08-27), with one deliberate
 //! subtraction: the fork also wrote the **verbatim body of every successful
 //! `WebFetch`** into `.emma/memory/raw/web/`. That is not ported. Owner
 //! ruling, 2026-08-27: the wiki keeps *durable knowledge distilled from* a

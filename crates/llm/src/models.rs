@@ -28,7 +28,7 @@
 //! from the provider with the key the user already gave us and keep this table
 //! only as the offline fallback. [`Limits`] is deliberately the shape that
 //! response parses into, so that stage replaces the *lookup* and not the
-//! clamping. See `notes/design/provider-and-model.md` §4.1.
+//! clamping. See the provider-and-model design.
 //!
 //! Note what is **not** here: the minimum cacheable prefix. It is the same
 //! class of per-model value, it is wrong for the same reason, and the models

@@ -1,7 +1,7 @@
 //! Reading a `.claude/` directory as an Emma harness.
 //!
 //! Emma runs on the Anthropic API; it does not shell out to the `claude` binary
-//! and does not use the Agent SDK (`notes/design/claude-code-compatibility.md`). What
+//! and does not use the Agent SDK (see the Claude Code compatibility design). What
 //! remains is one cheap, useful thing: **recognise `.claude/` configuration when
 //! we find it**, so a skill or command already written for Claude Code can be
 //! used without being rewritten.

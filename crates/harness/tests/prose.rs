@@ -62,8 +62,6 @@ const ALIGNED_ON_PURPOSE: &[&str] = &[
     // Sample reports for the tool pages: they are transcripts of a writer's
     // column layout, and the alignment is the content.
     "crates/emma/src/term/app.rs",
-    // Not production: a probe kept as evidence for DEF-005.
-    "verification/evidence/nulprobe.rs",
 ];
 
 fn tracked_rust_files(root: &Path) -> Vec<PathBuf> {

@@ -3,7 +3,7 @@
 //!
 //! # Why this module exists at all
 //!
-//! `notes/design/tui-fork-inventory.md` §11 counted a `QUICK HELP` panel
+//! The fork inventory counted a `QUICK HELP` panel
 //! advertising six keys of which four do nothing, on a branch about to be
 //! merged here. Nobody wrote those rows dishonestly. The table was a literal
 //! list of `(key, description)` pairs and the bindings were an exhaustive
@@ -17,7 +17,7 @@
 //! the list is hand-written **and** the drawing is separate, that test proves
 //! the list matches the handlers and says nothing about what is on screen —
 //! the same defect wearing a receipt. So the rule here is the one
-//! `notes/design/coverage-contract.md` §1 asks for:
+//! The coverage contract asks for:
 //!
 //! > **The declaration is the thing that draws.** One value, read twice —
 //! > once to paint, once to test.

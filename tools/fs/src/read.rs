@@ -54,8 +54,8 @@
 //! against a file that drifted used to cost exactly that every single time.
 //! That is the expensive path, it is the common one on a machine where somebody
 //! has the file open in an editor, and it is the one this removes. Anyone
-//! revisiting this should re-measure rather than trust the paragraph above; see
-//! `notes/improvements.md`, which records that the 61% figure quoted from
+//! revisiting this should re-measure rather than trust the paragraph above; the
+//! backlog records that the 61% figure quoted from
 //! elsewhere is a different scheme's author benchmarking their own scheme.
 //!
 //! The hash covers the line **exactly as this file shows it**, which is the

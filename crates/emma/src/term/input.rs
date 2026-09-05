@@ -79,7 +79,7 @@ pub enum Action {
 /// without saying so is not, because the user is about to spend a model call on
 /// text that is not the text they copied. `DEF-028` is the row, and the half
 /// this closes is the silence rather than the flattening -- keeping the breaks
-/// needs the multi-line editor of `notes/design/tui-fullscreen.md` stage 0(a),
+/// needs the multi-line editor of the full-screen design's stage 0(a),
 /// which is not built.
 ///
 /// The same correction `Term::clipboard` and `Interrupt::starting_goal` already
@@ -284,7 +284,7 @@ impl Editor {
     ///
     /// **Line breaks become spaces, because this editor is one line.** The
     /// multi-line editor that keeps them is stage 0(a) of
-    /// `notes/design/tui-fullscreen.md` and is not built yet; until it is, the
+    /// the full-screen design and is not built yet; until it is, the
     /// choice is between flattening the paste and refusing it, and a flattened
     /// stack trace is still the stack trace the user meant to ask about. A run
     /// of breaks collapses to one space so a paste with blank lines in it does
@@ -1396,7 +1396,7 @@ mod tests {
     /// Flattening a stack trace to one line is defensible; doing it silently is
     /// not, because the next thing that happens is a model call billed against
     /// text the clipboard never held. The row's other half -- keeping the
-    /// breaks -- needs stage 0(a) of `notes/design/tui-fullscreen.md` and is
+    /// breaks -- needs stage 0(a) of the full-screen design and is
     /// still open.
     ///
     /// **The clean case is the load-bearing half of this test.** A note on

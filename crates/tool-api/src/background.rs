@@ -29,7 +29,7 @@
 //!    is a constant here, and `drained` reports what was dropped so the reader
 //!    is never told a truncated tail is the whole of it.
 //! 3. **Killing kills the child, and says what it did not kill.** Emma does not
-//!    reap process trees — that was ruled out in `notes/plans/process-lifetime.md`
+//!    reap process trees — that was ruled out in the process-lifetime plan
 //!    when the owner ruled that a hook may deliberately daemonize. The same rule
 //!    applies here, so `kill` is honest about its blast radius rather than
 //!    implying a guarantee it does not provide.

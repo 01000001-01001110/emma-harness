@@ -300,10 +300,7 @@ mod tests {
     /// server indexes nothing under it, and every question returns `[]`.
     #[test]
     fn a_verbatim_windows_prefix_is_stripped_before_encoding() {
-        assert_eq!(
-            to_uri(Path::new(r"\\?\C:\src\emma")),
-            "file:///C:/src/emma"
-        );
+        assert_eq!(to_uri(Path::new(r"\\?\C:\src\emma")), "file:///C:/src/emma");
         assert_eq!(
             to_uri(Path::new(r"\\?\UNC\server\share\x.rs")),
             "file://server/share/x.rs"

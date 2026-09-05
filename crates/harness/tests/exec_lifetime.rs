@@ -11,7 +11,7 @@
 //!
 //! **The ruling these fixtures pin.** The owner ruled on 2026-08-14 that a hook
 //! which spawns something meant to outlive it is a *supported use*, not a leak
-//! (`notes/plans/process-lifetime.md`, §1). So the surviving grandchild is not a
+//! (the process-lifetime plan). So the surviving grandchild is not a
 //! hazard to be tolerated here — it is a guarantee with a test on it, and
 //! `a_daemonizing_hooks_child_is_still_running_after_emma_walks_away` fails if
 //! anybody ever adds a job object, a process group or a tree kill.
@@ -21,12 +21,12 @@
 //! string a pid can be recycled out from under. Only
 //! `OpenProcess(SYNCHRONIZE)` + `WaitForSingleObject` answers "is this process
 //! gone" about the process we meant. That was paid for once already —
-//! `notes/lessons/a-flaky-test-was-the-only-symptom-of-a-real-leak.md`.
+//! a recorded lesson: a flaky test was the only symptom of a real leak.
 //!
 //! **Windows only, and said plainly rather than hidden in a `cfg`.** This is the
 //! platform the defect was found on and the only one this box can certify. The
-//! unix arm of the fix is reasoned in the plan and compile-checked here; §6 of
-//! the plan names the Linux run that would settle it, including the one place
+//! unix arm of the fix is reasoned in the plan and compile-checked here; the
+//! plan record names the Linux run that would settle it, including the one place
 //! unix genuinely differs (a daemon that keeps writing gets SIGPIPE when Emma
 //! drops the read end, and Windows has no such signal).
 
@@ -493,7 +493,7 @@ async fn a_hooks_whole_answer_survives_however_many_reads_it_takes() {
     assert!(seen.contains("row-0000") && seen.contains("row-0999"));
 }
 
-/// The plan's open question 1 (`notes/plans/process-lifetime.md` §8), run as an
+/// The process-lifetime plan's open question 1, run as an
 /// experiment rather than answered from the armchair: a hook that writes its
 /// last line and exits, 100 times, expecting zero lost lines.
 ///
@@ -580,7 +580,7 @@ async fn certify_the_misreport_rate_over_twenty_trials() {
 
 /// The unix arm is compile-checked on this box and nothing more, and that is
 /// said here rather than in a report nobody will read next to the code. What a
-/// Linux run would settle is in `notes/plans/process-lifetime.md` §6, and it is
+/// Linux run would settle is in the process-lifetime plan record, and it is
 /// not only "does it pass": closing the read end on unix *does* SIGPIPE a daemon
 /// that later writes, so variant A′ is expected to behave differently there
 /// unless the daemon ignores the signal — which is why the module doc on

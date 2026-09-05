@@ -865,7 +865,7 @@ pub fn fit(text: &str, budget: usize, ellipsis: &str) -> String {
 /// somebody pressing the chord again and saying it *"does not close"*; there is
 /// no scroll, no close affordance and no click target on any of these screens,
 /// so the key is the only way off and the page is the only place it can be
-/// read. Item A11 of `notes/design/term-hardening-backport.md`. The three
+/// read. Item A11 of the term-hardening backport checklist. The three
 /// pages had it, the 2026-08-27 TUI import did not, and it is restored here —
 /// once, rather than per page, because three copies of a promise drift.
 ///

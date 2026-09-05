@@ -39,9 +39,9 @@
 //! `dyn Write` in `commands.rs` with no styling in it, which is why the seventh
 //! exists; none of the seven can stand in for `-p`.
 //!
-//! The `-p` path's evidence is a runtime receipt instead
-//! (`verification/receipts/def-057-runtime.json`: 71 seconds, 10 model calls,
-//! four tool attempts, redirected to a file, zero escape bytes). That is a
+//! The `-p` path's evidence is a runtime receipt in the owner's records instead
+//! (one run: 71 seconds, 10 model calls, four tool attempts, redirected to a
+//! file, zero escape bytes). That is a
 //! measurement of one run rather than a guarantee, and closing the gap needs a
 //! scripted provider the binary can be pointed at — which does not exist yet.
 

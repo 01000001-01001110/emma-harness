@@ -108,7 +108,7 @@
       module doc records the outcome in six words: <em>&ldquo;That argument was
       true and it lost.&rdquo;</em>
     </p>
-    <span class="src">crates/emma/src/term/frame.rs module doc; notes/design/tui-fullscreen.md §0, §2 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
+    <span class="src">crates/emma/src/term/frame.rs module doc</span>
   </div>
 
   <p>
@@ -412,7 +412,7 @@ const ALT_LEAVE: &amp;str = "\x1b[?1049l";</code></pre>
       exists in the tree. Detaching mid-frame, resizing the pane and reattaching
       would settle it.
     </p>
-    <span class="src">crates/emma/src/term/frame.rs module doc; notes/design/tui-fullscreen.md §2.1, §2.4 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
+    <span class="src">crates/emma/src/term/frame.rs module doc</span>
   </div>
 
   <h2 id="absolute-3">Absolute 3: <code>EMMA_UI=inline</code> is an escape hatch with an expiry</h2>
@@ -427,7 +427,7 @@ const ALT_LEAVE: &amp;str = "\x1b[?1049l";</code></pre>
         <span class="c">// else — including the variable being unset, which is the ordinary</span>
         <span class="c">// case — is the full-screen app.</span>
         <span class="k">let</span> inline = std::env::var("EMMA_UI").is_ok_and(|v| v.eq_ignore_ascii_case("inline"));</code></pre>
-  <span class="src">crates/emma/src/term/frame.rs — <code>Frame::install</code>; notes/design/tui-fullscreen.md §2.3</span>
+  <span class="src">crates/emma/src/term/frame.rs — <code>Frame::install</code></span>
 
   <p>
     It is kept <strong>for one release</strong>, as a soak period, so the flip's
@@ -695,7 +695,7 @@ fn resize_target(pinned: bool, screen_rows: u16, height: u16) -&gt; Option&lt;u1
       genuinely duplicated box still fails, because a duplicated box brings its
       border with it.
     </p>
-    <span class="src">crates/emma/src/term/frame.rs — <code>boxes_in</code>; notes/lessons/testbackend-clears-one-cell-fewer&hellip;</span>
+    <span class="src">crates/emma/src/term/frame.rs — <code>boxes_in</code></span>
   </div>
 
   <h2 id="api">The Frame's public surface</h2>

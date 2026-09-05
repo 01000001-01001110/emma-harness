@@ -481,7 +481,7 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
     a <code>kill(-pgid)</code> drop-guard. The plan records it as dead so it is not
     rebuilt.
   </p>
-  <span class="src">notes/plans/process-lifetime.md §1, §7 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
+  <span class="src">the owner’s records, outside this repository</span>
 
   <p>
     The defect was never that a grandchild lives. It was that <code>exec</code>
@@ -496,7 +496,7 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
     Reproduced as a rate: <strong>20 of 20 invocations misreported before the fix,
     0 of 20 after, with the daemon surviving 20 of 20 in both.</strong>
     <span class="chip obs">observed</span>: the before/after comparison ran once,
-    on 2026-08-14, logged in <code>notes/plans/process-lifetime.md</code> §6. The
+    on 2026-08-14, logged in the owner's records outside this repository. The
     "before" half needs the reverted code to reproduce, so nobody can run it
     again as it stands. The "after" half is on demand:
     <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/harness/tests/exec_lifetime.rs">crates/harness/tests/exec_lifetime.rs</a>
@@ -511,7 +511,7 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
     this Windows box. The twenty-trial certification is one of the two skipped. It
     was not executed for this page.
   </p>
-  <span class="src">notes/plans/process-lifetime.md header, §6; crates/harness/tests/exec_lifetime.rs::certify_the_misreport_rate_over_twenty_trials (removed from the repository 2026-08-30, history included; the owner holds it)</span>
+  <span class="src">crates/harness/tests/exec_lifetime.rs::certify_the_misreport_rate_over_twenty_trials</span>
 
   <h2 id="exec">The order in <code>exec</code></h2>
 
@@ -682,7 +682,7 @@ where
     failure is in fixture setup, before the asserted lifetime behaviour, so it
     neither confirms nor refutes that behaviour here.
   </p>
-  <span class="src">crates/harness/tests/exec_lifetime.rs; notes/plans/process-lifetime.md §2, §6 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
+  <span class="src">crates/harness/tests/exec_lifetime.rs</span>
 
   <div class="note warn">
     <span class="h">The unix edge</span>
@@ -732,7 +732,7 @@ where
     clause in the transcript telling the operator to look. That is a report, not a
     bound.
   </p>
-  <span class="src">crates/harness/src/hooks.rs — exec; notes/plans/process-lifetime.md §3, §5 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
+  <span class="src">crates/harness/src/hooks.rs — exec</span>
 
   <p>
     <span class="chip unv">unverified</span> One question is open rather than
@@ -746,7 +746,7 @@ where
     repeated-trigger fixture; if yes, document the accumulation cost beside the
     setting.
   </p>
-  <span class="src">notes/plans/process-lifetime.md §4, header (removed from the repository 2026-08-30, history included; the owner holds it)</span>
+  <span class="src">the owner’s records, outside this repository</span>
 
   <h2 id="unsettled">What else is not settled here</h2>
 

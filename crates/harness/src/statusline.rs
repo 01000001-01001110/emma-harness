@@ -6,7 +6,7 @@
 //! is that an existing configuration is not rewritten for Emma. What Emma
 //! borrows is the shape (`type`/`command`/`padding`), the JSON handed to the
 //! program on stdin, and the rule that its stdout is displayed as-is, colour and
-//! all. See `notes/design/status-line.md` for what Emma sends, what it cannot, and what
+//! all. See the status-line design for what Emma sends, what it cannot, and what
 //! is lost by configuring one at all.
 //!
 //! # Why this lives beside `hooks.rs` and not near the terminal
@@ -33,7 +33,7 @@
 //! repaint. The *other* half of that ruling sits less comfortably here than it
 //! does on a hook: a status script runs many times a session, so one that
 //! daemonizes accumulates a process per burst. That is flagged for a second
-//! owner ruling in `notes/plans/process-lifetime.md` §4 and is deliberately
+//! owner ruling in the process-lifetime plan and is deliberately
 //! **not** decided by growing `exec` a caller-chosen policy — one behaviour for
 //! both until somebody rules otherwise, for the same reason everything else on
 //! this list is shared.

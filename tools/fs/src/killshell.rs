@@ -11,7 +11,7 @@
 //! `Killed`, destroying a fact `BashOutput` still owes the model.
 //!
 //! **The kill's blast radius is the shell, never a tree.** Emma does not reap
-//! process trees — ruled out in `notes/plans/process-lifetime.md`, because a
+//! process trees — ruled out in the process-lifetime plan, because a
 //! deliberately daemonizing child is a supported use and nothing can
 //! distinguish one from an orphaned mess. So a shell that spawned a server
 //! keeps that server, and every success message here says so rather than

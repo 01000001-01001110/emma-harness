@@ -8,9 +8,9 @@
 //!
 //! # The numbers here were measured off the image, not the prose
 //!
-//! `notes/design/mockup-tui.png` was re-measured directly for this file (2026-08-13,
+//! The approved TUI mockup was re-measured directly for this file (2026-08-13,
 //! pixel sampling; character pitch 10px, sidebar box x≈17..337 of 1448 —
-//! 22.2%). Where this file and `notes/design/tui-fullscreen.md` §1 disagree,
+//! 22.2%). Where this file and the full-screen design disagree,
 //! the image won, twice: the selected row is *accent text on a barely-raised
 //! near-black band* (rgb 25,27,30 on a 13,15,19 ground), nothing like the
 //! approval chip's dark-on-pink; and the `[+]` affordance is accent pink, not
@@ -245,7 +245,7 @@ pub fn tool_rows(ascii: bool, selected: Option<Tool>) -> Vec<Row> {
 /// the branch's.** What arrived with the import was six hand-written
 /// `(key, label)` literals. A pair typed by hand carries no reference to the
 /// `match` arm that answers it, so the two drift and nothing says so —
-/// `notes/design/tui-fork-inventory.md` §11 counted a branch's copy of this
+/// the fork inventory counted a branch's copy of this
 /// panel advertising six keys of which four do nothing, one of them `Ctrl+k`
 /// for a binding that is `Ctrl-U`. The rows come from
 /// [`super::bindings::CHAT`], where each carries the chord it means, and the

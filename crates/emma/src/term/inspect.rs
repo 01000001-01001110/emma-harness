@@ -1,13 +1,13 @@
 //! The Inspect Run page: the owner's mock, cell for cell.
 //!
-//! The mock is the acceptance criterion (`notes/design-inspect-page.md`), the
+//! The mock is the acceptance criterion (the Inspect page design), the
 //! standing Settings/Memory rule: a head block, a seven-cell header info
 //! strip, STEP TIMELINE, RUN METADATA, TOOL CALLS, ARTIFACTS and EVENT LOG
 //! cards, and the page's own input bar, with every label, glyph, footer and
 //! affordance from the mock.
 //!
 //! The one sanctioned divergence is data. The harness this page describes is
-//! aspirational (`notes/plan-harness.md`), so everything renders from an
+//! aspirational (the harness plan), so everything renders from an
 //! [`InspectView`]: a populated view reproduces the mock exactly (the tests
 //! pin that now, with the mock's sample data), and the live view starts with
 //! no run at all. `run: None` renders the head plus one honest dim line —

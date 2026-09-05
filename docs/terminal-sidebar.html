@@ -90,8 +90,8 @@
     Sessions, tools, quick help, in a bordered box on the left. Pure rendering:
     the shell owns the state and hands it in as a <code>State</code>, and
     nothing here reads a file, takes a lock or asks the terminal a question.
-    Every number in it was measured off <code>notes/design/mockup-tui.png</code>
-    directly, and where the file and the design note disagree the file records
+    Every number in it was measured off the approved TUI mockup
+    directly, and where the image and the design note disagree the file records
     that the image won.
   </p>
 
@@ -503,7 +503,7 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
   <p>
     <strong>Not settled here.</strong> Everything in this file is measured
     against an image, and every test reads a cell buffer. Whether the drawn pane
-    matches <code>notes/design/mockup-tui.png</code> is
+    matches the approved TUI mockup is
     <span class="chip unv">unverified</span> by anything but the owner's earlier
     eyeball, which is what produced the two corrections the module records. What
     would settle it: a screenshot at 128&times;41 laid over the mockup.

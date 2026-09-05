@@ -72,7 +72,7 @@
     shape: there is no name, pattern or command in Emma that a rule, a flag and a
     remembered grant cannot together permit.
   </p>
-  <span class="src">crates/emma/src/approval.rs — EXEMPT; notes/improvements.md item 14 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
+  <span class="src">crates/emma/src/approval.rs — EXEMPT</span>
 
   <h2 id="list">The list</h2>
 
@@ -160,7 +160,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     item 39 names the write-scope axis explicitly and says it is the mechanism
     meant to retire <code>EXEMPT</code>.
   </p>
-  <pre><code>rg -n -A 12 '^### 39\. The write-scope' notes/improvements.md
+  <pre><code>rg -n -A 12 '^### 39\. The write-scope' &lt;the backlog&gt;
 905:### 39. The write-scope &#96;ToolMeta&#96; axis exists only as a comment
 907:**Status:** open. Found 2026-08-16, &#96;docs/consent-exempt.html&#96;.
 909-&#96;EXEMPT&#96;'s own comment says the list should be deleted when a write-scope axis
@@ -170,14 +170,14 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
 914-&#96;EXEMPT&#96; is a ceiling above it, keyed by tool name rather than by any property a
 915-tool declares. A write-scope axis would let the gate ask what a tool does rather
 916-than what it is called, which is what makes the name-keyed list deletable.</code></pre>
-  <span class="src">crates/emma/src/approval.rs — EXEMPT; notes/improvements.md — item 39 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
+  <span class="src">crates/emma/src/approval.rs — EXEMPT</span>
 
   <h2 id="floor">The opposite shape does not exist</h2>
 
   <p>
     <code>EXEMPT</code> is an always-<em>allow</em> hole. A small, hardcoded,
     non-overridable <em>deny</em> list that no rule, no flag and no remembered
-    grant can relax is <code>notes/improvements.md</code> item 14, and it is open.
+    grant can relax is an entry in the backlog, and it is open.
     <code>rm -rf /</code> in a <code>Bash</code> call is a prompt like any other,
     and answering <code>y</code> runs it.
   </p>
@@ -261,7 +261,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     <code>;</code>, <code>&amp;&amp;</code>, <code>||</code> and <code>|</code>;
     and roughly forty dangerous-command cases beside a false-positive suite.
   </p>
-  <span class="src">notes/improvements.md item 14 · notes/research/survey-pie.md §1.1 · notes/research/survey-harnesses-2.md §4 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
+  <span class="src">the owner’s records, outside this repository</span>
 
   <p>
     Pie was read at commit <code>b725796</code> and is <strong>MIT, plain, no
@@ -269,7 +269,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     copied with attribution. It is a stated 1:1 port of a TypeScript upstream, so
     a copied file attributes both.
   </p>
-  <span class="src">notes/improvements.md item 14 · notes/research/survey-pie.md (removed from the repository 2026-08-30, history included; the owner holds it)</span>
+  <span class="src">the owner’s records, outside this repository</span>
 
   <div class="note">
     <span class="h">The counter-argument, recorded because it may win</span>
@@ -294,7 +294,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
       category. Emma has no such category, and the gap is tracked under
       <a href="roadmap.html#hazards">named hazards</a> rather than argued here.
     </p>
-    <span class="src">notes/improvements.md item 14 · notes/research/survey-pie.md §1.1, §2.1 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
+    <span class="src">the owner’s records, outside this repository</span>
   </div>
 
   <h2 id="unsettled">What is not settled here</h2>
@@ -311,7 +311,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     can bypass the guard. No current-file reading can settle a historical-source
     claim.
   </p>
-  <span class="src">notes/research/survey-pie.md §5 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
+  <span class="src">the owner’s records, outside this repository</span>
 
   <p>
     <span class="chip cert">certified</span> The current primary sources support
@@ -329,7 +329,7 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
   <footer class="pg">
     Emma 0.1.0 · read at commit <code>a3eba74</code> ·
     <code>crates/emma/src/approval.rs</code> ·
-    <code>notes/improvements.md</code> item 14 ·
+    the backlog ·
     <a href="consent.html">back to the chapter</a>
   </footer>
 

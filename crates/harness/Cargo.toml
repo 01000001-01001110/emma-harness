@@ -24,7 +24,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 # timed-out hook's own process does not; both answers have to come from
 # `OpenProcess(SYNCHRONIZE)` + `WaitForSingleObject` rather than from a kill's
 # return or a `tasklist` grep, which is the lesson in
-# `notes/lessons/a-flaky-test-was-the-only-symptom-of-a-real-leak.md`. The crate
+# a recorded lesson: a flaky test was the only symptom of a real leak. The crate
 # itself has no Windows dependency and must not grow one.
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys.workspace = true

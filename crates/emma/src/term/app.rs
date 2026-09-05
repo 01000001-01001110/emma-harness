@@ -1,7 +1,7 @@
 //! The full-screen frame: the layout that owns the whole window, and the state
 //! that survives between paints.
 //!
-//! This is stage 2 of `notes/design-tui-fullscreen.md` — the point of no
+//! This is stage 2 of the full-screen design — the point of no
 //! return. The alternate screen is entered in [`super::frame`]; what happens on
 //! it is decided here. Everything in this file is pure over a [`Buffer`], so a
 //! test can hold the layout still; the terminal, the locks and the entry/leave
@@ -1675,7 +1675,7 @@ fn unavailable_marked(
 ///
 /// **The rows are derived, not typed.** A `(key, description)` pair written by
 /// hand carries no reference to the `match` arm that answers it, so the two
-/// drift and nothing says so — `notes/design/tui-fork-inventory.md` §11 counted
+/// drift and nothing says so — the fork inventory counted
 /// a branch's copy of this panel advertising six keys of which four do nothing,
 /// one of them `Ctrl+k` for a binding that is `Ctrl-U`. The rows come from
 /// [`super::bindings::CHAT`], where each carries the chord it means, and the
@@ -3198,7 +3198,7 @@ mod tests {
         // it.** QUICK HELP here is derived from `super::bindings::CHAT`, whose
         // rows carry the chord they mean and are driven through the real
         // decoders; the panel it replaced was six hand-typed pairs, and
-        // `notes/design/tui-fork-inventory.md` §11 counted four of that
+        // the fork inventory counted four of that
         // panel's six keys doing nothing — one of them `Ctrl+k`, for a
         // binding that is `Ctrl-U`. Asserting a chord the table actually holds
         // is what makes this test about the panel rather than about a literal.
@@ -3544,7 +3544,7 @@ mod tests {
             "{word:?}"
         );
         assert!(
-            rows.iter().any(|r| r.contains("Projects")),
+            rows.iter().any(|r| r.contains("src")),
             "the subtitle is not the real cwd: {rows:?}"
         );
     }

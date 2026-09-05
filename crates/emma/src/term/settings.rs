@@ -1,6 +1,6 @@
 //! The Settings screen: the owner's mock, cell for cell — and live.
 //!
-//! The mock is the acceptance criterion (`notes/design-settings-tui.md`): a
+//! The mock is the acceptance criterion (the Settings TUI design): a
 //! title block with the version in the top-right corner, eight numbered cards
 //! in a two-by-four grid (a ninth, LANGUAGE SERVERS, was added after the mock
 //! and takes the left of a fifth row), every card a bordered box of `Label … value` rows
@@ -14,7 +14,7 @@
 //! and the row kept its accent — so `Max Context Tokens 8192` and
 //! `Shell  Ask ›` were painted identically to a live `Model`, with the caveat
 //! reachable only by pressing Enter on the row. Owner ruling, 2026-08-27
-//! (`notes/design/settings-wiring.md`): every row ends in exactly one of three
+//! (the settings-wiring design): every row ends in exactly one of three
 //! states, and each is visually distinct.
 //!
 //! 1. **Live and editable** — [`Value::Cycler`] or [`Value::Button`], accent,
@@ -1055,7 +1055,7 @@ pub fn render_hits(area: Rect, buf: &mut Buffer, s: &SettingsView, skin: &Skin) 
 /// absent, unreachable by any key, with no sentence saying they existed. The
 /// page does not scroll, so a taller window is the only remedy there is, and a
 /// count is what lets a reader judge whether resizing is worth it. Item A1 of
-/// `notes/design/term-hardening-backport.md`; the guarantee predates the TUI
+/// the term-hardening backport checklist; the guarantee predates the TUI
 /// import, did not survive it, and is restored here rather than papered over in
 /// the test that found it missing.
 fn overflow_line(hidden: usize, w: usize, skin: &Skin) -> Line<'static> {

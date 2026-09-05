@@ -333,7 +333,7 @@ fn into_outcome(rendered: digest_md::Rendered) -> ToolOutcome {
 /// silently became a grant for wherever that host chooses to send us — and on a
 /// page that is itself hostile, the page picks the destination.
 ///
-/// `notes/design/web-surface.md` §Requirement 2 already makes this argument and
+/// The web-surface design already makes this argument and
 /// the browser session tools already act on it: they re-derive
 /// `network_target` from the pool's `final_url` so the *next* verb re-asks.
 /// `WebFetch` is one call and cannot re-ask inside itself, so the honest move

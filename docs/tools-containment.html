@@ -537,8 +537,8 @@ for component in lexical_normalize(&amp;joined).components() {
     product has decided it is not. The counter-argument is that
     &ldquo;<code>Bash</code> can do it anyway&rdquo; is the reasoning that ends
     with every guard removed, so the decision is the owner's. It was recorded
-    as <code>SEC-001</code> in a rulings file that left the tree with
-    <code>notes/</code> on 2026-08-30, and it is still unanswered: a product
+    as <code>SEC-001</code> in a rulings file that left the tree
+    on 2026-08-30, and it is still unanswered: a product
     question about whether containment should become a sandbox, not a security
     incident.
   </p>
@@ -601,7 +601,7 @@ for component in lexical_normalize(&amp;joined).components() {
   had no positive control, so a <code>resolve</code> returning its argument
   unchecked would have passed it and still backed this chip. All three are
   fixed, and the control is what makes the test mutable at all
-  (<code>verification/mutations/hardlink-certification.json</code>). An independent reviewer ran it live
+  (a mutation receipt in the owner’s records). An independent reviewer ran it live
   on Windows; <code>a_hard_link_inside_the_root_reads_a_file_outside_it</code>
   in <code>tools/fs/tests/containment.rs</code> now runs it in the suite: a hard
   link created inside a sandbox root pointing at a file outside it, and

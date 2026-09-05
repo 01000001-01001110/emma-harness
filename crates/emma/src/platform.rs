@@ -1,8 +1,8 @@
 //! `.platform/context.yaml` — what this **repository** is, detected
 //! mechanically.
 //!
-//! Ported from the Mac branch, reviewed as item 5 of
-//! `notes/audits/2026-08-27-divergent-emma-fork.md`. **No model call anywhere
+//! Ported from the Mac branch, per the divergent-fork audit reviewed on
+//! 2026-08-27. **No model call anywhere
 //! in here**: every field is something the process looked up in a manifest, a
 //! README or a directory entry, and a field that would have to be guessed is
 //! absent rather than inferred. A curated fence in the file survives a

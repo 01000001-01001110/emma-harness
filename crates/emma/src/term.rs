@@ -26,8 +26,9 @@
 //! **The transcript is retained, because the alternate screen keeps no
 //! scrollback.** This was the reverse for the whole life of this module —
 //! "scrollback is the terminal's and stays the terminal's" — and the reversal
-//! is deliberate: stage 2 of `notes/design/tui-fullscreen.md`, owner-approved,
-//! priced in that note's §2 and red-teamed in `notes/audits/eval-tui-fullscreen-kimi.md`.
+//! is deliberate: stage 2 of the full-screen design, owner-approved,
+//! with its costs priced in that design's record and red-teamed in the
+//! full-screen evaluation.
 //!
 //! # The design, and the three it replaces
 //!
@@ -83,7 +84,7 @@ pub mod frame;
 /// panic hook had moved after raw mode, `restore_terminal`'s early return was
 /// back to consulting one latch of four, the Settings grid clipped four cards
 /// with nothing saying so, and neither page named the key that leaves it. Read
-/// its own doc and `notes/design/term-hardening-backport.md` for what each item
+/// its own doc and the term-hardening backport checklist for what each item
 /// defends.
 pub mod guarantees;
 pub mod harness;

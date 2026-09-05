@@ -22,7 +22,7 @@
 //!
 //! # The drop order, and why context is last
 //!
-//! From `notes/design/tui-fullscreen.md` §7, which extends the drop order
+//! From the full-screen design's status-bar section, which extends the drop order
 //! `Skin::status` already argued once: names shorten before anything is lost,
 //! then decoration goes before measurement, and among measurements the one
 //! that survives longest is the one that changes what the user does next.

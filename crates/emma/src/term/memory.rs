@@ -1,6 +1,6 @@
 //! The Memory main page: the owner's mock, cell for cell.
 //!
-//! The mock is the acceptance criterion (`notes/design-memory-page.md`), the
+//! The mock is the acceptance criterion (the Memory page design), the
 //! same standing rule the Settings screen was built under: action bar, four
 //! cards in a two-column grid, a full-width categories card, a tip row, and a
 //! bordered query box, with every label, glyph and affordance from the mock.
@@ -274,7 +274,7 @@ pub const NOTICE_M2: &str = "memory query needs the retrieval stage (M2)";
 /// `Wiki::project` or `Wiki::view` returns an error. So an unreadable store
 /// renders as a store with nothing in it, and the reader is told the opposite
 /// of what happened. The old text pages carried this sentence and the import
-/// dropped it (F32, `notes/design/term-hardening-backport.md`); it names the
+/// dropped it (F32, the term-hardening backport checklist); it names the
 /// store as well as the failure, because the Harness page has its own and a
 /// shared sentence would leave a reader unable to tell which one failed.
 pub const NOTICE_UNREADABLE: &str =
@@ -596,7 +596,7 @@ fn toggle_help(v: &mut MemoryView, text: &str) {
 }
 
 /// Which of the six Tab stops a focus belongs to. The cycle order — recorded
-/// in `notes/design-memory-page.md` — is: Recent, Pinned, Conversation,
+/// in the Memory page design — is: Recent, Pinned, Conversation,
 /// Retrieval, Categories, Query box, then around again.
 fn card_of(f: Focus) -> usize {
     match f {
@@ -773,7 +773,7 @@ fn render_main(area: Rect, buf: &mut Buffer, v: &MemoryView, skin: &Skin, g: &Pa
 /// The two derived sub-views share one skeleton: head, their own action bar,
 /// one full-width listing card, and the bottom-anchored notice/hint row.
 /// Derived designs (no mock): the main page's idiom, applied — recorded in
-/// `notes/design-memory-page.md`.
+/// the Memory page design.
 #[allow(clippy::too_many_arguments)]
 fn render_sub(
     area: Rect,

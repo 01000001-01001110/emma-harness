@@ -3,7 +3,7 @@
 //! [`super::palette`] argues that the one place a hex may appear is its table;
 //! this file is that table made readable from disk, and every rule below exists
 //! so that letting a stranger choose the colours cannot cost more than colour.
-//! `notes/design/themes.md` is the argument in full; what follows is the part
+//! The themes design is the argument in full; what follows is the part
 //! that has to be true of the code.
 //!
 //! **Resolution happens once, at load, into plain `Copy` data.** [`Theme`] is a
@@ -144,7 +144,7 @@ pub const BUILTIN: Theme = Theme {
         entry(245, 84, 143, 204, Color::LightMagenta),
     ],
     // Accent text on a barely-raised near-black, measured off
-    // `notes/design/mockup-tui.png`: rgb(25,27,30) over the mockup's own ground. Index
+    // the approved TUI mockup: rgb(25,27,30) over the mockup's own ground. Index
     // 234 is the greyscale ramp's `#1c1c1c`; `DarkGray` is as subtle as sixteen
     // colours get.
     selection: [

@@ -109,7 +109,7 @@
     // Mouse capture, for the wheel: on the alternate screen the wheel
     // does nothing at all without it — not &quot;less useful&quot;, nothing —
     // and the first instinct of anybody reading a long answer is the
-    // wheel (`notes/audits/eval-tui-fullscreen-kimi.md` §1.5). The cost is
+    // wheel (recorded in the full-screen TUI evaluation). The cost is
     // that plain drag-selection now needs Shift; the quick-help table
     // says so, because it is the one fact a user cannot guess. Only
     // on the full-screen path: inline, the terminal owns the wheel
@@ -385,7 +385,7 @@ if !lost.is_empty() {
     transcript buffer replaces it, reachable by keys and the wheel rather than
     by the terminal's own history. Re-reading the styled run after exit is gone
     outright: the session JSONL named in the exit line is the record.
-    <code>notes/design/tui-fullscreen.md</code> §2 lists what the reversal
+    The full-screen TUI design lists what the reversal
     cost, and <code>/export</code> is the half of the answer that landed.
   </p>
 

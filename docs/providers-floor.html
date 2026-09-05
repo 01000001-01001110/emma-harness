@@ -124,7 +124,7 @@ claude-haiku-4-5: 4129 tokens, marker present -&gt; cache_creation = <span class
       two-line table, which is the whole of it.
     </p>
   </div>
-  <span class="src">notes/lessons/a-provider-feature-can-be-accepted-and-inert.md; commit <code>bb78857</code></span>
+  <span class="src">commit <code>bb78857</code></span>
 
   <p>
     The generalisable part: <strong>when a provider feature is advisory rather
@@ -232,7 +232,7 @@ const MIN_CACHEABLE: &amp;[(&amp;str, usize)] = &amp;[
 
   <p>
     The table is also shorter than the documentation it came from.
-    <code>notes/research/caching-mechanics.md</code>'s floor table names four
+    The research note it came from has a floor table that names four
     ids the shipped rows dropped: <strong>Opus 4.1</strong> at 1,024,
     <strong>Mythos Preview</strong> and <strong>Haiku 3.5</strong> at 2,048,
     and <strong>Opus 4.5</strong> at 4,096. A user who names one of those today
@@ -243,7 +243,7 @@ const MIN_CACHEABLE: &amp;[(&amp;str, usize)] = &amp;[
     in <code>models::TABLE</code> either, so adding them means two measured
     values per model rather than one.
   </p>
-  <span class="src">crates/llm/src/anthropic.rs — <code>MIN_CACHEABLE</code>; notes/research/caching-mechanics.md §1</span>
+  <span class="src">crates/llm/src/anthropic.rs — <code>MIN_CACHEABLE</code></span>
 
   <h2 id="lookup">The lookup, and the fallback that guesses high</h2>
 
@@ -408,7 +408,7 @@ fn min_cacheable_tokens(model: &amp;str) -&gt; usize {
       doc comment arguing both ways at once.
     </li>
   </ul>
-  <span class="src">crates/llm/src/models.rs and crates/llm/src/anthropic.rs — module docs; notes/lessons/a-provider-feature-can-be-accepted-and-inert.md §"Fallback direction" (removed from the repository 2026-08-30, history included; the owner holds it)</span>
+  <span class="src">crates/llm/src/models.rs and crates/llm/src/anthropic.rs — module docs</span>
 
   <h3>What the split costs, and the guard that pays for it</h3>
 
@@ -483,8 +483,8 @@ assert!(
 
   <p>
     Whether an ignored marker <em>costs</em> anything directly.
-    <code>notes/plans/caching-defects.md</code> describes it as "+25% on the
-    marked span, forever". <code>notes/research/caching-mechanics.md</code>
+    The caching-defects plan describes it as "+25% on the
+    marked span, forever"; the caching-mechanics research
     says a below-minimum prefix is "cost-<em>neutral</em> (marker ignored), not
     negative", adding that what it really costs is the false belief that
     caching is on. <span class="chip unv">unverified</span> The reconciliation
@@ -503,7 +503,7 @@ assert!(
     <code>cache_creation = 0</code>, and did not record what
     <code>input_tokens</code> did.
   </p>
-  <span class="src">notes/improvements.md §"+25% on the marked span, forever" vs "cost-neutral, marker ignored" (removed from the repository 2026-08-30, history included; the owner holds it)</span>
+  <span class="src">the owner’s records, outside this repository</span>
 
   <h2 id="coverage">Coverage</h2>
 

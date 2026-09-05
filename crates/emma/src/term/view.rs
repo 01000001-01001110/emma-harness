@@ -188,7 +188,7 @@ impl View {
     ///
     /// The reverse of that trade is the one worth stating in the docs: a program
     /// that answers **replaces** the built-in line entirely, so anything it does
-    /// not print is simply gone. See `notes/design/status-line.md`.
+    /// not print is simply gone. See the status-line design.
     fn status_row(&self, width: u16) -> Line<'static> {
         match &self.custom_status {
             Some(text) => super::statusline::to_line(
@@ -314,7 +314,7 @@ impl View {
         }
         // The mockup's `[send: Enter]`, right-aligned inside the border — the
         // one key a first-time user cannot see any other way (measured off
-        // `notes/design/mockup-tui.png`: dim, flush right, on the input row itself).
+        // the approved TUI mockup: dim, flush right, on the input row itself).
         // Drawn only while it cannot collide with what is being typed: a hint
         // that overwrites the sentence it is hinting about is worse than none,
         // so a long line evicts it and the border's edge stays honest.

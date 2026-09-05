@@ -6,7 +6,7 @@
 //! Today the transcript is not Emma's at all. `insert_before` hands each line to
 //! the terminal, the terminal wraps it, keeps tens of thousands of them in
 //! scrollback, scrolls them with the user's own keys and reflows them on resize
-//! — for no code and no memory here. `notes/design-tui-fullscreen.md` §2.1 is
+//! — for no code and no memory here. The full-screen design is
 //! blunt that this is the single largest thing the alternate screen takes away,
 //! and this module is the whole of the replacement: append, cap, scroll, follow
 //! the tail, re-wrap at a new width.
@@ -14,8 +14,8 @@
 //! **It draws nothing and owns no terminal.** It produces `Vec<Line>` and takes
 //! a width; a [`Skin`] is passed in rather than held, so every decision in here
 //! is testable without a console. That is deliberate and it is the point of
-//! building it a stage early: `notes/lessons/testbackend-clears-one-cell-fewer…`
-//! and the two shipped scrollback defects both say that anything with a terminal
+//! building it a stage early: a recorded lesson on TestBackend clearing one
+//! cell fewer than expected, and the two shipped scrollback defects both say that anything with a terminal
 //! in it is certified late and expensively, so the parts that can be separated
 //! from one should be.
 //!
@@ -1219,8 +1219,8 @@ mod tests {
     /// **"Cheap at transcript scale" was an assertion; this is the number.**
     ///
     /// The evaluation flagged re-running markdown over every entry on resize as
-    /// unmeasured optimism, and `notes/lessons/measure-an-adopted-idea-before-…`
-    /// says what to do about that. A full buffer re-wrapped has to beat a frame
+    /// unmeasured optimism, and a recorded lesson on measuring an adopted
+    /// idea before building says what to do about that. A full buffer re-wrapped has to beat a frame
     /// at 60Hz by a wide margin or the eager design in this module is wrong and
     /// the laziness the plan wanted has to be built after all.
     ///

@@ -176,7 +176,7 @@ pub fn opening_turn(&amp;self) -&gt; String {
     it would be two user turns in a row, which the API rejects. So it rides at
     the front of the same user turn, attributed, separated by a blank line.
   </p>
-  <span class="src">crates/emma/src/goal.rs — <code>Goal::opening_turn</code>; notes/audits/caching-emma.md</span>
+  <span class="src">crates/emma/src/goal.rs — <code>Goal::opening_turn</code></span>
 
   <p>
     It is one string rather than two content blocks because
@@ -557,12 +557,12 @@ fn could_become_marker(line: &amp;str) -&gt; bool {
     That is a second <code>impl</code> and a different value in
     <code>Setup</code>, not surgery on the loop, which is why
     <code>DoneCheck</code> is a trait.
-    <code>notes/plans/loops-stage-1.md</code> designs a third implementation along
+    The stage-1 loops plan designs a third implementation along
     those lines: a cheap second model call as an independent judge, whose "no"
     costs one kick and is bounded by <code>max_kicks</code> like any other
     not-done. It is not built.
   </p>
-  <span class="src">crates/emma/src/goal.rs — module doc; notes/plans/loops-stage-1.md (removed from the repository 2026-08-30, history included; the owner holds it)</span>
+  <span class="src">crates/emma/src/goal.rs — module doc</span>
 
   <div class="note">
     <span class="h">Where the code disagrees with its own doc</span>
@@ -587,7 +587,7 @@ fn could_become_marker(line: &amp;str) -&gt; bool {
   <h2 id="research">What the research says about grading by model</h2>
 
   <p>
-    <code>notes/research/loops-goals-and-cost.md</code> collected the numbers
+    The owner's research note on loops, goals and cost collected the numbers
     behind "LLM-as-judge is brittle". Read them before anyone builds the judge
     check, because the failure is not that a judge is a coin flip. It
     is that the reassuring number is the wrong number.
@@ -612,7 +612,7 @@ fn could_become_marker(line: &amp;str) -&gt; bool {
     and stays <span class="chip unv">unverified</span> until read on METR's own
     evaluation pages.
   </p>
-  <span class="src">notes/research/loops-goals-and-cost.md §2 and §3 (removed from the repository 2026-08-30, history included; the owner holds it)</span>
+  <span class="src">the owner’s records, outside this repository</span>
 
   <h2 id="coverage">Functions this page covers</h2>
 

@@ -1,14 +1,14 @@
 //! Reading an answer out loud.
 //!
 //! Output only: no capture, no microphone, nothing leaving the machine, and
-//! off unless asked for. The audit that cleared it is
-//! `notes/audits/2026-08-27-divergent-emma-fork.md` §3.2.
+//! off unless asked for. The audit that cleared it is the divergent-fork review
+//! of 2026-08-27.
 //!
 //! **The branch this came from is macOS-only, through `say(1)`, and the owner
 //! runs Windows.** So it lands with a real second implementation or it lands
 //! as a setting that honestly says the feature is unavailable here — never as
-//! a row that does nothing, which is the defect class
-//! `notes/design/coverage-contract.md` exists to prevent. There is a real
+//! a row that does nothing, which is the defect class the coverage-contract
+//! design exists to prevent. There is a real
 //! second implementation: Windows speaks through
 //! `System.Speech.Synthesis.SpeechSynthesizer`, driven by a **fixed** script
 //! handed to `powershell.exe`. See the Platform region for what that costs and

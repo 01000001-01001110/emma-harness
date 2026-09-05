@@ -109,8 +109,8 @@ pub fn web_search_tool() -> Value {
 /// `Limits` is the shape `GET /v1/models` parses into, that endpoint reports no
 /// cache minimum, and the two unknown-model fallbacks argue in opposite
 /// directions (see [`MIN_CACHEABLE_UNKNOWN`]). The cost of the split is two
-/// tables to update per release; `notes/plans/caching-defects.md` §"Where it
-/// lives" carries the argument and the revisit trigger.
+/// tables to update per release; the caching-defects plan record carries the
+/// argument and the revisit trigger.
 const MIN_CACHEABLE: &[(&str, usize)] = &[
     ("claude-opus-5", 512),
     ("claude-fable-5", 512),
