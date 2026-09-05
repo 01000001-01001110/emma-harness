@@ -3,6 +3,11 @@
 //! Same arrangement as `cargo fmt --check`: the generated artefact is
 //! committed, and this regenerates it and fails when the two differ.
 //!
+//! "Diagrams" includes the three Markdown blocks in `README.md` -- the
+//! provider sentence, the tool list and the budget table -- which are
+//! generated through the same markers. A hand edit to a name or a number
+//! inside those markers fails here the same way a stale SVG does.
+//!
 //! A `build.rs` would redraw on every `cargo build`, including the builds
 //! where nothing a diagram is drawn from has changed, and files that appear
 //! during a build get ignored. This runs under `cargo test --workspace`,

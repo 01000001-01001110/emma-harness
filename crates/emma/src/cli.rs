@@ -203,7 +203,8 @@ APPROVAL
         it is a different key.
 
   What 'r' and 't' write is a Claude Code permission rule, in
-  <harness>/settings.local.json — WebFetch(domain:apnews.com), or WebSearch.
+  <harness>/settings.local.json — WebFetch(domain:apnews.com), or WebFetch for
+  every host.
   `emma config check` lists every rule and the file it came from; delete a line
   to revoke it. Rules already in .claude/settings.json are honoured, and a deny
   rule in your ~/.claude/settings.json applies here too (allow rules there do

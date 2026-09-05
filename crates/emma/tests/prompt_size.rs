@@ -18,9 +18,11 @@ use emma_tool_api::Registry;
 /// The wire `tools` array for the registry a run assembles, in bytes.
 ///
 /// Built the way `main::run` builds it, minus the surfaces that depend on this
-/// machine: no `Skill` (needs a harness), no browser and no `WebSearch` (need a
-/// Chrome and a Brave key). So this is a floor, and the comment below says by
-/// roughly how much.
+/// machine: no `Skill` (needs a harness), no `WebFetch` and no browser tools
+/// (need a Chrome). So this is a floor, and the comment below says by roughly
+/// how much. The provider's search tool is not in any of these numbers: it is
+/// one small entry the provider appends on its own side of `Request::tools`,
+/// and this test measures what Emma assembles.
 fn tool_surface_bytes() -> (usize, usize) {
     let mut registry = Registry::new();
     let (fs, _tracker) = emma_tools_fs::fs_tools();

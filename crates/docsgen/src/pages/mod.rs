@@ -31,6 +31,7 @@ pub mod consent;
 pub mod delegation;
 pub mod loop_;
 pub mod providers;
+pub mod readme;
 pub mod terminal;
 pub mod tools;
 

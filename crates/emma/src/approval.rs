@@ -1285,8 +1285,8 @@ mod tests {
         reaches_network: false,
         idempotent: false,
     };
-    /// The shape `WebFetch` and `WebSearch` have, and the whole reason for the
-    /// second axis: honestly read-only, and still how bytes leave.
+    /// The shape `WebFetch` has, and the whole reason for the second axis:
+    /// honestly read-only, and still how bytes leave.
     const REACHES: ToolMeta = ToolMeta {
         read_only: true,
         reaches_network: true,
@@ -1823,7 +1823,7 @@ mod tests {
         // and the next process does not ask about any of them. The queue is
         // empty, so every `Allow` below is the rule and not a scripted answer.
         let hosts = [
-            "api.search.brave.com",
+            "search.example.com",
             "www.reuters.com",
             "tech.yahoo.com",
             "openai.com",
@@ -2113,7 +2113,7 @@ mod tests {
             a.decide(
                 "WebSearch",
                 REACHES,
-                target("api.search.brave.com"),
+                target("search.example.com"),
                 &Value::Null,
                 &Term::silent()
             )
@@ -2197,10 +2197,10 @@ mod tests {
         // consent, applied to this prompt. The host alone cannot distinguish a
         // search for a crate name from a search for the contents of a file.
         let p = network_preview(&NetworkTarget::new(
-            "api.search.brave.com",
+            "search.example.com",
             "search for: contents of .env",
         ));
-        assert!(p.contains("api.search.brave.com"), "{p}");
+        assert!(p.contains("search.example.com"), "{p}");
         assert!(p.contains("contents of .env"), "{p}");
     }
 

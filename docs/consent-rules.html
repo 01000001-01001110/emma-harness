@@ -114,7 +114,7 @@
   <table>
     <thead><tr><th>Rule</th><th>Parses to</th><th>Answers</th><th>Meaning</th></tr></thead>
     <tbody>
-      <tr><td><code>WebSearch</code></td><td><code>Spec::All</code></td><td>both questions</td><td>every call to that tool, to any host</td></tr>
+      <tr><td><code>WebSearch</code></td><td><code>Spec::All</code></td><td>both questions</td><td>every call to that tool, to any host. The grammar is Claude Code's and the tests keep this name; Emma has registered no tool by it since 2026-09-05, so such a rule now matches nothing</td></tr>
       <tr><td><code>WebSearch(*)</code></td><td><code>Spec::All</code></td><td>both questions</td><td>the same thing; Claude Code documents them as equivalent</td></tr>
       <tr><td><code>WebSearch()</code></td><td><code>Spec::All</code></td><td>both questions</td><td>an empty specifier is read the same way</td></tr>
       <tr><td><code>WebFetch(domain:*)</code></td><td><code>Spec::All</code></td><td>both questions</td><td>normalised back to the bare shape at parse time, so one shape in the code means "everything"</td></tr>

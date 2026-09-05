@@ -41,6 +41,11 @@ pub struct Say {
     /// Report `max_tokens` — the model was cut off mid-answer rather than
     /// finishing. The one `stop_reason` the loop must act on.
     pub truncated: bool,
+    /// Report `pause_turn` with a `server_tool_use` block and no text: the
+    /// provider suspended a search it was running for the model and wants the
+    /// turn back unchanged. The other `stop_reason` the loop must act on, and
+    /// the one it acted on wrongly before there was a fake for it.
+    pub paused: bool,
     /// Answer this call with `LlmError::BadRequest` carrying this message,
     /// rather than with a turn.
     ///
@@ -57,7 +62,17 @@ pub fn text(t: &str) -> Say {
         calls: Vec::new(),
         tokens: 10,
         truncated: false,
+        paused: false,
         fail: None,
+    }
+}
+
+/// A turn the provider paused mid-search: `stop_reason: pause_turn`, carrying
+/// the search it started as a block this client does not model.
+pub fn paused() -> Say {
+    Say {
+        paused: true,
+        ..text("")
     }
 }
 
@@ -75,6 +90,7 @@ pub fn call(tool: &str, args: Value) -> Say {
         calls: vec![(tool.into(), args)],
         tokens: 10,
         truncated: false,
+        paused: false,
         fail: None,
     }
 }
@@ -86,6 +102,7 @@ pub fn rejected(message: &str) -> Say {
         calls: Vec::new(),
         tokens: 0,
         truncated: false,
+        paused: false,
         fail: Some(message.into()),
     }
 }
@@ -227,6 +244,16 @@ impl Provider for Fake {
         if !say.text.is_empty() {
             content.push(ContentBlock::text(say.text.clone()));
         }
+        if say.paused {
+            // The shape the reference shows for a suspended search: the
+            // provider's own tool-use block, which this client keeps opaque.
+            content.push(ContentBlock::Passthrough(json!({
+                "type": "server_tool_use",
+                "id": format!("srvtoolu_{n}"),
+                "name": "web_search",
+                "input": { "query": "what the model wanted to know" }
+            })));
+        }
         for (i, (name, input)) in say.calls.iter().enumerate() {
             content.push(ContentBlock::ToolUse(ToolCall {
                 id: format!("tu_{n}_{i}"),
@@ -244,6 +271,8 @@ impl Provider for Fake {
         Ok(AssistantTurn {
             stop_reason: if say.truncated {
                 "max_tokens".into()
+            } else if say.paused {
+                "pause_turn".into()
             } else if say.calls.is_empty() {
                 "end_turn".into()
             } else {

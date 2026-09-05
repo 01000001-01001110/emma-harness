@@ -251,6 +251,39 @@
     described here.
   </p>
 
+  <p>
+    The crate root is <code>crates/emma/src/lib.rs</code>: eighty lines of
+    module declarations and one <code>pub use</code> block, which is the
+    binary's whole vocabulary in one screen. It re-exports
+    <code>Agent</code>, <code>Budgets</code>, <code>Ending</code>,
+    <code>Interrupt</code>, <code>Outcome</code>, <code>Resumed</code>,
+    <code>Setup</code> and <code>Spend</code> from <code>agent</code>;
+    <code>Answer</code>, <code>Approvals</code>, <code>Asker</code>,
+    <code>Gate</code> and <code>Verdict</code> from <code>approval</code>;
+    <code>Delegate</code> and <code>Nest</code>; <code>Done</code>,
+    <code>DoneCheck</code>, <code>Goal</code> and <code>MarkerClaim</code>;
+    <code>Continuity</code>, <code>Restored</code> and <code>SessionLog</code>;
+    and <code>Flow</code> with <code>SessionCommand</code>.
+    <span class="chip cert">certified</span>: the six <code>pub use</code> lines
+    are the last six statements in the file.
+  </p>
+  <span class="src">crates/emma/src/lib.rs — the <code>pub use</code> block</span>
+
+  <div class="note warn">
+    <span class="h">one claim in that file is now false</span>
+    <p>
+      Its module doc closes with <em>&ldquo;Anthropic is the only
+      provider&rdquo;</em>. A second one shipped, and
+      <a href="providers-boundary.html#ollama">the boundary page</a> describes
+      it. The sentence was not corrected here because this change edits
+      documentation and no source.
+      <span class="chip cert">certified</span>: the line is in
+      <code>crates/emma/src/lib.rs</code> above the module declarations, and
+      <code>crates/llm/src/kind.rs</code> lists two entries in
+      <code>KINDS</code>.
+    </p>
+  </div>
+
   <h2 id="crates">What each crate is</h2>
 
   <div class="tw">
@@ -270,7 +303,7 @@
       <tr><td><code>tools/tasks</code></td>
           <td>The task list a goal-holding loop writes down what is left in.</td></tr>
       <tr><td><code>tools/web</code></td>
-          <td><code>WebSearch</code>, <code>WebFetch</code> rendering in real Chrome, and five tools driving a live page.</td></tr>
+          <td><code>WebFetch</code> rendering in real Chrome, and five tools driving a live page. Search is the provider's, not a tool here.</td></tr>
       <tr><td><code>tools/lsp</code></td>
           <td><code>FindReferences</code>, <code>GoToDefinition</code>, <code>Hover</code>, <code>DocumentSymbols</code>.</td></tr>
     </tbody>

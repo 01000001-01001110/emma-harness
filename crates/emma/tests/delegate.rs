@@ -110,6 +110,7 @@ async fn delegating(
             cwd: dir.to_path_buf(),
             session_id: "sess-test".into(),
             caching: Caching::On,
+            web_search: false,
             budgets,
             running: Running::new(base.clone()),
         },
@@ -141,6 +142,7 @@ async fn delegating(
         budgets,
         caching: Caching::On,
         mode: Mode::Batch,
+        web_search: false,
     });
     let outcome = agent
         .run_goal(&Goal::new("find out where the retry policy lives"))
@@ -606,6 +608,7 @@ async fn two_delegations_never_overlap() {
             cwd: dir.path().to_path_buf(),
             session_id: "sess-test".into(),
             caching: Caching::On,
+            web_search: false,
             budgets: budgets(),
             running: Running::new(base.clone()),
         },
@@ -674,6 +677,7 @@ async fn constructing_an_agent_never_moves_the_status_meters() {
         budgets: budgets(),
         caching: Caching::On,
         mode: Mode::Batch,
+        web_search: false,
     });
     assert!(
         term.recorded().is_empty(),
@@ -1121,6 +1125,7 @@ fn an_agent_type_cannot_reach_a_tool_the_persona_excluded() {
                 cwd: dir.path().to_path_buf(),
                 session_id: "sess-test".into(),
                 caching: Caching::On,
+                web_search: false,
                 budgets: budgets(),
                 running: Running::new(base),
             },
@@ -1181,6 +1186,7 @@ fn an_unknown_agent_name_is_refused_by_the_argument_check_and_not_only_by_the_sc
             cwd: dir.path().to_path_buf(),
             session_id: "sess-test".into(),
             caching: Caching::On,
+            web_search: false,
             budgets: budgets(),
             running: Running::new(base),
         },
@@ -1546,6 +1552,7 @@ async fn a_subagent_inherits_the_projects_instructions_and_is_told_who_it_works_
             cwd: dir.path().to_path_buf(),
             session_id: "sess-test".into(),
             caching: Caching::On,
+            web_search: false,
             budgets: budgets(),
             running: Running::new(base),
         },

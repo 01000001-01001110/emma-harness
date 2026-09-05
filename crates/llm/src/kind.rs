@@ -51,6 +51,18 @@ pub trait ProviderKind: Send + Sync {
         true
     }
 
+    /// Whether this provider can search the web for the model on its own side
+    /// of the wire, given [`Request::web_search`](crate::Request::web_search).
+    ///
+    /// Defaulted false: a provider that has not said it can search cannot be
+    /// asked to, and the loop uses this to tell the user at startup whether
+    /// the setting they hold means anything on the provider they chose. A
+    /// setting that silently does nothing is the failure this exists to
+    /// prevent.
+    fn web_search(&self) -> bool {
+        false
+    }
+
     fn build(&self, key: ApiKey, model: Option<String>) -> Arc<dyn Provider>;
 }
 
@@ -67,6 +79,12 @@ impl ProviderKind for Anthropic {
 
     fn default_model(&self) -> &'static str {
         crate::DEFAULT_MODEL
+    }
+
+    /// The Messages API sells `web_search` as a server tool on the same key.
+    /// See `anthropic::web_search_tool` for the wire shape.
+    fn web_search(&self) -> bool {
+        true
     }
 
     fn build(&self, key: ApiKey, model: Option<String>) -> Arc<dyn Provider> {
@@ -106,6 +124,15 @@ pub fn known() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **If this breaks:** the startup line says search is on for a provider
+    /// that has none, or off for the one that sells it, and the setting reads
+    /// as honoured when it is not.
+    #[test]
+    fn only_the_provider_that_sells_search_says_it_can() {
+        assert!(kind("anthropic").unwrap().web_search());
+        assert!(!kind("ollama").unwrap().web_search());
+    }
 
     #[test]
     fn a_misspelled_provider_is_refused_and_told_what_exists() {

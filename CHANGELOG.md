@@ -28,6 +28,18 @@ out for themselves.
 
 ## Unreleased
 
+- **BREAKING: `WebSearch` is gone, and so is the Brave Search key.** Search is
+  the provider's now. On Anthropic the model can search through the API's own
+  `web_search` tool, on the same key you already hold, and each search is
+  billed apart from tokens; Emma says so at startup every run and prints what
+  was searched for as it happens. `"web_search": false` in
+  `~/.emma/settings.json` turns it off. On Ollama there is no search, and the
+  startup line says that too. What to do about it: delete
+  `brave_search_api_key` from `~/.emma/credentials.json` and unset
+  `BRAVE_SEARCH_API_KEY`; nothing reads either any more, and a permission rule
+  written for `WebSearch` matches nothing. The tool count is 22 with a Chrome
+  found, 16 without one; it was 23 and 17.
+
 - **Every full-screen page now says the key that gets you out of it.** Settings
   says `Esc closes`, Memory says `Alt+m closes` and the Harness dashboard says
   `Alt+h closes`, in the page's top-left corner. All three keys already worked;

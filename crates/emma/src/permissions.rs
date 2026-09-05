@@ -2425,7 +2425,7 @@ mod tests {
         let r = rules(&[], &[], &["WebSearch"]);
         assert_eq!(r.for_tool("WebSearch"), Some(Decision::Allow));
         assert_eq!(
-            r.for_egress("WebSearch", "api.search.brave.com"),
+            r.for_egress("WebSearch", "search.example.com"),
             Some(Decision::Allow)
         );
         assert_eq!(

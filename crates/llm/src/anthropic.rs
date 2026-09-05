@@ -50,6 +50,35 @@ pub const DEFAULT_MODEL: &str = "claude-opus-5";
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const API_VERSION: &str = "2023-06-01";
 
+/// The server-side search tool, added to `tools` when a request asks for it.
+///
+/// `web_search_20250305` and not a newer version, and the reason is a 400
+/// rather than a preference. `web_search_20260209` and later default
+/// `allowed_callers` to code execution so the model can filter results before
+/// they reach its context, and on a model without programmatic tool calling
+/// that default is rejected outright. The basic version calls the index
+/// directly on every model the API serves it to. Read from the tool's own
+/// reference on 2026-09-05; the version string is the whole contract and a
+/// bump here is a change to what every request sends.
+const WEB_SEARCH_TYPE: &str = "web_search_20250305";
+/// Searches the API may run inside one call before it answers with a
+/// `max_uses_exceeded` result block instead. Each search is billed apart from
+/// tokens, and a model in a research loop will keep searching until something
+/// stops it. Five is the reference's own worked example, and it is a cap on one
+/// call rather than on a goal: the loop's iteration budget bounds the rest.
+const WEB_SEARCH_MAX_USES: u32 = 5;
+
+/// The `tools` entry the API reads as "you may search". Public so the loop's
+/// tests and the documentation can name the exact bytes rather than a
+/// description of them.
+pub fn web_search_tool() -> Value {
+    json!({
+        "type": WEB_SEARCH_TYPE,
+        "name": "web_search",
+        "max_uses": WEB_SEARCH_MAX_USES,
+    })
+}
+
 // region: Cache breakpoints
 // ---------------------------------------------------------------------------
 // Cache breakpoints
@@ -317,9 +346,17 @@ impl AnthropicProvider {
     }
 
     fn render(&self, req: &Request, mode: Mode) -> Result<Value, LlmError> {
-        let tools_chars = serde_json::to_string(&req.tools)
-            .map(|s| s.len())
-            .unwrap_or(0);
+        // The server tool rides in the same array as the client tools, last,
+        // so it sits inside the cached prefix with them and a request that
+        // never changes its mind about searching renders identical bytes every
+        // call. Appended here rather than by the loop because the loop does
+        // not know Anthropic's wire shape, and `Request::web_search` is the
+        // ask the provider answers.
+        let mut tools = req.tools.clone();
+        if req.web_search {
+            tools.push(web_search_tool());
+        }
+        let tools_chars = serde_json::to_string(&tools).map(|s| s.len()).unwrap_or(0);
         // The cache floor is per-model and this is the only place the model and
         // the gating are both in scope — the same argument as the clamping
         // below, and the reason the floor is a parameter rather than a const.
@@ -341,7 +378,7 @@ impl AnthropicProvider {
             "max_tokens": limits.clamp_max_tokens(req.max_tokens),
             "system": system,
             "messages": messages,
-            "tools": req.tools,
+            "tools": tools,
         });
         // Absent rather than defaulted: on a model with no effort parameter the
         // field itself is the 400, so there is no value that would be safe to
@@ -579,6 +616,8 @@ impl Assembly {
                 self.usage.cache_creation_input_tokens = pick(u, "cache_creation_input_tokens");
                 self.usage.cache_read_input_tokens = pick(u, "cache_read_input_tokens");
                 self.usage.output_tokens = pick(u, "output_tokens");
+                self.usage.server_tool_use.web_search_requests =
+                    pick_nested(u, "/server_tool_use/web_search_requests");
             }
             "content_block_start" => {
                 let block = ev.get("content_block").cloned().unwrap_or_default();
@@ -665,6 +704,13 @@ impl Assembly {
                 // that `message_start` established.
                 if out != 0 {
                     self.usage.output_tokens = out;
+                }
+                // Same guard, same reason: the final delta carries the whole
+                // count, and an earlier one carrying only a stop reason must
+                // not zero it.
+                let searches = pick_nested(u, "/server_tool_use/web_search_requests");
+                if searches != 0 {
+                    self.usage.server_tool_use.web_search_requests = searches;
                 }
             }
             "error" => {
@@ -756,6 +802,15 @@ fn str_at(v: &Value, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string()
+}
+
+/// [`pick`] for a key below the top level, by JSON pointer. Absent reads as
+/// zero for the same reason `pick` does: the loop measures against it.
+fn pick_nested(usage: Option<&Value>, pointer: &str) -> i64 {
+    usage
+        .and_then(|u| u.pointer(pointer))
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
 }
 
 fn pick(usage: Option<&Value>, key: &str) -> i64 {
@@ -2100,6 +2155,96 @@ mod tests {
     /// being read from the wrong place either. Both assertions are needed: that
     /// the extra keys are tolerated, and that the four that matter still carry
     /// their real values.
+    /// **If this breaks:** a request that asked to search went out without
+    /// the server tool, so the model cannot search and nothing says so; or a
+    /// request that did not ask went out with it, and a test or a sub-call is
+    /// paying for searches nobody wanted.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_request_that_asks_to_search_carries_the_server_tool_last() {
+        let s = stub(vec![Reply::json(batch_body())]).await;
+        let _ = run(&s, request().with_web_search(true), Mode::Batch).await;
+        let tools = s.last()["tools"].clone();
+        let tools = tools.as_array().expect("tools is an array");
+        assert_eq!(
+            tools.last(),
+            Some(&web_search_tool()),
+            "the server tool is not the last entry: {tools:?}"
+        );
+        // Last, after every client tool, so the prefix the cache keys on is
+        // the registry's own bytes followed by one constant entry.
+        assert_eq!(tools[0], json!({ "name": "Read" }));
+        assert_eq!(tools.len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_request_that_does_not_ask_carries_no_server_tool() {
+        let s = stub(vec![Reply::json(batch_body())]).await;
+        let _ = run(&s, request(), Mode::Batch).await;
+        let tools = s.last()["tools"].to_string();
+        assert!(
+            !tools.contains("web_search"),
+            "a request that never asked is offering search: {tools}"
+        );
+    }
+
+    /// **If this breaks:** the search count is read from the wrong place, or
+    /// not at all, and a turn that ran three billed searches logs zero.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_search_count_is_read_from_under_server_tool_use() {
+        let body = json!({
+            "type": "message",
+            "role": "assistant",
+            "stop_reason": "end_turn",
+            "content": [{ "type": "text", "text": "ok" }],
+            "usage": {
+                "input_tokens": 41,
+                "output_tokens": 17,
+                "server_tool_use": { "web_search_requests": 3 }
+            }
+        })
+        .to_string();
+        let s = stub(vec![Reply::json(body)]).await;
+        let (turn, _) = run(&s, request(), Mode::Batch).await;
+        let usage = turn.expect("the body decodes").usage;
+        assert_eq!(usage.server_tool_use.web_search_requests, 3);
+        // And the count stays out of the token arithmetic.
+        assert_eq!(usage.billable_total_tokens(), 41 + 17);
+    }
+
+    /// The streaming twin of the batch test above. The count arrives on the
+    /// final `message_delta`, under `server_tool_use`, and an earlier delta
+    /// carrying only a stop reason must not zero it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_search_count_survives_a_stream() {
+        let body: String = [
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":41,"server_tool_use":{"web_search_requests":0}}}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{"query":"q"}}}"#,
+            r#"{"type":"content_block_stop","index":0}"#,
+            r#"{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#,
+            r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"found it"}}"#,
+            r#"{"type":"content_block_stop","index":1}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":17,"server_tool_use":{"web_search_requests":2}}}"#,
+            r#"{"type":"message_stop"}"#,
+        ]
+        .iter()
+        .map(|d| format!("event: x
+data: {d}
+
+"))
+        .collect();
+        let s = stub(vec![Reply::sse(body)]).await;
+        let (turn, _) = run(&s, request().with_web_search(true), Mode::Stream).await;
+        let turn = turn.expect("the stream assembles");
+        assert_eq!(turn.usage.server_tool_use.web_search_requests, 2);
+        // And the provider's block came through opaque, in order, ready to be
+        // echoed back: the API rejects a continuation that lost it.
+        assert!(
+            matches!(&turn.content[0], ContentBlock::Passthrough(v) if v["type"] == "server_tool_use"),
+            "{:?}",
+            turn.content
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_usage_object_with_keys_this_client_does_not_model_still_counts() {
         let body = json!({

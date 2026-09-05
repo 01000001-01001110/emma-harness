@@ -15,11 +15,13 @@
 //! old `emma api`, which is one machine and no expiry date. Reading is what
 //! migrates; nothing rewrites the file for having been read.
 //!
-//! **A write preserves everything it did not come to change.** One file holds
-//! several secrets — the web tools keep `brave_search_api_key` beside these —
-//! so [`store`] merges into the JSON that is there rather than replacing it.
-//! The alternative is a `set-provider` that silently deletes the key belonging
-//! to some other part of the program.
+//! **A write preserves everything it did not come to change.** One file may
+//! hold keys this module does not own, so [`store`] merges into the JSON that
+//! is there rather than replacing it. The alternative is a `set-provider` that
+//! silently deletes a key belonging to some other part of the program. The
+//! rule outlived the field that prompted it: a search tool once kept its own
+//! vendor's key at the top level of this file, that tool is gone, and a file
+//! written while it existed still reads and still survives a write.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -316,11 +318,11 @@ pub fn stored_providers(home: &Path) -> Vec<String> {
 /// is read from a pipe or a no-echo prompt rather than an argument.
 ///
 /// **Merges.** The file is read, one provider's entry is replaced, and
-/// everything else in it survives — other providers' keys, and
-/// `brave_search_api_key`, which the web tools put at the top level of this
-/// same file. Writing a fresh document would delete whichever of those the
-/// caller did not happen to know about, silently, and the symptom would arrive
-/// hours later as a tool that stopped being registered.
+/// everything else in it survives — other providers' keys, and any top-level
+/// field some other part of the program put here. Writing a fresh document
+/// would delete whichever of those the caller did not happen to know about,
+/// silently, and the symptom would arrive hours later as something that
+/// stopped working with no error naming why.
 ///
 /// A file that cannot be parsed is an error rather than something to overwrite,
 /// for the same reason: overwriting is how the other keys are lost.
@@ -514,15 +516,18 @@ mod tests {
 
     #[test]
     fn a_key_written_by_the_old_emma_api_still_reads() {
-        // The owner's live file, exactly: one flat `api_key`, and a Brave key
-        // beside it that belongs to a different part of the program. Both must
-        // survive contact with the provider-keyed shape.
+        // The shape the owner's live file had: one flat `api_key`, and beside
+        // it a key belonging to a different part of the program. That other
+        // key was a search vendor's when this was written; the tool that read
+        // it is gone, and the guarantee is the same, because a file on somebody's
+        // disk does not know the tool went away. Both must survive contact
+        // with the provider-keyed shape.
         let home = Home::new("legacy");
         let path = credentials_path(home.path());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         write_private(
             &path,
-            r#"{"api_key":"sk-ant-legacy","brave_search_api_key":"BSA-legacy"}"#,
+            r#"{"api_key":"sk-ant-legacy","other_tool_key":"other-legacy"}"#,
         )
         .unwrap();
 
@@ -545,7 +550,7 @@ mod tests {
         );
         let doc: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
-            doc["brave_search_api_key"], "BSA-legacy",
+            doc["other_tool_key"], "other-legacy",
             "a key this module does not own was destroyed by a write: {doc}"
         );
         // …and the legacy field is gone rather than left as a second answer.

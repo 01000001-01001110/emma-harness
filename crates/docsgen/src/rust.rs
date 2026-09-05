@@ -121,6 +121,11 @@ pub fn const_list(file: &syn::File, name: &str) -> Result<Vec<Item>> {
         for item in items {
             match item {
                 syn::Item::Const(c) if c.ident == name => return elements(&c.expr),
+                // A `static` list is the same membership claim with a different
+                // keyword. `llm::kind::KINDS` is one, because a slice of trait
+                // objects cannot be a `const`, and it is the list every
+                // provider claim in the README is measured against.
+                syn::Item::Static(s) if s.ident == name => return elements(&s.expr),
                 syn::Item::Mod(m) => {
                     if let Some((_, inner)) = &m.content {
                         if let Some(found) = find(inner, name) {
@@ -461,6 +466,248 @@ pub fn has_fn(file: &syn::File, name: &str) -> bool {
     walk(&file.items, name)
 }
 
+/// What a method on a type's `impl` block returns, as source text, for a
+/// method whose whole body is one expression.
+///
+/// `Ok(None)` when no `impl` for `type_name` in this file declares `method`,
+/// which for a trait method means the trait's default applies and the caller
+/// has to know what that is. `Ok(Some)` carries the tail expression: a string
+/// literal comes back as its value, and a bare path is resolved against the
+/// file's `const`s so `fn name() { NAME }` answers `"WebFetch"` rather than
+/// `NAME`. A path that resolves to nothing comes back as written, because a
+/// name is still more useful than an empty string, and the caller can tell the
+/// two apart by looking for a capital.
+///
+/// Written for `Tool::name` and `ProviderKind::name`, which every tool and
+/// provider in this workspace implements as one literal or one const, and for
+/// `ProviderKind::requires_key`, which is `false` or absent.
+pub fn impl_method_value(
+    file: &syn::File,
+    type_name: &str,
+    method: &str,
+) -> Result<Option<String>> {
+    fn self_type_is(ty: &syn::Type, name: &str) -> bool {
+        let syn::Type::Path(p) = ty else { return false };
+        p.path.segments.last().is_some_and(|s| s.ident == name)
+    }
+    fn find<'a>(items: &'a [syn::Item], type_name: &str, method: &str) -> Option<&'a syn::Block> {
+        for item in items {
+            match item {
+                syn::Item::Impl(i) if self_type_is(&i.self_ty, type_name) => {
+                    for it in &i.items {
+                        if let syn::ImplItem::Fn(f) = it {
+                            if f.sig.ident == method {
+                                return Some(&f.block);
+                            }
+                        }
+                    }
+                }
+                syn::Item::Mod(m) => {
+                    if let Some((_, inner)) = &m.content {
+                        if let Some(found) = find(inner, type_name, method) {
+                            return Some(found);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    let Some(block) = find(&file.items, type_name, method) else {
+        return Ok(None);
+    };
+    let tail = match block.stmts.last() {
+        Some(syn::Stmt::Expr(e, None)) => e,
+        _ => bail!("`{type_name}::{method}` does not end in a bare expression"),
+    };
+    let text = match tail {
+        syn::Expr::Path(p) => {
+            let ident = path_tail(&p.path);
+            const_value(file, &ident).unwrap_or(ident)
+        }
+        other => expr_text(other),
+    };
+    if text.is_empty() {
+        bail!("`{type_name}::{method}` returns something this reader cannot print");
+    }
+    Ok(Some(text))
+}
+
+/// The fields of a type's `impl Default`, in the order the literal names them,
+/// each with its value.
+///
+/// `detail` is the value as an integer when the expression is one that can be
+/// worked out without a compiler: a literal, arithmetic on literals, or one
+/// constructor call around either -- `Duration::from_secs(30 * 60)` is `1800`.
+/// The constructor is looked through rather than refused because the number
+/// inside it is the fact a table prints, and the unit is the constructor's name,
+/// which the caller already knows. Anything else comes back as source text.
+///
+/// Field order is the literal's order rather than the struct's, because the
+/// `Default` is where the author wrote the numbers down and a table reads in
+/// the order they were written.
+pub fn default_fields(file: &syn::File, type_name: &str) -> Result<Vec<Item>> {
+    fn is_default_for(i: &syn::ItemImpl, type_name: &str) -> bool {
+        let Some((_, trait_path, _)) = &i.trait_ else {
+            return false;
+        };
+        let syn::Type::Path(p) = &*i.self_ty else {
+            return false;
+        };
+        trait_path
+            .segments
+            .last()
+            .is_some_and(|s| s.ident == "Default")
+            && p.path.segments.last().is_some_and(|s| s.ident == type_name)
+    }
+    for item in &file.items {
+        let syn::Item::Impl(i) = item else { continue };
+        if !is_default_for(i, type_name) {
+            continue;
+        }
+        let block = i
+            .items
+            .iter()
+            .find_map(|it| match it {
+                syn::ImplItem::Fn(f) if f.sig.ident == "default" => Some(&f.block),
+                _ => None,
+            })
+            .with_context(|| format!("`impl Default for {type_name}` has no `fn default`"))?;
+        let Some(syn::Stmt::Expr(syn::Expr::Struct(lit), None)) = block.stmts.last() else {
+            bail!("`{type_name}::default` does not end in a struct literal");
+        };
+        return Ok(lit
+            .fields
+            .iter()
+            .map(|f| Item {
+                name: match &f.member {
+                    syn::Member::Named(n) => n.to_string(),
+                    syn::Member::Unnamed(i) => i.index.to_string(),
+                },
+                doc: String::new(),
+                detail: int_value(&f.expr)
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| expr_text(&f.expr)),
+            })
+            .collect());
+    }
+    bail!("no `impl Default for {type_name}` in this file")
+}
+
+/// A number the source states without needing a compiler to say so.
+fn int_value(e: &syn::Expr) -> Option<i128> {
+    match e {
+        syn::Expr::Lit(l) => match &l.lit {
+            syn::Lit::Int(i) => i.base10_digits().parse().ok(),
+            _ => None,
+        },
+        syn::Expr::Paren(p) => int_value(&p.expr),
+        syn::Expr::Group(g) => int_value(&g.expr),
+        syn::Expr::Unary(u) => match u.op {
+            syn::UnOp::Neg(_) => int_value(&u.expr).map(|n| -n),
+            _ => None,
+        },
+        syn::Expr::Binary(b) => {
+            let (l, r) = (int_value(&b.left)?, int_value(&b.right)?);
+            match b.op {
+                syn::BinOp::Add(_) => l.checked_add(r),
+                syn::BinOp::Sub(_) => l.checked_sub(r),
+                syn::BinOp::Mul(_) => l.checked_mul(r),
+                syn::BinOp::Div(_) => l.checked_div(r),
+                _ => None,
+            }
+        }
+        // One constructor around a number: `Duration::from_secs(1800)`. Two
+        // arguments would be a pair, not a number, and are refused.
+        syn::Expr::Call(c) if c.args.len() == 1 => int_value(&c.args[0]),
+        _ => None,
+    }
+}
+
+/// The types constructed inside the `vec![...]` a function returns its surface
+/// in, in the order they are pushed.
+///
+/// `fs_tools`, `task_tools`, `lsp_tools` and `browser_tools` all have the same
+/// shape: `vec![Arc::new(Read::new(..)), Arc::new(Write::new(..)), ..]`. The
+/// element the reader wants is the innermost constructor's type, `Read`, so
+/// each element is unwrapped call by call until a `T::new`-shaped path is
+/// found. A `vec!` is a macro, so `syn` holds its body as tokens rather than
+/// as expressions, and the body is parsed here as a comma-separated list.
+pub fn vec_types(file: &syn::File, fn_name: &str) -> Result<Vec<String>> {
+    fn constructed_type(e: &syn::Expr) -> Option<String> {
+        match e {
+            syn::Expr::Call(c) => {
+                if let syn::Expr::Path(p) = &*c.func {
+                    let n = p.path.segments.len();
+                    // `Arc::new(inner)` is a wrapper; `Read::new(..)` is the
+                    // answer. Both are `X::new`, so the wrapper is recognised
+                    // by name and looked through.
+                    if n >= 2 && p.path.segments[n - 2].ident != "Arc" {
+                        return Some(p.path.segments[n - 2].ident.to_string());
+                    }
+                }
+                c.args.first().and_then(constructed_type)
+            }
+            syn::Expr::Paren(p) => constructed_type(&p.expr),
+            syn::Expr::Reference(r) => constructed_type(&r.expr),
+            _ => None,
+        }
+    }
+    let body =
+        fn_body(&file.items, fn_name).with_context(|| format!("no `fn {fn_name}` in this file"))?;
+    for stmt in &body {
+        let mac = match stmt {
+            syn::Stmt::Local(l) => match l.init.as_ref().map(|i| &*i.expr) {
+                Some(syn::Expr::Macro(m)) => &m.mac,
+                _ => continue,
+            },
+            syn::Stmt::Expr(syn::Expr::Macro(m), _) => &m.mac,
+            _ => continue,
+        };
+        if !mac.path.is_ident("vec") {
+            continue;
+        }
+        let elems = mac
+            .parse_body_with(
+                syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
+            )
+            .with_context(|| {
+                format!("the `vec!` in `fn {fn_name}` did not parse as expressions")
+            })?;
+        let types: Vec<String> = elems.iter().filter_map(constructed_type).collect();
+        if types.len() != elems.len() {
+            bail!(
+                "an element of the `vec!` in `fn {fn_name}` is not a constructor call, so its \
+                 type cannot be named"
+            );
+        }
+        if types.is_empty() {
+            bail!("the `vec!` in `fn {fn_name}` is empty");
+        }
+        return Ok(types);
+    }
+    bail!("`fn {fn_name}` builds no `vec!`")
+}
+
+/// Every string literal in the file, wherever it sits.
+///
+/// For checking that a flag the README documents is one `cli.rs` matches on:
+/// `"--max-kicks"` appears in a `match` arm there, and a README row for a flag
+/// the parser does not know is the drift this crate exists to catch.
+pub fn string_literals(file: &syn::File) -> Vec<String> {
+    use syn::visit::Visit;
+    struct Strings(Vec<String>);
+    impl<'ast> Visit<'ast> for Strings {
+        fn visit_lit_str(&mut self, s: &'ast syn::LitStr) {
+            self.0.push(s.value());
+        }
+    }
+    let mut v = Strings(Vec::new());
+    v.visit_file(file);
+    v.0
+}
+
 /// The first sentence of an item's `///` documentation.
 ///
 /// First sentence rather than the whole comment: these become labels beside a
@@ -589,6 +836,10 @@ mod quote_min {
                     .last()
                     .map(|s| s.ident.to_string())
                     .unwrap_or_default(),
+                // `&Anthropic` in a slice of trait objects is the name behind
+                // the borrow. Nothing before this arm produced a `&` element,
+                // so the string lists `const_list` already reads are unmoved.
+                syn::Expr::Reference(r) => r.expr.to_text(),
                 _ => String::new(),
             }
         }
@@ -831,5 +1082,108 @@ const N: u8 = 3;",
         assert!(has_fn(&f, "inner"));
         assert!(has_fn(&f, "nested"));
         assert!(!has_fn(&f, "absent"));
+    }
+
+    /// **If this breaks:** the README's provider list is read from a `static`
+    /// that this reader no longer sees, and the generator fails on a list that
+    /// is right there in the file -- or, worse, reads `&Anthropic` back as an
+    /// empty name.
+    #[test]
+    fn a_static_list_of_borrowed_types_comes_back_as_the_type_names() {
+        let f = file("static KINDS: &[&dyn K] = &[&Anthropic, &crate::ollama::Ollama];");
+        let k = const_list(&f, "KINDS").expect("KINDS");
+        assert_eq!(
+            k.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+            ["Anthropic", "Ollama"]
+        );
+    }
+
+    /// **If this breaks:** a tool or provider name read off its `impl` comes
+    /// back as `NAME` rather than the string `NAME` holds, or a method the
+    /// type never overrides is reported as if it had.
+    #[test]
+    fn a_method_returning_a_literal_or_a_const_answers_with_the_string() {
+        let f = file(
+            "const NAME: &str = \"WebFetch\";
+             impl Tool for WebFetch { fn name(&self) -> &'static str { NAME } }
+             impl ProviderKind for Ollama {
+                 fn name(&self) -> &'static str { \"ollama\" }
+                 fn requires_key(&self) -> bool { false }
+             }",
+        );
+        assert_eq!(
+            impl_method_value(&f, "WebFetch", "name").expect("readable"),
+            Some("WebFetch".to_string())
+        );
+        assert_eq!(
+            impl_method_value(&f, "Ollama", "name").expect("readable"),
+            Some("ollama".to_string())
+        );
+        assert_eq!(
+            impl_method_value(&f, "Ollama", "requires_key").expect("readable"),
+            Some("false".to_string())
+        );
+        assert_eq!(
+            impl_method_value(&f, "WebFetch", "requires_key").expect("absent is not an error"),
+            None
+        );
+    }
+
+    /// **If this breaks:** the budget table prints `Duration::from_secs(30 *
+    /// 60)` where a reader wants `1800`, or a field is dropped from the table
+    /// because its value was not a bare literal.
+    #[test]
+    fn default_fields_come_back_in_literal_order_with_arithmetic_worked_out() {
+        let f = file(
+            "impl Default for Budgets { fn default() -> Self { Self {
+                 max_iterations: 60,
+                 max_tokens: 500_000,
+                 wall_clock: Duration::from_secs(30 * 60),
+                 label: \"x\",
+             } } }",
+        );
+        let d = default_fields(&f, "Budgets").expect("Budgets has a Default");
+        let pairs: Vec<(&str, &str)> = d
+            .iter()
+            .map(|i| (i.name.as_str(), i.detail.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            [
+                ("max_iterations", "60"),
+                ("max_tokens", "500000"),
+                ("wall_clock", "1800"),
+                ("label", "x"),
+            ]
+        );
+        assert!(default_fields(&f, "Nope").is_err());
+    }
+
+    /// **If this breaks:** the browser tools are read off `browser_tools` as
+    /// `Arc` five times, or a surface built as a `vec!` is reported empty.
+    #[test]
+    fn the_types_constructed_in_a_surface_vec_are_named_in_order() {
+        let f = file(
+            "pub fn browser_tools(p: P) -> (Vec<T>, P) {
+                 let pool = Arc::new(Pool::new(p));
+                 let tools: Vec<Arc<dyn Tool>> = vec![
+                     Arc::new(BrowserOpen::new(pool.clone())),
+                     Arc::new(BrowserClose::new(pool.clone())),
+                 ];
+                 (tools, pool)
+             }",
+        );
+        let t = vec_types(&f, "browser_tools").expect("a vec! is there");
+        assert_eq!(t, ["BrowserOpen", "BrowserClose"]);
+        assert!(vec_types(&f, "absent").is_err());
+    }
+
+    /// **If this breaks:** a README row for a flag `cli.rs` no longer matches
+    /// on is generated anyway, because the literal check saw nothing.
+    #[test]
+    fn every_string_literal_is_found_including_those_in_match_arms() {
+        let f = file("fn p(a: &str) { match a { \"--max-kicks\" => {} _ => {} } }");
+        let s = string_literals(&f);
+        assert_eq!(s, ["--max-kicks"]);
     }
 }

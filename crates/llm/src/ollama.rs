@@ -712,6 +712,9 @@ fn turn_from_ollama(body: &Value) -> Result<AssistantTurn, LlmError> {
         // and that is exactly true of every Ollama call.
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: 0,
+        // Ollama searches nothing for the model. Zero is the truth, not a
+        // placeholder.
+        server_tool_use: Default::default(),
     };
 
     Ok(AssistantTurn {

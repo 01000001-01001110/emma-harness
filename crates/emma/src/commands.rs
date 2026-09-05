@@ -1359,16 +1359,18 @@ mod tests {
 
     #[test]
     fn the_setup_that_exists_today_survives_the_upgrade() {
-        // The owner's live `~/.emma`, reproduced: a flat `api_key`, a Brave key
-        // beside it that belongs to the web tools, and a bare `{"model": …}`.
-        // If this goes red, an upgrade quietly took away somebody's working
-        // configuration — the failure that arrives with no error message.
+        // The shape the owner's live `~/.emma` had: a flat `api_key`, a key
+        // beside it belonging to another part of the program, and a bare
+        // `{"model": …}`. If this goes red, an upgrade quietly took away
+        // somebody's working configuration — the failure that arrives with no
+        // error message. The second key was a search vendor's when this was
+        // written; the tool is gone and the file on disk is not.
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(home.path().join(".emma")).unwrap();
         let credentials = emma_llm::auth::credentials_path(home.path());
         std::fs::write(
             &credentials,
-            r#"{"api_key":"sk-ant-live","brave_search_api_key":"BSA-live"}"#,
+            r#"{"api_key":"sk-ant-live","other_tool_key":"other-live"}"#,
         )
         .unwrap();
         #[cfg(unix)]
@@ -1406,7 +1408,7 @@ mod tests {
             "sk-ant-live"
         );
         let raw = std::fs::read_to_string(emma_llm::auth::credentials_path(home.path())).unwrap();
-        assert!(raw.contains("BSA-live"), "{raw}");
+        assert!(raw.contains("other-live"), "{raw}");
         let (_, resolved) = settings::resolve_kind(None, None, Some(home.path())).unwrap();
         assert_eq!(resolved.model, "claude-opus-5");
         assert_eq!(resolved.provider, "anthropic");

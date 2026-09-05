@@ -124,6 +124,7 @@ async fn run(
         budgets: budgets(),
         caching: Caching::On,
         mode: Mode::Batch,
+        web_search: false,
     });
     agent.run_goal(&Goal::new("find out about the news")).await
 }
@@ -221,11 +222,11 @@ async fn a_remembered_host_is_not_asked_about_in_the_next_process() {
 #[tokio::test]
 async fn trusting_the_tool_covers_every_host_it_reaches_afterwards() {
     // "not just search, but like claude code" — the broad grant, and the reason
-    // it is a separate keystroke. One `t` on `api.search.brave.com`, and the
+    // it is a separate keystroke. One `t` on `search.example.com`, and the
     // next process reaches four hosts it has never been asked about.
     let dir = tempfile::tempdir().unwrap();
     let root = harness_dir(dir.path(), "{}");
-    let (search, _) = TestTool::reaching("WebSearch", "api.search.brave.com");
+    let (search, _) = TestTool::reaching("WebSearch", "search.example.com");
 
     run(
         &root,
@@ -369,6 +370,7 @@ async fn a_hook_denial_outranks_an_allow_rule_that_covers_the_call() {
         budgets: budgets(),
         caching: Caching::On,
         mode: Mode::Batch,
+        web_search: false,
     });
     let out = agent.run_goal(&Goal::new("run it")).await;
     assert_eq!(out.ending, Ending::Done);

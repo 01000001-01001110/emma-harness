@@ -219,21 +219,26 @@ mod tests {
         );
     }
 
-    /// **If this breaks:** either `roster.rs` gained a citation (good news --
+    /// **If this breaks:** either `theme.rs` gained a citation (good news --
     /// update the module this test names to a module that is still uncited),
-    /// or `coverage` stopped seeing a real gap. `roster.rs` is one of the two
-    /// provider modules named in the brief this module was built against as
-    /// uncited on the day it was written.
+    /// or `coverage` stopped seeing a real gap.
+    ///
+    /// This named `crates/llm/src/roster.rs` when it was written, and that
+    /// module was cited the same afternoon by the pass this report was built
+    /// to drive, which is the outcome the test exists to notice. The generator's
+    /// own theme file is the fixture now: `docs/` describes Emma, not the tool
+    /// that draws its diagrams, so this one should stay uncited for as long as
+    /// that division holds.
     #[test]
     fn a_module_known_to_be_uncited_is_reported_as_uncited() {
         let modules = coverage(&workspace_root()).expect("workspace root reads");
-        let roster = modules
+        let theme = modules
             .iter()
-            .find(|m| m.path == "crates/llm/src/roster.rs")
-            .expect("roster.rs is a workspace source file");
+            .find(|m| m.path == "crates/docsgen/src/theme.rs")
+            .expect("theme.rs is a workspace source file");
         assert!(
-            !roster.cited,
-            "roster.rs was uncited when this test was written; if it now \
+            !theme.cited,
+            "theme.rs was uncited when this test was written; if it now \
              appears on a docs page this assertion should move to a module \
              that is still a gap"
         );

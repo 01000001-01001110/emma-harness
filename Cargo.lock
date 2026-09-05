@@ -407,6 +407,10 @@ name = "emma-docsgen"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "emma-tool-api",
+ "emma-tools-fs",
+ "emma-tools-lsp",
+ "emma-tools-tasks",
  "syn 2.0.119",
 ]
 
@@ -507,7 +511,6 @@ dependencies = [
  "emma-tool-api",
  "futures",
  "regex",
- "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tempfile",

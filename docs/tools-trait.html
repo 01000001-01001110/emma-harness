@@ -291,9 +291,8 @@
         <td><code>read_only</code></td>
         <td>
           Can this damage this machine: no file written, no process spawned.
-          Not "cannot reach the network". <code>WebFetch</code> and
-          <code>WebSearch</code> both declare <code>true</code> and both talk to
-          the outside, one of them by driving a browser.
+          Not "cannot reach the network". <code>WebFetch</code> declares
+          <code>true</code> and talks to the outside, by driving a browser.
         </td>
         <td>the approval gate</td>
       </tr>
@@ -486,8 +485,9 @@
 
 <p>
   <code>detail</code> is one line naming the errand, and it is what the human
-  reads under the host. <code>WebSearch</code> puts the query there verbatim,
-  <code>BrowserFill</code> puts every field and value. A prompt that names a
+  reads under the host. <code>BrowserFill</code> puts every field and value
+  there, and the search tool that used to put its query there is gone. A prompt
+  that names a
   host and not what is being sent there is a prompt nobody can evaluate.
 </p>
 <span class="src">crates/tool-api/src/lib.rs — <code>NetworkTarget</code></span>

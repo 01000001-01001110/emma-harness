@@ -384,8 +384,8 @@ tools/web/src/fetch.rs:220:            parsed.host_str()?,
 tools/web/src/browser/pool.rs:743:pub fn host_of(url: &amp;str) -&gt; Option&lt;String&gt; {
 tools/web/src/browser/pool.rs:744:    let parsed = url::Url::parse(url).ok()?;
 tools/web/src/browser/pool.rs:745:    let host = parsed.host_str()?;</code></pre>
-      <code>WebFetch</code>, <code>WebSearch</code>, browser open and browser
-      navigation parse a URL directly. Browser read, fill and non-navigation
+      <code>WebFetch</code>, browser open and browser navigation parse a URL
+      directly. Browser read, fill and non-navigation
       actions use the session host, which <code>host_of</code> derives from the
       final parsed URL. None constructs a host from raw argument text.
     </li>

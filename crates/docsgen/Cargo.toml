@@ -22,3 +22,13 @@ anyhow.workspace = true
 # pattern and none of them defeat a parser. Already in the lock file via serde,
 # so this adds no download.
 syn = { version = "2", features = ["full", "extra-traits", "visit"] }
+# The README's tool list is the registry a run assembles, built the way
+# `crates/emma/src/main.rs` and `crates/emma/tests/prompt_size.rs` build it,
+# so the names are what `Tool::name` returns at runtime rather than a reading
+# of the source. Only the three unconditional surfaces: `tools/web` and the
+# harness register on conditions this machine may not meet, and those names
+# are read from source in `pages/readme.rs` instead.
+emma-tool-api.workspace = true
+emma-tools-fs.workspace = true
+emma-tools-tasks.workspace = true
+emma-tools-lsp.workspace = true

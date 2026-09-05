@@ -1,4 +1,5 @@
-//! Write the generated diagrams into `docs/`, or report on them.
+//! Write the generated diagrams into `docs/` and the generated facts into
+//! `README.md`, or report on them.
 //!
 //! `cargo run -p emma-docsgen` after changing anything a diagram is drawn
 //! from. `tests/current.rs` fails if this was not run.

@@ -24,8 +24,10 @@ wrote. Swapping the directory swaps the agent.
 failed, so try another way; the tests are still red, so read the failure and fix
 it — until done is true or it runs out of room.
 
+<!-- diagram:readme-providers -->
 **Any model that can call tools.** Anthropic over the API, or Ollama on your own
 machine.
+<!-- /diagram -->
 
 ### What it is not
 
@@ -151,19 +153,28 @@ running it yourself.
   tasks/tasks.md           the agent's task list, in a file you can edit
 ```
 
-Tools available to the model: `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash`,
-`BashOutput`, `KillShell`, four task-list tools, four language-server tools
-(`FindReferences`, `GoToDefinition`, `Hover`, `DocumentSymbols`), `WebFetch`,
-`WebSearch`, and five browser tools that drive a real Chrome.
+<!-- diagram:readme-tools -->
+Tools available to the model on every run: `Read`, `Write`, `Edit`, `Glob`,
+`Grep`, `Bash`, `BashOutput`, `KillShell`, `TaskCreate`, `TaskGet`, `TaskList`,
+`TaskUpdate`, `FindReferences`, `GoToDefinition`, `Hover` and `DocumentSymbols`.
+Registered only when this machine can back them: `Skill`, when the configuration
+directory declares a skill; `Delegate`, when it declares an agent; `WebFetch`
+and the browser tools `BrowserOpen`, `BrowserRead`, `BrowserAct`, `BrowserFill`
+and `BrowserClose`, when a Chrome can be found. Web search is not a tool of
+Emma's: the provider runs it, on the same key, when the provider has one.
+<!-- /diagram -->
 
-`WebSearch` needs a Brave Search key, in `~/.emma/credentials.json` or
-`BRAVE_SEARCH_API_KEY`. Without one Emma says that tool is unavailable and
-carries on.
+Web search is not a tool of Emma's. On Anthropic the model can search through
+the API's own search tool, on the same key, and each search is billed apart from
+tokens; Emma says so at startup and prints what was searched for as it happens.
+`"web_search": false` in `~/.emma/settings.json` turns it off. On Ollama there is
+no search, and the startup line says that too.
 
 ## Budgets
 
 Every goal runs under limits, and Emma stops rather than overrunning them.
 
+<!-- diagram:readme-budgets -->
 | Flag               | Default | What it bounds                                    |
 | ------------------ | ------- | ------------------------------------------------- |
 | `--max-iterations` | 60      | model calls per goal                              |
@@ -171,6 +182,7 @@ Every goal runs under limits, and Emma stops rather than overrunning them.
 | `--timeout`        | 1800    | seconds of wall clock per goal                    |
 | `--max-kicks`      | 3       | times the loop may say "not done, continue"       |
 | `--max-context`    | 120000  | request size before the conversation is compacted |
+<!-- /diagram -->
 
 ## What it cannot do yet
 
@@ -183,7 +195,7 @@ Four things it does not do, so you do not find out by hitting them.
 - **Resume brings back the conversation, not the work.** `--resume` restores the
   transcript and the budget already spent. It re-runs nothing.
 - **Nothing lists what you could resume.** There is no `emma sessions`.
-- **Two providers.** Anthropic and Ollama. Anything speaking the OpenAI API,
+- **Only the providers named above.** Anything speaking the OpenAI API,
   OpenRouter included, is not wired up.
 
 ## Documentation

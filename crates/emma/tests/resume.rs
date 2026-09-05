@@ -78,6 +78,7 @@ async fn drive(
         budgets,
         caching: Caching::On,
         mode: Mode::Batch,
+        web_search: false,
     });
     if let Some(resumed) = resumed {
         agent = agent.resuming(resumed);

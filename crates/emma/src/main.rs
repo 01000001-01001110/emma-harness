@@ -116,15 +116,22 @@ async fn run(cli: cli::Cli) -> Result<()> {
         registry.register(Arc::new(skill) as Arc<dyn Tool>);
     }
     // The web surface, under the same rule and for the same reason. `web_tools`
-    // resolves Chrome and the Brave key *first* and returns only what can
-    // actually work: tustle-agent shipped a `web_search` that registered with no
-    // key and failed on every call, and the model had no way to learn the tool
-    // was decoration. What it left out is kept and reported below rather than
+    // resolves Chrome *first* and returns only what can actually work:
+    // tustle-agent shipped a `web_search` that registered with no key and
+    // failed on every call, and the model had no way to learn the tool was
+    // decoration. What it left out is kept and reported below rather than
     // dropped, because a capability that silently is not there is the same trap
     // one step quieter.
     //
-    // Both of these declare `reaches_network: true`, which is what makes
-    // registering them a decision rather than a default: the approval gate asks
+    // There is no search tool here any more. Search is the provider's, asked
+    // for per request (`Request::web_search`) and run on the provider's side
+    // on the provider's key, which is how every harness this one is measured
+    // against does it. The client tool this replaced needed a second vendor's
+    // credential in the credentials file for a capability the provider already
+    // sells; the owner's ruling on 2026-09-05 was that no such key comes back.
+    //
+    // `WebFetch` declares `reaches_network: true`, which is what makes
+    // registering it a decision rather than a default: the approval gate asks
     // a human for each new host, once per session. See `approval.rs`.
     //
     // It also carries the five browser session tools, which are the same
@@ -326,6 +333,35 @@ async fn run(cli: cli::Cli) -> Result<()> {
     for note in provider.startup_notes() {
         term.note(&note);
     }
+    // **Search is the provider's, on the provider's key, and the user is told
+    // so every run.** Absent means on, per `settings::Settings::web_search`.
+    // The line is disclosure rather than a gate, the same class as the
+    // `OLLAMA_HOST` note above: each search is a separate charge and the
+    // model's query leaves with the conversation, and a person who did not
+    // choose that should read it before the first call rather than on the
+    // invoice. A provider that cannot search gets the opposite line, so a
+    // `web_search: true` in settings never reads as honoured when it is not.
+    let wanted = home
+        .as_deref()
+        .map(emma::settings::load)
+        .and_then(|s| s.web_search)
+        .unwrap_or(true);
+    let web_search = wanted && kind.web_search();
+    if web_search {
+        term.note(concat!(
+            "web search is on: the model may search through the provider, on the same key, ",
+            "and each search is billed apart from tokens. `\"web_search\": false` in ",
+            "~/.emma/settings.json turns it off."
+        ));
+    } else if wanted {
+        term.note(&format!(
+            concat!(
+                "web search is not available on {}: this provider has no search of its own, ",
+                "so the model cannot look anything up."
+            ),
+            kind.name()
+        ));
+    }
     // The one cell everything that resolves a provider *late* reads — today
     // that is `Delegate` and nothing else. Written only by `/model`. See
     // `agent::Running`.
@@ -449,6 +485,7 @@ async fn run(cli: cli::Cli) -> Result<()> {
             caching: opts.caching,
             budgets,
             running: running.clone(),
+            web_search,
         },
         harness.agent_types(),
         &available,
@@ -628,6 +665,7 @@ async fn run(cli: cli::Cli) -> Result<()> {
         } else {
             Mode::Stream
         },
+        web_search,
     });
 
     // The restored conversation and counters go in here, and the loop below is
@@ -983,6 +1021,8 @@ async fn run_verification(
             budgets,
             caching: emma_llm::Caching::On,
             mode: Mode::Batch,
+            // A review reads the repository and never the web.
+            web_search: false,
         });
         let outcome = agent.run_goal(&Goal::new(emma::verify::brief(row))).await;
         let report = outcome.text.clone();

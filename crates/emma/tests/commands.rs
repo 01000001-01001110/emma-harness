@@ -113,6 +113,7 @@ impl Fixture {
             budgets,
             caching: Caching::On,
             mode: Mode::Batch,
+            web_search: false,
         })
     }
 

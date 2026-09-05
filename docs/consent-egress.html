@@ -228,9 +228,8 @@
     <code>hosts_allowed</code> is a <code>HashSet&lt;String&gt;</code> separate
     from <code>session_allowed</code>. The first fetch to <code>docs.rs</code>
     asks; every later fetch to <code>docs.rs</code> in this process does not; a
-    fetch elsewhere asks again. A host approved while running
-    <code>WebSearch</code> is approved for <code>WebFetch</code> too, because what
-    the human approved was a host.
+    fetch elsewhere asks again. A host approved under one tool is approved
+    under another, because what the human approved was a host.
   </p>
 
   <p>
@@ -242,11 +241,27 @@
     <code>Yes</code> for three calls.
     <code>a_second_host_is_a_second_question</code> queues one for two hosts and
     expects the second to be denied.
-    <code>a_grant_is_the_host_and_not_the_tool</code> approves a host under
-    <code>WebSearch</code> and then calls <code>WebFetch</code> with an empty
-    queue.
+    <code>a_grant_is_the_host_and_not_the_tool</code> approves a host under a
+    test double still named <code>WebSearch</code>, after the tool that name
+    belonged to, and then calls <code>WebFetch</code> with an empty queue.
   </p>
   <span class="src">crates/emma/src/approval.rs — Approvals::hosts_allowed; tests as named</span>
+
+  <div class="note warn">
+    <span class="h">A search the provider runs never reaches this gate</span>
+    <p>
+      Since 2026-09-05 the model can search the web through its provider rather
+      than through a tool of Emma's, and that search happens on the provider's
+      side of the wire inside the same API call. Nothing here sees it. The gate
+      asks before Emma reaches a host from this machine; a provider-side search
+      reaches no host from here, and what leaves is the model's query, to the
+      same place the whole conversation already goes. The user is told at
+      startup that search is on and how to turn it off, which is disclosure
+      rather than consent per call, because by the time the loop sees the turn
+      the search has already run. <a href="tools-web.html#search">The web
+      page</a> carries the rest.
+    </p>
+  </div>
 
   <figure>
     <div class="figwrap">

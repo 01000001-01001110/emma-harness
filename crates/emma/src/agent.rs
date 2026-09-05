@@ -651,6 +651,10 @@ pub struct Setup<'a> {
     pub budgets: Budgets,
     pub caching: Caching,
     pub mode: Mode,
+    /// Whether each request asks the provider to search the web for the
+    /// model. Resolved once from settings and the provider's own answer, so the
+    /// loop never asks a provider that cannot. See `Request::web_search`.
+    pub web_search: bool,
 }
 
 pub struct Agent<'a> {
@@ -1074,6 +1078,7 @@ impl<'a> Agent<'a> {
                 max_tokens: 32_000,
                 effort: emma_llm::Effort::XHigh,
                 caching: self.s.caching,
+                web_search: self.s.web_search,
             };
 
             let turn = match self.call_model(request).await {
@@ -1130,8 +1135,25 @@ impl<'a> Agent<'a> {
                     "billable_total_tokens": turn.usage.billable_total_tokens(),
                     "cost_tokens": cost_tokens(&turn.usage),
                     "goal_total_so_far": tokens,
+                    // Apart from the tokens, because it is billed apart from
+                    // them. Zero on every provider that searches nothing.
+                    "web_search_requests": turn.usage.server_tool_use.web_search_requests,
                 }),
             );
+            // The searches the provider ran are inside the turn as blocks this
+            // client does not model, so the transcript would show the model
+            // answering from nowhere. Say what it looked up, to the person
+            // paying for it, and write it down where a grep can find it.
+            let searched = web_searches(&turn.content);
+            if !searched.is_empty() {
+                self.s.log.append(
+                    "web_search",
+                    json!({ "turn_id": turn_id, "queries": searched }),
+                );
+                self.s
+                    .term
+                    .note(&format!("searched the web for: {}", searched.join(" | ")));
+            }
             // What the next request will carry, measured rather than guessed —
             // and it is the whole request, so it includes the system prompt and
             // the tool schemas as well as the conversation.
@@ -1192,6 +1214,21 @@ impl<'a> Agent<'a> {
             // loop spent itself.
             if self.s.spend.get() > self.s.budgets.max_tokens {
                 break Ending::Tokens;
+            }
+
+            // **A paused turn is not a stopped one.** The API can suspend a
+            // long server-side search and hand back what it has with
+            // `pause_turn`; the contract is to send that assistant message
+            // back unchanged and let it carry on. It carries no client tool
+            // call, so without this arm it would fall into the branch below
+            // and be judged as an answer: on a fresh goal that is
+            // `Ending::Answered` on a turn the model never finished, and on a
+            // worked one it is a kick appended after a message the API asked
+            // to see returned alone. Neither is what the model said. The
+            // iteration budget bounds how many times this can repeat.
+            if turn.stop_reason == "pause_turn" {
+                place(&mut query, &mut pending_turn, Vec::new());
+                continue;
             }
 
             if turn.tool_calls().is_empty() {
@@ -2091,6 +2128,30 @@ fn arrival_budget_warning(carried: i64, max_tokens: i64) -> Option<String> {
 ///
 /// Integer arithmetic, so a cache read under ten tokens weighs nothing. At the
 /// scale a budget is set in, that is not a rounding error worth a float.
+/// The queries the provider searched for in a turn, in order.
+///
+/// A `server_tool_use` block is [`ContentBlock::Passthrough`] here, because
+/// this client does not model it and must echo it back byte for byte. That is
+/// right for the wire and wrong for a person: the transcript shows text and
+/// tool calls and nothing between them. This reads the one field a human
+/// wants out of the opaque block, without pretending to type the rest.
+fn web_searches(content: &[ContentBlock]) -> Vec<String> {
+    content
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::Passthrough(v)
+                if v.get("type").and_then(Value::as_str) == Some("server_tool_use")
+                    && v.get("name").and_then(Value::as_str) == Some("web_search") =>
+            {
+                v.pointer("/input/query")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn cost_tokens(u: &emma_llm::Usage) -> i64 {
     u.input_tokens
         + (u.cache_creation_input_tokens * 5) / 4
@@ -2602,6 +2663,12 @@ mod tests {
             // field fails to compile *here*, where the weighting that has to
             // account for it is written.
             cache_read_input_tokens: 100_000,
+            // A search is not a token. It is billed per request, apart from
+            // the token bill, and stays out of this weighting on purpose:
+            // folding it in would need a token-equivalent price that changes
+            // per model, and the loop's cap is a token cap. It is logged and
+            // shown to the user instead.
+            server_tool_use: Default::default(),
         };
         // 1,000 + 100,000/10 + 500.
         assert_eq!(cost_tokens(&cached), 11_500);
@@ -2622,6 +2689,7 @@ mod tests {
             output_tokens: 0,
             cache_creation_input_tokens: 1_000,
             cache_read_input_tokens: 0,
+            server_tool_use: Default::default(),
         };
         assert_eq!(cost_tokens(&written), 1_250);
 

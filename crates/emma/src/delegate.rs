@@ -176,6 +176,9 @@ pub struct Nest {
     pub cwd: PathBuf,
     pub session_id: String,
     pub caching: Caching,
+    /// Whether the parent's requests ask the provider to search. A subagent
+    /// inherits it unchanged; see the `Setup` it builds.
+    pub web_search: bool,
     /// The *parent's* budgets, which is what a sub-budget is derived from.
     pub budgets: Budgets,
     /// The provider in force right now, for an agent type that named no model
@@ -677,6 +680,10 @@ impl Tool for Delegate {
                 // subordinate `Term` swallows prose anyway, so streaming it
                 // would be bytes nobody reads.
                 mode: Mode::Batch,
+                // Inherited: the parent's setting on the parent's provider, so
+                // a subagent can look something up exactly when its parent
+                // could have. Charged to the same meter either way.
+                web_search: self.nest.web_search,
             });
             sub.run_goal(&Goal::new(brief)).await
         };
@@ -871,7 +878,7 @@ impl DoneCheck for SubagentClaim {
 // the categories are arranged around, and it is a repair rather than an
 // original virtue: the categories are keyed on argument names, so for a while
 // any call carrying none of `file_path`/`pattern`/`command` — `WebFetch(url)`,
-// `WebSearch(query)`, `Skill`, every `Task*` — was counted in `tool_calls` and
+// the old `WebSearch(query)`, `Skill`, every `Task*` — was counted in `tool_calls` and
 // named nowhere, which reads as `files read: none` under a paragraph
 // describing five fetches. Coarseness is visible and self-correcting; a parent
 // reading `other tool calls: Frobnicate ×2` knows the record is coarse.
@@ -940,8 +947,8 @@ impl Facts {
                     // safe.** Keying on argument names means a tool naming its
                     // arguments something else falls through every probe, and
                     // until this arm existed it fell through into silence —
-                    // Emma's own `WebFetch(url)` and `WebSearch(query)` among
-                    // them, which is how five fetches footered as
+                    // Emma's own `WebFetch(url)` and the old `WebSearch(query)`
+                    // among them, which is how five fetches footered as
                     // `files read: none` over `5 tool calls`. The residual is
                     // keyed on the tool name out of the record, which is a
                     // fact the loop wrote and not knowledge of the registry.
@@ -1388,8 +1395,9 @@ mod tests {
 
     #[test]
     fn the_arguments_emmas_own_web_tools_use_reach_the_footer() {
-        // Not hypothetical: `WebFetch` takes `url` and `WebSearch` takes
-        // `query`, and neither is `file_path`/`pattern`/`command`. Before the
+        // Not hypothetical: `WebFetch` takes `url`, and the search tool this
+        // project used to ship took `query`; neither is
+        // `file_path`/`pattern`/`command`. Before the
         // probe covered them, a subagent that fetched five pages footered as
         // `files touched: none · searched for: none · commands run: none` over
         // `5 tool calls` — under-reporting the exact class of call the rest of

@@ -166,7 +166,32 @@ pub fn render_all(root: &Path) -> Result<Vec<(String, String)>> {
             "tools-trait".to_string(),
             pages::tools::tools_trait(root)?.render(),
         ),
+        // Markdown for `README.md`, not SVG for a page. Same markers, same
+        // freshness test; see `page_for` for how the name picks the file.
+        (
+            "readme-providers".to_string(),
+            pages::readme::providers(root)?,
+        ),
+        ("readme-tools".to_string(), pages::readme::tools(root)?),
+        ("readme-budgets".to_string(), pages::readme::budgets(root)?),
     ])
+}
+
+/// The file a generated block is written into.
+///
+/// `docs/{name}.html` for everything, except that a name starting with
+/// `readme-` goes to `README.md`. The prefix is the seam rather than a second
+/// registry because there is one list of names, one `stale`, one `write_all`
+/// and one test, and a second registry would need a second of each -- or a
+/// flag threaded through all four -- to say the one thing the name already
+/// says. A README block is a diagram that happens to be Markdown; the
+/// generator neither knows nor cares, since `inject` never reads the body.
+pub fn page_for(root: &Path, name: &str) -> std::path::PathBuf {
+    if name.starts_with("readme-") {
+        root.join("README.md")
+    } else {
+        root.join("docs").join(format!("{name}.html"))
+    }
 }
 
 /// Replace the marked block for `name` in `page`, returning the new text.
@@ -221,7 +246,7 @@ pub fn inject(page: &str, name: &str, svg: &str) -> Result<String> {
 pub fn write_all(root: &Path) -> Result<Vec<String>> {
     let mut changed = Vec::new();
     for (name, svg) in render_all(root)? {
-        let page = root.join("docs").join(format!("{name}.html"));
+        let page = page_for(root, &name);
         let before = std::fs::read_to_string(&page)
             .with_context(|| format!("{} carries the {name} diagram", page.display()))?;
         let after = inject(&before, &name, &svg)
@@ -239,9 +264,11 @@ pub fn write_all(root: &Path) -> Result<Vec<String>> {
 pub fn stale(root: &Path) -> Result<Vec<String>> {
     let mut out = Vec::new();
     for (name, svg) in render_all(root)? {
-        let page = root.join("docs").join(format!("{name}.html"));
-        let before = std::fs::read_to_string(&page)?;
-        let after = inject(&before, &name, &svg)?;
+        let page = page_for(root, &name);
+        let before = std::fs::read_to_string(&page)
+            .with_context(|| format!("{} carries the {name} block", page.display()))?;
+        let after = inject(&before, &name, &svg)
+            .with_context(|| format!("injecting {name} into {}", page.display()))?;
         if before != after {
             out.push(name);
         }
@@ -313,5 +340,36 @@ mod tests {
         let once = inject(PAGE, "x", "<svg>new</svg>").expect("first");
         let twice = inject(&once, "x", "<svg>new</svg>").expect("second");
         assert_eq!(once, twice);
+    }
+
+    /// **If this breaks:** a README block is looked for under `docs/`, or a
+    /// docs diagram is written into the README. Every name that existed before
+    /// the README joined must still resolve to `docs/`, which is the second
+    /// assertion.
+    #[test]
+    fn a_readme_prefixed_name_targets_the_readme_and_nothing_else_moves() {
+        let root = Path::new("r");
+        assert_eq!(page_for(root, "readme-tools"), root.join("README.md"));
+        assert_eq!(
+            page_for(root, "tools-edit"),
+            root.join("docs").join("tools-edit.html")
+        );
+        assert_eq!(
+            page_for(root, "architecture"),
+            root.join("docs").join("architecture.html")
+        );
+    }
+
+    /// **If this breaks:** a Markdown block is written with an indent, which
+    /// turns a table row into a code line. README markers sit in column zero,
+    /// and this pins that a zero-indent marker gives a zero-indent body.
+    #[test]
+    fn a_markdown_block_at_column_zero_stays_at_column_zero() {
+        let page = "# Title\n\n<!-- diagram:readme-x -->\nold\n<!-- /diagram -->\n\nafter\n";
+        let out = inject(page, "readme-x", "| a | b |\n| - | - |").expect("markers");
+        assert_eq!(
+            out,
+            "# Title\n\n<!-- diagram:readme-x -->\n| a | b |\n| - | - |\n<!-- /diagram -->\n\nafter\n"
+        );
     }
 }

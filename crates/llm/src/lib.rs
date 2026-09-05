@@ -218,6 +218,27 @@ pub struct Request {
     /// no effort parameter.
     pub effort: Effort,
     pub caching: Caching,
+    /// Whether the provider may search the web on the model's behalf, using
+    /// its own search tool, on its own side of the wire.
+    ///
+    /// **An ask, like `effort` and `max_tokens` above, and the provider decides
+    /// what it means.** Anthropic answers it by adding its server-side
+    /// `web_search` tool to the request; nothing runs on this machine, no host
+    /// is reached from here, and the model's queries go to the same place the
+    /// conversation already goes. Ollama has no equivalent and ignores the
+    /// flag, so a request that asks on a local model gets no search and no
+    /// error. The loop sets this from the user's settings; a bare
+    /// [`Request::new`] leaves it off, because a test or a sub-call that did
+    /// not ask for a search must not be billed for one.
+    ///
+    /// This replaced a `WebSearch` client tool keyed on a search vendor's own
+    /// API key. Every harness this project compares itself to has search as a
+    /// provider-side tool paid for by the provider key the user already
+    /// holds, and a second vendor's credential in `~/.emma/credentials.json`
+    /// was one more thing to leak for a capability the provider already
+    /// sells. Owner ruling, 2026-09-05: no search-vendor key in this
+    /// repository again.
+    pub web_search: bool,
 }
 
 impl Request {
@@ -237,7 +258,13 @@ impl Request {
             max_tokens: 32_000,
             effort: Effort::XHigh,
             caching: Caching::On,
+            web_search: false,
         }
+    }
+
+    pub fn with_web_search(mut self, on: bool) -> Self {
+        self.web_search = on;
+        self
     }
 
     pub fn with_history(mut self, history: Vec<Message>) -> Self {
@@ -293,6 +320,23 @@ pub struct Usage {
     /// Input tokens served from the cache on this call (billed at 0.1×).
     #[serde(default)]
     pub cache_read_input_tokens: i64,
+    /// What the provider did on its own side of the wire during this call.
+    /// Defaulted, because most providers report nothing here and a provider
+    /// that never searches must not read as "unknown".
+    #[serde(default)]
+    pub server_tool_use: ServerToolUse,
+}
+
+/// Work the provider performed for the model inside one call, billed apart
+/// from tokens. Nested to match the wire, where Anthropic puts it under
+/// `usage.server_tool_use`, so the batch decoder needs no special case.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerToolUse {
+    /// Web searches the provider ran during this call. Each is a separate
+    /// charge from the tokens, which is why it is counted here and shown to the
+    /// user rather than folded into the token spend.
+    #[serde(default)]
+    pub web_search_requests: i64,
 }
 
 impl Usage {
@@ -709,6 +753,7 @@ mod tests {
             output_tokens: 17,
             cache_creation_input_tokens: 3_200,
             cache_read_input_tokens: 29_000,
+            server_tool_use: Default::default(),
         };
         assert_eq!(usage.billable_input_tokens(), 41 + 3_200 + 29_000);
         assert_eq!(usage.billable_total_tokens(), 41 + 3_200 + 29_000 + 17);

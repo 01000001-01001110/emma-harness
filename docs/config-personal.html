@@ -467,9 +467,10 @@ pub fn stored_providers(home: &amp;Path) -&gt; Vec&lt;String&gt; {
   <div class="note warn">
     <span class="h">The scar: a write that deleted a key it never knew about</span>
     <p>
-      This file holds more than one program's secrets. The web tools keep
-      <code>brave_search_api_key</code> at its top level, beside the provider
-      entries. A write that serialised a fresh document, the obvious
+      This file can hold more than one program's secrets. A search tool kept
+      its key at the top level, beside the provider entries, until that tool
+      left on 2026-09-05; the file it wrote is still on disks. A write that
+      serialised a fresh document, the obvious
       implementation, deleted whichever keys the caller did not happen to know
       about, silently, and the symptom arrived hours later as a tool that had
       stopped being registered.
@@ -481,11 +482,12 @@ pub fn stored_providers(home: &amp;Path) -&gt; Vec&lt;String&gt; {
       is how the other keys are lost.
       <span class="chip cert">certified</span>: a scratch
       <code>credentials.json</code> holding
-      <code>{"providers":{"anthropic":{"api_key":"sk-a"}},"brave_search_api_key":"bk-1"}</code>,
+      <code>{"providers":{"anthropic":{"api_key":"sk-a"}},"other_key":"bk-1"}</code>,
       after <code>emma set-provider anthropic</code> with a new key on stdin,
       reads
-      <code>{"brave_search_api_key":"bk-1","providers":{"anthropic":{"api_key":"sk-newkey"}}}</code>.
-      Release binary, 2026-08-16.
+      <code>{"other_key":"bk-1","providers":{"anthropic":{"api_key":"sk-newkey"}}}</code>.
+      Release binary, 2026-08-16. The field was the search tool's when this was
+      observed; its name is not what the observation proves.
     </p>
   </div>
 
@@ -503,6 +505,95 @@ api key        found (ANTHROPIC_API_KEY)
 api key        NOT FOUND — …\fakehome\.emma\credentials.json is not valid credentials JSON:
 expected ident at line 1 column 2</code></pre>
   <span class="chip cert">certified</span>: release binary, 2026-08-16. The first is this repository with <code>ANTHROPIC_API_KEY</code> exported; the hour that second line saves is a key stored, a key exported, and no way to tell which one the 401 came from.
+
+  <h2 id="speech">Reading an answer aloud</h2>
+
+  <p>
+    <code>crates/emma/src/speech.rs</code> is output only: no capture, no
+    microphone, nothing leaving the machine, and off unless asked for. It landed
+    from a branch that is macOS-only through <code>say(1)</code>, and the owner
+    runs Windows, so it either arrived with a real second implementation or as a
+    setting that says the feature is unavailable here. It has the second
+    implementation: Windows speaks through
+    <code>System.Speech.Synthesis.SpeechSynthesizer</code>, driven by a fixed
+    script handed to <code>powershell.exe</code>.
+    <span class="chip cert">certified</span>: <code>Backend</code> is an enum
+    with <code>Say</code> and <code>Sapi</code>, carried as a value rather than
+    read from <code>cfg!</code> at each use, so every decision below it is
+    exercised for both platforms by tests running on either one. Only
+    <code>backend</code> is <code>cfg</code>-dependent and it is one expression.
+  </p>
+  <span class="src">crates/emma/src/speech.rs — module doc, <code>Backend</code>, <code>backend</code>, <code>speak</code>, <code>plan_utterance</code></span>
+
+  <p>
+    Nothing is spawned through a shell on either platform. The text of an answer
+    is arbitrary model output, and it reaches the synthesiser on stdin rather
+    than as an argument, so there is no argv element for it to be, no flag for a
+    leading <code>-</code> to become, and no command line for it to be split out
+    of. On Windows the voice name travels on stdin too.
+    <code>plan_utterance</code> is the one place that decides what a child
+    process is handed. A failure is a notice and never an abort: a missing
+    binary, a voice this machine does not have, a non-zero exit. The answer is
+    already on screen and this is decoration, so nothing in the file returns an
+    error to the agent loop, and <code>speak</code> spawns and returns while a
+    thread reaps.
+  </p>
+
+  <p>
+    Two decisions came across from the branch rather than being re-derived. A
+    voice is stored by name, so a machine without it falls back to the system
+    default and a synced settings file still starts. And an enhanced voice is a
+    recommendation in the listing rather than a silent substitution, because
+    preferring one would talk a user out of the voice they chose in their own
+    accessibility settings. There is a cut on how much is read: the screen
+    already has the whole answer, so the cap exists to stop a very long one
+    becoming a monologue rather than to keep the spoken part short.
+  </p>
+
+  <p>
+    Neither synthesiser is looked for on <code>PATH</code>, which departs from
+    <code>usertools</code>' PATHEXT-aware probe. That module resolves programs
+    the user names, an editor or a shell, so it has to search the way the user's
+    shell would. Both programs here are parts of their operating system at fixed
+    locations, and a <code>powershell.exe</code> somebody dropped earlier on
+    <code>PATH</code> is not what the owner asked for. Each is an absolute path
+    checked with one <code>exists</code>.
+  </p>
+
+  <p>
+    What the Windows arm cannot reach is stated rather than papered over.
+    <code>System.Speech</code> sees only the SAPI5 voices registered under
+    <code>HKLM\SOFTWARE\Microsoft\Speech\Voices\Tokens</code>, and the more
+    natural OneCore voices live under a different key and are invisible to it.
+    Measured on the owner's box on 2026-08-26,
+    <code>GetInstalledVoices()</code> returned two, <code>Microsoft David
+    Desktop</code> and <code>Microsoft Zira Desktop</code>, while the OneCore
+    key held three tokens, so a voice installed on that machine could not be
+    offered. Reaching OneCore needs the WinRT synthesiser, which returns a
+    stream the caller must play, and that is an audio pipeline this module does
+    not have. A consequence follows: no Windows voice is ever enhanced in the
+    sense the macOS listing means, so the recommendation half of the branch's
+    decision has nothing to recommend here and says so instead of inventing a
+    ranking.
+    <span class="chip obs">observed</span>: one reading of one machine's voice
+    registry on 2026-08-26, recorded in the module. Another Windows box could
+    hold a different set, and nothing re-runs the check.
+  </p>
+
+  <div class="note warn">
+    <span class="h">no key on this page turns it on</span>
+    <p>
+      Nothing outside the module references it. There is no
+      <code>settings.json</code> key documented on this page that reaches it,
+      and no call site in the loop or the terminal.
+      <span class="chip cert">certified</span>:
+      <code>grep -rn "speech" crates/emma/src --include=*.rs</code> outside
+      <code>speech.rs</code> matches the <code>pub mod</code> line in
+      <code>lib.rs</code> and three comments that use the word in its ordinary
+      sense. So this section describes a capability the crate has and a run does
+      not.
+    </p>
+  </div>
 
   <h2 id="notverified">What this page did not settle</h2>
 

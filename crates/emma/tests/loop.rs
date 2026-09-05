@@ -23,7 +23,9 @@ use emma_llm::{Caching, Mode};
 use emma_tool_api::Registry;
 use serde_json::json;
 
-use support::{call, cut_off, empty_harness, harness_denying, registry, text, Fake, Say, TestTool};
+use support::{
+    call, cut_off, empty_harness, harness_denying, paused, registry, text, Fake, Say, TestTool,
+};
 
 fn budgets() -> Budgets {
     Budgets {
@@ -101,6 +103,7 @@ async fn drive_goals(
         budgets,
         caching: Caching::On,
         mode: Mode::Batch,
+        web_search: false,
     });
     let mut out = Vec::new();
     for goal in goals {
@@ -120,6 +123,57 @@ fn goal() -> Goal {
 // The loop's first property: no failure class ends a goal. These three cover
 // the failure reaching the model at all, and both halves of the memo rule.
 // ---------------------------------------------------------------------------
+
+/// A provider that pauses a search mid-turn hands back a turn with no text and
+/// no client tool call, and asks to see it again unchanged. Before this test
+/// the loop read that as the model's answer: on a fresh goal it ended
+/// `Answered` after one call, and the search the user was paying for never
+/// finished.
+///
+/// **If this breaks:** either the paused turn is judged as an answer again,
+/// or it is sent back with a kick appended after it, which is not the message
+/// the provider asked to see.
+#[tokio::test]
+async fn a_paused_turn_is_sent_back_unchanged_and_is_not_an_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let fake = Fake::new(vec![paused(), text("found it.\n\nGOAL COMPLETE")]);
+    let log = SessionLog::open(dir.path(), "s").unwrap();
+
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![]),
+        &Approvals::new(Gate::Ask, Asker::Scripted(Default::default())),
+        &fake,
+        budgets(),
+        &goal(),
+        &log,
+    )
+    .await;
+
+    assert_eq!(
+        out.ending,
+        Ending::Done,
+        "the pause was taken as the answer"
+    );
+    assert_eq!(fake.calls(), 2, "the paused turn was never sent back");
+    // The provider's block went back exactly as it came, on the assistant
+    // side, and nothing was appended after it: no kick, no user message.
+    let messages = fake.last_messages();
+    let last = messages.last().expect("the second request carried history");
+    let rendered = last.content.to_string();
+    assert!(
+        rendered.contains("server_tool_use"),
+        "the paused turn is not the last thing the provider saw: {rendered}"
+    );
+    assert!(
+        !fake
+            .transcript()
+            .contains("The goal is not recorded as done"),
+        "a kick was appended to a paused turn"
+    );
+}
 
 /// The property the whole crate is arranged around. Delete this and a
 /// regression that turns a `ToolError` back into an early return is invisible:
@@ -302,6 +356,7 @@ async fn a_turn_cut_off_at_the_output_limit_is_reported() {
         budgets: budgets(),
         caching: Caching::On,
         mode: Mode::Batch,
+        web_search: false,
     });
     agent.run_goal(&goal()).await;
 
@@ -363,6 +418,7 @@ async fn an_interrupt_reaches_a_tool_that_is_already_running() {
         budgets: budgets(),
         caching: Caching::On,
         mode: Mode::Batch,
+        web_search: false,
     });
 
     let started = std::time::Instant::now();
@@ -1430,6 +1486,7 @@ async fn a_ctrl_c_during_a_model_call_ends_the_goal_rather_than_hanging() {
         budgets: budgets(),
         caching: Caching::On,
         mode: Mode::Batch,
+        web_search: false,
     });
 
     let out = tokio::time::timeout(Duration::from_secs(5), agent.run_goal(&goal()))
@@ -1481,6 +1538,7 @@ async fn a_ctrl_c_during_a_model_call_ends_the_goal_rather_than_hanging() {
         budgets: budgets(),
         caching: Caching::On,
         mode: Mode::Batch,
+        web_search: false,
     });
     assert!(
         tokio::time::timeout(Duration::from_millis(400), agent.run_goal(&goal()))
@@ -1549,6 +1607,7 @@ async fn a_cancelled_tool_is_recorded_as_cancelled_and_a_finished_one_is_not() {
             budgets: budgets(),
             caching: Caching::On,
             mode: Mode::Batch,
+            web_search: false,
         });
         let out = agent.run_goal(&goal()).await;
         let kinds = SessionLog::read(log.path())
@@ -1667,6 +1726,7 @@ async fn an_ending_on_a_tool_call_turn_still_reports_the_last_answer() {
             calls: vec![("Fine".into(), json!({ "x": "1" }))],
             tokens: 10,
             truncated: false,
+            paused: false,
             fail: None,
         },
         // ...and then a turn that is only tool calls. This is the one the
@@ -1833,6 +1893,7 @@ async fn compaction_fires_on_the_measured_request_rather_than_the_estimate() {
         budgets: b,
         caching: Caching::On,
         mode: Mode::Batch,
+        web_search: false,
     });
     agent.run_goal(&Goal::new("first goal")).await;
     // Nothing has been compacted yet: within the first goal there is no
@@ -1910,6 +1971,7 @@ async fn a_context_cap_of_zero_is_off_rather_than_a_cap_of_zero() {
             budgets: b,
             caching: Caching::On,
             mode: Mode::Batch,
+            web_search: false,
         });
         agent.run_goal(&Goal::new("first goal")).await;
         agent.run_goal(&Goal::new("second goal")).await;

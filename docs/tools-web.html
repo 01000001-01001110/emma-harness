@@ -83,13 +83,14 @@
 </nav>
 
 <p class="lede">
-  <code>WebSearch</code> returns places to look. <code>WebFetch</code> renders
-  one page in real Chrome and throws the browser away. The five
-  <code>Browser*</code> tools keep it, which is a different capability: inside a
-  session the model acts as the user, on a page that may hold their login.
+  <code>WebFetch</code> renders one page in real Chrome and throws the browser
+  away. The five <code>Browser*</code> tools keep it, which is a different
+  capability: inside a session the model acts as the user, on a page that may
+  hold their login. Searching is not on this page because it is not a tool of
+  Emma's any more; the section below says whose it is.
 </p>
 
-<h2 id="registration">Neither is registered unless it can work</h2>
+<h2 id="registration">Nothing is registered unless it can work</h2>
 
 <pre><code><span class="k">pub fn</span> web_tools() -&gt; WebSurface {
     <span class="k">let mut</span> tools: Vec&lt;Arc&lt;<span class="k">dyn</span> Tool&gt;&gt; = Vec::new();
@@ -98,10 +99,6 @@
     <span class="k">match</span> fetch::WebFetch::detect() {
         Ok(t) =&gt; tools.push(Arc::new(t)),
         Err(why) =&gt; skipped.push(format!(<span class="s">"WebFetch is not available: {why}"</span>)),
-    }
-    <span class="k">match</span> search::WebSearch::detect() {
-        Ok(t) =&gt; tools.push(Arc::new(t)),
-        Err(why) =&gt; skipped.push(format!(<span class="s">"WebSearch is not available: {why}"</span>)),
     }</code></pre>
 
 <p>
@@ -135,89 +132,119 @@
   </p>
 </div>
 
-<h2 id="websearch"><code>WebSearch</code></h2>
-
-<div class="tw">
-  <table>
-    <thead><tr><th>Argument</th><th>Default</th><th>Ceiling</th></tr></thead>
-    <tbody>
-      <tr><td><code>query</code> <em>required</em></td><td>none</td><td>whitespace-only is <code>WebSearch.query is empty</code></td></tr>
-      <tr><td><code>count</code></td><td class="num">10</td><td class="num">20, Brave's own per-request ceiling</td></tr>
-    </tbody>
-  </table>
-</div>
+<h2 id="search">Search is the provider's</h2>
 
 <p>
-  Twenty is Brave's limit rather than a preference. Asking for more is silently
-  clamped by the API, which would make the count in the result disagree with the
-  request. <code>read_only: true</code>, <code>reaches_network: true</code>,
-  <code>idempotent: true</code>.
+  There was a <code>WebSearch</code> tool here until 2026-09-05. It asked a
+  search index over a plain JSON API, returned titles, URLs and one-line
+  snippets, and refused to register without a key so the model never saw a
+  tool that could not work. It was a good tool. What it cost was a second
+  vendor's credential in <code>~/.emma/credentials.json</code>, for a capability
+  the model's own provider sells on the key I already hold.
 </p>
 
 <p>
-  The key travels in an <code>X-Subscription-Token</code> header and never in
-  the query string, because a key in a URL ends up in every proxy log between
-  here and Brave. It is resolved once at construction from the environment then
-  <code>~/.emma/credentials.json</code>, never the project directory, and on
-  unix a credentials file whose mode allows group or other access is refused
-  rather than warned about.
+  Every harness this project measures itself against does search the other
+  way: the provider runs it, on its side of the wire, inside the same API call,
+  and bills it with the call. Claude Code's search is Anthropic's server-side
+  <code>web_search</code> tool. Codex's is OpenAI's. Nobody pastes a search
+  vendor's key into either. I decided that no such key comes back to this
+  repository, and the tool went with it. The module is in the history under
+  <code>tools/web/src/search.rs</code>.
 </p>
-<span class="src">tools/web/src/credentials.rs — <code>resolve</code>, <code>permissions_ok</code></span>
 
-<h3>Status into the taxonomy the model routes on</h3>
+<h3>What Emma sends instead</h3>
 
-<div class="tw">
-  <table>
-    <thead><tr><th>Status</th><th>Class</th><th>What the caller does next</th></tr></thead>
-    <tbody>
-      <tr><td>401, 403</td><td><code>Unavailable</code></td><td>Stop and tell a human. The message names <code>BRAVE_SEARCH_API_KEY</code> and the credentials file, never the key.</td></tr>
-      <tr><td>422</td><td><code>BadArguments</code></td><td>Rewrite the query. Brave answers a malformed query with 422 rather than an empty result set, so this really is the arguments.</td></tr>
-      <tr><td>429</td><td><code>Failed</code></td><td>Try again; the message says the condition is temporary.</td></tr>
-      <tr><td>anything else</td><td><code>Failed</code></td><td>The body is flattened and clipped to 300 characters.</td></tr>
-    </tbody>
-  </table>
-</div>
+<p>
+  <code>Request</code> carries a <code>web_search: bool</code>, an ask of the
+  same kind as <code>effort</code> and <code>max_tokens</code>: the loop says
+  what it wants and the provider decides what that means. Anthropic answers it
+  by appending one entry to the <code>tools</code> array, after every client
+  tool, so the cached prefix is the registry's own bytes followed by one
+  constant:
+</p>
+
+<pre><code>{ <span class="k">"type"</span>: <span class="s">"web_search_20250305"</span>, <span class="k">"name"</span>: <span class="s">"web_search"</span>, <span class="k">"max_uses"</span>: 5 }</code></pre>
+<span class="src">crates/llm/src/anthropic.rs &mdash; <code>web_search_tool</code>, <code>render</code>; crates/llm/src/lib.rs &mdash; <code>Request::web_search</code></span>
 
 <p>
   <span class="chip test">tested</span>
-  <a href="https://github.com/01000001-01001110/emma-harness/blob/master/tools/web/src/fetch.rs">tools/web/src/fetch.rs</a>
-  <code>status_codes_land_in_the_right_class</code> walks all five, and
-  <code>a_rejected_key_never_appears_in_the_message</code> asserts the env var
-  name is present. Collapsing any two classes sends the model to retry the one
-  thing that cannot work.
-</p>
-<span class="src">tools/web/src/search.rs — <code>classify_status</code></span>
-
-<h3>Places to look, not an answer</h3>
-
-<p>
-  Zero results is <code>Ok</code>, and the content says so in words: <code>No
-  results. The query found nothing — this is an answer, not a failure.</code>
-  Brave sometimes omits the <code>web</code> block entirely rather than sending
-  an empty array, and both shapes take that branch. Every non-empty result opens
-  with a standing sentence: <code>These are places to look, not an answer. The
-  snippets are the search engine's summaries; use WebFetch on a URL before
-  relying on what it says.</code>
+  <code>a_request_that_asks_to_search_carries_the_server_tool_last</code>
+  reads the body a stub server received and asserts that entry is last;
+  <code>a_request_that_does_not_ask_carries_no_server_tool</code> asserts a
+  bare request offers nothing. The version string is the whole contract and is
+  the basic one on purpose: the two later versions default to running the
+  search from inside code execution, and a model without programmatic tool
+  calling answers that default with a 400. Ollama has no equivalent, ignores
+  the flag, and <code>ProviderKind::web_search</code> says so, which is what
+  lets the startup line tell the truth on either provider.
 </p>
 
-<p>
-  Snippets arrive as HTML, because Brave wraps matched terms in
-  <code>&lt;strong&gt;</code>. <code>strip_markup</code> removes tags first and
-  decodes entities second, so an entity-encoded bracket in the page's own text
-  survives as a character instead of being re-read as the start of a tag. The
-  tag stripper is a two-state scan rather than a regex, so an unbalanced
-  <code>&lt;</code> swallows the rest of the string; the alternative is a parser
-  for a field that exists to bold three words.
-</p>
-<span class="src">tools/web/src/search.rs — <code>render</code>, <code>strip_markup</code></span>
+<h3>What comes back, and what the loop does with it</h3>
 
 <p>
-  <code>network_target</code> takes the host from <code>base_url</code> rather
-  than a constant, so a run pointed at a loopback stub gates on the stub. Its
-  <code>detail</code> is <code>search for: {query}</code>, verbatim, because the
-  query <em>is</em> the thing leaving the machine and a prompt that names a host
-  without saying what is being sent there cannot distinguish a search for a
-  crate name from a search for the contents of a file.
+  The search happens inside the call. The turn arrives with the provider's own
+  blocks in it, <code>server_tool_use</code> carrying the query and
+  <code>web_search_tool_result</code> carrying encrypted results, and this
+  client keeps both as <code>ContentBlock::Passthrough</code>: it does not model
+  them, and it echoes them back byte for byte, because the API rejects a
+  continuation that lost or altered one. That was already true before search
+  existed; the golden-body test in <code>anthropic.rs</code> has carried a
+  <code>server_tool_use</code> block since the passthrough variant was written.
+</p>
+
+<p>
+  Two things are new in the loop. It reads the query out of each opaque block
+  and says <em>searched the web for: &hellip;</em> on the terminal, and writes a
+  <code>web_search</code> record to the session file, because a transcript that
+  shows text and tool calls and nothing between them would show the model
+  answering from nowhere. And it handles <code>pause_turn</code>: the API can
+  suspend a long search and hand the turn back unfinished, asking to see it
+  again unchanged. That turn has no text and no client tool call, and before
+  the arm existed the loop read it as the model's answer.
+  <span class="chip test">tested</span>
+  <code>a_paused_turn_is_sent_back_unchanged_and_is_not_an_answer</code> scripts
+  a pause and then a completion, and asserts the goal ended <code>Done</code>
+  after two calls with the provider's block still last in what it saw.
+</p>
+<span class="src">crates/emma/src/agent.rs &mdash; <code>run_goal</code>, <code>web_searches</code></span>
+
+<h3>What it costs, and who is told</h3>
+
+<p>
+  Each search is a separate charge from the tokens, and the count comes back
+  under <code>usage.server_tool_use.web_search_requests</code>. The loop writes
+  it on every <code>model_call</code> record and keeps it out of the token
+  weighting, since a search has no token-equivalent price and the loop's cap is
+  a token cap.
+  <span class="chip test">tested</span>
+  <code>the_search_count_is_read_from_under_server_tool_use</code> and
+  <code>the_search_count_survives_a_stream</code> cover both decoders.
+</p>
+
+<p>
+  <strong>Absent means on.</strong> <code>"web_search": false</code> in
+  <code>~/.emma/settings.json</code> turns it off; nothing else does. Every run
+  on Anthropic starts with a line saying search is on, that it is billed apart
+  from tokens, and how to turn it off. A run on Ollama starts with a line
+  saying search is not available there. This is disclosure and not a gate: the
+  approval gate asks before Emma reaches a host from this machine, and a search
+  the provider runs on its own side reaches nothing from here. What leaves is
+  the model's query, and it leaves to the same place the conversation already
+  goes.
+</p>
+<span class="src">crates/emma/src/settings.rs &mdash; <code>web_search</code>; crates/emma/src/main.rs &mdash; the startup note</span>
+
+<p>
+  <span class="chip unv">unverified</span>: no goal has run a real search
+  through this path yet. The request shape is taken from the tool's own
+  reference, read on 2026-09-05, and the decoders are exercised against bodies
+  written from that reference. A goal that asks a question only the web can
+  answer, run on Anthropic with search on, would settle it, and the session
+  file's <code>web_search</code> record is where the evidence would land. An
+  organisation that has turned search off in the console gets a 400 saying so
+  rather than a result block, and the loop surfaces that as the provider's own
+  message; nobody has provoked that either.
 </p>
 
 <h2 id="webfetch"><code>WebFetch</code></h2>
@@ -761,6 +788,127 @@
   surprise as a credentials file in the repository being read. So the message is
   wrong about the remedy rather than about the restriction.
 </p>
+
+<h2 id="vendored">The vendored files, named</h2>
+
+<p>
+  The admission below stands: the four <code>chromehand</code> modules are
+  upstream code and the rest of this page takes their behaviour on the
+  surrounding code's word. What follows is a shallow read of each one, enough to
+  say what it is, and it does not turn any claim elsewhere on this page into a
+  checked claim.
+</p>
+
+<p>
+  <code>tools/web/src/chromehand/digest.rs</code> is the digest primitive:
+  render one page in the shared Chrome, run a deterministic in-page extraction,
+  and assemble the output contract. No model anywhere in it. Every extraction is
+  a DOM walk, and the extraction itself is one long string of JavaScript, the
+  largest single thing in the crate, returning meta, boilerplate-stripped main
+  text, structured data from JSON-LD and tables, and an inventory of forms,
+  fields, buttons and links each carrying a stable selector for later use. The
+  comments inside that string are scars: a truncated selector path that clicked
+  the wrong element, hidden elements whose selectors could not be acted on, page
+  chrome that ate the whole link budget before the article appeared. Every
+  section is bounded, because a digest that does not fit a context window is not
+  a digest.
+  <span class="chip cert">certified</span>:
+  <code>DEFAULT_TIMEOUT_MS</code> is 45,000 and
+  <code>DEFAULT_MAX_TEXT_CHARS</code> is 8,000, both declared in that file.
+</p>
+<span class="src">tools/web/src/chromehand/digest.rs — module doc, <code>DIGEST_JS</code>, <code>DEFAULT_TIMEOUT_MS</code>, <code>DEFAULT_MAX_TEXT_CHARS</code></span>
+
+<p>
+  <code>tools/web/src/chromehand/actions.rs</code> holds the session action
+  verbs: navigate, back and forward, wait-for, click, type, select, screenshot,
+  and an in-session digest. Policy splits them in two. The read verbs follow the
+  ordinary URL policy, and the interaction verbs additionally require a
+  user-owned allowlist, because reading the web is ordinary and acting on it is
+  opt-in. Two refusals are structural rather than configurable:
+  <code>click</code> refuses submit-type controls, since submission is its own
+  verb, and <code>type</code> refuses password fields, so the action vocabulary
+  has no code path into credentials. The file also carries a selector resolver
+  written as JavaScript rather than Rust, because a CSS selector cannot cross a
+  shadow boundary or an iframe document, and the digest emits two delimiters of
+  its own that this resolves back.
+</p>
+<span class="src">tools/web/src/chromehand/actions.rs — module doc, <code>RESOLVE_JS</code>, <code>selector_needs_in_page</code></span>
+
+<p>
+  <code>tools/web/src/chromehand/forms.rs</code> is form extraction and filling.
+  Extraction deepens the digest's field inventory with real label resolution,
+  fieldset grouping, radio and checkbox groups collapsed into one logical field
+  with options, ARIA custom widgets, and wizard-step signals, all by DOM walk
+  with nothing inferred by a model. Filling types like a user, with focus and
+  key events so page validation fires, then re-reads every targeted field from
+  the live DOM and reports what was requested against what the field now
+  contains. It has no submit path and refuses password fields structurally.
+  Submit is a separate verb behind a two-key rule: the calling agent passes a
+  flag and the user has set a key in a config file no agent may edit on their
+  behalf. Either key missing and it exits naming the one that is missing.
+  Without the flag, submit is an observe mode that requires a headful session,
+  focuses the window, and waits for a human to click.
+  <span class="chip unv">unverified</span> The two-key rule is read off this
+  module's own doc. Whether Emma's tools can reach the submit path at all was
+  not traced here, and the page's own account of the browser tools says nothing
+  submits a form. Following the call graph from Emma's tool surface into this
+  file would settle it.
+</p>
+<span class="src">tools/web/src/chromehand/forms.rs — module doc</span>
+
+<p>
+  <code>tools/web/src/chromehand/session.rs</code> makes Chrome itself the
+  session daemon, with no custom IPC server. Opening a session spawns a detached
+  Chrome with an ephemeral CDP port and an isolated profile, records the id,
+  pid, websocket URL and target in a JSON file under
+  <code>.browser-miner/</code>, and exits. Every later verb reconnects over that
+  websocket, acts on the recorded page target, and disconnects, so the page and
+  its state persist between commands. A session id becomes a path component, so
+  it is constrained to hex before any path is built from it, and every read and
+  write goes through that check. The security note is recorded in every session
+  file rather than only in the source: a live session's CDP websocket is
+  unauthenticated on localhost, so while it exists any local process can puppet
+  that browser. Profiles are isolated and throwaway, and a session not contacted
+  for its TTL is killed on the next contact.
+  <span class="chip cert">certified</span>: <code>SESSION_DIR</code> is
+  <code>.browser-miner</code> and <code>DEFAULT_SESSION_TTL_SECS</code> is
+  <code>30 * 60</code>, both declared in that file, and the warning string is a
+  constant written into the record.
+</p>
+<span class="src">tools/web/src/chromehand/session.rs — module doc, <code>SESSION_DIR</code>, <code>DEFAULT_SESSION_TTL_SECS</code>, <code>validate_id</code></span>
+
+<p>
+  <code>tools/web/src/bin/browser-miner.rs</code> is the standalone CLI over
+  this fork: argv in, one JSON object on stdout, an exit code for the verdict.
+  Upstream had only this; here the work lives in the library and the binary is
+  the thin shell that turns argv into a call and an error back into an exit
+  code, kept so standalone use still works and so the vendored integration tests
+  can exercise the whole stack through a real process. The exit codes are
+  upstream's, unchanged, because 22 integration tests assert them directly:
+  <code>0</code> is a result including honest negatives such as a blocked page,
+  a rendered 404 or a timed-out wait; <code>2</code> is bad input, a policy
+  refusal or an expired session; <code>3</code> is browser failure. That is the
+  only place in the crate where those integers still exist, and the library
+  states the same taxonomy as an error type. One thing the CLI does not share
+  with Emma's tools: it loads policy itself, keeping upstream's fall back to an
+  allowlist file under the process's working directory, which is right for a
+  program a user runs from their own project and wrong for a library. Two
+  upstream features went with the fork, a batch verify harness and the job-board
+  adapters.
+</p>
+<span class="src">tools/web/src/bin/browser-miner.rs — module doc, <code>quit</code>, <code>MinerError</code></span>
+
+<p>
+  <code>tools/web/src/args.rs</code> is the argument reader, a copy of the
+  subset this crate needs rather than a dependency on
+  <code>emma-tools-fs</code>. The alternative would make a crate that cannot
+  write to disk depend on the entire filesystem tool surface, <code>Bash</code>
+  included, to borrow four helpers. The cost of the copy is that a change to the
+  phrasing must be made twice, and the phrasing is what the model learns, so a
+  divergence would be visible immediately rather than silently. Unknown keys are
+  refused rather than ignored, for the same reason the other two copies give.
+</p>
+<span class="src">tools/web/src/args.rs — module doc, <code>deny_unknown</code>, <code>object</code></span>
 
 <h2 id="unverified">What is not verified here</h2>
 

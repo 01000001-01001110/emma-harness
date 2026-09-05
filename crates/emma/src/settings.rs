@@ -101,6 +101,20 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prune_history: Option<bool>,
 
+    /// Whether the provider may search the web for the model, on its own side
+    /// of the wire and on the same key. See `emma_llm::Request::web_search`.
+    ///
+    /// **Absent means on**, the same reading as `memory` and for a stronger
+    /// reason: this is what every comparable harness ships, and a user who
+    /// picked a provider that sells search would otherwise have to find a
+    /// setting to get what they are already paying for. It is disclosed at
+    /// startup on every run, because each search is a separate charge and the
+    /// query leaves with the conversation. `false` turns it off. On a provider
+    /// with no search of its own the value is read and does nothing, and the
+    /// startup line says so rather than letting the setting look honoured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_search: Option<bool>,
+
     /// The pre-provider spelling. Deserialized and never written back, so it
     /// survives being read and disappears on the first save. Private because
     /// nothing outside this module has any business setting it: it is an input
@@ -258,6 +272,31 @@ pub fn resolve_kind(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **If this breaks:** a settings file written before the key existed
+    /// reads as a refusal, or `false` is lost on the way to disk and search
+    /// stays on for somebody who turned it off.
+    #[test]
+    fn web_search_is_absent_until_said_and_false_survives_a_save() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(
+            load(home.path()).web_search,
+            None,
+            "a fresh home has no opinion"
+        );
+
+        let mut settings = load(home.path());
+        settings.web_search = Some(false);
+        save(home.path(), &settings).unwrap();
+        assert_eq!(load(home.path()).web_search, Some(false));
+
+        // And a file that never mentions it is not rewritten to mention it.
+        let mut settings = load(home.path());
+        settings.web_search = None;
+        save(home.path(), &settings).unwrap();
+        let raw = std::fs::read_to_string(path(home.path())).unwrap();
+        assert!(!raw.contains("web_search"), "{raw}");
+    }
 
     #[test]
     fn a_saved_model_round_trips_and_the_flag_still_wins() {
