@@ -153,65 +153,60 @@ pub fn discover_from(start: &amp;Path, overridden: Option&lt;PathBuf&gt;) -&gt; 
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 940 366" role="img" aria-label="Harness discovery: EMMA_ROOT overrides everything; otherwise the walk climbs from the working directory trying .emma then .claude in each ancestor, first hit wins, the home directory offers only .emma and only when it holds config.json or personas, the home directory's .claude is never considered, and nothing found is a refusal to start.">
+      <!-- diagram:config-discovery -->
+      <svg viewBox="0 0 182 172" role="img" aria-label="The 2 ways discover_in returns a harness directory. EMMA_ROOT answers first and, when it names something that is not a directory, the search is refused rather than continued. Otherwise the walk climbs from the working directory, trying .emma and .claude at each ancestor -- the second rung repeats per ancestor, which is why it is marked and not drawn level with the first.">
+        <style>
+          :root {
+            --discovery-ground: #12101a;
+            --discovery-surface: #1c1930;
+            --discovery-line: #31d4f2;
+            --discovery-text: #dcf6ff;
+            --discovery-muted: #7d8fa8;
+            --discovery-accent: #ff2e97;
+            --discovery-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --discovery-ground: #0b0a10;
+              --discovery-surface: #15132a;
+              --discovery-line: #22b8d6;
+              --discovery-text: #c4e8f5;
+              --discovery-muted: #6b7c94;
+              --discovery-accent: #ff45a3;
+              --discovery-dim: #7a4fd8;
+            }
+          }
+          .discovery-ground { fill: var(--discovery-ground); }
+          .discovery-box { fill: var(--discovery-surface); stroke: var(--discovery-line); stroke-width: 1.5; }
+          .discovery-box-hl { fill: var(--discovery-surface); stroke: var(--discovery-accent); stroke-width: 2; }
+          .discovery-lbl { fill: var(--discovery-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .discovery-note { fill: var(--discovery-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .discovery-edge { stroke: var(--discovery-line); stroke-width: 1.5; fill: none; }
+          .discovery-edge-hl { stroke: var(--discovery-accent); stroke-width: 2; fill: none; }
+          .discovery-edge-dim { stroke: var(--discovery-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
         <defs>
-          <marker id="disc-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
+          <marker id="discovery-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--discovery-line)"/>
           </marker>
-          <marker id="disc-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
+          <marker id="discovery-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--discovery-accent)"/>
+          </marker>
+          <marker id="discovery-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--discovery-dim)"/>
           </marker>
         </defs>
+        <rect class="discovery-ground" x="0" y="0" width="182" height="172"/>
 
-        <rect class="hl" x="16" y="14" width="216" height="44" rx="3"/>
-        <text class="sm on-hl" x="30" y="34">EMMA_ROOT set?</text>
-        <text class="tiny" x="30" y="50">read, not searched for</text>
+        <path class="discovery-edge" marker-end="url(#discovery-tip)" d="M 91 54 L 91 118"/>
+        <rect class="discovery-box-hl" x="16" y="16" width="150" height="38" rx="3"/>
+        <text class="discovery-lbl" x="91" y="40" text-anchor="middle">p.is_dir()</text>
 
-        <path class="edge" marker-end="url(#disc-arrow)" d="M232,36 L296,36"/>
-        <text class="tiny" x="248" y="28">yes</text>
-        <rect class="box" x="300" y="14" width="330" height="44" rx="3"/>
-        <text class="sm" x="314" y="34">that directory, whatever it is named</text>
-        <text class="tiny" x="314" y="50">not a directory → startup error, and no search happens</text>
+        <rect class="discovery-box" x="16" y="118" width="150" height="38" rx="3"/>
+        <text class="discovery-lbl" x="91" y="142" text-anchor="middle">candidate.is_dir() &amp;&amp; eligible</text>
 
-        <path class="edge-hl" marker-end="url(#disc-arrow-hl)" d="M124,58 L124,84"/>
-        <text class="tiny" x="134" y="76">no</text>
-
-        <text class="tiny" x="16" y="100">then each ancestor of the working directory, nearest first, first hit wins:</text>
-
-        <path class="edge-hl" marker-end="url(#disc-arrow-hl)" d="M124,112 L124,284"/>
-        <text class="tiny" x="16" y="200">up the tree</text>
-
-        <rect class="box" x="146" y="112" width="200" height="34" rx="3"/>
-        <text class="sm" x="160" y="134">cwd/.emma</text>
-        <path class="edge" marker-end="url(#disc-arrow)" d="M346,129 L368,129"/>
-        <rect class="box" x="372" y="112" width="200" height="34" rx="3"/>
-        <text class="sm" x="386" y="134">cwd/.claude</text>
-        <text class="tiny" x="592" y="133">tried only when there is no .emma/ beside it</text>
-
-        <rect class="box" x="146" y="158" width="200" height="34" rx="3"/>
-        <text class="sm" x="160" y="180">../.emma</text>
-        <path class="edge" marker-end="url(#disc-arrow)" d="M346,175 L368,175"/>
-        <rect class="box" x="372" y="158" width="200" height="34" rx="3"/>
-        <text class="sm" x="386" y="180">../.claude</text>
-        <text class="tiny" x="592" y="179">the loser is ignored, never merged</text>
-
-        <text class="sm" x="240" y="214">…</text>
-        <text class="sm" x="466" y="214">…</text>
-
-        <rect class="box" x="146" y="234" width="200" height="50" rx="3"/>
-        <text class="sm" x="160" y="254">$HOME/.emma</text>
-        <text class="tiny" x="160" y="270">only with config.json or personas/</text>
-        <rect class="ghost" x="372" y="234" width="200" height="50" rx="3"/>
-        <text class="tiny" x="386" y="256">$HOME/.claude</text>
-        <text class="tiny" x="386" y="272">never considered, never listed</text>
-        <text class="tiny" x="592" y="255">the walk stops here: above it are</text>
-        <text class="tiny" x="592" y="271">C:\Users and /home, which belong to nobody</text>
-
-        <path class="edge-hl" marker-end="url(#disc-arrow-hl)" d="M246,284 L246,308"/>
-        <rect class="box" x="146" y="312" width="426" height="44" rx="3"/>
-        <text class="sm" x="160" y="332">nothing found → refuse to start</text>
-        <text class="tiny" x="160" y="348">every path searched is printed. there is no compiled-in fallback prompt.</text>
       </svg>
+      <!-- /diagram -->
     </div>
     <figcaption>
       Read off <code>discover_in</code>. On the bottom row: the home directory offers only <code>.emma/</code>, and it

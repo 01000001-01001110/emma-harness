@@ -328,3 +328,198 @@ mod write_axes {
         std::fs::write(&page, after).expect("the axes page writes");
     }
 }
+
+/// How a harness directory is found, read as the two ways `discover_in`
+/// returns one.
+///
+/// The page's claim is an order: the override answers first, and otherwise a
+/// walk climbs from the working directory. Both halves are guards in
+/// `harness::discover_in`, and the second is marked with what it repeats over
+/// -- it runs once per ancestor and, within each, once per candidate name, so
+/// drawing it level with the override would turn a search into a straight
+/// line.
+///
+/// The candidate names come from the constants beside it rather than from the
+/// prose: `ROOT_DIR_NAME` is Emma's own and `CLAUDE_DIR_NAME` is the one it
+/// reads for compatibility.
+pub fn config_discovery(root: &Path) -> Result<Diagram> {
+    let path = root.join("crates/harness/src/lib.rs");
+    let file = rust::parse(&path)?;
+
+    let rungs = rust::fn_guards(&file, "discover_in")
+        .with_context(|| format!("{} declares the discovery order", path.display()))?;
+    let env = rust::const_value(&file, "ROOT_ENV")
+        .with_context(|| format!("{} names the override variable", path.display()))?;
+    let own = rust::const_value(&file, "ROOT_DIR_NAME")
+        .with_context(|| format!("{} names Emma's own directory", path.display()))?;
+    let compat = rust::const_value(&file, "CLAUDE_DIR_NAME")
+        .with_context(|| format!("{} names the compatible directory", path.display()))?;
+
+    let steps: Vec<rust::Item> = rungs
+        .iter()
+        .map(|r| rust::Item {
+            name: r.name.clone(),
+            doc: r.doc.clone(),
+            detail: if r.doc.is_empty() {
+                env.clone()
+            } else {
+                format!("{own} | {compat}")
+            },
+        })
+        .collect();
+
+    let n = steps.len();
+    Ok(shapes::ladder(
+        "discovery",
+        format!(
+            "The {n} ways discover_in returns a harness directory. {env} answers \
+             first and, when it names something that is not a directory, the \
+             search is refused rather than continued. Otherwise the walk climbs \
+             from the working directory, trying {own} and {compat} at each \
+             ancestor -- the second rung repeats per ancestor, which is why it \
+             is marked and not drawn level with the first."
+        ),
+        &steps,
+        Some(rungs[0].name.as_str()),
+    ))
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    fn root() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("the workspace root")
+    }
+
+    /// **If this breaks:** the discovery page shows an order the harness does
+    /// not search in, or loses the fact that the second check repeats.
+    ///
+    /// Asserted against `fn_guards` on the real function rather than against a
+    /// written list, so a third return added to `discover_in` appears here
+    /// without this test being edited.
+    #[test]
+    fn the_discovery_diagram_draws_the_returns_discover_in_declares() {
+        let root = root();
+        let file = rust::parse(&root.join("crates/harness/src/lib.rs")).expect("harness parses");
+        let rungs = rust::fn_guards(&file, "discover_in").expect("discover_in has guards");
+
+        let d = config_discovery(&root).expect("the diagram builds");
+        let drawn: Vec<String> = d.layers.iter().flatten().map(|n| n.id.clone()).collect();
+        assert_eq!(
+            drawn,
+            rungs.iter().map(|r| r.name.clone()).collect::<Vec<_>>(),
+            "the drawn order is the order discover_in returns in"
+        );
+        assert!(
+            rungs.iter().any(|r| !r.doc.is_empty()),
+            "one rung repeats per ancestor and must say so: {rungs:?}"
+        );
+        for name in ["ROOT_ENV", "ROOT_DIR_NAME", "CLAUDE_DIR_NAME"] {
+            let v = rust::const_value(&file, name).expect(name);
+            assert!(
+                d.caption.contains(&v),
+                "the caption names {name} ({v}): {}",
+                d.caption
+            );
+        }
+    }
+
+    /// **If this breaks:** the source moves and the page draws an empty ladder
+    /// instead of reporting that its source is gone.
+    #[test]
+    fn a_missing_source_fails_the_discovery_diagram_rather_than_emptying_it() {
+        let Err(e) = config_discovery(Path::new("definitely-not-a-workspace")) else {
+            panic!("a missing tree must not produce a diagram");
+        };
+        assert!(format!("{e:#}").contains("lib.rs"), "{e:#}");
+    }
+}
+
+/// The named hole in the gate: every tool that skips the prompt by being on a
+/// list rather than by being read-only.
+///
+/// The page argues something wider -- that the gate has a ceiling and no
+/// floor, with no unconditional deny where one could sit. **That half is not
+/// drawn, and cannot be:** an absence is not a fact any lookup returns, and a
+/// picture asserting it would be a person's argument wearing a generated
+/// diagram's authority. It stays in the page's prose where a reader can see
+/// who is making it.
+///
+/// What is drawn is the half a machine can check: the membership of `EXEMPT`.
+/// A tool added to that list stops asking, and this is the picture that
+/// changes when one is.
+pub fn consent_exempt(root: &Path) -> Result<Diagram> {
+    let path = root.join("crates/emma/src/approval.rs");
+    let file = rust::parse(&path)?;
+    let exempt = rust::const_list(&file, "EXEMPT")
+        .with_context(|| format!("{} declares the exemption", path.display()))?;
+
+    let n = exempt.len();
+    let names: Vec<&str> = exempt.iter().map(|i| i.name.as_str()).collect();
+    Ok(shapes::set(
+        "exempt",
+        format!(
+            "The {n} tools on EXEMPT: {}. Each skips the prompt because it is \
+             named here rather than because it is read-only, which is why the \
+             list is short and why adding to it is a decision rather than a \
+             tidy-up. What sits above the prompt -- deny rules and hook denials \
+             -- and the absence of any unconditional deny below it are argued in \
+             the prose on this page; neither is a fact this diagram can read.",
+            names.join(", ")
+        ),
+        &exempt,
+        2,
+        None,
+    ))
+}
+
+#[cfg(test)]
+mod exempt_tests {
+    use super::*;
+
+    fn root() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("the workspace root")
+    }
+
+    /// **If this breaks:** the page shows an exemption list that is not the
+    /// one the gate consults, and a reader cannot tell which tools skip the
+    /// prompt. A tool added to `EXEMPT` stops asking; this is what makes that
+    /// visible.
+    #[test]
+    fn the_exempt_diagram_draws_the_list_the_gate_consults() {
+        let root = root();
+        let file =
+            rust::parse(&root.join("crates/emma/src/approval.rs")).expect("approval.rs parses");
+        let exempt = rust::const_list(&file, "EXEMPT").expect("EXEMPT exists");
+
+        let d = consent_exempt(&root).expect("the diagram builds");
+        let drawn: Vec<String> = d.layers.iter().flatten().map(|n| n.id.clone()).collect();
+        assert_eq!(drawn.len(), exempt.len(), "{drawn:?}");
+        for tool in &exempt {
+            assert!(
+                drawn.contains(&tool.name),
+                "{} missing: {drawn:?}",
+                tool.name
+            );
+            assert!(d.caption.contains(&tool.name), "the caption names it too");
+        }
+        assert!(d.edges.is_empty(), "membership is not a sequence");
+    }
+
+    /// **If this breaks:** the source moves and the page draws an empty set,
+    /// which would read as "no tool is exempt" -- the opposite of a warning.
+    #[test]
+    fn a_missing_source_fails_the_exempt_diagram_rather_than_emptying_it() {
+        let Err(e) = consent_exempt(Path::new("definitely-not-a-workspace")) else {
+            panic!("a missing tree must not produce a diagram");
+        };
+        assert!(format!("{e:#}").contains("approval.rs"), "{e:#}");
+    }
+}

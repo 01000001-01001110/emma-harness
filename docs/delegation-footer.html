@@ -118,62 +118,89 @@
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 780 400" role="img"
-           aria-label="The parent-child boundary. Delegate::invoke sends a brief into a nested run with its own registry, budget and instructions. Two things come back from different places: the sub's final message, written by its model, and the loop's own records of every tool call, result, denial and ending. Facts::from reads only the records and builds the footer. The tool result the parent's model reads is the message with the footer under it.">
+      <!-- diagram:delegation-footer -->
+      <svg viewBox="0 0 526 376" role="img" aria-label="The 12 fields of Facts, which is what the parent is told about a sub-run. Facts::from reads the loop's own records and Facts::footer renders them, so every line comes from what the loop logged rather than from the subagent's final message -- the two arrive from different places and only one of them is testimony.">
+        <style>
+          :root {
+            --footer-ground: #12101a;
+            --footer-surface: #1c1930;
+            --footer-line: #31d4f2;
+            --footer-text: #dcf6ff;
+            --footer-muted: #7d8fa8;
+            --footer-accent: #ff2e97;
+            --footer-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --footer-ground: #0b0a10;
+              --footer-surface: #15132a;
+              --footer-line: #22b8d6;
+              --footer-text: #c4e8f5;
+              --footer-muted: #6b7c94;
+              --footer-accent: #ff45a3;
+              --footer-dim: #7a4fd8;
+            }
+          }
+          .footer-ground { fill: var(--footer-ground); }
+          .footer-box { fill: var(--footer-surface); stroke: var(--footer-line); stroke-width: 1.5; }
+          .footer-box-hl { fill: var(--footer-surface); stroke: var(--footer-accent); stroke-width: 2; }
+          .footer-lbl { fill: var(--footer-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .footer-note { fill: var(--footer-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .footer-edge { stroke: var(--footer-line); stroke-width: 1.5; fill: none; }
+          .footer-edge-hl { stroke: var(--footer-accent); stroke-width: 2; fill: none; }
+          .footer-edge-dim { stroke: var(--footer-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
         <defs>
-          <marker id="ftr-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
+          <marker id="footer-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--footer-line)"/>
           </marker>
-          <marker id="ftr-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
+          <marker id="footer-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--footer-accent)"/>
+          </marker>
+          <marker id="footer-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--footer-dim)"/>
           </marker>
         </defs>
+        <rect class="footer-ground" x="0" y="0" width="526" height="376"/>
 
-        <rect class="ghost" x="300" y="14" width="466" height="182" rx="4"/>
-        <text class="tiny" x="312" y="32">the nested run: its own registry, instructions, budgets, DoneCheck, provider</text>
+        <rect class="footer-box-hl" x="16" y="16" width="150" height="38" rx="3"/>
+        <text class="footer-lbl" x="91" y="40" text-anchor="middle">ending: String</text>
 
-        <rect class="hl" x="14" y="52" width="248" height="40" rx="3"/>
-        <text class="lbl" x="28" y="70">parent loop</text>
-        <text class="sm" x="28" y="86">Delegate::invoke</text>
+        <rect class="footer-box" x="188" y="16" width="150" height="38" rx="3"/>
+        <text class="footer-lbl" x="263" y="40" text-anchor="middle">detail</text>
 
-        <path class="edge" d="M262 72 L326 72" marker-end="url(#ftr-arrow)"/>
-        <text class="tiny" x="266" y="62">brief()</text>
+        <rect class="footer-box" x="360" y="16" width="150" height="38" rx="3"/>
+        <text class="footer-lbl" x="435" y="40" text-anchor="middle">tokens: i64</text>
 
-        <rect class="box" x="326" y="46" width="416" height="36" rx="3"/>
-        <text class="lbl" x="340" y="69">Agent::run_goal: the second loop</text>
+        <rect class="footer-box" x="16" y="118" width="150" height="38" rx="3"/>
+        <text class="footer-lbl" x="91" y="142" text-anchor="middle">iterations: u64</text>
 
-        <path class="edge" d="M430 82 L430 108" marker-end="url(#ftr-arrow)"/>
-        <path class="edge-hl" d="M640 82 L640 108" marker-end="url(#ftr-arrow-hl)"/>
+        <rect class="footer-box" x="188" y="118" width="150" height="38" rx="3"/>
+        <text class="footer-lbl" x="263" y="142" text-anchor="middle">elapsed_ms: u64</text>
 
-        <rect class="box" x="326" y="110" width="192" height="66" rx="3"/>
-        <text class="lbl" x="338" y="132">its model writes</text>
-        <text class="sm" x="338" y="150">the final message</text>
-        <text class="tiny" x="338" y="166">outcome.text</text>
+        <rect class="footer-box" x="360" y="118" width="150" height="38" rx="3"/>
+        <text class="footer-lbl" x="435" y="142" text-anchor="middle">tool_calls: usize</text>
 
-        <rect class="hl" x="546" y="110" width="196" height="66" rx="3"/>
-        <text class="lbl" x="558" y="132">the loop writes</text>
-        <text class="sm" x="558" y="150">sub.tool_call · tool_result</text>
-        <text class="sm" x="558" y="164">sub.denied · goal_finished</text>
+        <rect class="footer-box" x="16" y="220" width="150" height="38" rx="3"/>
+        <text class="footer-lbl" x="91" y="244" text-anchor="middle">files: Vec&lt;String&gt;</text>
 
-        <path class="edge" d="M422 176 L422 232 L150 232 L150 268" marker-end="url(#ftr-arrow)"/>
-        <text class="tiny" x="172" y="226">the agent's own account: carried verbatim, never parsed</text>
+        <rect class="footer-box" x="188" y="220" width="150" height="38" rx="3"/>
+        <text class="footer-lbl" x="263" y="244" text-anchor="middle">searches</text>
 
-        <path class="edge-hl" d="M644 176 L644 300 L568 300" marker-end="url(#ftr-arrow-hl)"/>
+        <rect class="footer-box" x="360" y="220" width="150" height="38" rx="3"/>
+        <text class="footer-lbl" x="435" y="244" text-anchor="middle">fetched: Vec&lt;String&gt;</text>
 
-        <rect class="hl" x="304" y="278" width="264" height="44" rx="3"/>
-        <text class="lbl" x="318" y="299">Facts::from(records)</text>
-        <text class="sm" x="318" y="315">→ footer()</text>
+        <rect class="footer-box" x="16" y="322" width="150" height="38" rx="3"/>
+        <text class="footer-lbl" x="91" y="346" text-anchor="middle">other</text>
 
-        <path class="edge-hl" d="M304 300 L270 300" marker-end="url(#ftr-arrow-hl)"/>
+        <rect class="footer-box" x="188" y="322" width="150" height="38" rx="3"/>
+        <text class="footer-lbl" x="263" y="346" text-anchor="middle">commands: Vec</text>
 
-        <rect class="box" x="14" y="270" width="252" height="60" rx="3"/>
-        <text class="lbl" x="28" y="292">one tool_result</text>
-        <text class="sm" x="28" y="310">the message, then the footer</text>
-        <text class="sm" x="28" y="324">under it</text>
+        <rect class="footer-box" x="360" y="322" width="150" height="38" rx="3"/>
+        <text class="footer-lbl" x="435" y="346" text-anchor="middle">denied: Vec&lt;String&gt;</text>
 
-        <path class="edge" d="M140 330 L140 356" marker-end="url(#ftr-arrow)"/>
-        <text class="tiny" x="14" y="374">the parent's model, which read neither the transcript nor a file the sub opened</text>
       </svg>
+      <!-- /diagram -->
     </div>
     <figcaption>
       Drawn from <code>Delegate::invoke</code> and

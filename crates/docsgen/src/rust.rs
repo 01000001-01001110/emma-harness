@@ -98,6 +98,56 @@ pub fn struct_fields(file: &syn::File, name: &str) -> Result<Vec<Item>> {
     bail!("no `struct {name}` in this file")
 }
 
+/// The elements of a `const` array or slice, as written.
+///
+/// For `const EXEMPT: &[&str] = &["TaskCreate", "TaskUpdate"]` and its shape.
+/// A list in a const is a membership claim -- which tools skip the gate, which
+/// variables survive a hook's environment -- and membership is the one thing a
+/// diagram can state without inventing an order.
+///
+/// Separate from [`const_value`] because the answers differ in kind: one is a
+/// number to print, this is a set to draw. An empty list is an error rather
+/// than an empty set, for the reason the module doc gives.
+pub fn const_list(file: &syn::File, name: &str) -> Result<Vec<Item>> {
+    fn elements(e: &syn::Expr) -> Option<Vec<String>> {
+        match e {
+            syn::Expr::Reference(r) => elements(&r.expr),
+            syn::Expr::Group(g) => elements(&g.expr),
+            syn::Expr::Array(a) => Some(a.elems.iter().map(expr_text).collect()),
+            _ => None,
+        }
+    }
+    fn find(items: &[syn::Item], name: &str) -> Option<Vec<String>> {
+        for item in items {
+            match item {
+                syn::Item::Const(c) if c.ident == name => return elements(&c.expr),
+                syn::Item::Mod(m) => {
+                    if let Some((_, inner)) = &m.content {
+                        if let Some(found) = find(inner, name) {
+                            return Some(found);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    let found =
+        find(&file.items, name).with_context(|| format!("no `const {name}` list in this file"))?;
+    if found.is_empty() {
+        bail!("`const {name}` is an empty list, so there is no membership to draw");
+    }
+    Ok(found
+        .into_iter()
+        .map(|name| Item {
+            name,
+            doc: String::new(),
+            detail: String::new(),
+        })
+        .collect())
+}
+
 /// The value of a `const`, as written.
 ///
 /// Returned as source text rather than evaluated. A diagram showing a clamp of
@@ -197,6 +247,34 @@ fn collect_guards(stmts: &[syn::Stmt], out: &mut Vec<Item>, descend: bool) {
                 } else if descend {
                     // A guard whose body is itself guards -- `if !forced`.
                     collect_guards(&iff.then_branch.stmts, out, false);
+                }
+            }
+            // A `for` body can hold guards too, and `harness::discover_in`'s
+            // search is built that way: the returning check lives inside the
+            // walk over `start.ancestors()`.
+            //
+            // **Marked rather than flattened.** A rung inside a loop runs once
+            // per iteration, and drawing it level with the guards above it
+            // would turn a search into a straight line -- a confident picture
+            // of the wrong shape, which is the failure this crate exists to
+            // avoid. `doc` carries what it iterates so a caller can say so.
+            syn::Stmt::Expr(syn::Expr::ForLoop(f), _) if descend => {
+                // Loops nest where `if` does not. A loop inside a loop is
+                // another pass of the same search -- `discover_in` walks
+                // ancestors and, within each, the candidate names -- so the
+                // returning guard is two levels down and is still one of the
+                // two ways the function answers. An `if` inside an `if` is a
+                // narrowing branch, which is why that stays capped at one.
+                let mut inner = Vec::new();
+                collect_guards(&f.body.stmts, &mut inner, true);
+                let over = cond_text(&f.expr);
+                for mut item in inner {
+                    item.doc = if over.is_empty() {
+                        "per iteration".to_string()
+                    } else {
+                        format!("per {over}")
+                    };
+                    out.push(item);
                 }
             }
             _ => {}
@@ -572,6 +650,36 @@ mod tests {
         assert_eq!(s[1].detail, "u32");
     }
 
+    /// **If this breaks:** a membership diagram shows a set the source does
+    /// not declare -- which tools skip the gate, which variables a hook keeps.
+    #[test]
+    fn a_const_list_comes_back_as_its_elements() {
+        let f = file(
+            "const EXEMPT: &[&str] = &[\"TaskCreate\", \"TaskUpdate\"];
+             const NUMS: [u8; 2] = [1, 2];",
+        );
+        let e = const_list(&f, "EXEMPT").expect("EXEMPT");
+        assert_eq!(
+            e.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+            ["TaskCreate", "TaskUpdate"]
+        );
+        let n = const_list(&f, "NUMS").expect("an array without the reference");
+        assert_eq!(n.len(), 2, "{n:?}");
+    }
+
+    /// **If this breaks:** an empty list draws an empty set, and a reader sees
+    /// a picture asserting nothing rather than an error saying so.
+    #[test]
+    fn an_empty_const_list_is_an_error_rather_than_an_empty_set() {
+        let f = file(
+            "const NONE: &[&str] = &[];
+const N: u8 = 3;",
+        );
+        assert!(const_list(&f, "NONE").is_err(), "empty list");
+        assert!(const_list(&f, "N").is_err(), "a scalar is not a list");
+        assert!(const_list(&f, "ABSENT").is_err(), "missing");
+    }
+
     /// **If this breaks:** a diagram naming a constant shows a stale number,
     /// which is the class of error this whole crate exists to end.
     #[test]
@@ -600,6 +708,35 @@ mod tests {
         assert_eq!(g.len(), 2, "{g:?}");
         assert_eq!(g[0].name, "rule == Deny");
         assert_eq!(g[1].name, "gate == SkipAll");
+    }
+
+    /// **If this breaks:** a guard inside a loop is either dropped -- leaving
+    /// a search looking like a straight run of checks -- or drawn level with
+    /// the guards outside it, which claims it runs once when it runs per
+    /// iteration.
+    ///
+    /// `harness::discover_in` is the worked example: its returning check lives
+    /// inside a walk over `start.ancestors()`.
+    #[test]
+    fn a_guard_inside_a_for_loop_is_a_rung_and_says_what_it_repeats_over() {
+        let f = file(
+            "fn d() -> V {
+             if a { return V::A; }
+             for dir in start.ancestors() {
+             if found { return V::B; }
+             }
+             V::C
+}",
+        );
+        let g = fn_guards(&f, "d").expect("guards");
+        assert_eq!(g.len(), 2, "{g:?}");
+        assert_eq!(g[0].name, "a");
+        assert_eq!(g[0].doc, "", "a top-level guard repeats over nothing");
+        assert_eq!(g[1].name, "found");
+        assert_eq!(
+            g[1].doc, "per start.ancestors()",
+            "a looped rung names what it repeats over: {g:?}"
+        );
     }
 
     /// **If this breaks:** a `let … else { return … }` stops counting as a

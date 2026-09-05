@@ -66,6 +66,22 @@ pub fn render_all(root: &Path) -> Result<Vec<(String, String)>> {
             pages::terminal::terminal_layout(root)?.render(),
         ),
         (
+            "terminal-surface".to_string(),
+            pages::terminal::terminal_surface(root)?.render(),
+        ),
+        (
+            "config-discovery".to_string(),
+            pages::consent::config_discovery(root)?.render(),
+        ),
+        (
+            "delegation-footer".to_string(),
+            pages::delegation::delegation_footer(root)?.render(),
+        ),
+        (
+            "consent-exempt".to_string(),
+            pages::consent::consent_exempt(root)?.render(),
+        ),
+        (
             "consent-egress".to_string(),
             pages::consent::consent_egress(root)?.render(),
         ),

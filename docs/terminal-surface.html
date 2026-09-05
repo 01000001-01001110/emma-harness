@@ -226,65 +226,68 @@ fn fallback_reason(
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 760 300" role="img"
-           aria-label="Term::interactive asks frame_wanted, which is fallback_reason over the real process. A refusal takes the plain path with the console left as found. An acceptance adopts the UTF-8 output code page, then Frame::install re-asks fallback_reason, proves VT on Windows, and reads EMMA_UI. If install refuses after the code page was changed, the console is restored and the glyph set re-decided.">
+      <!-- diagram:terminal-surface -->
+      <svg viewBox="0 0 182 376" role="img" aria-label="The 4 conditions fallback_reason checks before the frame is allowed, in order: opted_out, !stdout_tty, !stdin_tty, term_var == Some(&quot;dumb&quot;). The first that answers refuses the frame and the run takes the plain path with the console left as found. Everything after an acceptance -- the UTF-8 code page, the re-ask in Frame::install, the Windows VT proof -- is a sequence rather than a run of returns, and is not drawn here.">
+        <style>
+          :root {
+            --surface-ground: #12101a;
+            --surface-surface: #1c1930;
+            --surface-line: #31d4f2;
+            --surface-text: #dcf6ff;
+            --surface-muted: #7d8fa8;
+            --surface-accent: #ff2e97;
+            --surface-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --surface-ground: #0b0a10;
+              --surface-surface: #15132a;
+              --surface-line: #22b8d6;
+              --surface-text: #c4e8f5;
+              --surface-muted: #6b7c94;
+              --surface-accent: #ff45a3;
+              --surface-dim: #7a4fd8;
+            }
+          }
+          .surface-ground { fill: var(--surface-ground); }
+          .surface-box { fill: var(--surface-surface); stroke: var(--surface-line); stroke-width: 1.5; }
+          .surface-box-hl { fill: var(--surface-surface); stroke: var(--surface-accent); stroke-width: 2; }
+          .surface-lbl { fill: var(--surface-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .surface-note { fill: var(--surface-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .surface-edge { stroke: var(--surface-line); stroke-width: 1.5; fill: none; }
+          .surface-edge-hl { stroke: var(--surface-accent); stroke-width: 2; fill: none; }
+          .surface-edge-dim { stroke: var(--surface-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
         <defs>
-          <marker id="srf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          <marker id="surface-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--surface-line)"/>
           </marker>
-          <marker id="srf-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          <marker id="surface-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--surface-accent)"/>
+          </marker>
+          <marker id="surface-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--surface-dim)"/>
           </marker>
         </defs>
+        <rect class="surface-ground" x="0" y="0" width="182" height="376"/>
 
-        <rect class="box" x="8" y="12" width="150" height="34" rx="4" />
-        <text class="lbl" x="83" y="34" text-anchor="middle">Term::interactive</text>
+        <path class="surface-edge" marker-end="url(#surface-tip)" d="M 91 54 L 91 118"/>
+        <path class="surface-edge" marker-end="url(#surface-tip)" d="M 91 156 L 91 220"/>
+        <path class="surface-edge" marker-end="url(#surface-tip)" d="M 91 258 L 91 322"/>
+        <rect class="surface-box-hl" x="16" y="16" width="150" height="38" rx="3"/>
+        <text class="surface-lbl" x="91" y="40" text-anchor="middle">opted_out: Some</text>
 
-        <path class="edge" d="M158 29 H208" marker-end="url(#srf-arrow)" />
+        <rect class="surface-box" x="16" y="118" width="150" height="38" rx="3"/>
+        <text class="surface-lbl" x="91" y="142" text-anchor="middle">!stdout_tty: Some</text>
 
-        <rect class="box" x="214" y="6" width="180" height="46" rx="4" />
-        <text class="lbl" x="304" y="24" text-anchor="middle">frame_wanted</text>
-        <text class="tiny" x="304" y="40" text-anchor="middle">fallback_reason, 5 inputs</text>
+        <rect class="surface-box" x="16" y="220" width="150" height="38" rx="3"/>
+        <text class="surface-lbl" x="91" y="244" text-anchor="middle">!stdin_tty: Some</text>
 
-        <path class="edge-dash" d="M304 52 V96" marker-end="url(#srf-arrow)" />
-        <text class="tiny" x="312" y="80">Some(reason)</text>
+        <rect class="surface-box" x="16" y="322" width="150" height="38" rx="3"/>
+        <text class="surface-lbl" x="91" y="346" text-anchor="middle">term_var == Some(&quot;dumb&quot;)</text>
 
-        <rect class="box" x="198" y="102" width="212" height="60" rx="4" />
-        <text class="lbl" x="304" y="122" text-anchor="middle">console_is_utf8()</text>
-        <text class="tiny" x="304" y="139" text-anchor="middle">ask, never change</text>
-        <text class="tiny" x="304" y="154" text-anchor="middle">glyphs = ASCII unless proved</text>
-
-        <path class="edge" d="M304 162 V194" marker-end="url(#srf-arrow)" />
-        <rect class="box" x="190" y="200" width="228" height="46" rx="4" />
-        <text class="lbl" x="304" y="218" text-anchor="middle">plain lines</text>
-        <text class="tiny" x="304" y="234" text-anchor="middle">-p &middot; pipes &middot; EMMA_NO_FRAME &middot; no console</text>
-
-        <path class="edge-hl" d="M394 29 H452" marker-end="url(#srf-arrow-hl)" />
-        <text class="tiny" x="400" y="21">None</text>
-
-        <rect class="hl" x="458" y="6" width="212" height="46" rx="4" />
-        <text class="lbl" x="564" y="24" text-anchor="middle">adopt_utf8_output()</text>
-        <text class="tiny" x="564" y="40" text-anchor="middle">set &middot; read back &middot; believe read-back</text>
-
-        <path class="edge-hl" d="M564 52 V84" marker-end="url(#srf-arrow-hl)" />
-
-        <rect class="hl" x="458" y="90" width="212" height="72" rx="4" />
-        <text class="lbl" x="564" y="110" text-anchor="middle">Frame::install</text>
-        <text class="tiny" x="564" y="126" text-anchor="middle">fallback_reason again</text>
-        <text class="tiny" x="564" y="141" text-anchor="middle">enable_vt() on windows</text>
-        <text class="tiny" x="564" y="156" text-anchor="middle">EMMA_UI read here</text>
-
-        <path class="edge-dash" d="M458 130 H432 V126 H420" marker-end="url(#srf-arrow)" />
-        <text class="tiny" x="424" y="118">refused</text>
-
-        <path class="edge-hl" d="M564 162 V194" marker-end="url(#srf-arrow-hl)" />
-        <rect class="hl" x="458" y="200" width="212" height="46" rx="4" />
-        <text class="lbl" x="564" y="218" text-anchor="middle">a Frame</text>
-        <text class="tiny" x="564" y="234" text-anchor="middle">full-screen, or inline</text>
-
-        <text class="tiny" x="8" y="278">A refusal after the code page moved calls restore_console_cp() and re-reads the console</text>
-        <text class="tiny" x="8" y="292">before choosing glyphs: a Unicode transcript on a restored 437 console is the mojibake case.</text>
       </svg>
+      <!-- /diagram -->
     </div>
     <figcaption>
       The startup path, drawn from <code>Term::interactive</code>,

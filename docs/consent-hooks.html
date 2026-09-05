@@ -578,58 +578,42 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 780 268" role="img"
-           aria-label="Timeline of hooks::exec. Emma spawns the hook and writes stdin; the hook starts a daemon that inherits the same stdout, then writes and exits. Emma's wait resolves on the hook's exit, gives the pipes a 200 millisecond grace, then drops its read ends and returns. The daemon keeps the write end, so end-of-file never arrives.">
-        <defs>
-          <marker id="hook-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
-          </marker>
-          <marker id="hook-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
-          </marker>
-        </defs>
-
-        <rect class="hl" x="16" y="44" width="176" height="30" rx="3"/>
-        <text class="lbl" x="28" y="64">emma · hooks::exec</text>
-        <rect class="box" x="16" y="128" width="176" height="30" rx="3"/>
-        <text class="lbl" x="28" y="148">the hook it spawned</text>
-        <rect class="box" x="16" y="212" width="176" height="30" rx="3"/>
-        <text class="lbl" x="28" y="232">what the hook started</text>
-
-        <path class="edge" d="M200 59 L764 59"/>
-        <path class="edge" d="M200 143 L520 143"/>
-        <path class="edge-dash" d="M392 227 L752 227" marker-end="url(#hook-arrow)"/>
-
-        <path class="edge" d="M232 66 L232 132" marker-end="url(#hook-arrow)"/>
-        <text class="tiny" x="210" y="30">spawn,</text>
-        <text class="tiny" x="210" y="42">then stdin</text>
-
-        <path class="edge" d="M392 150 L392 216" marker-end="url(#hook-arrow)"/>
-        <text class="tiny" x="300" y="186">inherits the</text>
-        <text class="tiny" x="300" y="198">same stdout</text>
-
-        <path class="edge" d="M462 136 L462 70" marker-end="url(#hook-arrow)"/>
-        <text class="tiny" x="372" y="106">writes stdout</text>
-
-        <path class="edge-hl" d="M520 136 L520 70" marker-end="url(#hook-arrow-hl)"/>
-        <text class="tiny" x="500" y="164">exit 0</text>
-
-        <rect class="box" x="520" y="46" width="112" height="26" rx="3"/>
-        <text class="tiny" x="530" y="63">200ms grace</text>
-        <text class="tiny" x="536" y="96">wait resolved — drain</text>
-        <text class="tiny" x="536" y="108">whatever is buffered</text>
-
-        <path class="edge-hl" d="M660 46 L660 28" marker-end="url(#hook-arrow-hl)"/>
-        <text class="tiny" x="600" y="18">drop the read ends, return</text>
-
-        <text class="tiny" x="200" y="252">the write end is still held down here, so end-of-file never arrives: that was the defect</text>
-      </svg>
+      <ol class="timeline">
+        <li>
+          <code>emma · hooks::exec</code> spawns the hook and writes its stdin.
+        </li>
+        <li>
+          The hook starts a daemon, which <strong>inherits the same
+          stdout</strong>, then writes and exits.
+        </li>
+        <li>
+          <code>child.wait()</code> resolves on the hook's own exit &mdash; not
+          on end-of-file, which is the point.
+        </li>
+        <li>
+          The pipes get a grace of
+          <code>EXEC_DRAIN_GRACE_MS</code> milliseconds, then
+          <code>exec</code> drops its read ends and returns.
+        </li>
+        <li>
+          The daemon still holds the write end, so end-of-file never arrives.
+          A version of this that waited for EOF would wait for the lifetime of
+          whatever the hook started.
+        </li>
+      </ol>
     </div>
     <figcaption>
-      Read from the function above. Both capped pipe reads run
-      <em>concurrently</em> with <code>child.wait()</code> in a
-      <code>select!</code> rather than in front of it, so completion is the
-      child's own exit and the pipes are drained around it.
+      A reading of the function quoted above, written as prose rather than
+      drawn. Every other figure on this site is generated from source by
+      <code>crates/docsgen</code>; this one is not, because an interleaving of
+      three processes over time is not a structure any lookup returns &mdash;
+      the constants near it (<code>EXEC_DRAIN_GRACE_MS</code>, the caps) state
+      no ordering, and a picture asserting one would be this argument wearing a
+      generated diagram's authority. It was a hand-drawn SVG until 2026-09-05.
+      Both capped pipe reads run <em>concurrently</em> with
+      <code>child.wait()</code> in a <code>select!</code> rather than in front
+      of it, so completion is the child's own exit and the pipes are drained
+      around it.
     </figcaption>
   </figure>
 

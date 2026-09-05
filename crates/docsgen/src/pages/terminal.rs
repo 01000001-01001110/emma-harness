@@ -145,3 +145,91 @@ mod tests {
         assert!(format!("{e:#}").contains("sidebar.rs"), "{e:#}");
     }
 }
+
+/// Why the full-screen frame is refused, read as the guards of
+/// `fallback_reason`.
+///
+/// The page describes a longer sequence than this: `Term::interactive` asks,
+/// `Frame::install` re-asks, and the Windows VT probe sits between them. Only
+/// the refusal decision is a ladder in the source, and it is the half that
+/// matters to a reader asking why they got the plain path -- each rung is a
+/// reason, and the first that answers is the answer.
+///
+/// What is not drawn, because no guard states it: the re-ask in
+/// `Frame::install`, the VT proof, and the code-page change. Those are steps in
+/// a sequence rather than a run of returns, and the page says so in prose.
+pub fn terminal_surface(root: &Path) -> Result<Diagram> {
+    let path = root.join("crates/emma/src/term.rs");
+    let file = rust::parse(&path)?;
+    let rungs = rust::fn_guards(&file, "fallback_reason")
+        .with_context(|| format!("{} decides whether the frame is refused", path.display()))?;
+
+    let n = rungs.len();
+    let names: Vec<&str> = rungs.iter().map(|r| r.name.as_str()).collect();
+    Ok(shapes::ladder(
+        "surface",
+        format!(
+            "The {n} conditions fallback_reason checks before the frame is \
+             allowed, in order: {}. The first that answers refuses the frame and \
+             the run takes the plain path with the console left as found. \
+             Everything after an acceptance -- the UTF-8 code page, the re-ask \
+             in Frame::install, the Windows VT proof -- is a sequence rather \
+             than a run of returns, and is not drawn here.",
+            names.join(", ")
+        ),
+        &rungs,
+        rungs.first().map(|r| r.name.as_str()),
+    ))
+}
+
+#[cfg(test)]
+mod surface_tests {
+    use super::*;
+
+    fn root() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("the workspace root")
+    }
+
+    /// **If this breaks:** the surface page lists a refusal reason the terminal
+    /// does not check, or omits one it does -- and a reader who got the plain
+    /// path has no way to find out why.
+    ///
+    /// Asserted against `fallback_reason` itself, so a fifth reason appears
+    /// without this test being edited.
+    #[test]
+    fn the_surface_diagram_draws_every_reason_the_frame_is_refused() {
+        let root = root();
+        let file = rust::parse(&root.join("crates/emma/src/term.rs")).expect("term.rs parses");
+        let rungs = rust::fn_guards(&file, "fallback_reason").expect("fallback_reason has guards");
+
+        let d = terminal_surface(&root).expect("the diagram builds");
+        let drawn: Vec<String> = d.layers.iter().flatten().map(|n| n.id.clone()).collect();
+        assert_eq!(
+            drawn,
+            rungs.iter().map(|r| r.name.clone()).collect::<Vec<_>>(),
+            "the drawn order is the order the reasons are checked"
+        );
+        assert!(
+            d.caption.contains(&rungs.len().to_string()),
+            "the caption counts them: {}",
+            d.caption
+        );
+        assert!(
+            d.layers.iter().all(|l| l.len() == 1),
+            "a ladder is one rung per row"
+        );
+    }
+
+    /// **If this breaks:** the source moves and the page draws an empty ladder
+    /// rather than reporting that its source is gone.
+    #[test]
+    fn a_missing_source_fails_the_surface_diagram_rather_than_emptying_it() {
+        let Err(e) = terminal_surface(Path::new("definitely-not-a-workspace")) else {
+            panic!("a missing tree must not produce a diagram");
+        };
+        assert!(format!("{e:#}").contains("term.rs"), "{e:#}");
+    }
+}
