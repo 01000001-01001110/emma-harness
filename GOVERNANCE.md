@@ -63,8 +63,9 @@ else's behalf.
 
 ## Provenance, because it is unusual and you should know
 
-Roughly twenty agents wrote most of this code, and the written record —
-`notes/lessons/`, the audits, the commit messages — exists because no author's
-memory backs it. When a comment here explains why an obvious approach was
+Roughly twenty agents wrote most of this code, and the written record exists
+because no author's memory backs it. Most of it is now in the commit messages;
+the lessons and audits that used to sit under `notes/` were removed from the
+tree on 2026-08-30 and are reachable with `git log -p -- notes/`. When a comment here explains why an obvious approach was
 rejected, it is generally because that approach was tried and reversed, and the
 reversal is recorded rather than remembered.

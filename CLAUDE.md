@@ -10,7 +10,7 @@ rather than `main.rs`, so a scripted `Provider` can drive it without a network.
 **`docs/` describes how Emma works and why. It is not a rendering of a truth
 that lives somewhere else — it is the place a stranger goes first, and the place
 that has to be right.** Open `docs/index.html` in a browser; it needs no server
-and no build step. `docs/CONTRACT.md` says how a page is written.
+and no build step. `DOCS.md` says how a page is written.
 
 **Read the page for the area you are about to touch before you touch it.** It
 is faster than reading the crate, and it carries the arguments — what was tried,

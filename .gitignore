@@ -77,12 +77,12 @@ verification/
 # and screenshots -- unpublished writing, and nothing here depends on it.
 blog/
 
-# Contributor process rather than a description of the system. AUTHORITY.md is
-# which record wins a disagreement; CONTRACT.md is how a docs page is written.
-# Both are addressed to somebody working *on* this repository, and `docs/` is
-# addressed to somebody trying to understand Emma.
+# Which record wins a disagreement. Addressed to somebody working *on* this
+# repository, and `docs/` is addressed to somebody trying to understand Emma.
+# The page-writing standard used to sit beside it and is tracked now, at
+# `DOCS.md` in the root: thirteen tracked files cited it, so leaving it ignored
+# meant every one of those citations pointed at nothing a cloner could open.
 docs/AUTHORITY.md
-docs/CONTRACT.md
 
 # No images in the repository, by the owner's decision on 2026-09-01. The
 # history was rewritten to remove every one that had ever been committed --

@@ -65,7 +65,7 @@ invariants.
 
 `docs/` is the project's written record, and a behaviour it describes wrongly is
 a defect of the same kind as a failing test — fixed in the change that caused
-it, not filed for later. `docs/CONTRACT.md` says how a page is written.
+it, not filed for later. [`DOCS.md`](DOCS.md) says how a page is written.
 
 Every non-obvious claim on a page carries an evidence chip: `certified` for
 something observed against the real API, terminal or file on disk; `tested` for

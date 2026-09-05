@@ -1,9 +1,9 @@
 # Changelog
 
 What changed, for someone deciding whether to upgrade. The reasoning behind a
-change lives in its commit message; what was learned lives in `notes/lessons/`;
-where the work stands lives in `notes/STATUS.md`. This file answers only: what
-is different now, and will it break me.
+change lives in its commit message, and so does what was learned; where the work
+stands is the owner's to say and is not written down here. This file answers
+only: what is different now, and will it break me.
 
 ## How versions work here
 
