@@ -377,68 +377,76 @@ fn turn_from_content(
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 760 320" role="img"
-           aria-label="SSE frames are routed by type: message_start seeds the four usage counters, content_block_start creates a Partial keyed by index, content_block_delta appends to the matching Partial by delta type, message_delta sets the stop reason and guards the output count, and an error frame ends the turn. finish() renders each Partial back to a wire block and hands the array to turn_from_content, the same function the batch path uses.">
+      <!-- diagram:providers-turn -->
+      <svg viewBox="0 0 182 580" role="img" aria-label="SSE frames route through Assembly::apply's 5 typed arms (message_start, content_block_start, content_block_delta, message_delta, error), then finish() hands the assembled blocks to turn_from_content — the same function the batch path uses.">
+        <style>
+          :root {
+            --trn-ground: #12101a;
+            --trn-surface: #1c1930;
+            --trn-line: #31d4f2;
+            --trn-text: #dcf6ff;
+            --trn-muted: #7d8fa8;
+            --trn-accent: #ff2e97;
+            --trn-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --trn-ground: #0b0a10;
+              --trn-surface: #15132a;
+              --trn-line: #22b8d6;
+              --trn-text: #c4e8f5;
+              --trn-muted: #6b7c94;
+              --trn-accent: #ff45a3;
+              --trn-dim: #7a4fd8;
+            }
+          }
+          .trn-ground { fill: var(--trn-ground); }
+          .trn-box { fill: var(--trn-surface); stroke: var(--trn-line); stroke-width: 1.5; }
+          .trn-box-hl { fill: var(--trn-surface); stroke: var(--trn-accent); stroke-width: 2; }
+          .trn-lbl { fill: var(--trn-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .trn-note { fill: var(--trn-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .trn-edge { stroke: var(--trn-line); stroke-width: 1.5; fill: none; }
+          .trn-edge-hl { stroke: var(--trn-accent); stroke-width: 2; fill: none; }
+          .trn-edge-dim { stroke: var(--trn-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
         <defs>
-          <marker id="trn-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          <marker id="trn-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--trn-line)"/>
           </marker>
-          <marker id="trn-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          <marker id="trn-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--trn-accent)"/>
+          </marker>
+          <marker id="trn-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--trn-dim)"/>
           </marker>
         </defs>
+        <rect class="trn-ground" x="0" y="0" width="182" height="580"/>
 
-        <text class="tiny" x="14" y="16">frames, in arrival order</text>
-        <rect class="box" x="14" y="26" width="188" height="26" rx="4" />
-        <text class="sm" x="26" y="44">message_start</text>
-        <rect class="box" x="14" y="58" width="188" height="26" rx="4" />
-        <text class="sm" x="26" y="76">content_block_start</text>
-        <rect class="box" x="14" y="90" width="188" height="26" rx="4" />
-        <text class="sm" x="26" y="108">content_block_delta</text>
-        <rect class="box" x="14" y="122" width="188" height="26" rx="4" />
-        <text class="sm" x="26" y="140">message_delta</text>
-        <rect class="box" x="14" y="154" width="188" height="26" rx="4" />
-        <text class="sm" x="26" y="172">error</text>
-        <rect class="box" x="14" y="186" width="188" height="26" rx="4" />
-        <text class="sm" x="26" y="204">anything else</text>
+        <path class="trn-edge" marker-end="url(#trn-tip)" d="M 91 54 L 91 118"/>
+        <path class="trn-edge" marker-end="url(#trn-tip)" d="M 91 156 L 91 220"/>
+        <path class="trn-edge" marker-end="url(#trn-tip)" d="M 91 258 L 91 322"/>
+        <path class="trn-edge" marker-end="url(#trn-tip)" d="M 91 360 L 91 424"/>
+        <path class="trn-edge" marker-end="url(#trn-tip)" d="M 91 462 L 91 526"/>
+        <rect class="trn-box" x="16" y="16" width="150" height="38" rx="3"/>
+        <text class="trn-lbl" x="91" y="40" text-anchor="middle">message_start</text>
 
-        <line class="edge" x1="204" y1="39" x2="284" y2="60" marker-end="url(#trn-arrow)" />
-        <line class="edge" x1="204" y1="71" x2="284" y2="122" marker-end="url(#trn-arrow)" />
-        <line class="edge" x1="204" y1="103" x2="284" y2="140" marker-end="url(#trn-arrow)" />
-        <line class="edge" x1="204" y1="135" x2="284" y2="76" marker-end="url(#trn-arrow)" />
-        <line class="edge-dash" x1="204" y1="167" x2="284" y2="210" />
-        <line class="edge-dash" x1="204" y1="199" x2="264" y2="199" />
-        <text class="tiny" x="212" y="216">dropped</text>
+        <rect class="trn-box" x="16" y="118" width="150" height="38" rx="3"/>
+        <text class="trn-lbl" x="91" y="142" text-anchor="middle">content_block_start</text>
 
-        <rect class="box" x="286" y="40" width="200" height="52" rx="4" />
-        <text class="lbl" x="298" y="60">Assembly.usage</text>
-        <text class="tiny" x="298" y="80">output_tokens guarded: 0 never overwrites</text>
+        <rect class="trn-box" x="16" y="220" width="150" height="38" rx="3"/>
+        <text class="trn-lbl" x="91" y="244" text-anchor="middle">content_block_delta</text>
 
-        <rect class="hl" x="286" y="102" width="200" height="60" rx="4" />
-        <text class="lbl" x="298" y="122">blocks: BTreeMap</text>
-        <text class="tiny" x="298" y="140">index =&gt; Partial</text>
-        <text class="tiny" x="298" y="154">Text | Thinking | Tool | Opaque</text>
+        <rect class="trn-box" x="16" y="322" width="150" height="38" rx="3"/>
+        <text class="trn-lbl" x="91" y="346" text-anchor="middle">message_delta</text>
 
-        <rect class="box" x="286" y="172" width="200" height="52" rx="4" />
-        <text class="lbl" x="298" y="192">Err(LlmError::Api)</text>
-        <text class="tiny" x="298" y="210">status 200, the turn stops</text>
+        <rect class="trn-box" x="16" y="424" width="150" height="38" rx="3"/>
+        <text class="trn-lbl" x="91" y="448" text-anchor="middle">error</text>
 
-        <line class="edge-hl" x1="488" y1="132" x2="556" y2="132" marker-end="url(#trn-arrow-hl)" />
-        <rect class="hl" x="558" y="102" width="188" height="60" rx="4" />
-        <text class="lbl" x="570" y="124">finish()</text>
-        <text class="tiny" x="570" y="142">each Partial back to a wire block,</text>
-        <text class="tiny" x="570" y="156">in index order</text>
+        <rect class="trn-box-hl" x="16" y="526" width="150" height="38" rx="3"/>
+        <text class="trn-lbl" x="91" y="550" text-anchor="middle">finish()</text>
 
-        <line class="edge-hl" x1="652" y1="164" x2="652" y2="234" marker-end="url(#trn-arrow-hl)" />
-        <rect class="hl" x="500" y="236" width="246" height="50" rx="4" />
-        <text class="lbl" x="514" y="258">turn_from_content</text>
-        <text class="tiny" x="514" y="276">shared with the batch path</text>
-
-        <line class="edge" x1="240" y1="262" x2="496" y2="262" marker-end="url(#trn-arrow)" />
-        <rect class="box" x="14" y="236" width="224" height="50" rx="4" />
-        <text class="lbl" x="26" y="258">read_batch</text>
-        <text class="tiny" x="26" y="276">one body, via turn_from_message</text>
       </svg>
+      <!-- /diagram -->
     </div>
     <figcaption>
       Both modes converge on <code>turn_from_content</code>, which is why they

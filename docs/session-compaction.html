@@ -128,73 +128,75 @@ pub fn conversation(&amp;self) -&gt; Vec&lt;Message&gt; {
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 940 404" role="img" aria-label="The compaction decision: the trigger is the provider's measured input for the last call, with the chars-over-four estimate standing in only at goal open; over the cap, whole chapters are taken oldest-first until the remainder fits half the cap, and a replacement that would not shrink the conversation is abandoned.">
+      <!-- diagram:session-compaction -->
+      <svg viewBox="0 0 182 376" role="img" aria-label="4 early-return checks across compact_if_needed and compact, in the order they run. The two the page highlights are size &gt; cap (the second guard, inverted) and after &gt;= before (the last).">
+        <style>
+          :root {
+            --compaction-ground: #12101a;
+            --compaction-surface: #1c1930;
+            --compaction-line: #31d4f2;
+            --compaction-text: #dcf6ff;
+            --compaction-muted: #7d8fa8;
+            --compaction-accent: #ff2e97;
+            --compaction-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --compaction-ground: #0b0a10;
+              --compaction-surface: #15132a;
+              --compaction-line: #22b8d6;
+              --compaction-text: #c4e8f5;
+              --compaction-muted: #6b7c94;
+              --compaction-accent: #ff45a3;
+              --compaction-dim: #7a4fd8;
+            }
+          }
+          .compaction-ground { fill: var(--compaction-ground); }
+          .compaction-box { fill: var(--compaction-surface); stroke: var(--compaction-line); stroke-width: 1.5; }
+          .compaction-box-hl { fill: var(--compaction-surface); stroke: var(--compaction-accent); stroke-width: 2; }
+          .compaction-lbl { fill: var(--compaction-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .compaction-note { fill: var(--compaction-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .compaction-edge { stroke: var(--compaction-line); stroke-width: 1.5; fill: none; }
+          .compaction-edge-hl { stroke: var(--compaction-accent); stroke-width: 2; fill: none; }
+          .compaction-edge-dim { stroke: var(--compaction-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
         <defs>
-          <marker id="scmp2-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
+          <marker id="compaction-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--compaction-line)"/>
           </marker>
-          <marker id="scmp2-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
+          <marker id="compaction-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--compaction-accent)"/>
+          </marker>
+          <marker id="compaction-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--compaction-dim)"/>
           </marker>
         </defs>
+        <rect class="compaction-ground" x="0" y="0" width="182" height="376"/>
 
-        <rect class="box" x="16" y="16" width="290" height="44" rx="3"/>
-        <text class="sm" x="30" y="36">measured: last call's billable input</text>
-        <text class="tiny" x="30" y="52">usage.billable_input_tokens()</text>
+        <path class="compaction-edge" marker-end="url(#compaction-tip)" d="M 91 54 L 91 118"/>
+        <path class="compaction-edge" marker-end="url(#compaction-tip)" d="M 91 156 L 91 220"/>
+        <path class="compaction-edge" marker-end="url(#compaction-tip)" d="M 91 258 L 91 322"/>
+        <rect class="compaction-box" x="16" y="16" width="150" height="38" rx="3"/>
+        <text class="compaction-lbl" x="91" y="40" text-anchor="middle">cap ? 0</text>
 
-        <rect class="box" x="16" y="76" width="290" height="44" rx="3" stroke-dasharray="4 4"/>
-        <text class="sm" x="30" y="96">estimate: wire chars / 4</text>
-        <text class="tiny" x="30" y="112">only at goal open, before any call</text>
+        <rect class="compaction-box" x="16" y="118" width="150" height="38" rx="3"/>
+        <text class="compaction-lbl" x="91" y="142" text-anchor="middle">size ? cap</text>
 
-        <path class="edge" marker-end="url(#scmp2-arrow)" d="M306,38 L360,38 L360,58 L390,58"/>
-        <path class="edge-dash" marker-end="url(#scmp2-arrow)" d="M306,98 L360,98 L360,78 L390,78"/>
+        <rect class="compaction-box" x="16" y="220" width="150" height="38" rx="3"/>
+        <text class="compaction-lbl" x="91" y="244" text-anchor="middle">take == 0</text>
 
-        <rect class="hl" x="394" y="42" width="190" height="52" rx="3"/>
-        <text class="sm" x="489" y="66" text-anchor="middle">size &gt; max_context?</text>
-        <text class="tiny" x="489" y="84" text-anchor="middle">cap ≤ 0 disables it entirely</text>
+        <rect class="compaction-box-hl" x="16" y="322" width="150" height="38" rx="3"/>
+        <text class="compaction-lbl" x="91" y="346" text-anchor="middle">after ? before</text>
 
-        <path class="edge" marker-end="url(#scmp2-arrow)" d="M584,68 L688,68"/>
-        <text class="tiny" x="626" y="60">no</text>
-        <rect class="box" x="692" y="46" width="232" height="44" rx="3"/>
-        <text class="sm" x="708" y="66">send it unchanged</text>
-        <text class="tiny" x="708" y="82">nothing is recorded</text>
-
-        <path class="edge-hl" marker-end="url(#scmp2-arrow-hl)" d="M489,94 L489,130"/>
-        <text class="tiny" x="500" y="118">yes</text>
-
-        <rect class="box" x="300" y="134" width="378" height="44" rx="3"/>
-        <text class="sm" x="316" y="154">target = max(max_context / 2, 1)</text>
-        <text class="tiny" x="316" y="170">half, not all: the goal now starting needs room to work in</text>
-
-        <path class="edge-hl" marker-end="url(#scmp2-arrow-hl)" d="M489,178 L489,202"/>
-
-        <rect class="box" x="300" y="206" width="378" height="46" rx="3"/>
-        <text class="sm" x="316" y="226">take chapters oldest-first while remainder &gt; target</text>
-        <text class="tiny" x="316" y="242">whole goals only; sizes measured once, not per step</text>
-
-        <path class="edge-hl" marker-end="url(#scmp2-arrow-hl)" d="M489,252 L489,276"/>
-
-        <rect class="box" x="300" y="280" width="378" height="46" rx="3"/>
-        <text class="sm" x="316" y="300">each becomes: goal text · final answer · the note</text>
-        <text class="tiny" x="316" y="316">two Messages. no model is asked anything.</text>
-
-        <path class="edge" marker-end="url(#scmp2-arrow)" d="M678,303 L714,303"/>
-        <rect class="hl" x="718" y="280" width="206" height="46" rx="3"/>
-        <text class="sm" x="732" y="300">after ≥ before?</text>
-        <text class="tiny" x="732" y="316">abandon, and say which case</text>
-
-        <path class="edge-hl" marker-end="url(#scmp2-arrow-hl)" d="M489,326 L489,350"/>
-
-        <rect class="box" x="300" y="354" width="378" height="44" rx="3"/>
-        <text class="sm" x="316" y="374">append `compacted`: drop_messages + the messages</text>
-        <text class="tiny" x="316" y="390">both halves, so the fold replays instead of re-deciding</text>
       </svg>
+      <!-- /diagram -->
     </div>
     <figcaption>
       Read off <code>Agent::compact_if_needed</code> and
-      <code>Agent::compact</code>. The two pink boxes are the only branches:
-      whether the last request was over the cap, and whether the replacement
-      comes out smaller than what it replaces. Everything between them is
+      <code>Agent::compact</code>. The four rungs are the early-return checks,
+      in the order they run; the two the page highlights are
+      <code>size &gt; max_context</code> (the second guard, inverted) and
+      <code>after &gt;= before</code> (the last). Everything between them is
       arithmetic.
     </figcaption>
   </figure>
@@ -772,9 +774,12 @@ fn estimate(messages: &amp;[Message]) -&gt; i64 {
       about that file.
     </li>
     <li>
-      <span class="chip unv">unverified</span> How this page renders. The figure
-      was drawn from the two functions and its geometry checked by arithmetic.
-      No browser drew it.
+      <span class="chip test">tested</span> How this page renders. The figure
+      is generated from <code>run_tool_call</code>,
+      <code>compact_if_needed</code>, and <code>compact</code> by
+      <code>emma-docsgen</code>; run <code>cargo test -p emma-docsgen
+      session_compaction</code> and the freshness test in
+      <code>tests/current.rs</code> if it changes.
     </li>
   </ul>
 

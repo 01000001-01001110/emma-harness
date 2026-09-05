@@ -172,83 +172,100 @@ let request = Request {
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 700 560" role="img" aria-label="One iteration: three guards, then compaction, then a request built from instructions, tools, history and query. The turn comes back, is metered and logged, and is held rather than pushed. If it has no tool calls the ending ladder runs; if it has tool calls they are dispatched one at a time and the held turn is placed beside their results.">
-        <rect class="box" x="16" y="14" width="200" height="72" rx="4" />
-        <text class="sm" x="26" y="34">interrupt.tripped()?</text>
-        <text class="sm" x="26" y="52">elapsed &gt; wall_clock?</text>
-        <text class="sm" x="26" y="70">iterations &gt;= max?</text>
-        <text class="tiny" x="26" y="82">in this order</text>
-
-        <path class="edge" d="M216 50 H258" marker-end="url(#ot-arrow)" />
-        <rect class="box" x="258" y="26" width="164" height="48" rx="4" />
-        <text class="sm" x="268" y="46">compact_if_needed</text>
-        <text class="tiny" x="268" y="63">(last_input)</text>
-
-        <path class="edge" d="M422 50 H466" marker-end="url(#ot-arrow)" />
-        <rect class="box" x="466" y="14" width="218" height="80" rx="4" />
-        <text class="lbl" x="476" y="34">Request</text>
-        <text class="sm" x="476" y="52">instructions + contract</text>
-        <text class="sm" x="476" y="68">tools · history · query</text>
-        <text class="tiny" x="476" y="86">max_tokens 32_000 · XHigh</text>
-
-        <path class="edge" d="M575 94 V126" marker-end="url(#ot-arrow)" />
-        <rect class="hl" x="466" y="126" width="218" height="72" rx="4" />
-        <text class="lbl" x="476" y="146">call_model</text>
-        <text class="sm" x="476" y="164">select!: interrupt · events</text>
-        <text class="sm" x="476" y="180">· the send future</text>
-        <text class="tiny" x="476" y="194">Ok(None) = interrupted</text>
-
-        <path class="edge" d="M575 198 V228" marker-end="url(#ot-arrow)" />
-        <rect class="box" x="466" y="228" width="218" height="76" rx="4" />
-        <text class="sm" x="476" y="248">spend.add(cost_tokens)</text>
-        <text class="tiny" x="476" y="265">log model_call · assistant</text>
-        <text class="tiny" x="476" y="281">last_input = billable_input</text>
-        <text class="tiny" x="476" y="297">pending_turn = turn.content</text>
-
-        <path class="edge" d="M575 304 V334" marker-end="url(#ot-arrow)" />
-        <rect class="box" x="466" y="334" width="218" height="36" rx="4" />
-        <text class="sm" x="476" y="357">tool_calls().is_empty()?</text>
-
-        <path class="edge" d="M466 352 H360 V392" marker-end="url(#ot-arrow)" />
-        <text class="tiny" x="366" y="347">yes</text>
-        <rect class="box" x="240" y="392" width="196" height="52" rx="4" />
-        <text class="lbl" x="250" y="414">the ending ladder</text>
-        <text class="tiny" x="250" y="432">verdict · stall · answered · kicks</text>
-
-        <path class="edge-hl" d="M575 370 V398" marker-end="url(#ot-arrow-hl)" />
-        <text class="tiny" x="581" y="390">no</text>
-        <rect class="hl" x="466" y="398" width="218" height="76" rx="4" />
-        <text class="lbl" x="476" y="418">for call in tool_calls()</text>
-        <text class="sm" x="476" y="436">worked = true</text>
-        <text class="sm" x="476" y="452">run_tool_call(...)</text>
-        <text class="tiny" x="476" y="468">memo written here, not there</text>
-
-        <path class="edge-hl" d="M575 474 V500" marker-end="url(#ot-arrow-hl)" />
-        <path class="edge" d="M338 444 V500" marker-end="url(#ot-arrow)" />
-        <rect class="box" x="150" y="500" width="534" height="44" rx="4" />
-        <text class="lbl" x="160" y="521">place(query, pending_turn, results)</text>
-        <text class="tiny" x="160" y="537">session::place_turn — both go in, or neither does</text>
-
-        <path class="edge-hl" d="M150 522 H100 V50 H216" marker-end="url(#ot-arrow-hl)" />
-        <text class="tiny" x="26" y="300">next</text>
-        <text class="tiny" x="26" y="314">iteration</text>
-
+      <!-- diagram:loop-one-turn -->
+      <svg viewBox="0 0 182 988" role="img" aria-label="10 steps in one run_goal iteration: the three budget guards ([&quot;Interrupted&quot;, &quot;Deadline&quot;, &quot;Iterations&quot;]), compact_if_needed, the four Request fields that move each call, call_model, then place once the turn knows where it goes.">
+        <style>
+          :root {
+            --one-turn-ground: #12101a;
+            --one-turn-surface: #1c1930;
+            --one-turn-line: #31d4f2;
+            --one-turn-text: #dcf6ff;
+            --one-turn-muted: #7d8fa8;
+            --one-turn-accent: #ff2e97;
+            --one-turn-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --one-turn-ground: #0b0a10;
+              --one-turn-surface: #15132a;
+              --one-turn-line: #22b8d6;
+              --one-turn-text: #c4e8f5;
+              --one-turn-muted: #6b7c94;
+              --one-turn-accent: #ff45a3;
+              --one-turn-dim: #7a4fd8;
+            }
+          }
+          .one-turn-ground { fill: var(--one-turn-ground); }
+          .one-turn-box { fill: var(--one-turn-surface); stroke: var(--one-turn-line); stroke-width: 1.5; }
+          .one-turn-box-hl { fill: var(--one-turn-surface); stroke: var(--one-turn-accent); stroke-width: 2; }
+          .one-turn-lbl { fill: var(--one-turn-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .one-turn-note { fill: var(--one-turn-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .one-turn-edge { stroke: var(--one-turn-line); stroke-width: 1.5; fill: none; }
+          .one-turn-edge-hl { stroke: var(--one-turn-accent); stroke-width: 2; fill: none; }
+          .one-turn-edge-dim { stroke: var(--one-turn-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
         <defs>
-          <marker id="ot-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          <marker id="one-turn-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--one-turn-line)"/>
           </marker>
-          <marker id="ot-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          <marker id="one-turn-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--one-turn-accent)"/>
+          </marker>
+          <marker id="one-turn-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--one-turn-dim)"/>
           </marker>
         </defs>
+        <rect class="one-turn-ground" x="0" y="0" width="182" height="988"/>
+
+        <path class="one-turn-edge" marker-end="url(#one-turn-tip)" d="M 91 54 L 91 118"/>
+        <path class="one-turn-edge" marker-end="url(#one-turn-tip)" d="M 91 156 L 91 220"/>
+        <path class="one-turn-edge" marker-end="url(#one-turn-tip)" d="M 91 258 L 91 322"/>
+        <path class="one-turn-edge" marker-end="url(#one-turn-tip)" d="M 91 360 L 91 424"/>
+        <path class="one-turn-edge" marker-end="url(#one-turn-tip)" d="M 91 462 L 91 526"/>
+        <path class="one-turn-edge" marker-end="url(#one-turn-tip)" d="M 91 564 L 91 628"/>
+        <path class="one-turn-edge" marker-end="url(#one-turn-tip)" d="M 91 666 L 91 730"/>
+        <path class="one-turn-edge" marker-end="url(#one-turn-tip)" d="M 91 768 L 91 832"/>
+        <path class="one-turn-edge" marker-end="url(#one-turn-tip)" d="M 91 870 L 91 934"/>
+        <rect class="one-turn-box" x="16" y="16" width="150" height="38" rx="3"/>
+        <text class="one-turn-lbl" x="91" y="40" text-anchor="middle">Interrupted</text>
+
+        <rect class="one-turn-box" x="16" y="118" width="150" height="38" rx="3"/>
+        <text class="one-turn-lbl" x="91" y="142" text-anchor="middle">Deadline</text>
+
+        <rect class="one-turn-box" x="16" y="220" width="150" height="38" rx="3"/>
+        <text class="one-turn-lbl" x="91" y="244" text-anchor="middle">Iterations</text>
+
+        <rect class="one-turn-box" x="16" y="322" width="150" height="38" rx="3"/>
+        <text class="one-turn-lbl" x="91" y="346" text-anchor="middle">compact_if_needed</text>
+
+        <rect class="one-turn-box" x="16" y="424" width="150" height="38" rx="3"/>
+        <text class="one-turn-lbl" x="91" y="448" text-anchor="middle">instructions: String</text>
+
+        <rect class="one-turn-box" x="16" y="526" width="150" height="38" rx="3"/>
+        <text class="one-turn-lbl" x="91" y="550" text-anchor="middle">tools</text>
+
+        <rect class="one-turn-box" x="16" y="628" width="150" height="38" rx="3"/>
+        <text class="one-turn-lbl" x="91" y="652" text-anchor="middle">history</text>
+
+        <rect class="one-turn-box" x="16" y="730" width="150" height="38" rx="3"/>
+        <text class="one-turn-lbl" x="91" y="754" text-anchor="middle">query: Vec&lt;Message&gt;</text>
+
+        <rect class="one-turn-box-hl" x="16" y="832" width="150" height="38" rx="3"/>
+        <text class="one-turn-lbl" x="91" y="856" text-anchor="middle">call_model</text>
+
+        <rect class="one-turn-box" x="16" y="934" width="150" height="38" rx="3"/>
+        <text class="one-turn-lbl" x="91" y="958" text-anchor="middle">place</text>
+
       </svg>
+      <!-- /diagram -->
     </div>
     <figcaption>
-      One iteration, drawn from the body of <code>run_goal</code>. The pink
-      path is the working case. The assistant turn is held in
-      <code>pending_turn</code> from the moment it arrives until something
-      knows where it goes, which is why <code>place</code> appears once at the
-      bottom rather than at each of the four places a turn could be pushed.
+      One iteration of <code>run_goal</code>: the three budget guards as
+      <code>Ending</code> variants, then compaction, the four
+      <code>Request</code> fields built each call, <code>call_model</code>, and
+      <code>place</code> once the turn knows where it goes. The fork between
+      tool calls and the ending ladder is in the prose below; this ladder is
+      only what the source names in order.
     </figcaption>
   </figure>
 

@@ -83,7 +83,7 @@
 </nav>
 
 <p class="lede">
-  Three fields, and one absence that three separate crates have each worked
+  Four fields, and one absence that three separate crates have each worked
   around in their own words. This is the sharpest edge in the tool layer: an
   invariant the type system does not hold, guarded by three comments and
   nothing else.
@@ -102,6 +102,7 @@
     <span class="k">pub</span> cwd: std::path::PathBuf,
     <span class="k">pub</span> session_id: String,
     <span class="k">pub</span> turn_id: String,
+    <span class="k">pub</span> background: background::Registry,
 }</code></pre>
 <span class="src">crates/tool-api/src/lib.rs — <code>ToolCtx</code></span>
 
@@ -111,7 +112,8 @@
   <code>session_id</code> keys the read tracker, so a resumed process cannot
   inherit an earlier session's claim to have looked at a file.
   <code>turn_id</code> is carried for logging and is read by nothing in the four
-  tool crates.
+  tool crates. <code>background</code> holds in-flight shell work; it is not
+  the read tracker the page is about.
 </p>
 <span class="src">tools/fs/src/session.rs — <code>ReadTracker::state</code></span>
 
@@ -126,46 +128,68 @@
 
 <figure>
   <div class="figwrap">
-    <svg viewBox="0 0 700 300" role="img" aria-label="Three builder functions each construct their tools around one shared object: fs_tools gives Read, Write and Edit one ReadTracker; lsp_tools gives the four code-intelligence tools one ServerPool; browser_tools gives the five browser tools one BrowserPool. tools/tasks needs no builder invariant because the file on disk is its state.">
+    <!-- diagram:tools-ctx -->
+    <svg viewBox="0 0 182 376" role="img" aria-label="3 of the 4 tool builders wire every member to one shared object; the other 1 re-reads the file on every call. Drawn from the four `*_tools` functions and the structs they Arc.">
+      <style>
+        :root {
+          --tools-ctx-ground: #12101a;
+          --tools-ctx-surface: #1c1930;
+          --tools-ctx-line: #31d4f2;
+          --tools-ctx-text: #dcf6ff;
+          --tools-ctx-muted: #7d8fa8;
+          --tools-ctx-accent: #ff2e97;
+          --tools-ctx-dim: #8a5cf0;
+        }
+        @media (prefers-color-scheme: dark) {
+          :root {
+            --tools-ctx-ground: #0b0a10;
+            --tools-ctx-surface: #15132a;
+            --tools-ctx-line: #22b8d6;
+            --tools-ctx-text: #c4e8f5;
+            --tools-ctx-muted: #6b7c94;
+            --tools-ctx-accent: #ff45a3;
+            --tools-ctx-dim: #7a4fd8;
+          }
+        }
+        .tools-ctx-ground { fill: var(--tools-ctx-ground); }
+        .tools-ctx-box { fill: var(--tools-ctx-surface); stroke: var(--tools-ctx-line); stroke-width: 1.5; }
+        .tools-ctx-box-hl { fill: var(--tools-ctx-surface); stroke: var(--tools-ctx-accent); stroke-width: 2; }
+        .tools-ctx-lbl { fill: var(--tools-ctx-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .tools-ctx-note { fill: var(--tools-ctx-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .tools-ctx-edge { stroke: var(--tools-ctx-line); stroke-width: 1.5; fill: none; }
+        .tools-ctx-edge-hl { stroke: var(--tools-ctx-accent); stroke-width: 2; fill: none; }
+        .tools-ctx-edge-dim { stroke: var(--tools-ctx-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+      </style>
       <defs>
-        <marker id="tx-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+        <marker id="tools-ctx-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-ctx-line)"/>
         </marker>
-        <marker id="tx-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+        <marker id="tools-ctx-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-ctx-accent)"/>
+        </marker>
+        <marker id="tools-ctx-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-ctx-dim)"/>
         </marker>
       </defs>
+      <rect class="tools-ctx-ground" x="0" y="0" width="182" height="376"/>
 
-      <rect class="box" x="10" y="20" width="140" height="34" rx="4" />
-      <text class="lbl" x="26" y="42">fs_tools()</text>
-      <path class="edge-hl" d="M150 37 L214 37" marker-end="url(#tx-arrow-hl)" />
-      <rect class="hl" x="214" y="19" width="150" height="36" rx="4" />
-      <text class="lbl" x="230" y="42">Arc&lt;ReadTracker&gt;</text>
-      <text class="sm" x="384" y="34">Read · Write · Edit</text>
-      <text class="tiny" x="384" y="49">wrong wiring: nothing is ever refused</text>
+      <path class="tools-ctx-edge" marker-end="url(#tools-ctx-tip)" d="M 91 54 L 91 118"/>
+      <path class="tools-ctx-edge" marker-end="url(#tools-ctx-tip)" d="M 91 156 L 91 220"/>
+      <path class="tools-ctx-edge" marker-end="url(#tools-ctx-tip)" d="M 91 258 L 91 322"/>
+      <rect class="tools-ctx-box-hl" x="16" y="16" width="150" height="38" rx="3"/>
+      <text class="tools-ctx-lbl" x="91" y="40" text-anchor="middle">fs_tools</text>
 
-      <rect class="box" x="10" y="94" width="140" height="34" rx="4" />
-      <text class="lbl" x="26" y="116">lsp_tools()</text>
-      <path class="edge-hl" d="M150 111 L214 111" marker-end="url(#tx-arrow-hl)" />
-      <rect class="hl" x="214" y="93" width="150" height="36" rx="4" />
-      <text class="lbl" x="230" y="116">Arc&lt;Pool&gt;</text>
-      <text class="sm" x="384" y="108">the four LSP tools</text>
-      <text class="tiny" x="384" y="123">wrong wiring: four rust-analyzers, one workspace</text>
+      <rect class="tools-ctx-box" x="16" y="118" width="150" height="38" rx="3"/>
+      <text class="tools-ctx-lbl" x="91" y="142" text-anchor="middle">lsp_tools: Arc&lt;Pool&gt;</text>
 
-      <rect class="box" x="10" y="168" width="140" height="34" rx="4" />
-      <text class="lbl" x="26" y="190">browser_tools()</text>
-      <path class="edge-hl" d="M150 185 L214 185" marker-end="url(#tx-arrow-hl)" />
-      <rect class="hl" x="214" y="167" width="150" height="36" rx="4" />
-      <text class="lbl" x="230" y="190">Arc&lt;BrowserPool&gt;</text>
-      <text class="sm" x="384" y="182">the five browser tools</text>
-      <text class="tiny" x="384" y="197">wrong wiring: BrowserClose cannot see BrowserOpen</text>
+      <rect class="tools-ctx-box" x="16" y="220" width="150" height="38" rx="3"/>
+      <text class="tools-ctx-lbl" x="91" y="244" text-anchor="middle">browser_tools</text>
 
-      <rect class="box" x="10" y="242" width="140" height="34" rx="4" />
-      <text class="lbl" x="26" y="264">task_tools()</text>
-      <path class="edge-dash" d="M150 259 L214 259" marker-end="url(#tx-arrow)" />
-      <text class="sm" x="222" y="256">no shared object</text>
-      <text class="tiny" x="222" y="271">the file on disk is the state, re-read every call</text>
+      <rect class="tools-ctx-box" x="16" y="322" width="150" height="38" rx="3"/>
+      <text class="tools-ctx-lbl" x="91" y="346" text-anchor="middle">task_tools</text>
+
     </svg>
+    <!-- /diagram -->
   </div>
   <figcaption>
     Three builders that carry an invariant and one that does not. Drawn from

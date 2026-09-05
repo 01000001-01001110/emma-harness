@@ -289,56 +289,78 @@ fn min_cacheable_tokens(model: &amp;str) -&gt; usize {
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 760 250" role="img"
-           aria-label="One prefix of about 700 estimated tokens sits above Opus 5's floor of 512 and far below Haiku 4.5's floor of 4,096, so the identical request is marked on Opus 5 and unmarked on Haiku. An unknown model is gated at 4,096, the highest floor in the table.">
+      <!-- diagram:providers-floor -->
+      <svg viewBox="0 0 698 172" role="img" aria-label="One prefix of about 700 estimated tokens (chars/4) on 4 models: claude-opus-5 → marked (floor 512); claude-sonnet-5 → unmarked (floor 1024); claude-haiku-4-5 → unmarked (floor 4096); unknown-model → unmarked (floor 4096). Unknown models use MIN_CACHEABLE_UNKNOWN (4096).">
+        <style>
+          :root {
+            --flr-ground: #12101a;
+            --flr-surface: #1c1930;
+            --flr-line: #31d4f2;
+            --flr-text: #dcf6ff;
+            --flr-muted: #7d8fa8;
+            --flr-accent: #ff2e97;
+            --flr-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --flr-ground: #0b0a10;
+              --flr-surface: #15132a;
+              --flr-line: #22b8d6;
+              --flr-text: #c4e8f5;
+              --flr-muted: #6b7c94;
+              --flr-accent: #ff45a3;
+              --flr-dim: #7a4fd8;
+            }
+          }
+          .flr-ground { fill: var(--flr-ground); }
+          .flr-box { fill: var(--flr-surface); stroke: var(--flr-line); stroke-width: 1.5; }
+          .flr-box-hl { fill: var(--flr-surface); stroke: var(--flr-accent); stroke-width: 2; }
+          .flr-lbl { fill: var(--flr-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .flr-note { fill: var(--flr-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .flr-edge { stroke: var(--flr-line); stroke-width: 1.5; fill: none; }
+          .flr-edge-hl { stroke: var(--flr-accent); stroke-width: 2; fill: none; }
+          .flr-edge-dim { stroke: var(--flr-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
         <defs>
-          <marker id="flr-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          <marker id="flr-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--flr-line)"/>
           </marker>
-          <marker id="flr-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          <marker id="flr-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--flr-accent)"/>
+          </marker>
+          <marker id="flr-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--flr-dim)"/>
           </marker>
         </defs>
+        <rect class="flr-ground" x="0" y="0" width="698" height="172"/>
 
-        <text class="tiny" x="14" y="18">estimated prefix tokens, chars / 4</text>
-        <line class="edge" x1="40" y1="40" x2="720" y2="40" marker-end="url(#flr-arrow)" />
-        <text class="tiny" x="42" y="58">0</text>
-        <text class="tiny" x="120" y="58">512</text>
-        <text class="tiny" x="204" y="58">1,024</text>
-        <text class="tiny" x="330" y="58">2,048</text>
-        <text class="tiny" x="580" y="58">4,096</text>
+        <path class="flr-edge" marker-end="url(#flr-tip)" d="M 349 54 L 91 118"/>
+        <path class="flr-edge-dim" marker-end="url(#flr-tip-dim)" d="M 349 54 L 263 118"/>
+        <path class="flr-edge-dim" marker-end="url(#flr-tip-dim)" d="M 349 54 L 435 118"/>
+        <path class="flr-edge-dim" marker-end="url(#flr-tip-dim)" d="M 349 54 L 607 118"/>
+        <rect class="flr-box-hl" x="274" y="16" width="150" height="38" rx="3"/>
+        <text class="flr-lbl" x="349" y="40" text-anchor="middle">~700 tokens</text>
 
-        <line class="edge-dash" x1="128" y1="30" x2="128" y2="200" />
-        <line class="edge-dash" x1="212" y1="30" x2="212" y2="200" />
-        <line class="edge-dash" x1="338" y1="30" x2="338" y2="200" />
-        <line class="edge-dash" x1="588" y1="30" x2="588" y2="200" />
+        <rect class="flr-box" x="16" y="118" width="150" height="38" rx="3"/>
+        <text class="flr-lbl" x="91" y="142" text-anchor="middle">claude-opus-5</text>
 
-        <rect class="hl" x="150" y="76" width="26" height="26" rx="4" />
-        <text class="tiny" x="184" y="94">one prefix, about 700 estimated tokens</text>
+        <rect class="flr-box" x="188" y="118" width="150" height="38" rx="3"/>
+        <text class="flr-lbl" x="263" y="142" text-anchor="middle">claude-sonnet-5</text>
 
-        <text class="sm" x="14" y="132">opus-5</text>
-        <line class="edge-hl" x1="128" y1="126" x2="700" y2="126" marker-end="url(#flr-arrow-hl)" />
-        <text class="tiny" x="600" y="120">marked</text>
+        <rect class="flr-box" x="360" y="118" width="150" height="38" rx="3"/>
+        <text class="flr-lbl" x="435" y="142" text-anchor="middle">claude-haiku-4-5</text>
 
-        <text class="sm" x="14" y="162">sonnet-5</text>
-        <line class="edge-hl" x1="212" y1="156" x2="700" y2="156" marker-end="url(#flr-arrow-hl)" />
-        <text class="tiny" x="600" y="150">marked above 1,024</text>
+        <rect class="flr-box" x="532" y="118" width="150" height="38" rx="3"/>
+        <text class="flr-lbl" x="607" y="142" text-anchor="middle">unknown-model</text>
 
-        <text class="sm" x="14" y="192">haiku-4-5</text>
-        <line class="edge-hl" x1="588" y1="186" x2="700" y2="186" marker-end="url(#flr-arrow-hl)" />
-        <text class="tiny" x="230" y="180">a marker here is accepted and does nothing</text>
-
-        <text class="sm" x="14" y="222">unknown</text>
-        <line class="edge-hl" x1="588" y1="216" x2="700" y2="216" marker-end="url(#flr-arrow-hl)" />
-        <text class="tiny" x="230" y="210">gated at the highest floor in the table</text>
       </svg>
+      <!-- /diagram -->
     </div>
     <figcaption>
       The same request on four models. Pink is the region where a
-      <code>cache_control</code> marker does something. The 700-token prefix
-      drawn at the top is <code>big_instructions()</code> from the test module,
-      chosen to sit above Opus 5's floor and well below Haiku's, which is what
-      makes
+      <code>cache_control</code> marker does something. The prefix size comes
+      from <code>big_instructions()</code> in the test module — chosen to sit
+      above Opus 5's floor and well below Haiku's — which is what makes
       <code>a_prefix_over_one_models_floor_and_under_anothers_is_marked_only_for_the_first</code>
       a regression guard rather than a tautology. Drawn from
       <code>MIN_CACHEABLE</code> and <code>clears_minimum</code>; the axis is

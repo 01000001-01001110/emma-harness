@@ -14,6 +14,68 @@ use crate::rust;
 use crate::shapes;
 use crate::svg::Diagram;
 
+/// What the gate reads off the tool, looked up where each answer lives.
+///
+/// Two of the four are fields on `ToolMeta`, two are methods on `Tool`;
+/// `Approvals::request` is verified as the function they are read in. The
+/// page's further claim -- that the gate checks none of them -- is not
+/// something a lookup can state, and it stays in the caption.
+pub fn consent_axes(root: &Path) -> Result<Diagram> {
+    let approval = root.join("crates/emma/src/approval.rs");
+    let approval_file = rust::parse(&approval)?;
+    if !rust::has_fn(&approval_file, "request") {
+        bail!("{} no longer declares `request`", approval.display());
+    }
+
+    let api = root.join("crates/tool-api/src/lib.rs");
+    let api_file = rust::parse(&api)?;
+    for name in ["name", "network_target"] {
+        if !rust::has_fn(&api_file, name) {
+            bail!("{} no longer declares `Tool::{name}`", api.display());
+        }
+    }
+    let fields = rust::struct_fields(&api_file, "ToolMeta")
+        .with_context(|| format!("{} declares the two axes", api.display()))?;
+    let axis = |name: &str| -> Result<rust::Item> {
+        fields
+            .iter()
+            .find(|f| f.name == name)
+            .cloned()
+            .with_context(|| format!("ToolMeta::{name} is one of the two axes"))
+    };
+
+    let from = fn_item("Approvals::request");
+    let answers = vec![
+        fn_item("name"),
+        axis("read_only")?,
+        axis("reaches_network")?,
+        fn_item("network_target"),
+    ];
+    let n = answers.len();
+    Ok(shapes::fan(
+        "axes",
+        format!(
+            "The {n} answers {} reads off the tool before deciding: name, the \
+             two ToolMeta axes read_only and reaches_network, and the \
+             NetworkTarget the tool itself computes from args. The gate checks \
+             none of them; each is the tool's own declaration. args itself goes \
+             to the preview renderer and is never parsed for a host.",
+            from.name,
+        ),
+        &from,
+        &answers,
+        &[],
+    ))
+}
+
+fn fn_item(name: &str) -> rust::Item {
+    rust::Item {
+        name: name.into(),
+        doc: String::new(),
+        detail: String::new(),
+    }
+}
+
 /// The in-process approval grants, from the fields that store them.
 ///
 /// Both grants are sets of strings, but they answer different questions. The
@@ -92,6 +154,58 @@ mod tests {
             .join("../..")
             .canonicalize()
             .expect("the workspace root")
+    }
+
+    /// **If this breaks:** the axes page shows an answer `request` no longer
+    /// reads, or omits one it still reads. The fields are looked up on the
+    /// real `ToolMeta`, so a renamed field fails here rather than drawing an
+    /// old spelling.
+    #[test]
+    fn the_axes_diagram_draws_the_answers_request_reads_off_the_tool() {
+        let root = root();
+        let api = rust::parse(&root.join("crates/tool-api/src/lib.rs")).expect("tool-api parses");
+        let fields = rust::struct_fields(&api, "ToolMeta").expect("ToolMeta exists");
+        for name in ["name", "network_target"] {
+            assert!(rust::has_fn(&api, name), "{name} is declared on Tool");
+        }
+        for name in ["read_only", "reaches_network"] {
+            assert!(
+                fields.iter().any(|f| f.name == name),
+                "{name} is a ToolMeta field: {fields:?}"
+            );
+        }
+        let expected: Vec<String> = [
+            "Approvals::request",
+            "name",
+            "read_only",
+            "reaches_network",
+            "network_target",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+        let d = consent_axes(&root).expect("the diagram builds");
+        let drawn: Vec<String> = d.layers.iter().flatten().map(|n| n.id.clone()).collect();
+        assert_eq!(drawn, expected, "{drawn:?}");
+        assert_eq!(d.edges.len(), expected.len() - 1, "one edge per answer");
+        let answers = expected.len() - 1;
+        assert!(
+            d.caption.contains(&answers.to_string()),
+            "the caption states the count: {}",
+            d.caption
+        );
+    }
+
+    /// **If this breaks:** the axes page loses one of its two source files and
+    /// the generator draws from the other alone rather than saying so.
+    #[test]
+    fn a_missing_source_fails_the_axes_diagram_rather_than_emptying_it() {
+        let Err(e) = consent_axes(Path::new("definitely-not-a-workspace")) else {
+            panic!("a missing tree must not produce a diagram");
+        };
+        let msg = format!("{e:#}");
+        assert!(msg.contains("approval.rs"), "{msg}");
     }
 
     /// **If this breaks:** the egress page shows a grant field `Approvals` no
@@ -191,5 +305,26 @@ mod tests {
         };
         let msg = format!("{e:#}");
         assert!(msg.contains("approval.rs"), "{msg}");
+    }
+}
+
+#[cfg(test)]
+mod write_axes {
+    use super::*;
+    use crate::inject;
+
+    /// Writes the axes page, which this module owns but `render_all` in
+    /// `lib.rs` does not list yet; the marker pair is already in the page.
+    #[test]
+    fn write_the_axes_page() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("the workspace root");
+        let page = root.join("docs").join("consent-axes.html");
+        let before = std::fs::read_to_string(&page).expect("the axes page reads");
+        let svg = consent_axes(&root).expect("the diagram builds").render();
+        let after = inject(&before, "consent-axes", &svg).expect("the markers are present");
+        std::fs::write(&page, after).expect("the axes page writes");
     }
 }

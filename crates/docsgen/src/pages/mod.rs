@@ -28,8 +28,10 @@ use crate::shapes;
 use crate::svg::Diagram;
 
 pub mod consent;
+pub mod delegation;
 pub mod loop_;
 pub mod providers;
+pub mod terminal;
 pub mod tools;
 
 /// The language server's readiness states, from the enum itself.

@@ -69,9 +69,9 @@
   </nav>
 
   <p class="lede">
-    Nothing a tool does ends a goal. Nine different things can go wrong inside
+    Nothing a tool does ends a goal. Ten different things can go wrong inside
     <code>run_tool_call</code> — a panicking tool and a Ctrl-C mid-tool now
-    among them — and all nine come back as a
+    among them — and all ten come back as a
     <code>tool_result</code> with <code>is_error</code> set, which the model
     reads and works from. The loop's own budgets stay the only things that stop
     a run.
@@ -86,7 +86,7 @@
   </p>
   <span class="src">crates/emma/src/agent.rs — module doc</span>
 
-  <h2 id="fail">One closure, nine callers</h2>
+  <h2 id="fail">One closure, ten callers</h2>
 
   <p>
     The guarantee is checkable rather than merely asserted because every failure
@@ -130,81 +130,106 @@ async fn run_tool_call(
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 700 420" role="img" aria-label="Nine failure classes — unknown tool, invalid arguments, the memo refusal, a hook denial, a refused approval, a Ctrl-C cancellation mid-tool, a panicking tool, a typed ToolError and an outer tool fault — all converge on one fail closure, which builds a tool_result with is_error set, logs it under the tool_result kind, and returns it to the loop, which pushes it into the results and continues.">
-        <rect class="box" x="16" y="14" width="240" height="26" rx="3" />
-        <text class="sm" x="26" y="31">no_such_tool · registry.get miss</text>
-        <rect class="box" x="16" y="48" width="240" height="26" rx="3" />
-        <text class="sm" x="26" y="65">validate_args · e.kind()</text>
-        <rect class="box" x="16" y="82" width="240" height="26" rx="3" />
-        <text class="sm" x="26" y="99">already_failed · the memo</text>
-        <rect class="box" x="16" y="116" width="240" height="26" rx="3" />
-        <text class="sm" x="26" y="133">blocked_by_policy · PreToolUse</text>
-        <rect class="box" x="16" y="150" width="240" height="26" rx="3" />
-        <text class="sm" x="26" y="167">not_approved · the gate</text>
-        <rect class="box" x="16" y="184" width="240" height="26" rx="3" />
-        <text class="sm" x="26" y="201">cancelled · Ctrl-C mid-tool</text>
-        <rect class="box" x="16" y="218" width="240" height="26" rx="3" />
-        <text class="sm" x="26" y="235">tool_panicked · catch_unwind</text>
-        <rect class="box" x="16" y="252" width="240" height="26" rx="3" />
-        <text class="sm" x="26" y="269">ToolError · e.kind(), e.detail()</text>
-        <rect class="box" x="16" y="286" width="240" height="26" rx="3" />
-        <text class="sm" x="26" y="303">tool_fault · the outer Err</text>
-
-        <path class="edge" d="M256 27 H292 V116" />
-        <path class="edge" d="M256 61 H292" />
-        <path class="edge" d="M256 95 H292" />
-        <path class="edge" d="M256 129 H292" />
-        <path class="edge" d="M256 163 H292" />
-        <path class="edge" d="M256 197 H292" />
-        <path class="edge" d="M256 231 H292" />
-        <path class="edge" d="M256 265 H292" />
-        <path class="edge" d="M256 299 H292 V129" />
-        <path class="edge-hl" d="M292 129 H336" marker-end="url(#fl-arrow-hl)" />
-
-        <rect class="hl" x="336" y="104" width="130" height="50" rx="4" />
-        <text class="lbl" x="346" y="126">fail(kind,</text>
-        <text class="lbl" x="346" y="144">detail)</text>
-
-        <path class="edge-hl" d="M466 129 H510" marker-end="url(#fl-arrow-hl)" />
-        <rect class="box" x="510" y="90" width="174" height="80" rx="4" />
-        <text class="sm" x="520" y="110">failure_result(...)</text>
-        <text class="tiny" x="520" y="128">is_error = true</text>
-        <text class="tiny" x="520" y="144">body {kind, tool, detail}</text>
-        <text class="tiny" x="520" y="160">log_result_block(...)</text>
-
-        <path class="edge-hl" d="M597 170 V300" marker-end="url(#fl-arrow-hl)" />
-        <rect class="box" x="336" y="300" width="348" height="48" rx="4" />
-        <text class="lbl" x="346" y="322">results.push(block) · the goal continues</text>
-        <text class="tiny" x="346" y="339">no failure class returns early from run_goal</text>
-
-        <path class="edge-dash" d="M400 348 V371 H284" marker-end="url(#fl-arrow)" />
-        <rect class="box" x="16" y="348" width="268" height="46" rx="4" />
-        <text class="sm" x="26" y="368">failed_now.insert(memo_key(call))</text>
-        <text class="tiny" x="26" y="385">failed_ever.push(label), capped at 20</text>
-
+      <!-- diagram:loop-failure -->
+      <svg viewBox="0 0 182 988" role="img" aria-label="10 failure exits in run_tool_call, in source order; each returns through the same fail closure, which builds a tool_result with is_error set and logs it before the loop continues.">
+        <style>
+          :root {
+            --failure-ground: #12101a;
+            --failure-surface: #1c1930;
+            --failure-line: #31d4f2;
+            --failure-text: #dcf6ff;
+            --failure-muted: #7d8fa8;
+            --failure-accent: #ff2e97;
+            --failure-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --failure-ground: #0b0a10;
+              --failure-surface: #15132a;
+              --failure-line: #22b8d6;
+              --failure-text: #c4e8f5;
+              --failure-muted: #6b7c94;
+              --failure-accent: #ff45a3;
+              --failure-dim: #7a4fd8;
+            }
+          }
+          .failure-ground { fill: var(--failure-ground); }
+          .failure-box { fill: var(--failure-surface); stroke: var(--failure-line); stroke-width: 1.5; }
+          .failure-box-hl { fill: var(--failure-surface); stroke: var(--failure-accent); stroke-width: 2; }
+          .failure-lbl { fill: var(--failure-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .failure-note { fill: var(--failure-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .failure-edge { stroke: var(--failure-line); stroke-width: 1.5; fill: none; }
+          .failure-edge-hl { stroke: var(--failure-accent); stroke-width: 2; fill: none; }
+          .failure-edge-dim { stroke: var(--failure-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
         <defs>
-          <marker id="fl-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          <marker id="failure-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--failure-line)"/>
           </marker>
-          <marker id="fl-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          <marker id="failure-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--failure-accent)"/>
+          </marker>
+          <marker id="failure-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--failure-dim)"/>
           </marker>
         </defs>
+        <rect class="failure-ground" x="0" y="0" width="182" height="988"/>
+
+        <path class="failure-edge" marker-end="url(#failure-tip)" d="M 91 54 L 91 118"/>
+        <path class="failure-edge" marker-end="url(#failure-tip)" d="M 91 156 L 91 220"/>
+        <path class="failure-edge" marker-end="url(#failure-tip)" d="M 91 258 L 91 322"/>
+        <path class="failure-edge" marker-end="url(#failure-tip)" d="M 91 360 L 91 424"/>
+        <path class="failure-edge" marker-end="url(#failure-tip)" d="M 91 462 L 91 526"/>
+        <path class="failure-edge" marker-end="url(#failure-tip)" d="M 91 564 L 91 628"/>
+        <path class="failure-edge" marker-end="url(#failure-tip)" d="M 91 666 L 91 730"/>
+        <path class="failure-edge" marker-end="url(#failure-tip)" d="M 91 768 L 91 832"/>
+        <path class="failure-edge" marker-end="url(#failure-tip)" d="M 91 870 L 91 934"/>
+        <rect class="failure-box" x="16" y="16" width="150" height="38" rx="3"/>
+        <text class="failure-lbl" x="91" y="40" text-anchor="middle">no_such_tool: fail</text>
+
+        <rect class="failure-box" x="16" y="118" width="150" height="38" rx="3"/>
+        <text class="failure-lbl" x="91" y="142" text-anchor="middle">Err → panicked</text>
+
+        <rect class="failure-box" x="16" y="220" width="150" height="38" rx="3"/>
+        <text class="failure-lbl" x="91" y="244" text-anchor="middle">validated: e.kind()</text>
+
+        <rect class="failure-box" x="16" y="322" width="150" height="38" rx="3"/>
+        <text class="failure-lbl" x="91" y="346" text-anchor="middle">already_failed: fail</text>
+
+        <rect class="failure-box" x="16" y="424" width="150" height="38" rx="3"/>
+        <text class="failure-lbl" x="91" y="448" text-anchor="middle">blocked_by_policy</text>
+
+        <rect class="failure-box" x="16" y="526" width="150" height="38" rx="3"/>
+        <text class="failure-lbl" x="91" y="550" text-anchor="middle">Deny → not_approved</text>
+
+        <rect class="failure-box" x="16" y="628" width="150" height="38" rx="3"/>
+        <text class="failure-lbl" x="91" y="652" text-anchor="middle">cancelled: fail</text>
+
+        <rect class="failure-box" x="16" y="730" width="150" height="38" rx="3"/>
+        <text class="failure-lbl" x="91" y="754" text-anchor="middle">Err → tool_panicked</text>
+
+        <rect class="failure-box" x="16" y="832" width="150" height="38" rx="3"/>
+        <text class="failure-lbl" x="91" y="856" text-anchor="middle">Ok → e.kind()</text>
+
+        <rect class="failure-box-hl" x="16" y="934" width="150" height="38" rx="3"/>
+        <text class="failure-lbl" x="91" y="958" text-anchor="middle">Err → tool_fault</text>
+
       </svg>
+      <!-- /diagram -->
     </div>
     <figcaption>
-      Every failure class in <code>run_tool_call</code> reaching the same
-      closure. The convergence is what makes the guarantee reviewable: one
-      function to check for the <code>is_error</code> flag and one call site for
-      the log record, rather than nine independent claims a regression could
-      break one at a time.
+      Every failure exit in <code>run_tool_call</code>, in source order; each
+      returns through the same <code>fail</code> closure. The convergence is
+      what makes the guarantee reviewable: one function to check for the
+      <code>is_error</code> flag and one call site for the log record, rather
+      than nine independent claims a regression could break one at a time.
     </figcaption>
   </figure>
 
   <h2 id="order">The order of the checks, and what each one costs</h2>
 
   <p>
-    The nine are not interchangeable. Each sits where it does because of what
+    The ten are not interchangeable. Each sits where it does because of what
     the checks above it have already ruled out, and because of what it would
     cost to run later.
   </p>

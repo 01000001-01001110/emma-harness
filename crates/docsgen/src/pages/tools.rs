@@ -231,6 +231,152 @@ fn fn_item(name: &str) -> Item {
     }
 }
 
+type BuilderSpec = (
+    &'static str,
+    &'static str,
+    Option<(&'static str, &'static str)>,
+);
+
+const TOOL_BUILDERS: [BuilderSpec; 4] = [
+    (
+        "tools/fs/src/lib.rs",
+        "fs_tools",
+        Some(("tools/fs/src/session.rs", "ReadTracker")),
+    ),
+    (
+        "tools/lsp/src/lib.rs",
+        "lsp_tools",
+        Some(("tools/lsp/src/pool.rs", "Pool")),
+    ),
+    (
+        "tools/web/src/browser/mod.rs",
+        "browser_tools",
+        Some(("tools/web/src/browser/pool.rs", "BrowserPool")),
+    ),
+    ("tools/tasks/src/lib.rs", "task_tools", None),
+];
+
+/// Each crate's builder and the shared object it hands every member.
+///
+/// The builder must exist in its `lib.rs`; when it shares state, the struct
+/// must exist in the file named beside it. `task_tools` is the row with no
+/// shared struct — the markdown file is the state.
+pub fn tools_ctx(root: &Path) -> Result<Diagram> {
+    let mut steps = Vec::new();
+    for (lib, builder, shared) in TOOL_BUILDERS {
+        let lib_path = root.join(lib);
+        let file = rust::parse(&lib_path)?;
+        if !rust::has_fn(&file, builder) {
+            bail!("{} no longer declares `{builder}`", lib_path.display());
+        }
+        let detail = if let Some((shared_path, struct_name)) = shared {
+            let path = root.join(shared_path);
+            rust::struct_fields(&rust::parse(&path)?, struct_name).with_context(|| {
+                format!("{} declares the object `{builder}` shares", path.display())
+            })?;
+            format!("Arc<{struct_name}>")
+        } else {
+            "no shared object".into()
+        };
+        steps.push(Item {
+            name: builder.into(),
+            doc: String::new(),
+            detail,
+        });
+    }
+
+    let shared = steps
+        .iter()
+        .filter(|s| s.detail.starts_with("Arc<"))
+        .count();
+    let n = steps.len();
+    let alone = n - shared;
+    Ok(shapes::ladder(
+        "tools-ctx",
+        format!(
+            "{shared} of the {n} tool builders wire every member to one shared \
+             object; the other {alone} re-reads the file on every call. Drawn from \
+             the four `*_tools` functions and the structs they Arc."
+        ),
+        &steps,
+        Some("fs_tools"),
+    ))
+}
+
+/// The checks `run_tool_call` runs before `invoke`, in order.
+///
+/// `fn_guards` sees only three of the five early exits — the registry miss is a
+/// `let … else` and the approval denial is a `match` arm — so the ladder names
+/// the six functions and fields the path actually calls, verified in the files
+/// that declare them.
+pub fn tools_trait(root: &Path) -> Result<Diagram> {
+    let agent_path = root.join("crates/emma/src/agent.rs");
+    let agent = rust::parse(&agent_path)?;
+    if !rust::has_fn(&agent, "run_tool_call") {
+        bail!(
+            "{} no longer declares `run_tool_call`",
+            agent_path.display()
+        );
+    }
+    if !rust::has_fn(&agent, "memo_key") {
+        bail!("{} no longer declares `memo_key`", agent_path.display());
+    }
+
+    let api_path = root.join("crates/tool-api/src/lib.rs");
+    let api = rust::parse(&api_path)?;
+    for name in ["get", "validate_args", "invoke"] {
+        if !rust::has_fn(&api, name) {
+            bail!("{} no longer declares `{name}`", api_path.display());
+        }
+    }
+
+    let harness_path = root.join("crates/harness/src/lib.rs");
+    let harness = rust::parse(&harness_path)?;
+    if !rust::has_fn(&harness, "run_hooks") {
+        bail!("{} no longer declares `run_hooks`", harness_path.display());
+    }
+
+    let approval_path = root.join("crates/emma/src/approval.rs");
+    let approval = rust::parse(&approval_path)?;
+    if !rust::has_fn(&approval, "request") {
+        bail!("{} no longer declares `request`", approval_path.display());
+    }
+
+    let steps = vec![
+        Item {
+            name: "Registry::get".into(),
+            doc: String::new(),
+            detail: "miss → no_such_tool".into(),
+        },
+        fn_item("validate_args"),
+        fn_item("memo_key"),
+        Item {
+            name: "PreToolUse".into(),
+            doc: String::new(),
+            detail: "run_hooks".into(),
+        },
+        Item {
+            name: "approval gate".into(),
+            doc: String::new(),
+            detail: "request".into(),
+        },
+        fn_item("invoke"),
+    ];
+
+    let n = steps.len();
+    let pre_invoke = n - 1;
+    Ok(shapes::ladder(
+        "tools-trait",
+        format!(
+            "{pre_invoke} checks in run_tool_call can end a call before invoke \
+             runs; the ladder names all {n} stages through invoke itself. \
+             Drawn from crates/emma/src/agent.rs."
+        ),
+        &steps,
+        Some("approval gate"),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,5 +547,99 @@ mod tests {
         };
         let msg = format!("{e:#}");
         assert!(msg.contains("tools.rs") || msg.contains("pool.rs"), "{msg}");
+    }
+
+    /// **If this breaks:** the ToolCtx page shows a builder or shared struct
+    /// the source no longer declares.
+    #[test]
+    fn the_ctx_diagram_draws_the_builders_and_shared_structs_the_source_declares() {
+        let root = root();
+        for (lib, builder, shared) in TOOL_BUILDERS {
+            let file = rust::parse(&root.join(lib)).expect("{lib} parses");
+            assert!(rust::has_fn(&file, builder), "{builder} in {lib}");
+            if let Some((shared_path, struct_name)) = shared {
+                let shared_file = rust::parse(&root.join(shared_path)).expect("shared file");
+                rust::struct_fields(&shared_file, struct_name).expect(struct_name);
+            }
+        }
+
+        let d = tools_ctx(&root).expect("the diagram builds");
+        let drawn: Vec<String> = d.layers.iter().flatten().map(|n| n.id.clone()).collect();
+        assert_eq!(drawn.len(), TOOL_BUILDERS.len(), "{drawn:?}");
+        for (_, builder, _) in TOOL_BUILDERS {
+            assert!(
+                drawn.contains(&builder.to_string()),
+                "{builder} missing: {drawn:?}"
+            );
+        }
+        let shared = TOOL_BUILDERS.iter().filter(|(_, _, s)| s.is_some()).count();
+        assert!(
+            d.caption.contains(&shared.to_string()),
+            "the caption states how many share: {}",
+            d.caption
+        );
+    }
+
+    /// **If this breaks:** a renamed builder file still produces a diagram.
+    #[test]
+    fn a_missing_source_fails_the_ctx_diagram_rather_than_emptying_it() {
+        let Err(e) = tools_ctx(Path::new("definitely-not-a-workspace")) else {
+            panic!("a missing tree must not produce a diagram");
+        };
+        let msg = format!("{e:#}");
+        assert!(msg.contains("lib.rs"), "{msg}");
+    }
+
+    /// **If this breaks:** the trait page shows dispatch stages the call path
+    /// no longer names.
+    #[test]
+    fn the_trait_diagram_draws_the_stages_run_tool_call_declares() {
+        let root = root();
+        let agent = rust::parse(&root.join("crates/emma/src/agent.rs")).expect("agent.rs");
+        assert!(rust::has_fn(&agent, "run_tool_call"));
+        assert!(rust::has_fn(&agent, "memo_key"));
+
+        let api = rust::parse(&root.join("crates/tool-api/src/lib.rs")).expect("tool-api");
+        for name in ["get", "validate_args", "invoke"] {
+            assert!(rust::has_fn(&api, name), "{name} in tool-api");
+        }
+
+        let harness = rust::parse(&root.join("crates/harness/src/lib.rs")).expect("harness");
+        assert!(rust::has_fn(&harness, "run_hooks"));
+
+        let approval = rust::parse(&root.join("crates/emma/src/approval.rs")).expect("approval");
+        assert!(rust::has_fn(&approval, "request"));
+
+        let d = tools_trait(&root).expect("the diagram builds");
+        let drawn: Vec<String> = d.layers.iter().flatten().map(|n| n.id.clone()).collect();
+        assert_eq!(drawn.len(), 6, "{drawn:?}");
+        for name in [
+            "Registry::get",
+            "validate_args",
+            "memo_key",
+            "PreToolUse",
+            "approval gate",
+            "invoke",
+        ] {
+            assert!(
+                drawn.contains(&name.to_string()),
+                "{name} missing: {drawn:?}"
+            );
+        }
+        assert!(
+            d.caption.contains('5'),
+            "the caption states how many can end early: {}",
+            d.caption
+        );
+    }
+
+    /// **If this breaks:** a renamed agent file still produces a diagram.
+    #[test]
+    fn a_missing_source_fails_the_trait_diagram_rather_than_emptying_it() {
+        let Err(e) = tools_trait(Path::new("definitely-not-a-workspace")) else {
+            panic!("a missing tree must not produce a diagram");
+        };
+        let msg = format!("{e:#}");
+        assert!(msg.contains("agent.rs"), "{msg}");
     }
 }

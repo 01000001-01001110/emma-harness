@@ -119,64 +119,64 @@
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 760 372" role="img"
-           aria-label="The server renders tools, then system, then messages. Emma places at most three cache_control breakpoints: on the last system block, on the last message of history, and on the last message of the query, the third only once a tool round-trip is already in flight. Each is gated on the estimated prefix up to that point clearing the model's minimum cacheable size.">
-        <!-- The prefix spine: the order the server concatenates in, which
-             is what the exact-prefix cache match is computed over. Drawn
-             from AnthropicProvider::render + system_field + messages_field. -->
+      <!-- diagram:providers-caching -->
+      <svg viewBox="0 0 182 274" role="img" aria-label="The server renders 3 prefix sections in order — tools, then system, then messages — with 3 cache_control breakpoints total: 1 on the system block and 2 in the message list, each gated on clears_minimum.">
+        <style>
+          :root {
+            --cch-ground: #12101a;
+            --cch-surface: #1c1930;
+            --cch-line: #31d4f2;
+            --cch-text: #dcf6ff;
+            --cch-muted: #7d8fa8;
+            --cch-accent: #ff2e97;
+            --cch-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --cch-ground: #0b0a10;
+              --cch-surface: #15132a;
+              --cch-line: #22b8d6;
+              --cch-text: #c4e8f5;
+              --cch-muted: #6b7c94;
+              --cch-accent: #ff45a3;
+              --cch-dim: #7a4fd8;
+            }
+          }
+          .cch-ground { fill: var(--cch-ground); }
+          .cch-box { fill: var(--cch-surface); stroke: var(--cch-line); stroke-width: 1.5; }
+          .cch-box-hl { fill: var(--cch-surface); stroke: var(--cch-accent); stroke-width: 2; }
+          .cch-lbl { fill: var(--cch-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .cch-note { fill: var(--cch-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .cch-edge { stroke: var(--cch-line); stroke-width: 1.5; fill: none; }
+          .cch-edge-hl { stroke: var(--cch-accent); stroke-width: 2; fill: none; }
+          .cch-edge-dim { stroke: var(--cch-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
         <defs>
-          <marker id="cch-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+          <marker id="cch-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--cch-line)"/>
           </marker>
-          <marker id="cch-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+          <marker id="cch-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--cch-accent)"/>
+          </marker>
+          <marker id="cch-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--cch-dim)"/>
           </marker>
         </defs>
+        <rect class="cch-ground" x="0" y="0" width="182" height="274"/>
 
-        <text class="tiny" x="12" y="18">server renders in this order</text>
+        <path class="cch-edge" marker-end="url(#cch-tip)" d="M 91 54 L 91 118"/>
+        <path class="cch-edge" marker-end="url(#cch-tip)" d="M 91 156 L 91 220"/>
+        <rect class="cch-box" x="16" y="16" width="150" height="38" rx="3"/>
+        <text class="cch-lbl" x="91" y="40" text-anchor="middle">tools[]</text>
 
-        <line class="edge" x1="20" y1="34" x2="20" y2="344" marker-end="url(#cch-arrow)" />
+        <rect class="cch-box-hl" x="16" y="118" width="150" height="38" rx="3"/>
+        <text class="cch-lbl" x="91" y="142" text-anchor="middle">system[0]</text>
 
-        <rect class="box" x="40" y="30" width="392" height="42" rx="4" />
-        <text class="lbl" x="56" y="49">tools[]</text>
-        <text class="sm" x="56" y="65">Registry::wire_definitions()</text>
-        <text class="tiny" x="446" y="56">counted toward the gate, never marked</text>
+        <rect class="cch-box" x="16" y="220" width="150" height="38" rx="3"/>
+        <text class="cch-lbl" x="91" y="244" text-anchor="middle">messages</text>
 
-        <rect class="hl" x="40" y="86" width="392" height="42" rx="4" />
-        <text class="lbl" x="56" y="105">system[0]</text>
-        <text class="sm" x="56" y="121">instructions, verbatim</text>
-        <circle class="edge-hl" cx="452" cy="107" r="11" fill="none" />
-        <text class="lbl" x="447" y="112">1</text>
-        <text class="tiny" x="472" y="103">gate: tools + instructions</text>
-        <text class="tiny" x="472" y="117">byte-identical all session</text>
-
-        <rect class="box" x="40" y="142" width="392" height="30" rx="4" />
-        <text class="sm" x="56" y="161">messages[0 … n-2], completed turns</text>
-        <rect class="hl" x="40" y="176" width="392" height="42" rx="4" />
-        <text class="lbl" x="56" y="195">messages[n-1]</text>
-        <text class="sm" x="56" y="211">last message of history</text>
-        <circle class="edge-hl" cx="452" cy="197" r="11" fill="none" />
-        <text class="lbl" x="447" y="202">2</text>
-        <text class="tiny" x="472" y="193">gate: + history</text>
-        <text class="tiny" x="472" y="207">stable to the last completed turn</text>
-
-        <rect class="box" x="40" y="232" width="392" height="30" rx="4" />
-        <text class="sm" x="56" y="251">query[0], the user's message</text>
-        <rect class="box" x="40" y="266" width="392" height="30" rx="4" />
-        <text class="sm" x="56" y="285">query[1], assistant tool_use</text>
-        <rect class="hl" x="40" y="300" width="392" height="42" rx="4" />
-        <text class="lbl" x="56" y="319">query[last]</text>
-        <text class="sm" x="56" y="335">newest tool_result</text>
-        <circle class="edge-hl" cx="452" cy="321" r="11" fill="none" />
-        <text class="lbl" x="447" y="326">3</text>
-        <text class="tiny" x="472" y="317">gate: + query, and query.len() &gt; 1</text>
-        <text class="tiny" x="472" y="331">absent on the first call of a turn</text>
-
-        <line class="edge-dash" x1="740" y1="86" x2="740" y2="342" />
-        <text class="tiny" x="446" y="360">
-          every gate above: chars/4 ≥ MIN_CACHEABLE[model]
-        </text>
       </svg>
+      <!-- /diagram -->
     </div>
     <figcaption>
       The three <code>cache_control</code> breakpoints, and what each one is

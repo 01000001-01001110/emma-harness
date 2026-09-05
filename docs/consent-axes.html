@@ -201,48 +201,80 @@ pub reaches_network: bool,</code></pre>
 
   <figure>
     <div class="figwrap">
-      <svg viewBox="0 0 760 250" role="img"
-           aria-label="What the gate reads off a tool before deciding: the tool's name, its read_only bit, its reaches_network bit, and the NetworkTarget it answers with. The gate checks none of them.">
+      <!-- diagram:consent-axes -->
+      <svg viewBox="0 0 698 172" role="img" aria-label="The 4 answers Approvals::request reads off the tool before deciding: name, the two ToolMeta axes read_only and reaches_network, and the NetworkTarget the tool itself computes from args. The gate checks none of them; each is the tool's own declaration. args itself goes to the preview renderer and is never parsed for a host.">
+        <style>
+          :root {
+            --axes-ground: #12101a;
+            --axes-surface: #1c1930;
+            --axes-line: #31d4f2;
+            --axes-text: #dcf6ff;
+            --axes-muted: #7d8fa8;
+            --axes-accent: #ff2e97;
+            --axes-dim: #8a5cf0;
+          }
+          @media (prefers-color-scheme: dark) {
+            :root {
+              --axes-ground: #0b0a10;
+              --axes-surface: #15132a;
+              --axes-line: #22b8d6;
+              --axes-text: #c4e8f5;
+              --axes-muted: #6b7c94;
+              --axes-accent: #ff45a3;
+              --axes-dim: #7a4fd8;
+            }
+          }
+          .axes-ground { fill: var(--axes-ground); }
+          .axes-box { fill: var(--axes-surface); stroke: var(--axes-line); stroke-width: 1.5; }
+          .axes-box-hl { fill: var(--axes-surface); stroke: var(--axes-accent); stroke-width: 2; }
+          .axes-lbl { fill: var(--axes-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .axes-note { fill: var(--axes-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+          .axes-edge { stroke: var(--axes-line); stroke-width: 1.5; fill: none; }
+          .axes-edge-hl { stroke: var(--axes-accent); stroke-width: 2; fill: none; }
+          .axes-edge-dim { stroke: var(--axes-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+        </style>
         <defs>
-          <marker id="axes-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479"/>
+          <marker id="axes-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--axes-line)"/>
           </marker>
-          <marker id="axes-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7"/>
+          <marker id="axes-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--axes-accent)"/>
+          </marker>
+          <marker id="axes-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--axes-dim)"/>
           </marker>
         </defs>
+        <rect class="axes-ground" x="0" y="0" width="698" height="172"/>
 
-        <rect class="box" x="16" y="60" width="196" height="128" rx="3"/>
-        <text class="lbl" x="30" y="84">the tool</text>
-        <text class="tiny" x="30" y="106">name()</text>
-        <text class="tiny" x="30" y="124">meta().read_only</text>
-        <text class="tiny" x="30" y="142">meta().reaches_network</text>
-        <text class="tiny" x="30" y="160">network_target(args)</text>
-        <text class="tiny" x="30" y="178">invoke(ctx, args)</text>
+        <path class="axes-edge" marker-end="url(#axes-tip)" d="M 349 54 L 91 118"/>
+        <path class="axes-edge" marker-end="url(#axes-tip)" d="M 349 54 L 263 118"/>
+        <path class="axes-edge" marker-end="url(#axes-tip)" d="M 349 54 L 435 118"/>
+        <path class="axes-edge" marker-end="url(#axes-tip)" d="M 349 54 L 607 118"/>
+        <rect class="axes-box-hl" x="274" y="16" width="150" height="38" rx="3"/>
+        <text class="axes-lbl" x="349" y="40" text-anchor="middle">Approvals::request</text>
 
-        <path class="edge-hl" d="M216 100 L318 100" marker-end="url(#axes-arrow-hl)"/>
-        <text class="tiny" x="228" y="92">four answers,</text>
-        <text class="tiny" x="228" y="122">all believed</text>
+        <rect class="axes-box" x="16" y="118" width="150" height="38" rx="3"/>
+        <text class="axes-lbl" x="91" y="142" text-anchor="middle">name</text>
 
-        <rect class="hl" x="324" y="60" width="212" height="128" rx="3"/>
-        <text class="lbl" x="338" y="84">Approvals::request</text>
-        <text class="tiny" x="338" y="106">decide(name, meta,</text>
-        <text class="tiny" x="338" y="124">target, args, term)</text>
-        <text class="tiny" x="338" y="148">records (name, verdict)</text>
-        <text class="tiny" x="338" y="166">into `seen`</text>
+        <rect class="axes-box" x="188" y="118" width="150" height="38" rx="3"/>
+        <text class="axes-lbl" x="263" y="142" text-anchor="middle">read_only: bool</text>
 
-        <path class="edge" d="M540 100 L620 100" marker-end="url(#axes-arrow)"/>
-        <text class="sm" x="630" y="96">Allow</text>
-        <text class="sm" x="630" y="118">Deny(why)</text>
+        <rect class="axes-box" x="360" y="118" width="150" height="38" rx="3"/>
+        <text class="axes-lbl" x="435" y="142" text-anchor="middle">reaches_network</text>
 
-        <text class="tiny" x="16" y="222">Nothing on this diagram verifies a declaration. A tool that answers `read_only: true` and writes a file</text>
-        <text class="tiny" x="16" y="238">is not stopped anywhere; the tool crates' own tests are what keep the declarations true.</text>
+        <rect class="axes-box" x="532" y="118" width="150" height="38" rx="3"/>
+        <text class="axes-lbl" x="607" y="142" text-anchor="middle">network_target</text>
+
       </svg>
+      <!-- /diagram -->
     </div>
     <figcaption>
-      Drawn from <code>Approvals::request</code>. The four values on the left are
-      everything the gate learns about the call. <code>args</code> is passed
-      through to the preview renderer and is never parsed for a host.
+      Drawn from <code>Approvals::request</code> and <code>ToolMeta</code>. These
+      four are everything the gate learns about the call, and all four are the
+      tool's own answers: the gate checks none of them. <code>args</code> is
+      passed through to the preview renderer and is never parsed for a host;
+      what the verdict can be, and where it is recorded, is in
+      <a href="#request">the next section</a>.
     </figcaption>
   </figure>
 

@@ -62,6 +62,10 @@ pub fn render_all(root: &Path) -> Result<Vec<(String, String)>> {
         ),
         ("tools-lsp".to_string(), pages::tools_lsp(root)?.render()),
         (
+            "terminal-layout".to_string(),
+            pages::terminal::terminal_layout(root)?.render(),
+        ),
+        (
             "consent-egress".to_string(),
             pages::consent::consent_egress(root)?.render(),
         ),
@@ -76,6 +80,18 @@ pub fn render_all(root: &Path) -> Result<Vec<(String, String)>> {
         (
             "loop-memo".to_string(),
             pages::loop_::loop_memo(root)?.render(),
+        ),
+        (
+            "loop-failure".to_string(),
+            pages::loop_::loop_failure(root)?.render(),
+        ),
+        (
+            "loop-one-turn".to_string(),
+            pages::loop_::loop_one_turn(root)?.render(),
+        ),
+        (
+            "session-compaction".to_string(),
+            pages::loop_::session_compaction(root)?.render(),
         ),
         (
             "session-fold".to_string(),
@@ -94,6 +110,22 @@ pub fn render_all(root: &Path) -> Result<Vec<(String, String)>> {
             pages::providers::providers_models(root)?.render(),
         ),
         (
+            "providers-caching".to_string(),
+            pages::providers::providers_caching(root)?.render(),
+        ),
+        (
+            "providers-content".to_string(),
+            pages::providers::providers_content(root)?.render(),
+        ),
+        (
+            "providers-floor".to_string(),
+            pages::providers::providers_floor(root)?.render(),
+        ),
+        (
+            "providers-turn".to_string(),
+            pages::providers::providers_turn(root)?.render(),
+        ),
+        (
             "tools-edit".to_string(),
             pages::tools::tools_edit(root)?.render(),
         ),
@@ -108,6 +140,14 @@ pub fn render_all(root: &Path) -> Result<Vec<(String, String)>> {
         (
             "tools-web".to_string(),
             pages::tools::tools_web(root)?.render(),
+        ),
+        (
+            "tools-ctx".to_string(),
+            pages::tools::tools_ctx(root)?.render(),
+        ),
+        (
+            "tools-trait".to_string(),
+            pages::tools::tools_trait(root)?.render(),
         ),
     ])
 }

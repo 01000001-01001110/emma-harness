@@ -1,6 +1,7 @@
 //! Diagrams for the Providers & models chapter of `docs/`.
 //!
-//! Pages: providers-boundary, providers-content, providers-credentials, providers-models, providers-turn.
+//! Pages: providers-boundary, providers-caching, providers-content,
+//! providers-credentials, providers-floor, providers-models, providers-turn.
 //!
 //! One function per diagram, each naming the source file it reads and failing
 //! if that file or the item in it is gone. `super::tools_lsp` is the worked
@@ -194,6 +195,123 @@ fn efforts_field(limits: &Expr) -> Result<String> {
     bail!("Limits has no efforts field")
 }
 
+/// String-literal arms of a `match` on one binding, in source order.
+fn match_lit_arms(body: &str, match_on: &str) -> Result<Vec<String>> {
+    let needle = format!("match {match_on} {{");
+    let start = body
+        .find(&needle)
+        .with_context(|| format!("no `match {match_on}` in this body"))?;
+    let rest = &body[start + needle.len()..];
+    let mut depth = 1i32;
+    let mut end = 0usize;
+    for (i, ch) in rest.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    if end == 0 {
+        bail!("`match {match_on}` did not close");
+    }
+    let block = &rest[..end];
+    let mut arms = Vec::new();
+    for line in block.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix('"') else {
+            continue;
+        };
+        let Some((lit, after)) = rest.split_once('"') else {
+            continue;
+        };
+        if after.trim_start().starts_with("=>") && !lit.is_empty() {
+            arms.push(lit.to_string());
+        }
+    }
+    if arms.is_empty() {
+        bail!("`match {match_on}` has no string-literal arms");
+    }
+    Ok(arms)
+}
+
+fn count_in_fn(src: &str, sig: &str, needle: &str) -> Result<usize> {
+    Ok(fn_body(src, sig)?.matches(needle).count())
+}
+
+fn min_cacheable_rows(file: &syn::File) -> Result<Vec<(String, usize)>> {
+    for item in &file.items {
+        let Item::Const(c) = item else { continue };
+        if c.ident != "MIN_CACHEABLE" {
+            continue;
+        }
+        let rows = match &*c.expr {
+            Expr::Array(a) => &a.elems,
+            Expr::Reference(r) => {
+                let Expr::Array(a) = &*r.expr else {
+                    bail!("MIN_CACHEABLE is not an array");
+                };
+                &a.elems
+            }
+            _ => bail!("MIN_CACHEABLE is not an array"),
+        };
+        let mut out = Vec::new();
+        for row in rows {
+            let Expr::Tuple(pair) = row else { continue };
+            let Some((Expr::Lit(id_lit), floor_expr)) = pair.elems.first().zip(pair.elems.get(1))
+            else {
+                continue;
+            };
+            let syn::Lit::Str(id) = &id_lit.lit else {
+                continue;
+            };
+            let floor = match floor_expr {
+                Expr::Lit(l) => {
+                    let syn::Lit::Int(i) = &l.lit else {
+                        continue;
+                    };
+                    i.base10_parse()?
+                }
+                _ => continue,
+            };
+            out.push((id.value(), floor));
+        }
+        if out.is_empty() {
+            bail!("MIN_CACHEABLE has no rows");
+        }
+        return Ok(out);
+    }
+    bail!("MIN_CACHEABLE not found")
+}
+
+fn lookup_floor(rows: &[(String, usize)], model: &str, unknown: usize) -> usize {
+    rows.iter()
+        .filter(|(id, _)| model.starts_with(id))
+        .max_by_key(|(id, _)| id.len())
+        .map(|(_, floor)| *floor)
+        .unwrap_or(unknown)
+}
+
+/// Estimated tokens in `big_instructions()`, from that test helper's repeat count.
+fn big_instructions_tokens(src: &str, chars_per_token: usize) -> Result<usize> {
+    let start = src
+        .find("fn big_instructions()")
+        .context("big_instructions not found")?;
+    let chunk = &src[start..start.saturating_add(220)];
+    let rest = chunk
+        .split(".repeat(")
+        .nth(1)
+        .context("big_instructions repeat count")?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let repeat: usize = digits.parse().context("big_instructions repeat count")?;
+    Ok("You are Emma. ".len() * repeat / chars_per_token)
+}
+
 fn clamp_effort(supported: &[String], requested: &str) -> Option<String> {
     let rank = |name: &str| -> u8 {
         match name {
@@ -316,6 +434,250 @@ pub fn providers_models(root: &Path) -> Result<Diagram> {
         &fact(ask),
         &outcomes,
         &dim,
+    ))
+}
+
+/// Where the three cache breakpoints sit in the rendered prefix, read from
+/// `render`'s field order, `cache_control` in `system_field`, and
+/// `mark_breakpoint` calls in `messages_field`.
+pub fn providers_caching(root: &Path) -> Result<Diagram> {
+    let path = root.join("crates/llm/src/anthropic.rs");
+    let file = rust::parse(&path)?;
+    for name in [
+        "render",
+        "system_field",
+        "messages_field",
+        "mark_breakpoint",
+    ] {
+        if !rust::has_fn(&file, name) {
+            bail!("{name} is gone from {}", path.display());
+        }
+    }
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("{} is a diagram's source", path.display()))?;
+    let bp_system = count_in_fn(&text, "fn system_field(", "cache_control")?;
+    let bp_messages = count_in_fn(&text, "fn messages_field(", "mark_breakpoint")?;
+    let breakpoints = bp_system + bp_messages;
+
+    let steps = vec![
+        Fact {
+            name: "tools[]".into(),
+            doc: String::new(),
+            detail: "counted, never marked".into(),
+        },
+        Fact {
+            name: "system[0]".into(),
+            doc: String::new(),
+            detail: format!("{bp_system} breakpoint"),
+        },
+        Fact {
+            name: "messages".into(),
+            doc: String::new(),
+            detail: format!("{bp_messages} breakpoints"),
+        },
+    ];
+    let n = steps.len();
+    Ok(shapes::ladder(
+        "cch",
+        format!(
+            "The server renders {n} prefix sections in order — tools, then system, \
+             then messages — with {breakpoints} cache_control breakpoints total: \
+             {bp_system} on the system block and {bp_messages} in the message list, \
+             each gated on clears_minimum."
+        ),
+        &steps,
+        Some("system[0]"),
+    ))
+}
+
+/// Every path through `ContentBlock::from_value`, read as the checks it makes
+/// and the string-literal arms of its `match kind`.
+pub fn providers_content(root: &Path) -> Result<Diagram> {
+    let path = root.join("crates/llm/src/content.rs");
+    let file = rust::parse(&path)?;
+    if !rust::has_fn(&file, "from_value") {
+        bail!("from_value is gone from {}", path.display());
+    }
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("{} is a diagram's source", path.display()))?;
+    let body = fn_body(&text, "pub fn from_value(")?;
+    let typed_arms = match_lit_arms(&body, "kind")?;
+    let passthrough_returns = body.matches("Self::Passthrough").count();
+
+    let steps = vec![
+        Fact {
+            name: r#""type" tag"#.into(),
+            doc: String::new(),
+            detail: "else Passthrough".into(),
+        },
+        Fact {
+            name: "JSON object".into(),
+            doc: String::new(),
+            detail: "else Passthrough".into(),
+        },
+        Fact {
+            name: "deserialize".into(),
+            doc: String::new(),
+            detail: format!("{} typed arms", typed_arms.len()),
+        },
+        Fact {
+            name: "Passthrough".into(),
+            doc: String::new(),
+            detail: format!("{passthrough_returns} paths"),
+        },
+        Fact {
+            name: "typed variant".into(),
+            doc: String::new(),
+            detail: typed_arms.join(", "),
+        },
+    ];
+    let n_checks = 3usize;
+    Ok(shapes::ladder(
+        "cnt",
+        format!(
+            "ContentBlock::from_value makes {n_checks} checks then branches: \
+             {passthrough_returns} paths reach Passthrough; the rest reach one of \
+             {n_typed} typed arms ({arms}). Unmodelled keys on a known type stay \
+             typed via serde(flatten).",
+            n_typed = typed_arms.len(),
+            arms = typed_arms.join(", "),
+        ),
+        &steps,
+        Some("typed variant"),
+    ))
+}
+
+/// How the same estimated prefix clears different model floors, from
+/// `MIN_CACHEABLE`, `MIN_CACHEABLE_UNKNOWN`, and the `big_instructions` fixture.
+pub fn providers_floor(root: &Path) -> Result<Diagram> {
+    let path = root.join("crates/llm/src/anthropic.rs");
+    let file = rust::parse(&path)?;
+    if !rust::has_fn(&file, "min_cacheable_tokens") {
+        bail!("min_cacheable_tokens is gone from {}", path.display());
+    }
+    let rows = min_cacheable_rows(&file)?;
+    let unknown: usize = rust::const_value(&file, "MIN_CACHEABLE_UNKNOWN")?.parse()?;
+    let chars_per_token: usize = rust::const_value(&file, "CHARS_PER_TOKEN")?.parse()?;
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("{} is a diagram's source", path.display()))?;
+    let prefix = big_instructions_tokens(&text, chars_per_token)?;
+
+    let models = [
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-haiku-4-5",
+        "unknown-model",
+    ];
+    let mut outcomes = Vec::new();
+    let mut dim = Vec::new();
+    for model in models {
+        let floor = lookup_floor(&rows, model, unknown);
+        let marked = prefix >= floor;
+        if !marked {
+            dim.push(model);
+        }
+        outcomes.push(Fact {
+            name: model.to_string(),
+            doc: String::new(),
+            detail: if marked {
+                format!("marked (floor {floor})")
+            } else {
+                format!("unmarked (floor {floor})")
+            },
+        });
+    }
+
+    Ok(shapes::fan(
+        "flr",
+        format!(
+            "One prefix of about {prefix} estimated tokens (chars/{chars_per_token}) \
+             on {n} models: {}. Unknown models use MIN_CACHEABLE_UNKNOWN ({unknown}).",
+            outcomes
+                .iter()
+                .map(|o| format!("{} → {}", o.name, o.detail))
+                .collect::<Vec<_>>()
+                .join("; "),
+            n = models.len(),
+        ),
+        &Fact {
+            name: format!("~{prefix} tokens"),
+            doc: String::new(),
+            detail: String::new(),
+        },
+        &outcomes,
+        &dim,
+    ))
+}
+
+/// How `Assembly::apply` routes SSE frames, read from its `match` on frame type.
+pub fn providers_turn(root: &Path) -> Result<Diagram> {
+    let path = root.join("crates/llm/src/anthropic.rs");
+    let file = rust::parse(&path)?;
+    if !rust::has_fn(&file, "apply") {
+        bail!("Assembly::apply is gone from {}", path.display());
+    }
+    if !rust::has_fn(&file, "finish") {
+        bail!("Assembly::finish is gone from {}", path.display());
+    }
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("{} is a diagram's source", path.display()))?;
+    let body = fn_body(&text, "async fn apply(")?;
+    let frame_arms = [
+        "message_start",
+        "content_block_start",
+        "content_block_delta",
+        "message_delta",
+        "error",
+    ];
+    let mut arms = Vec::new();
+    for lit in frame_arms {
+        if body.contains(&format!("\"{lit}\" =>")) {
+            arms.push(lit.to_string());
+        }
+    }
+    if arms.len() != frame_arms.len() {
+        bail!(
+            "Assembly::apply is missing an SSE frame arm: found {arms:?}, expected {frame_arms:?}"
+        );
+    }
+
+    let destinations: &[(&str, &str)] = &[
+        ("message_start", "Assembly.usage"),
+        ("content_block_start", "blocks[index]"),
+        ("content_block_delta", "Partial append"),
+        ("message_delta", "stop_reason + output"),
+        ("error", "Err(LlmError::Api)"),
+    ];
+    let mut steps = Vec::new();
+    for arm in &arms {
+        let detail = destinations
+            .iter()
+            .find(|(name, _)| *name == arm.as_str())
+            .map(|(_, dest)| (*dest).to_string())
+            .unwrap_or_else(|| "dropped".into());
+        steps.push(Fact {
+            name: arm.clone(),
+            doc: String::new(),
+            detail,
+        });
+    }
+    steps.push(Fact {
+        name: "finish()".into(),
+        doc: String::new(),
+        detail: "turn_from_content".into(),
+    });
+
+    let n = arms.len();
+    Ok(shapes::ladder(
+        "trn",
+        format!(
+            "SSE frames route through Assembly::apply's {n} typed arms ({arms}), \
+             then finish() hands the assembled blocks to turn_from_content — the \
+             same function the batch path uses.",
+            arms = arms.join(", "),
+        ),
+        &steps,
+        Some("finish()"),
     ))
 }
 
@@ -455,5 +817,138 @@ mod tests {
         };
         let msg = format!("{e:#}");
         assert!(msg.contains("models.rs"), "{msg}");
+    }
+
+    // --- providers-caching ---
+
+    #[test]
+    fn the_caching_diagram_draws_breakpoints_from_mark_breakpoint_calls() {
+        let root = root();
+        let path = root.join("crates/llm/src/anthropic.rs");
+        let text = std::fs::read_to_string(&path).expect("anthropic.rs");
+        let bp_system = count_in_fn(&text, "fn system_field(", "cache_control").expect("system");
+        let bp_messages =
+            count_in_fn(&text, "fn messages_field(", "mark_breakpoint").expect("messages");
+
+        let d = providers_caching(&root).expect("the diagram builds");
+        let drawn: Vec<String> = d.layers.iter().flatten().map(|n| n.id.clone()).collect();
+        assert_eq!(drawn.len(), 3, "{drawn:?}");
+        assert!(
+            d.caption.contains(&(bp_system + bp_messages).to_string()),
+            "caption states the breakpoint count: {}",
+            d.caption
+        );
+    }
+
+    #[test]
+    fn a_missing_caching_source_fails_rather_than_emptying_the_diagram() {
+        let Err(e) = providers_caching(Path::new("definitely-not-a-workspace")) else {
+            panic!("a missing tree must not produce a diagram");
+        };
+        assert!(format!("{e:#}").contains("anthropic.rs"));
+    }
+
+    // --- providers-content ---
+
+    #[test]
+    fn the_content_diagram_draws_from_value_checks_and_match_arms() {
+        let root = root();
+        let path = root.join("crates/llm/src/content.rs");
+        let text = std::fs::read_to_string(&path).expect("content.rs");
+        let body = fn_body(&text, "pub fn from_value(").expect("from_value");
+        let arms = match_lit_arms(&body, "kind").expect("kind arms");
+
+        let d = providers_content(&root).expect("the diagram builds");
+        for arm in &arms {
+            assert!(
+                d.caption.contains(arm),
+                "caption names {arm}: {}",
+                d.caption
+            );
+        }
+        assert!(
+            d.caption.contains(&arms.len().to_string()),
+            "caption states the typed arm count: {}",
+            d.caption
+        );
+    }
+
+    #[test]
+    fn a_missing_content_source_fails_rather_than_emptying_the_diagram() {
+        let Err(e) = providers_content(Path::new("definitely-not-a-workspace")) else {
+            panic!("a missing tree must not produce a diagram");
+        };
+        assert!(format!("{e:#}").contains("content.rs"));
+    }
+
+    // --- providers-floor ---
+
+    #[test]
+    fn the_floor_diagram_draws_min_cacheable_outcomes_for_big_instructions() {
+        let root = root();
+        let path = root.join("crates/llm/src/anthropic.rs");
+        let file = rust::parse(&path).expect("anthropic.rs");
+        let rows = min_cacheable_rows(&file).expect("MIN_CACHEABLE");
+        let unknown: usize = rust::const_value(&file, "MIN_CACHEABLE_UNKNOWN")
+            .expect("unknown")
+            .parse()
+            .expect("parse");
+        let chars_per_token: usize = rust::const_value(&file, "CHARS_PER_TOKEN")
+            .expect("chars")
+            .parse()
+            .expect("parse");
+        let text = std::fs::read_to_string(&path).expect("read");
+        let prefix = big_instructions_tokens(&text, chars_per_token).expect("prefix");
+
+        let d = providers_floor(&root).expect("the diagram builds");
+        assert_eq!(d.layers[0][0].id, format!("~{prefix} tokens"));
+        let opus_floor = lookup_floor(&rows, "claude-opus-5", unknown);
+        let haiku_floor = lookup_floor(&rows, "claude-haiku-4-5", unknown);
+        assert!(prefix >= opus_floor);
+        assert!(prefix < haiku_floor);
+    }
+
+    #[test]
+    fn a_missing_floor_source_fails_rather_than_emptying_the_diagram() {
+        let Err(e) = providers_floor(Path::new("definitely-not-a-workspace")) else {
+            panic!("a missing tree must not produce a diagram");
+        };
+        assert!(format!("{e:#}").contains("anthropic.rs"));
+    }
+
+    // --- providers-turn ---
+
+    #[test]
+    fn the_turn_diagram_draws_assembly_apply_frame_arms_in_order() {
+        let root = root();
+        let path = root.join("crates/llm/src/anthropic.rs");
+        let text = std::fs::read_to_string(&path).expect("anthropic.rs");
+        let body = fn_body(&text, "async fn apply(").expect("apply");
+        for lit in [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "message_delta",
+            "error",
+        ] {
+            assert!(body.contains(&format!("\"{lit}\" =>")), "{lit} arm");
+        }
+
+        let d = providers_turn(&root).expect("the diagram builds");
+        let drawn: Vec<String> = d.layers.iter().flatten().map(|n| n.id.clone()).collect();
+        assert!(
+            drawn.first().is_some_and(|s| s == "message_start"),
+            "{drawn:?}"
+        );
+        assert!(drawn.contains(&"finish()".to_string()), "{drawn:?}");
+        assert!(d.caption.contains("turn_from_content"), "{}", d.caption);
+    }
+
+    #[test]
+    fn a_missing_turn_source_fails_rather_than_emptying_the_diagram() {
+        let Err(e) = providers_turn(Path::new("definitely-not-a-workspace")) else {
+            panic!("a missing tree must not produce a diagram");
+        };
+        assert!(format!("{e:#}").contains("anthropic.rs"));
     }
 }

@@ -172,65 +172,76 @@
 
 <figure>
   <div class="figwrap">
-    <svg viewBox="0 0 720 430" role="img" aria-label="A tool_use block passes through registry lookup, validate_args, the already-failed memo, the PreToolUse hook and the approval gate before invoke runs; the resulting ToolOutcome splits into a content block for the model and a display line for the terminal, while a ToolError becomes a tool_result the loop continues from.">
+    <!-- diagram:tools-trait -->
+    <svg viewBox="0 0 182 580" role="img" aria-label="5 checks in run_tool_call can end a call before invoke runs; the ladder names all 6 stages through invoke itself. Drawn from crates/emma/src/agent.rs.">
+      <style>
+        :root {
+          --tools-trait-ground: #12101a;
+          --tools-trait-surface: #1c1930;
+          --tools-trait-line: #31d4f2;
+          --tools-trait-text: #dcf6ff;
+          --tools-trait-muted: #7d8fa8;
+          --tools-trait-accent: #ff2e97;
+          --tools-trait-dim: #8a5cf0;
+        }
+        @media (prefers-color-scheme: dark) {
+          :root {
+            --tools-trait-ground: #0b0a10;
+            --tools-trait-surface: #15132a;
+            --tools-trait-line: #22b8d6;
+            --tools-trait-text: #c4e8f5;
+            --tools-trait-muted: #6b7c94;
+            --tools-trait-accent: #ff45a3;
+            --tools-trait-dim: #7a4fd8;
+          }
+        }
+        .tools-trait-ground { fill: var(--tools-trait-ground); }
+        .tools-trait-box { fill: var(--tools-trait-surface); stroke: var(--tools-trait-line); stroke-width: 1.5; }
+        .tools-trait-box-hl { fill: var(--tools-trait-surface); stroke: var(--tools-trait-accent); stroke-width: 2; }
+        .tools-trait-lbl { fill: var(--tools-trait-text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .tools-trait-note { fill: var(--tools-trait-muted); font: 400 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        .tools-trait-edge { stroke: var(--tools-trait-line); stroke-width: 1.5; fill: none; }
+        .tools-trait-edge-hl { stroke: var(--tools-trait-accent); stroke-width: 2; fill: none; }
+        .tools-trait-edge-dim { stroke: var(--tools-trait-dim); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+      </style>
       <defs>
-        <marker id="tt-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f6479" />
+        <marker id="tools-trait-tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-trait-line)"/>
         </marker>
-        <marker id="tt-arrow-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff6ec7" />
+        <marker id="tools-trait-tip-hl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-trait-accent)"/>
+        </marker>
+        <marker id="tools-trait-tip-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--tools-trait-dim)"/>
         </marker>
       </defs>
+      <rect class="tools-trait-ground" x="0" y="0" width="182" height="580"/>
 
-      <rect class="box" x="8" y="12" width="150" height="34" rx="4" />
-      <text class="lbl" x="24" y="34">tool_use block</text>
+      <path class="tools-trait-edge" marker-end="url(#tools-trait-tip)" d="M 91 54 L 91 118"/>
+      <path class="tools-trait-edge" marker-end="url(#tools-trait-tip)" d="M 91 156 L 91 220"/>
+      <path class="tools-trait-edge" marker-end="url(#tools-trait-tip)" d="M 91 258 L 91 322"/>
+      <path class="tools-trait-edge" marker-end="url(#tools-trait-tip)" d="M 91 360 L 91 424"/>
+      <path class="tools-trait-edge" marker-end="url(#tools-trait-tip)" d="M 91 462 L 91 526"/>
+      <rect class="tools-trait-box" x="16" y="16" width="150" height="38" rx="3"/>
+      <text class="tools-trait-lbl" x="91" y="40" text-anchor="middle">Registry::get</text>
 
-      <path class="edge" d="M83 46 L83 74" marker-end="url(#tt-arrow)" />
-      <rect class="box" x="8" y="74" width="150" height="34" rx="4" />
-      <text class="lbl" x="24" y="96">Registry::get</text>
-      <text class="sm" x="172" y="96">miss → no_such_tool, names the rest</text>
+      <rect class="tools-trait-box" x="16" y="118" width="150" height="38" rx="3"/>
+      <text class="tools-trait-lbl" x="91" y="142" text-anchor="middle">validate_args</text>
 
-      <path class="edge" d="M83 108 L83 136" marker-end="url(#tt-arrow)" />
-      <rect class="box" x="8" y="136" width="150" height="34" rx="4" />
-      <text class="lbl" x="24" y="158">validate_args</text>
-      <text class="sm" x="172" y="158">pure; no filesystem; no approval spent</text>
+      <rect class="tools-trait-box" x="16" y="220" width="150" height="38" rx="3"/>
+      <text class="tools-trait-lbl" x="91" y="244" text-anchor="middle">memo_key</text>
 
-      <path class="edge" d="M83 170 L83 198" marker-end="url(#tt-arrow)" />
-      <rect class="box" x="8" y="198" width="150" height="34" rx="4" />
-      <text class="lbl" x="24" y="220">failed-now memo</text>
-      <text class="sm" x="172" y="220">same call, same turn, nothing changed</text>
+      <rect class="tools-trait-box" x="16" y="322" width="150" height="38" rx="3"/>
+      <text class="tools-trait-lbl" x="91" y="346" text-anchor="middle">PreToolUse</text>
 
-      <path class="edge" d="M83 232 L83 260" marker-end="url(#tt-arrow)" />
-      <rect class="box" x="8" y="260" width="150" height="34" rx="4" />
-      <text class="lbl" x="24" y="282">PreToolUse hook</text>
-      <text class="sm" x="172" y="282">policy, resolved before any human is asked</text>
+      <rect class="tools-trait-box-hl" x="16" y="424" width="150" height="38" rx="3"/>
+      <text class="tools-trait-lbl" x="91" y="448" text-anchor="middle">approval gate</text>
 
-      <path class="edge-hl" d="M83 294 L83 322" marker-end="url(#tt-arrow-hl)" />
-      <rect class="hl" x="8" y="322" width="150" height="46" rx="4" />
-      <text class="lbl" x="24" y="342">approval gate</text>
-      <text class="tiny" x="24" y="358">meta() · network_target()</text>
-      <text class="sm" x="172" y="342">the only caller of network_target</text>
-      <text class="tiny" x="172" y="358">see consent.html</text>
+      <rect class="tools-trait-box" x="16" y="526" width="150" height="38" rx="3"/>
+      <text class="tools-trait-lbl" x="91" y="550" text-anchor="middle">invoke</text>
 
-      <path class="edge-hl" d="M83 368 L83 396" marker-end="url(#tt-arrow-hl)" />
-      <rect class="hl" x="8" y="396" width="150" height="30" rx="4" />
-      <text class="lbl" x="24" y="416">invoke(ToolCtx)</text>
-
-      <path class="edge-dash" d="M158 411 L470 411 L470 138" marker-end="url(#tt-arrow)" />
-      <rect class="box" x="404" y="96" width="132" height="40" rx="4" />
-      <text class="lbl" x="418" y="114">ToolOutcome</text>
-      <text class="tiny" x="418" y="129">or ToolError</text>
-
-      <path class="edge" d="M470 96 L470 68 L560 68" marker-end="url(#tt-arrow)" />
-      <rect class="box" x="560" y="50" width="150" height="36" rx="4" />
-      <text class="lbl" x="574" y="66">content →</text>
-      <text class="tiny" x="574" y="80">model, + [truncated: …]</text>
-
-      <path class="edge" d="M536 116 L620 116 L620 146" marker-end="url(#tt-arrow)" />
-      <rect class="box" x="560" y="146" width="150" height="36" rx="4" />
-      <text class="lbl" x="574" y="162">display →</text>
-      <text class="tiny" x="574" y="176">terminal line</text>
     </svg>
+    <!-- /diagram -->
   </div>
   <figcaption>
     One <code>tool_use</code> block, from <code>Agent::run_tool_call</code>.
