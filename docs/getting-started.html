@@ -170,7 +170,7 @@ emma -p "summarise what changed since the last tag"</code></pre>
       project. Network approvals are per host.
     </p>
     <p>
-      The gate is a consent interface rather than a sandbox. It enforces nothing
+      The gate is a consent interface. It is not a sandbox. It enforces nothing
       a tool does not declare about itself, and <code>Bash</code> can do
       anything. <a href="consent.html">Consent</a> covers where that ends,
       including the parts that will surprise you.
@@ -197,7 +197,7 @@ emma -p "summarise what changed since the last tag"</code></pre>
   </div>
 
   <div class="note warn">
-    <span class="h">Two of those are tripwires, not ceilings</span>
+    <span class="h">Two of the four are tripwires</span>
     <p>
       <code>--max-tokens</code> is checked after a call returns, so the call
       that crosses the line is paid for in full. A real run overshot 500,000 and

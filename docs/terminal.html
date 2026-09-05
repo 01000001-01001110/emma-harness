@@ -68,12 +68,12 @@
   <h1>The terminal</h1>
 
   <p class="lede">
-    Emma draws two different things. One is a full-screen application on the
+    Emma gives you two different surfaces. One is a full-screen application on the
     alternate screen, with a sidebar, a retained conversation buffer, a pinned
     input dock and a status bar. The other is a stream of lines with no escape
-    byte in it. The second one runs whenever the first cannot, and most of the
-    rules in this subsystem are about the seam between them, and about giving
-    the terminal back exactly as it was found.
+    byte in it. You get the plain stream whenever the full-screen path cannot,
+    and most of the rules in this subsystem sit on the seam between them and on
+    giving your terminal back exactly as it was found.
   </p>
 
   <div class="key">
@@ -102,7 +102,7 @@
     the <code>term.rs</code> facade above them and <code>usertools.rs</code>
     beside them. It is the region <code>notes/archive/map-architecture.md</code> calls
     <em>&ldquo;the largest single gap in this document&rdquo;</em>, having read
-    <em>&ldquo;almost nothing&rdquo;</em> of it; that note also puts the size at
+    <em>&ldquo;almost nothing&rdquo;</em> of it. That note also puts the size at
     <em>&ldquo;16 files, ~13,000 lines&rdquo;</em>, which is low on both counts
     while its own sentence goes on to list seventeen filenames.
     <span class="chip cert">certified</span>:
@@ -117,7 +117,7 @@
     <code>frame.rs</code> owns the terminal, <code>input.rs</code> reads stdin,
     <code>statusline.rs</code> starts a task that runs somebody's program, and
     <code>theme.rs</code> reads a file. The other thirteen are pure over a
-    <code>Buffer</code>, a <code>Vec&lt;Line&gt;</code> or plain data, which is
+    <code>Buffer</code>, a <code>Vec&lt;Line&gt;</code> or plain data. That's
     why almost everything here has a test. <code>app.rs</code> gives the reason
     for keeping the split where it is: <em>&ldquo;the terminal, the locks and the entry/leave bytes
     stay in <code>frame.rs</code>, which has already shipped two
@@ -126,16 +126,16 @@
   </p>
 
   <p>
-    Two facts to carry into the pages. First, the reversal: for the whole life
-    of this module the rule was <strong><code>Viewport::Inline</code> only,
+    Two facts I want you to carry into the subpages. First, the reversal: for the
+    whole life of this module the rule was <strong><code>Viewport::Inline</code> only,
     never the alternate screen</strong>, and on 2026-08-12 I reversed
     it, on the ground that the multi-pane layout I specified cannot be drawn
     inline. Everything about a retained transcript, a sidebar and mouse capture
     dates from that day, and <code>frame.rs</code> records the outcome without
     softening it: <em>&ldquo;That argument was true and it lost.&rdquo;</em>
-    Second, the direction of every degradation: a plain terminal that is correct
-    beats a pretty one that is broken, so every gate in the subsystem refuses
-    rather than guesses.
+    Second, where I had a choice I took the plain path. I would rather give you
+    a terminal that is correct than one that is pretty and broken, so every gate
+    in the subsystem refuses rather than guesses.
   </p>
 
   <h2 id="absolutes">Three constraints without exception</h2>
@@ -506,14 +506,15 @@
   <h2 id="unverified">What a cell buffer cannot settle</h2>
 
   <p>
-    <strong>Whether any of this <em>looks</em> right is the one thing no test
-    here can answer.</strong> A fully-tested scrollback defect has shipped from
-    this directory twice; both times a green suite was the evidence, and both
-    times it was wrong the same way, because a <code>TestBackend</code> agrees
-    with whoever wrote the fixture. <code>app.rs</code> puts it as
-    <code>frame.rs</code> having <em>&ldquo;already shipped two
-    invisible-to-tests defects.&rdquo;</em> Every page in this chapter closes
-    with what it could not settle, and the largest items are collected on
+    <strong>Whether any of this <em>looks</em> right on your console is the one
+    thing no test in this tree can answer.</strong> A fully-tested scrollback
+    defect has shipped from this directory twice; both times a green suite was
+    the evidence, and both times it was wrong the same way, because a
+    <code>TestBackend</code> agrees with whoever wrote the fixture.
+    <code>app.rs</code> puts it as <code>frame.rs</code> having
+    <em>&ldquo;already shipped two invisible-to-tests defects.&rdquo;</em>
+    Every page in this chapter closes with what it could not settle, and the
+    largest items are collected on
     <a href="unverified.html">what is not verified</a>.
   </p>
 

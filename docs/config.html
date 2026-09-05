@@ -68,11 +68,11 @@
   <h1>Configuration</h1>
 
   <p class="lede">
-    Emma reads seven kinds of file across three scopes, and they do not all fail
-    the same way. A mistake in the project's harness refuses the boot and names
-    the file; a mistake in a personal preference costs the preference and says
-    so; a key belonging to another program is ignored. This is the chapter to
-    read when something you configured did not happen.
+    When something you configured did not happen, start here. Emma reads seven
+    kinds of file across three scopes, and they do not all fail the same way.
+    A mistake in the project's harness refuses the boot and names the file. A
+    mistake in a personal preference costs the preference and says so. A key
+    belonging to another program is ignored.
   </p>
 
   <div class="key">
@@ -91,25 +91,25 @@
     working directory. The <code>emma</code> binary reads
     <code>~/.emma/settings.json</code> for what belongs to the person rather than
     to the repository. <code>emma-llm</code> reads
-    <code>~/.emma/credentials.json</code> for the key. Nothing personal is
-    settable from the project, and nothing about the project is settable from the
-    home directory.
+    <code>~/.emma/credentials.json</code> for the key. You cannot set anything
+    personal from the project directory, and nothing about the project is
+    settable from your home directory.
   </p>
 
   <p>
     <strong>Emma does not adopt your global Claude Code configuration.</strong>
-    It recognises a <code>.claude/</code> directory in a project, so a skill or a
-    command already written for Claude Code works unchanged, and it refuses to
-    read <code>~/.claude/</code> as a harness at all. The one thing that crosses
-    from there is the <code>deny</code> list, never <code>allow</code> and never
-    <code>ask</code>, so another program's standing grants cannot widen what Emma
-    may do.
+    It still recognises a <code>.claude/</code> directory in a project, so a
+    skill or a command already written for Claude Code works unchanged, and I
+    refused to read <code>~/.claude/</code> as a harness at all. The one thing
+    that crosses from there is the <code>deny</code> list, never
+    <code>allow</code> and never <code>ask</code>, so another program's standing
+    grants cannot widen what Emma may do.
   </p>
 
   <p>
-    The command to run first is <code>emma config check</code>. It loads
-    everything in this chapter, prints what resolved, and calls no model. Most of
-    the certified claims on these pages are its output.
+    Run <code>emma config check</code> first. It loads everything in this
+    chapter, prints what resolved, and calls no model. Most of the certified
+    claims on these pages come from that output.
   </p>
   <span class="src">crates/harness/src/lib.rs; crates/emma/src/settings.rs; crates/llm/src/auth.rs; crates/emma/src/term/theme.rs; crates/emma/src/commands.rs — <code>config_check</code></span>
 

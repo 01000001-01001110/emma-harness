@@ -57,8 +57,9 @@
   <h1>Records &amp; house rules</h1>
 
   <p class="lede">
-    The repository keeps a small set of written records. Each has one job; when
-    two answer the same question, one of them is wrong and nobody can tell which.
+    I keep a small set of written records in this repository. Each has one job.
+    When two answer the same question, one of them is wrong and nobody can tell
+    which.
   </p>
 
   <h2 id="records">Records in the repository</h2>
@@ -100,7 +101,7 @@
   </div>
 
   <p>
-    A changelog entry describing a refactor is describing something no user can
+    I don't put refactors in the changelog; that describes something no user can
     observe. A documentation page narrating the project's week is doing
     <code>STATUS.md</code>'s old job.
   </p>
@@ -110,17 +111,18 @@
   <h3>Comments carry the why, not the what</h3>
 
   <p>
-    A comment restating the code is noise. A comment carrying the argument for a
-    decision is the reason the file can be changed safely later. Read a module's
-    existing doc before adding to it and match that register.
+    I treat a comment restating the code as noise. A comment carrying the
+    argument for a decision is the reason the file can be changed safely later.
+    Read a module's existing doc before adding to it and match that register.
   </p>
 
   <h3>A test that cannot fail is a false receipt</h3>
 
   <p>
-    Every behaviour gets a test, and tests that claim a guarantee must go red when the
-    guarantee is removed. The way to know is to break the code, watch the test
-    fail, and put it back. Report which mutations were run and what happened.
+    I want a test for every behaviour, and tests that claim a guarantee must go
+    red when the guarantee is removed. The way to know is to break the code,
+    watch the test fail, and put it back. Report which mutations you ran and
+    what happened.
   </p>
 
   <p>
@@ -142,8 +144,8 @@
   </p>
 
   <p>
-    Fixtures agree with their author. The rule that follows is to certify
-    against the real thing, and paste what it actually said.
+    Fixtures agree with their author. My rule is to certify against the real
+    thing, and paste what it actually said.
   </p>
 
   <h3>Say what you could not verify</h3>
@@ -169,8 +171,8 @@
   <h3>Licences before code</h3>
 
   <p>
-    A README is not a licence, and <code>NOASSERTION</code> on GitHub means open
-    the actual file. This has caught five things in one week: a badge that read
+    A README is not a licence, and when GitHub shows <code>NOASSERTION</code> I
+    open the actual file. This has caught five things in one week: a badge that read
     <code>NOASSERTION</code> over a real FSL-1.1-MIT licence, a crate that turned
     out GPL-3.0-or-later, a project silently relicensed to a source-available
     licence after an acquisition, a repository with no licence file at all, and
@@ -180,23 +182,23 @@
   <h2 id="why">Why the record is this detailed</h2>
 
   <p>
-    Emma is built mostly by agents, in sessions. Context carries inside a
-    session and the rules carry across them, but the person holding the
+    I've built Emma mostly through agents, in sessions. Context carries inside
+    a session and the rules carry across them, but the person holding the
     reasoning changes constantly. Anything kept only in someone's head is gone
     by the next session.
   </p>
 
   <p>
     The alternative to writing down what was measured and what was assumed is
-    re-deriving it. The four incidents above are what that costs. In each case
-    the written record was the only possible correction, and where the record
-    was silent, the mistake shipped.
+    re-deriving it, and the four incidents above are what that has cost me. In
+    each case the written record was the only possible correction, and where the
+    record was silent, the mistake shipped.
   </p>
 
   <h2 id="drift">How the records go wrong</h2>
 
   <p>
-    Every failure below is real and recent. They are listed because the failure
+    Every failure below is real and recent. I'm listing them because the failure
     modes repeat, and because a record that has drifted is worse than a missing
     one: it will be believed.
   </p>
@@ -222,7 +224,7 @@
   </div>
 
   <p>
-    Two habits come out of that list. Record the count the blocking query
+    Two habits I took from that list. Record the count the blocking query
     returned rather than a summary of the corpus it ran against. And when
     quoting a figure, carry its caveat with it or check the figure first.
   </p>
