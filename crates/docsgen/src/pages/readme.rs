@@ -135,8 +135,8 @@ fn trait_default_requires_key(file: &syn::File) -> Result<bool> {
 /// is read from source, because each of those tools registers only when this
 /// machine has what it needs and the generator's machine is not the reader's:
 /// `Skill` wants a skill in the configuration directory, `Delegate` an agent,
-/// `WebFetch` and the browser tools a Chrome. The conditions themselves are
-/// prose here; what `main.rs` checks for each is
+/// `WebFetch`, `WebSearch` and the browser tools a Chrome. The conditions
+/// themselves are prose here; what `main.rs` checks for each is
 /// not something a parser states, and a reader who wants the argument has
 /// `main.rs`'s comments.
 pub fn tools(root: &Path) -> Result<String> {
@@ -170,6 +170,7 @@ pub fn tools(root: &Path) -> Result<String> {
     let skill = name_of("crates/emma/src/skill.rs", "Skill")?;
     let delegate = name_of("crates/emma/src/delegate.rs", "Delegate")?;
     let fetch = name_of("tools/web/src/fetch.rs", "WebFetch")?;
+    let search = name_of("tools/web/src/search.rs", "WebSearch")?;
     let browser_mod = rust::parse(&root.join("tools/web/src/browser/mod.rs"))?;
     let browser_types = rust::vec_types(&browser_mod, "browser_tools")
         .context("tools/web/src/browser/mod.rs builds the browser surface")?;
@@ -184,9 +185,9 @@ pub fn tools(root: &Path) -> Result<String> {
     Ok(wrap(&format!(
         "Tools available to the model on every run: {}. Registered only when this \
          machine can back them: `{skill}`, when the configuration directory declares a \
-         skill; `{delegate}`, when it declares an agent; `{fetch}` and the browser tools \
-         {}, when a Chrome can be found. Web search is not a tool of Emma's: the \
-         provider runs it, on the same key, when the provider has one.",
+         skill; `{delegate}`, when it declares an agent; `{fetch}`, `{search}` and the \
+         browser tools {}, when a Chrome can be found. Search is a results page rendered \
+         in that Chrome, so it needs no key and no account.",
         join_and(&always),
         join_and(&browser),
     )))
@@ -403,7 +404,13 @@ mod tests {
                 "{name} is missing from the unconditional list: {text}"
             );
         }
-        for name in ["`Skill`", "`Delegate`", "`WebFetch`", "`BrowserOpen`"] {
+        for name in [
+            "`Skill`",
+            "`Delegate`",
+            "`WebFetch`",
+            "`WebSearch`",
+            "`BrowserOpen`",
+        ] {
             assert!(
                 conditional.contains(name),
                 "{name} is missing from the conditional list: {text}"

@@ -333,19 +333,21 @@ async fn run(cli: cli::Cli) -> Result<()> {
     for note in provider.startup_notes() {
         term.note(&note);
     }
-    // **Search is the provider's, on the provider's key, and the user is told
-    // so every run.** Absent means on, per `settings::Settings::web_search`.
-    // The line is disclosure rather than a gate, the same class as the
-    // `OLLAMA_HOST` note above: each search is a separate charge and the
-    // model's query leaves with the conversation, and a person who did not
-    // choose that should read it before the first call rather than on the
-    // invoice. A provider that cannot search gets the opposite line, so a
-    // `web_search: true` in settings never reads as honoured when it is not.
+    // **Provider-side search is opt-in, and the user is told when it is on.**
+    // Emma's own `WebSearch` tool, a results page rendered in the local Chrome,
+    // is the search the model has by default: no key, no per-search bill, and
+    // the egress gate asks about it like any other network tool. The provider's
+    // server-side search is a second path for whoever wants it, off unless
+    // `settings::Settings::web_search` says `true`. When it is on, the line is
+    // disclosure rather than a gate, the same class as the `OLLAMA_HOST` note
+    // above: each search is a separate charge and the model's query leaves with
+    // the conversation. A provider that cannot search gets the opposite line,
+    // so a `true` in settings never reads as honoured when it is not.
     let wanted = home
         .as_deref()
         .map(emma::settings::load)
         .and_then(|s| s.web_search)
-        .unwrap_or(true);
+        .unwrap_or(false);
     let web_search = wanted && kind.web_search();
     if web_search {
         term.note(concat!(

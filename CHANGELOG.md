@@ -28,17 +28,23 @@ out for themselves.
 
 ## Unreleased
 
-- **BREAKING: `WebSearch` is gone, and so is the Brave Search key.** Search is
-  the provider's now. On Anthropic the model can search through the API's own
-  `web_search` tool, on the same key you already hold, and each search is
-  billed apart from tokens; Emma says so at startup every run and prints what
-  was searched for as it happens. `"web_search": false` in
-  `~/.emma/settings.json` turns it off. On Ollama there is no search, and the
-  startup line says that too. What to do about it: delete
+- **BREAKING: `WebSearch` no longer needs a key, and the Brave Search key is
+  gone.** The tool is a search engine's results page rendered in the same
+  Chrome `WebFetch` uses, reduced to titles and URLs. It registers whenever a
+  Chrome can be found, costs nothing per search, works on Ollama as on
+  Anthropic, and the egress gate asks about the engine's host like any other
+  network tool. If the engine answers with a bot challenge the tool says so
+  and names the way through: `BrowserOpen` on the same URL with `headful:
+  true`, then `BrowserRead`. What to do about it: delete
   `brave_search_api_key` from `~/.emma/credentials.json` and unset
-  `BRAVE_SEARCH_API_KEY`; nothing reads either any more, and a permission rule
-  written for `WebSearch` matches nothing. The tool count is 22 with a Chrome
-  found, 16 without one; it was 23 and 17.
+  `BRAVE_SEARCH_API_KEY`; nothing reads either any more. A permission rule
+  written for `WebSearch` still applies.
+
+- **Provider-side search, opt-in.** `"web_search": true` in
+  `~/.emma/settings.json` also lets the model search through the provider's
+  own search tool, on the same key, billed apart from tokens; Emma says so at
+  startup while it is on and prints what was searched for. Anthropic only;
+  Ollama has none and the startup line says so.
 
 - **Every full-screen page now says the key that gets you out of it.** Settings
   says `Esc closes`, Memory says `Alt+m closes` and the Harness dashboard says

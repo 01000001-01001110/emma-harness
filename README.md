@@ -158,17 +158,19 @@ Tools available to the model on every run: `Read`, `Write`, `Edit`, `Glob`,
 `Grep`, `Bash`, `BashOutput`, `KillShell`, `TaskCreate`, `TaskGet`, `TaskList`,
 `TaskUpdate`, `FindReferences`, `GoToDefinition`, `Hover` and `DocumentSymbols`.
 Registered only when this machine can back them: `Skill`, when the configuration
-directory declares a skill; `Delegate`, when it declares an agent; `WebFetch`
-and the browser tools `BrowserOpen`, `BrowserRead`, `BrowserAct`, `BrowserFill`
-and `BrowserClose`, when a Chrome can be found. Web search is not a tool of
-Emma's: the provider runs it, on the same key, when the provider has one.
+directory declares a skill; `Delegate`, when it declares an agent; `WebFetch`,
+`WebSearch` and the browser tools `BrowserOpen`, `BrowserRead`, `BrowserAct`,
+`BrowserFill` and `BrowserClose`, when a Chrome can be found. Search is a
+results page rendered in that Chrome, so it needs no key and no account.
 <!-- /diagram -->
 
-Web search is not a tool of Emma's. On Anthropic the model can search through
-the API's own search tool, on the same key, and each search is billed apart from
-tokens; Emma says so at startup and prints what was searched for as it happens.
-`"web_search": false` in `~/.emma/settings.json` turns it off. On Ollama there is
-no search, and the startup line says that too.
+`WebSearch` needs no key. It opens a search engine's results page in the same
+Chrome `WebFetch` uses and returns titles, URLs and snippets, on Ollama as on
+Anthropic. If the engine answers with a bot challenge the tool says so and
+names the way through: `BrowserOpen` on the same URL with `headful: true`. A
+second search, through the provider's own search tool on the same key and
+billed apart from tokens, is there for whoever wants it: `"web_search": true`
+in `~/.emma/settings.json`, Anthropic only.
 
 ## Budgets
 

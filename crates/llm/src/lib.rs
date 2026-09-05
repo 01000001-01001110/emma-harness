@@ -227,17 +227,17 @@ pub struct Request {
     /// is reached from here, and the model's queries go to the same place the
     /// conversation already goes. Ollama has no equivalent and ignores the
     /// flag, so a request that asks on a local model gets no search and no
-    /// error. The loop sets this from the user's settings; a bare
-    /// [`Request::new`] leaves it off, because a test or a sub-call that did
-    /// not ask for a search must not be billed for one.
+    /// error. The loop sets this from the user's settings, off unless asked; a
+    /// bare [`Request::new`] leaves it off, because a test or a sub-call that
+    /// did not ask for a search must not be billed for one.
     ///
-    /// This replaced a `WebSearch` client tool keyed on a search vendor's own
-    /// API key. Every harness this project compares itself to has search as a
-    /// provider-side tool paid for by the provider key the user already
-    /// holds, and a second vendor's credential in `~/.emma/credentials.json`
-    /// was one more thing to leak for a capability the provider already
-    /// sells. Owner ruling, 2026-09-05: no search-vendor key in this
-    /// repository again.
+    /// This is the second of two search paths and the optional one. Emma's own
+    /// `WebSearch` tool renders a results page in the local Chrome, needs no
+    /// key, and goes through the egress gate; it is what the model has by
+    /// default. This flag is for whoever wants the provider's search as well,
+    /// which Claude Code and Codex both use on their own providers. What is
+    /// not coming back is a search vendor's own API key: the owner's ruling on
+    /// 2026-09-05, after the tool that needed one was removed.
     pub web_search: bool,
 }
 

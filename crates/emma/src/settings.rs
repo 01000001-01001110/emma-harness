@@ -104,14 +104,17 @@ pub struct Settings {
     /// Whether the provider may search the web for the model, on its own side
     /// of the wire and on the same key. See `emma_llm::Request::web_search`.
     ///
-    /// **Absent means on**, the same reading as `memory` and for a stronger
-    /// reason: this is what every comparable harness ships, and a user who
-    /// picked a provider that sells search would otherwise have to find a
-    /// setting to get what they are already paying for. It is disclosed at
-    /// startup on every run, because each search is a separate charge and the
-    /// query leaves with the conversation. `false` turns it off. On a provider
-    /// with no search of its own the value is read and does nothing, and the
-    /// startup line says so rather than letting the setting look honoured.
+    /// **Absent means off**, which is the opposite reading to `memory` and the
+    /// same one as `prune_history`, for the same reason: this changes what the
+    /// model can do and what the user is billed for. The model already has a
+    /// search by default, Emma's own `WebSearch` tool over the local Chrome,
+    /// which costs nothing per call and goes through the egress gate. The
+    /// provider's server-side search is a second path for whoever wants it:
+    /// `true` turns it on, and every run then says so at startup, because each
+    /// search is a separate charge and the query leaves with the conversation.
+    /// On a provider with no search of its own a `true` is read and does
+    /// nothing, and the startup line says so rather than letting the setting
+    /// look honoured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_search: Option<bool>,
 

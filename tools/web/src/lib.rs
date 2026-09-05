@@ -4,28 +4,14 @@
 //! [`web_tools`], which returns only the ones that can actually work on this
 //! machine.
 //!
-//! **There is no `WebSearch` here any more, and the reason is worth a
-//! paragraph because the tool was good.** It returned places to look from a
-//! search index over a plain JSON API, and it refused to register without a
-//! key so the model never saw a tool that could not work. What it cost was a
-//! second vendor's credential in `~/.emma/credentials.json`, for a capability
-//! the model's own provider sells on the key the user already holds: every
-//! harness this project measures itself against has search as a server-side
-//! tool, run by the provider, billed with the call. Emma asks for that now
-//! through `emma_llm::Request::web_search`, and the owner's ruling on
-//! 2026-09-05 was that no search-vendor key returns to this repository. The
-//! module this paragraph replaces is in the history under `search.rs`.
-//!
-//! This crate sat unreachable for a while, and deliberately: the approval gate
-//! keyed entirely on [`emma_tool_api::ToolMeta::read_only`], one boolean that
-//! cannot express both "may not write" and "may not talk to the outside", and
-//! wiring these two through it would have decided that question by accident.
-//! The decision was made rather than dodged — `ToolMeta` gained a second axis,
-//! [`emma_tool_api::ToolMeta::reaches_network`], and the gate consults the two
-//! separately. Both tools declare it, both answer
-//! [`emma_tool_api::Tool::network_target`] with the host they are about to
-//! reach, and a human grants a host once per session. The last paragraph of
-//! this comment is the argument that shape came out of.
+//! **`WebSearch` is a results page rendered in that same Chrome.** It left
+//! on 2026-09-05 as a tool over a search vendor's JSON API, because that needed
+//! the vendor's key in `~/.emma/credentials.json` and the owner ruled no such
+//! key comes back. It returned the same day as a browser tool: open the
+//! engine's results page, take the links, throw the browser away. No key, no
+//! account, and it works on a local model exactly as on a paid one. See
+//! `search.rs` for what an engine's challenge page costs and how the tool
+//! reports it.
 //!
 //! The names are Claude Code's, exactly, so a hook matcher or an allow-list
 //! written for one works for the other.
@@ -68,9 +54,11 @@ pub mod browser;
 pub mod chromehand;
 pub mod digest_md;
 pub mod fetch;
+pub mod search;
 
 pub use browser::{browser_tools, BrowserPool};
 pub use fetch::WebFetch;
+pub use search::WebSearch;
 
 /// What the web surface turned out to be on this machine.
 pub struct WebSurface {
@@ -115,13 +103,16 @@ pub fn web_tools() -> WebSurface {
     // where `WebFetch` is present and `BrowserOpen` is not for no visible reason.
     let browser = match fetch::WebFetch::detect() {
         Ok(_) => {
+            // Search rides the same verdict: it is a results page rendered in
+            // the same Chrome, and a machine that can fetch can search.
+            tools.push(Arc::new(search::WebSearch::new()));
             let (browser_tools, pool) = browser::browser_tools(fetch::home_allowlist());
             tools.extend(browser_tools);
             Some(pool)
         }
         Err(why) => {
             skipped.push(format!(
-                "The browser session tools (BrowserOpen, BrowserRead, BrowserAct, BrowserFill, \
+                "WebSearch and the browser session tools (BrowserOpen, BrowserRead, BrowserAct, BrowserFill, \
                  BrowserClose) are not available: {why}"
             ));
             None
@@ -185,20 +176,13 @@ mod tests {
     }
 
     #[test]
-    fn no_tool_here_is_called_websearch() {
-        // The ruling this pins: search is the provider's, and no client tool
-        // by that name registers from this crate again. If one comes back, the
-        // README's generated tool list and `Request::web_search` both need to
-        // know, and this is the test that says so first.
-        let surface = web_tools();
-        assert!(
-            surface.tools.iter().all(|t| t.name() != "WebSearch"),
-            "a WebSearch client tool is registered again"
-        );
-        assert!(
-            surface.skipped.iter().all(|s| !s.contains("WebSearch")),
-            "web_tools still reports a WebSearch it could not build: {:?}",
-            surface.skipped
-        );
+    fn search_ships_a_real_description_and_schema_too() {
+        let tool: Arc<dyn Tool> = Arc::new(search::WebSearch::new());
+        assert!(tool.description().len() > 120, "stub description");
+        let schema = tool.input_schema();
+        assert_eq!(schema["type"], "object");
+        assert!(schema["properties"]["query"]["description"].is_string());
+        assert_eq!(schema["required"], serde_json::json!(["query"]));
+        assert_eq!(tool.name(), "WebSearch");
     }
 }

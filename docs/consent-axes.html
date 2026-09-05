@@ -93,9 +93,9 @@
     <code>read_only</code> asks a single question: can this call change local
     state, meaning a file written or a process spawned. It was once documented as
     also meaning "cannot reach the network", and that reading was never true of
-    the tools as they were written. <code>WebFetch</code> declares
-    <code>read_only: true</code>, because it cannot damage this machine, and it
-    is how bytes leave it.
+    the tools as they were written. <code>WebFetch</code> and
+    <code>WebSearch</code> declare <code>read_only: true</code>, because neither
+    can damage this machine, and both are how bytes leave it.
   </p>
   <span class="src">crates/tool-api/src/lib.rs — ToolMeta::read_only</span>
 
@@ -124,10 +124,9 @@ pub reaches_network: bool,</code></pre>
   <span class="src">crates/tool-api/src/lib.rs — ToolMeta::read_only</span>
 
   <p>
-    Five tools in the workspace declare <code>reaches_network: true</code>:
-    <code>WebFetch</code> and four of the five browser tools. It was six until
-    the search tool left on 2026-09-05. <code>BrowserClose</code> declares
-    <code>false</code>, since closing a
+    Six tools in the workspace declare <code>reaches_network: true</code>:
+    <code>WebFetch</code>, <code>WebSearch</code>, and four of the five browser
+    tools. <code>BrowserClose</code> declares <code>false</code>, since closing a
     session sends nothing outward.
     <span class="chip cert">certified</span> Counted from disk at commit
     <code>a3eba74</code>:

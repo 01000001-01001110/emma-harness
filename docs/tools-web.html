@@ -83,11 +83,11 @@
 </nav>
 
 <p class="lede">
-  <code>WebFetch</code> renders one page in real Chrome and throws the browser
-  away. The five <code>Browser*</code> tools keep it, which is a different
-  capability: inside a session the model acts as the user, on a page that may
-  hold their login. Searching is not on this page because it is not a tool of
-  Emma's any more; the section below says whose it is.
+  <code>WebSearch</code> opens a search engine's results page in real Chrome
+  and returns the places it points at. <code>WebFetch</code> renders one page
+  the same way and throws the browser away. The five <code>Browser*</code>
+  tools keep it, which is a different capability: inside a session the model
+  acts as the user, on a page that may hold their login.
 </p>
 
 <h2 id="registration">Nothing is registered unless it can work</h2>
@@ -100,6 +100,12 @@
         Ok(t) =&gt; tools.push(Arc::new(t)),
         Err(why) =&gt; skipped.push(format!(<span class="s">"WebFetch is not available: {why}"</span>)),
     }</code></pre>
+
+<p>
+  <code>WebSearch</code> and the five browser tools ride the same verdict: one
+  Chrome check, and everything that needs a Chrome registers or is reported
+  missing together.
+</p>
 
 <p>
   The predecessor shipped a <code>web_search</code> that registered with no key
@@ -132,120 +138,135 @@
   </p>
 </div>
 
-<h2 id="search">Search is the provider's</h2>
+<h2 id="search"><code>WebSearch</code></h2>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Argument</th><th>Default</th><th>Ceiling</th></tr></thead>
+    <tbody>
+      <tr><td><code>query</code> <em>required</em></td><td>none</td><td>whitespace-only is <code>WebSearch.query is empty</code></td></tr>
+      <tr><td><code>count</code></td><td class="num">10</td><td class="num">20</td></tr>
+    </tbody>
+  </table>
+</div>
 
 <p>
-  There was a <code>WebSearch</code> tool here until 2026-09-05. It asked a
-  search index over a plain JSON API, returned titles, URLs and one-line
-  snippets, and refused to register without a key so the model never saw a
-  tool that could not work. It was a good tool. What it cost was a second
-  vendor's credential in <code>~/.emma/credentials.json</code>, for a capability
-  the model's own provider sells on the key I already hold.
+  <code>read_only: true</code>, <code>reaches_network: true</code>,
+  <code>idempotent: true</code>. The gate is told the engine's host and the
+  query verbatim, because the query is the thing leaving the machine, and a
+  prompt naming a host without what is being sent there cannot tell a search
+  for a crate name from a search for the contents of a file.
+</p>
+<span class="src">tools/web/src/search.rs &mdash; <code>ENGINE</code>, <code>WebSearch::network_target</code></span>
+
+<h3>Why a browser and not an API</h3>
+
+<p>
+  This tool existed once before, over a search vendor's JSON API, and it needed
+  that vendor's key in <code>~/.emma/credentials.json</code>. I ruled on
+  2026-09-05 that no search-vendor key comes back. What Emma already had was a
+  real Chrome, driven by the code <code>WebFetch</code> uses, and a results page
+  is a page: open it, take the links, throw the browser away. No key, no
+  account, nothing billed per search, and it works on a local model exactly as
+  on a paid one, which the provider-side alternative I built first could not.
+</p>
+
+<h3>What was tried, so nobody repeats it</h3>
+
+<p>
+  Four engines from a fresh headless Chrome, 2026-09-05, this machine.
+  DuckDuckGo's HTML and Lite endpoints both served a
+  <em>&ldquo;bots use DuckDuckGo too&rdquo;</em> challenge. Startpage served
+  <em>&ldquo;Access Temporarily Suspended&rdquo;</em>. Bing served a results
+  page that looked right and was not: three runs returned Army PDFs, vacation
+  packages and Bing's own version page for a query about ratatui. That last one
+  is the shape this project refuses everywhere, a plausible fabrication rather
+  than a refusal.
+  <span class="chip cert">certified</span>: the four digests are reproducible
+  with <code>browser-miner digest &lt;url&gt;</code>, and the probe that settled
+  the fix is <code>tests/search_probe.rs</code>, driven by environment variables.
 </p>
 
 <p>
-  Every harness this project measures itself against does search the other
-  way: the provider runs it, on its side of the wire, inside the same API call,
-  and bills it with the call. Claude Code's search is Anthropic's server-side
-  <code>web_search</code> tool. Codex's is OpenAI's. Nobody pastes a search
-  vendor's key into either. I decided that no such key comes back to this
-  repository, and the tool went with it. The module is in the history under
-  <code>tools/web/src/search.rs</code>.
+  The one difference that fixed Bing was the User-Agent. Headless Chrome
+  announces itself as <code>HeadlessChrome/N</code> and Bing degrades that
+  client silently. The same launch sending an ordinary Chrome User-Agent got
+  <em>About 59,500 results</em> with ratatui.rs first, with
+  <code>navigator.webdriver</code> still <code>true</code>; a persistent
+  profile and a visible window also worked and were not needed. DuckDuckGo
+  challenged the ordinary User-Agent too, so it is out. The string is built
+  from the installed Chrome's own major version, read once per process, so it
+  does not age into a tell of its own.
 </p>
+<span class="src">tools/web/src/search.rs &mdash; <code>user_agent</code>, <code>installed_chrome_major</code>; tools/web/tests/search_probe.rs</span>
 
-<h3>What Emma sends instead</h3>
+<h3>One engine, no silent fallback</h3>
 
 <p>
-  <code>Request</code> carries a <code>web_search: bool</code>, an ask of the
-  same kind as <code>effort</code> and <code>max_tokens</code>: the loop says
-  what it wants and the provider decides what that means. Anthropic answers it
-  by appending one entry to the <code>tools</code> array, after every client
-  tool, so the cached prefix is the registry's own bytes followed by one
-  constant:
+  The gate grants a host per call, before anything runs. A tool that tried a
+  second engine when the first blocked would reach a host the human never saw
+  in a prompt, which is the redirect hazard <code>WebFetch</code> refuses one
+  function over. So the engine is one constant and the prompt names it. When
+  it blocks, the output says so and names the way through: <code>BrowserOpen</code>
+  on the same URL with <code>headful: true</code>, then <code>BrowserRead</code>.
+  A visible window is one a person can pass a challenge in.
+  <span class="chip test">tested</span>:
+  <code>a_challenge_page_is_reported_as_a_block_and_not_as_results</code>
+  asserts a blocked digest's links never reach the output and the
+  <code>BrowserOpen</code> instruction does.
 </p>
 
-<pre><code>{ <span class="k">"type"</span>: <span class="s">"web_search_20250305"</span>, <span class="k">"name"</span>: <span class="s">"web_search"</span>, <span class="k">"max_uses"</span>: 5 }</code></pre>
-<span class="src">crates/llm/src/anthropic.rs &mdash; <code>web_search_tool</code>, <code>render</code>; crates/llm/src/lib.rs &mdash; <code>Request::web_search</code></span>
+<h3>A results page into places to look</h3>
 
 <p>
-  <span class="chip test">tested</span>
-  <code>a_request_that_asks_to_search_carries_the_server_tool_last</code>
-  reads the body a stub server received and asserts that entry is last;
-  <code>a_request_that_does_not_ask_carries_no_server_tool</code> asserts a
-  bare request offers nothing. The version string is the whole contract and is
-  the basic one on purpose: the two later versions default to running the
-  search from inside code execution, and a model without programmatic tool
-  calling answers that default with a 400. Ollama has no equivalent, ignores
-  the flag, and <code>ProviderKind::web_search</code> says so, which is what
-  lets the startup line tell the truth on either provider.
+  Bing does not link to results directly. Every result anchor is a
+  click-tracking redirect, <code>www.bing.com/ck/a?&hellip;&amp;u=a1&lt;base64url&gt;</code>,
+  so &ldquo;a link that leaves the engine's host&rdquo; finds nothing and the
+  redirect is decoded; the model is shown the destination and never the
+  tracking URL. Titles and snippets are not on the anchors chromehand collects,
+  which carry the cite line. They are in the page text, four lines per result,
+  and the cite line is matched by host and first path segment to read the two
+  lines after it. A result the text does not mention keeps its anchor text as a
+  title, because a URL with a poor title is a place to look and dropping it is
+  the silent kind of loss.
+  <span class="chip test">tested</span>:
+  <code>hits_decode_the_redirects_and_read_titles_from_the_text</code> against
+  a fixture cut from the page Bing served, and
+  <code>a_click_redirect_decodes_to_the_page_it_tracks</code>.
 </p>
-
-<h3>What comes back, and what the loop does with it</h3>
-
-<p>
-  The search happens inside the call. The turn arrives with the provider's own
-  blocks in it, <code>server_tool_use</code> carrying the query and
-  <code>web_search_tool_result</code> carrying encrypted results, and this
-  client keeps both as <code>ContentBlock::Passthrough</code>: it does not model
-  them, and it echoes them back byte for byte, because the API rejects a
-  continuation that lost or altered one. That was already true before search
-  existed; the golden-body test in <code>anthropic.rs</code> has carried a
-  <code>server_tool_use</code> block since the passthrough variant was written.
-</p>
+<span class="src">tools/web/src/search.rs &mdash; <code>hits</code>, <code>decode_click_redirect</code>, <code>title_and_snippet</code></span>
 
 <p>
-  Two things are new in the loop. It reads the query out of each opaque block
-  and says <em>searched the web for: &hellip;</em> on the terminal, and writes a
-  <code>web_search</code> record to the session file, because a transcript that
-  shows text and tool calls and nothing between them would show the model
-  answering from nowhere. And it handles <code>pause_turn</code>: the API can
-  suspend a long search and hand the turn back unfinished, asking to see it
-  again unchanged. That turn has no text and no client tool call, and before
-  the arm existed the loop read it as the model's answer.
-  <span class="chip test">tested</span>
-  <code>a_paused_turn_is_sent_back_unchanged_and_is_not_an_answer</code> scripts
-  a pause and then a completion, and asserts the goal ended <code>Done</code>
-  after two calls with the provider's block still last in what it saw.
-</p>
-<span class="src">crates/emma/src/agent.rs &mdash; <code>run_goal</code>, <code>web_searches</code></span>
-
-<h3>What it costs, and who is told</h3>
-
-<p>
-  Each search is a separate charge from the tokens, and the count comes back
-  under <code>usage.server_tool_use.web_search_requests</code>. The loop writes
-  it on every <code>model_call</code> record and keeps it out of the token
-  weighting, since a search has no token-equivalent price and the loop's cap is
-  a token cap.
-  <span class="chip test">tested</span>
-  <code>the_search_count_is_read_from_under_server_tool_use</code> and
-  <code>the_search_count_survives_a_stream</code> cover both decoders.
+  <span class="chip cert">certified</span>: <code>cargo test -p emma-tools-web
+  --test search -- --ignored --nocapture</code> on 2026-09-05 returned five
+  results for <em>ratatui alternate screen rust</em>, ratatui.rs first, each
+  with a decoded URL, a title and a snippet, in 3.5 seconds including the
+  Chrome launch. Same query, same day, the headless User-Agent had returned
+  Army PDFs.
 </p>
 
 <p>
-  <strong>Absent means on.</strong> <code>"web_search": false</code> in
-  <code>~/.emma/settings.json</code> turns it off; nothing else does. Every run
-  on Anthropic starts with a line saying search is on, that it is billed apart
-  from tokens, and how to turn it off. A run on Ollama starts with a line
-  saying search is not available there. This is disclosure and not a gate: the
-  approval gate asks before Emma reaches a host from this machine, and a search
-  the provider runs on its own side reaches nothing from here. What leaves is
-  the model's query, and it leaves to the same place the conversation already
-  goes.
+  <span class="chip unv">unverified</span>: Bing's results markup and its
+  redirect encoding are the engine's to change, and a change breaks this
+  quietly into &ldquo;no results&rdquo; rather than loudly. The ignored live
+  test is the check; running it on a schedule would settle whether the shape
+  has held. Also unverified: what a rate-limited Bing looks like from here, and
+  whether <code>looks_blocked</code> would recognise it. Nobody has hit that.
 </p>
-<span class="src">crates/emma/src/settings.rs &mdash; <code>web_search</code>; crates/emma/src/main.rs &mdash; the startup note</span>
+
+<h3>The other search, opt-in</h3>
 
 <p>
-  <span class="chip unv">unverified</span>: no goal has run a real search
-  through this path yet. The request shape is taken from the tool's own
-  reference, read on 2026-09-05, and the decoders are exercised against bodies
-  written from that reference. A goal that asks a question only the web can
-  answer, run on Anthropic with search on, would settle it, and the session
-  file's <code>web_search</code> record is where the evidence would land. An
-  organisation that has turned search off in the console gets a 400 saying so
-  rather than a result block, and the loop surfaces that as the provider's own
-  message; nobody has provoked that either.
+  <code>"web_search": true</code> in <code>~/.emma/settings.json</code> also
+  lets the model search through the provider's own server-side tool, on the
+  same key, billed apart from tokens. It is off unless asked because this tool
+  covers the need without a bill, and because a search the provider runs on its
+  own side never reaches the egress gate. When it is on, every run says so at
+  startup and the loop prints what was searched for. Anthropic only; Ollama has
+  none and the startup line says so.
+  <a href="consent-egress.html">The egress page</a> carries the consent argument.
 </p>
+<span class="src">crates/llm/src/lib.rs &mdash; <code>Request::web_search</code>; crates/emma/src/settings.rs &mdash; <code>web_search</code></span>
 
 <h2 id="webfetch"><code>WebFetch</code></h2>
 

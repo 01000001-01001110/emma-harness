@@ -512,6 +512,19 @@ async fn navigate_and_extract(
 pub fn looks_blocked(title: &str, text_lower: &str, final_url: &str) -> bool {
     let t = title.to_lowercase();
     t.contains("just a moment")
+        // Two certified misses from 2026-09-05, both found the same afternoon
+        // by pointing a fresh Chrome at search engines. DuckDuckGo's challenge
+        // ("Unfortunately, bots use DuckDuckGo too. Please complete the
+        // following challenge...") carried none of the phrases below and came
+        // back HTTP 202 with `looks_blocked: false`. Startpage's block page
+        // titled itself "Access Denied - Startpage" while its text said
+        // "Access Temporarily Suspended"; the phrase was in the title, and
+        // only the text was checked. Both were then handed to a tool as an
+        // ordinary page with one link on it.
+        || t.contains("access denied")
+        || text_lower.contains("bots use duckduckgo too")
+        || text_lower.contains("confirm this search was made by a human")
+        || text_lower.contains("access temporarily suspended")
         || t.contains("pardon our interruption") // HEURISTIC: Akamai
         || t.contains("attention required! | cloudflare") // HEURISTIC: Cloudflare legacy
         || text_lower.contains("verify you are human")
