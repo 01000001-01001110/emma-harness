@@ -1350,12 +1350,23 @@ mod tests {
     fn the_unset_voice_is_named_as_the_system_default_and_says_where_to_change_it() {
         let label = State::default().voice_label();
         assert!(label.contains("system default"), "{label}");
-        // Both platforms name the room. On macOS it is the Siri seat, which is
-        // the reason this module never substitutes an enhanced voice for it.
-        assert!(
-            label.contains("Settings"),
-            "the room was not named: {label}"
-        );
+
+        // The room is named where there is a room. This used to assert
+        // `Settings` unconditionally with a comment reading "both platforms",
+        // which held on macOS and Windows and failed on Linux on 2026-09-04 --
+        // where `backend()` is `None`, there is no synthesiser and so no
+        // settings pane to send anybody to. Naming one would be an invention.
+        match backend() {
+            Some(_) => assert!(
+                label.contains("Settings"),
+                "a platform with a synthesiser must say where to change it: {label}"
+            ),
+            None => assert_eq!(
+                label, "the system default",
+                "with no backend there is no room to name, so the label adds nothing"
+            ),
+        }
+
         assert_eq!(
             State {
                 on: true,
@@ -1364,6 +1375,28 @@ mod tests {
             }
             .voice_label(),
             "Daniel"
+        );
+    }
+
+    /// **If this breaks:** a platform gains or loses a synthesiser and the
+    /// label stops matching what `backend()` reports, so `/voice` sends the
+    /// reader to a pane that is not there -- or fails to send them anywhere
+    /// when it could.
+    ///
+    /// Asserted against `backend()` rather than against `cfg!`, so the two
+    /// cannot drift apart: the label is the only thing a person reads and the
+    /// backend is the thing that decides.
+    #[test]
+    fn the_default_label_agrees_with_whether_a_backend_exists() {
+        let label = system_default_label();
+        assert!(
+            label.starts_with("the system default"),
+            "every platform opens the same way: {label}"
+        );
+        assert_eq!(
+            backend().is_some(),
+            label.len() > "the system default".len(),
+            "a backend adds the room and no backend adds nothing: {label}"
         );
     }
 
