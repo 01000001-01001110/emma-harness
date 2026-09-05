@@ -228,22 +228,10 @@
     <p>
       There is nowhere in the context for per-session state, so read-tracking
       and anything else a tool needs to remember across calls has no home.
-      Constructing tools individually compiles and then silently misbehaves.
     </p>
     <p>
-      <strong>Three crates document this separately:</strong> <code>tools/fs</code>,
-      <code>tools/lsp</code> and <code>tools/web</code> each warn about it in
-      their own words, which is what a missing shared abstraction looks like
-      from below.       Backlog item 17.
-      <span class="chip unv">unverified</span>. The failure is described in
-      three comments (<code>tools/fs/src/lib.rs</code>,
-      <code>tools/lsp/src/lib.rs</code>, and the browser pool in
-      <code>tools/web</code>); no test reproduces separate construction.
-      What would settle it: construct two <code>Write</code> tools with two
-      different <code>ReadTracker</code> handles (or four LSP tools with four
-      pools), exercise read-then-write on the same path, and assert the second
-      tool does not see the first tool's session state. A test this round
-      cannot add because another worker owns the Rust.
+      Separate tool construction can silently misbehave, listed under
+      <a href="roadmap.html#hazards">named hazards</a> rather than described here.
     </p>
   </div>
 
@@ -257,18 +245,11 @@
     the loop's behaviour is covered at all.
   </p>
 
-  <div class="note warn">
-    <span class="h">The split is not clean</span>
-    <p>
-      <code>main.rs</code> opens by saying it is "wiring, and nothing else".
-      <code>run()</code> is 634 lines of policy sitting above the point a
-      scripted provider attaches, so the code that decides what happens before
-      the loop starts is the part the seam cannot reach.
-      <span class="chip unv">unverified</span>. Found by reading, in
-      <code>notes/archive/map-architecture.md</code>; no measurement of what that code
-      does that is untested. Backlog item 19.
-    </p>
-  </div>
+  <p>
+    <code>main.rs</code> carries policy the scripted-provider seam cannot reach,
+    listed under <a href="roadmap.html#hazards">named hazards</a> rather than
+    described here.
+  </p>
 
   <h2 id="crates">What each crate is</h2>
 
@@ -321,10 +302,11 @@
       watches for it.
     </li>
     <li>
-      The <code>ToolCtx</code> hazard and the <code>main.rs</code> policy count
-      both come from <code>notes/archive/map-architecture.md</code>, whose citations
-      were sampled and confirmed on 2026-08-16 but not exhaustively re-read
-      here.
+      The <code>ToolCtx</code> and <code>main.rs</code> hazards moved to
+      <a href="roadmap.html#hazards">named hazards</a>. Both came from an
+      architecture survey that left this repository with <code>notes/</code> on
+      2026-08-30; its citations were sampled and confirmed on 2026-08-16 and
+      have not been re-read against the source since.
       <span class="chip unv">unverified</span>
     </li>
   </ul>

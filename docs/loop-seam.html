@@ -366,14 +366,9 @@ impl Interrupt {
   </p>
 
   <p>
-    What it did not make testable is that <code>main</code> calls it. The
-    interactive goal loop is still in <code>main.rs</code>, so deleting the call
-    leaves the entire workspace green.
-    <span class="chip unv">unverified</span> Nothing checks the wiring. What
-    would settle it is extracting the goal loop into the library behind a seam a
-    scripted provider can drive, rather than another test on
-    <code>Interrupt</code>, which is the part that is already covered. It is
-    filed as <code>ARCH-003</code>.
+    That <code>main</code> calls <code>starting_goal</code> is unchecked —
+    deleting the call leaves the workspace green — listed under
+    <a href="roadmap.html#hazards">named hazards</a> rather than described here.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Interrupt::install</code>, <code>Interrupt::reset</code>, <code>Interrupt::starting_goal</code>; crates/emma/src/main.rs</span>
 

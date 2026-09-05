@@ -323,29 +323,11 @@ config         fd13f35ed476c2f7</code></pre>
         };</code></pre>
   <span class="src">crates/harness/src/lib.rs — <code>Harness::load_selecting</code>; crates/harness/src/statusline.rs — module doc</span>
 
-  <div class="note warn">
-    <span class="h">That sentence is not reachable from <code>emma config check</code></span>
-    <p>
-      <code>config_check</code> prints the hooks, the agents, the commands, the
-      permissions and the notes attached to each. It never calls
-      <code>status_line_note()</code>, and <code>main</code> reaches the call
-      that does roughly 280 lines after the <code>ConfigCheck</code> arm has
-      already returned. So a <code>statusLine</code> Emma refused is invisible to
-      the one command whose stated job is answering why something did not happen.
-    </p>
-    <p>
-      <span class="chip cert">certified</span>: a scratch <code>.claude/</code>
-      whose <code>settings.json</code> asks for
-      <code>{"type":"command","command":"jq -r .model.display_name"}</code>
-      produces a full, ordinary <code>config check</code> report with no mention
-      of the status line at all. Repeat it with any command string containing a
-      space. The note does reach an interactive run through
-      <code>Term::warn</code> at <code>main.rs</code>'s status-line block;
-      <span class="chip unv">unverified</span> that it is legible there, because
-      nothing in this session drew a frame. Settle it by starting Emma in that
-      scratch directory and reading the lines above the first prompt.
-    </p>
-  </div>
+  <p>
+    A refused <code>statusLine</code> is invisible to
+    <code>emma config check</code>, listed under
+    <a href="roadmap.html#hazards">named hazards</a> rather than described here.
+  </p>
 
   <h2 id="prompt">The prompt is concatenation, and that is a property</h2>
 
@@ -553,10 +535,10 @@ pub struct Harness {
 
   <ul class="body">
     <li>
-      <strong>The interactive status-line note.</strong> The defect above is
-      certified only in its negative half: <code>config check</code> prints
-      nothing. Whether <code>Term::warn</code> shows the sentence legibly in a
-      frame, and whether it survives the first repaint, was not looked at.
+      <strong>The status-line hazard.</strong> Moved to
+      <a href="roadmap.html#hazards">named hazards</a>; whether
+      <code>Term::warn</code> shows the sentence legibly in a frame, and whether
+      it survives the first repaint, was not looked at.
       <span class="chip unv">unverified</span>. Settle it by starting Emma in a
       directory whose <code>settings.json</code> names a shell-string status line
       and reading the lines above the first prompt.

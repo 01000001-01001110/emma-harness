@@ -167,12 +167,19 @@
   <h2 id="hazards">Named hazards, unprovoked</h2>
 
   <p>
-    Each of these is a failure the code names and does not remove. None has
-    been made to happen, which is why they are here rather than under
-    <a href="#defects">known defects</a> &mdash; and why each says what would
-    settle it. They were moved out of the pages that describe the mechanisms
-    they belong to, because an explanation of how something works is the wrong
-    place to keep an open defect.
+    Each of these is a failure the code does not remove, and none of them has
+    been made to happen. Some are <span class="chip cert">certified</span>
+    against what the source says while staying unprovoked in effect, which is
+    why they are here rather than under
+    <a href="#defects">known defects</a>, and why every one of them says what
+    would settle it.
+  </p>
+
+  <p>
+    They were moved off the pages describing the mechanisms they belong to. An
+    explanation of how something works is the wrong place to keep an open
+    defect: a reader looking for the defect list does not find it there, and a
+    reader learning the mechanism is handed a caveat they cannot act on.
   </p>
 
   <h3><code>reanchor</code> can send the cursor answer to the wrong reader</h3>
@@ -192,6 +199,165 @@
     A resize storm on a unix terminal while a goal streams would settle it.
   </p>
   <span class="src">crates/emma/src/term/frame.rs &mdash; <code>reanchor</code></span>
+
+  <h3>A write to Emma's own configuration is an ordinary file write</h3>
+
+  <p>
+    <code>approval.rs</code> classifies by tool name, not by destination. A
+    <code>Write</code> to <code>.claude/hooks/</code>,
+    <code>settings.local.json</code>, <code>agents/</code> or
+    <code>skills/</code> is the same category of act as writing a source file,
+    so it is the one edit that can disable the check that would have caught it.
+    A session-wide allowance makes that reachable without a second prompt: the
+    allowance is granted for <code>Write</code> and the next <code>Write</code>
+    is not asked about, wherever it lands.
+  </p>
+
+  <p>
+    The allowance behaviour is pinned by a test in <code>approval.rs</code>, so
+    that half is not in doubt.
+    <span class="chip unv">unverified</span>: nobody has run the sequence end to
+    end &mdash; allow <code>Write</code>, then write a hook that turns the gate
+    off. Doing that once, and reading what the next run prompts for, would
+    settle whether the exposure is real or whether something downstream catches
+    it.
+  </p>
+  <span class="src">crates/emma/src/approval.rs &mdash; <code>decide</code>, allowances</span>
+
+  <h3><code>ToolCtx</code> has no slot for per-session state</h3>
+
+  <p>
+    Nothing in the context holds state a tool needs across calls, so read
+    tracking and the browser pool have no shared home. Constructing tools
+    individually compiles and then silently misbehaves: the second tool does
+    not see what the first recorded. Three crates document the same problem
+    separately &mdash; <code>tools/fs</code>, <code>tools/lsp</code> and
+    <code>tools/web</code> each warn about it in their own words, which is what
+    a missing shared abstraction looks like from below.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span>: the failure is described in three
+    comments and no test reproduces it. Construct two <code>Write</code> tools
+    with two different <code>ReadTracker</code> handles, exercise
+    read-then-write on the same path, and assert the second tool does not see
+    the first tool's session state. That would settle it.
+  </p>
+  <span class="src">crates/tool-api &mdash; <code>ToolCtx</code></span>
+
+  <h3><code>main.rs</code> holds policy the scripted-provider seam cannot reach</h3>
+
+  <p>
+    <code>main.rs</code> opens by saying it is wiring and nothing else.
+    <code>run()</code> is 634 lines sitting above the point a scripted provider
+    attaches, so everything deciding what happens before the loop starts is
+    outside what a test with no network can drive.
+    <span class="chip unv">unverified</span>: found by reading, and nobody has
+    measured how much of those lines no test reaches. Extracting the goal loop
+    into the library behind the seam would both settle it and remove it.
+  </p>
+  <span class="src">crates/emma/src/main.rs &mdash; <code>run</code></span>
+
+  <h3>Nothing checks that <code>main</code> calls <code>starting_goal</code></h3>
+
+  <p>
+    <code>Interrupt::starting_goal</code> is covered. That <code>main</code>
+    calls it is not: the interactive goal loop is still in <code>main.rs</code>,
+    so deleting the call leaves the whole workspace green.
+    <span class="chip unv">unverified</span>: nobody has deleted the call and
+    run the suite. Another test on <code>Interrupt</code> would not settle it,
+    because that is the half already covered; extracting the goal loop into the
+    library behind a seam a scripted provider can drive would.
+  </p>
+  <span class="src">crates/emma/src/agent.rs &mdash; <code>Interrupt::starting_goal</code>; crates/emma/src/main.rs</span>
+
+  <h3>A refused <code>statusLine</code> is invisible to <code>emma config check</code></h3>
+
+  <p>
+    <code>config_check</code> prints the hooks, the agents, the commands, the
+    permissions and the notes attached to each. It never calls
+    <code>status_line_note()</code>, and <code>main</code> reaches the call that
+    does roughly 280 lines after the <code>ConfigCheck</code> arm has already
+    returned. So a <code>statusLine</code> Emma refused is invisible to the one
+    command whose stated job is answering why something did not happen.
+  </p>
+
+  <p>
+    <span class="chip cert">certified</span> in its negative half: a scratch
+    <code>.claude/</code> whose <code>settings.json</code> asks for a
+    <code>command</code> status line produces a full, ordinary
+    <code>config check</code> report with no mention of the status line at all,
+    and so does any command string containing a space. The note does reach an
+    interactive run through <code>Term::warn</code>.
+    <span class="chip unv">unverified</span> whether it is legible there, since
+    nobody has drawn a frame and looked. Start Emma in that scratch directory
+    and read the lines above the first prompt.
+  </p>
+  <span class="src">crates/harness/src/lib.rs &mdash; <code>load_selecting</code>; crates/emma/src/main.rs</span>
+
+  <h3>Hunk headers are drawn outside the diff budget</h3>
+
+  <p>
+    In <code>Change::out</code> the ordinary path pushes <code>Out::Hunk</code>
+    for each hunk before consuming rows, and <code>room</code> is decremented
+    only by the body rows taken. A patch with many small scattered hunks can
+    therefore draw up to <code>BUDGET</code> header rows <em>plus</em>
+    <code>BUDGET</code> body rows. The size tests use a single-hunk fixture and
+    a coarse one, and both assert
+    <code>out.lines().count() &lt;= BUDGET + 8</code>, which a forty-hunk patch
+    would exceed.
+  </p>
+
+  <p>
+    <span class="chip cert">certified</span> by reading the loop:
+    <code>room</code> gates entry and bounds <code>take</code>, and the header
+    push happens before either.
+    <span class="chip unv">unverified</span> in effect, because no such patch
+    has been rendered. Render one with forty scattered hunks under the budget
+    cap and count the lines.
+  </p>
+  <span class="src">crates/emma/src/term/diff.rs &mdash; <code>Change::out</code></span>
+
+  <h3><code>Change::creation</code> skips three checks the other paths make</h3>
+
+  <p>
+    <code>creation</code> is the <code>Write</code>-to-a-missing-file path, and
+    it checks <code>MAX_LINES</code> and nothing else. It does not scan for NUL
+    bytes, which live in <code>compute</code>, so a <code>Write</code> creating
+    a new binary file is drawn as a screen of <code>+</code> rows where the same
+    content over an existing file is refused as binary. It applies no byte limit
+    to the model's <code>content</code>, where the existing-file path has
+    <code>MAX_READ</code>. And it reports no line-ending or final-newline note,
+    because those are gathered in <code>compute</code> too.
+  </p>
+
+  <p>
+    The consequence is bounded: <code>Change::out</code> runs
+    <code>sanitise</code> over every row, so control bytes never reach a cell
+    and the symptom is a long meaningless diff rather than a corrupted frame.
+    <span class="chip cert">certified</span> by reading &mdash;
+    <code>creation</code> is 35 lines and contains one guard, on
+    <code>text.lines.len()</code>. Routing new-file writes through
+    <code>compute</code>, or duplicating its guards, would remove it.
+  </p>
+  <span class="src">crates/emma/src/term/diff.rs &mdash; <code>Change::creation</code>, <code>compute</code></span>
+
+  <h3>The fidelity loop in the gutter test cannot fail</h3>
+
+  <p>
+    <code>an_addition_and_a_removal_differ_in_gutter_as_well_as_in_colour</code>
+    closes with a loop over three <code>Level</code>s and then calls a renderer
+    that takes no <code>Skin</code> and cannot see the level. The variable
+    reaches only the failure message, so the identical assertion runs three
+    times while the comment claims coverage of three fidelities. This is the
+    false-receipt shape the project names elsewhere, inside a test file that
+    argues against it.
+    <span class="chip cert">certified</span>: <code>to_text</code>'s signature is
+    <code>fn to_text(&amp;self, budget: usize) -&gt; String</code>. Call a
+    renderer that takes a <code>Skin</code> inside the loop, or delete the loop
+    and say the test covers colour only.
+  </p>
+  <span class="src">crates/emma/src/term/diff.rs &mdash; <code>an_addition_and_a_removal_differ_in_gutter_as_well_as_in_colour</code>, <code>Change::to_text</code></span>
 
   <h2 id="planned">Planned, with the reasoning written down</h2>
 

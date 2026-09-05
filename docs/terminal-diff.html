@@ -297,46 +297,17 @@ fn coarse_rows(patch: &amp;Patch, budget: usize) -&gt; Vec&lt;Out&gt; {
     costs most.
   </p>
 
-  <div class="note warn">
-    <span class="h">Defect: hunk headers are drawn outside the budget</span>
-    <p>
-      In <code>Change::out</code>, the ordinary path pushes
-      <code>Out::Hunk</code> for each hunk before consuming rows, and
-      <code>room</code> is decremented only by <code>took</code>, the body rows
-      taken. A patch with many small scattered hunks can therefore draw up to
-      <code>BUDGET</code> header rows <em>plus</em> <code>BUDGET</code> body
-      rows. The size tests use a single-hunk fixture and a coarse fixture, and
-      both assert <code>out.lines().count() &lt;= BUDGET + 8</code>, which a
-      forty-hunk patch would exceed.
-      <span class="chip cert">certified</span>: read the loop in
-      <code>Change::out</code>. <code>room</code> gates entry to the loop and
-      bounds <code>take</code>, and <code>out.push(Out::Hunk(&hellip;))</code>
-      happens before either.
-    </p>
-    <span class="src">crates/emma/src/term/diff.rs — <code>Change::out</code></span>
-  </div>
+  <p>
+    Hunk headers in <code>Change::out</code> are drawn outside the budget, listed
+    under <a href="roadmap.html#hazards">named hazards</a> rather than described
+    here.
+  </p>
 
-  <div class="note warn">
-    <span class="h">Defect: <code>Change::creation</code> skips three checks the other paths make</span>
-    <p>
-      <code>creation</code> is the <code>Write</code>-to-a-missing-file path. It
-      checks <code>MAX_LINES</code> and nothing else. It does not scan for NUL
-      bytes, which live in <code>compute</code>, so a <code>Write</code>
-      creating a new binary file is drawn as a screen of <code>+</code> rows
-      where the same content over an existing file is refused as binary. It
-      applies no byte limit to the model's <code>content</code>, where the
-      existing-file path has <code>MAX_READ</code>. And it reports no
-      line-ending or final-newline note, because those are gathered in
-      <code>compute</code> too.
-      <span class="chip cert">certified</span>: <code>creation</code> is 35
-      lines and contains one guard, on <code>text.lines.len()</code>.
-      <code>Change::out</code> runs <code>sanitise</code> over every row before
-      it becomes an <code>Out</code>, so the control bytes never reach a cell
-      and the symptom is a long and meaningless diff rather than a corrupted
-      frame.
-    </p>
-    <span class="src">crates/emma/src/term/diff.rs — <code>Change::creation</code>, <code>compute</code></span>
-  </div>
+  <p>
+    <code>Change::creation</code> skips three checks the other paths make, listed
+    under <a href="roadmap.html#hazards">named hazards</a> rather than described
+    here.
+  </p>
 
   <h2 id="gutter">The gutter, and the rule this file inverts</h2>
 
@@ -387,23 +358,10 @@ fn text_of(out: &amp;Out) -&gt; String {
     line at budgets 1, 4 and 40.
   </p>
 
-  <div class="note warn">
-    <span class="h">Defect: the fidelity loop in the gutter test cannot fail</span>
-    <p>
-      <code>an_addition_and_a_removal_differ_in_gutter_as_well_as_in_colour</code>
-      closes with <code>for level in [Level::None, Level::Ansi16,
-      Level::Ansi256]</code> and then calls
-      <code>Change::file("a\n", "b\n").to_text(BUDGET)</code>, which takes no
-      <code>Skin</code> and cannot see <code>level</code>. The variable is used
-      only in the failure message, so the identical assertion runs three times
-      while the comment claims coverage of three fidelities. The colour half of
-      the test, above the loop, is genuine and does check
-      <code>Role::Ok</code> against <code>Role::Err</code>.
-      <span class="chip cert">certified</span>: <code>to_text</code>'s signature
-      is <code>fn to_text(&amp;self, budget: usize) -&gt; String</code>.
-    </p>
-    <span class="src">crates/emma/src/term/diff.rs — <code>an_addition_and_a_removal_differ_in_gutter_as_well_as_in_colour</code>, <code>Change::to_text</code></span>
-  </div>
+  <p>
+    The fidelity loop in the gutter test cannot fail, listed under
+    <a href="roadmap.html#hazards">named hazards</a> rather than described here.
+  </p>
 
   <h2 id="summary">The one line that is never cut</h2>
 
