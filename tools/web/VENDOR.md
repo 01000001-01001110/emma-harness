@@ -2,8 +2,9 @@
 
 `src/chromehand/` is a fork of **chromehand** (binary name `browser-miner`),
 Alan's own project, a sibling repository on his machine. Forked from commit `9c93827`
-on **2026-08-09**, MIT (the upstream `Cargo.toml` declares `license = "MIT"`;
-it ships no `LICENSE` file to copy).
+on **2026-08-09**. Upstream declares MIT in its `Cargo.toml` and ships no
+`LICENSE` file; this copy is Apache-2.0 with the rest of the workspace, a
+relicensing the owner made on 2026-09-05 as the author of both.
 
 **That repo is canonical and stays independent.** This copy is Emma's and is
 free to diverge — it is not a vendored snapshot waiting to be re-synced, and

@@ -2,9 +2,10 @@
 name = "emma-tools-web"
 version.workspace = true
 edition.workspace = true
-# Inherited from the fork's origin. chromehand ships no LICENSE file to copy;
-# its Cargo.toml is where the declaration lives. See VENDOR.md.
-license = "MIT"
+# The workspace licence. The fork's origin declares MIT and ships no LICENSE
+# file; the same person wrote both, and relicensed this copy on 2026-09-05.
+# See VENDOR.md.
+license.workspace = true
 
 # The standalone CLI, kept from upstream. It is what the vendored integration
 # tests drive — they exercise policy refusals and the whole session loop
