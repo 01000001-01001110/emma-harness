@@ -35,6 +35,7 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 
 pub mod architecture;
+pub mod coverage;
 pub mod pages;
 pub mod rust;
 pub mod shapes;
