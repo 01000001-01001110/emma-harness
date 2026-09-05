@@ -192,16 +192,15 @@ loop {
   <span class="src">crates/emma/src/approval.rs — Approvals::ask, terminal arm</span>
 
   <p>
-    Four properties come out of that block. Input is trimmed and lowercased, so
-    <code>Y</code> and <code>&nbsp;yes&nbsp;</code> work. An empty line is
-    <code>n</code>. An unrecognised line prints the keys that were actually
-    offered and asks again rather than resolving to anything. And end of input,
-    which is <code>line?</code> returning <code>None</code>, leaves the caller
-    with the "no approval was given" denial.
+    Input is trimmed and lowercased, so <code>Y</code> and
+    <code>&nbsp;yes&nbsp;</code> work. An empty line is <code>n</code>. An
+    unrecognised line prints the keys that were actually offered and asks again.
+    End of input (<code>line?</code> returning <code>None</code>) leaves the
+    caller with the "no approval was given" denial.
   </p>
 
   <div class="note warn">
-    <span class="h">Two of those four had never been executed by a test</span>
+    <span class="h">Two behaviours had never been executed by a test</span>
     <p>
       Until 2026-08-23 nothing in this repository could reach the block above.
       Changing the empty-line arm to <code>Answer::Yes</code>, so that
@@ -359,10 +358,10 @@ loop {
   <h2 id="preview">What the prompt shows</h2>
 
   <p>
-    A prompt the reader cannot evaluate manufactures consent and leaves a record
+    A prompt the reader cannot evaluate is useless as consent and leaves a record
     saying they agreed. <code>preview</code> has one arm per tool that can change
-    something, and the fallback is pretty-printed JSON, which is visibly worse and
-    is the pressure on whoever adds the next writing tool.
+    something. The fallback is pretty-printed JSON, visibly worse, which pushes
+    whoever adds the next writing tool to write a real arm.
   </p>
 
   <div class="tw">
@@ -433,27 +432,25 @@ loop {
   <h2 id="grants">Naming the grants back</h2>
 
   <p>
-    <code>session_grants</code> returns the tools and the hosts a run has
-    accumulated, each sorted. It is there for <code>/clear</code>, which keeps
-    both sets and has to be able to name them: a receipt saying "grants were kept"
-    without saying which is the silence the command is written against. The sort
-    is because a <code>HashSet</code> has no order and a receipt that reshuffles
-    itself between two readings is one nobody trusts.
+    <code>session_grants</code> returns the tools and hosts a run has accumulated,
+    each sorted. <code>/clear</code> keeps both sets and has to name them. A
+    receipt that says "grants were kept" without listing them is the silence the
+    command is written against. The sort is because a <code>HashSet</code> has no
+    order and a receipt that reshuffles between readings is untrustworthy.
   </p>
   <span class="src">crates/emma/src/approval.rs — Approvals::session_grants</span>
 
   <h2 id="rest">The rest of the type</h2>
 
   <p>
-    Four items on <code>Approvals</code> need no paragraph of their own.
-    <code>new</code> builds a gate with empty sets and no rules;
-    <code>with_rules</code> is a separate builder step rather than two more
-    parameters, so that every existing caller still means "ask about everything";
+    On <code>Approvals</code>: <code>new</code> builds a gate with empty sets and
+    no rules; <code>with_rules</code> is a separate builder step (not two more
+    parameters) so existing callers still mean "ask about everything";
     <code>unattended</code> is <code>new(Gate::Unattended, Scripted(empty))</code>;
-    and <code>gate</code> returns the mode. <code>Offers::text</code> renders an
-    optional rule to an optional string. <code>Verdict</code> has two variants,
-    and the <code>Deny</code> one carries the sentence the model is told, because
-    a denial the model cannot read is a tool that mysteriously does nothing.
+    <code>gate</code> returns the mode. <code>Offers::text</code> renders an
+    optional rule to an optional string. <code>Verdict</code> has two variants;
+    the <code>Deny</code> one carries the sentence the model is told, because a
+    denial the model cannot read looks like a tool that mysteriously does nothing.
   </p>
   <span class="src">crates/emma/src/approval.rs — Approvals::new, with_rules, unattended, gate; Offers::text; Verdict</span>
 

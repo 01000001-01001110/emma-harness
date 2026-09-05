@@ -64,7 +64,7 @@
 <div class="col">
 
   <p class="eyebrow">crates/llm/src/content.rs</p>
-  <h1>Typed content blocks, and the 712 tests that proved nothing</h1>
+  <h1>Typed content blocks</h1>
 
   <nav class="chapter">
     <a class="up" href="providers.html">Providers &amp; models</a>
@@ -82,9 +82,8 @@
     This module exists to delete one field. What replaced it decoded strictly,
     passed 712 tests with byte-identical output, and then decoded no real tool
     call at all, because the API puts a key on every <code>tool_use</code>
-    block that nothing here had read about. The fix is two escape hatches
-    pointing in opposite directions, and the split between them came from a live
-    call.
+    block that nothing here had read about. The fix uses two escape hatches that
+    work in opposite directions; the split between them came from a live call.
   </p>
 
   <h2 id="blob">The field it deletes</h2>
@@ -113,7 +112,7 @@
   </p>
   <span class="src">crates/llm/src/content.rs — module doc §"Why a blob existed at all"</span>
 
-  <h2 id="strict">712 tests, clean clippy, identical bytes, dead agent</h2>
+  <h2 id="strict">Strict decoding and the live failure</h2>
 
   <p>
     The first version of this module decoded strictly:
@@ -148,7 +147,7 @@
     The demotion above fires on an <em>extra</em> key. It also fires on a
     <em>missing</em> one, and that half is not fixed. A <code>tool_use</code>
     block with no <code>input</code> still decodes to
-    <code>Passthrough</code> in the batch path &mdash; so the run reports
+    <code>Passthrough</code> in the batch path, so the run reports
     <em>"answered, no tools were needed"</em>, which is the exact sentence this
     page was written about.
   </p>
@@ -161,7 +160,7 @@ stream (tool_use with no `name`):  ToolCall{name:"",…}  tool_calls = 1</code><
   <p>
     One quietly loses the call; the other produces a call named
     <code>""</code> that no registry can dispatch. Neither errors. <strong>Batch
-    is the unattended path</strong> &mdash; it is what <code>-p</code> uses, and
+    is the unattended path</strong>; it is what <code>-p</code> uses, and
     what a script gets.
     <span class="chip unv">unverified</span> Whether the API can actually emit
     either shape. The decoder's behaviour on them is measured; what the wire
@@ -183,10 +182,9 @@ stream (tool_use with no `name`):  ToolCall{name:"",…}  tool_calls = 1</code><
     never moves, and nothing says so.
     <span class="chip test">tested</span>
     <code>an_absent_usage_block_reports_zero_tokens_and_says_nothing</code> pins
-    it &mdash; and its doc says plainly that it pins a <em>gap</em> rather than a
-    guarantee, with a control beside it showing that a usage block which is
-    present and malformed IS refused loudly. So the quiet case is absence, not
-    corruption.
+    a gap rather than a guarantee. Its doc says so plainly, with a control beside
+    it showing that a usage block which is present and malformed IS refused loudly.
+    So the quiet case is absence, not corruption.
   </p>
 </div>
 
@@ -236,7 +234,7 @@ fn a_real_tool_use_block_is_a_tool_call_and_still_round_trips() {
     </p>
   </div>
 
-  <h2 id="hatches">Two escape hatches, pointing opposite ways</h2>
+  <h2 id="hatches">Escape hatches in opposite directions</h2>
 
   <p>
     An unknown block <em>type</em> becomes

@@ -69,8 +69,9 @@
   </nav>
 
   <p class="lede">
-    Five bounds, three token numbers that are not each other, and one meter that
-    a delegated run can reach. The bounds are separate because they fail
+    A goal is bounded by five limits, and token spend is tracked with three
+    numbers that must not be confused with each other. A delegated run shares
+    one meter with its parent. The limits are separate because they fail
     differently: a model calling one cheap tool forever is caught by iterations
     and not by tokens, and a model reading enormous files is caught by tokens and
     not by iterations.
@@ -196,7 +197,7 @@ impl Default for Budgets {
   </div>
   <span class="src">crates/emma/src/agent.rs — <code>Budgets::max_tokens</code>, <code>Ending::Tokens</code>, <code>the_token_budget_is_described_as_the_tripwire_it_is</code></span>
 
-  <h2 id="numbers">Three token numbers, three jobs</h2>
+  <h2 id="numbers">Three token numbers</h2>
 
   <p>
     Every model call produces three different token figures, and assuming any two

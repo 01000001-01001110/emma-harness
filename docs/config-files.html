@@ -17,7 +17,7 @@
      Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it. That is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -101,9 +101,9 @@
   <div class="note warn">
     <span class="h">A byte order mark is not malformed, and used to be</span>
     <p>
-      Until 2026-08-23 every JSON config here &mdash; <code>.emma/config.json</code>,
+      Until 2026-08-23 every JSON config here (<code>.emma/config.json</code>,
       <code>.claude/settings.json</code>, <code>.claude/settings.local.json</code> and the
-      user's global <code>~/.claude/settings.json</code> &mdash; refused the boot if it
+      user's global <code>~/.claude/settings.json</code>) refused the boot if it
       began with a UTF-8 BOM, with <code>is malformed: expected value at line 1
       column 1</code>. That error names a correct file.
     </p>

@@ -237,11 +237,11 @@
     Keying both grants on one set would mean approving <code>WebFetch</code> once
     approved every host it is later pointed at, which the field's own comment
     names as the grant this design refuses to offer.
-    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a> Three tests hold the two directions
-    apart: <code>the_first_call_to_a_host_asks_and_later_ones_do_not</code> queues
-    one <code>Yes</code> for three calls,
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
+    <code>the_first_call_to_a_host_asks_and_later_ones_do_not</code> queues one
+    <code>Yes</code> for three calls.
     <code>a_second_host_is_a_second_question</code> queues one for two hosts and
-    expects the second to be denied, and
+    expects the second to be denied.
     <code>a_grant_is_the_host_and_not_the_tool</code> approves a host under
     <code>WebSearch</code> and then calls <code>WebFetch</code> with an empty
     queue.
@@ -352,13 +352,11 @@
     <code>Rules::for_call(tool, args)</code>, which answers the local question,
     matches bare rules plus the command and path shapes, and its
     <code>Spec::Domain</code> arm is <code>false</code>, so a
-    <code>domain:</code> rule never becomes permission to run a tool. The
-    separation is the same one it always was; what changed is that the local
+    <code>domain:</code> rule never becomes permission to run a tool. The local
     question now reads the arguments, so <code>Bash(git *)</code> and
     <code>Read(./src/**)</code> answer it. <code>for_tool</code> still exists and
-    is no longer what the gate consults. Nothing in the surface both writes and names a host
-    today; the first tool that did would be the one that paid for getting it
-    wrong. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
+    is no longer what the gate consults. No tool in the surface both writes and
+    names a host today. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/approval.rs">crates/emma/src/approval.rs</a>
     <code>a_domain_rule_does_not_become_permission_to_run_the_tool</code>
     constructs a hypothetical <code>Uploader</code> with
     <code>read_only: false, reaches_network: true</code>, allows

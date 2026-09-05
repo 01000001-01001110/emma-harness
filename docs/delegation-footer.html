@@ -373,10 +373,10 @@ struct Facts {
   <h2 id="categories">Every recorded call lands in exactly one category</h2>
 
   <p>
-    The probe chain keys on <em>argument names</em>, the way
-    <code>agent::compact</code> and <code>term::summarise_args</code> already do.
-    This file has no business knowing which tools a build registers, and an agent
-    library names tools that do not exist here at all.
+    The probe chain keys on <em>argument names</em>, like
+    <code>agent::compact</code> and <code>term::summarise_args</code>. This file
+    does not enumerate registered tools; an agent library may name tools Emma does
+    not ship.
   </p>
 
   <div class="tw">
@@ -408,30 +408,26 @@ struct Facts {
   </p>
 
   <p>
-    The last row is a repair rather than an original property. Until the residual
-    existed, a call carrying none of the first three argument names fell through
-    into silence, and Emma's own <code>WebFetch(url)</code> and
-    <code>WebSearch(query)</code> were among them. That is how five fetches
-    footered as <code>files read: none</code> over <code>5 tool calls</code>: a
-    parent reading a paragraph about five pages, with a record underneath
-    appearing to say nothing had been touched. Coarseness is visible and
-    self-correcting, because a parent reading <code>other tool calls: Frobnicate
-    ×2</code> knows the record is coarse. Silence is not.
+    The last row closed a gap. Until the residual existed, a call carrying none
+    of the first three argument names fell through into silence, and Emma's own
+    <code>WebFetch(url)</code> and <code>WebSearch(query)</code> were among them.
+    Five fetches could footer as <code>files read: none</code> over
+    <code>5 tool calls</code> while the message described five pages. A coarse
+    line like <code>other tool calls: Frobnicate ×2</code> tells the parent the
+    record is incomplete. A missing line does not.
     <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/delegate.rs">crates/emma/src/delegate.rs</a>
   </p>
   <span class="src">crates/emma/src/delegate.rs — tests::the_arguments_emmas_own_web_tools_use_reach_the_footer, tests::a_call_whose_arguments_match_no_probe_is_named_coarsely_rather_than_dropped</span>
 
   <p>
-    The partition is asserted as arithmetic:
-    <code>files + searches + fetched + commands + other == tool_calls</code>,
-    over eight calls whose arguments are all distinct so that de-duplication
-    cannot hide a missing one. A probe added later that forgets the residual, or
-    a residual that double-counts, breaks it without anybody having to think of
-    the tool it would happen to. A second test asserts the complement: a
-    recognised call is in its own category and <em>not</em> also in the residual,
-    because a parent who reads <code>Read ×3</code> beside three named files
-    learns nothing and doubts both. <span class="chip test">tested</span>
+    Tests assert the partition with
+    <code>files + searches + fetched + commands + other == tool_calls</code>
+    over eight calls with distinct arguments, so de-duplication cannot hide a
+    missing one. Forgetting the residual or double-counting breaks the sum. A
+    second test checks that a recognised call appears in one category only, not
+    also under <code>other</code> (e.g. <code>Read ×3</code> beside three named
+    files). <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/delegate.rs">crates/emma/src/delegate.rs</a>
   </p>
   <span class="src">crates/emma/src/delegate.rs — tests::every_recorded_call_lands_in_exactly_one_footer_category, tests::a_recognised_call_is_in_its_own_category_and_not_also_in_the_residual</span>
@@ -520,13 +516,12 @@ struct Facts {
   <span class="src">crates/emma/src/delegate.rs — Facts::footer, quoted entire</span>
 
   <p>
-    The ending is first because it is the most valuable field.
-    <code>Ending::Tokens</code> and <code>Ending::Done</code> otherwise leave the
-    same confident final paragraph, and without this line the parent cannot tell
-    a finished run from a truncated one. Anything that is not <code>done</code>
-    or <code>answered</code> gets a second line saying to read what follows as
-    partial, and a run with no record of how it stopped says <em>"unknown — no
-    record of how this run stopped"</em> rather than implying success.
+    The ending is first because it distinguishes a finished run from a
+    truncated one. <code>Ending::Tokens</code> and <code>Ending::Done</code>
+    otherwise leave the same confident final paragraph. Anything that is not
+    <code>done</code> or <code>answered</code> gets a second line saying to read
+    what follows as partial. A run with no ending record uses the footer's
+    unknown-ending text instead of implying success.
     <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/delegate.rs">crates/emma/src/delegate.rs</a>
   </p>
@@ -534,12 +529,12 @@ struct Facts {
 
   <p>
     <strong>Files touched, not files read.</strong> <code>Write</code> and
-    <code>Edit</code> carry <code>file_path</code> too, so a written file has
-    always landed in that list, and under the
-    <a href="delegation-tools.html">inherit-everything default</a> a subagent
-    holding <code>Write</code> is the ordinary case rather than the exotic one.
-    Splitting read from written would need the tool-name knowledge this file has
-    refused; the neutral word costs nothing and stops the over-claim.
+    <code>Edit</code> carry <code>file_path</code> too, so written files land in
+    that list. Under the
+    <a href="delegation-tools.html">inherit-everything default</a>, a subagent
+    with <code>Write</code> is common. Splitting read from written would need
+    tool-name knowledge this file avoids; "touched" covers both without
+    over-claiming.
   </p>
 
   <p>
@@ -640,15 +635,12 @@ fn string(value: &amp;Value, key: &amp;str) -&gt; String {
       the answer"</em>.
     </p>
     <p>
-      <strong>What did not catch it.</strong> The tests passed, because their
-      fixtures put the status on line one. They were written from the
-      doc comment rather than from a real <code>Bash</code> result. The page you
-      are reading described the parser accurately, and the parser was wrong. And
-      the failure looked exactly like the normal case for a subagent that had
-      been refused, so there was nothing anomalous to notice.
-      <strong>A mechanism whose failure is indistinguishable from its
-      quiet success has no symptom at all</strong>, and the only thing that finds
-      one is checking it against real output.
+      <strong>What did not catch it.</strong> The tests passed because their
+      fixtures put the status on line one. They were written from the doc comment,
+      not from a real <code>Bash</code> result. This page described the parser
+      accurately; the parser was wrong. The footer showed "no result", the same
+      text as for a refused command, so the bug had no obvious symptom. Checking
+      against real output is what finds that class of failure.
     </p>
   </div>
   <span class="src">crates/emma/src/delegate.rs — tests::an_exit_status_is_read_from_where_bash_actually_puts_it, tests::a_commands_exit_status_reaches_the_footer</span>
@@ -764,9 +756,9 @@ spent: 3 model calls, 7319 tokens, 12s</code></pre>
     Its doc names the mutation: compose the footer from
     <code>outcome.text</code> rather than from the run's records and it goes red,
     because the two claimed paths appear under <code>files touched</code> and the
-    invented exit status appears under <code>commands run</code>. That is the
-    difference between a record and a claim, and <code>Facts::from</code>'s own
-    doc points at the same mutation from the other side.
+    invented exit status appears under <code>commands run</code>. That gap is
+    what the test guards: a record compiled from testimony instead of the log
+    would credit files and commands the sub never ran.
   </p>
   <span class="src">crates/emma/tests/delegate.rs — the test's doc comment; crates/emma/src/delegate.rs — Facts::from</span>
 
@@ -796,12 +788,11 @@ spent: 3 model calls, 7319 tokens, 12s</code></pre>
   <div class="note warn">
     <span class="h">What the footer proves, and what it does not</span>
     <p>
-      It proves what was looked at, what was run, and how the run ended. It does
-      not prove the conclusion follows from any of it. The worst case of this
-      design is that the footer becomes the thing everyone trusts:
-      <code>done · 14 files · 3 commands</code> reads like verification and is
-      only attendance. It reports counts rather than adjectives for that reason,
-      and nothing anywhere claims the conclusion was checked.
+      It lists what was looked at, what was run, and how the run ended. It does
+      not prove the conclusion follows. A footer line like
+      <code>done · 14 files · 3 commands</code> reads like verification but is
+      only attendance. Counts replace adjectives; nothing here claims the
+      conclusion was checked.
     </p>
     <span class="src">crates/emma/src/delegate.rs — the footer region doc</span>
   </div>

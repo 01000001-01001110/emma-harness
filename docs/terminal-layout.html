@@ -161,16 +161,14 @@
   <span class="src">crates/emma/src/term/app.rs — <code>regions</code>, <code>struct Regions</code></span>
 
   <p>
-    Four constants set the thresholds, and each is a decision rather than a
-    round number. <code>UNBORDERED_COLS</code> is 60, below which the main pane
-    loses its border and the horizontal float goes with it, so the two shed as
-    one look. <code>SLIM_STATUS_ROWS</code> is 14 and takes the bar from three
-    rows to one, and the blank row above it rides along. <code>SLIM_HEADER_ROWS</code>
+    Four constants set the thresholds. <code>UNBORDERED_COLS</code> is 60, below
+    which the main pane loses its border and the horizontal float goes with it.
+    <code>SLIM_STATUS_ROWS</code> is 14 and takes the bar from three rows to
+    one, and the blank row above it rides along. <code>SLIM_HEADER_ROWS</code>
     is 12, below which the header is one line and the rule disappears.
-    <code>INSET_MIN_ROWS</code> is 30, and its comment names the trade: rows are
-    the scarce axis, at 24 rows two of them are a whole approval key row, and
-    the mockup only speaks for one window size, so how it degrades is this
-    file's decision rather than the image's.
+    <code>INSET_MIN_ROWS</code> is 30; its comment notes that rows are the
+    scarce axis and the mockup only speaks for one window size, so degradation
+    is decided here, not copied from the image.
   </p>
 
   <h3>The numbers came from the image, not from the description of it</h3>
@@ -448,14 +446,13 @@ pub fn hidden(total_cols: u16, latch: Latch) -&gt; bool {
   <h2 id="render">What <code>App::render</code> does, in order</h2>
 
   <p>
-    Nine steps, and two of them are seams. It refuses a zero-sized
-    area; asks <code>hidden</code> and <code>sidebar::width</code>; carves;
-    writes down <code>side_rect</code>; draws the sidebar; draws the main pane's
-    border, header and rule; sets <code>wrap_width</code> and
-    <code>chat_height</code> and re-wraps the transcript; draws the chat pane;
-    draws the dock through <code>View</code>'s own renderers; draws the hint;
-    and finally draws the status bar, or the configured status program's row in
-    its place.
+    Nine steps; two are seams. It refuses a zero-sized area; asks
+    <code>hidden</code> and <code>sidebar::width</code>; carves; writes down
+    <code>side_rect</code>; draws the sidebar; draws the main pane's border,
+    header and rule; sets <code>wrap_width</code> and <code>chat_height</code>
+    and re-wraps the transcript; draws the chat pane; draws the dock through
+    <code>View</code>'s own renderers; draws the hint; and finally draws the
+    status bar, or the configured status program's row in its place.
   </p>
 
   <p>
@@ -582,10 +579,8 @@ pub fn hidden(total_cols: u16, latch: Latch) -&gt; bool {
     <code>click</code>, <code>set_tools</code>, <code>set_identity</code>,
     <code>render</code>, <code>hint</code>, <code>header</code>), and four free
     functions (<code>builtin_rows</code>, <code>tool_rows</code>,
-    <code>keymap</code>, <code>stem</code>). All 19 are named here: 19 of 19,
-    along with all five constants (<code>SLIM_STATUS_ROWS</code>,
-    <code>SLIM_HEADER_ROWS</code>, <code>UNBORDERED_COLS</code>,
-    <code>INSET_MIN_ROWS</code>, <code>PANE_GAP_COLS</code>) and both types. Twelve of its twenty tests are cited.
+    <code>keymap</code>, <code>stem</code>). All five constants and both types
+    are named above. Twelve of its twenty tests are cited.
   </p>
 
   <p>

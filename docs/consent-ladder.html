@@ -68,10 +68,10 @@
   </nav>
 
   <p class="lede">
-    One function decides every local call, and the order of its statements is the
-    whole of the policy. It is quoted here entire, because a summary of it loses
-    the property: which line runs first is the only thing that says whether a
-    <code>deny</code> rule survives a bypass flag.
+    One function decides every local call, and statement order is the policy.
+    It is quoted here entire because a summary loses the property that matters:
+    which line runs first decides whether a <code>deny</code> rule survives a
+    bypass flag.
   </p>
   <span class="src">crates/emma/src/approval.rs — Approvals::decide</span>
 
@@ -371,18 +371,18 @@
     <code>Gate::SkipAll</code> gate with an empty answer queue, asserts
     <code>Bash</code> is denied on the local axis and
     <code>WebFetch(domain:evil.example)</code> on the network one, and then
-    asserts that <code>docs.rs</code> is still allowed. Without that third
-    assertion the guarantee would be indistinguishable from the flag having
-    stopped working.
+    asserts that <code>docs.rs</code> is still allowed. The third assertion
+    catches a bypass that denies everything instead of everything except
+    explicit denies.
   </p>
   <span class="src">crates/emma/src/approval.rs — tests::a_deny_rule_beats_the_bypass_flag</span>
 
   <p>
     Neutering the deny check in <code>decide</code> and in <code>egress</code>
     turned that test and
-    <code>a_deny_rule_beats_an_allow_rule_on_both_axes</code> red. That mutation
-    was run at commit <code>20ac400</code> and reverted; this page did not repeat
-    it, because the page's author does not change source.
+    <code>a_deny_rule_beats_an_allow_rule_on_both_axes</code> red at commit
+    <code>20ac400</code>; the change was reverted. This page does not mutate
+    source.
   </p>
   <span class="src">crates/emma/src/approval.rs — tests; notes/plan records at 20ac400</span>
 
@@ -398,30 +398,30 @@
   </p>
 
   <p>
-    That is a narrower-than-bypass unattended mode, and nothing announces it.
-    <strong>It is no longer tool-wide only.</strong> The narrowing somebody would
-    reach for, such as <code>Bash(git log:*)</code> or
-    <code>"allow": ["Bash(cargo test *)"]</code> in a <code>-p</code> run,
-    matches, because <code>decide</code> asks <code>for_call</code> and the
-    specifier is a word-boundary prefix over the <code>command</code> argument.
+    <code>-p</code> with an <code>allow</code> rule is narrower than the bypass
+    flag, and nothing in <code>--help</code> says so.
+    <strong>It is no longer tool-wide only.</strong> Specifiers like
+    <code>Bash(git log:*)</code> or <code>"allow": ["Bash(cargo test *)"]</code>
+    in a <code>-p</code> run match, because <code>decide</code> asks
+    <code>for_call</code> and the specifier is a word-boundary prefix over the
+    <code>command</code> argument.
   </p>
 
   <p>
-    <strong>This paragraph used to say the opposite, and it was right when it was
-    written.</strong> Every <code>Bash(...)</code> and <code>Read(...)</code>
-    specifier parsed to <code>Spec::Unsupported</code>: announced at boot, and
-    then matching nothing in any list, including <code>deny</code>.
-    Measured against a real settings file, <strong>62 of its 64 rules were
-    inert</strong>. So a reader who acted on the old sentence would have believed
-    two wrong things at once: that a narrow allow was impossible, and that a
-    narrow deny was harmless. The second is the one that costs something.
+    <strong>This paragraph used to say the opposite.</strong> When it was
+    written, every <code>Bash(...)</code> and <code>Read(...)</code> specifier
+    parsed to <code>Spec::Unsupported</code>: announced at boot, then matching
+    nothing in any list, including <code>deny</code>. Measured against a real
+    settings file, <strong>62 of its 64 rules were inert</strong>. A reader who
+    acted on the old sentence would have believed a narrow allow was impossible
+    and a narrow deny was harmless. The second mistake is worse.
   </p>
 
   <p>
     What a prefix and a glob still cannot see is on
-    <a href="consent-rules.html#boundary">the rules page</a>, and it is a real
-    boundary rather than a to-do: a command-prefix deny narrows to the spellings
-    it names, and what it cannot judge it asks about rather than passing quietly.
+    <a href="consent-rules.html#boundary">the rules page</a>. A command-prefix
+    deny narrows to the spellings it names; what it cannot judge it asks about
+    instead of passing quietly.
     <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>the_shapes_that_used_to_be_inert_now_evaluate</code> parses a
     Claude-Code-shaped deny list and asserts a <code>rm</code> call is denied and
@@ -528,9 +528,9 @@ match self
   <span class="src">crates/emma/src/agent.rs — the PreToolUse block, immediately above the approval call</span>
 
   <p>
-    A source-order assertion was written inside <code>approval.rs</code> first and
-    then removed: it passed against a mutation that disabled the denial outright,
-    which makes it worse than nothing. The guarantee is held behaviourally by
+    A source-order assertion in <code>approval.rs</code> was removed after it
+    passed against a mutation that disabled the denial outright. Behaviour is
+    covered by
     <code>a_hook_denial_outranks_an_allow_rule_that_covers_the_call</code>.
     <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/permissions.rs">crates/emma/tests/permissions.rs</a>
   </p>

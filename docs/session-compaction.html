@@ -274,7 +274,7 @@ fn compact_if_needed(&amp;mut self, measured: Option&lt;i64&gt;, why: &amp;str) 
     remainder fits, so it never takes the newest goal unless it has to take
     everything. It measures each chapter once. Re-summing the conversation
     inside the loop would be quadratic in a list whose elements are file
-    contents, which is the kind of cost that is invisible until a session gets
+    contents. That cost stays invisible until a session gets
     large enough to need compaction in the first place.
   </p>
 
@@ -282,8 +282,8 @@ fn compact_if_needed(&amp;mut self, measured: Option&lt;i64&gt;, why: &amp;str) 
     The tail of the function used to be a bare
     <code>self.compact(take, size, why);</code>, dropping the returned
     <code>Compacted</code> on the floor. That mattered in exactly one case: a
-    conversation over its cap with nothing left to summarise — one enormous
-    goal, or a history already reduced to summaries — where
+    conversation over its cap with nothing left to summarise (one enormous
+    goal, or a history already reduced to summaries) where
     <code>compact</code> answers <code>Compacted::Nothing</code> with a reason
     and the threshold path said none of it. Such a session grew on every call
     in silence until the token budget or a provider 400 ended it, and the
@@ -360,7 +360,7 @@ const COMPACTED_NOTE: &amp;str = "[Summarised to save context. The tool calls fr
     fields get stated placeholders rather than blank strings, so a goal that
     ended without a final message says so instead of producing an assistant
     message that opens with a newline. An already-summarised chapter comes back
-    unchanged, which is what stops a second pass wrapping it in a second note.
+    unchanged. A second pass must not wrap it in a second note.
   </p>
 
   <p>
@@ -459,7 +459,7 @@ self.s.log.append(
 
   <p>
     The replaced chapters become one chapter with empty <code>goal</code> and
-    <code>answer</code> and <code>summarised: true</code>, which is why
+    <code>answer</code> and <code>summarised: true</code>. That is why
     <code>summarise</code>'s placeholders exist: a later compaction that reaches
     this chapter returns its messages unchanged, and a
     <code>Cleared</code> receipt counts it as not a goal.

@@ -105,12 +105,12 @@ pub struct Continuity {
     empty. It comes to the same thing and it makes the missing case the default
     for a struct that derives <code>Default</code>. <code>cwd</code> sat on the
     type from the beginning and, for a while, was the one field
-    <code>differences</code> did not compare — an earlier version of this page
+    <code>differences</code> did not compare. An earlier version of this page
     explained the gap as intentional, on the argument that resuming into a
     different tree is a request the user made explicitly by naming the
     session. That argument covered <code>--resume &lt;id&gt;</code> and nothing
-    else, and the hazard <code>locate</code> names in its own doc — "a
-    conversation about the wrong repository with write tools attached" — was
+    else. The hazard <code>locate</code> names in its own doc ("a
+    conversation about the wrong repository with write tools attached") was
     the only drift that arrived silently while three cheaper ones all warned.
     It is compared now, same as the rest.
   </p>
@@ -137,7 +137,7 @@ fn continuity_of(records: &amp;[Value]) -&gt; Continuity {
   <p>
     Last rather than first, and assigned whole rather than merged field by
     field. A session whose model changed halfway through reports the model of
-    its final goal, which is the one the restored messages were produced under.
+    its final goal. That is the harness the restored messages were produced under.
     The record is a <code>goal</code> record, so a <code>/model</code> switch
     inside a goal is not picked up here at all; it leaves a
     <code>model_changed</code> record that nothing reads back.
@@ -231,7 +231,7 @@ pub fn differences(
     <code>term.warn</code>. The current directory is read at the call site,
     and one that cannot be read becomes the empty string. The empty-skip in
     <code>check</code> is on the recorded value, not the current one, so a
-    file that recorded a directory still gets its warning in that case — with
+    file that recorded a directory still gets its warning in that case, with
     nothing after the arrow.
   </p>
 

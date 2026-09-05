@@ -164,12 +164,12 @@ pub fn load(
   <span class="src">crates/emma/src/term/theme.rs — <code>load</code></span>
 
   <p>
-    Four exits before a single colour is parsed: no selection returns the
-    built-in with no notices; a reserved name returns the built-in with a notice
-    if a file of that name exists; a name found in neither directory returns the
-    built-in and names both paths; and a file whose top level is not a JSON
-    object, or which is not JSON at all, returns the built-in quoting serde's
-    own line and column.
+    Before any colour is parsed, the loader can exit four ways: no selection
+    returns the built-in with no notices; a reserved name returns the built-in
+    with a notice if a file of that name exists; a name found in neither
+    directory returns the built-in and names both paths; and a file whose top
+    level is not a JSON object, or which is not JSON at all, returns the
+    built-in quoting serde's own line and column.
   </p>
 
   <p class="faint">crates/emma/src/term/theme.rs · <code>load</code>, the reserved name and the read</p>
@@ -232,9 +232,9 @@ const MAX_NOTICES: usize = 5;</code></pre>
   <span class="src">crates/emma/src/term/theme.rs — <code>ROLE_NAMES</code>, <code>SETTABLE</code>, <code>MAX_NOTICES</code>, <code>RESERVED</code></span>
 
   <p>
-    Eight role names exist and seven may be set. The eighth is in the list on
-    purpose, so a person who misspells <code>text</code> is told about
-    <code>text</code> rather than about seven names that do not include it.
+    Eight role names exist and seven may be set. The eighth sits in the list so a
+    person who misspells <code>text</code> is told about <code>text</code>,
+    not a list of seven other names.
   </p>
 
   <p>
@@ -354,11 +354,10 @@ const MAX_NOTICES: usize = 5;</code></pre>
   </p>
 
   <p>
-    The asymmetry between the two fallbacks is the measured one. The 256-colour
-    index is derived by nearest neighbour over the xterm cube; the 16-colour name
-    is inherited from the built-in role instead, because the same arithmetic at
-    sixteen colours makes <code>Accent</code> a light red, which is how every
-    goal line comes to read as an error. Intent cannot be computed.
+    The 256-colour index is derived by nearest neighbour over the xterm cube.
+    The 16-colour name comes from the built-in role instead: the same arithmetic
+    at sixteen colours makes <code>Accent</code> a light red, which turns every
+    goal line into error styling. Intent cannot be computed from distance alone.
   </p>
 
   <p>
@@ -412,7 +411,7 @@ const MAX_NOTICES: usize = 5;</code></pre>
     the terminal its author happened to have.
   </p>
 
-  <h2 id="seen">The whole of it, on one file</h2>
+  <h2 id="seen">One example file</h2>
 
   <p>
     A scratch theme selected from a scratch home, with a wrong name, a bad hex, a

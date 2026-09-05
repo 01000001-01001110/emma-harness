@@ -86,8 +86,8 @@
 
   <p>
     <code>emma --resume [&lt;id&gt;] [&lt;goal text&gt;]</code>. The parser tells
-    an id from a goal by the fixed <code>sess-</code> prefix every id carries,
-    which is why <code>new_id</code>'s format is a parsing decision as well as a
+    an id from a goal by the fixed <code>sess-</code> prefix every id carries.
+    <code>new_id</code>'s format is therefore both a parsing decision and a
     sorting one.
   </p>
 
@@ -189,10 +189,10 @@ pub fn locate(dir: &amp;Path, id: Option&lt;&amp;str&gt;, cwd: &amp;Path) -&gt; 
     first that has a <code>goal</code> record from this directory. In a
     directory where roughly half the files are empty and nothing recent ran
     here, that is a read of every file: 103 files at the last count, 48 of them
-    zero bytes. The cost is bounded by the directory rather than by a constant,
-    which is the difference between this and the first-run scan on
-    <a href="session-continuity.html">Continuity</a>, and the module doc names
-    it as the first of the three things that would justify a database.
+    zero bytes. Cost scales with the directory, not with a constant. Unlike the
+    first-run scan on
+    <a href="session-continuity.html">Continuity</a>, the module doc names
+    that as the first of three things that would justify a database.
   </p>
   <span class="src">crates/emma/src/session.rs — <code>locate</code>, module doc</span>
 
@@ -264,9 +264,8 @@ pub fn restore(path: &amp;Path) -&gt; Result&lt;Restored&gt; {
     it is the reader that keeps the 48 empty files in the directory from being a
     problem rather than merely clutter. The id is the file stem, so the resumed
     run reopens the same path in append mode and the second leg lands after the
-    first. <code>main.rs</code> resolves all of this before the log is opened,
-    which is the ordering that makes a resume of a resume fold the whole file
-    rather than the last leg of it.
+    first. <code>main.rs</code> resolves locate and restore before the log
+    opens, so a resume of a resume folds the whole file, not only the last leg.
   </p>
   <span class="src">crates/emma/src/session.rs — <code>restore</code>; crates/emma/src/main.rs</span>
 
@@ -289,10 +288,11 @@ pub struct Resumed {
 }</code></pre>
 
   <p>
-    Without the three counters, resume is a way to spend past a cap: a goal that
-    ended on <code>Ending::Tokens</code> could be resumed indefinitely and the
-    limit it hit would mean nothing. Without the memo, the resumed model is
-    handed back the identical failing call it had already been refused.
+    Without restored token, iteration, and kick counts, resume becomes a way to
+    spend past a cap: a goal that ended on <code>Ending::Tokens</code> could be
+    resumed indefinitely and the limit it hit would mean nothing. Without the
+    failure memo, the resumed model is handed back the identical failing call it
+    had already been refused.
     <span class="chip test">tested</span>, one test per field in
     <code>crates/emma/tests/resume.rs</code>:
     <code>a_resumed_run_inherits_the_tokens_the_first_one_spent</code>,
@@ -361,7 +361,7 @@ pub fn restore_records(records: &amp;[Value]) -&gt; Resumed {
             }</code></pre>
 
   <p>
-    The fallback is live rather than theoretical.
+    The fallback is not theoretical.
     <span class="chip cert">certified</span>: 51 of the 103 session files in
     <code>~/.emma/sessions/</code> at 2026-08-16 20:28 EDT contain a
     <code>model_call</code> record, and 12 of those 51 have no
@@ -418,12 +418,12 @@ pub fn restore_records(records: &amp;[Value]) -&gt; Resumed {
 
   <p>
     <code>failed_now</code> is "nothing has changed since this failed" and is
-    cleared by any success, exactly as the loop clears it. <code>failed_ever</code>
+    cleared by any success, as the live loop does. <code>failed_ever</code>
     accumulates for the whole goal and is what a nudge quotes back, so it is not
     cleared. The keys come from <code>memo_key_of</code> and
     <code>label_of</code> in <code>agent.rs</code>, the same two functions the
-    live loop uses, which is what keeps a restored memo from being keyed
-    differently from the one it continues. See
+    live loop uses, so a restored memo uses the same keying as the one it
+    continues. See
     <a href="loop-memo.html">The memo rule</a>.
   </p>
   <span class="src">crates/emma/src/session.rs — <code>restore_records</code>; crates/emma/src/agent.rs — <code>memo_key_of</code>, <code>label_of</code></span>
@@ -524,12 +524,11 @@ let resuming_a_goal_in_flight = !resumed.messages.is_empty();
 let mut query: Vec&lt;Message&gt; = open_query(resumed.messages, opening);</code></pre>
 
   <p>
-    Two costs. A restored prefix pays full
-    price on every call of the resumed goal instead of the 0.1× cache read it
-    would otherwise get, and a resume that comes back over
+    A restored prefix pays full price on every call of the resumed goal instead
+    of the 0.1× cache read it would otherwise get. A resume that comes back over
     <code>max_context</code> runs that goal at that size because compaction
-    works in whole chapters and the restored block is one chapter. Neither is
-    an outage. Guessing the split wrong would be.
+    works in whole chapters and the restored block is one chapter. Neither
+    failure stops the run. Guessing the split wrong would.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>, <code>open_query</code>; <a href="loop-one-turn.html">One turn</a></span>
 
@@ -617,9 +616,8 @@ term.note(&amp;format!(
   <footer class="pg">
     <p>
       Written against commit <code>62ab9c3</code>. Next:
-      <a href="session-continuity.html">Continuity, and the first run</a>, which
-      is what the same records say about the harness rather than the
-      conversation.
+      <a href="session-continuity.html">Continuity, and the first run</a>, on
+      what the same records say about the harness, not the conversation.
     </p>
   </footer>
 

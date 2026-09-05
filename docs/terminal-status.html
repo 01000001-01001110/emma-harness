@@ -185,7 +185,7 @@ fn compose(width: u16, bar: &amp;Bar, skin: &amp;Skin) -&gt; Line&lt;'static&gt;
     <code>row_width</code> and <code>layout</code> each compute the help cell's
     fixed cost, and the comment says what a disagreement would do:
     <em>&ldquo;the env-room arithmetic hands out columns the layout will refuse,
-    and some width overflows — the property test walks every width precisely to
+    and some width overflows. The property test walks every width precisely to
     catch that drift.&rdquo;</em>
   </p>
 
@@ -290,7 +290,7 @@ fn filled(used: i64, cap: i64, segments: usize) -&gt; usize {
     glyph is <code>&#9617;</code> rather than a grey block, and that is a
     deliberate deviation from the mockup: filled and empty must differ by
     <em>shape</em>, not colour alone, <em>&ldquo;or the meter dies at
-    <code>Level::None</code> — the mock was never run on a colourless
+    <code>Level::None</code>. The mock was never run on a colourless
     terminal.&rdquo;</em>
     <span class="chip test">tested</span>:
     <code>the_filled_segments_stay_individually_countable</code> goes red if
@@ -454,7 +454,7 @@ fn filled(used: i64, cap: i64, segments: usize) -&gt; usize {
     Only the first non-empty line is taken. Claude Code renders every printed
     line as its own row; Emma cannot, because the inline viewport's height is
     fixed at install and <em>&ldquo;a status line that could claim two rows
-    would be a viewport that resizes under a running program — the class of bug
+    would be a viewport that resizes under a running program. That is the class of bug
     that ate the last two attempts at this file.&rdquo;</em> The limit is stated
     here rather than discovered by somebody whose two-line script silently lost
     its second line.

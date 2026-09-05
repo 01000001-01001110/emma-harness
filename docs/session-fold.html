@@ -159,7 +159,7 @@ struct Fold {
     alternative. A finished goal used to become two lines of prose the instant it
     finished, in the loop, and the fold carried its own copy of that rule so a
     resume would produce the same shape. Two implementations of one decision,
-    and the failure mode was silent: move either one and <code>--resume</code>
+    and when either moved, <code>--resume</code>
     rebuilds a conversation that was never sent, with nothing but a round-trip
     test to say so. The two-line collapse survives, but only as what
     <a href="session-compaction.html">compaction</a> makes, later, and only when
@@ -251,8 +251,8 @@ struct Fold {
       Every field of <code>Fold</code>, from the struct. The two lists are
       <code>history</code> and <code>query</code>; <code>damage</code> is the
       records the fold refused, so a resume can say the rebuilt conversation
-      is known not to match. How a turn is placed — <code>close_turn</code>,
-      <code>answered</code>, <code>place_turn</code> — is the argument in the
+      is known not to match. How a turn is placed (<code>close_turn</code>,
+      <code>answered</code>, <code>place_turn</code>) is the argument in the
       methods below, not a membership the struct states.
     </figcaption>
   </figure>
@@ -384,12 +384,11 @@ match r["kind"].as_str().unwrap_or_default() {
       that abandoned the splice. A <code>messages</code> field that would not
       deserialise yielded an empty vector and the splice still removed
       <code>drop_messages</code> messages off the front, so a malformed record
-      deleted conversation rather than being ignored — the arm that deleted
+      deleted conversation rather than being ignored. That was the arm that deleted
       conversation on malformed input while other arms dropped bad records and
       no more. Both defaults are gone. A missing count and an unreadable
       replacement now each refuse the whole arm, say so on stderr, and leave
-      the conversation alone — which is still not a silent no-op, because the
-      refusal names the consequence: the rebuilt conversation will not match
+      the conversation alone. The refusal still names the consequence: the rebuilt conversation will not match
       the one that was sent.
       <span class="chip test">tested</span>
       <code>a_compaction_record_missing_its_fields_does_not_silently_rebuild_a_different_conversation</code>

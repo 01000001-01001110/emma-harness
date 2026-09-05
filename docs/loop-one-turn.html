@@ -138,7 +138,8 @@ let request = Request {
 };</code></pre>
 
   <p>
-    Four moving parts. <code>instructions</code> is the harness prompt with
+    <code>Request::new</code> assembles four pieces.
+    <code>instructions</code> is the harness prompt with
     <code>goal::standing_contract(done)</code> appended, so the completion rule
     the model is told about comes from the <code>DoneCheck</code> actually in
     force rather than from a fixed string. <code>tools</code> is
@@ -368,7 +369,7 @@ fn on_event(&amp;self, ev: Event) -&gt; bool {
     Three matches on the call's result, and only one of them continues. An
     <code>Ok(None)</code> is the interrupt and ends the goal. An error goes to
     <code>Ending::Provider</code> unless
-    <code>recover_from_a_model_change</code> claims it, which is the loop's one
+    <code>recover_from_a_model_change</code> claims it. That is the loop's one
     retry and is covered under <a href="loop-seam.html">Seams</a>.
   </p>
 
@@ -518,9 +519,9 @@ fn open_query(mut restored: Vec&lt;Message&gt;, opening: String) -&gt; Vec&lt;Me
     turn calling nothing. So the new goal's opening joins the last message
     instead of following it, as a text block after the result blocks when the
     content is an array and as concatenated text when it is not. Nothing is
-    dropped to make room, because dropping the trailing results would leave the
-    <code>tool_use</code> above them unanswered, which is the other rejection.
-    With nothing restored, which is every ordinary run, the match falls to the
+    dropped to make room. Dropping the trailing results would leave the
+    <code>tool_use</code> above them unanswered. That is the other rejection the API makes.
+    With nothing restored (every ordinary run), the match falls to the
     last arm and this is <code>vec![Message::user(opening)]</code>.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>open_query</code></span>
@@ -663,7 +664,7 @@ outcome</code></pre>
   <footer class="pg">
     <p>
       Written against commit <code>a3eba74</code>. Next:
-      <a href="loop-failure.html">Failure as an observation</a>, which is what
+      <a href="loop-failure.html">Failure as an observation</a>: what
       the tool-call branch of this page's diagram does with a call that goes
       wrong.
     </p>

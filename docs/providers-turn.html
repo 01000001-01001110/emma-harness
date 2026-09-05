@@ -210,9 +210,9 @@ pub fn tool_calls(&amp;self) -&gt; Vec&lt;&amp;ToolCall&gt; { … }</code></pre>
   <p>
     Both are <code>filter_map</code> over <code>content</code>.
     <code>text()</code> concatenates <code>Text</code> blocks with no separator,
-    so two adjacent text blocks join without a space, which is what the API
+    so two adjacent text blocks join without a space. That is what the API
     means by them. <code>tool_calls()</code> borrows rather than clones, in the
-    order the model emitted them, which is the order the loop dispatches in.
+    order the model emitted them. The loop dispatches in that same order.
   </p>
 
   <h2 id="batch">The batch path</h2>
@@ -301,8 +301,8 @@ fn turn_from_message(msg: &amp;Value) -&gt; Result&lt;AssistantTurn, LlmError&gt
     exercised.
     <span class="chip test">tested</span>
     <code>a_batch_response_without_a_stop_reason_is_a_fault</code>, with
-    <code>an_ordinary_batch_response_still_decodes</code> as its control &mdash;
-    adding a refusal at a provider boundary is exactly the change that starts
+    <code>an_ordinary_batch_response_still_decodes</code> as its control.
+    Adding a refusal at a provider boundary is exactly the change that starts
     rejecting valid traffic, and a boundary that rejects good responses is worse
     than one that accepts a rare bad one.
   </p>
@@ -315,8 +315,8 @@ fn turn_from_message(msg: &amp;Value) -&gt; Result&lt;AssistantTurn, LlmError&gt
   </p>
 
   <p>
-    A stream that closed without ever saying why it stopped did not finish
-    &mdash; it was cut. A dropped connection, a proxy timeout and a truncated
+    A stream that closed without ever saying why it stopped did not finish.
+    It was cut. A dropped connection, a proxy timeout and a truncated
     response all arrive as a <em>clean</em> close, and the code used to return
     <code>Ok</code> with whatever text had turned up.
   </p>
@@ -325,8 +325,8 @@ fn turn_from_message(msg: &amp;Value) -&gt; Result&lt;AssistantTurn, LlmError&gt
     A turn reading <em>"The tests all pa"</em> was handed to the loop as a
     finished answer, with no truncation signal anywhere downstream and no way to
     tell it apart from a model that genuinely said that. A failure is
-    recoverable &mdash; <code>Protocol</code> is retried like any other &mdash;
-    and a confident half-sentence is not. That asymmetry is why an empty
+    recoverable (<code>Protocol</code> is retried like any other). A confident
+    half-sentence is not. That asymmetry is why an empty
     <code>stop_reason</code> is an error rather than a default, and it is the
     same one this project applies to a truncated tool result.
   </p>
@@ -449,7 +449,7 @@ fn turn_from_content(
       <!-- /diagram -->
     </div>
     <figcaption>
-      Both modes converge on <code>turn_from_content</code>, which is why they
+      Both modes converge on <code>turn_from_content</code>, so they
       cannot disagree about what a turn contains. The
       <code>content_block_delta</code> arrow carries four sub-cases keyed by
       the delta's own type: <code>text_delta</code>,
@@ -517,11 +517,11 @@ Opaque(Value),</code></pre>
 
   <p>
     <code>pick</code> returns <code>0</code> for a missing key, a null, and a
-    genuine zero alike, which is the ambiguity that guard exists for. It costs
+    genuine zero alike. That ambiguity is what the guard exists for. It costs
     one case: a turn that really did generate zero output tokens keeps whatever
     <code>message_start</code> reported, which is also zero, so nothing is lost
     in practice. <code>str_at</code> is its string twin and returns an empty
-    string for anything missing, which is why a <code>tool_use</code> with no
+    string for anything missing. A <code>tool_use</code> with no
     <code>id</code> assembles as a call with an empty id rather than failing.
   </p>
 

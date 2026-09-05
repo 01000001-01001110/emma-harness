@@ -70,29 +70,26 @@
 
   <p class="lede">
     Nothing a tool does ends a goal. Ten different things can go wrong inside
-    <code>run_tool_call</code> — a panicking tool and a Ctrl-C mid-tool now
-    among them — and all ten come back as a
-    <code>tool_result</code> with <code>is_error</code> set, which the model
-    reads and works from. The loop's own budgets stay the only things that stop
-    a run.
+    <code>run_tool_call</code>, including a panicking tool and a Ctrl-C
+    mid-tool, and all ten come back as a <code>tool_result</code> with
+    <code>is_error</code> set, which the model reads and works from. The loop's
+    own budgets stay the only things that stop a run.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::run_tool_call</code>, module doc</span>
 
   <p>
-    The property is here because it was paid for elsewhere. In the predecessor
-    project five of eight failure classes ended turns silently, the user saw
-    <em>"Something went wrong on my side"</em>, and the model never learned
-    anything had failed.
+    In the predecessor project five of eight failure classes ended turns
+    silently, the user saw <em>"Something went wrong on my side"</em>, and the
+    model never learned anything had failed.
   </p>
   <span class="src">crates/emma/src/agent.rs — module doc</span>
 
   <h2 id="fail">One closure, ten callers</h2>
 
   <p>
-    The guarantee is checkable rather than merely asserted because every failure
-    path converges. <code>fail()</code> is defined at the top of
-    <code>run_tool_call</code> and is the only non-success exit from the
-    function.
+    Every failure path converges on one closure. <code>fail()</code> is defined
+    at the top of <code>run_tool_call</code> and is the only non-success exit
+    from the function.
   </p>
 
   <pre><code><span class="c">// crates/emma/src/agent.rs</span>
@@ -377,12 +374,12 @@ match self
     exactly two error arms. Two failure classes existed that neither arm
     caught, and both ended more than the call. A panicking tool unwound
     straight through the loop, past the session log and the budget accounting,
-    and took the run with it — the one failure class that did not reach the
-    model as an observation, on a tool surface where several crates parse
+    and took the run with it. That was the one failure class that did not reach
+    the model as an observation, on a tool surface where several crates parse
     input the model wrote. And a Ctrl-C during a tool did nothing until the
     tool finished on its own: <code>invoke</code> was awaited outright, the
     flag was read only at iteration boundaries and around the model call, so a
-    wrong <code>Bash</code> ran to its own timeout — 120 seconds by default —
+    wrong <code>Bash</code> ran to its own timeout (120 seconds by default)
     with the keyboard already asking it to stop, and in the framed UI raw mode
     means the child never sees a console signal either. Both are now ordinary
     failed calls: the future is wrapped in <code>catch_unwind</code> and raced
@@ -402,8 +399,8 @@ match self
       Until 2026-08-23 the <code>catch_unwind</code> wrapped
       <code>Tool::invoke</code> and nothing else. The argument quoted above is
       that <em>&ldquo;several of its crates parse input from the model, and an
-      index or an <code>unwrap</code> in any of them ended everything&rdquo;</em>
-      &mdash; and the first function on the call path to see that input is
+      index or an <code>unwrap</code> in any of them ended everything&rdquo;</em>,
+      and the first function on the call path to see that input is
       <code>Tool::validate_args</code>, which sat outside the guard. So did
       <code>network_target</code> and <code>meta</code>, both of which the
       approval gate calls on the tool&rsquo;s own code before anything runs.
@@ -414,8 +411,8 @@ match self
     </p>
     <p>
       <strong>The positive control could not have caught it.</strong>
-      <code>TestTool::panicking</code> panics inside <code>invoke</code> &mdash;
-      the half the guard already covered. An independent reviewer staged a panic
+      <code>TestTool::panicking</code> panics inside <code>invoke</code>, the
+      half the guard already covered. An independent reviewer staged a panic
       in a test tool&rsquo;s <code>validate_args</code> and the session died
       exactly the way this page said it no longer could.
     </p>
@@ -563,7 +560,7 @@ let outcome = match called {
     session cannot continue, and it becomes a result too.
     <code>catch_unwind</code> wraps another <code>Result</code> around both,
     whose <code>Err</code> is a panic payload, and the <code>select!</code> can
-    preempt the whole stack when the interrupt trips —
+    preempt the whole stack when the interrupt trips. It uses
     <code>biased</code>, so a pending Ctrl-C wins the race against a completed
     tool. Four error shapes, one closure; none returns early from
     <code>run_goal</code>. The cancellation is safe to do by dropping the

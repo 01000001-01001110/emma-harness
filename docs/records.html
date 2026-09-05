@@ -57,15 +57,16 @@
   <h1>Records &amp; house rules</h1>
 
   <p class="lede">
-    Six records, six jobs, and the conventions that keep them from turning into
-    each other.
+    The repository keeps a small set of written records. Each has one job; when
+    two answer the same question, one of them is wrong and nobody can tell which.
   </p>
 
-  <h2 id="six">The six records</h2>
+  <h2 id="records">Records in the repository</h2>
 
   <p>
-    Each answers one question. When two of them answer the same question, one of
-    them is wrong and nobody can tell which.
+    As of 2026-08-30, <code>notes/</code> is no longer in the tree. Three
+    records remain here; where the old <code>notes/</code> jobs went is listed
+    below.
   </p>
 
   <div class="tw">
@@ -73,26 +74,35 @@
     <thead><tr><th>Record</th><th>Answers</th></tr></thead>
     <tbody>
       <tr><td>commit message</td>
-          <td>What changed, and why. Long, because the reasoning behind a change has nowhere else to go once the diff is old.</td></tr>
+          <td>What changed, and why. Long, because the reasoning behind a change has nowhere else to go once the diff is old. Lessons that used to live in <code>notes/lessons/</code> belong here now.</td></tr>
       <tr><td><code>docs/</code></td>
           <td>How Emma works and why it is shaped that way. The only one addressed to somebody trying to use or modify the system rather than track the project.</td></tr>
-      <tr><td><code>notes/lessons/</code></td>
-          <td>What was learned, one file per lesson so two authors never collide.</td></tr>
-      <tr><td><code>notes/improvements.md</code></td>
-          <td>What could be done next, with where the idea came from and under what licence.</td></tr>
-      <tr><td><code>notes/STATUS.md</code></td>
-          <td>Where things stand right now. Append-only, dated, newest on top.</td></tr>
       <tr><td><code>CHANGELOG.md</code></td>
           <td>What is different for somebody upgrading, and nothing else.</td></tr>
     </tbody>
   </table>
   </div>
 
+  <h3 id="removed">Former <code>notes/</code> records</h3>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>Was</th><th>Job now</th></tr></thead>
+    <tbody>
+      <tr><td><code>notes/lessons/</code></td>
+          <td>Commit message on the change that carried the lesson.</td></tr>
+      <tr><td><code>notes/improvements.md</code></td>
+          <td>The owner's vault outside this repository.</td></tr>
+      <tr><td><code>notes/STATUS.md</code></td>
+          <td>The owner carries in-flight state; do not infer it from <code>git log</code>.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
   <p>
-    A status entry that restates a commit message is doing <code>git log</code>'s
-    job. A changelog entry describing a refactor is describing something no user
-    can observe. A documentation page narrating the project's week belongs in
-    <code>STATUS.md</code>.
+    A changelog entry describing a refactor is describing something no user can
+    observe. A documentation page narrating the project's week is doing
+    <code>STATUS.md</code>'s old job.
   </p>
 
   <h2 id="rules">Rules for durable records</h2>
@@ -114,11 +124,11 @@
   </p>
 
   <p>
-    This has been paid for. A source-grep test once passed while the thing it
-    guarded was disabled entirely. Four tests in the terminal directory were
-    found this week that cannot fail: one binds a value nothing reads, two
-    discard their results, and one asserts against a label the module stopped
-    emitting. That directory's test count is four higher than its coverage.
+    A source-grep test once passed while the thing it guarded was disabled
+    entirely. Four tests in the terminal directory were found that cannot fail:
+    one binds a value nothing reads, two discard their results, and one asserts
+    against a label the module stopped emitting. That directory's test count is
+    four higher than its coverage.
   </p>
 
   <h3>A green suite is not evidence</h3>
@@ -234,7 +244,7 @@
     to keep the reasoning in them and is also their weakness: an author checking
     their own claim re-reads the argument they already made. On 2026-08-23 nine
     defects were found here in one day and every one came from an independent
-    reviewer &mdash; none from the author.
+    reviewer; none from the author.
   </p>
 
   <p>

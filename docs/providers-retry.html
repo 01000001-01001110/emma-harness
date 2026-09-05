@@ -113,7 +113,7 @@ impl Default for Retry {
 
   <p>
     <code>max_attempts: 4</code> counts the original, so the default is one try
-    plus three retries. Every field is <code>pub</code>, which is what lets the
+    plus three retries. Every field is <code>pub</code> so the
     provider tests build a policy with millisecond delays and exercise the
     retry path without making the suite slow.
   </p>
@@ -234,7 +234,7 @@ pub(crate) fn retry_after_seconds(raw: Option&lt;&amp;str&gt;) -&gt; Option&lt;D
     cases in eight lines: <code>"3"</code>, <code>" 12 "</code> with
     surrounding whitespace, an HTTP-date which yields <code>None</code>, and no
     header at all. <span class="chip test">tested</span> An unparseable value
-    is indistinguishable from an absent one downstream, which is the intended
+    is indistinguishable from an absent one downstream. That is the intended
     degradation: the curve takes over.
   </p>
 
@@ -435,7 +435,7 @@ fn api_message(body: &amp;str) -&gt; String {
     <code>Retrying</code> events arrived with the message
     <em>a silent retry is a hang</em>, and the first of those had a delay of
     exactly zero, so the provider's header was used rather than the curve. The
-    second is asserted only as greater than zero, which is the curve.
+    second is asserted only as greater than zero (the curve).
     <span class="chip test">tested</span>
   </p>
 
@@ -443,8 +443,8 @@ fn api_message(body: &amp;str) -&gt; String {
     <code>a_429_that_never_clears_reports_how_long_to_wait</code> is its
     complement: three 429s, the last asking for 9 seconds, and the surfaced
     error mentions both <em>rate limited</em> and <em>9s</em>. The attempt cap
-    holds at three, which is what the test provider's
-    <code>max_attempts: 3</code> sets. <span class="chip test">tested</span>
+    holds at three, matching the test provider's
+    <code>max_attempts: 3</code> setting. <span class="chip test">tested</span>
   </p>
 
   <h2 id="coverage">Coverage</h2>

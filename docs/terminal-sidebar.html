@@ -130,11 +130,10 @@ pub fn width(total: u16, collapsed: bool) -&gt; u16 {
     The ordering of the clamp and the cap is the decision. Applying
     <code>min(total / 2)</code> after the floor means a terminal too narrow for
     28 columns gets a shrinking sidebar rather than one that eats the
-    transcript: <em>&ldquo;a &lsquo;side&rsquo; bar wider than the pane it sits
-    beside has the two the wrong way round.&rdquo;</em> The shell will usually
-    have collapsed it by then, but a user who re-expanded is honoured, and
-    honouring them must not mean a 28-column sidebar beside a 12-column
-    transcript.
+    transcript. A sidebar wider than the pane it sits beside has the two the
+    wrong way round. The shell will usually have collapsed it by then, but a
+    user who re-expanded is honoured, and honouring them must not mean a
+    28-column sidebar beside a 12-column transcript.
   </p>
 
   <p>
@@ -142,9 +141,8 @@ pub fn width(total: u16, collapsed: bool) -&gt; u16 {
     <code>an_expanded_sidebar_never_takes_more_than_half_the_terminal</code>
     walks every width from 0 to 200 and asserts the property rather than
     checking a threshold. <code>the_width_is_the_mockups_proportion_between_a_floor_and_a_ceiling</code>
-    pins four literals, because <em>&ldquo;clamp(round(0.224&middot;cols), 28,
-    40)&rdquo; is an argument in a comment until a number is written
-    down.&rdquo;</em> <code>a_collapsed_sidebar_takes_no_columns_at_any_size</code>
+    pins four literals. The formula clamp(round(0.224·cols), 28, 40) is an
+    argument in a comment until a number is written down. <code>a_collapsed_sidebar_takes_no_columns_at_any_size</code>
     holds the contract the layout depends on, including at
     <code>u16::MAX</code>.
   </p>
@@ -197,12 +195,11 @@ const RIGHT_PAD: usize = 2;</code></pre>
   <span class="src">crates/emma/src/term/sidebar.rs — <code>list_row</code></span>
 
   <p>
-    The name truncates and the trailing column survives, and the doc argues the
-    priority: <em>&ldquo;the trailing column is short and uniform and the eye
-    scans it as a column: one row whose date is missing reads as a row with no
-    date, while a name cut short still reads as that name.&rdquo;</em> The
-    trailing text is itself capped at half the row, <em>&ldquo;so a pathological
-    value cannot invert the priority.&rdquo;</em>
+    The name truncates and the trailing column survives. The trailing column is
+    short and uniform; the eye scans it as a column. One row whose date is missing
+    reads as a row with no date, while a name cut short still reads as that name.
+    The trailing text is itself capped at half the row so a pathological value
+    cannot invert the priority.
   </p>
 
   <p>
@@ -246,9 +243,9 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
 
   <p>
     The property for the pane as a whole is asserted on the
-    assembled <em>lines</em> rather than on the buffer, and the test says why:
-    <em>&ldquo;<code>set_line</code> clips, and a clipped overrun is exactly the
-    invisible defect this test exists to catch.&rdquo;</em>
+    assembled <em>lines</em> rather than on the buffer. <code>set_line</code>
+    clips, and a clipped overrun is exactly the invisible defect this test exists
+    to catch.
     <code>no_row_is_ever_wider_than_the_pane</code> walks widths 0 to 44 against
     four hostile rows and five chrome lines.
     <span class="chip test">tested</span>
@@ -281,9 +278,8 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
   <p>
     A <code>&gt;</code> in the lead <em>and</em> a full-width band from
     <code>Palette::band</code>. The band runs border to border, one style across
-    every span including the lead and the padding, <em>&ldquo;so the highlight
-    is the full row and not a patchwork — the image shows it running border to
-    border.&rdquo;</em> With no colour it degrades to reversed video, so the
+    every span including the lead and the padding, so the highlight is the full
+    row and not a patchwork. The image shows it running border to border. With no colour it degrades to reversed video, so the
     selection is never carried by colour alone and the <code>&gt;</code>
     survives everything.
   </p>
@@ -291,16 +287,15 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
   <p>
     <span class="chip test">tested</span> three ways.
     <code>the_selected_row_is_distinguishable_with_no_colour_at_all</code>
-    asserts on the cells rather than on the marker, because
-    <em>&ldquo;the marker alone could pass with the band gone.&rdquo;</em>
+    asserts on the cells rather than on the marker, because the marker alone could
+    pass with the band gone.
     <code>the_band_is_accent_on_a_subtle_ground_and_covers_the_full_row</code>
     asserts every span carries the same style and that the band is not the chip.
     And
     <code>the_selected_row_is_painted_exactly_as_it_was_before_the_band_moved</code>
     walks the painted cells from column 1 to 28 at three fidelities against the
-    exact colours the private table used to produce, then asserts the border
-    kept its own background: <em>&ldquo;the band is the row, not the
-    pane.&rdquo;</em>
+    exact colours the private table used to produce, then asserts the border kept
+    its own background. The band is the row, not the pane.
   </p>
 
   <p>
@@ -308,9 +303,9 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
     <a href="terminal-colour.html">the palette</a>. Its doc names the risk
     precisely: not that the pair stops existing, which the test above would
     catch, but that one of its four fidelities quietly changes value on the way
-    across, <em>&ldquo;and the <code>Ansi256</code> and <code>Ansi16</code> rows
-    are the ones worth having, because those are the two the palette now
-    computes differently.&rdquo;</em>
+    across. <em>&ldquo;The <code>Ansi256</code> and <code>Ansi16</code> rows are the
+    important ones: those are the two the palette now computes
+    differently.&rdquo;</em>
   </p>
 
   <h2 id="empty">A header over nothing</h2>
@@ -318,8 +313,7 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
   <p>
     A header over an empty section reads as a broken pane, so each one says in
     words what would be there. Four constants carry the sentences, and all four
-    are ASCII, for a stated reason: <em>&ldquo;they must render on the exact consoles the
-    ASCII glyph set exists for.&rdquo;</em>
+    are ASCII so they render on the exact consoles the ASCII glyph set exists for.
   </p>
 
   <div class="tw">
@@ -341,8 +335,8 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
   <p>
     <code>note_rows</code> wraps these rather than truncating them, and the
     reason is arithmetic: at the design's own 28-column floor the sessions hint
-    is wider than the pane, <em>&ldquo;and a truncated explanation is half an
-    explanation, which is the defect the sentence exists to prevent.&rdquo;</em>
+    is wider than the pane. A truncated explanation is half an explanation, which
+    is the defect the sentence exists to prevent.
     A single word wider than the pane is still clipped with a mark, because
     wrapping it would invent a break.
     <span class="chip test">tested</span>:
@@ -354,9 +348,9 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
 
   <p>
     <code>TOOL_MISSING</code> is a sentinel with a narrow contract, and the doc
-    says why it cannot collide: <em>&ldquo;<code>when</code> can never mint this
-    string and no single-key binding can be three characters, so neither a
-    session's date nor a live key collides.&rdquo;</em> <code>list_row</code>
+    says why it cannot collide: <code>when</code> can never mint this string and
+    no single-key binding can be three characters, so neither a session's date
+    nor a live key collides. <code>list_row</code>
     treats it as a whole-row signal and dims the label with it, so the row reads
     as switched off rather than broken, and the words carry what the dimming
     cannot on a colourless console.
@@ -371,7 +365,7 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
     <span class="h">Defect: the affordance's doc denies a click that is routed</span>
     <p>
       <code>COLLAPSE_HINT</code>'s doc says <em>&ldquo;What it does <em>not</em>
-      do is accept a click — the shell owns input, and until it routes a mouse
+      do is accept a click. The shell owns input, and until it routes a mouse
       press here this is a label for Ctrl-B, drawn where the mockup drew
       it.&rdquo;</em> The shell routes exactly that press.
       <code>App::click</code> hit-tests the SESSIONS header row and toggles the
@@ -390,18 +384,17 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
     Three public functions turn a session into a row.
     <code>session_label</code> is the first goal with whitespace collapsed, so a
     pasted multi-line goal stays one row, and <code>UNTITLED_SESSION</code> when
-    there is none. There is no length cap: <em>&ldquo;the pane
-    already truncates to fit, and two caps drift.&rdquo;</em> The doc names what
-    it replaced: <em>&ldquo;Sessions have ids (<code>sess-&lt;ms&gt;-&lt;pid&gt;</code>),
-    not names, and an id dressed up as a name is the filename defect this
-    constant replaces.&rdquo;</em>
+    there is none. There is no length cap: the pane already truncates to fit, and
+    two caps drift. The doc names what it replaced: sessions have ids
+    (<code>sess-&lt;ms&gt;-&lt;pid&gt;</code>), not names, and an id dressed up
+    as a name is the filename defect this constant replaces.
   </p>
 
   <p>
     <code>session_time_ms</code> digs the creation time out of an id, and
-    refuses anything that does not parse: <em>&ldquo;a made-up time is worse
-    than no column.&rdquo;</em> It requires the pid half to be all digits and
-    the millisecond half to be positive.
+    refuses anything that does not parse. A made-up time is worse than no column.
+    It requires the pid half to be all digits and the millisecond half to be
+    positive.
     <span class="chip test">tested</span> against four malformed ids.
   </p>
 
@@ -426,18 +419,17 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
   <p>
     Four buckets: <code>12:42</code> for the same civil day,
     <code>Yesterday</code>, <code>May 18</code> for this year, and
-    <code>May 2025</code> before that, because <em>&ldquo;a date from last May
-    shown bare would be a fresher claim than the file can back.&rdquo;</em> A
-    timestamp from the future renders as the date it says, because a skewed
-    clock is the caller's fact to keep.
+    <code>May 2025</code> before that. A date from last May shown bare would be a
+    fresher claim than the file can back. A timestamp from the future renders as
+    the date it says, because a skewed clock is the caller's fact to keep.
   </p>
 
   <p>
     <code>offset_min</code> is an argument and not a lookup, because std cannot
-    ask the OS for a timezone and this module draws. The doc names the failure
-    of passing zero: <em>&ldquo;An offset of 0 renders UTC under a local-looking
-    format, which is a quiet lie on any box west or east of Greenwich; the shell
-    must pass the real offset, not guess.&rdquo;</em>
+    ask the OS for a timezone and this module draws. The doc names the failure of
+    passing zero: an offset of 0 renders UTC under a local-looking format, which
+    is a quiet lie on any box west or east of Greenwich; the shell must pass the
+    real offset, not guess.
     <span class="chip test">tested</span>:
     <code>the_offset_moves_the_midnight_boundary_not_just_the_clock</code>
     shows two instants that are &ldquo;Yesterday&rdquo; in UTC and
@@ -448,22 +440,20 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
   <p>
     <code>civil</code> is Hinnant's <code>civil_from_days</code>, the standard
     closed form, with <code>div_euclid</code>/<code>rem_euclid</code> standing in
-    for the paper's floored division. It is <em>&ldquo;exercised against known
-    calendar anchors in the tests rather than trusted on reputation&rdquo;</em>,
-    and the test's own doc records that the first draft of the anchor forgot
-    2020's leap day and the algorithm caught the fixture, <em>&ldquo;which is
-    the right direction for that to fail.&rdquo;</em>
+    for the paper's floored division. It is exercised against known calendar
+    anchors in the tests rather than trusted on reputation, and the test's own
+    doc records that the first draft of the anchor forgot 2020's leap day and the
+    algorithm caught the fixture. That is the right direction for that to fail.
     <span class="chip test">tested</span>
   </p>
 
   <h2 id="assembly">Assembly, and the ASCII fallback</h2>
 
   <p>
-    <code>render</code> refuses outright when collapsed or under three cells
-    either way: <em>&ldquo;the pane is absent, not clipped.&rdquo;</em>
-    Otherwise it draws one bordered block, calls <code>content</code> to build
-    every line at the inner width, hands them to <code>fitted</code> for the
-    height, and writes them row by row.
+    <code>render</code>     refuses outright when collapsed or under three cells either way. The pane is
+    absent, not clipped. Otherwise it draws one bordered block, calls
+    <code>content</code> to build every line at the inner width, hands them to
+    <code>fitted</code> for the height, and writes them row by row.
   </p>
 
   <p>
@@ -472,19 +462,18 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
     blanks are the sidebar's <em>internal</em> layout, which is the exception
     <a href="terminal-skin.html">the spacing rule</a> already holds for
     <code>welcome.rs</code>. A pane too narrow for an inset rule gets a blank
-    row instead, because <em>&ldquo;one stranded glyph does not read as a rule,
-    and the inset would overrun.&rdquo;</em>
+    row instead, because one stranded glyph does not read as a rule and the inset
+    would overrun.
   </p>
 
   <p>
     <code>header</code> right-aligns the affordance and drops it <em>whole</em>
-    when it will not fit: <em>&ldquo;half of <code>[+]</code> is not a control,
-    it is debris.&rdquo;</em> Its right pad goes first, since one column off the
-    border still reads as the control. <code>help_row</code> gives every key a
-    shared column so the descriptions align, capped at half the pane so a long
-    key cannot push them all off the edge, and both halves are dim: the two
-    columns are told apart by alignment, <em>&ldquo;which no colour level takes
-    away.&rdquo;</em>
+    when it will not fit. Half of <code>[+]</code> is not a control; it is debris.
+    Its right pad goes first, since one column off the border still reads as the
+    control. <code>help_row</code> gives every key a shared column so the
+    descriptions align, capped at half the pane so a long key cannot push them
+    all off the edge, and both halves are dim. The two columns are told apart by
+    alignment, which no colour level takes away.
   </p>
 
   <p>

@@ -17,7 +17,7 @@
      Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it. That is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -83,10 +83,10 @@
 </nav>
 
 <p class="lede">
-  Four fields, and one absence that three separate crates have each worked
-  around in their own words. This is the sharpest edge in the tool layer: an
-  invariant the type system does not hold, guarded by three comments and
-  nothing else.
+  <code>ToolCtx</code> carries four fields. Session state is not one of them, and
+  three separate crates have each worked around that absence in their own words.
+  This is the sharpest edge in the tool layer: an invariant the type system does
+  not hold, guarded by three comments and nothing else.
 </p>
 
 <pre><code><span class="c">/// What a tool is told about the call it is serving.</span>
@@ -292,7 +292,7 @@
 </div>
 
 <p>
-  Four statements of one fact is the argument for the fix belonging in
+  The same fact appears in four module comments. That is the argument for the fix belonging in
   <code>tool-api</code>. It is a real trade rather than a free win, because
   <code>tool-api</code> is kept to one file, and a session-state slot
   on <code>ToolCtx</code> would have to answer what its lifetime is and who

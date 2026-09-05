@@ -17,7 +17,7 @@
      Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it. That is the deal, and is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -107,9 +107,9 @@ tool schema    ce26c5f39467e4f0</code></pre>
 <h2 id="shape">Four crates, one trait, and the thing the trait cannot hold</h2>
 
 <p>
-  <code>tools/fs</code> is eight tools over the filesystem and a shell &mdash;
-  six, plus <code>BashOutput</code> and <code>KillShell</code>, which read and
-  stop a command started in the background.
+  <code>tools/fs</code> is eight tools over the filesystem and a shell: six,
+  plus <code>BashOutput</code> and <code>KillShell</code>, which read and stop a
+  command started in the background.
   <code>tools/tasks</code> is four tools over one markdown file.
   <code>tools/web</code> is two stateless tools plus five that drive a live
   Chrome. <code>tools/lsp</code> is four that ask rust-analyzer instead of

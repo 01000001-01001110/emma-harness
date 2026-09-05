@@ -79,11 +79,10 @@
   </nav>
 
   <p class="lede">
-    Emma has no corpus. The only stable prefix is the instructions plus the
-    tool schema, a few thousand tokens rather than fifty, so caching had to be
-    argued rather than assumed. The argument turns on the loop being multi-call,
-    and the code that implements it is four small functions and one number
-    divided by four.
+    Emma has no corpus. The stable prefix is the instructions plus the tool
+    schema, a few thousand tokens instead of fifty, so caching needed an explicit
+    argument. The loop is multi-call; the implementation is four small functions
+    and one number divided by four.
   </p>
 
   <h2 id="arithmetic">Whether it is worth it here</h2>
@@ -106,12 +105,11 @@
     A coding turn is never one model call: the model reads a file, gets the
     result, and is called again seconds later. P is effectively 1.0, so the
     write pays back on the second call of the first turn and every call after
-    that is 90% off on the prefix. That is why caching is <code>On</code> by
-    default, and why <code>--no-cache</code> exists, so the claim can be
-    measured rather than believed. The saving is smaller than tustle-agent's
-    measured 84%, because there the cached prefix was a 33k-token corpus. Here
-    the prefix is small and the real money is in the conversation, which is why
-    the history gets a breakpoint too.
+    that is 90% off on the prefix. Caching defaults to <code>On</code>; use
+    <code>--no-cache</code> to measure the claim. The saving is smaller than
+    tustle-agent's measured 84%, because there the cached prefix was a 33k-token
+    corpus. Here the prefix is small and the real money is in the conversation,
+    which is why the history gets a breakpoint too.
   </p>
   <span class="src">crates/llm/src/anthropic.rs — module doc §"Caching, and whether it is worth it here"</span>
 
@@ -297,9 +295,10 @@ fn messages_field(
   </p>
 
   <p>
-    Note the gate for breakpoint 3 counts <em>all</em> of query, not just the
-    part before the marker. That over-counts relative to what the marked prefix
-    actually contains, in a direction that opens the gate slightly early.
+    Note the gate for breakpoint 3 counts <em>all</em> of query when sizing the
+    prefix, including the part after the marker. That over-counts relative to
+    what the marked prefix actually contains, in a direction that opens the gate
+    slightly early.
     <span class="chip unv">unverified</span> Whether that matters depends on
     how close a real prefix runs to the floor at the moment of the second tool
     call; settling it means comparing the gated estimate against
@@ -341,13 +340,11 @@ fn mark_breakpoint(content: &amp;mut Value) -&gt; bool {
   <span class="src">crates/llm/src/anthropic.rs — <code>mark_breakpoint</code>, <code>ephemeral</code></span>
 
   <p>
-    Four outcomes, and two of them are refusals. An empty string is not marked,
-    because an empty text block is rejected by the API. An array whose last
-    element is not an object is not marked. A non-empty string is promoted to a
-    one-element block array carrying the marker, which is the only case where
-    marking changes a message's shape and not just its keys. Anything else, a
-    number or a null that should never appear, returns false. The return value
-    is not read by either caller.
+    Marking can refuse: an empty string, or an array whose last element is not an
+    object. A non-empty string is promoted to a one-element block array carrying
+    the marker (the only case where marking changes a message's shape, not only
+    its keys). Anything else (a number or null that should never appear) returns
+    false. The return value is not read by either caller.
   </p>
 
   <p>
@@ -488,12 +485,11 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
     <code>read</code> is <code>cache_read_input_tokens</code>. A cached read
     costs 0.1× of base, so it saves 0.9×; a cached write costs 1.25×, so it
     loses 0.25×. Emma sends only 5-minute markers, so the general form's
-    <code>− 1.0·write_1h</code> term drops out. <strong>The number goes
-    negative exactly when the harness is paying write premiums it never reads
-    back.</strong> That is what a broken prefix produces, and what the
+    <code>− 1.0·write_1h</code> term drops out. The number goes negative when
+    the harness pays write premiums it never reads back: a broken prefix, or the
     accepted-and-inert defect on
-    <a href="providers-floor.html">the next page</a> produced for every
-    non-Opus-5 model. It does not credit latency.
+    <a href="providers-floor.html">the next page</a> for every non-Opus-5 model.
+    It does not credit latency.
   </p>
 
   <p>
@@ -524,11 +520,10 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
 
   <p>
     Two companion views sit alongside it. <em>Cached fraction</em>,
-    <code>read / (input + creation + read)</code>, is a health gauge rather
-    than a cost claim, and reads low at the start of a session where history is
-    small, so the tail is the part that means anything. And an
-    <em>expected-hit regression</em>: within a TTL, call N should read at least
-    what call N−1 established, which catches a change that silently breaks the
+    <code>read / (input + creation + read)</code>, is a health gauge, not a cost
+    claim; it reads low early in a session when history is small. An
+    <em>expected-hit regression</em> checks that within a TTL, call N reads at
+    least what call N−1 established, catching a change that silently breaks the
     prefix.
   </p>
 
@@ -543,14 +538,12 @@ savings         = p · (<span class="s">0.9</span>·read − <span class="w">0.2
   </p>
 
   <p>
-    One known thing will drag that number down and cannot be fixed with
-    breakpoints: <strong>compaction invalidates the message half of the prefix
-    entirely, every time it fires.</strong> The first call afterwards re-writes
-    what it would have read, at 1.25× instead of 0.1×. No placement of markers
-    avoids it, because the bytes genuinely changed. That mechanism belongs to
+    Compaction invalidates the message half of the prefix every time it fires.
+    The first call afterwards re-writes what it would have read, at 1.25× instead
+    of 0.1×. No marker placement avoids that because the bytes changed. See
     <a href="session.html">sessions &amp; context</a>; it is named here because
-    it is the largest single term in Emma's caching bill, and a reader watching
-    the arithmetic go negative should suspect it first.
+    it is often the largest term in Emma's caching bill when the arithmetic goes
+    negative.
   </p>
   <span class="src">notes/audits/caching-emma.md §"Does it invalidate the cached prefix?"</span>
 

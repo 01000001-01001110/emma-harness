@@ -116,12 +116,11 @@
   </p>
 
   <p>
-    The costs are stated rather than discovered. <strong>Setext headings</strong>
+    The costs are documented up front. <strong>Setext headings</strong>
     (<code>Title</code> under <code>=====</code>) cannot be recognised, because
     by the time the underline arrives the title has already been printed; they
-    degrade to a paragraph and a rule, which is what they look like.
-    <strong>Tables</strong> are not aligned, because column widths are a property
-    of the whole table; their rows are printed as written.
+    show up as a paragraph and a rule. <strong>Tables</strong> are not aligned,
+    because column widths need the whole table; their rows print as written.
   </p>
 
   <h2 id="line">The one entry point</h2>
@@ -163,12 +162,9 @@
   <span class="src">crates/emma/src/term/markdown.rs — <code>Markdown::line</code></span>
 
   <p>
-    The fence check is first, and that ordering is the state
-    machine: inside a fence, nothing else is recognised. The last arm is prose,
-    which is why every shape that is <em>nearly</em> something renders as a
-    paragraph rather than as a mistake. The recognisers are narrow:
-    <em>&ldquo;a shape that is <em>nearly</em> a heading is a paragraph, and a
-    paragraph is always renderable.&rdquo;</em>
+    The fence check is first; inside a fence, nothing else is recognised. The
+    last arm is prose. Shapes that are <em>nearly</em> something else render as
+    paragraphs, because a paragraph is always renderable.
   </p>
 
   <div class="tw">
@@ -277,12 +273,11 @@ fn code_rows(text: &amp;str, width: usize, skin: &amp;Skin) -&gt; Vec&lt;Line&lt
   <p>
     <span class="chip test">tested</span>:
     <code>a_fenced_code_block_is_never_reflowed_and_never_loses_a_character</code>
-    is written as &ldquo;the rows concatenate back to the source&rdquo; rather
-    than as a width check, <em>&ldquo;because that is the property: a
-    word-wrapped code line would still be under the width and would still be
-    wrong.&rdquo;</em> It then renders the <em>same text outside a fence</em> and
-    asserts that one <em>does</em> break at a space, which is what makes the
-    first assertion a distinction rather than a tautology.
+    is written as &ldquo;the rows concatenate back to the source&rdquo; because
+    word-wrapped code would stay under the width and still be wrong. It then
+    renders the <em>same text outside a fence</em> and asserts that one
+    <em>does</em> break at a space, so the first assertion tests a real
+    distinction.
   </p>
 
   <h3>2. Nothing is inserted into what a reader copies</h3>
@@ -433,8 +428,8 @@ fn sanitise(raw: &amp;str) -&gt; String {
     <span class="chip test">tested</span>:
     <code>an_escape_byte_in_the_models_prose_never_reaches_a_cell</code> feeds
     <code>hello \x1b[31mred\x1b[0m \x07 and\ttabs</code> and asserts no control
-    character survives <em>and</em> that the words did, which is what makes it a
-    translation rather than a refusal to draw.
+    character survives <em>and</em> that the words did, so the test checks
+    translation, not refusal to draw.
   </p>
 
   <div class="note warn">

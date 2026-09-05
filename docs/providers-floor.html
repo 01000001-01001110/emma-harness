@@ -359,8 +359,8 @@ fn min_cacheable_tokens(model: &amp;str) -&gt; usize {
     <figcaption>
       The same request on four models. Pink is the region where a
       <code>cache_control</code> marker does something. The prefix size comes
-      from <code>big_instructions()</code> in the test module — chosen to sit
-      above Opus 5's floor and well below Haiku's — which is what makes
+      from <code>big_instructions()</code> in the test module, chosen to sit
+      above Opus 5's floor and well below Haiku's. That is what makes
       <code>a_prefix_over_one_models_floor_and_under_anothers_is_marked_only_for_the_first</code>
       a regression guard rather than a tautology. Drawn from
       <code>MIN_CACHEABLE</code> and <code>clears_minimum</code>; the axis is

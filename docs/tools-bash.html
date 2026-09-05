@@ -83,10 +83,9 @@
 </nav>
 
 <p class="lede">
-  Four arguments, one shell, and the widest hole in the containment story,
-  documented as one rather than papered over. This is also the tool that forced
-  the workspace's error rule to be restated, and the only tool that can hand
-  back a handle instead of a result.
+  Four arguments, one shell, and the widest hole in the containment story.
+  This is also the tool that forced the workspace's error rule to be restated,
+  and the only tool that can hand back a handle instead of a result.
 </p>
 
 <div class="tw">
@@ -94,7 +93,7 @@
     <thead><tr><th>Argument</th><th>Type</th><th>Meaning</th></tr></thead>
     <tbody>
       <tr><td><code>command</code> <em>required</em></td><td>string</td><td>A shell command line. Whitespace-only is <code>Bash.command is empty</code>.</td></tr>
-      <tr><td><code>timeout_ms</code></td><td>integer ≥ 1</td><td>Default 120,000, clamped at 600,000. Zero is refused; an over-large value is clamped, because "wait an hour" is a real intention the engine will not honour past its ceiling. <strong>Refused outright alongside <code>run_in_background</code></strong> — see below.</td></tr>
+      <tr><td><code>timeout_ms</code></td><td>integer ≥ 1</td><td>Default 120,000, clamped at 600,000. Zero is refused; an over-large value is clamped, because "wait an hour" is a real intention the engine will not honour past its ceiling. <strong>Refused outright alongside <code>run_in_background</code></strong>. See below.</td></tr>
       <tr><td><code>cwd</code></td><td>string</td><td>Must resolve inside the working directory and be a directory. Defaults to the root.</td></tr>
       <tr><td><code>run_in_background</code></td><td>boolean</td><td>Return a task id immediately instead of waiting. The command keeps running; <code>BashOutput</code> reads what has arrived since you last asked, and <code>KillShell</code> stops it.</td></tr>
     </tbody>
@@ -223,21 +222,20 @@
   Git for Windows is searched <em>before</em> <code>PATH</code>, and the WSL
   launcher is skipped rather than merely ranked below it, because on a box
   without Git the ranking alone still ends at WSL. Seven directories are tried:
-  the three spellings of <code>Git\usr\bin</code> &mdash;
-  <code>ProgramFiles</code>, <code>ProgramW6432</code>,
-  <code>LOCALAPPDATA</code> &mdash; and then the four of
-  <code>Git\bin</code>.
+  the three spellings of <code>Git\usr\bin</code>
+  (<code>ProgramFiles</code>, <code>ProgramW6432</code>,
+  <code>LOCALAPPDATA</code>) and then the four of <code>Git\bin</code>.
 </p>
 
 <div class="note warn">
-  <span class="h">That order is a bug fix, and the bug was a kill that lied</span>
+  <span class="h"><code>Git\bin</code> search order: a kill that lied</span>
   <p>
     <code>Git\bin\bash.exe</code> is a <em>launcher</em>. It re-execs
     <code>Git\usr\bin\bash.exe</code> as a child process and waits. Emma
     spawns what it finds, so while <code>Git\bin</code> was searched first the
-    process Emma held &mdash; the only one <code>start_kill</code> and
-    <code>kill_on_drop</code> can reach &mdash; was the launcher, and the shell
-    running the command was a generation further down. Killing the launcher left
+    process Emma held was the launcher (the only one <code>start_kill</code> and
+    <code>kill_on_drop</code> can reach), and the shell running the command was
+    a generation further down. Killing the launcher left
     the command running, and both <code>timeout_ms</code> and
     <code>KillShell</code> reported that it had stopped.
   </p>
@@ -257,8 +255,8 @@ spawned  Git\usr\bin\bash.exe
   orphans left   : 0</code></pre>
   <p>
     The byte count is only how long the orphan happened to live before it was
-    cleaned up &mdash; the first run measured 14,962. What the two runs agree on
-    is that the file grew after the kill in one case and not the other.
+    cleaned up (the first run measured 14,962). What the two runs agree on is
+    that the file grew after the kill in one case and not the other.
   </p>
   <p>
     The launcher is kept as a fallback rather than dropped: it is what exists on
@@ -355,8 +353,8 @@ spawned  Git\usr\bin\bash.exe
     go red.</strong>
     <code>the_wsl_launcher_is_recognised_wherever_windows_keeps_it</code> passes
     on Linux and on Windows alike, for the same reason the defect exists:
-    <code>classify</code> gives the same answer on both. Flagged here rather
-    than fixed.
+    <code>classify</code> gives the same answer on both. Flagged here; not
+    fixed.
   </p>
 </div>
 
@@ -417,7 +415,7 @@ spawned  Git\usr\bin\bash.exe
 </p>
 
 <div class="note">
-  <span class="h">The copy that was wrong is the one the model reads</span>
+  <span class="h">The description lagged behind the code</span>
   <p>
     This contract was stated three ways for a while: in the module doc, in
     <code>run</code>, and in <code>descriptions/bash.md</code>. The description
@@ -513,8 +511,8 @@ spawned  Git\usr\bin\bash.exe
       <tr>
         <td><code>KillShell</code></td>
         <td><code>bash_id</code></td>
-        <td>Signals the shell it started &mdash; <strong>never a process
-        tree</strong> &mdash; and the outcome says which. Does not
+        <td>Signals the shell it started (<strong>never a process
+        tree</strong>) and the outcome says which. Does not
         claim <code>read_only</code>: signalling a process is exactly the local
         damage the bit exists to flag.</td>
       </tr>
@@ -525,10 +523,9 @@ spawned  Git\usr\bin\bash.exe
 
 <p>
   <strong><code>timeout_ms</code> together with <code>run_in_background</code> is
-  refused rather than ignored.</strong> The two mean opposite things &mdash; one
-  says "stop waiting after N", the other says "do not wait" &mdash; and silently
-  dropping either would be the tool deciding which half of a call the caller
-  meant.
+  refused rather than ignored.</strong> One says stop waiting after N; the other
+  says do not wait. Silently dropping either would be the tool deciding which
+  half of a call the caller meant.
 </p>
 
 <p>
@@ -538,8 +535,8 @@ spawned  Git\usr\bin\bash.exe
   remembered tasks had no bound at all until 2026-08-23: a dead task stays
   findable after exit, so a long session held every handle it ever made.
   <code>MAX_REMEMBERED_TASKS</code> is 64, and <strong>only finished tasks are
-  ever evicted</strong> &mdash; losing the handle to a live process means losing
-  the ability to kill it, which is worse than the leak the bound exists for.
+  ever evicted</strong>. Losing the handle to a live process means losing the
+  ability to kill it, which is worse than the leak the bound exists for.
   <span class="chip test">tested</span>
   <code>the_registry_forgets_old_finished_tasks_and_never_a_running_one</code>,
   mutation-proven in both directions.
@@ -555,19 +552,19 @@ spawned  Git\usr\bin\bash.exe
     <code>KillShell</code> returned nothing. <code>CLAUDE.md</code> is explicit
     that <em>&ldquo;a commit that changes what Emma does and leaves the docs
     describing the old behaviour is incomplete&rdquo;</em>, so this was an
-    incomplete commit rather than a documentation chore &mdash; and it was found
-    by an adversarial reviewer, not by the sweep that had just finished.
+    incomplete commit rather than a documentation chore. An adversarial reviewer
+    found it, not the sweep that had just finished.
   </p>
 </div>
 
-<h2 id="containment">The containment story, stated rather than implied</h2>
+<h2 id="containment">The containment story</h2>
 
 <p>
   <code>cwd</code> is where the command starts, not a wall it is held behind.
   <code>cd ..</code> leaves. The <code>cwd</code> <em>argument</em> is contained
   and must resolve inside the root, which is a guard on the argument only. That
-  is in the tool's description rather than papered over, because a boundary the
-  operator believes in and that does not hold is worse than no boundary.
+  is in the tool's description, because a boundary the operator believes in and
+  that does not hold is worse than no boundary.
 </p>
 
 <p>

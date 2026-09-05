@@ -91,8 +91,8 @@ const EXEMPT: &amp;[&amp;str] = &amp;[<span class="s">"TaskCreate"</span>, <span
     <code>read_only: false</code> and were not declared
     <code>read_only: true</code> to dodge the gate. A tool that misreports itself
     leaves the gate protecting nothing in general rather than only for that tool,
-    which is why the hole is a list of names in one place rather than a lie in a
-    tool crate.
+    so the exception is a list of names in one place, not a false
+    <code>read_only</code> flag on the tool.
   </p>
 
   <p>

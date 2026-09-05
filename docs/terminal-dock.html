@@ -106,10 +106,9 @@
 
   <div class="note warn">
     <p>
-      <em>&ldquo;That is not a stale-input annoyance — it is one question being
-      answered by a keystroke aimed at another, and the place it matters most is
-      the approval gate, where the line in question is a
-      <code>y</code>.&rdquo;</em>
+      That is not a stale-input annoyance. One question is answered by a
+      keystroke aimed at another. It matters most at the approval gate, where the
+      line in question is a <code>y</code>.
     </p>
     <p>
       <span class="chip obs">observed</span>, on the first real run, and
@@ -160,11 +159,9 @@
   <span class="src">crates/emma/src/term/input.rs — <code>LineSource::drain</code></span>
 
   <p>
-    Three hiding places, one call. The count is returned rather than swallowed
-    <em>&ldquo;because silently eating a line a person typed is its own small
-    betrayal&rdquo;</em>, and the caller says so. After a drain the input box is
-    visibly empty, <em>&ldquo;which is the version of this property a user can
-    check.&rdquo;</em>
+    Three hiding places, one call. The count is returned rather than swallowed,
+    and the caller says so. After a drain the input box is visibly empty, which
+    is the version of this property a user can check.
   </p>
 
   <p>
@@ -172,15 +169,14 @@
     <code>a_line_typed_before_the_question_cannot_answer_it</code> is the
     original;
     <code>a_half_typed_answer_is_drained_as_well_as_a_submitted_one</code> is
-    the ground raw mode gained, and its doc says it is written from the hole
-    rather than from the implementation;
+    the ground raw mode gained;
     <code>draining_closes_the_command_menu_as_well</code> checks the fixture
-    really opened a menu first, <em>&ldquo;so this proves nothing&rdquo;</em> if
-    it did not; and <code>a_pasted_line_is_drained_like_a_typed_one</code>
+    really opened a menu first;
+    <code>a_pasted_line_is_drained_like_a_typed_one</code>
     covers the newest entrance.
     <code>draining_an_empty_queue_drops_nothing_and_says_so</code> guards the
-    count, because <em>&ldquo;a false positive there tells a user their input
-    was eaten when it was not.&rdquo;</em>
+    count, because a false positive there tells a user their input was eaten when
+    it was not.
   </p>
 
   <h3>What never enters the channel</h3>
@@ -188,38 +184,34 @@
   <p>
     Four classes of keystroke are consumed reader-locally and never become a
     line: the pane keys, the tool chords, the four menu keys, and every mouse
-    event. Each mutates view state through the frame and returns, so
-    <em>&ldquo;a scroll cannot become a line, so it cannot answer a
-    question&rdquo;</em>, and the drain guarantee is untouched because those
+    event. Each mutates view state through the frame and returns, so a scroll
+    cannot become a line and the drain guarantee is untouched because those
     keystrokes never enter the channel.
   </p>
 
   <p>
-    The transcript's scroll position is likewise exempt from the drain, as a
-    decision rather than an omission: <em>&ldquo;a scroll offset cannot answer a
-    question, and yanking the reader's page because a prompt appeared would be
-    hostile.&rdquo;</em>
+    The transcript's scroll position is likewise exempt from the drain. A scroll
+    offset cannot answer a question, and yanking the reader's page because a
+    prompt appeared would be hostile.
   </p>
 
   <h2 id="editor">The line editor</h2>
 
   <p>
-    Fifteen match arms and a paste handler, and the scope is argued rather than
-    left minimal by accident: <em>&ldquo;Everything here is a key that a user pressing
-    it would be surprised not to have. Anything more — history, completion, word
-    motion beyond <code>Ctrl-W</code> — is a text editor, and Emma already has
-    one of those as a tool.&rdquo;</em>
+    Fifteen match arms and a paste handler. The scope is deliberate: every key
+    here is one a user would expect. History, completion, and word motion beyond
+    <code>Ctrl-W</code> belong in a text editor, and Emma already has one as a
+    tool.
   </p>
 
   <p>
     Three of the arms are defensive rather than functional. A
     <code>KeyEventKind::Release</code> returns <code>Ignore</code>, because
     Windows reports both edges and acting on both types every character twice.
-    <code>Ctrl-C</code> clears the buffer as well as interrupting,
-    <em>&ldquo;a user who hits Ctrl-C and then types a goal must not find the
-    interrupted line still in front of it.&rdquo;</em> And an unimplemented
-    modifier arm catches every remaining <code>Ctrl</code> or <code>Alt</code>
-    character:
+    <code>Ctrl-C</code> clears the buffer as well as interrupting, so a user who
+    hits Ctrl-C and then types a goal does not find the interrupted line still in
+    front of them. An unimplemented modifier arm catches every remaining
+    <code>Ctrl</code> or <code>Alt</code> character:
   </p>
 
   <pre><code>            <span class="c">// A modifier we do not implement must not type its letter: `Ctrl-R`</span>
@@ -244,12 +236,11 @@
 
   <p>
     Line breaks become spaces, and a run of them collapses to one, because this
-    editor is one line: <em>&ldquo;until [a multi-line editor] is [built], the
-    choice is between flattening the paste and refusing it, and a flattened
-    stack trace is still the stack trace the user meant to ask about.&rdquo;</em>
-    Everything else that is not printable is dropped, tabs included, because a
-    clipboard is untrusted bytes and <em>&ldquo;a tab in a cell is not eight
-    columns, it is one cell containing a tab.&rdquo;</em>
+    editor is one line. Until a multi-line editor exists, the choice is between
+    flattening the paste and refusing it; a flattened stack trace still carries
+    the text the user meant to ask about. Everything else that is not printable
+    is dropped, tabs included: a clipboard is untrusted bytes, and a tab in a
+    cell is one column containing a tab character, not eight columns.
   </p>
 
   <p>
@@ -289,9 +280,8 @@
     carries the reporting, and the clean case is the half a reader will see most:
     a note on every paste is noise, and noise is what gets ignored, which would
     leave the real notes unread. Four mutations go red on four different
-    assertions &mdash; always silent, always speaking, breaks counted per
-    character instead of per run, and control bytes dropped without being
-    counted.
+    assertions: always silent, always speaking, breaks counted per character
+    instead of per run, and control bytes dropped without being counted.
   </p>
 
   <h2 id="routing">Which key acts on which pane</h2>
@@ -317,14 +307,13 @@
 
   <p>
     Three rules are encoded in those seven arms. Scrolling works
-    <strong>while a goal runs and while a question is pending</strong>, because
-    <em>&ldquo;reading the evidence above an approval prompt is exactly when
-    scrolling matters most, and the prompt itself is fixed chrome that scrolling
-    cannot move.&rdquo;</em> <code>Home</code>/<code>End</code> belong to the
-    editor while there is a line to move within and to the transcript when there
-    is not: <em>&ldquo;one rule, no mode: the keys act on the thing that can
-    act.&rdquo;</em> And <code>Ctrl-B</code> dies under a prompt, so nothing
-    aimed at a pane can read as part of an answer.
+    <strong>while a goal runs and while a question is pending</strong>. Reading
+    the evidence above an approval prompt is when scrolling matters most, and
+    the prompt itself is fixed chrome that scrolling cannot move.
+    <code>Home</code>/<code>End</code> belong to the editor while there is a line
+    to move within and to the transcript when there is not: one rule, no mode.
+    <code>Ctrl-B</code> dies under a prompt, so nothing aimed at a pane can read
+    as part of an answer.
     <span class="chip test">tested</span>, three tests, including one asserting
     <code>Ctrl-Down</code> still scrolls with <code>prompt_pending</code> true.
   </p>
@@ -332,10 +321,9 @@
   <div class="note warn">
     <span class="h">Defect: a comment credits a mechanism that is not there, and another names a feature that does not exist</span>
     <p>
-      Inside <code>LineSource::raw</code>, the reader loop opens with
-      <em>&ldquo;A poll rather than a blocking read, so a frame that has been
-      torn down does not leave a thread wedged inside the console driver holding
-      a handle nobody can close.&rdquo;</em> The line under it is
+      Inside <code>LineSource::raw</code>, the reader loop opens with a comment
+      that a poll rather than a blocking read keeps a torn-down frame from
+      leaving a thread wedged inside the console driver. The line under it is
       <code>match event::read()</code>, which blocks. The stated failure is not
       prevented by the mechanism the comment credits; whether it happens in
       practice is a separate question the comment does not answer.
@@ -343,12 +331,11 @@
     <p>
       Separately, inside
       <code>the_pane_keys_route_to_the_transcript_and_nothing_else_does</code>,
-      a comment reads <em>&ldquo;Ctrl turns the arrows into row scrolling; plain
-      arrows stay with history and the menu.&rdquo;</em> There is no history:
-      the module doc says <em>&ldquo;there is no history and no
-      completion&rdquo;</em>, and <code>Editor::key</code> has no
-      <code>Up</code>/<code>Down</code> arm at all, so bare arrows fall to
-      <code>Action::Ignore</code>. A reader would conclude <code>Up</code>
+      a comment reads that Ctrl turns the arrows into row scrolling and plain
+      arrows stay with history and the menu. There is no history: the module doc
+      says there is no history and no completion, and <code>Editor::key</code>
+      has no <code>Up</code>/<code>Down</code> arm at all, so bare arrows fall
+      to <code>Action::Ignore</code>. A reader would conclude <code>Up</code>
       recalls the previous goal.
       <span class="chip cert">certified</span> for both: read the two lines
       against the code immediately below them. The second is in a test comment
@@ -361,17 +348,16 @@
 
   <p>
     The mockup showed bare <code>s</code>/<code>c</code>/<code>f</code> bindings.
-    The design refused them outright: <em>&ldquo;a bare letter that acts while
-    the input box exists is a footgun.&rdquo;</em> The softer rule,
-    <em>only when the editor is empty</em>, dies on a fact the approval-gate keys
-    never meet:
+    The design refused them: a bare letter that acts while the input box exists
+    is a footgun. The softer rule, only when the editor is empty, fails on a
+    fact the approval-gate keys never meet:
   </p>
 
   <div class="note warn">
     <p>
-      <em>&ldquo;the first character of <em>every</em> goal lands on an empty
-      editor, so a bare <code>s</code> binding makes any goal beginning with
-      <code>s</code> start a shell instead.&rdquo;</em>
+      The first character of every goal lands on an empty editor, so a bare
+      <code>s</code> binding makes any goal beginning with <code>s</code> start a
+      shell instead.
     </p>
     <span class="src">crates/emma/src/term/input.rs — <code>tool_key</code></span>
   </div>
@@ -387,9 +373,9 @@
 
   <p>
     <span class="chip test">tested</span>:
-    <code>a_bare_letter_is_never_a_tool_shortcut</code> walks seven characters
-    and its doc says <em>&ldquo;If this test goes red, that refuted idea is
-    back&rdquo;</em>, which is what makes it a guard rather than a check.
+    <code>a_bare_letter_is_never_a_tool_shortcut</code> walks seven characters.
+    If this test goes red, that refuted idea is back, which is what makes it a
+    guard rather than a check.
     <code>alt_chords_launch_tools_and_die_under_a_prompt</code> covers the four
     ways the chord must not fire: under a prompt, on a release edge, under
     AltGr, and with no Alt at all.
@@ -399,11 +385,10 @@
 
   <p>
     <code>menu.rs</code> is pure: a filter string and a list of names in, an open
-    or closed menu out. The reason for the split is stated: the menu's behaviour
-    <em>&ldquo;is the part that can be wrong in a way nobody can see from a test
-    binary — cargo hands the tests a pipe, so the viewport is never drawn while
-    they run. What <em>can</em> be asserted is when it opens, what it filters to,
-    what closes it and what an approval does to it.&rdquo;</em>
+    or closed menu out. The split exists because menu behaviour can be wrong in
+    ways no test binary can show: cargo hands the tests a pipe, so the viewport
+    is never drawn while they run. What can be asserted is when it opens, what it
+    filters to, what closes it and what an approval does to it.
   </p>
 
   <div class="tw">
@@ -416,15 +401,15 @@
         </tr>
         <tr>
           <td>No match closes it</td>
-          <td><em>&ldquo;A popup with nothing in it, sitting over the text somebody is trying to type, is a trap.&rdquo;</em></td>
+          <td><em>A popup with nothing in it, sitting over the text somebody is trying to type, is a trap.</em></td>
         </tr>
         <tr>
           <td>Esc leaves the text alone</td>
-          <td>Clearing what somebody typed is <em>&ldquo;the same class of theft as the drain eating a line, and the drain at least has a safety argument.&rdquo;</em></td>
+          <td>Clearing what somebody typed is the same class of theft as the drain eating a line, and the drain at least has a safety argument.</td>
         </tr>
         <tr>
           <td>A pending question outranks it</td>
-          <td>Passed in as an argument rather than looked up, <em>&ldquo;so that the rule is a thing a test states rather than a thing a terminal has to be in front of.&rdquo;</em></td>
+          <td>Passed in as an argument rather than looked up, so the rule is something a test states rather than something a terminal has to be in front of.</td>
         </tr>
       </tbody>
     </table>
@@ -434,11 +419,11 @@
   <p>
     <code>dismissed_at</code> is a fifth rule that only exists because of the
     third: after Esc, the menu stays shut while what the user types still starts
-    with the text they dismissed it at, since <em>&ldquo;reopening a popup
-    somebody just dismissed, on their next keystroke, is worse than never having
-    shown it.&rdquo;</em> <code>sync</code> also holds the selection on the same
-    command while it survives the filter, <em>&ldquo;so narrowing does not move
-    the selection out from under a hand that is already on Enter.&rdquo;</em>
+    with the text they dismissed it at, since reopening a popup somebody just
+    dismissed on their next keystroke is worse than never having shown it.
+    <code>sync</code> also holds the selection on the same command while it
+    survives the filter, so narrowing does not move the selection out from under
+    a hand that is already on Enter.
     <span class="chip test">tested</span>, both.
   </p>
 
@@ -446,23 +431,21 @@
     Nothing is invented. The vocabulary is Emma's own
     <code>session_command::BUILTINS</code> plus whatever the harness loaded, in
     the harness's order, and a harness command with no description gets
-    <code>NO_DESCRIPTION</code> rather than a summary invented from prompt text:
-    <em>&ldquo;a summary invented from prompt text is a description of a command
-    that nobody wrote and nobody can correct.&rdquo;</em>
+    <code>NO_DESCRIPTION</code> rather than a summary invented from prompt text.
+    A summary invented from prompt text describes a command that nobody wrote and
+    nobody can correct.
     <span class="chip test">tested</span>:
     <code>the_menu_and_the_parser_agree_on_the_vocabulary</code> checks both
-    directions, that every built-in has a row and that every row parses,
-    <em>&ldquo;which is what stops the ninth command shipping
-    undiscoverable.&rdquo;</em>
+    directions, that every built-in has a row and that every row parses. That
+    stops the ninth command shipping undiscoverable.
   </p>
 
   <p>
-    A name collision resolves to the built-in, and the project's row is
-    <em>marked</em> rather than duplicated or dropped: <em>&ldquo;two identical
-    rows would read as a bug, and dropping it silently would hide the collision
-    entirely.&rdquo;</em> That is the one place the menu composes a sentence, and
-    the file says why it is allowed to: what it composes is a fact about
-    <em>resolution</em>, not a summary of a file nobody wrote a description for.
+    A name collision resolves to the built-in, and the project's row is marked
+    rather than duplicated or dropped: two identical rows would read as a bug,
+    and dropping it silently would hide the collision. That is the one place the
+    menu composes a sentence. What it composes is a fact about resolution, not a
+    summary of a file nobody wrote a description for.
     <span class="chip test">tested</span>:
     <code>a_project_command_a_builtin_shadows_gets_one_marked_row_not_two</code>.
   </p>
@@ -472,36 +455,34 @@
   <p>
     <code>View::render</code> lays out bottom-up: the body, the hint, and the
     status on the very last row. The comment records the reversal and the reason
-    for it: the status used to be the first row, and the owner asked for what
-    the terminal agents he uses do, <em>&ldquo;the chat bar at the bottom of the
-    window with the status underneath it. The eye ends where the cursor is, and
-    the two rows below the box are the two that never move.&rdquo;</em>
+    for it:     the status used to be the first row, and the owner asked for what the
+    terminal agents he uses do: the chat bar at the bottom of the window with the
+    status underneath it. The eye ends where the cursor is, and the two rows
+    below the box are the two that never move.
   </p>
 
   <p>
-    Nothing was added by the reorder, which is the part the comment insists on:
-    <em>&ldquo;These are the same two rows of chrome the old order spent,
-    reordered, so <code>body</code> gets exactly the height it got before and
-    every case that fitted still fits.&rdquo;</em> A third fixed row would have
-    cost the five-row viewport the ability to show a command <em>and</em> the
-    keys to approve it.
+    Nothing was added by the reorder. These are the same two rows of chrome the
+    old order spent, reordered, so <code>body</code> gets exactly the height it
+    got before and every case that fitted still fits. A third fixed row would
+    have cost the five-row viewport the ability to show a command and the keys to
+    approve it.
     <span class="chip test">tested</span>:
     <code>the_reordering_cost_the_body_no_rows_at_the_smallest_viewport_emma_draws</code>
     at heights 5, 8 and 10, and
     <code>the_input_box_is_at_the_bottom_with_the_hint_and_then_the_status_beneath_it</code>,
     which asserts the ordering by row index rather than by three
-    <code>contains</code> calls, <em>&ldquo;because the property <em>is</em> the
-    ordering: a test that only asked whether each piece appeared somewhere would
-    pass the layout this replaced.&rdquo;</em>
+    <code>contains</code> calls, because the property is the ordering. A test
+    that only asked whether each piece appeared somewhere would pass the layout
+    this replaced.
   </p>
 
   <p>
-    The hint keeps a row of its own rather than sharing the status row, and the
-    reason is the status row's law: <em>&ldquo;sharing that row with a fixed
-    sentence would mean an advice string deciding whether a measurement
-    fits.&rdquo;</em> Showing it only when it has something to say was the other
+    The hint keeps a row of its own rather than sharing the status row. Sharing
+    that row with a fixed sentence would mean an advice string deciding whether a
+    measurement fits. Showing it only when it has something to say was the other
     candidate and is worse in the hand, because the row would come and go as the
-    mode changed, <em>moving the input box under the user's fingers</em>.
+    mode changed, moving the input box under the user's fingers.
   </p>
 
   <h3>The box is laid out first</h3>
@@ -527,14 +508,13 @@
 
   <p>
     Three smaller decisions live in the same function. The border is accent
-    rather than grey, because <em>&ldquo;a widget that is the same weight as its
-    own decoration reads as decoration.&rdquo;</em> An empty box shows
-    <code>menu::PLACEHOLDER</code>, since a new user's first question is what
-    this takes and the answer was previously nowhere except a note that had
-    already scrolled away. And the mockup's <code>[send: Enter]</code> is drawn
-    inside the right border only while it cannot collide with the typed line,
-    because <em>&ldquo;a hint that overwrites the sentence it is hinting about is
-    worse than none.&rdquo;</em>
+    rather than grey, because a widget that is the same weight as its decoration
+    reads as decoration. An empty box shows <code>menu::PLACEHOLDER</code>, since
+    a new user's first question is what this takes and the answer was previously
+    nowhere except a note that had already scrolled away. The mockup's
+    <code>[send: Enter]</code> is drawn inside the right border only while it
+    cannot collide with the typed line; a hint that overwrites the sentence it
+    is hinting about is worse than none.
     <span class="chip test">tested</span>:
     <code>the_send_hint_sits_inside_the_box_and_yields_to_a_long_line</code>.
   </p>
@@ -544,11 +524,11 @@
   <p>
     A box costs two rows, and on a short window those two rows are the
     difference between showing the command and showing nothing but a title and a
-    <code>[y]</code>. <em>&ldquo;A prompt the user cannot evaluate manufactures
-    consent — that argument is older than this file — so the decoration goes
-    first and the title becomes an ordinary line.&rdquo;</em> The keys and the
-    answer share the last row and are laid out first: whatever else has to go,
-    the way to answer the question does not.
+    <code>[y]</code>. A prompt the user cannot evaluate manufactures consent; that
+    argument is older than this file. The decoration goes first and the title
+    becomes an ordinary line. The keys and the answer share the last row and are
+    laid out first: whatever else has to go, the way to answer the question does
+    not.
     <span class="chip test">tested</span>:
     <code>the_shortest_viewport_drops_the_border_rather_than_the_evidence</code>
     at five rows asserts the title, the command and the keys are all present and
@@ -559,9 +539,9 @@
 
   <p>
     Both <code>render_input</code> and <code>render_prompt</code> are
-    <code>pub(crate)</code> with the reason attached: <em>&ldquo;the approval
-    panel must be the identical panel in both frames, because a consent
-    interface with two renderings is two interfaces.&rdquo;</em>
+    <code>pub(crate)</code> with the reason attached: the approval panel must be
+    the identical panel in both frames, because a consent interface with two
+    renderings is two interfaces.
     <a href="terminal-layout.html">The full-screen dock</a> calls them with a
     different rectangle and nothing else.
   </p>
@@ -573,9 +553,9 @@
     characters and the cursor goes on a cell.
     <span class="chip test">tested</span>:
     <code>the_cursor_lands_on_the_right_column_after_wide_characters</code>,
-    whose doc names the failure the previous version had:
-    <em>&ldquo;the character-counted version passed every test above because
-    every string in them is one column per character.&rdquo;</em>
+    whose doc names the failure the previous version had: the character-counted
+    version passed every test above because every string in them is one column
+    per character.
   </p>
 
   <div class="note warn">
@@ -617,30 +597,28 @@
   <p>
     <code>LineSource::stdin</code> is the cooked reader: whole lines, edited by
     the terminal, a thread and a channel. It is unchanged from before the frame
-    existed, because <em>&ldquo;it is what every fallback run uses
-    and the fallback is the product.&rdquo;</em> Its <code>editing</code>,
-    <code>menu</code> and <code>frame</code> fields are all <code>None</code>,
-    so <code>drain</code> reaches only the channel, which is all there is.
+    existed, because it is what every fallback run uses and the fallback is the
+    product. Its <code>editing</code>, <code>menu</code> and <code>frame</code>
+    fields are all <code>None</code>, so <code>drain</code> reaches only the
+    channel, which is all there is.
   </p>
 
   <p>
     <code>LineSource::raw</code> is the frame's, and its loop is the only place
     a <code>crossterm::Event</code> is inspected. The ordering in it is the
     routing table: pane keys, then tool chords, then menu keys, then the editor.
-    Mouse events handle the wheel and exactly one click, a plain left
-    <em>press</em>, and refuse anything Shift-modified even where a terminal
-    forwards it, because <em>&ldquo;Shift-drag is the terminal's own selection —
-    the one copy route left on the alternate screen — and this arm must never
-    bid for it.&rdquo;</em> A resize is a redraw and nothing else, since ratatui
-    re-measures on every draw.
+    Mouse events handle the wheel and exactly one click, a plain left press, and
+    refuse anything Shift-modified even where a terminal forwards it. Shift-drag
+    is the terminal's own selection, the one copy route left on the alternate
+    screen, and this arm must never bid for it. A resize is a redraw and nothing
+    else, since ratatui re-measures on every draw.
   </p>
 
   <p>
-    <code>WHEEL_ROWS</code> is 3, <em>&ldquo;what terminals themselves scroll
-    by&rdquo;</em>. A submit and a menu-accepted command both snap the view to
-    the tail, <em>&ldquo;the answer to what was just sent is about to arrive
-    there, and a reader parked fifty rows up would watch nothing
-    happen.&rdquo;</em>
+    <code>WHEEL_ROWS</code> is 3, matching what terminals themselves scroll by.
+    A submit and a menu-accepted command both snap the view to the tail: the
+    answer to what was just sent is about to arrive there, and a reader parked
+    fifty rows up would watch nothing happen.
   </p>
 
   <h2 id="coverage">Coverage</h2>
@@ -689,9 +667,9 @@
     <span class="chip test">tested</span>
     <code>a_paste_puts_its_note_on_the_surface_and_a_clean_one_puts_nothing</code>;
     deleting that line now turns it red.
-    The other arms &mdash; keys, mouse, resize &mdash; are untouched, and the
-    thread's one call to <code>on_paste</code> is itself still deletable with
-    the suite green. The boundary moved rather than vanishing.
+    The other arms (keys, mouse, resize) are untouched, and the thread's one call
+    to <code>on_paste</code> is itself still deletable with the suite green. The
+    boundary moved rather than vanishing.
     <span class="chip unv">unverified</span>: type into a running Emma while a
     goal is in flight, then trigger an approval, and check the box is empty and
     the count is reported. And the whole of <code>Editor</code>'s Windows

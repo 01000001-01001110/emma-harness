@@ -17,7 +17,7 @@
      Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it. That is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -128,9 +128,9 @@ no model was called.</code></pre>
 <div class="note warn">
   <span class="h">This block was wrong in three ways at once, under a green chip</span>
   <p>
-    Until 2026-08-23 it showed 21 tool names rather than 23 — missing
-    <code>BashOutput</code> and <code>KillShell</code>, which
-    <code>ARCH-001</code> registered — a <code>tool schema</code> hash of
+    Until 2026-08-23 it showed 21 tool names rather than 23, missing
+    <code>BashOutput</code> and <code>KillShell</code> that
+    <code>ARCH-001</code> registered, and a <code>tool schema</code> hash of
     <code>ce26c5f39467e4f0</code> where the binary prints
     <code>42a842bc85513719</code>, and no shadowed-harness line at all, which
     <code>HARD-006</code> added directly under <code>harness</code>.
@@ -138,16 +138,16 @@ no model was called.</code></pre>
   <p>
     All three arrived the same way: a row landed, and the page that pastes this
     command's output was not re-run. <strong>A pasted transcript is the most
-    perishable thing on this site</strong> — it is a claim about every line of a
-    program's output, and any row that adds one line invalidates it. Found by a
-    reviewer running the command, which is the only thing that ever finds this.
+    perishable thing on this site.</strong> It is a claim about every line of a
+    program's output, and any row that adds one line invalidates it. A reviewer
+    running the command found this.
   </p>
 </div>
 
   <h2 id="one">1 · A different directory was loaded than the one you edited</h2>
 
   <p>
-    Three causes, and all three look identical from inside the editor:
+    Three causes look identical from inside the editor:
     <code>.emma/</code> beat a <code>.claude/</code> sitting beside it, a
     <em>nearer</em> ancestor had a harness you had forgotten about, or
     <code>EMMA_ROOT</code> is exported in that shell. Read the first three lines
@@ -183,7 +183,7 @@ no model was called.</code></pre>
       <tr><td>a hook for <code>SessionStart</code>, <code>Stop</code>, <code>PreCompact</code></td>
           <td>either spine</td>
           <td>nowhere: Emma has three events. By default this is a startup
-              error rather than a skip &mdash; so if Emma booted with no
+              error rather than a skip, so if Emma booted with no
               <code>EMMA_CLAUDE_HOOKS</code> set, this is not it. With
               <code>EMMA_CLAUDE_HOOKS=skip-unknown</code> it boots and names each
               dropped hook, so <strong>the inference needs the variable checked
@@ -203,10 +203,10 @@ no model was called.</code></pre>
   </div>
 
   <p>
-    Two of those rows say "if Emma booted, this is not it", and that is the most
-    useful property the chapter has. Emma's own format refuses rather than
-    ignores, so a misplaced key in <code>.emma/config.json</code> cannot be the
-    explanation for a run that started.
+    Two of those rows say "if Emma booted, this is not it". Emma's own format
+    refuses rather than ignores, so a misplaced key in
+    <code>.emma/config.json</code> cannot be the explanation for a run that
+    started.
   </p>
 
   <h2 id="three">3 · The key was swallowed rather than refused</h2>
@@ -298,8 +298,8 @@ no model was called.</code></pre>
 
   <p>
     <strong>The example this section used to give is no longer one.</strong>
-    <code>Bash(ls:*)</code> was the illustration, and it now evaluates &mdash;
-    along with <code>Read(./src/**)</code> and <code>Bash(git log:*)</code>. Run
+    <code>Bash(ls:*)</code> was the illustration, and it now evaluates, along
+    with <code>Read(./src/**)</code> and <code>Bash(git log:*)</code>. Run
     against a scratch harness carrying all three plus two denies, the current
     binary loads five rules and has nothing to announce:
   </p>
@@ -314,25 +314,25 @@ no model was called.</code></pre>
   <span class="chip cert">certified</span>: release binary rebuilt at
   <code>ce0dd69</code>, scratch <code>.claude/</code> harness, 2026-08-22. Paths
   elided for width; nothing else altered. <strong>The previous certification on
-  this block showed a warning line the current binary cannot produce</strong>
-  &mdash; it was accurate at its own build and went on looking green for weeks
+  this block showed a warning line the current binary cannot produce.</strong>
+  It was accurate at its own build and went on looking green for weeks
   after the behaviour moved. A dated certification goes on looking green
-  long after the thing it measured has moved, and the reason a reader who tries to reproduce one is doing the site a
-  favour.
+  long after the thing it measured has moved.
 
   <p>
     So the category still exists and its example had to be replaced.
     <code>Bash(git log)</code> with no wildcard and no separator is still a
     command prefix; a specifier this build genuinely cannot parse into any of the
-    four shapes still loads, still gets named, and still approves nothing. What
-    changed is how rarely that happens: <strong>the same measurement that found
-    62 of 64 real rules inert is why this example stopped working</strong>.
+    four shapes still loads, still gets named, and still approves nothing.
+    <strong>The same measurement that found 62 of 64 real rules inert is why this
+    example stopped working.</strong>
+  </p>
 
   <p>
-    Four things share that shape: loaded, named, and doing nothing. A configured
-    editor that is not on <code>PATH</code>; an agent with no
-    <code>description</code>; a project command a built-in shadows; and the
-    permission rule above. <code>config check</code> prints all four.
+    Loaded, named, and doing nothing: a configured editor that is not on
+    <code>PATH</code>; an agent with no <code>description</code>; a project
+    command a built-in shadows; and the permission rule above.
+    <code>config check</code> prints all four.
   </p>
 
   <div class="note warn">
@@ -355,7 +355,7 @@ no model was called.</code></pre>
 
   <p>
     <strong>Approval.</strong> If Emma keeps asking about something you granted,
-    the rule may be right and simply not matching. That is
+    the rule may be right and not matching. That is
     <a href="consent-matching.html">Consent &amp; permissions</a>, not this
     chapter. And the gate is a consent interface rather than a sandbox: it
     enforces nothing a tool does not honestly declare, and <code>Bash</code> can

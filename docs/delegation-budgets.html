@@ -121,10 +121,10 @@ const FOOTER_ITEMS: usize = 12;
   <span class="src">crates/emma/src/delegate.rs — the bounds region, quoted entire</span>
 
   <p>
-    They are constants rather than judgements at the call site for the reason
-    every truncation cap in this repository is: a bound nobody can find is a
-    bound nobody can change. <code>FOOTER_ITEMS</code> is in the same block and
-    belongs to <a href="delegation-footer.html#footer-fn">the footer</a>.
+    They are constants, not judgements at the call site, for the same reason as
+    every truncation cap in this repository: a bound nobody can find is a bound
+    nobody can change. <code>FOOTER_ITEMS</code> is in the same block and belongs
+    to <a href="delegation-footer.html#footer-fn">the footer</a>.
   </p>
 
   <div class="tw">
@@ -185,10 +185,10 @@ const FOOTER_ITEMS: usize = 12;
     what is left of the parent's allowance decides whether to run at all
     <em>and</em> how much of it to lend. The refusal is
     <code>ToolError::Unavailable</code> and is phrased as "I cannot", per
-    <code>ToolError</code>'s own rule, because this is the machinery being out of
-    room rather than the work being impossible. It is a <code>tool_result</code>
-    the model reads and routes around, never a tool that disappears from the
-    schema, which would be a capability quietly vanishing late in every goal.
+    <code>ToolError</code>'s own rule: the machinery is out of room, not the
+    work. It is a <code>tool_result</code> the model reads and routes around,
+    never a tool that disappears from the schema (a capability quietly vanishing
+    late in every goal).
     <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
     <code>a_delegation_refuses_to_start_when_the_goal_has_almost_nothing_left</code>.
@@ -218,8 +218,8 @@ const FOOTER_ITEMS: usize = 12;
     wall_clock)</code>, and the parent's clock keeps running independently while
     the sub runs. It is only checked at the parent's next iteration boundary, so
     one long delegation can overshoot the parent's deadline by up to five
-    minutes, and four back-to-back delegations by up to twenty. Bounded, and
-    stated rather than discovered.
+    minutes, and four back-to-back delegations by up to twenty. The cap is
+    documented in the source.
   </p>
 
   <h2 id="spend">How a child's spend reaches the parent</h2>
@@ -293,9 +293,9 @@ impl Spend {
   <p>
     The type's doc rejects an alternative: a
     <code>run_tool_call</code> that adds a tool's self-reported cost when the
-    tool's name is <code>Delegate</code>. That is the loop branching on a tool's
-    identity, which the module doc forbids and which this project has already
-    paid to remove twice.
+    tool's name is <code>Delegate</code>. That would branch the loop on a tool
+    name, which the module doc forbids; this project removed that pattern twice
+    already.
   </p>
 
   <p>
@@ -429,12 +429,12 @@ impl Spend {
   </div>
 
   <p>
-    The third row is the loop's governing rule applied without an exception for
-    this tool: a failed delegation is an observation the model routes around, not
-    an abort. Throwing the partial answer away to return a clean error would
-    throw away everything that was paid for, and the wording tells the model not
-    to re-issue the brief unchanged, which is the memo rule stated in prose
-    because the memo itself only catches identical calls.
+    The third row follows the same rule as other tools: a failed delegation is
+    an observation the model routes around, not an abort. Throwing the partial
+    answer away to return a clean error would discard everything that was paid
+    for. The wording tells the model not to re-issue the brief unchanged (the
+    memo rule stated in prose because the memo itself only catches identical
+    calls).
     <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
     <code>a_subagent_that_ran_out_of_budget_is_not_reported_as_a_finished_one</code>.
@@ -459,7 +459,7 @@ impl Spend {
       Sub-run wall clock and kick count are on the delegation record and asserted by
       <code>a_sub_run_gets_its_own_wall_clock_and_a_single_nudge</code> (ran
       2026-09-02: ok). That is not the same as observing a sub sleep past the
-      parent's deadline — still unverified below.
+      parent's deadline (still unverified below).
     </li>
     <li>
       <span class="chip unv">unverified</span> The overshoot arithmetic is read

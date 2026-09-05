@@ -85,14 +85,13 @@
 
 
   <p class="lede">
-    The full-screen frame took the terminal's own copy-paste away, and gave
-    back three routes instead of one. <code>Shift+drag</code> is the
-    terminal's selection, still there and still whole-row.
-    <code>/copy</code> puts the last answer on the clipboard with an escape
-    sequence. <code>/export</code> writes the conversation to a file and is the
-    only one of the three that works when Emma is being piped. None of them is
-    the plain drag that worked before 2026-08-12, and the page says why that is
-    gone rather than pretending it was replaced.
+    The full-screen frame took the terminal's own copy-paste away and gave back
+    three routes instead of one. <code>Shift+drag</code> is the terminal's
+    selection, still there and still whole-row. <code>/copy</code> puts the last
+    answer on the clipboard with an escape sequence. <code>/export</code> writes
+    the conversation to a file and is the only one of the three that works when
+    Emma is being piped. None of them replaces the plain drag that worked before
+    2026-08-12; this page explains why that route is gone.
   </p>
 
   <h2 id="capture">The wheel cost the drag</h2>
@@ -260,12 +259,11 @@ pub fn clipboard(&amp;self, text: &amp;str) -&gt; bool {
 }</code></pre>
 
   <p>
-    The refusal sits in the function that writes the bytes, and it did not
-    always. Until 2026-08-23 the doc comment asked callers to check
-    <code>framed()</code> first and the single call site did, which meant the
-    invariant rested on one <code>if</code> and a sentence. An adversarial
-    reviewer found that no test in the workspace named <code>Copy</code>:
-    deleting that line emitted OSC 52 into a pipe with the whole suite green.
+    The refusal sits in the function that writes the bytes. Until 2026-08-23
+    only the call site checked <code>framed()</code>; the doc comment asked
+    callers to do the same. No test named <code>Copy</code> guarded that path:
+    deleting the call-site check emitted OSC 52 into a pipe with the whole
+    suite green.
     <span class="chip test">tested</span>
     <code>an_unframed_terminal_refuses_to_write_the_clipboard</code> in
     <code>term.rs</code> covers all four unframed constructors. Removing the
@@ -275,11 +273,11 @@ pub fn clipboard(&amp;self, text: &amp;str) -&gt; bool {
   </p>
 
   <p>
-    Both guards remain, and they do different jobs. The one at the call site
-    has an operator to explain the refusal to. The one in
-    <code>clipboard</code> has the bytes. What connects them is the return
-    value: the report follows what was written rather than what was called, so
-    it cannot say "sent" about bytes that never left.
+    Both guards remain and do different jobs. The one at the call site has an
+    operator to explain the refusal to. The one in <code>clipboard</code> has
+    the bytes. The return value connects them: the report follows what was
+    written, not what was called, so it cannot say "sent" about bytes that never
+    left.
   </p>
 
   <p class="src">crates/emma/src/session_command.rs, <code>copy_last_answer</code></p>

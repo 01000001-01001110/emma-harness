@@ -17,7 +17,7 @@
      Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it. That is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -129,8 +129,7 @@ pub fn discover_from(start: &amp;Path, overridden: Option&lt;PathBuf&gt;) -&gt; 
   <span class="src">crates/harness/src/lib.rs — the Discovery region</span>
 
   <p>
-    Three functions for one walk, and the middle one earns its place in the
-    call graph as the seam a test binds to. <code>discover</code> reads the
+    Three functions share one walk. <code>discover</code> reads the
     process environment and nothing else does, so every rule below can be
     exercised without a test mutating state that the rest of a threaded test
     binary shares. <code>discover_in</code> takes the home directory as a third
@@ -218,9 +217,8 @@ pub fn discover_from(start: &amp;Path, overridden: Option&lt;PathBuf&gt;) -&gt; 
   <h2 id="body">The loop, in full</h2>
 
   <p>
-    Every rule this page describes is in one function. It is quoted whole,
-    comments included, because in this one the comments are three-quarters of
-    what is being asserted.
+    Every rule this page describes is in one function, quoted whole with its
+    comments.
   </p>
 
   <p class="faint">crates/harness/src/lib.rs · <code>discover_in</code></p>
@@ -383,9 +381,9 @@ flavor         emma</code></pre>
   2026-08-23 and re-pasted. <strong>It was stale, under this green chip, and a reviewer found
   it.</strong> The paste was <code>head -3</code> taken before <code>HARD-006</code> added the
   shadow sentence, so it ended at <code>flavor</code> and showed no sign that a whole
-  <code>.claude</code> beside the winner had been passed over — which is the one thing this
-  example exists to demonstrate. A stale <span class="chip cert">certified</span> is worse than an
-  honest <span class="chip unv">unverified</span>, because the credibility of every green chip on
+  <code>.claude</code> beside the winner had been passed over. That shadow sentence is what this
+  example exists to demonstrate. A stale <span class="chip cert">certified</span> is worse than
+  marking it <span class="chip unv">unverified</span>, because the credibility of every green chip on
   this site rests on them meaning something. Three lines of search for a directory holding two candidate harnesses, and <code>.claude</code> is not one of them. Adding <code>config.json</code> by hand is what makes the other one a harness.
 
   <div class="note warn">
@@ -407,11 +405,11 @@ flavor         emma</code></pre>
       session had just put there and then removed.
     </p>
     <p>
-      This is the failure the canonicalising comparison was written against,
-      reached through a different door: there the two spellings differed by case,
+      The canonicalising comparison was written against this failure class,
+      reached through a different door. There the two spellings differed by case;
       here they differ because something set the variable. Nothing in the source
-      claims to cover it, and the honest reading of the comment is that it is
-      about spellings of one path rather than about two different paths.
+      claims to cover it. The comment is about spellings of one path, not about
+      two different paths.
     </p>
   </div>
 
@@ -459,7 +457,8 @@ fn home_dir() -&gt; Option&lt;PathBuf&gt; {
   <span class="src">crates/harness/src/lib.rs — the Discovery region's three helpers</span>
 
   <p>
-    <code>configured_by_hand</code> checks two things and not four.
+    <code>configured_by_hand</code> checks for <code>config.json</code> or
+    <code>personas/</code> only.
     <code>config.json</code> and <code>personas/</code> are written by a person;
     <code>credentials.json</code>, <code>sessions/</code> and
     <code>settings.json</code> are written by Emma, and a directory Emma created
@@ -472,10 +471,9 @@ fn home_dir() -&gt; Option&lt;PathBuf&gt; {
   <h2 id="override">Overriding the walk</h2>
 
   <p>
-    <code>EMMA_ROOT</code> replaces discovery outright, and a value that is not a
-    directory is an error rather than a fall-back to searching. An override that
-    quietly searched would boot the agent on configuration nobody asked for,
-    which is the failure the whole region is arranged against.
+    <code>EMMA_ROOT</code> replaces discovery outright. A value that is not a
+    directory is an error, not a fall-back to searching. An override that
+    quietly searched would boot the agent on configuration nobody asked for.
   </p>
 
 <pre><code><span class="c">$ EMMA_ROOT=/tmp/scratch/nope emma config check</span>
@@ -548,7 +546,7 @@ harness        …\scratchpad\cfg\both\.emma
                <span class="s">…\cfg\both\.emma is being used, so …\cfg\both\.claude is ignored entirely — its skills, agents, commands, hooks and permissions are all passed over rather than merged</span>
 flavor         emma
 persona        (none)</code></pre>
-  <span class="chip cert">certified</span>: re-run against a release binary built from this tree on 2026-08-23 and re-pasted. <strong>Stale under a green chip until a reviewer found it</strong>, for the same reason as the block above: the paste predates <code>HARD-006</code>, so a <code>head -4</code> ended at <code>flavor</code> and the shadow sentence — the entire point of a tree holding both — was missing. Originally certified against a scratch tree built 2026-08-16. <code>instructions</code> on the next line reported the empty-harness hash, so the sibling <code>CLAUDE.md</code> was not read.
+  <span class="chip cert">certified</span>: re-run against a release binary built from this tree on 2026-08-23 and re-pasted. <strong>Stale under a green chip until a reviewer found it</strong>, for the same reason as the block above: the paste predates <code>HARD-006</code>, so a <code>head -4</code> ended at <code>flavor</code> and the shadow sentence (the point of a tree holding both) was missing. Originally certified against a scratch tree built 2026-08-16. <code>instructions</code> on the next line reported the empty-harness hash, so the sibling <code>CLAUDE.md</code> was not read.
 
   <h2 id="notverified">What this page did not settle</h2>
 

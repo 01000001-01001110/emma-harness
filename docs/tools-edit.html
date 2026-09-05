@@ -17,7 +17,7 @@
      Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it. That is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -393,9 +393,9 @@
   </div>
   <figcaption>
     The addressed path, from <code>by_address</code>. Each gate names a
-    different source item — <code>ReadState::Never</code>,
+    different source item (<code>ReadState::Never</code>,
     <code>Address</code>, <code>contains_run</code>, and
-    <code>MAX_LINE_CHARS</code> — and each refusal names the line, what was
+    <code>MAX_LINE_CHARS</code>). Each refusal names the line, what was
     expected, and what is there instead.
   </figcaption>
 </figure>
@@ -579,8 +579,8 @@
   So on tokens alone it is close to a wash, and the case does not rest on it. It
   rests on the call that no longer happens: an <code>old_string</code> edit
   against a drifted file was refused outright and cost a full re-read plus a
-  re-emitted edit every time, which is the common case on a machine where
-  somebody has the file open in an editor.
+  re-emitted edit every time. On a machine where
+  somebody has the file open in an editor, that was the common case.
 </p>
 
 <div class="note warn">

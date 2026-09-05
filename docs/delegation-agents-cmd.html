@@ -383,7 +383,7 @@ const RECENT: usize = 10;</code></pre>
     <p>
       Two different causes sit under one symptom. <code>fetched</code> and
       <code>other_tool_calls</code> <em>are</em> in the parent-level record and
-      are simply not read here, which is a column away from being fixed.
+      are not read here, which is a column away from being fixed.
       <strong><code>searches</code> is not in the record at all</strong>, so no
       amount of reading it recovers them: the fix has to add a field to
       <code>Delegate</code>'s <code>delegation</code> record first, and old
@@ -407,13 +407,13 @@ const RECENT: usize = 10;</code></pre>
       <span class="chip test">tested</span>
       <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
       <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/delegate.rs">crates/emma/tests/delegate.rs</a>
-      Cross-session totals are not exercised at scale &mdash; a live corpus does
-      not exist &mdash; but a tally that summed wrongly across sessions would not
+      Cross-session totals are not exercised at scale (a live corpus does
+      not exist), but a tally that summed wrongly across sessions would not
       match what the integration test asserts. Ran
       <code>cargo test -p emma --test delegate what_a_delegation_cost</code> on
       2026-09-02:
       <code>test what_a_delegation_cost_can_be_read_back_across_sessions ... ok</code>
-      (one clean session plus one deliberately unreadable file named in the
+      (one clean session plus one unreadable file named in the
       report).
     </li>
     <li>

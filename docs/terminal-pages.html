@@ -112,10 +112,10 @@ pub enum Pane {
   <span class="src">crates/emma/src/term/app.rs &mdash; <code>enum Pane</code>, <code>App::render</code></span>
 
   <p>
-    <code>App::render</code> lays the frame out first &mdash; border, sidebar,
-    dock, hint, status &mdash; and only then matches on <code>self.pane</code> to
-    decide what fills the space between them. So a page is not a window, not a
-    mode and not a second <code>App</code>. Nothing about the surrounding frame
+    <code>App::render</code> lays the frame out first (border, sidebar,
+    dock, hint, status) and only then matches on <code>self.pane</code> to
+    decide what fills the space between them. A page is not a separate window
+    or a second <code>App</code>. Nothing about the surrounding frame
     is reachable from a page&rsquo;s drawing code, which is why a page cannot
     accidentally move the status row.
   </p>
@@ -142,7 +142,7 @@ pub enum Pane {
     title, a subtitle and the footer lines; the footer is per page because
     <em>what each one refuses to draw</em> is the part a reader most needs told.
     The text itself is one <code>Vec&lt;String&gt;</code> on <code>App</code>,
-    not one per page &mdash; only one page shows at a time, and a second buffer
+    not one per page. Only one page shows at a time, and a second buffer
     would be a second thing to forget to clear.
   </p>
   <span class="src">crates/emma/src/term/app.rs &mdash; <code>App::text_page</code>, <code>App::show_explorer</code>, <code>App::show_memory</code></span>
@@ -160,9 +160,9 @@ pub enum Pane {
   <p>
     <strong>The page and the command cannot disagree, because there is one
     implementation.</strong> The text comes from a <code>commands::*</code>
-    writer &mdash; <code>commands::sessions</code> and
+    writer (<code>commands::sessions</code> and
     <code>commands::memory</code>, both writer-shaped like
-    <code>commands::agents</code> &mdash; captured into a string by
+    <code>commands::agents</code>), captured into a string by
     <code>capture_sessions</code> / <code>capture_memory</code>. The frame paints
     what a command would have printed.
   </p>
@@ -217,7 +217,7 @@ pub enum Pane {
     the search key's honesty notice. The test names on this page when it was
     written (<code>the_memory_page_says_it_has_no_index_rather_than_inventing_one</code>,
     <code>the_explorer_page_draws_its_snapshot_and_names_what_it_omits</code>)
-    no longer exist — the Data Explorer page was removed 2026-08-27.
+    no longer exist. The Data Explorer page was removed 2026-08-27.
   </p>
 
   <p>
@@ -233,8 +233,8 @@ pub enum Pane {
     The chords are the tools&rsquo; own, unchanged: the sidebar advertises
     <code>Alt+,</code>, <code>Alt+d</code> and <code>Alt+m</code>, and
     <code>Frame::launch_tool</code> intercepts those three before they reach
-    <code>usertools::launch</code>. The scan happens there &mdash; the frame
-    already knows the session path because the status row shows it &mdash; and
+    <code>usertools::launch</code>. The scan happens there. The frame
+    already knows the session path because the status row shows it, and
     the page is handed a finished snapshot.
   </p>
   <span class="src">crates/emma/src/term/frame.rs &mdash; <code>Frame::launch_tool</code>, <code>Frame::leave_page</code></span>
@@ -245,13 +245,13 @@ pub enum Pane {
     typed line, which is what it has always done; only when no menu is up does it
     reach <code>leave_page</code>. That function answers whether it did anything,
     so a caller can tell <em>&ldquo;handled&rdquo;</em> from <em>&ldquo;pass it
-    on&rdquo;</em> &mdash; an <code>Esc</code> swallowed while no page was showing
+    on&rdquo;</em>. An <code>Esc</code> swallowed while no page was showing
     would quietly take the key away from whatever else wanted it.
   </p>
   <span class="src">crates/emma/src/term/input.rs &mdash; the reader loop, below <code>menu_key</code></span>
 
   <p>
-    The transcript is not discarded while a page is up. It is simply not painted,
+    The transcript is not discarded while a page is up. It is not painted,
     so returning costs nothing and loses no scroll position.
   </p>
 
@@ -260,9 +260,9 @@ pub enum Pane {
   <p>
     Settings opened <code>~/.emma/settings.json</code> in the configured editor
     and the Data Explorer opened the file manager on <code>~/.emma</code>. Both
-    were correct as built &mdash; the original comment argued that
+    were correct as built. The original comment argued that
     <em>&ldquo;the tool&rsquo;s promise is edit your settings, not open your
-    chosen editor&rdquo;</em> &mdash; and simply were not what was wanted. The
+    chosen editor&rdquo;</em>, and that was not what was wanted. The
     owner reported <code>Alt+,</code> opening VS Code three times before it was
     ruled on. That is a reversal, not a bug found.
   </p>
@@ -272,7 +272,7 @@ pub enum Pane {
     <code>in_app</code> since the tools were written and <em>nothing routed
     it</em>: pressing the chord reached <code>usertools::launch</code>, which
     refused it with the words <em>&ldquo;the frame owns the <code>m</code>
-    key&rdquo;</em> &mdash; a key the frame had never claimed. The sidebar
+    key&rdquo;</em>, a key the frame had never claimed. The sidebar
     advertised a chord that only produced a warning. That is why
     <code>Tool::in_app</code> and <code>Tool::routed</code> are now two
     predicates: one says a tool runs inside Emma, the other says the frame

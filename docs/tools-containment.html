@@ -17,7 +17,7 @@
      Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it. That is the deal, and it is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -91,7 +91,7 @@
 
 <p>
   That matters more than code reuse usually does. A second implementation would
-  not merely duplicate the check, it would eventually <em>disagree</em> with the
+  not only duplicate the check; it would eventually <em>disagree</em> with the
   first, and the disagreement would be silent in the direction that fails open.
   One tool would refuse a path another accepted, and nothing in either result
   would say the two had different ideas of the boundary.
@@ -169,7 +169,7 @@
     <code>resolve</code> returns the path the caller then uses for I/O, and
     checking one path while operating on another is how this check becomes
     decorative. <code>Bash</code> is absent because no dependency edge can
-    express it &mdash; it is a shell, and it can leave the root.
+    express it: it is a shell, and it can leave the root.
   </figcaption>
 </figure>
 
@@ -306,11 +306,10 @@
 </p>
 
 <p>
-  Two promises in the write path were false for that one input:
-  <em>&ldquo;nothing before the refusal changes the filesystem, which is what
-  makes a refusal actually a refusal&rdquo;</em>, and <em>&ldquo;a stray
-  <code>.emma-tmp</code> in somebody&rsquo;s repository is a bug
-  report&rdquo;</em>. So this is refused rather than attempted.
+  Two promises in the write path were false for that one input: nothing before
+  the refusal may change the filesystem, and a stray
+  <code>.emma-tmp</code> in somebody&rsquo;s repository counts as a bug
+  report. So this is refused rather than attempted.
 </p>
 
 <pre><code><span class="c">// **A colon inside a name is an NTFS alternate data stream, and it made a
@@ -366,7 +365,7 @@ for component in lexical_normalize(&amp;joined).components() {
 <span class="src">tools/fs/src/path.rs &mdash; <code>resolve</code></span>
 
 <p>
-  <strong>It is a refusal here and a warning one file over</strong>, and the
+  <strong>It is a refusal here and a warning one file over.</strong> The
   difference is what succeeds. A file named <code>NUL</code> under Emma&rsquo;s
   verbatim root is real, round-trips, and is merely awkward for other Windows
   tooling, so refusing it would be Emma deciding what a user may call a file.
@@ -380,7 +379,7 @@ for component in lexical_normalize(&amp;joined).components() {
   <code>sub:s/file.txt</code>: the same construction one component to the left,
   going through without a word. <code>Component::Normal</code> is what makes
   widening safe rather than merely convenient, because a drive letter&rsquo;s
-  colon arrives as <code>Component::Prefix</code> &mdash; <code>C:\a\b</code>
+  colon arrives as <code>Component::Prefix</code>: <code>C:\a\b</code>
   yields Prefix, RootDir, Normal, Normal, and the legitimate colon is never
   examined.
   <span class="chip test">tested</span>
@@ -388,8 +387,8 @@ for component in lexical_normalize(&amp;joined).components() {
   <code>a_stream_named_in_a_directory_component_is_refused_too</code> goes red
   when the loop is narrowed back to <code>next_back()</code>, while
   <code>an_ordinary_nested_path_is_not_caught_by_the_stream_refusal</code> stays
-  green &mdash; which is what says the widening refuses the right thing and not
-  simply more things.
+  green. That shows the widening refuses the right thing and not simply more
+  things.
 </p>
 
 <p>
@@ -484,8 +483,8 @@ for component in lexical_normalize(&amp;joined).components() {
 </p>
 
 <p>
-  <strong>The check is now re-run as the last thing before every write</strong>
-  &mdash; <code>path::still_contained</code>, from <code>Write</code> and both
+  <strong>The check is now re-run as the last thing before every write</strong>:
+  <code>path::still_contained</code>, from <code>Write</code> and both
   <code>Edit</code> paths. It re-resolves from the <em>original argument</em>
   rather than re-checking the resolved path against itself, because the second
   is a tautology and is the shape this check decays into once the reason stops
@@ -498,9 +497,9 @@ for component in lexical_normalize(&amp;joined).components() {
     The gap goes from &ldquo;however long the tool spends thinking&rdquo; to
     &ldquo;a canonicalise and a syscall&rdquo;. A gap of microseconds is still a
     gap, and the function's own doc says so in those words. <strong>Closing it
-    means handle-based I/O</strong> &mdash; <code>openat</code> against a
+    means handle-based I/O</strong>: <code>openat</code> against a
     directory descriptor on unix, a relative open against a parent handle on
-    Windows &mdash; so that the path checked and the path written are the same
+    Windows, so that the path checked and the path written are the same
     <em>object</em> rather than the same <em>string</em>. That is a rewrite of
     four call sites on two platforms with <code>unsafe</code> on both, and it is
     not done.
@@ -512,22 +511,22 @@ for component in lexical_normalize(&amp;joined).components() {
   <a href="https://github.com/01000001-01001110/emma-harness/blob/master/tools/fs/tests/containment.rs">tools/fs/tests/containment.rs</a> Two cases, because one does not cover
   the other and mutation proved it. A directory swapped for a link pointing
   <em>out</em> is refused by <code>resolve</code> itself, so disabling the
-  drift comparison left that test green; the second case &mdash; a link to a
+  drift comparison left that test green. The second case is a link to a
   different directory <em>inside</em> the root, where containment still holds
-  and the path now names a different file &mdash; is what exercises the
-  comparison, and it goes red when the comparison is disabled.
+  and the path now names a different file. That case exercises the comparison,
+  and it goes red when the comparison is disabled.
   <code>a_directory_swapped_for_a_link_out_is_caught_by_the_recheck</code> and
   <code>a_path_that_resolves_somewhere_else_inside_the_root_is_refused_too</code>.
-  Both perform the swap deliberately rather than racing it: a race that can be
-  won on demand is not the race being guarded against.
+  Both tests set up the swap instead of racing it: a race that can be won on
+  demand is not the race being guarded against.
 </p>
 
 <p>
   <span class="chip unv">unverified</span> <strong>That the guard is called at
   all.</strong> Deleting <code>still_contained(&hellip;)</code> from
   <code>write.rs</code> leaves the whole workspace green. On the happy path the
-  guard is a no-op by construction &mdash; the tool resolved the path at the top
-  of the call and nothing between there and here moves it &mdash; so its wiring
+  guard is a no-op by construction: the tool resolved the path at the top
+  of the call and nothing between there and here moves it, so its wiring
   is asserted by reading the code and nothing else. <em>What would settle it:</em>
   a test that wins the race on demand, which is the thing that cannot be built.
 </p>
@@ -539,7 +538,7 @@ for component in lexical_normalize(&amp;joined).components() {
     <em>while Emma is running</em>. Two records already put that person out of
     scope: the module doc above says containment is <em>&ldquo;a boundary
     against paths, not against an operator who has already placed a link inside
-    the tree&rdquo;</em>, and <code>CLAUDE.md</code> is blunter &mdash;
+    the tree&rdquo;</em>, and <code>CLAUDE.md</code> is blunter:
     <em>&ldquo;the approval gate is a consent interface, not a sandbox&hellip;
     and <code>Bash</code> can do anything.&rdquo;</em> Someone able to swap a
     directory under Emma mid-call has a far shorter route to the same result.
@@ -549,7 +548,7 @@ for component in lexical_normalize(&amp;joined).components() {
     does that job, and <code>DEF-016</code> is asking it to be a sandbox the
     product has decided it is not. The counter-argument is that
     &ldquo;<code>Bash</code> can do it anyway&rdquo; is the reasoning that ends
-    with every guard removed &mdash; so the decision is the owner's and is
+    with every guard removed, so the decision is the owner's and is
     recorded as <code>SEC-001</code> in <code>notes/RULINGS-PENDING.md</code>,
     unanswered.
   </p>
@@ -603,7 +602,7 @@ for component in lexical_normalize(&amp;joined).components() {
 <p>
   <span class="chip cert">certified</span> Settled on 2026-08-23, by exactly the
   experiment this paragraph used to ask for, and then taken apart by a reviewer
-  the same evening &mdash; the first row <a href="records-verify.html"><code>emma
+  the same evening. The first row <a href="records-verify.html"><code>emma
   verify</code></a> ever judged, returned <code>OVERSTATED</code>. The test used
   a fixed filename in the shared temp directory that a neighbouring test also
   writes and deletes, so a parallel run could turn it into a silent skip; its
@@ -620,12 +619,12 @@ for component in lexical_normalize(&amp;joined).components() {
 
 <p>
   The test asserts the <em>limitation</em> and not a fix, because there is no
-  fix at this layer &mdash; both names are equally the file, there is no real
+  fix at this layer. Both names are equally the file, there is no real
   path to canonicalise towards, and <code>canonicalize</code> returns the inside
   one. What it buys is that the hole cannot quietly change: if a future resolver
   ever does catch this, the test goes red and somebody has to come and rewrite
   this page rather than leaving it saying the opposite. Its failure message says
-  so. The skip is real and reported &mdash; a filesystem that refuses a hard
+  so. The skip is real and reported. A filesystem that refuses a hard
   link leaves nothing to certify, and this box refused nothing.
 </p>
 </div>

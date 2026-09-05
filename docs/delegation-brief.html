@@ -226,7 +226,7 @@ fn brief(args: &amp;Value) -&gt; String {
     whitespace-only context entries are dropped, and a context array of nothing
     but blanks produces no heading at all rather than a heading over an empty
     list. Non-string entries are dropped by <code>filter_map</code> without
-    comment, which is the one place a caller can lose an argument silently.
+    comment. It is the one place a caller can lose an argument silently.
   </p>
 
   <p>

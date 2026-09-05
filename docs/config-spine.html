@@ -17,7 +17,7 @@
      Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it. That is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -83,7 +83,7 @@
   <p class="lede">
     Whichever directory discovery found, exactly one file in it is configuration
     rather than prompt text. In <code>.emma/</code> that file is
-    <code>config.json</code>, and it is Emma's own format, which is why it is the
+    <code>config.json</code>, and it is Emma's own format. It is the
     strictest file in the system: a key Emma does not recognise here can only be
     a typo, and the typo one attribute buys protection from is a misspelled
     <code>mathcer</code> that would guard every tool while looking like it
@@ -97,7 +97,7 @@
     <div><span class="chip unv">unverified</span> believed, not checked</div>
   </div>
 
-  <h2 id="keys">Five keys, and a sixth is a load error</h2>
+  <h2 id="keys">Five keys; a sixth key is a load error</h2>
 
   <p class="faint">crates/harness/src/lib.rs · <code>Spine</code></p>
 <pre><code>/// `deny_unknown_fields` throughout: a typo'd key is a load error, not a
@@ -138,8 +138,8 @@ struct Spine {
     is camelCase in a file whose other keys are snake_case, and
     <code>permissions</code> carries Claude Code's three list names and Claude
     Code's rule strings. Renaming either would mean a block could not be moved
-    between <code>.emma/</code> and <code>.claude/</code> without being re-typed,
-    which is the thing the compatibility work exists to avoid.
+    between <code>.emma/</code> and <code>.claude/</code> without being re-typed.
+    That is what the compatibility work exists to avoid.
   </p>
 
   <p>
@@ -228,7 +228,7 @@ struct PersonaBlock {
 alpha
 <span class="c">$ emma config check</span>
 Error: …\cfg\up\.emma\config.json: no `default_persona`, but …\cfg\up\.emma\personas contains alpha</code></pre>
-  <span class="chip cert">certified</span>: scratch harness, release binary, 2026-08-16. The message names the directory and lists what is in it, which is the whole of what an operator needs to fix it.
+  <span class="chip cert">certified</span>: scratch harness, release binary, 2026-08-16. The message names the directory and lists what is in it. That is all an operator needs to fix it.
 
   <p>
     One directory name under <code>personas/</code> is not a persona.
@@ -401,8 +401,8 @@ Caused by:
 
   <p>
     Everything else a declared hook must survive happens at load rather than at
-    the moment it is needed, which is what makes the boot the place a broken hook
-    is discovered. <code>resolve</code> checks that a persona did not enable a
+    the moment it is needed. A broken hook is therefore discovered at boot.
+    <code>resolve</code> checks that a persona did not enable a
     hook that is not declared, parses the event, containment-checks the path,
     refuses a matcher on <code>UserPromptSubmit</code>, anchors the matcher
     regex, hashes the executable, and clamps the timeout.
@@ -637,7 +637,7 @@ pub struct PermissionEntry {
   </p>
 
   <p>
-    Rules come out in deny, then ask, then allow order, which is the order they
+    Rules come out in deny, then ask, then allow order. That is the order they
     are consulted in. Nothing depends on it; it means a debug print reads in
     precedence order.
   </p>

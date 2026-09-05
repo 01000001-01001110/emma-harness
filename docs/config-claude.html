@@ -17,7 +17,7 @@
      Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it. That is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -83,9 +83,8 @@
   <p class="lede">
     Emma recognises a <code>.claude/</code> directory so that a skill, a command
     or an agent already written for Claude Code works without being rewritten.
-    That is the whole of the ambition. What this page is mostly about is the
-    other half: the four things that were not carried over, and the
-    one rule people most often assume and which is the reverse of the truth.
+    This page covers what was not carried over, including the rule people most
+    often get backwards:
     <strong>Emma does not adopt your global Claude Code configuration.</strong>
   </p>
 
@@ -418,31 +417,29 @@ const SHELL_METACHARACTERS: &amp;[char] = &amp;[
   <span class="src">crates/harness/src/lib.rs — <code>user_permissions</code></span>
 
   <p>
-    The function is short enough to read whole, and the two things worth
-    noticing are that the <code>deny</code> list is moved into a fresh block with
-    the other two defaulted away, and that neither an unreadable file nor a parse
-    failure is a <code>?</code>.
+    The function is short enough to read whole. The <code>deny</code> list is
+    moved into a fresh block with the other two defaulted away. Neither an
+    unreadable file nor a parse failure is a <code>?</code>.
   </p>
 
   <p>
     <strong>Both of those used to return an empty vector and nothing else.</strong>
-    The argument for not failing the boot is sound and unchanged &mdash; a
-    personal settings file belonging to another program is not Emma's to refuse
-    to start over, and the only thing taken from it is restrictions, so failing
-    to read it can only leave Emma asking more often. But that argument covers
-    refusing to <em>boot</em>; it does not license silence. The operator wrote
-    deny rules and believes they apply, and the only report of their absence was
-    <code>config check</code> printing <code>(none)</code> &mdash; which reads as
-    "you have no rules", not as "your rules could not be read". One trailing
-    comma was enough.
+    Not failing the boot still makes sense. A personal settings file belonging to
+    another program is not Emma's to refuse to start over, and the only thing
+    taken from it is restrictions, so failing to read it can only leave Emma
+    asking more often. That argument covers refusing to <em>boot</em>. It does not
+    license silence. The operator wrote deny rules and believes they apply. The
+    only report of their absence was <code>config check</code> printing
+    <code>(none)</code>, which reads as "you have no rules", not as "your rules
+    could not be read". One trailing comma was enough.
   </p>
 
   <p>
     The sibling case was already loud: <code>read_permissions</code>, the
     function directly above this one, fails the boot on a malformed
-    <em>project</em> settings file. So the quiet path here was not a considered
-    exception to a policy, it was an inconsistency with the function next to it
-    &mdash; which is the most common shape of defect in this codebase.
+    <em>project</em> settings file. The quiet path here was not a considered
+    exception to a policy. It was an inconsistency with the function next to it,
+    the most common shape of defect in this codebase.
   </p>
 
   <p class="faint">crates/harness/src/lib.rs · <code>user_permissions</code>, the body</p>
@@ -515,11 +512,10 @@ const SHELL_METACHARACTERS: &amp;[char] = &amp;[
   </p>
 
   <p>
-    Here it is happening. A scratch home holds a
+    A scratch home holds a
     <code>~/.claude/settings.json</code> with one rule in each list; a scratch
     project holds its own <code>.claude/settings.json</code> with one rule in
-    each list. Three rules arrive, and the one that did not is the user-scope
-    <code>allow</code>:
+    each list. One rule does not arrive: the user-scope <code>allow</code>:
   </p>
 
 <pre><code><span class="c">$ cat $X/.claude/settings.json</span>
@@ -541,10 +537,10 @@ permissions    3 rule(s)
     <strong>An earlier certification of this same block carried a warning line
     the current binary does not print</strong>, saying <code>Bash(ls:*)</code>
     was a rule Emma could not evaluate. It was true of its build. The property
-    being demonstrated here &mdash; user scope contributes <code>deny</code> and
-    nothing else &mdash; is unchanged, and it was the incidental line inside the
-    evidence that rotted. That is the more common way a certification goes
-    stale: not the claim, the transcript around it.
+    being demonstrated here (user scope contributes <code>deny</code> and nothing
+    else) is unchanged. The incidental line inside the evidence rotted.
+    Certifications more often go stale in the transcript around the claim, not in
+    the claim itself.
   </p>
 
   <p>

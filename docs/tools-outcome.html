@@ -238,18 +238,16 @@
   <code>truncated()</code> without a reason is described in its own doc as never
   the preferred choice for a new tool. <strong>It now has no production callers
   at all.</strong> The two that remained were both in the LSP renderer, and they
-  were the reason the invariant on this page &mdash; a cut names its cap, its
-  loss and its remedy, or admits it cannot &mdash; was not actually held.
+  were the reason the invariant on this page (a cut names its cap, its loss and
+  its remedy, or admits it cannot) was not actually held.
 </p>
 
 <p>
-  What it cost is the argument for the strong form
-  rather than a preference for it. Both LSP renderers explained their cut in
-  prose inside <code>content</code>, so the <em>model</em> was not left guessing.
-  The human watching the terminal was, and so was the runtime's own note, which
-  fell back to a generic sentence naming no cap. A truncation that is legible to
-  one reader and opaque to the other is the shape this invariant exists to catch,
-  and it survived a class-wide test that covered the fs tools only.
+  Both LSP renderers explained their cut in prose inside <code>content</code>,
+  so the <em>model</em> was not left guessing. The human watching the terminal
+  was, and so was the runtime's own note, which fell back to a generic sentence
+  naming no cap. A truncation legible to one reader and opaque to the other is
+  what the invariant catches; a class-wide test covered the fs tools only.
 </p>
 
 <div class="tw">
@@ -280,11 +278,9 @@
 
 <p>
   <strong>The chip above used to certify the opposite</strong>, and it was
-  accurate at its own commit &mdash; the grep really did return eight lines then.
-  A dated certification goes on looking green
-  long after the thing it measured has moved, and this page's whole credibility
-  rests on the green ones meaning something. It was found by a docs audit rather
-  than by anything that could fail on its own.
+  accurate at its own commit: the grep really did return eight lines then. A
+  dated certification can stay green after the thing it measured has moved. A
+  docs audit found the stale chip; nothing in CI would have.
 </p>
 
 <p>

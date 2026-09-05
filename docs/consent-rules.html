@@ -468,8 +468,8 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
   <span class="src">crates/harness/src/lib.rs — PermissionEntry::source; crates/emma/tests/permissions.rs</span>
 
   <p>
-    <code>PermissionBlock::into_entries</code> pushes deny, then ask, then allow,
-    which is the order they are consulted in. Nothing depends on that ordering; it
+    <code>PermissionBlock::into_entries</code> pushes deny, then ask, then allow.
+    That is the order they are consulted in. Nothing depends on that ordering; it
     means a debug print of the vector reads in precedence order.
   </p>
   <span class="src">crates/harness/src/lib.rs — PermissionBlock::into_entries</span>
@@ -537,7 +537,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     a whole document, and written back with every key it had:
     <code>hooks</code>, <code>statusLine</code>, <code>env</code>, anything else.
     It returns <code>true</code> when a line was added and <code>false</code> when
-    the rule was already there, which is what makes the prompt able to say "saved"
+    the rule was already there. The prompt uses that to say "saved"
     or "already had". This project has been bitten once by a write path that
     replaced a shared configuration document and deleted another program's key.
   </p>
@@ -563,7 +563,7 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     file behind. <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/permissions.rs">crates/emma/src/permissions.rs</a>
     <code>a_missing_file_is_created_with_only_what_was_granted_in_it</code>
     asserts the created file byte for byte and then asserts the directory holds
-    exactly one entry, which is what catches a temporary file surviving the
+    exactly one entry. That catches a temporary file surviving the
     rename.
   </p>
   <span class="src">crates/emma/src/permissions.rs — remember; tests::a_missing_file_is_created_with_only_what_was_granted_in_it</span>
@@ -790,9 +790,9 @@ fn decide(&amp;self, matches: impl Fn(&amp;Rule) -&gt; bool) -&gt; Option&lt;Dec
     <p>
       The <code>Rule::parse</code> block above read
       <code>if tool != "Bash" || inner.contains('/') || &hellip;</code> until
-      2026-08-23. That disjunct was the fix for the <em>previous</em> defect —
+      2026-08-23. That disjunct was the fix for the <em>previous</em> defect:
       shape chosen by punctuation, which made <code>Read(Cargo.toml)</code> a
-      command prefix that matched nothing — and it rebuilt the identical defect
+      command prefix that matched nothing. It rebuilt the identical defect
       facing the other way: every <code>Bash</code> rule containing a separator
       compiled to a path glob, and a <code>Bash</code> call carries
       <code>command</code> rather than <code>file_path</code>, so the rule could

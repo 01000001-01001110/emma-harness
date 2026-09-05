@@ -294,9 +294,9 @@ self.s.log.append(
         <td><code>tool_cancelled</code></td>
         <td>Ctrl-C reached a tool that was already running. The call is not
             abandoned silently: it comes back as a result the model reads, so the
-            conversation stays wire-legal &mdash; every <code>tool_use</code> has
-            exactly one result &mdash; and the model is told the work stopped
-            rather than being left to infer it from silence</td>
+            conversation stays wire-legal. Every <code>tool_use</code> has
+            exactly one result, and the model is told the work stopped instead of
+            inferring it from silence.</td>
         <td><code>id</code>, <code>tool</code>, <code>detail</code></td>
       </tr>
       <tr>
@@ -344,13 +344,12 @@ self.s.log.append(
 );</code></pre>
 
   <p>
-    The block rather than the rendered string, because the string alone cannot
-    be turned back into a message: the block carries the
-    <code>tool_use_id</code> that pairs it with its call, and
-    <code>is_error</code> when it failed. The content is one JSON string deeper
-    than it would otherwise be, which is the price of the record being
-    sufficient rather than merely readable, and it is not stored twice. A tool's
-    output is the largest thing in the file.
+    The block rather than the rendered string, because the string alone cannot be
+    turned back into a message. The block carries the <code>tool_use_id</code> that
+    pairs it with its call, and <code>is_error</code> when it failed. The content
+    is one JSON string deeper than it would otherwise be. That is the price of
+    the record being sufficient rather than merely readable, and it is not stored
+    twice. A tool's output is the largest thing in the file.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::log_result_block</code></span>
 

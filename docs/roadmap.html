@@ -58,8 +58,9 @@
 
   <p class="lede">
     What is known to be wrong, what is planned, and what was investigated and
-    refused. The backlog itself lives in <code>notes/improvements.md</code>;
-    this page is the shape of it.
+    refused. This page is the whole of it: the backlog used to live in
+    <code>notes/improvements.md</code>, which left the repository on
+    2026-08-30.
   </p>
 
   <h2 id="defects">Known defects</h2>
@@ -162,6 +163,35 @@
       at the default cap is 50,000 line clones to draw about 40 rows.
     </li>
   </ul>
+
+  <h2 id="hazards">Named hazards, unprovoked</h2>
+
+  <p>
+    Each of these is a failure the code names and does not remove. None has
+    been made to happen, which is why they are here rather than under
+    <a href="#defects">known defects</a> &mdash; and why each says what would
+    settle it. They were moved out of the pages that describe the mechanisms
+    they belong to, because an explanation of how something works is the wrong
+    place to keep an open defect.
+  </p>
+
+  <h3><code>reanchor</code> can send the cursor answer to the wrong reader</h3>
+
+  <p>
+    Asking the terminal where the cursor is costs a round trip on unix. By the
+    time a resize happens the reader thread is on stdin too, so the reply can
+    reach the wrong reader. The exposure is not Emma's alone: ratatui's own
+    <code>autoresize</code> asks the same question on the first draw after any
+    resize.
+  </p>
+
+  <p>
+    The consequence is bounded. When it fails, <code>anchor</code> moves
+    nothing and the frame stays where it was.
+    <span class="chip unv">unverified</span>: nobody has provoked the race.
+    A resize storm on a unix terminal while a goal streams would settle it.
+  </p>
+  <span class="src">crates/emma/src/term/frame.rs &mdash; <code>reanchor</code></span>
 
   <h2 id="planned">Planned, with the reasoning written down</h2>
 

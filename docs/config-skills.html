@@ -81,11 +81,11 @@
     </nav>
 
   <p class="lede">
-    Two directories with the same layout in both flavours, which is the whole
-    point of reading a second directory name at all. A skill is text the model
-    asks for by name; a command is text a person summons with a slash. Neither
-    can change what the runtime does, and the strictness each is read with
-    depends on whose format the file is written in.
+    Two directories share the same layout in both flavours; that is why Emma
+    reads a second directory name. A skill is text the model asks for by name;
+    a command is text a person summons with a slash. Neither can change what the
+    runtime does. How strictly each is read depends on whose format the file
+    uses.
   </p>
 
   <div class="key">
@@ -154,23 +154,20 @@
   <span class="src">crates/harness/src/lib.rs — <code>load_skills</code></span>
 
   <p>
-    The catalogue is keyed and sorted by the <em>frontmatter</em> name rather
-    than by the directory name, and never by directory iteration order, because
-    the catalogue rides in the prompt prefix that the provider caches as an exact
-    byte match. Two skills declaring the same <code>name</code> still collapse to one &mdash;
-    but the collapse is reported now, naming both files and saying that which one
-    wins depends on the order the filesystem returned the directory in, so it may
-    differ between runs. It used to happen in silence, while the sibling agent
-    loader had been printing exactly that note for months. Two skills declaring
-    the same <code>name</code> collapse to one,
-    with the later iteration winning.
+    The catalogue is keyed and sorted by the <em>frontmatter</em> name, not the
+    directory name or iteration order, because the catalogue rides in the prompt
+    prefix that the provider caches as an exact byte match. Two skills declaring
+    the same <code>name</code> collapse to one. The loader now reports that
+    collision, names both files, and notes that which file wins follows
+    filesystem iteration order and may differ between runs. The agent loader had
+    been printing that note for months while the skill loader stayed silent.
   </p>
 
-  <h2 id="strict">The strictness split, and what it cost to learn</h2>
+  <h2 id="strict">The strictness split</h2>
 
   <p>
-    Two structs, two fields each, and the difference between them is one
-    attribute.
+    Emma uses two frontmatter structs with the same two fields; only the serde
+    attributes differ.
   </p>
 
   <p class="faint">crates/harness/src/lib.rs · <code>Front</code>, <code>ClaudeFront</code></p>
@@ -276,23 +273,23 @@ skills         demo, licenced</code></pre>
 
   <p>
     The opener goes through <code>claude::open_frontmatter</code>, which tolerates
-    <code>---\r\n</code> and a leading byte-order mark. <strong>It used to be
+    <code>---\r\n</code> and a leading byte-order mark.     <strong>It used to be
     <code>"---\n"</code> byte for byte, and this page used to describe that as
-    the design.</strong> It was not a design; it was the same defect the agent
-    parser had already been fixed for, sitting one file away and unvisited
-    because nobody was holding both files at once. Measured against the owner's
-    real library: <strong>101 of 323 skills silently missing</strong>, every one
-    written by an editor that ends lines with CRLF.
-    <span class="chip cert">certified</span> on that corpus &mdash; 207 of 324
-    loaded before, 306 of 324 after.
+    the design.</strong> It matched the same defect the agent parser had already
+    been fixed for, one file away and unvisited because nobody was holding both
+    files at once. Measured against the owner's real library:
+    <strong>101 of 323 skills silently missing</strong>, all from an editor that
+    ends lines with CRLF.
+    <span class="chip cert">certified</span> on that corpus: 207 of 324 loaded
+    before, 306 of 324 after.
   </p>
 
   <p>
     The lesson filed with the fix is the general one:
     <em>when you fix a parser, grep for its siblings before you finish</em>, and
-    make both callers reach one function rather than copying it. This defect
-    recurred once precisely because the first fix was a local edit instead of a
-    shared function. <code>open_frontmatter</code> now has three callers and its
+    make both callers reach one function rather than copying it. The defect
+    recurred once because the first fix was a local edit instead of a shared
+    function. <code>open_frontmatter</code> now has three callers and its
     doc asks the next person not to inline a copy.
   </p>
 
@@ -335,7 +332,7 @@ fn after_licence_header(text: &amp;str) -&gt; &amp;str {
   </p>
 
   <div class="note">
-    <span class="h">What the CRLF fix cost to find, kept because the shape recurs</span>
+    <span class="h">What the CRLF fix cost to find</span>
     <p>
       <code>split_agent</code> in <code>claude.rs</code> had already been fixed
       for this: requiring <code>---\n</code> exactly made <strong>90 out of 90</strong>
@@ -343,10 +340,9 @@ fn after_licence_header(text: &amp;str) -&gt; &amp;str {
       <code>split_skill</code>, two hundred lines away, still required it.
       <strong>The fixtures were the reason nobody saw it.</strong> They were
       written by the same author as the parser, in the same editor, with the same
-      line endings &mdash; so the suite was green while a third of a real corpus
-      was being dropped. That is why this repository certifies against a real
-      library rather than a fixture directory, and why a green suite is not
-      evidence.
+      line endings, so the suite stayed green while a third of a real corpus was
+      dropped. This repository certifies against a real library rather than a
+      fixture directory for that reason; a green suite alone is not evidence.
       <span class="chip test">tested</span>
       <code>a_skill_written_with_windows_line_endings_loads</code>
       (<code>crates/harness/tests/claude_compat.rs:455</code>); removing the
@@ -374,8 +370,9 @@ pub struct SkillDef {
     Four accessors sit on <code>Harness</code>. <code>skills()</code> returns the
     sorted slice, <code>skill(name)</code> finds one, <code>skill_names()</code>
     gives the closed enum a tool schema puts in its <code>name</code> argument,
-    and <code>skill_catalog()</code> composes the description lines. The last one
-    is the interesting one, because its return type carries a decision.
+    and <code>skill_catalog()</code> composes the description lines. The last
+    returns <code>Option&lt;String&gt;</code>: <code>None</code> means do not
+    register the tool at all.
   </p>
 
   <p class="faint">crates/harness/src/lib.rs · <code>Harness::skill_catalog</code></p>
@@ -407,10 +404,10 @@ pub struct SkillDef {
     <code>… Hover, DocumentSymbols, WebFetch, …</code>; the same line in the
     scratch <code>.claude/</code> harness with two skills reads
     <code>… Hover, DocumentSymbols, <strong>Skill</strong>, WebFetch, …</code>.
-    Twenty-one tools against twenty-two, and the <code>tool schema</code> hashes
-    differ accordingly. Those two figures are from the run recorded here; the
-    registry is larger now, and what the comparison shows is the difference of
-    one, not either total.
+    Twenty-one tools here versus twenty-two in the scratch harness; the
+    <code>tool schema</code> hashes differ by the presence of
+    <code>Skill</code>. Those counts are from the run recorded here. The registry
+    is larger now; the comparison shows the difference of one, not either total.
   </p>
 
   <p>

@@ -89,10 +89,9 @@
 </p>
 
 <p>
-  A line nobody changed is written back byte for byte, nothing is ever
-  reordered, and completing a task ticks a box where it sits. The moment a
-  person's edit disappears they stop trusting the file, then stop reading it,
-  and a task list nobody reads is theatre with a write amplification problem.
+  A line nobody changed is written back byte for byte. Nothing is reordered.
+  Completing a task ticks a box where it sits. When a person's edit disappears
+  they stop trusting the file, then stop reading it.
 </p>
 <span class="src">tools/tasks/src/lib.rs — module doc</span>
 
@@ -222,7 +221,7 @@
 </p>
 <span class="src">tools/tasks/src/doc.rs — <code>Status</code>, <code>RELATIVE_PATH</code></span>
 
-<h2 id="roundtrip">The parser that cannot lose what it did not write</h2>
+<h2 id="roundtrip">The parser and round-trip</h2>
 
 <p>
   The document model is <code>Vec&lt;Line&gt;</code>, not
@@ -315,11 +314,10 @@
 </figure>
 
 <p>
-  New text is the one exception and it is the whole of it. When the words change
-  there is no original spacing left to preserve, so the line comes back
-  canonical: one space between bullet, box, text and handle. A line
-  <code>create</code> synthesised takes the same branch, having never been
-  anything else.
+  New text is the exception. When the words change there is no original spacing
+  left to preserve, so the line comes back canonical: one space between bullet,
+  box, text and handle. A line <code>create</code> synthesised takes the same
+  branch, having never been anything else.
 </p>
 
 <p>
@@ -467,7 +465,7 @@
 <span class="src">tools/tasks/src/store.rs — <code>replace_if_unchanged</code>, <code>write_atomically</code>, <code>hash</code></span>
 
 <div class="note warn">
-  <span class="h">What the guard cannot catch, in its own words</span>
+  <span class="h">What the guard cannot catch</span>
   <p>
     An editor holds the whole file in memory. If a person opened
     <code>tasks.md</code> at 10:00, Emma writes at 10:01, and the person hits
@@ -478,8 +476,8 @@
   </p>
   <p>
     The guard's own window is not zero either. A write landing between the
-    confirming read and the rename is lost. It is microseconds wide, and it is
-    not closed, only made small and admitted.
+    confirming read and the rename is lost. It is microseconds wide and not
+    closed; the page says so.
   </p>
 </div>
 
@@ -506,7 +504,7 @@
 </p>
 <span class="src">tools/tasks/src/list.rs — module doc, <code>TaskList::run</code></span>
 
-<h3>The two writers are exempted by name, not by a false declaration</h3>
+<h3>Exemption by name in <code>approval.rs</code></h3>
 
 <pre><code>            <span class="c">// Declared honestly. This writes a file, and saying otherwise to</span>
             <span class="c">// skip the approval prompt would break the invariant `read_only`</span>

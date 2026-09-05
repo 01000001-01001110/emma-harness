@@ -587,8 +587,8 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
           stdout</strong>, then writes and exits.
         </li>
         <li>
-          <code>child.wait()</code> resolves on the hook's own exit &mdash; not
-          on end-of-file, which is the point.
+          <code>child.wait()</code> resolves on the hook's own exit, not
+          on end-of-file. EOF is not the signal.
         </li>
         <li>
           The pipes get a grace of
@@ -606,7 +606,7 @@ if denied &amp;&amp; event == HookEvent::PreToolUse {
       A reading of the function quoted above, written as prose rather than
       drawn. Every other figure on this site is generated from source by
       <code>crates/docsgen</code>; this one is not, because an interleaving of
-      three processes over time is not a structure any lookup returns &mdash;
+      three processes over time is not a structure any lookup returns:
       the constants near it (<code>EXEC_DRAIN_GRACE_MS</code>, the caps) state
       no ordering, and a picture asserting one would be this argument wearing a
       generated diagram's authority. It was a hand-drawn SVG until 2026-09-05.

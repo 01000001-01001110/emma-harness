@@ -626,15 +626,11 @@ fn resize_target(pinned: bool, screen_rows: u16, height: u16) -&gt; Option&lt;u1
   </p>
 
   <p>
-    <code>reanchor</code> also names a hazard it cannot remove. Asking where the
-    cursor is costs a round trip through the terminal on unix, and by the time a
-    resize happens the reader thread is on stdin too, so the answer can go to
-    the wrong reader. The exposure is not new: ratatui's own
-    <code>autoresize</code> asks the same question on the first draw after any
-    resize. When it fails, <code>anchor</code> moves nothing and the frame stays
-    where it was, <em>&ldquo;untidy, not broken.&rdquo;</em>
-    <span class="chip unv">unverified</span>: nobody has provoked the race. A
-    resize storm on a unix terminal while a goal streams would settle it.
+    <code>reanchor</code> carries an unprovoked race on unix, listed under
+    <a href="roadmap.html#hazards">named hazards</a> rather than described here.
+    A page explaining how a mechanism works is the wrong place to hold an open
+    defect: a reader looking for the defect list does not find it, and a reader
+    learning the mechanism is handed a caveat they cannot act on.
   </p>
 
   <h2 id="paint">Two paints, one function each</h2>

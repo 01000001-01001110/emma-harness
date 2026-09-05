@@ -69,10 +69,9 @@
 
   <p class="lede">
     A delegation is <code>Agent::run_goal</code> called a second time from
-    inside one <code>Tool::invoke</code>. The child gets its own registry, its
-    own instructions, its own budgets and its own done-check. Everything else it
-    uses belongs to the parent, and each of those is shared rather than copied
-    for a reason that is written down beside it.
+    inside one <code>Tool::invoke</code>. The child gets its own registry,
+    instructions, budgets and done-check. Everything else belongs to the parent;
+    each shared field has a note beside it in <code>Nest</code>'s doc.
   </p>
   <span class="src">crates/emma/src/delegate.rs — Nest, Delegate::invoke</span>
 
@@ -228,9 +227,8 @@ struct AgentType {
   <h2 id="setup">The Setup a nested run is built from</h2>
 
   <p>
-    This is the whole of the arrangement in one expression. Read it beside the
-    table above: every line is either the parent's value or the type's own, and
-    there is no third source.
+    Read the Setup block beside the table above: every line is either the
+    parent's value or the type's own; there is no third source.
   </p>
 
 <pre><code>        let done = SubagentClaim {
@@ -401,11 +399,8 @@ struct AgentType {
   <span class="src">crates/emma/src/session.rs — SessionLog::subagent, with the tail of its doc</span>
 
   <p>
-    The namespacing is not tidiness. <code>fold_records</code> and
-    <code>restore_records</code> match on <code>kind</code> and both carry a
-    <code>_ =&gt; {}</code> arm, so <code>sub.assistant</code> and
-    <code>sub.model_call</code> are ignored for free. Written under the parent's
-    own names, a sub <code>assistant</code> record arriving between the parent's
+    Without the <code>sub.</code> prefix on record kinds, a sub
+    <code>assistant</code> record arriving between the parent's
     <code>tool_call</code> and its <code>tool_result</code> would call
     <code>close_turn</code>, place the parent's held turn without its results,
     fail <code>answered()</code>, and drop the parent's whole turn from every

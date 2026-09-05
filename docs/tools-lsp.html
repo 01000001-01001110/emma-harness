@@ -17,7 +17,7 @@
      Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it. That is the deal, and is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -493,7 +493,7 @@
   </p>
   <p>
     <strong>Why it was fixed rather than left flagged.</strong> The
-    model was never the reader being failed &mdash; it read a specific sentence
+    model was never the reader being failed. It read a specific sentence
     either way, and then got the runtime's generic fallback appended to it as
     well, which is its own small confusion. The reader left with nothing was the
     human watching the terminal, who saw a line naming no cap. A cut that is
@@ -543,7 +543,7 @@
   Diagnostics are pushed, not requested, so "get the diagnostics for this file"
   means waiting an unknowable time for a notification that may never come:
   the readiness problem again, without the progress notifications that make
-  readiness solvable. Worse, the diagnostics worth having are
+  readiness solvable. Worse, the useful diagnostics are
   <code>cargo check</code>'s, which this crate disables. With it off the tool
   would return syntax and name-resolution errors only and silently omit every
   type error. <code>Bash</code> running <code>cargo check</code> is the honest

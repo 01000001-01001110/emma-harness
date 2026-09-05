@@ -147,7 +147,7 @@ pub(crate) struct AgentFront {
       <tr><td><code>model</code></td><td>a per-agent model id</td><td>the parent's, read at call time</td></tr>
       <tr><td><code>max_turns</code> / <code>maxTurns</code></td><td>model calls for the sub-run</td><td><code>SUB_ITERATIONS</code>, 20</td></tr>
       <tr><td><code>max_tokens</code> / <code>maxTokens</code></td><td>a ceiling, clamped by the share</td><td>whatever the share allows</td></tr>
-      <tr><td>everything else</td><td>ignored</td><td>—</td></tr>
+      <tr><td>everything else</td><td>ignored</td><td>none</td></tr>
     </tbody>
   </table>
   </div>
@@ -167,9 +167,9 @@ pub(crate) struct AgentFront {
     <code>AgentFront</code> must never gain <code>deny_unknown_fields</code>.
     Measured against a real 90-file library, <code>category</code> and
     <code>version</code> appear throughout, and under a strict struct every one
-    of those files is a boot failure. The whole crate rules the same way twice
-    more: refusing to start over a key belonging to another program is an outage,
-    not a safety property.
+    The whole crate applies the same ruling in two other places: refusing to
+    start over a key belonging to another program is an outage, not a safety
+    property.
   </p>
   <span class="src">crates/harness/src/claude.rs — AgentFront, Settings, module doc</span>
 
@@ -298,7 +298,7 @@ fn open_frontmatter(text: &amp;str) -&gt; Option&lt;&amp;str&gt; {
     <span class="chip cert">certified</span> Re-run on 2026-09-02 with the path
     expanded:
     <code>python -c "import glob,os;fs=glob.glob(os.path.expanduser('~/.claude/agents/*.md'));print(sum(1 for f in fs if b'\r\n' in open(f,'rb').read()), len(fs))"</code>
-    printed <code>86 90</code> — 86 CRLF, 4 LF-only, 90 top-level files.
+    printed <code>86 90</code>: 86 CRLF, 4 LF-only, 90 top-level files.
   </p>
   <span class="src">crates/harness/src/claude.rs — split_agent; ~/.claude/agents/</span>
 
@@ -462,7 +462,7 @@ pub(crate) fn load_agents(root: &amp;Path) -&gt; Result&lt;(Vec&lt;crate::AgentD
   <span class="src">crates/harness/src/claude.rs — load_agents, quoted entire</span>
 
   <p>
-    Nothing here fails the boot. Four things can drop a file, and each is
+    A bad agent file does not fail the boot. Each of the four drop reasons is
     reported rather than swallowed: the file could not be read, its frontmatter
     could not be parsed, it declared a <code>name</code> that disagrees with its
     stem (noted, but still offered), or it has no <code>description</code>. The
@@ -531,12 +531,12 @@ pub(crate) fn load_agents(root: &amp;Path) -&gt; Result&lt;(Vec&lt;crate::AgentD
   <h2 id="instructions">Both halves of the prompt</h2>
 
   <p>
-    An agent type's instructions are the project's standing instructions and
-    then the file's body, in that order. Both halves, because standing rules
-    about evidence and accurate reporting are not persona-specific: a delegated agent that
-    does not inherit <em>report what the checks actually said</em> is one that
-    reports what they were expected to say. A file with an empty body gets the
-    project's instructions alone.
+    An agent type's instructions concatenate the project's standing instructions
+    and the file body, in that order. Standing rules about evidence and accurate
+    reporting are not persona-specific: a delegated agent that does not inherit
+    <em>report what the checks actually said</em> is one that reports what they
+    were expected to say. A file with an empty body gets the project's
+    instructions alone.
   </p>
 
 <pre><code>            let instructions = match def.instructions.trim().is_empty() {
@@ -638,8 +638,8 @@ fn one_line(text: &amp;str) -&gt; String {
       <span class="chip test">tested</span>
       <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/src/claude.rs">crates/harness/src/claude.rs</a>
       and
-      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/tests/agent_types.rs">crates/harness/tests/agent_types.rs</a>
-      — this page's claim that <code>claude.rs</code> had no test module was
+      <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/harness/tests/agent_types.rs">crates/harness/tests/agent_types.rs</a>.
+      This page's claim that <code>claude.rs</code> had no test module was
       wrong when written; <code>close_frontmatter</code> now has four unit tests
       in <code>claude.rs</code>, and <code>Tools::allowlist</code> / agent-file
       shapes are covered in <code>agent_types.rs</code> and

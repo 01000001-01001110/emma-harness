@@ -71,8 +71,8 @@
   <p class="lede">
     The kick is what makes this a loop rather than a chat client. The model
     stopped, the check said the goal is not met, so the loop pushes a user
-    message and goes round again. It carries three things: why the goal is not
-    recorded as done, the goal restated verbatim, and up to five of the calls
+    message and goes round again. The message states why the goal is not
+    recorded as done, restates the goal verbatim, and lists up to five calls
     that have already failed.
   </p>
   <span class="src">crates/emma/src/goal.rs — <code>kick</code>; crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
@@ -160,13 +160,12 @@ fn trim_oldest(v: &amp;mut Vec&lt;String&gt;) {
 }</code></pre>
 
   <p>
-    Two different numbers doing two jobs. <code>tail(&amp;failed_ever, 5)</code>
-    bounds what one kick shows, keeping the five most recent in their original
-    order. <code>FAILED_EVER_MAX</code> bounds the collection, at four times the
-    kick's five so the cap is not a second quieter version of the same limit.
-    The list is written into a session record and read back by
-    <code>--resume</code>, so an unbounded collection would be a growing payload
-    rather than a transient one.
+    <code>tail(&amp;failed_ever, 5)</code> bounds what one kick shows, keeping
+    the five most recent in their original order.
+    <code>FAILED_EVER_MAX</code> bounds the collection at four times the kick's
+    limit so the cap is not a quieter duplicate of the same number. The list is
+    written into a session record and read back by <code>--resume</code>, so an
+    unbounded collection would be a growing payload rather than a transient one.
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>tail</code>, <code>trim_oldest</code>, <code>FAILED_EVER_MAX</code></span>
 
@@ -227,15 +226,15 @@ continue;</code></pre>
   </p>
   <span class="src">crates/emma/src/agent.rs — <code>Agent::run_goal</code>; crates/emma/src/term/</span>
 
-  <h2 id="bounds">Two independent bounds</h2>
+  <h2 id="bounds">Kick bounds</h2>
 
   <p>
-    A kick that fires forever is worse than no kick. Two limits stop it, and the
-    goal ends the moment either is reached: <code>max_kicks</code>, default 3, a
-    hard count for the whole goal, and the stall rule, which needs no cooperation
-    from the model at all. Both sit under the iteration, token and wall-clock
-    budgets, so the worst case is bounded by arithmetic rather than by good
-    behaviour.
+    A kick that fires forever is worse than no kick. A hard count and a stall
+    rule stop it, and the goal ends the moment either is reached:
+    <code>max_kicks</code>, default 3, a hard count for the whole goal, and the
+    stall rule, which needs no cooperation from the model at all. Both sit under
+    the iteration, token and wall-clock budgets, so the worst case is bounded by
+    arithmetic rather than by good behaviour.
   </p>
   <span class="src">crates/emma/src/goal.rs — module doc; crates/emma/src/agent.rs — <code>Agent::run_goal</code></span>
 
@@ -247,7 +246,7 @@ continue;</code></pre>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/tests/loop.rs">crates/emma/tests/loop.rs</a>
     <code>the_kick_is_bounded_by_its_budget</code> sets
     <code>max_kicks = 2</code> and asserts the seventh scripted turn was never
-    requested, so the bound is real rather than merely reported.
+    requested, so the bound is enforced in code, not only in the ending message.
     <code>the_kick_fires_when_the_model_stops_without_claiming_completion</code>
     covers the other direction. Both pass at this checkout:
     <code>cargo test -p emma --test loop</code> printed

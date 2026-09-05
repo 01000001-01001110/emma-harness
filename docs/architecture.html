@@ -242,7 +242,7 @@
       What would settle it: construct two <code>Write</code> tools with two
       different <code>ReadTracker</code> handles (or four LSP tools with four
       pools), exercise read-then-write on the same path, and assert the second
-      tool does not see the first tool's session state — a test this round
+      tool does not see the first tool's session state. A test this round
       cannot add because another worker owns the Rust.
     </p>
   </div>
@@ -317,7 +317,7 @@
       <code>rg -n "harness|emma-harness" tools/*/Cargo.toml</code> printed nothing
       for all four tool crates. It would fail at compile time for a cyclic edge,
       but a non-cyclic one would simply appear.
-      <span class="chip unv">unverified</span> as a continuous guard — no test
+      <span class="chip unv">unverified</span> as a continuous guard. No test
       watches for it.
     </li>
     <li>

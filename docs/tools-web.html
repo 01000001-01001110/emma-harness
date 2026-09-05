@@ -17,7 +17,7 @@
      Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it. That is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -247,12 +247,11 @@
 <h3>Why a browser rather than an HTTP client</h3>
 
 <p>
-  Three reasons, in the order they bite. A large share of the pages worth
-  reading are JavaScript shells that serve an empty <code>&lt;div&gt;</code> to
-  <code>curl</code>. A further share refuse plain fetches outright;
-  WorkAtAStartup answers a bare request with 406 and renders fine in Chrome. And
-  what comes back is not a DOM dump, because chromehand strips boilerplate and
-  pre-extracts the interactive inventory.
+  Pages worth reading are often JavaScript shells that serve an empty
+  <code>&lt;div&gt;</code> to <code>curl</code>. Many refuse plain fetches
+  outright; WorkAtAStartup answers a bare request with 406 and renders fine in
+  Chrome. What comes back is not a DOM dump either: chromehand strips boilerplate
+  and pre-extracts the interactive inventory.
 </p>
 
 <p>
@@ -433,7 +432,7 @@
 <p>
   <strong>The same argument applied to <code>WebFetch</code>, and until
   2026-08-23 nobody had applied it.</strong> One call, so it cannot re-ask the
-  gate from inside itself &mdash; but Chrome follows redirects, and a persisted
+  gate from inside itself. Chrome follows redirects, and a persisted
   <code>WebFetch(domain:example.com)</code> rule answers every later call with no
   prompt at all. The page that came back could be from anywhere that host chose
   to send us, and on a hostile page the page chooses. It now compares the
@@ -444,8 +443,8 @@
   <span class="chip test">tested</span>
   <a href="https://github.com/01000001-01001110/emma-harness/blob/master/tools/web/src/fetch.rs">tools/web/src/fetch.rs</a>
   <code>a_redirect_to_another_host_is_refused_and_an_ordinary_one_is_not</code>
-  asserts the silent cases first &mdash; a scheme upgrade, a path change, a case
-  difference &mdash; because a guard that fired on those would be switched off
+  asserts the silent cases first (a scheme upgrade, a path change, a case
+  difference) because a guard that fired on those would be switched off
   within a day. Two mutations go red: the comparison removed, and the comparison
   weakened to a suffix match. Ran
   <code>cargo test -p emma-tools-web --lib a_redirect_to_another_host</code> on
@@ -531,7 +530,7 @@
   </div>
   <figcaption>
     <code>connect</code>, <code>finish</code>, <code>arrived_at</code>, and
-    <code>network_target</code> — the four functions the source names across
+    <code>network_target</code>: the four functions the source names across
     the guard and the pool. Drawn from
     <code>tools/web/src/browser/tools.rs</code> and
     <code>pool.rs</code>.
@@ -581,8 +580,8 @@
   CDP websocket is unauthenticated on localhost, so while it lives any local
   process can puppet that browser, with a profile that may hold a login. This
   crate has leaked one before, and <code>tools/lsp</code> wrote it down: "<code>tools/web</code>
-  leaked a Chrome per session because its teardown ran in <code>main</code> —
-  correct for a binary, wrong for a library." So the teardown is three
+  leaked a Chrome per session because its teardown ran in <code>main</code>.
+  Correct for a binary, wrong for a library." So the teardown is three
   mechanisms, each covering a way the previous one does not run.
 </p>
 
@@ -605,13 +604,13 @@
   cannot remove the directory it returns <code>false</code>, the pool records the
   path, and <code>BrowserPool::leaked_profiles</code> reports it; the end of a
   goal turns that into a warning naming the directory. Until 2026-08-23 it
-  returned <code>()</code> and the ten attempts simply ran out, with no value, no
+  returned <code>()</code> and the ten attempts ran out, with no value, no
   record and no line anywhere.
 </p>
 
 <p>
-  The backstop is real and unchanged &mdash; <code>sweep_stale_profiles</code>
-  clears it at the next start &mdash; but "not fatal" and "not worth mentioning"
+  The backstop is real and unchanged: <code>sweep_stale_profiles</code>
+  clears it at the next start. "Not fatal" and "not worth mentioning"
   are different claims, and a profile directory holds the session's cookies. This
   module's own note is that a browser Emma opened may hold a login.
   <span class="chip test">tested</span>
@@ -619,7 +618,7 @@
   <code>a_profile_that_cannot_be_removed_is_recorded_and_a_removed_one_is_not</code>
   produces the failure rather than mocking it, by putting a <em>file</em> where
   the directory should be so <code>remove_dir_all</code> fails for a reason the
-  filesystem supplies, and it asserts the clean cases too &mdash; an
+  filesystem supplies, and it asserts the clean cases too. An
   implementation that reported a leak every time would warn after every goal,
   and a warning that fires when it should not is how an operator learns to skip
   it. Three mutations go red on three different assertions.
@@ -629,8 +628,8 @@
   <strong>That test proved the decision and not the delivery, and a reviewer
   found the gap the same day.</strong> Neither it nor the recording test called
   <code>close</code> or <code>kill_all_now</code>, so both call sites that turn a
-  failed removal into a recorded one could be deleted with the suite green
-  &mdash; and the warning itself was assembled inline in <code>main.rs</code>,
+  failed removal into a recorded one could be deleted with the suite green.
+  The warning itself was assembled inline in <code>main.rs</code>,
   where reaching it needed a real browser, a really stranded profile and a real
   terminal. Nothing reached it. The text now lives in
   <code>pool::leaked_profile_warning</code>, which returns

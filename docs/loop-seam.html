@@ -335,8 +335,8 @@ impl Interrupt {
   <p>
     <code>install</code> is separate from <code>new</code> so a test never
     installs a process-wide handler. It spawns a task that trips the flag once.
-    The flag used to be one-way — an earlier version of this page said "a goal
-    cannot be un-interrupted", and it was describing the code accurately —
+    The flag used to be one-way. An earlier version of this page said "a goal
+    cannot be un-interrupted", and it was describing the code accurately,
     which meant Ctrl-C ended the <em>session</em>, against three help strings
     that promised it interrupts a goal. <code>reset</code> is the reversal, and
     <code>starting_goal</code> is the rule that uses it: an interactive goal
@@ -359,7 +359,7 @@ impl Interrupt {
   <p>
     That rule was <code>if !opts.print</code> in <code>main.rs</code> until
     2026-08-23. It put a decision in the binary, where no scripted provider can
-    reach it, and the <code>-p</code> half was asserted nowhere at all —
+    reach it, and the <code>-p</code> half was asserted nowhere at all;
     the unit test named above covers <code>reset</code>, which is the store
     rather than the choice. Moving the rule next to the flag made both halves
     testable.
@@ -521,8 +521,8 @@ fn recover_from_a_model_change(&amp;mut self, e: &amp;LlmError) -&gt; bool {
   </p>
 
   <p>
-    The wording guard used to fail in silence — a bare
-    <code>return false;</code> — and that was the fragile edge left unlit. The
+    The wording guard used to fail in silence: a bare
+    <code>return false;</code>. That was the fragile edge left unlit. The
     recovery keys on the provider's prose because no structured code
     distinguishes the stale-signature case from any other bad request, so a
     wording change upstream disables it without disabling anything that

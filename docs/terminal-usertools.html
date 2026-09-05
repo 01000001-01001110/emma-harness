@@ -90,9 +90,9 @@
     The sidebar's middle section lists seven entries in a fixed order. Three
     start a program on the machine; four run inside Emma and say so rather than
     pretending to launch: Search, and the three
-    <a href="terminal-pages.html">tool pages</a>. Three rules carry the design, and every one exists
-    because breaking it fails silently. The sharpest of them cost twenty-two
-    green tests and a canary in the wrong stream to find.
+    <a href="terminal-pages.html">tool pages</a>. Three rules carry the design;
+    breaking any of them fails silently. The sharpest took twenty-two green
+    tests and a canary in the wrong stream to find.
   </p>
 
   <h2 id="catalogue">Seven entries, always all seven</h2>
@@ -130,8 +130,8 @@
     always said <em>&ldquo;the shell routes their keys itself&rdquo;</em>, which
     was true of Search and false of Memory: nothing routed Memory, so
     <code>launch_tool</code> sent it to <code>launch</code>, which refused it
-    with the words <em>&ldquo;the frame owns the <code>m</code> key&rdquo;</em>
-    &mdash; a key the frame had never claimed. The sidebar advertised
+    with the words <em>&ldquo;the frame owns the <code>m</code> key&rdquo;</em>,
+    a key the frame had never claimed. The sidebar advertised
     <code>Alt+M</code> and pressing it produced a warning.
   </p>
 
@@ -145,8 +145,8 @@
     <code>the_catalogue_lists_all_seven_tools_with_their_fixed_keys</code>, whose
     assertion has been through all three states and carries the history: it
     first claimed both in-app tools were available <em>because their keys are
-    live in the frame</em> &mdash; the claim rather than the behaviour, which is
-    what held the defect in place &mdash; was then inverted with a note saying
+    live in the frame</em>. That assertion, not the behaviour, held the defect
+    in place until it was inverted with a note saying
     the day a Memory page existed it should be flipped back, and was flipped back
     on the day that happened.
   </p>
@@ -163,8 +163,8 @@
   <p>
     <code>catalogue</code> may run on every draw, so PATH lookups are cached for
     the life of the process. That also makes &ldquo;a program installed
-    mid-session appears after a restart&rdquo; true by construction rather than
-    intermittently. <code>settings.json</code> is re-read on every call, one
+    mid-session appears after a restart&rdquo; because the cache lasts for the
+    process lifetime. <code>settings.json</code> is re-read on every call, one
     small file read, so the Settings tool's own writes show up on the next
     frame.
   </p>
@@ -320,7 +320,7 @@ Settings      [,] available=true -- what this run resolved, and from where, insi
     documented <code>CommandLineToArgvW</code> quoting rules, the same algorithm
     std uses, and the doc says why the effort is warranted even though Windows
     paths cannot contain a quote: <em>&ldquo;an argument is not always a path,
-    and a quoting bug here is an argv boundary moving — exactly the class of
+    and a quoting bug here is an argv boundary moving, the same class of
     failure this module refuses everywhere else.&rdquo;</em>
     <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>:
@@ -332,12 +332,11 @@ Settings      [,] available=true -- what this run resolved, and from where, insi
   <h3>What the certification actually asserts, and what it cannot</h3>
 
   <p>
-    <strong>Twenty-two green tests said nothing about any of this</strong>, and
-    could not have: an inherited handle bypasses the test harness's own capture,
-    so the write reaches the console without passing through anything an
-    assertion can see. What caught it was a canary, a known string the spawned
-    child prints, and a human reading the run's scrollback for its absence.
-    That method is now the test, and it says so of itself:
+    <strong>Twenty-two green tests did not cover any of this.</strong> An
+    inherited handle bypasses the test harness's own capture, so the write
+    reaches the console without passing through anything an assertion can see.
+    What caught it was a canary string the spawned child prints, read by hand in
+    the run's scrollback. That method is now the test:
   </p>
 
   <div class="note">
@@ -345,7 +344,7 @@ Settings      [,] available=true -- what this run resolved, and from where, insi
       <em>&ldquo;run by hand&hellip; and read the OUTPUT, not just the pass: the
       NewConsole test's claim is that the canary does NOT appear anywhere in the
       run's output, which the assertion cannot see (an inherited handle bypasses
-      the test harness's capture) — the reader checking the scrollback is the
+      the test harness's capture); the reader checking the scrollback is the
       certification.&rdquo;</em>
     </p>
     <span class="src">crates/emma/src/usertools.rs — the <em>Certification against the real machine</em> region</span>
@@ -377,8 +376,8 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
 0</code></pre>
 
   <p>
-    Zero occurrences of either canary in the run's output, which is the claim no
-    assertion can make. The detached test's own receipt is the exit code:
+    Zero occurrences of either canary in the run's output. That is what no
+    assertion can check. The detached test's own receipt is the exit code:
     <code>exit 7</code> coming back proves the child really ran, and the canary
     staying out of the output proves its stdout went to the null device.
     Repeatable with the two commands above.
@@ -410,8 +409,8 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
   <p>
     <code>adopt</code> is how a child is let go. Dropping a handle never kills a
     process; on unix an unreaped child becomes a zombie if it exits before Emma
-    does, so a throwaway thread waits on it, <em>&ldquo;and if Emma exits first
-    the child is init's problem, which is the point.&rdquo;</em>
+    does, so a throwaway thread waits on it. If Emma exits first, the child is
+    init's problem.
   </p>
 
   <h2 id="values">A configured value is one program, never a command line</h2>
@@ -491,8 +490,8 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
     <code>CreateProcessW</code> cannot execute a cmd script and routing one
     through <code>cmd.exe</code> would re-open the handle question the raw spawn
     exists to close. It is checked twice, at planning time so the catalogue can
-    say so, and again inside <code>new_console::spawn</code>, <em>&ldquo;which is
-    the layer that must hold even if a future plan forgets to ask.&rdquo;</em>
+    say so, and     again inside <code>new_console::spawn</code>, in case a future plan skips
+    the planning-time check.
     <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/usertools.rs">crates/emma/src/usertools.rs</a>:
     <code>a_cmd_script_cannot_be_promised_a_console_window</code> also asserts
@@ -563,9 +562,9 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
     <code>ensure_settings_file</code> is gone too. It created
     <code>settings.json</code> through <code>settings.rs</code> so the file an
     editor opened was the file every other reader would have produced, and left
-    an existing one byte-for-byte alone &mdash; <em>&ldquo;load/save would
-    reformat it, and a settings file that mutates on open is one nobody can
-    diff.&rdquo;</em> Nothing opens that file on Emma's behalf now, so nothing
+    an existing one byte-for-byte alone. <em>&ldquo;Load/save would reformat it,
+    and a settings file that mutates on open is one nobody can diff.&rdquo;</em>
+    Nothing opens that file on Emma's behalf now, so nothing
     needs to create it first. <strong>The consequence:</strong>
     a machine that has never had a <code>settings.json</code> written still has
     none after opening the Settings page, and the page shows the resolved
@@ -595,7 +594,7 @@ $ &hellip; | grep -c 'USERTOOLS-CANARY'
   <p>
     <span class="chip unv">unverified</span> Whether every function item is
     still <em>named</em> somewhere on this page. Side-by-side on 2026-09-02:
-    ten are not named in the prose —
+    ten are not named in the prose:
     <code>browser_program</code>, <code>editor_window</code>,
     <code>in_app_detail</code>, <code>in_app_note</code>, <code>launch_on</code>,
     <code>plan_code</code>, <code>plan_file_browser</code>, <code>plan_shell</code>,

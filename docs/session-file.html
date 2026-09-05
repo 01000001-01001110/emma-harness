@@ -71,9 +71,8 @@
     A session is one JSONL file under <code>~/.emma/sessions/</code>, opened at
     startup and appended to as the run happens. This page covers the type that
     owns it: how an id is made, where the file goes, what one append does, and
-    the two ways the writing can go wrong — a write that starts failing
-    mid-run, and a line that will not parse coming back. Both used to be
-    silent; both now say so once.
+    two failure modes (a write that starts failing mid-run, and a line that will
+    not parse on read). Both used to fail silently; both now report once.
   </p>
   <span class="src">crates/emma/src/session.rs — <code>SessionLog</code></span>
 
@@ -111,7 +110,7 @@ pub fn new_id() -&gt; String {
   <span class="src">crates/emma/src/session.rs — <code>SessionLog::new_id</code>, <code>locate</code>, <code>first_run</code></span>
 
   <p>
-    A clock that cannot be read yields <code>0</code> rather than an error, so
+    A clock that cannot be read yields <code>0</code> instead of an error, so
     the id is <code>sess-0000000000000-&lt;pid&gt;</code> and the process id is
     the only thing keeping two such runs apart. Nothing in the tree exercises
     that branch.
@@ -136,8 +135,8 @@ pub fn default_dir(home: Option&lt;&amp;Path&gt;) -&gt; Option&lt;PathBuf&gt; {
     The environment variable wins over the home directory unconditionally, and
     <code>--session-dir</code> on the command line wins over both, because
     <code>main.rs</code> resolves the flag first and only falls back to this.
-    An <code>Option</code> comes back rather than a guess, and the caller that
-    gets <code>None</code> is the one case
+    An <code>Option</code> comes back instead of a guess. The caller that gets
+    <code>None</code> is the case
     <a href="#none"><code>SessionLog::none</code></a> exists for.
   </p>
   <span class="src">crates/emma/src/session.rs — <code>SessionLog::default_dir</code>; crates/emma/src/main.rs</span>
@@ -235,36 +234,31 @@ pub struct SessionLog {
 
   <p>
     Record-before-action ordering is what the format requires. A record goes down
-    before the thing it describes happens, so a run killed
-    between the two leaves a claim that a tool was about to run and no claim
-    that it did. Reverse the order and the file would sometimes assert a tool
-    ran when the process died first. An <code>await</code> between the append
-    and the tool call is where a cancelled future would land, and
-    <code>tokio::select!</code> in <code>call_model</code> is a cancellation of
-    exactly that shape, happening elsewhere in the same loop.
+    before the thing it describes happens, so a run killed between the two leaves
+    a claim that a tool was about to run and no claim that it did. Reverse the
+    order and the file could assert a tool ran when the process died first. An
+    <code>await</code> between append and tool call is where a cancelled future
+    would land; <code>tokio::select!</code> in <code>call_model</code> can cancel
+    in exactly that shape elsewhere in the same loop.
   </p>
   <span class="src">crates/emma/src/session.rs — <code>SessionLog::file</code>; crates/emma/src/agent.rs — <code>Agent::call_model</code></span>
 
   <div class="note">
     <span class="h">Why not SQLite</span>
     <p>
-      The module doc argues it rather than assuming it. SQLite pays for itself
-      against concurrent writers and against a crash-recovery fold that has to
-      decide whether a side-effecting tool already ran. Emma has one process,
-      one user, one writer, and no recovery requirement: a crashed run is
-      re-run, because what it was doing is in the working tree where you can
-      see it. A database would add a dependency, a schema, a migration story
-      and a binary file you cannot <code>grep</code>.
+      The module doc compares JSONL to SQLite. SQLite pays off with concurrent
+      writers and a crash-recovery fold that must decide whether a side-effecting
+      tool already ran. Emma has one process, one user, one writer, and no
+      recovery requirement: a crashed run is re-run from the working tree. A
+      database would add a dependency, a schema, migrations, and a binary file
+      you cannot <code>grep</code>.
     </p>
     <p>
-      Three things would reverse it, and the doc says the reversal should
-      happen the same day any of them arrives. A second writer, because
-      <code>O_APPEND</code> survives concurrent small writes on unix and does
-      not on Windows. Exactly-once tool semantics across a crash, which needs a
-      transaction rather than a line. Queries across sessions, which today mean
-      folding every file in the directory. The third already costs something:
-      <code>locate</code> is a directory scan, and its own doc names it as the
-      cost the module doc predicted.
+      Three conditions would reverse the choice, and the doc says to switch the
+      same day any of them arrives: a second writer (<code>O_APPEND</code> on
+      unix vs Windows), exactly-once tool semantics across a crash (needs a
+      transaction), or queries across sessions (today a directory fold).
+      <code>locate</code> is already a directory scan; its doc names that cost.
     </p>
   </div>
   <span class="src">crates/emma/src/session.rs — module doc; <code>locate</code></span>
@@ -334,29 +328,25 @@ pub struct SessionLog {
 }</code></pre>
 
   <p>
-    Five things happen in a fixed order. The <code>kind</code> gets its prefix,
-    which is <code>None</code> for a session's own records and
-    <code>Some("sub")</code> for a delegation's. <code>kind</code> and
+    The <code>kind</code> gets a prefix (<code>None</code> for the session,
+    <code>Some("sub")</code> for a delegation). <code>kind</code> and
     <code>at_ms</code> are inserted into the payload, which is why every record
-    in every file carries those two and only those two universally. The stamp
-    is merged, which is how a delegation's records carry
-    <code>sub_id</code>, <code>parent_turn_id</code> and <code>agent</code>.
-    The record goes into the in-memory tap if there is one. Then the line is
-    written and flushed, and the first write that fails is reported on stderr;
-    every one after it is swallowed, because a failing write fails on every
-    record and a warning per record would bury the run in its own complaint.
-    <code>write_failed</code> is an <code>Arc&lt;AtomicBool&gt;</code> shared
-    with every <a href="session-records.html">subagent view</a>, so a
-    delegation does not repeat a complaint about a file its parent already
-    reported.
+    carries those two fields. The stamp merges in delegation fields
+    (<code>sub_id</code>, <code>parent_turn_id</code>, <code>agent</code>).
+    The record goes into the in-memory tap when present. Then the line is written
+    and flushed; the first write failure prints on stderr, and later failures are
+    swallowed so one complaint does not flood the run. <code>write_failed</code>
+    is an <code>Arc&lt;AtomicBool&gt;</code> shared with every
+    <a href="session-records.html">subagent view</a>, so a delegation does not
+    repeat a complaint the parent already printed.
   </p>
 
   <p>
-    <code>kind</code> is inserted rather than written by the caller, so no call
-    site can forget it or spell it differently. Where it lands in the rendered
-    line is <code>serde_json</code>'s business, which is why a
-    <code>grep</code> for <code>'"kind":"goal"'</code> is a substring search
-    over a whole file rather than a field query. It agrees with a parse today:
+    <code>kind</code> is inserted by <code>append</code>, not by callers, so no
+    call site can omit or misspell it. Where it appears in the rendered line is
+    <code>serde_json</code>'s ordering, which is why
+    <code>grep '"kind":"goal"'</code> is a substring search, not a field query.
+    It agrees with a parse today:
     <code>grep -h -o '"kind":"goal"' *.jsonl | wc -l</code> returns 61 in
     <code>~/.emma/sessions/</code> and a JSON parse of the same directory finds
     61 records of that kind, with zero of the matches sitting inside some other
@@ -378,22 +368,20 @@ pub struct SessionLog {
   <span class="src">crates/emma/src/session.rs — <code>SessionLog::append</code>; crates/emma/src/agent.rs, delegate.rs, main.rs — every call site</span>
 
   <p>
-    <strong>A poisoned mutex is recovered rather than treated as the end of the
-    transcript</strong>, and until 2026-08-23 it was not. The lock is poisoned
-    when some thread panics while holding it, which says nothing about whether
-    the file is still writable. <code>append</code> returned early instead, so
-    every record from that moment was discarded for the rest of the process.
+    <strong>A poisoned mutex is recovered instead of stopping the
+    transcript</strong> (before 2026-08-23 it was not). The lock is poisoned
+    when a thread panics while holding it, which does not imply the file is
+    unwritable. <code>append</code> returned early instead, discarding every
+    later record for the rest of the process.
   </p>
 
   <p>
-    The silence was the smaller half. <code>write_failed</code> was never set on
-    that path, so <code>transcript_failed</code> went on reporting that the
-    transcript was fine while the session stopped being recorded &mdash; the one
-    observable built to make this visible said the opposite of what had
-    happened. Recovering with <code>unwrap_or_else(|e| e.into_inner())</code> is
-    what the rest of the tree does at twenty-five other sites, and the data
-    behind this lock is a <code>File</code> handle, which somebody else's panic
-    cannot leave half-updated.
+    On that path <code>write_failed</code> was never set, so
+    <code>transcript_failed</code> kept reporting a healthy transcript while
+    recording had stopped. Recovery uses
+    <code>unwrap_or_else(|e| e.into_inner())</code>, matching twenty-five other
+    sites in the tree; the data behind this lock is a <code>File</code> handle
+    that another thread's panic cannot leave half-updated.
     <span class="chip test">tested</span>
     <code>a_poisoned_lock_does_not_silently_stop_the_transcript</code> poisons
     the lock for real, by joining a thread that panics while holding it, and
@@ -413,24 +401,20 @@ pub struct SessionLog {
     <p>
       An earlier version of <code>append</code> ended in two
       <code>let _ =</code> discards, and its doc claimed the caller "has
-      already been told once by <code>open</code>" — which covers a directory
-      that cannot be created or a file that cannot be opened, and says nothing
-      about a volume that fills up or a mount that goes read-only during the
-      run. That class of failure was silent everywhere: no warning, no record,
-      and a session file that simply stops while resume, <code>emma agents</code>
-      and the exit line all keep pointing at it. The warn box that used to sit
-      here made that argument, and the code now agrees with it: the first
-      failed write prints one line on stderr saying the transcript can no
-      longer be written, and every later failure is swallowed on the
-      <code>write_failed</code> flag.
+      already been told once by <code>open</code>". That covers a directory
+      that cannot be created or a file that cannot be opened, not a volume that
+      fills up or a mount that goes read-only during the run. That failure was
+      silent everywhere: no warning, no record, and a session file that stops
+      while resume, <code>emma agents</code> and the exit line still point at
+      it. The code now prints one stderr line on the first failed write; later
+      failures are suppressed on the <code>write_failed</code> flag.
       <span class="chip cert">certified</span> by reading <code>append</code>:
       the <code>if let Err(e)</code> around <code>write_all</code> and
       <code>flush</code> is quoted above and greppable. Whether that line is
-      actually seen — a full volume has not been staged, and in the framed UI
-      stderr lands on the alternate screen — is
-      <span class="chip unv">unverified</span>: settle it by filling the volume
-      holding <code>~/.emma/sessions/</code> during a goal and reading what
-      appears.
+      visible in practice (no staged full volume; framed UI stderr on the
+      alternate screen) is
+      <span class="chip unv">unverified</span>: fill the volume holding
+      <code>~/.emma/sessions/</code> during a goal and read what appears.
     </p>
   </div>
   <span class="src">crates/emma/src/session.rs — <code>SessionLog::append</code>, <code>SessionLog::open</code></span>
@@ -475,14 +459,11 @@ pub fn read(path: &amp;Path) -&gt; Result&lt;Vec&lt;Value&gt;&gt; {
 
   <p>
     This used to be a one-line <code>filter_map(…ok())</code>, which dropped
-    any line that would not parse — not only the torn tail the doc described —
-    and counted nothing. Silent loss in the middle of a file looked identical
-    to no loss at all, and this page said so. The shape of the fix keeps the
-    property that mattered and adds the one that was missing: a bad line
-    anywhere still costs only itself, because a reader that failed outright
-    would turn one corrupt record into an unresumable session, but a bad line
-    that is neither blank nor last is now counted and named on stderr as
-    damage, "not the partial last line a crash leaves behind."
+    any line that would not parse, not only the torn tail the doc described,
+    and counted nothing. Silent loss in the middle looked like no loss. The fix
+    keeps one bad line costing only itself (a reader that failed outright would
+    make one corrupt record unresumable) and counts and names other bad lines on
+    stderr as damage, not the partial last line a crash leaves behind.
     <span class="chip test">tested</span>
     <code>a_torn_tail_is_silent_and_damage_in_the_middle_is_not</code> in
     <code>tests/resume.rs</code> feeds it both shapes and asserts both recover;

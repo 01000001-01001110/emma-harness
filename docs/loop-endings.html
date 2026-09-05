@@ -196,8 +196,8 @@ if turn.tool_calls().is_empty() {
     </div>
     <figcaption>
       The endings the empty-tool-calls branch of <code>run_goal</code> can
-      produce, in the order the checks run — not the declaration order of
-      <code>Ending</code>. Moving a rung changes what the endings mean rather
+      produce, in the order the checks run (not the declaration order of
+      <code>Ending</code>). Moving a rung changes what the endings mean rather
       than reordering equivalent checks, and the paragraphs below say what
       each move would cost.
     </figcaption>
@@ -314,7 +314,7 @@ let mut worked = resuming_a_goal_in_flight;</code></pre>
   <h2 id="enum">The nine endings</h2>
 
   <p>
-    Four come off the ladder. The rest are the budgets, the user and the
+    Four come off the ladder; the rest are the budgets, the user and the
     provider.
   </p>
 
@@ -329,7 +329,7 @@ let mut worked = resuming_a_goal_in_flight;</code></pre>
       <tr><td><code>Iterations</code></td><td><code>iterations</code></td><td>Tested before the call: a run never makes more than <code>max_iterations</code>.</td></tr>
       <tr><td><code>Tokens</code></td><td><code>tokens</code></td><td>Tested after the call, so the call that crossed the line is paid for.</td></tr>
       <tr><td><code>Deadline</code></td><td><code>deadline</code></td><td>Tested at the top of an iteration against <code>wall_clock</code>.</td></tr>
-      <tr><td><code>Interrupted</code></td><td><code>interrupted</code></td><td>Ctrl-C: at the top of an iteration, during a model call, or during a tool call — the tool comes back <code>cancelled</code> and the next iteration's flag check ends the goal.</td></tr>
+      <tr><td><code>Interrupted</code></td><td><code>interrupted</code></td><td>Ctrl-C: at the top of an iteration, during a model call, or during a tool call. The tool comes back <code>cancelled</code> and the next iteration's flag check ends the goal.</td></tr>
       <tr><td><code>Provider(String)</code></td><td><code>provider_error</code></td><td>The provider failed in a way retrying will not fix.</td></tr>
     </tbody>
   </table>
@@ -338,7 +338,7 @@ let mut worked = resuming_a_goal_in_flight;</code></pre>
 
   <p>
     <code>as_str</code> returns a <code>&amp;'static str</code> and drops the
-    payload of <code>Provider</code>, which is why the
+    payload of <code>Provider</code>. That is why the
     <code>goal_finished</code> record carries a separate
     <code>detail</code> field holding the message for that one variant. The
     short string is what the session fold matches on and what
@@ -403,8 +403,8 @@ pub fn message(&amp;self, b: &amp;Budgets) -&gt; String {
 }</code></pre>
 
   <p>
-    Four of the nine interpolate a number from <code>Budgets</code>, which is
-    what the test asserts.
+    Four of the nine interpolate a number from <code>Budgets</code>. The
+    test asserts that.
     <span class="chip test">tested</span>
     <a href="https://github.com/01000001-01001110/emma-harness/blob/master/crates/emma/src/agent.rs">crates/emma/src/agent.rs</a>
     <code>every_ending_says_which_limit_fired</code> checks that
@@ -439,7 +439,7 @@ pub fn message(&amp;self, b: &amp;Budgets) -&gt; String {
     log", and this page quoted it without comment. The sentence was false in
     the case people actually hit: an interrupt landing mid-model-call drops
     the provider future, so there is no turn to record and no usage figure to
-    bill — the API never answered, and a reader sent to the log to find the
+    bill. The API never answered. A reader sent to the log to find the
     partial turn finds nothing. What is true, and what the message now says,
     is that everything that <em>finished</em> before the interrupt is in the
     log, and that the abandoned call's answer and cost are recorded nowhere.
@@ -487,7 +487,7 @@ self.s.log.append(
     The final <code>place</code> runs for every ending. For <code>Done</code>,
     <code>Answered</code>, <code>Stalled</code> and
     <code>KicksExhausted</code> that puts the model's last message into the
-    conversation, which is what makes a follow-up question possible at all: the
+    conversation, so a follow-up question is possible at all: the
     answer has to be in the conversation and not merely in the
     <code>Outcome</code>. For <code>Tokens</code> the held turn is one whose
     tools were never run, and <code>place_turn</code> drops it.
@@ -528,7 +528,7 @@ self.s.log.append(
     only <code>RateLimited</code>, <code>Unavailable</code>, and
     <code>Transport</code> are retried (default four attempts); everything else
     surfaces on the first failure. After retries are exhausted, a retryable
-    error reaches this arm too — so the variant doc's "retrying will not fix"
+    error reaches this arm too. The variant doc's "retrying will not fix"
     means <em>emma-llm has given up</em>, not that the error was never
     retryable. Non-retryable variants that reach it immediately:
     <code>Auth</code>, <code>Unauthorized</code>, <code>Forbidden</code>,
@@ -549,7 +549,7 @@ self.s.log.append(
   <footer class="pg">
     <p>
       Written against commit <code>a3eba74</code>. Next:
-      <a href="loop-kick.html">The kick</a>, which is what happens when the
+      <a href="loop-kick.html">The kick</a>: what happens when the
       ladder falls through all four rungs.
     </p>
   </footer>

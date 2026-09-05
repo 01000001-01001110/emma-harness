@@ -191,7 +191,7 @@
   </p>
 
   <p>
-    <code>EMMA_COLORS</code> still wins, deliberately: someone who sets it is
+    <code>EMMA_COLORS</code> still wins when set: someone who sets it is
     looking at a terminal Emma guessed wrong about, and that is as true in this
     direction as the other.
     <span class="chip unv">unverified</span> against a real VT-less console: this
@@ -486,12 +486,12 @@
   <p>
     <code>Palette</code> is two fields, a <code>Level</code> and a
     <code>Theme</code>, and it is <code>Copy</code>. Fifty-five call sites
-    construct one and pass it by value &mdash; 36 outside
+    construct one and pass it by value (36 outside
     <code>term/palette.rs</code> itself, which holds the other 19.
     <span class="chip cert">certified</span>:
     <code>rg -n "Palette::new" crates/emma/src | wc -l</code> returns 55 on
     2026-09-01. The page said "roughly thirty" until then, which was a hedge
-    rather than a count. and the <code>Skin</code> that holds one is stored in
+    rather than a count. The <code>Skin</code> that holds one is stored in
     widgets across the module. A <code>Theme</code> holding a
     <code>String</code> would end that and cascade through every signature in
     <code>term/</code>, which is why themes are resolved to fixed-size data at

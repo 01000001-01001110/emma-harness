@@ -123,17 +123,16 @@
   <span class="src">crates/emma/src/term.rs — <code>struct Term</code></span>
 
   <p>
-    The other seven fields are state that has to survive across
-    <code>&amp;self</code> calls, which is why three of them are behind a
-    <code>Mutex</code>: <code>marker</code> holds the completion-marker filter
-    part-way through a streamed answer, <code>pending</code> holds the approval
-    question while <code>prompt_header</code> and <code>prompt_question</code>
-    fill it in from two separate calls, and <code>spacing</code> holds the
-    blank-row state machine for the path that has no frame.
-    <code>subordinate</code> marks a nested run's view; <code>record</code> is
-    an optional log of what the meters and the prompt were told;
-    <code>enabled</code> is <code>false</code> only for
-    <code>Term::silent</code>.
+    The other seven fields hold state across <code>&amp;self</code> calls. Three
+    sit behind a <code>Mutex</code>: <code>marker</code> holds the
+    completion-marker filter part-way through a streamed answer,
+    <code>pending</code> holds the approval question while
+    <code>prompt_header</code> and <code>prompt_question</code> fill it in from
+    two separate calls, and <code>spacing</code> holds the blank-row state
+    machine for the path that has no frame. <code>subordinate</code> marks a
+    nested run's view; <code>record</code> is an optional log of what the
+    meters and the prompt were told; <code>enabled</code> is <code>false</code>
+    only for <code>Term::silent</code>.
   </p>
 
   <p>
@@ -201,11 +200,10 @@ fn fallback_reason(
   <span class="src">crates/emma/src/term.rs — <code>fallback_reason</code>, <code>MIN_ROWS</code>, <code>MIN_COLS</code></span>
 
   <p>
-    The environment variable is the first arm, and the test that
-    pins the ordering says why: <em>&ldquo;somebody setting this has a broken
-    terminal in front of them and no interest in the other five checks
-    agreeing.&rdquo;</em> No <code>TERM</code> at all is not a refusal, because
-    that is the ordinary Windows case. An unknown platform answers
+    The environment variable is the first arm. The test that pins the ordering
+    treats <code>EMMA_NO_FRAME</code> as an explicit opt-out that should win
+    before the other checks. No <code>TERM</code> at all is not a refusal,
+    because that is the ordinary Windows case. An unknown platform answers
     <code>None</code> from <code>terminal_size</code> and lands on
     <em>&ldquo;the window size could not be read&rdquo;</em>, so the fallback is
     what a port to anything else gets by default.
@@ -215,13 +213,11 @@ fn fallback_reason(
   </p>
 
   <p>
-    <code>frame_wanted</code> asks the same question of the real process and
-    exists because the answer is needed <em>before</em> the frame is installed:
-    the Windows code page is changed only for a run that will draw, and the
-    glyph set is chosen from what the console says afterwards.
-    <code>Frame::install</code> asks it again for itself, and the doc comment
-    prices the duplication: <em>&ldquo;a check that lives in two places is
-    cheaper than an installer that trusts its caller.&rdquo;</em>
+    <code>frame_wanted</code> asks the same question of the real process before
+    the frame is installed: on Windows the code page changes only for a run that
+    will draw, and the glyph set follows what the console reports afterwards.
+    <code>Frame::install</code> asks again for itself; the comment treats the
+    duplicate check as cheaper than trusting the caller.
   </p>
 
   <figure>
@@ -360,10 +356,9 @@ fn adopt_utf8_output() -&gt; bool {
     VT proved it writes escape sequences, and without it makes WinAPI calls in
     <em>screen buffer</em> coordinates. On Windows the buffer is usually far
     taller than the window, so a repaint aimed at row 40 of a nine-thousand-row
-    buffer goes somewhere invisible. The comment names that as
-    <em>&ldquo;the exact failure the first attempt at this file
-    shipped.&rdquo;</em> Its sentinel is <code>u32::MAX</code>, because no real
-    console mode has every bit set.
+    buffer goes somewhere invisible. The comment records that failure from the
+    first version of this file. Its sentinel is <code>u32::MAX</code>, because no
+    real console mode has every bit set.
   </p>
   <span class="src">crates/emma/src/term.rs — <code>enable_vt</code>, <code>ORIGINAL_MODE</code>, <code>restore_console_mode</code></span>
 
@@ -372,20 +367,16 @@ fn adopt_utf8_output() -&gt; bool {
     measures the visible window rather than the buffer, for the same reason.
     On Windows it is <code>GetConsoleScreenBufferInfo</code> and the arithmetic
     <code>srWindow.Right - srWindow.Left + 1</code>; on unix it is
-    <code>ioctl(TIOCGWINSZ)</code>; on anything else it returns
-    <code>None</code>, with the comment <em>&ldquo;an unknown platform gets the
-    fallback, which is the whole product.&rdquo;</em> Both live variants reject
-    a zero or negative size rather than passing it on.
+    <code>ioctl(TIOCGWINSZ)</code>; on anything else it returns <code>None</code>.
+    Both live variants reject a zero or negative size rather than passing it on.
   </p>
 
   <div class="note">
     <span class="h">The glyph set is a consequence, not a choice</span>
     <p>
       <code>prefers_ascii(opted_out, utf8)</code> is two booleans and one
-      <code>||</code>, and it is biased: UTF-8 has to be <em>proved</em> before
-      the Unicode set is used, because <em>&ldquo;a transcript made of question
-      marks reads as a broken program rather than as a stylistic
-      choice.&rdquo;</em> <code>EMMA_ASCII_FRAME</code> is the opt-out and it
+      <code>||</code>. UTF-8 must be proved before the Unicode set is used; a
+      transcript of question marks reads as a broken program. <code>EMMA_ASCII_FRAME</code>
       outranks a console that was successfully moved to UTF-8.
       <span class="chip test">tested</span>:
       <code>a_code_page_change_that_did_not_take_still_gets_ascii</code> asserts
@@ -464,9 +455,8 @@ p.err 84 bytes, 0 escape bytes:  b'&gt; say the single word: ok\n\n= goal comple
     <code>prompt_header</code>, <code>prompt_question</code>,
     <code>prompt_network_question</code> and <code>prompt_answered</code>
     render exactly as they do for the parent.
-    <code>Term::recording</code> exists so a test can see both halves of that
-    rule rather than only one, because <em>&ldquo;a no-op nobody can observe is
-    a rule nobody can test.&rdquo;</em>
+    <code>Term::recording</code> exists so a test can observe both halves of
+    that rule, not only the half where calls are swallowed.
   </p>
   <span class="src">crates/emma/src/term.rs — <code>subordinate</code>, <code>meter</code>, <code>remember</code>, <code>recording</code>, <code>recorded</code></span>
 
@@ -586,12 +576,10 @@ p.err 84 bytes, 0 escape bytes:  b'&gt; say the single word: ok\n\n= goal comple
   </p>
 
   <p>
-    Two things about it. The needle is assembled rather than
-    written out <em>&ldquo;because this file is its own haystack&rdquo;</em>,
-    which is the same technique the manifest test uses. And the doc names the
-    exception rather than leaving it to be discovered: a block's
-    <em>internal</em> layout may use blank rows, which is what
-    <code>welcome.rs</code> does between its sections.
+    Two details matter. The needle is assembled at runtime so this file can
+    search its own source without matching the literal in the test. The doc
+    also names the exception: a block's <em>internal</em> layout may use blank
+    rows, as <code>welcome.rs</code> does between its sections.
     <span class="chip test">tested</span>, and the failure it prevents has no
     other witness: a second hand-rolled <code>Line::default()</code> beside a
     <code>separate()</code> passes every test that renders lines and produces

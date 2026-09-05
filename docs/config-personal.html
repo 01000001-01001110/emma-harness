@@ -17,7 +17,7 @@
      Each page carries its own copy. These pages must open from file://
      with no server, no build step and no JavaScript, so there is nothing to
      include a partial with. The cost is that adding a page means editing this
-     file and every page's copy of it — which is the deal, and is why the list
+     file and every page's copy of it. That is why the list
      is kept short.
      =========================================================================== -->
 <nav class="side">
@@ -84,9 +84,9 @@
     Two files under the home directory, never in the working tree, read by the
     binary and the provider crate rather than by the harness. One holds
     preferences and fails by going quiet; the other holds secrets and fails by
-    refusing. Both rules were paid for: a preference store that refused to start
-    would be the tail wagging the dog, and a credential write that replaced the
-    document deleted a key belonging to another part of the program.
+    refusing. A preference store that refused to start would be the tail wagging
+    the dog. A credential write that replaced the document deleted a key belonging
+    to another part of the program.
   </p>
 
   <div class="key">
@@ -287,8 +287,8 @@ api key        NOT FOUND — no API key for anthropic. Set ANTHROPIC_API_KEY, or
 
   <p>
     Three sources per answer, in a fixed order: a flag, then the file, then the
-    built-in. <code>config check</code> refuses to hide the failure, because it
-    is the command people run when something is wrong:
+    built-in. <code>config check</code> prints provider failures because people
+    run it when something is wrong:
   </p>
 
 <pre><code><span class="c">$ cat ~/.emma/settings.json</span>
@@ -432,8 +432,8 @@ pub struct ToolSettings {
     <code>~/.emma/credentials.json</code>, keyed by provider, with the
     environment consulted first. <a href="providers-credentials.html">Providers
     &amp; models</a> covers <code>auth.rs</code> in full: the precedence rule,
-    the redaction, and the audit that moved it. Three things belong on a
-    configuration page.
+    the redaction, and the audit that moved it. On a configuration page, three
+    items matter:
   </p>
 
   <p>
