@@ -2407,35 +2407,48 @@ fn one_line_name(name: &str) -> String {
 /// this is called from `toggle_settings` on the input thread and a spawn there
 /// is a freeze with no way out. What that costs is honesty about the word: the
 /// row says `found`, and `NOTICE_LSP_FOUND` says found means on disk.
-fn lsp_rows(_stored: &crate::settings::Settings) -> (Vec<super::settings::LspRow>, Vec<String>) {
+fn lsp_rows(stored: &crate::settings::Settings) -> (Vec<super::settings::LspRow>, Vec<String>) {
     use super::settings::{LspFound, LspRow};
+    use emma_tools_lsp::lang;
+    use emma_tools_lsp::server::{self, Presence};
 
-    // **One row, because this build has one language server.** The screen
-    // arrived expecting `emma_tools_lsp::lang` — a registry of languages, a
-    // `Presence` probe per language, and an `lsp.enabled` block in
-    // `settings.json` to switch them with. None of the three is in this tree:
-    // `emma_tools_lsp` resolves exactly one server (`server::resolve`, Rust,
-    // `EMMA_LSP_SERVER` to override) and `crate::settings::Settings` has no
-    // `lsp` key. Rendering a table of languages this build cannot start would
-    // be the screen inventing a capability, so it renders the one that exists.
-    //
-    // `found` is still a claim about *resolution* and never about a server that
-    // starts, which is the distinction `LspFound` was drawn for. `network` is
-    // false: rust-analyzer indexes a local crate graph.
-    let (found, enabled) = match emma_tools_lsp::server::resolve() {
-        Ok(_) => (LspFound::Found, true),
-        Err(_) => (LspFound::Absent, false),
-    };
-    let rows = vec![LspRow {
-        label: "Rust".to_string(),
-        key: emma_tools_lsp::server::LANGUAGE_ID.to_string(),
-        enabled,
-        found,
-        network: false,
-    }];
-    // Nothing can be unknown while nothing can be enabled by name: the
-    // `lsp.enabled` block this reported typos in does not exist here.
-    (rows, Vec::new())
+    // One row per language in the table. `found` is a claim about a file on
+    // disk and never about a server that starts: `server::presence` spawns
+    // nothing, because this runs on the input thread from `toggle_settings`
+    // and a spawn there is a freeze with no way out. `server::resolve` is the
+    // truth and costs a process per candidate.
+    let enabled: Vec<String> = stored.lsp.enabled.clone().unwrap_or_else(|| {
+        lang::DEFAULT_ENABLED
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    });
+
+    let rows = lang::LANGUAGES
+        .iter()
+        .map(|l| LspRow {
+            label: l.label.to_string(),
+            key: l.key.to_string(),
+            enabled: enabled.iter().any(|k| k.trim().eq_ignore_ascii_case(l.key)),
+            found: match server::presence(l) {
+                Presence::Found { .. } => LspFound::Found,
+                Presence::NeedsLauncher { needs, .. } => LspFound::Needs(needs.to_string()),
+                Presence::Absent => LspFound::Absent,
+            },
+            network: l.network,
+        })
+        .collect();
+
+    // Keys in `lsp.enabled` that name no language here. Kept and reported
+    // rather than rejected, so a settings file written by a newer build does
+    // not disable the languages this one does know.
+    let unknown = enabled
+        .iter()
+        .filter(|k| lang::by_key(k).is_none())
+        .cloned()
+        .collect();
+
+    (rows, unknown)
 }
 
 /// The TOOL PERMISSIONS card's rows: the rules really in force for this
@@ -5048,38 +5061,30 @@ mod tests {
         assert!(app.settings.memory_on);
     }
 
-    /// Class B: opening the screen reports the one language server this build
-    /// has, and reports it against what `emma_tools_lsp` actually resolves.
+    /// Class B: opening the screen reports every language in the table,
+    /// against what `emma_tools_lsp` actually finds on disk.
     ///
-    /// **Rewritten, and the pair it replaces is a finding.** What stood here
-    /// were two tests over `emma_tools_lsp::lang` — a registry of four
-    /// languages, `DEFAULT_ENABLED`, a network flag per language and an
-    /// `lsp.enabled` block in `settings.json` that reported unknown keys. None
-    /// of that exists in this tree: `emma_tools_lsp` resolves exactly one
-    /// server and `Settings` has no `lsp` key. The tests could not be adapted
-    /// because there is nothing for them to be about.
-    ///
-    /// `found` is deliberately not asserted: whether rust-analyzer is on the
-    /// machine running the test is a fact about that machine.
+    /// `found` is deliberately not asserted: whether any given server is on
+    /// the machine running the test is a fact about that machine. What is
+    /// asserted is the table, the default enabled set, and the network flags,
+    /// which are facts about this build.
     #[test]
-    fn opening_settings_reports_the_one_language_server_this_build_has() {
+    fn opening_settings_reports_every_language_in_the_table() {
         let home = tempfile::tempdir().unwrap();
         let app = open_settings_at(home.path());
         let keys: Vec<&str> = app.settings.lsp.iter().map(|r| r.key.as_str()).collect();
-        assert_eq!(keys, vec![emma_tools_lsp::server::LANGUAGE_ID]);
-        assert!(
-            !app.settings.lsp[0].network,
-            "rust-analyzer indexes a local crate graph; a network claim here              would be the row inventing a hazard"
-        );
-        let resolves = emma_tools_lsp::server::resolve().is_ok();
-        assert_eq!(
-            app.settings.lsp[0].enabled, resolves,
-            "the row must follow what the resolver actually said"
-        );
-        assert!(
-            app.settings.lsp_unknown.is_empty(),
-            "nothing can be unknown while nothing is enabled by name"
-        );
+        assert_eq!(keys, emma_tools_lsp::lang::keys());
+        for row in &app.settings.lsp {
+            let l = emma_tools_lsp::lang::by_key(&row.key).expect("in the table");
+            assert_eq!(row.network, l.network, "{}", row.key);
+            assert_eq!(
+                row.enabled,
+                emma_tools_lsp::lang::DEFAULT_ENABLED.contains(&l.key),
+                "with no lsp.enabled written, the row must follow the default set: {}",
+                row.key
+            );
+        }
+        assert!(app.settings.lsp_unknown.is_empty());
     }
 
     /// Class A: Save Now writes the file and the receipt names it.

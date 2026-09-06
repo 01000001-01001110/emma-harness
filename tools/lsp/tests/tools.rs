@@ -106,7 +106,7 @@ async fn references_come_back_with_the_source_line_that_makes_them_useful() {
     );
     // The server is named in the result, not in the description.
     assert!(
-        out.content.starts_with("server: rust-analyzer 0.0.0-fake"),
+        out.content.starts_with("server: 0.0.0-fake (Rust)"),
         "{}",
         out.content
     );
@@ -193,7 +193,7 @@ async fn a_path_outside_the_root_is_refused() {
 /// Never a quiet text search. A file this crate has no server for is refused,
 /// and the refusal says what to use instead *and* what that costs.
 #[tokio::test]
-async fn a_file_that_is_not_rust_is_refused_rather_than_guessed_at() {
+async fn a_file_no_language_claims_is_refused_rather_than_guessed_at() {
     let (sandbox, pool) = fixture(Indexing::Finishes, &[]).await;
     let err = Hover::new(pool)
         .invoke(
@@ -204,7 +204,10 @@ async fn a_file_that_is_not_rust_is_refused_rather_than_guessed_at() {
         .expect("no fault")
         .expect_err("markdown has no language server here");
     assert_eq!(err.kind(), "tool_unavailable");
-    assert!(err.detail().contains("not a Rust file"), "{err}");
+    assert!(err.detail().contains("no language server wired"), "{err}");
+    // The refusal lists what it *does* serve, so the model learns the rule
+    // rather than only this verdict.
+    assert!(err.detail().contains("rs, sh"), "{err}");
     assert!(err.detail().contains("Grep"), "{err}");
 }
 
@@ -458,10 +461,21 @@ async fn go_to_definition_answers_the_definition_question_and_not_a_neighbouring
         "GoToDefinition returned the reference answer: {}",
         out.content
     );
+    // Scoped to the *label* line rather than to the whole result, and it has to
+    // be: since the language table landed, every rust answer carries the proc
+    // macro caveat, whose last clause is "references into macro-generated code
+    // will be missed". A whole-result `!contains("references")` therefore went
+    // red on a correct answer — a test failing on a sentence that exists to make
+    // answers more honest. The claim was always about the noun `render::locations`
+    // was handed, so that is what is asserted.
+    let label = out
+        .content
+        .lines()
+        .find(|l| l.contains(" in 1 file"))
+        .unwrap_or_else(|| panic!("no count line in: {}", out.content));
     assert!(
-        !out.content.contains("references"),
-        "the answer is labelled with the wrong question: {}",
-        out.content
+        !label.contains("references"),
+        "the answer is labelled with the wrong question: {label}"
     );
 }
 

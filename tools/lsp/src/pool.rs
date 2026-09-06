@@ -17,9 +17,12 @@
 //! would put the teardown back in `main` — the exact shape of the `tools/web`
 //! leak this crate is trying not to repeat.
 //!
-//! **Keyed by root**, because a language server is a project's index and Emma's
-//! root is the project. Two roots is two servers; the same root asked twice is
-//! one.
+//! **Keyed by root and language**, because a language server is a project's
+//! index and Emma's root is the project. Two roots is two servers; the same root
+//! asked twice is one. Root alone was the key while there was one language and
+//! it cannot stay that way: a workspace with `.rs` and `.tf` in it needs two
+//! servers, and the crash ceiling has to be per server or a bicep server that
+//! dies three times stops rust from ever starting.
 //!
 //! **When it dies.** The client notices and records why (see
 //! `client::pump_reader`). The pool checks before handing one out, drops the
@@ -49,6 +52,7 @@ use std::sync::Arc;
 use emma_tool_api::ToolError;
 
 use crate::client::Client;
+use crate::lang::Language;
 use crate::server::{self, Server};
 
 // region: The pool
@@ -81,14 +85,60 @@ struct Slot {
 /// and it is held across that await on purpose. Two tools asking at once during
 /// the first call of a session is the normal case, and the alternative to
 /// serialising them is two rust-analyzers indexing the same workspace.
-#[derive(Default)]
 pub struct Pool {
-    slots: tokio::sync::Mutex<HashMap<PathBuf, Slot>>,
+    slots: tokio::sync::Mutex<HashMap<Key, Slot>>,
+    /// Which languages may be started. Everything else is refused by
+    /// [`server::disabled_language`] before a process exists.
+    enabled: Vec<String>,
+}
+
+/// One root, one language. See the module doc for why root alone will not do.
+type Key = (PathBuf, &'static str);
+
+/// `Default` is [`Pool::new`] and therefore the default language set. Derived
+/// would be an empty `enabled`, which is a pool that refuses everything, and a
+/// wrong default here is silent.
+impl Default for Pool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Pool {
+    /// A pool serving the default language set.
     pub fn new() -> Self {
-        Self::default()
+        Self::with_enabled(crate::lang::DEFAULT_ENABLED.iter().map(|s| s.to_string()))
+    }
+
+    /// A pool serving exactly these language keys.
+    ///
+    /// Unknown keys are kept rather than rejected. A settings file written by a
+    /// newer build naming a language this one has never heard of should not stop
+    /// the ones it does know from working, and [`Pool::unknown_keys`] is how a
+    /// caller reports the difference instead.
+    pub fn with_enabled(keys: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            slots: tokio::sync::Mutex::new(HashMap::new()),
+            enabled: keys
+                .into_iter()
+                .map(|k| k.trim().to_ascii_lowercase())
+                .collect(),
+        }
+    }
+
+    /// Whether this pool may start a server for `language`.
+    pub fn is_enabled(&self, language: &Language) -> bool {
+        self.enabled.iter().any(|k| k == language.key)
+    }
+
+    /// Enabled keys that name no language here, for a caller that wants to say
+    /// so out loud.
+    pub fn unknown_keys(&self) -> Vec<String> {
+        self.enabled
+            .iter()
+            .filter(|k| crate::lang::by_key(k).is_none())
+            .cloned()
+            .collect()
     }
 
     /// The running server for `root`, starting one if there is not one.
@@ -96,9 +146,18 @@ impl Pool {
     /// `root` must already be canonical — it comes from `path::root`, which is
     /// the same canonicalisation every filesystem tool uses. Keying on anything
     /// else would let two spellings of one directory become two servers.
-    pub async fn client(&self, root: &Path) -> Result<Arc<Client>, ToolError> {
+    pub async fn client(
+        &self,
+        root: &Path,
+        language: &'static Language,
+    ) -> Result<Arc<Client>, ToolError> {
+        // The switch is checked before the lock and before any process, so a
+        // disabled language costs nothing and cannot contend with an enabled one.
+        if !self.is_enabled(language) {
+            return Err(server::disabled_language(language));
+        }
         let mut slots = self.slots.lock().await;
-        let slot = slots.entry(root.to_path_buf()).or_default();
+        let slot = slots.entry((root.to_path_buf(), language.key)).or_default();
 
         if let Some(existing) = &slot.client {
             match existing.death() {
@@ -116,14 +175,15 @@ impl Pool {
 
         if slot.crashes >= MAX_CRASHES {
             return Err(ToolError::Failed(format!(
-                "the language server has died {} times for this workspace, so Emma has \
+                "the {} language server has died {} times for this workspace, so Emma has \
                  stopped restarting it. The last time: {}",
+                language.label,
                 slot.crashes,
                 slot.last_death.as_deref().unwrap_or("no reason recorded")
             )));
         }
 
-        let server = server::resolve()?;
+        let server = server::resolve(language)?;
         match Client::start(&server, root).await {
             Ok(client) => {
                 slot.client = Some(client.clone());
@@ -153,9 +213,10 @@ impl Pool {
     /// rather than making the first tool call of a session pay for the index,
     /// starts one and adopts it here.
     pub async fn adopt(&self, root: &Path, client: Arc<Client>) {
+        let language = client.server().language.key;
         let mut slots = self.slots.lock().await;
         slots.insert(
-            root.to_path_buf(),
+            (root.to_path_buf(), language),
             Slot {
                 client: Some(client),
                 crashes: 0,
@@ -168,12 +229,27 @@ impl Pool {
     ///
     /// For a `/lsp`-style status command: "is one running, and which binary" is
     /// a question worth being able to ask without paying for an index.
-    pub async fn running(&self, root: &Path) -> Option<Server> {
+    pub async fn running(&self, root: &Path, language: &'static Language) -> Option<Server> {
         let slots = self.slots.lock().await;
         slots
-            .get(root)
+            .get(&(root.to_path_buf(), language.key))
             .and_then(|s| s.client.as_ref())
             .map(|c| c.server().clone())
+    }
+
+    /// Every server currently running, whatever the root or language.
+    ///
+    /// The `/lsp`-status question once there are seven languages: "which of
+    /// these is actually up" is no longer answerable one root at a time.
+    pub async fn all_running(&self) -> Vec<Server> {
+        let slots = self.slots.lock().await;
+        let mut servers: Vec<Server> = slots
+            .values()
+            .filter_map(|s| s.client.as_ref())
+            .map(|c| c.server().clone())
+            .collect();
+        servers.sort_by(|a, b| a.language.key.cmp(b.language.key));
+        servers
     }
 
     /// Shut every server down politely, then drop it.

@@ -1,11 +1,18 @@
 //! Emma's code-intelligence tool surface: `FindReferences`, `GoToDefinition`,
-//! `Hover`, `DocumentSymbols` — a language server's answers instead of text
-//! search.
+//! `Hover`, `DocumentSymbols`, `Diagnostics` — a language server's answers
+//! instead of text search.
 //!
 //! `Grep` finds a name. It cannot tell a call from a comment, does not know that
 //! `Config` here is the type declared over there, and cannot answer "what breaks
-//! if I change this signature". rust-analyzer can, because it is the compiler's
-//! own understanding of the project. This crate is the wire between them.
+//! if I change this signature". A language server can, because it is the
+//! compiler's or the linter's own understanding of the project. This crate is
+//! the wire between them.
+//!
+//! **Seven languages, one client.** Rust, Bash, PowerShell, Terraform and
+//! OpenTofu, Bicep, Ansible and Python. Which server, where it is found, how it
+//! is launched and what it is told at `initialize` are all data in [`lang`];
+//! nothing outside that module knows what any particular server is. Four of the
+//! seven are not executables, which is why a candidate carries a launcher.
 //!
 //! # The four rules that shape everything here
 //!
@@ -44,22 +51,33 @@
 //! and `tests/lifecycle.rs` checks it against a real process rather than
 //! trusting the flag.
 //!
-//! # What was cut, and why
+//! # `Diagnostics`, which this crate used to refuse to ship
 //!
-//! **`Diagnostics` — cut.** It was the third most valuable tool on the list and
-//! it is not here, because it is not the same mechanism. Diagnostics are not a
-//! request/response: the server *pushes* `textDocument/publishDiagnostics` when
-//! it feels like it, so "get the diagnostics for this file" means waiting an
-//! unknowable time for a notification that may never come — the readiness
-//! problem again, but without the progress notifications that make readiness
-//! solvable. Worse, the diagnostics worth having are `cargo check`'s, and
-//! rust-analyzer only produces those by *running cargo check*, which this crate
-//! deliberately disables (see [`client::INIT_OPTIONS`]) because it is what makes
-//! `read_only: true` a fact. With it off, the tool would return
-//! syntax-and-name-resolution errors only and silently omit every type error —
-//! a confidently incomplete answer, which is the exact failure everything else
-//! here is arranged to prevent. `Bash` running `cargo check` is the honest tool
-//! for this, and it already exists.
+//! It was cut once, and the argument was right at the time. Diagnostics are not
+//! a request/response: the server *pushes* `textDocument/publishDiagnostics`
+//! when it feels like it, so "get the diagnostics for this file" means waiting
+//! an unknowable time for a notification that may never come. And for rust the
+//! diagnostics worth having are `cargo check`'s, which this crate deliberately
+//! disables (see [`client::INIT_OPTIONS`]) because that is what makes
+//! `read_only: true` a fact.
+//!
+//! Both halves changed when the crate stopped being rust-only. For bash,
+//! ansible, terraform and bicep, `publishDiagnostics` on `didOpen` is the whole
+//! product and it arrives within a second. And the unknowable wait is now
+//! solved rather than avoided: [`client::Client::diagnostics`] returns an
+//! `Option`, `None` is **not** an empty list, and [`render::diagnostics`] gives
+//! the two cases sentences that cannot be mistaken for each other. An empty
+//! result means the server said clean. Silence says silence, names the wait it
+//! gave up after, and says how to wait longer.
+//!
+//! The rust caveat survives in the tool's own description, and it is narrower
+//! than it was first written. Measured against rust-analyzer 1.94.1 with
+//! `check.enable` off (`tests/real_server.rs`), what is published for Rust is
+//! **syntax errors only** — a call to a function that does not exist came back
+//! as an explicit clean result. So for Rust this tool answers "does it parse",
+//! and `Bash` running `cargo check` remains the honest tool for everything
+//! past that. The languages that publish more are the ones whose whole product
+//! is `publishDiagnostics`.
 //!
 //! **`WorkspaceSymbols` — cut.** Cheap to add and genuinely useful, and left out
 //! for one reason: it is the query most sensitive to a partial index, and it has
@@ -73,8 +91,8 @@
 //! [`client`] owns one running server: handshake, readiness, request
 //! correlation, death. [`pool`] owns the clients and the crash accounting.
 //! [`doc`] converts paths to URIs and "the symbol on line 42" to a position.
-//! [`render`] is everything the model reads. [`tools`] is four thin shells over
-//! all of it.
+//! [`render`] is everything the model reads. [`lang`] is the table every other
+//! module reads. [`tools`] is five thin shells over all of it.
 
 use std::sync::Arc;
 
@@ -83,6 +101,7 @@ use emma_tool_api::Tool;
 mod args;
 pub mod client;
 pub mod doc;
+pub mod lang;
 pub mod pool;
 pub mod proto;
 pub mod render;
@@ -92,28 +111,45 @@ pub mod tools;
 pub use client::{Client, Readiness};
 pub use pool::Pool;
 pub use server::Server;
-pub use tools::{DocumentSymbols, FindReferences, GoToDefinition, Hover};
+pub use tools::{Diagnostics, DocumentSymbols, FindReferences, GoToDefinition, Hover};
 
-/// The whole surface, wired to one pool.
+/// The whole surface, wired to one pool serving the default language set.
 ///
 /// Returns the pool as well, for the same reason `fs_tools` returns its read
 /// tracker: a harness that wants to shut the servers down politely, or ask which
-/// one is running, can — without any tool having to expose it.
+/// one is running, can, without any tool having to expose it.
 ///
 /// **This is the only supported way to build the set.** `ToolCtx` carries no
 /// session state, so the pool lives in the tool structs, and the invariant "all
-/// four share one pool" is a wiring convention rather than something the type
-/// system holds. Four tools built with four pools is four rust-analyzers
+/// five share one pool" is a wiring convention rather than something the type
+/// system holds. Five tools built with five pools is five language servers
 /// indexing the same workspace, and it compiles. The same known defect
 /// `tools/fs` records about its read tracker, recorded here for the same reason:
-/// cheaper to notice at four tools than at fourteen.
+/// cheaper to notice at five tools than at fourteen.
 pub fn lsp_tools() -> (Vec<Arc<dyn Tool>>, Arc<Pool>) {
-    let pool = Arc::new(Pool::new());
+    lsp_tools_with(lang::DEFAULT_ENABLED.iter().map(|s| s.to_string()))
+}
+
+/// The surface, serving exactly these language keys.
+///
+/// What `settings.json`'s `lsp.enabled` reaches. Keys are [`lang::LANGUAGES`]
+/// entries; anything else is kept and reported by [`Pool::unknown_keys`] rather
+/// than rejected, so a settings file written by a newer build does not disable
+/// the languages this one does know.
+///
+/// Three of the seven are absent from [`lang::DEFAULT_ENABLED`] because their
+/// servers may reach the network and these tools declare they do not. Turning
+/// one on is the user's call to make, and the refusal says so.
+pub fn lsp_tools_with(
+    enabled: impl IntoIterator<Item = String>,
+) -> (Vec<Arc<dyn Tool>>, Arc<Pool>) {
+    let pool = Arc::new(Pool::with_enabled(enabled));
     let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(FindReferences::new(pool.clone())),
         Arc::new(GoToDefinition::new(pool.clone())),
         Arc::new(Hover::new(pool.clone())),
         Arc::new(DocumentSymbols::new(pool.clone())),
+        Arc::new(Diagnostics::new(pool.clone())),
     ];
     (tools, pool)
 }
@@ -123,7 +159,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_surface_is_the_four_tools_and_they_share_one_pool() {
+    fn the_surface_is_the_five_tools_and_they_share_one_pool() {
         let (tools, pool) = lsp_tools();
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         assert_eq!(
@@ -132,13 +168,14 @@ mod tests {
                 "FindReferences",
                 "GoToDefinition",
                 "Hover",
-                "DocumentSymbols"
+                "DocumentSymbols",
+                "Diagnostics"
             ]
         );
-        // One pool, four tools holding it, plus the one returned: five strong
+        // One pool, five tools holding it, plus the one returned: six strong
         // references. The assertion is the sharing invariant `lsp_tools`
         // promises, which nothing else can check.
-        assert_eq!(Arc::strong_count(&pool), 5);
+        assert_eq!(Arc::strong_count(&pool), 6);
     }
 
     /// The same shape `tools/fs` asserts, for the same reason: a tool that
@@ -217,6 +254,6 @@ mod tests {
         for tool in tools {
             registry.register(tool);
         }
-        assert_eq!(registry.names().len(), 4);
+        assert_eq!(registry.names().len(), 5);
     }
 }

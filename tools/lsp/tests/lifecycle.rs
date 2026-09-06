@@ -17,8 +17,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use emma_tools_lsp::client::Client;
+use emma_tools_lsp::lang::Language;
 use emma_tools_lsp::pool::{Pool, MAX_CRASHES};
 use emma_tools_lsp::server::{Server, Source};
+
+/// The one language these lifecycle cases use. The pool is keyed by root *and*
+/// language now, so every `client` call has to name one.
+fn rust() -> &'static Language {
+    emma_tools_lsp::lang::by_key("rust").expect("rust is in the table")
+}
 use support::{Fake, Indexing, Sandbox};
 
 /// A process that will outlive its parent unless something kills it. Emma's own
@@ -35,9 +42,12 @@ fn sleeper() -> Option<Server> {
     ] {
         if std::path::Path::new(path).is_file() {
             return Some(Server {
-                path: path.into(),
+                program: path.into(),
+                args: Vec::new(),
+                entry: path.into(),
                 version: version.into(),
                 source: Source::Override,
+                language: emma_tools_lsp::lang::by_key("rust").expect("rust is in the table"),
             });
         }
     }
@@ -59,7 +69,7 @@ async fn dropping_a_client_kills_its_process() {
 
     // Started by hand rather than through `Client::start`, whose handshake
     // would block for ninety seconds against a process that does not speak LSP.
-    let mut child = tokio::process::Command::new(&server.path)
+    let mut child = tokio::process::Command::new(&server.program)
         .arg("3000")
         .current_dir(sandbox.root())
         .stdin(std::process::Stdio::piped())
@@ -177,7 +187,7 @@ async fn the_pool_stops_restarting_a_server_that_keeps_dying() {
     // against the same ceiling and for the same reason.
     let mut last = None;
     for _ in 0..(MAX_CRASHES + 2) {
-        last = Some(pool.client(&root).await);
+        last = Some(pool.client(&root, rust()).await);
     }
     let last = last.expect("looped");
 
@@ -206,8 +216,8 @@ async fn one_root_gets_one_server() {
     let pool = Arc::new(Pool::new());
     let root = sandbox.canonical();
 
-    let a = pool.client(&root).await;
-    let b = pool.client(&root).await;
+    let a = pool.client(&root, rust()).await;
+    let b = pool.client(&root, rust()).await;
     match (a, b) {
         (Ok(a), Ok(b)) => assert!(Arc::ptr_eq(&a, &b), "the pool started two servers"),
         (Err(a), Err(b)) => assert_eq!(a.kind(), b.kind(), "the same refusal both times"),

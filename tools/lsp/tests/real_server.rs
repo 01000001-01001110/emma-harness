@@ -24,7 +24,9 @@ use std::time::Duration;
 
 use emma_tool_api::Tool;
 use emma_tools_lsp::client::Readiness;
-use emma_tools_lsp::{server, DocumentSymbols, FindReferences, GoToDefinition, Hover, Pool};
+use emma_tools_lsp::{
+    server, Diagnostics, DocumentSymbols, FindReferences, GoToDefinition, Hover, Pool,
+};
 use serde_json::json;
 use std::sync::Arc;
 use support::Sandbox;
@@ -55,10 +57,16 @@ pub fn build() -> Config {
 
 const CARGO_TOML: &str = "[package]\nname = \"lsp-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n";
 
+/// The language every case here drives. `resolve` and `Pool::client` both take
+/// one now: the pool is keyed by root and language.
+fn rust() -> &'static emma_tools_lsp::lang::Language {
+    emma_tools_lsp::lang::by_key("rust").expect("rust is in the table")
+}
+
 /// Sets up a real server over a one-file crate, or `None` if there is none
 /// installed.
 async fn fixture() -> Option<(Sandbox, Arc<Pool>)> {
-    match server::resolve() {
+    match server::resolve(rust()) {
         Ok(found) => eprintln!("real-server tests running against {found}"),
         Err(e) => {
             eprintln!("SKIPPED: no rust-analyzer on this machine — {e}");
@@ -71,7 +79,7 @@ async fn fixture() -> Option<(Sandbox, Arc<Pool>)> {
     let pool = Arc::new(Pool::new());
     // Start it here so the first tool call is not also the one paying for the
     // spawn; the point of the test is the answers, not the latency.
-    pool.client(&sandbox.canonical()).await.ok()?;
+    pool.client(&sandbox.canonical(), rust()).await.ok()?;
     Some((sandbox, pool))
 }
 
@@ -83,7 +91,10 @@ async fn a_real_rust_analyzer_indexes_and_answers() {
     let Some((sandbox, pool)) = fixture().await else {
         return;
     };
-    let client = pool.client(&sandbox.canonical()).await.expect("started");
+    let client = pool
+        .client(&sandbox.canonical(), rust())
+        .await
+        .expect("started");
 
     // Readiness first, and this is the assertion that the progress tokens
     // `client::is_indexing_token` matches are the ones rust-analyzer actually
@@ -213,6 +224,23 @@ async fn definition_hover_and_symbols_answer_for_real() {
 ///   created when absent, refreshed when stale, and left byte-identical when
 ///   valid; nothing else in the project changes, with dependencies or without,
 ///   and no `target/` appears.
+/// - 2026-09-06, `rust-analyzer 1.94.1 (e408947b 2026-03-25)`, the rustup
+///   component on Windows: **no `Cargo.lock` again.** A full index, a satisfied
+///   `FindReferences` and a `DocumentSymbols` left the fixture byte-identical.
+///
+/// **So the lockfile write is a property of the build, not of the tool, and
+/// this test used to assert the wrong half of that.** It did
+/// `read_to_string(Cargo.lock).expect("the server materialized a lockfile, as
+/// measured on 0.3.3033")` — which turns a *tighter* server into a red test,
+/// and is the same mistake in the opposite direction as the version it
+/// replaced. Three measurements, two answers, and neither is a defect.
+///
+/// What is asserted instead is the invariant the `read_only` bit actually
+/// rests on and every build has satisfied: **nothing in the project changes,
+/// and the only file that may be added is a `Cargo.lock` that genuinely
+/// describes this crate.** A server that started writing a `target/`, or
+/// rewriting `src/lib.rs`, or dropping a file called `Cargo.lock` that is not
+/// one, still goes red.
 ///
 /// Whether that write fits the bit is a question about what `read_only` asks,
 /// and [`emma_tool_api::ToolMeta`]'s own documentation answers it: the bit
@@ -245,7 +273,10 @@ async fn a_real_server_writes_nothing_but_the_cargo_lock() {
     let before = support::fingerprint(sandbox.root());
     assert!(!before.is_empty(), "the fixture is empty");
 
-    let client = pool.client(&sandbox.canonical()).await.expect("started");
+    let client = pool
+        .client(&sandbox.canonical(), rust())
+        .await
+        .expect("started");
     let _ = tokio::time::timeout(Duration::from_secs(180), client.wait_ready()).await;
     let _ = FindReferences::new(pool.clone())
         .invoke(
@@ -257,12 +288,17 @@ async fn a_real_server_writes_nothing_but_the_cargo_lock() {
         .invoke(&sandbox.ctx, json!({ "file_path": "src/lib.rs" }))
         .await;
 
-    let lock = std::fs::read_to_string(sandbox.root().join("Cargo.lock"))
-        .expect("the server materialized a lockfile, as measured on 0.3.3033");
-    assert!(
-        lock.contains("name = \"lsp-fixture\""),
-        "Cargo.lock does not describe this crate: {lock}"
-    );
+    // If one appeared, it has to be a genuine lockfile for this crate — the
+    // cargo metadata write the doc above argues for, and not some other file
+    // wearing the name. If none appeared, this build did not make the call,
+    // which three years of rust-analyzer say is equally normal.
+    match std::fs::read_to_string(sandbox.root().join("Cargo.lock")) {
+        Ok(lock) => assert!(
+            lock.contains("name = \"lsp-fixture\""),
+            "a file called Cargo.lock appeared and does not describe this crate: {lock}"
+        ),
+        Err(e) => eprintln!("no Cargo.lock was written by this build ({e}); see the doc above"),
+    }
 
     let after = support::fingerprint(sandbox.root());
     let mut unexpected: Vec<&String> = Vec::new();
@@ -292,7 +328,10 @@ async fn a_real_server_writes_nothing_but_the_cargo_lock() {
     if generated.is_ok_and(|o| o.status.success()) {
         let before = support::fingerprint(locked.root());
         let pool = Arc::new(Pool::new());
-        let client = pool.client(&locked.canonical()).await.expect("started");
+        let client = pool
+            .client(&locked.canonical(), rust())
+            .await
+            .expect("started");
         let _ = tokio::time::timeout(Duration::from_secs(180), client.wait_ready()).await;
         let _ = Hover::new(pool)
             .invoke(
@@ -351,3 +390,212 @@ async fn a_file_edited_between_calls_is_re_synced() {
         second.content
     );
 }
+
+// region: Diagnostics, against a server that really pushes them
+// ---------------------------------------------------------------------------
+// Diagnostics, against a server that really pushes them
+//
+// Everything in `tests/diagnostics.rs` runs through the fake, which is what
+// makes the three outcomes testable on a box with nothing installed. What the
+// fake cannot answer is whether a real rust-analyzer publishes anything at all
+// with `check.enable` off — the exact question the crate spent a release
+// refusing to ship the tool over. These two are the receipt.
+// ---------------------------------------------------------------------------
+
+/// A real server, a real readiness wait, a real publication — and the boundary
+/// of what `Diagnostics` can honestly claim for Rust.
+///
+/// **What was measured, 2026-09-06, rust-analyzer 1.94.1, `check.enable: false`:**
+///
+/// - A **syntax error** is published, promptly and in detail. `pub fn oops( ->`
+///   came back as seven `rust-analyzer:syntax-error` diagnostics, 1-based,
+///   already waiting by the time the tool asked (0.00s past readiness).
+/// - An **unresolved name** — `no_such_function()` in an otherwise well-formed
+///   file — came back as an **empty publication**: a real answer saying clean.
+///   Run on its own, before the syntax error was added, and twice.
+/// - A **clean file** came back clean, which is the control.
+///
+/// The middle one is the finding, and it contradicts what the ported
+/// description said. With `cargo check` off this is a **syntax** checker for
+/// Rust, not a name-resolution one: rust-analyzer withholds name and type
+/// diagnostics for a crate whose model it does not consider fully loaded, and
+/// with build scripts and proc macros disabled that is every crate Emma opens.
+/// `descriptions/diagnostics.md` says so now. `Bash` running `cargo check`
+/// remains the honest tool for anything past a parse error.
+///
+/// The unresolved-name half is **printed and not asserted**, deliberately. A
+/// server that starts reporting it would be strictly better, and a test that
+/// pinned today's silence would go red for the improvement — the same mistake
+/// the lockfile assertion above made in the other direction. What is asserted is
+/// that it produced an *answer* rather than the timeout sentence, because that
+/// is the tool's contract and not the server's behaviour.
+///
+/// Timings are printed rather than asserted. A wall-clock assertion here would
+/// be the 0.36-second lie in a new costume: a number measured on one machine,
+/// pinned, and then believed on every other.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_real_server_publishes_diagnostics_and_a_clean_file_reads_differently() {
+    if server::resolve(rust()).is_err() {
+        eprintln!("SKIPPED: no rust-analyzer on this machine");
+        return;
+    }
+    // A sandbox of its own rather than `fixture()`'s, and the broken code is
+    // written **before** the server starts. Measured 2026-09-06: a module added
+    // to `lib.rs` after the workspace had been loaded came back with an empty
+    // diagnostic set — a real answer about a file rust-analyzer did not yet
+    // consider part of the crate. That is the server being consistent rather
+    // than wrong, and it is a trap for a test that writes its fixture late.
+    let sandbox = Sandbox::new();
+    sandbox.write("Cargo.toml", CARGO_TOML);
+    sandbox.write("src/clean.rs", LIB_RS);
+    sandbox.write(
+        "src/unresolved.rs",
+        "pub fn oops() {\n    no_such_function();\n}\n",
+    );
+    sandbox.write(
+        "src/lib.rs",
+        "pub mod clean;\npub mod unresolved;\n\npub fn broken( -> u32 {\n    0\n}\n",
+    );
+    let pool = Arc::new(Pool::new());
+
+    let started = std::time::Instant::now();
+    let client = pool
+        .client(&sandbox.canonical(), rust())
+        .await
+        .expect("started");
+    let readiness = tokio::time::timeout(Duration::from_secs(180), client.wait_ready()).await;
+    eprintln!(
+        "--- readiness: {readiness:?} after {:.2}s ---",
+        started.elapsed().as_secs_f64()
+    );
+
+    let asked = std::time::Instant::now();
+    let bad = Diagnostics::new(pool.clone())
+        .invoke(&sandbox.ctx, json!({ "file_path": "src/lib.rs" }))
+        .await
+        .expect("no fault")
+        .expect("no tool error");
+    eprintln!(
+        "--- Diagnostics src/lib.rs (syntax error), {:.2}s ---\n{}",
+        asked.elapsed().as_secs_f64(),
+        bad.content
+    );
+
+    let asked = std::time::Instant::now();
+    let good = Diagnostics::new(pool.clone())
+        .invoke(&sandbox.ctx, json!({ "file_path": "src/clean.rs" }))
+        .await
+        .expect("no fault")
+        .expect("no tool error");
+    eprintln!(
+        "--- Diagnostics src/clean.rs, {:.2}s ---\n{}",
+        asked.elapsed().as_secs_f64(),
+        good.content
+    );
+
+    // The third file, printed rather than asserted. See the doc above: this is
+    // where "unresolved names are reported" was measured and found false.
+    let asked = std::time::Instant::now();
+    let unresolved = Diagnostics::new(pool)
+        .invoke(&sandbox.ctx, json!({ "file_path": "src/unresolved.rs" }))
+        .await
+        .expect("no fault")
+        .expect("no tool error");
+    eprintln!(
+        "--- Diagnostics src/unresolved.rs (name resolution only), {:.2}s ---\n{}",
+        asked.elapsed().as_secs_f64(),
+        unresolved.content
+    );
+
+    // The assertions that cannot be satisfied by silence. If the server had
+    // published nothing, every one of these results would carry the timeout
+    // sentence and this goes red — which is the point, and is what caught the
+    // URI-spelling defect `client::published_key` records.
+    assert!(
+        !bad.content.contains("not a clean result"),
+        "the server published nothing for a file with a syntax error in it; \
+         `Diagnostics` cannot be certified against this build: {}",
+        bad.content
+    );
+    assert!(
+        bad.content.contains("Syntax Error") || bad.content.contains("diagnostic(s)"),
+        "{}",
+        bad.content
+    );
+    assert!(
+        good.content.contains("reported no problems"),
+        "a file with nothing wrong in it did not come back clean: {}",
+        good.content
+    );
+    assert!(
+        !unresolved.content.contains("not a clean result"),
+        "the server did not answer at all about the unresolved-name file: {}",
+        unresolved.content
+    );
+    assert_ne!(bad.content, good.content);
+}
+
+/// The same tool against **this repository**, which is the shape the owner will
+/// actually run it in.
+///
+/// `#[ignore]` for one reason and it is not flakiness: indexing a nine-crate
+/// workspace costs a couple of minutes and several gigabytes of resident memory,
+/// which is not a thing to do on every `cargo test`. Run it deliberately:
+///
+/// ```text
+/// cargo test -p emma-tools-lsp --test real_server -- --ignored --nocapture
+/// ```
+///
+/// It asserts almost nothing on purpose. Emma's own tree compiles, so the only
+/// honest expectation is a clean answer or a real finding, and what this proves
+/// is the thing no sandbox can: that readiness, the pool key, the document sync
+/// and the publication path survive a real workspace rather than a one-file
+/// crate.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "indexes the whole workspace; run deliberately with --ignored"]
+async fn diagnostics_against_this_repository() {
+    if server::resolve(rust()).is_err() {
+        eprintln!("SKIPPED: no rust-analyzer on this machine");
+        return;
+    }
+    // `tools/lsp` -> `tools` -> the workspace root.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("the workspace root is two levels up")
+        .to_path_buf();
+    let ctx = emma_tool_api::ToolCtx {
+        cwd: root.clone(),
+        session_id: "certify".into(),
+        turn_id: "certify".into(),
+        background: Default::default(),
+    };
+
+    let pool = Arc::new(Pool::new());
+    let started = std::time::Instant::now();
+    let client = pool
+        .client(&root.canonicalize().expect("canonical"), rust())
+        .await
+        .expect("started");
+    let readiness = tokio::time::timeout(Duration::from_secs(600), client.wait_ready()).await;
+    eprintln!(
+        "--- readiness: {readiness:?} after {:.2}s on {} ---",
+        started.elapsed().as_secs_f64(),
+        root.display()
+    );
+
+    let asked = std::time::Instant::now();
+    let out = Diagnostics::new(pool)
+        .invoke(&ctx, json!({ "file_path": "tools/lsp/src/lang.rs" }))
+        .await
+        .expect("no fault")
+        .expect("no tool error");
+    eprintln!(
+        "--- Diagnostics tools/lsp/src/lang.rs, {:.2}s ---\n{}",
+        asked.elapsed().as_secs_f64(),
+        out.content
+    );
+    assert!(out.content.contains("lang.rs"), "{}", out.content);
+}
+
+// endregion: Diagnostics, against a server that really pushes them

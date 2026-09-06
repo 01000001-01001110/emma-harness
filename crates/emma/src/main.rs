@@ -106,7 +106,18 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // dropped on purpose, as `_tracker` above is — the four tools hold clones of
     // the one shared instance, so the language server outlives this binding and
     // dies with them at exit.
-    let (lsp, _lsp_pool) = emma_tools_lsp::lsp_tools();
+    // `lsp.enabled` from settings.json, falling back to the default set. Three
+    // of the seven languages are off by default because their servers may
+    // reach the network and these tools declare `reaches_network: false`;
+    // turning one on is the user's call, and the pool reports a key this build
+    // does not know rather than rejecting the file.
+    let lsp_enabled = auth::home_dir()
+        .map(|h| emma::settings::load(&h))
+        .and_then(|s| s.lsp.enabled);
+    let (lsp, _lsp_pool) = match lsp_enabled {
+        Some(keys) => emma_tools_lsp::lsp_tools_with(keys),
+        None => emma_tools_lsp::lsp_tools(),
+    };
     for tool in lsp {
         registry.register(tool);
     }

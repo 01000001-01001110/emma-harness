@@ -796,7 +796,7 @@ impl Policy {
 /// name here that the registry says can write or can talk to the network is
 /// the defect. The reverse is not — `BrowserClose` qualifies on both bits and
 /// is deliberately absent, because `Safe` is a floor, not an inventory.
-pub const READ_ONLY_TOOLS: [&str; 10] = [
+pub const READ_ONLY_TOOLS: [&str; 11] = [
     "Read",
     "Grep",
     "Glob",
@@ -807,6 +807,7 @@ pub const READ_ONLY_TOOLS: [&str; 10] = [
     "GoToDefinition",
     "FindReferences",
     "DocumentSymbols",
+    "Diagnostics",
 ];
 
 /// Every tool name this build can register. `Deny All` writes all of them,
@@ -830,7 +831,7 @@ pub const READ_ONLY_TOOLS: [&str; 10] = [
 /// which is the same class of defect the fork's own doc records for
 /// `Screenshot`. The list below is derived from `main.rs`'s registrations, and
 /// the test is what keeps it derived.
-pub const ALL_TOOLS: [&str; 25] = [
+pub const ALL_TOOLS: [&str; 26] = [
     "Read",
     "Write",
     "Edit",
@@ -847,6 +848,7 @@ pub const ALL_TOOLS: [&str; 25] = [
     "GoToDefinition",
     "Hover",
     "DocumentSymbols",
+    "Diagnostics",
     "Skill",
     "WebFetch",
     "WebSearch",
