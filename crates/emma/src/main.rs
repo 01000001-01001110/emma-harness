@@ -209,6 +209,19 @@ async fn run(cli: cli::Cli) -> Result<()> {
     {
         emma::term::palette::activate_accent_choice(choice);
     }
+    // The terminal's own font, re-asked for from settings.json. Silent by
+    // design: this runs before there is a screen to print a refusal onto, and
+    // where the terminal offers no font control it asks nothing at all. The
+    // Settings rows are where a failure is worth reading, because that is
+    // where somebody just pressed something.
+    if let Some(home) = auth::home_dir() {
+        let appearance = emma::settings::load(&home).appearance;
+        emma::term::termfont::restore(
+            appearance.font_family.as_deref(),
+            appearance.font_size,
+            &emma::term::termfont::detect_here(),
+        );
+    }
     // The keybindings file, read once, here: the input layer resolves a chord
     // on every keystroke and must not touch the filesystem to do it. An edit
     // to the file applies to the next run.
