@@ -1364,6 +1364,11 @@ pub enum LspUpdate {
         path: String,
         target: DefTarget,
     },
+    /// What every run of characters in the file is, for colour.
+    Tokens {
+        path: String,
+        items: Vec<emma_tools_lsp::render::Token>,
+    },
     /// Which characters the server says should open a list, learned from the
     /// handshake. Sent once per server rather than guessed, because a guess is
     /// wrong for every language whose server disagrees with it.
@@ -1406,6 +1411,13 @@ pub struct Lsp {
     pub hover: Option<HoverPopup>,
     /// The completion popup, when one is open.
     pub popup: Option<Popup>,
+    /// What the server said each run of characters in the open file is, for
+    /// colour. Empty when there is no server, which draws plain text rather
+    /// than a highlighter's guess.
+    pub tokens: Vec<emma_tools_lsp::render::Token>,
+    /// Which file [`Self::tokens`] describes, so a stale set is dropped rather
+    /// than painted over a different file.
+    pub tokens_for: Option<String>,
     /// Characters that open a completion list, as the server named them.
     pub completion_triggers: Vec<String>,
     /// Characters that open signature help, as the server named them.
@@ -1545,6 +1557,13 @@ impl CodeView {
                         }
                     }
                 }
+            }
+            LspUpdate::Tokens { path, items } => {
+                if open.as_deref() == Some(path.as_str()) {
+                    self.lsp.tokens_for = Some(path);
+                    self.lsp.tokens = items;
+                }
+                None
             }
             LspUpdate::Triggers {
                 completion,
@@ -1974,6 +1993,31 @@ fn confirms(p: &Pending, code: KeyCode) -> bool {
 /// typing a character both inserts it and narrows the list.
 ///
 /// `None` means the popup did not take the key.
+/// What the server said this character is, as a colour role.
+///
+/// A linear scan of the line's tokens rather than an index, because a line has
+/// a handful of them and building a map per repaint would cost more than it
+/// saves. `Role::Text` when nothing covers the character, which is both the
+/// answer for ordinary identifiers and the answer when there is no server.
+fn syntax_role(tokens: &[emma_tools_lsp::render::Token], line: usize, col: usize) -> Role {
+    use emma_tools_lsp::render::TokenKind;
+    let Some(token) = tokens
+        .iter()
+        .find(|t| t.line == line && col >= t.start && col < t.end)
+    else {
+        return Role::Text;
+    };
+    match token.kind {
+        TokenKind::Comment => Role::Comment,
+        TokenKind::Keyword => Role::Keyword,
+        TokenKind::Str => Role::Str,
+        TokenKind::Number => Role::Number,
+        TokenKind::Type => Role::Type,
+        TokenKind::Func => Role::Func,
+        TokenKind::Other => Role::Text,
+    }
+}
+
 /// Whether typing `c` should ask for a completion list.
 ///
 /// **Two reasons to ask, and they are different questions.** A trigger
@@ -3538,6 +3582,15 @@ fn draw_file(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) {
     // Diagnostics decorate this file only when they are *for* this file. A
     // stale set is not drawn dim; it is not drawn.
     let diags = (v.lsp.path.as_deref() == Some(open.path.as_str())).then_some(&v.lsp);
+    // The server's own account of what each run of characters is. Empty when
+    // there is no server, or when the answer is about a different file, which
+    // draws plain text rather than colour from a stale set.
+    let tokens: &[emma_tools_lsp::render::Token] =
+        if v.lsp.tokens_for.as_deref() == Some(open.path.as_str()) {
+            &v.lsp.tokens
+        } else {
+            &[]
+        };
     for (i, ln) in open.lines.iter().enumerate().skip(top).take(h) {
         let row_chars: Vec<char> = ln.chars().collect();
         let (sel_a, sel_b) = match sel {
@@ -3602,7 +3655,13 @@ fn draw_file(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) {
                     .bold(d.severity.role())
                     .add_modifier(ratatui::style::Modifier::UNDERLINED)
             } else {
-                skin.palette.style(Role::Text)
+                // **The lowest rung of the ladder**, and the order above it is
+                // the point: the cursor says where the person is, the
+                // selection what they have taken, the diagnostic where the
+                // compiler objects, and syntax colour is what the text *is*.
+                // A comment under the cursor is drawn as the cursor, because
+                // losing the cursor is worse than losing the colour.
+                skin.palette.style(syntax_role(tokens, i, idx))
             };
             spans.push(Span::styled(glyph, style));
             x += gwid;
@@ -6638,6 +6697,100 @@ mod tests {
         assert!(
             !v.lsp.want_completion,
             "a dot was hard-coded rather than read from the server"
+        );
+    }
+
+    // -- syntax colour -------------------------------------------------------
+
+    /// **The complaint this feature answers, as a test.** Every character of
+    /// every file was `Role::Text`, so a comment and the code it explains were
+    /// the same colour. This asserts the painted cells actually differ, which
+    /// is the only claim that matters: a token list nobody paints is a token
+    /// list nobody can see.
+    #[test]
+    fn a_comment_and_the_code_beside_it_are_not_the_same_colour() {
+        use emma_tools_lsp::render::{Token, TokenKind};
+        let mut v = sample();
+        v.body_rows = 10;
+        open_file(&mut v, "src/lib.rs", &["let x = 1; // why"]);
+        v.apply_lsp(LspUpdate::Tokens {
+            path: "src/lib.rs".to_string(),
+            items: vec![
+                Token {
+                    line: 0,
+                    start: 0,
+                    end: 3,
+                    kind: TokenKind::Keyword,
+                },
+                Token {
+                    line: 0,
+                    start: 11,
+                    end: 17,
+                    kind: TokenKind::Comment,
+                },
+            ],
+        });
+        let area = Rect::new(0, 0, 80, 12);
+        let mut buf = Buffer::empty(area);
+        render(area, &mut buf, &v, &skin());
+        let g = doc_geom(area, &v).expect("the document was drawn");
+        let cell = |col: usize| {
+            let x = g.area.x + g.gutter + col as u16;
+            buf[(x, g.area.y)].style().fg
+        };
+        let keyword = cell(0);
+        let plain = cell(4);
+        let comment = cell(11);
+        assert_ne!(
+            comment, plain,
+            "the comment is the same colour as the code beside it"
+        );
+        assert_ne!(keyword, plain, "the keyword is not coloured");
+        assert_ne!(keyword, comment, "keyword and comment share a colour");
+    }
+
+    /// Tokens about another file are not painted over this one. A stale set is
+    /// dropped rather than drawn, which is the same rule the diagnostics follow.
+    #[test]
+    fn tokens_for_another_file_are_not_painted_over_this_one() {
+        use emma_tools_lsp::render::{Token, TokenKind};
+        let mut v = sample();
+        v.body_rows = 10;
+        open_file(&mut v, "src/lib.rs", &["let x = 1; // why"]);
+        v.apply_lsp(LspUpdate::Tokens {
+            path: "src/other.rs".to_string(),
+            items: vec![Token {
+                line: 0,
+                start: 0,
+                end: 3,
+                kind: TokenKind::Comment,
+            }],
+        });
+        assert!(
+            v.lsp.tokens.is_empty(),
+            "a token set about a different file was kept"
+        );
+
+        // **And the painter refuses one too**, which `apply_lsp` above makes
+        // unreachable through the normal path. Set directly, because a guard
+        // nothing can reach is a guard nothing tests: mutating the painter's
+        // check passed the whole file until this half existed.
+        v.lsp.tokens_for = Some("src/other.rs".to_string());
+        v.lsp.tokens = vec![Token {
+            line: 0,
+            start: 0,
+            end: 3,
+            kind: TokenKind::Comment,
+        }];
+        let area = Rect::new(0, 0, 80, 12);
+        let mut buf = Buffer::empty(area);
+        render(area, &mut buf, &v, &skin());
+        let g = doc_geom(area, &v).expect("drawn");
+        let first = buf[(g.area.x + g.gutter, g.area.y)].style().fg;
+        let plain = buf[(g.area.x + g.gutter + 4, g.area.y)].style().fg;
+        assert_eq!(
+            first, plain,
+            "tokens belonging to another file were painted over this one"
         );
     }
 }

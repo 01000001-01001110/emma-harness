@@ -963,6 +963,158 @@ mod tests {
         assert!(parse_signatures(&json!({ "signatures": [] })).is_none());
         assert!(parse_signatures(&json!(null)).is_none());
     }
+
+    // -- semantic tokens ----------------------------------------------------
+
+    fn legend() -> Legend {
+        Legend {
+            types: vec![
+                "comment".into(),
+                "keyword".into(),
+                "string".into(),
+                "type".into(),
+                "function".into(),
+                "variable".into(),
+            ],
+        }
+    }
+
+    /// **The delta rule, which fails silently when it is wrong.** A character
+    /// delta is relative to the previous token only on the same line, and
+    /// absolute on a new one. Treating it as always-relative colours the right
+    /// number of characters in the wrong places, which reads as a corrupted
+    /// file rather than as a bug.
+    #[test]
+    fn a_character_delta_restarts_on_every_new_line() {
+        // **The first token starts away from column 0 on purpose.** With both
+        // tokens at 0 the two readings agree and the test passes either way,
+        // which is what the first version of it did: the mutation applied and
+        // nothing went red.
+        //
+        // Line 0: `    let x = 1;` with `let` a keyword at 4..7.
+        // Line 1: `// note` with the comment at 0..7, absolute.
+        let text = "    let x = 1;
+// note
+";
+        let tokens = parse_tokens(
+            &json!({ "data": [
+                0, 4, 3, 1, 0,
+                // Next line, and the character delta is absolute: 0. Read as
+                // relative it would be 4 + 0, and the comment would be drawn
+                // four columns into a line that starts with it.
+                1, 0, 7, 0, 0,
+            ]}),
+            &legend(),
+            text,
+        );
+        assert_eq!(
+            tokens,
+            vec![
+                Token {
+                    line: 0,
+                    start: 4,
+                    end: 7,
+                    kind: TokenKind::Keyword
+                },
+                Token {
+                    line: 1,
+                    start: 0,
+                    end: 7,
+                    kind: TokenKind::Comment
+                },
+            ]
+        );
+    }
+
+    /// Two tokens on one line: the second delta is measured from the first's
+    /// start, not from the line's.
+    #[test]
+    fn two_tokens_on_a_line_chain_from_each_other() {
+        let text = "let x = 1;
+";
+        let tokens = parse_tokens(
+            &json!({ "data": [
+                0, 0, 3, 1, 0,
+                // Four past the previous *start*, so column 4: `x`.
+                0, 4, 1, 5, 0,
+            ]}),
+            &legend(),
+            text,
+        );
+        assert_eq!(tokens[1].start, 4, "the delta was measured from the line");
+        assert_eq!(tokens[1].end, 5);
+    }
+
+    /// Columns are UTF-16 on the wire and characters in a terminal, and they
+    /// differ on any line with a character outside the basic plane. Colouring
+    /// by the wire's number puts the highlight one cell out for every token
+    /// after the first such character.
+    #[test]
+    fn columns_are_converted_from_utf16_to_characters() {
+        // **An astral character, not a two-byte one.** `π` is two bytes but
+        // still one UTF-16 unit, so a column count and a UTF-16 count agree
+        // and the test passes without the conversion — which is what the first
+        // version of this test did. A balloon is two UTF-16 units and one
+        // character, so the two disagree from here on.
+        //
+        // `🎈`(utf16 0..2) `.`(2) `l`(3): the keyword is utf16 3..6 and
+        // characters 2..5.
+        let text = "🎈 let x
+";
+        let tokens = parse_tokens(&json!({ "data": [0, 3, 3, 1, 0]}), &legend(), text);
+        assert_eq!(
+            tokens[0],
+            Token {
+                line: 0,
+                start: 2,
+                end: 5,
+                kind: TokenKind::Keyword
+            },
+            "the wire's UTF-16 columns were drawn as character columns"
+        );
+    }
+
+    /// **Without a legend the numbers mean nothing**, so nothing is coloured.
+    /// A client that assumed the standard order would colour one language
+    /// correctly and every other one wrongly, silently.
+    #[test]
+    fn no_legend_means_no_colour_rather_than_a_guessed_order() {
+        let tokens = parse_tokens(
+            &json!({ "data": [0, 0, 3, 1, 0]}),
+            &Legend::default(),
+            "let x
+",
+        );
+        assert!(tokens.is_empty());
+    }
+
+    /// A token about a line the buffer does not have is dropped: the answer is
+    /// about a version the caller has moved past, and colouring by a stale
+    /// position is how highlighting ends up half a file out.
+    #[test]
+    fn a_token_past_the_end_of_the_buffer_is_dropped() {
+        let tokens = parse_tokens(
+            &json!({ "data": [0, 0, 3, 1, 0, 40, 0, 3, 1, 0]}),
+            &legend(),
+            "let x
+",
+        );
+        assert_eq!(tokens.len(), 1, "a token off the end was drawn: {tokens:?}");
+    }
+
+    /// An unknown token type is ordinary text, not nothing: a server with a
+    /// category this build has not heard of should still have its identifiers
+    /// drawn rather than vanish from the highlighting.
+    #[test]
+    fn an_unknown_token_type_is_ordinary_text() {
+        let tokens = parse_tokens(
+            &json!({ "data": [0, 0, 3, 99, 0]}),
+            &legend(),
+            "let x
+",
+        );
+        assert_eq!(tokens[0].kind, TokenKind::Other);
+    }
 }
 
 // endregion: Tests
@@ -1380,3 +1532,193 @@ pub fn parse_signatures(value: &Value) -> Option<(Vec<Signature>, usize)> {
 }
 
 // endregion: Signature help
+
+// region: Semantic tokens
+// ---------------------------------------------------------------------------
+// Semantic tokens
+//
+// How an editor knows a `//` inside a string is not a comment.
+//
+// **Three ways exist and this crate takes the third.** A regular-expression
+// grammar (TextMate, what most editors started with) is fast and wrong at the
+// edges: it cannot tell a type from a variable, and it highlights the contents
+// of strings. A parser generator (tree-sitter, what the newer terminal editors
+// use) is right about structure and needs a compiled grammar per language,
+// which is a dependency per language and a build problem on two platforms. The
+// third is to ask the server that already knows: it has type-checked the file,
+// so it can say that this identifier is a type and that one is a parameter,
+// and it is the same authority every other answer on this page comes from.
+//
+// The cost is honest and worth stating: no server means no colour. A file whose
+// language has no server installed draws as plain text, and the page says which
+// server is missing rather than inventing a highlighter that disagrees with the
+// one used everywhere else.
+//
+// **The wire format is the tricky part.** Tokens arrive as one flat array of
+// integers, five per token, and every position is a delta from the token
+// before it:
+//
+//   [deltaLine, deltaStartChar, length, tokenType, tokenModifiers]
+//
+// `deltaStartChar` is relative to the previous token's start **only when the
+// two are on the same line**, and absolute otherwise. Getting that wrong does
+// not fail loudly: it colours the right number of characters in the wrong
+// places, which reads as a corrupted file. And every column is UTF-16, like
+// every other column on this wire.
+// ---------------------------------------------------------------------------
+
+/// What a token is, as far as colour is concerned.
+///
+/// Deliberately fewer categories than the protocol offers. The protocol has
+/// twenty-odd token types and a reader looking at code needs the handful that
+/// change how a line is read: is this a comment, a string, a keyword, a name of
+/// a thing, or a number. Mapping the rest onto `Other` is not a shortcut, it is
+/// the same argument the palette makes about roles: a distinction nobody can
+/// see is a distinction that costs and pays nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenKind {
+    Comment,
+    Keyword,
+    Str,
+    Number,
+    /// A type, struct, enum, interface, or type parameter.
+    Type,
+    /// A function, method, or macro.
+    Func,
+    /// Everything else the server named: variables, parameters, properties,
+    /// operators, punctuation.
+    Other,
+}
+
+impl TokenKind {
+    /// The protocol's token type name, mapped to what a reader needs.
+    ///
+    /// Unknown names are `Other` rather than dropped: a server with a type this
+    /// build has not heard of should still get its identifiers coloured as
+    /// ordinary text rather than vanishing from the highlighting entirely.
+    fn from_name(name: &str) -> Self {
+        match name {
+            "comment" => Self::Comment,
+            "keyword" | "modifier" => Self::Keyword,
+            "string" | "regexp" => Self::Str,
+            "number" => Self::Number,
+            "type" | "class" | "struct" | "enum" | "interface" | "typeParameter" | "enumMember"
+            | "namespace" => Self::Type,
+            "function" | "method" | "macro" | "decorator" => Self::Func,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// One coloured run on one line.
+///
+/// Columns are **characters**, converted from the wire's UTF-16 at the one
+/// boundary this crate has for that, so a consumer never has to know the
+/// protocol counts differently from a terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Token {
+    pub line: usize,
+    /// First character of the run.
+    pub start: usize,
+    /// One past the last character.
+    pub end: usize,
+    pub kind: TokenKind,
+}
+
+/// The server's token-type names, in the order its numbers index.
+///
+/// Read from the handshake and kept, because the numbers in the token array
+/// mean nothing without it: type `3` is whatever this server put third. A
+/// client with a hard-coded legend colours Rust correctly and Python wrongly,
+/// silently, which is the class of bug this crate keeps finding.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Legend {
+    pub types: Vec<String>,
+}
+
+impl Legend {
+    pub fn parse(result: &Value) -> Self {
+        Self {
+            types: result
+                .pointer("/capabilities/semanticTokensProvider/legend/tokenTypes")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.types.is_empty()
+    }
+}
+
+/// Decode `textDocument/semanticTokens/full` into runs a painter can use.
+///
+/// `text` is the buffer the tokens are about, needed for the UTF-16 to
+/// character conversion. A token on a line the buffer does not have is dropped:
+/// that means the answer is about a version the caller has moved past, and
+/// colouring by a stale position is how highlighting ends up half a line out.
+pub fn parse_tokens(value: &Value, legend: &Legend, text: &str) -> Vec<Token> {
+    let Some(data) = value.get("data").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    if legend.is_empty() {
+        // No legend means every type number is unnamed, and colouring by
+        // position in a list this client guessed is worse than not colouring.
+        return Vec::new();
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    let (mut line, mut start_utf16) = (0usize, 0u32);
+    for item in data.chunks(5) {
+        let [d_line, d_start, len, ty, _mods] = item else {
+            // A trailing partial tuple: the answer is malformed, and what has
+            // been decoded so far is still correct, so it is kept.
+            break;
+        };
+        let (Some(d_line), Some(d_start), Some(len), Some(ty)) =
+            (d_line.as_u64(), d_start.as_u64(), len.as_u64(), ty.as_u64())
+        else {
+            break;
+        };
+        line += d_line as usize;
+        // **The rule that is easy to get wrong**: the character delta restarts
+        // at the beginning of every new line, and is relative only within one.
+        start_utf16 = if d_line == 0 {
+            start_utf16 + d_start as u32
+        } else {
+            d_start as u32
+        };
+        let Some(source) = lines.get(line) else {
+            continue;
+        };
+        let kind = legend
+            .types
+            .get(ty as usize)
+            .map(|n| TokenKind::from_name(n))
+            .unwrap_or(TokenKind::Other);
+        // UTF-16 to characters, through the one converter.
+        let to_chars = |utf16: u32| {
+            let bytes = crate::doc::byte_offset(source, utf16);
+            source[..bytes.min(source.len())].chars().count()
+        };
+        let start = to_chars(start_utf16);
+        let end = to_chars(start_utf16 + len as u32);
+        if end > start {
+            out.push(Token {
+                line,
+                start,
+                end,
+                kind,
+            });
+        }
+    }
+    out
+}
+
+// endregion: Semantic tokens

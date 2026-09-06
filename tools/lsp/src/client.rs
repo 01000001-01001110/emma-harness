@@ -353,6 +353,10 @@ pub struct Capabilities {
     /// first answer left out. Asking a server that cannot is a round trip for
     /// nothing.
     pub resolve_completion: bool,
+    /// Whether the server will name the tokens in a file, and what its type
+    /// numbers mean. Empty when it offers none, which is what makes a page
+    /// draw plain text rather than colour by a guessed legend.
+    pub semantic_tokens: crate::render::Legend,
 }
 
 impl Capabilities {
@@ -385,6 +389,7 @@ impl Capabilities {
                 .and_then(|c| c.get("resolveProvider"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            semantic_tokens: crate::render::Legend::parse(result),
         }
     }
 }
@@ -717,6 +722,23 @@ impl Client {
                     // is what lets the caller mark which argument the cursor is
                     // in; without it a signature is a line of text with no
                     // indication of where you are in it.
+                    // **How this page knows a `//` inside a string is not a
+                    // comment.** The alternative is a grammar, and a grammar is
+                    // a dependency per language plus a second opinion about
+                    // syntax in a crate whose whole argument is asking the
+                    // server that already type-checked the file.
+                    //
+                    // `multilineTokenSupport` is declared because a doc comment
+                    // or a raw string is one token across several lines, and a
+                    // client that cannot take one gets it split or dropped.
+                    "semanticTokens": {
+                        "dynamicRegistration": false,
+                        "requests": { "full": true },
+                        "tokenTypes": [],
+                        "tokenModifiers": [],
+                        "formats": ["relative"],
+                        "multilineTokenSupport": true,
+                    },
                     "signatureHelp": {
                         "dynamicRegistration": false,
                         "signatureInformation": {

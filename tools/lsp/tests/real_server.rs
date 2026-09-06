@@ -815,3 +815,70 @@ async fn the_real_server_names_the_characters_that_should_open_a_list() {
         "an open bracket must open signature help: {caps:?}"
     );
 }
+
+/// **Syntax colour, from the server that type-checked the file.** The claim
+/// under test is the one a regular-expression highlighter gets wrong: a `//`
+/// inside a string is not a comment, and only something that has parsed the
+/// file can tell the difference.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_real_server_names_a_comment_and_not_the_slashes_in_a_string() {
+    let Some((sandbox, pool)) = fixture().await else {
+        return;
+    };
+    let client = pool
+        .client(&sandbox.canonical(), rust())
+        .await
+        .expect("started");
+    client.wait_ready().await;
+
+    let legend = client.capabilities().semantic_tokens;
+    eprintln!("real legend: {} types", legend.types.len());
+    assert!(
+        !legend.is_empty(),
+        "the server named no token types, so nothing can be coloured"
+    );
+
+    // A real comment, and a string containing what looks like one.
+    let probe = format!(
+        "{LIB_RS}
+// a real comment
+pub fn url() -> &'static str {{ \"https://x\" }}
+"
+    );
+    let path = sandbox.canonical().join("src/lib.rs");
+    sandbox.write("src/lib.rs", &probe);
+    client.sync_document(&path, &probe);
+
+    let answer = client
+        .request(
+            "textDocument/semanticTokens/full",
+            serde_json::json!({ "textDocument": { "uri": emma_tools_lsp::doc::to_uri(&path) } }),
+        )
+        .await
+        .expect("the server answered");
+    let tokens = emma_tools_lsp::render::parse_tokens(&answer.value, &legend, &probe);
+    assert!(!tokens.is_empty(), "the server returned no tokens");
+
+    let lines: Vec<&str> = probe.lines().collect();
+    let text_of = |t: &emma_tools_lsp::render::Token| -> String {
+        lines[t.line]
+            .chars()
+            .skip(t.start)
+            .take(t.end - t.start)
+            .collect()
+    };
+    let comments: Vec<String> = tokens
+        .iter()
+        .filter(|t| t.kind == emma_tools_lsp::render::TokenKind::Comment)
+        .map(text_of)
+        .collect();
+    eprintln!("real comments: {comments:?}");
+    assert!(
+        comments.iter().any(|c| c.contains("a real comment")),
+        "the real comment was not named: {comments:?}"
+    );
+    assert!(
+        !comments.iter().any(|c| c.contains("https")),
+        "a string's slashes were called a comment: {comments:?}"
+    );
+}

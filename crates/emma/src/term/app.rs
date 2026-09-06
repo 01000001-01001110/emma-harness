@@ -1779,6 +1779,13 @@ impl App {
         ));
         handle.post(super::code_lsp::Request::Open {
             rel: open.path.clone(),
+            text: text.clone(),
+        });
+        // Colour, asked for with the file rather than on a key: a reader who
+        // has to press something to tell a comment from code is a reader
+        // looking at white text until they know the key exists.
+        handle.post(super::code_lsp::Request::Highlight {
+            rel: open.path.clone(),
             text,
         });
     }
@@ -1819,7 +1826,14 @@ impl App {
             return;
         }
         self.code_sent = Some((rel.clone(), hash));
-        handle.post(super::code_lsp::Request::Change { rel, text });
+        handle.post(super::code_lsp::Request::Change {
+            rel: rel.clone(),
+            text: text.clone(),
+        });
+        // Re-coloured on the same beat the buffer is sent, and only then: the
+        // debounce upstream is what keeps a burst of typing from becoming a
+        // burst of requests.
+        handle.post(super::code_lsp::Request::Highlight { rel, text });
     }
 
     /// Tell the server the buffer was written.

@@ -88,7 +88,7 @@ const fn entry(r: u8, g: u8, b: u8, idx: u8, ansi: Color) -> Entry {
 pub struct Theme {
     /// Indexed by [`slot`], so the array order is the `Role` declaration order
     /// and nothing else may assume it.
-    roles: [Entry; 8],
+    roles: [Entry; 14],
     /// `[foreground, background]`. Both halves are always present, which is the
     /// whole reason a background is expressible at all.
     chip: [Entry; 2],
@@ -106,6 +106,12 @@ const fn slot(role: Role) -> usize {
         Role::Info => 5,
         Role::Accent => 6,
         Role::Ground => 7,
+        Role::Comment => 8,
+        Role::Keyword => 9,
+        Role::Str => 10,
+        Role::Number => 11,
+        Role::Type => 12,
+        Role::Func => 13,
     }
 }
 
@@ -136,6 +142,32 @@ pub const BUILTIN: Theme = Theme {
         entry(142, 192, 124, 108, Color::LightCyan),
         entry(245, 84, 143, 204, Color::LightMagenta),
         entry(13, 13, 16, 233, Color::Black),
+        // -- source code ----------------------------------------------------
+        //
+        // Chosen for one job: making a screen of code readable at a glance,
+        // with the comment quiet enough to skip and everything else separable
+        // without being loud. They sit in the same family as the eight above
+        // rather than importing another editor's palette, so a file on the
+        // Code page looks like the rest of Emma and not like a window from
+        // somewhere else.
+        //
+        // A comment is dimmer than `Dim`, deliberately: `Dim` is for chrome a
+        // reader glances at, and a comment is text a reader is choosing not to
+        // read right now.
+        entry(124, 121, 116, 244, Color::DarkGray),
+        // Keyword: the accent's hue, desaturated so a page of `let` and `fn`
+        // does not compete with Emma's own chrome for attention.
+        entry(211, 134, 155, 175, Color::Magenta),
+        // String: green, which is where every reader's expectation already is.
+        entry(152, 172, 116, 107, Color::Green),
+        // Number: warm, and distinct from both string and type.
+        entry(212, 158, 106, 179, Color::Yellow),
+        // Type: the cyan family, matching `Info`, because a type name is the
+        // same kind of noun as a path or a host.
+        entry(126, 173, 168, 109, Color::Cyan),
+        // Function: blue, the one family not otherwise used, so a call reads as
+        // its own thing beside the type it is called on.
+        entry(129, 161, 193, 110, Color::LightBlue),
     ],
     // Dark on the accent: the answer keys, chosen for contrast against the pink
     // rather than for resemblance to anything.
@@ -278,13 +310,22 @@ pub const BUILT_IN: &str = RESERVED[0];
 /// Every role name a file may use, including the one that is refused — a typo
 /// of `text` should be told about `text`, not about seven names that do not
 /// include it.
-const ROLE_NAMES: [&str; 8] = [
-    "text", "dim", "ok", "err", "warn", "info", "accent", "ground",
+const ROLE_NAMES: [&str; 14] = [
+    "text", "dim", "ok", "err", "warn", "info", "accent", "ground", "comment", "keyword", "string",
+    "number", "type", "function",
 ];
 
 /// The settable roles, by the name a file spells them with.
-const SETTABLE: [(&str, Role); 7] = [
+const SETTABLE: [(&str, Role); 13] = [
     ("dim", Role::Dim),
+    // A theme that names none of these keeps the built-in six, so every theme
+    // already written stays valid and gains readable code for free.
+    ("comment", Role::Comment),
+    ("keyword", Role::Keyword),
+    ("string", Role::Str),
+    ("number", Role::Number),
+    ("type", Role::Type),
+    ("function", Role::Func),
     ("ok", Role::Ok),
     ("err", Role::Err),
     ("warn", Role::Warn),

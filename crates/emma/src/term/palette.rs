@@ -197,6 +197,31 @@ pub enum Role {
     Accent,
     /// Only ever a *foreground* on an accent background: the answer keys.
     Ground,
+
+    // -- source code --------------------------------------------------------
+    //
+    // **Six more, and they are the same idea rather than an exception to it.**
+    // A role is named for what a piece of text *means*, and "this is a comment"
+    // is exactly that kind of meaning: it is why a reader's eye can skip it.
+    // Before these, every character of every file on the Code page was `Text`,
+    // and a comment was indistinguishable from the code it explained.
+    //
+    // Six because that is what a reader needs to parse a screen of code at a
+    // glance, and because the categories come from the language server rather
+    // than from a guess: it has type-checked the file, so it knows a `//`
+    // inside a string is not a comment.
+    /// A comment. The one a reader most needs to see past.
+    Comment,
+    /// A keyword or modifier: the language's own words.
+    Keyword,
+    /// A string or regular-expression literal.
+    Str,
+    /// A numeric literal.
+    Number,
+    /// A type, struct, enum, interface or namespace: the nouns.
+    Type,
+    /// A function, method or macro: the verbs.
+    Func,
 }
 
 // ---------------------------------------------------------------------------

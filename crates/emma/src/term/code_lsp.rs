@@ -146,6 +146,11 @@ pub enum Request {
         line: usize,
         col: usize,
     },
+    /// Ask what every run of characters in the file is, for colour.
+    Highlight {
+        rel: String,
+        text: String,
+    },
     /// Ask which argument the cursor is in.
     Signature {
         rel: String,
@@ -325,6 +330,39 @@ pub async fn run(root: PathBuf, pool: Arc<Pool>, mut rx: mpsc::Receiver<Request>
                         &text,
                         answer,
                     );
+                }
+            }
+            Request::Highlight { rel, text } => {
+                if let Some(o) = open.as_ref().filter(|o| o.rel == rel) {
+                    sync_now(o, &text, &mut pending, &mut deadline);
+                    let client = o.client.clone();
+                    let sink = sink.clone();
+                    let uri = doc::to_uri(&o.path);
+                    let path = rel.clone();
+                    let buffer = text.clone();
+                    tokio::spawn(async move {
+                        let legend = client.capabilities().semantic_tokens;
+                        if legend.is_empty() {
+                            // No legend means the numbers in the answer are
+                            // unnamed, and colouring by an order this client
+                            // guessed is worse than drawing plain text.
+                            return;
+                        }
+                        let params = json!({ "textDocument": { "uri": uri } });
+                        let result = tokio::time::timeout(
+                            ASK_TIMEOUT,
+                            client.request("textDocument/semanticTokens/full", params),
+                        )
+                        .await;
+                        if let Ok(Ok(a)) = result {
+                            sink(LspUpdate::Tokens {
+                                path,
+                                items: emma_tools_lsp::render::parse_tokens(
+                                    &a.value, &legend, &buffer,
+                                ),
+                            });
+                        }
+                    });
                 }
             }
             Request::Signature {
