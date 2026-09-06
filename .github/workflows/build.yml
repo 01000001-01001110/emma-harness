@@ -1,0 +1,87 @@
+# Builds the binary for macOS and Windows on every push to `main`, and keeps
+# each build as a workflow artifact for a fortnight.
+#
+# This is not a release. `release.yml` still fires on tags only, and its
+# reasoning stands: a tag is a person's claim that a commit is worth running.
+# This workflow answers a different question, asked of every commit: does
+# `main` still build on the two platforms the owner uses, and can somebody
+# fetch that build without a toolchain? The artifact is dated by its run and
+# expires, so it never reads as a release.
+#
+# Linux is left out on purpose. Nobody here runs it, and each platform in the
+# matrix is a paid minute on a private-credit budget; macOS minutes cost ten
+# times Linux ones. Add it when somebody is going to open the artifact.
+#
+# The suite gates the build, once, on Windows, for the same reason as in
+# `release.yml`: a binary from a commit that fails its own tests is not worth
+# the minutes it took.
+name: build
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test --workspace --no-fail-fast
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: emma.exe
+            asset: emma-x86_64-windows.exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bin: emma
+            asset: emma-aarch64-macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: build
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin emma
+
+      # The artifact carries the short commit in its name so two downloads
+      # from different runs cannot be confused on a desktop.
+      - name: name the artifact
+        id: name
+        shell: bash
+        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}-${{ steps.name.outputs.sha }}
+          path: target/${{ matrix.target }}/release/${{ matrix.bin }}
+          retention-days: 14
+          if-no-files-found: error

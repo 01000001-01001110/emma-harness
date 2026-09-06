@@ -8,6 +8,9 @@
 #
 #   git tag -a v0.1.0 -m "…" && git push origin v0.1.0
 #
+# Per-commit builds of `main` are `build.yml`'s job: same gate, macOS and
+# Windows only, workflow artifacts that expire, and no release created.
+#
 # The tests gate the release. A tagged commit that fails its suite must not
 # produce a binary: shipping first and checking afterwards is how a broken
 # artifact ends up on a machine that trusted the tag.
