@@ -39,6 +39,16 @@ on:
       # The fork port: every push gets the macOS and Windows build the merge
       # bar requires, before the review rather than after it.
       - port/mac-fork
+      # **Every working branch, by pattern, and the reason is a branch that
+      # went four commits with no CI at all.** Naming branches one at a time
+      # means the workflow is edited at the start of each piece of work, which
+      # is exactly when nobody thinks about it: the macOS half of the matrix
+      # had not run once on `lsp/intellisense`, on work whose whole subject is
+      # a terminal drawing colours.
+      - "lsp/**"
+      - "feat/**"
+      - "fix/**"
+
 
 permissions:
   contents: read
