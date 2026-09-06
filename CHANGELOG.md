@@ -28,6 +28,18 @@ out for themselves.
 
 ## Unreleased
 
+- **A new tool, `Screenshot`.** It captures the primary display, bounds the
+  image so a capture is not a megabyte of base64, and hands the bytes to the
+  model on the wire the running provider actually has: an image block inside
+  the tool result on Anthropic, and an attached image on a following message
+  on Ollama, OpenRouter and OpenAI. A provider with no image path, or a
+  platform with no capture backend, is told to you in words in the result
+  rather than dropping the picture silently. The session log records a
+  capture as its path and size, never its bytes; `--resume` reads the file
+  back, and says `[image not replayed: ...]` in the result when the file is
+  gone. Compaction, shedding and pruning drop a result's images with its
+  text, so a saving reported is a saving taken.
+
 - The Code page (`Alt+c`) can edit and save the file it is showing. `Enter`
   on the body starts editing and the header says `EDIT`; `Ctrl+s` or `F2`
   saves, keeping the file's own line endings and its trailing-newline habit;

@@ -9,6 +9,7 @@ members = [
     "tools/lsp",
     "tools/web",
     "tools/tasks",
+    "tools/screenshot",
     "crates/docsgen",
 ]
 
@@ -21,6 +22,11 @@ license = "Apache-2.0"
 [workspace.dependencies]
 anyhow = "1"
 async-trait = "0.1"
+# A screen capture is bytes, and both provider wire formats want those bytes as
+# base64. Hand-rolling the alphabet and the padding is thirty lines nobody
+# should own. Already in the lock file, pulled in transitively by the HTTP
+# stack, so this adds no download.
+base64 = "0.22"
 # Chrome over the DevTools Protocol, for `tools/web`. The alternative to
 # driving a real browser is an HTTP client plus an HTML-to-markdown crate,
 # which returns an empty shell for every page built with JavaScript and a 406
@@ -84,3 +90,4 @@ emma-tools-fs = { path = "tools/fs" }
 emma-tools-lsp = { path = "tools/lsp" }
 emma-tools-web = { path = "tools/web" }
 emma-tools-tasks = { path = "tools/tasks" }
+emma-tools-screenshot = { path = "tools/screenshot" }

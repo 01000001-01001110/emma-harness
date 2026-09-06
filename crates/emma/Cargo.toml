@@ -53,6 +53,12 @@ emma-llm.workspace = true
 emma-tool-api.workspace = true
 emma-tools-fs.workspace = true
 emma-tools-tasks.workspace = true
+# The screen, for a provider that can carry a picture. Registered in `main.rs`
+# rather than beside the other tools, because it needs the resolved provider:
+# whether an attached image reaches the model is a fact about the wire.
+emma-tools-screenshot.workspace = true
+# Re-encoding a logged image's file on resume; see `session::rehydrate_images`.
+base64.workspace = true
 # Code intelligence over LSP. Registered unconditionally, unlike `web_tools`: a
 # missing rust-analyzer produces an `Unavailable` naming what was looked for,
 # what it rejected and both ways to fix it, which is strictly more useful to the

@@ -82,7 +82,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
-use emma_llm::{Content, ContentBlock, Message, Role, ToolResult};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
+use emma_llm::{Content, ContentBlock, Message, Role, ToolImage, ToolResult};
 use serde_json::{json, Value};
 
 use crate::agent::{label_of, memo_key_of, Resumed};
@@ -689,9 +691,10 @@ impl Fold {
                 // `answered` rather than half-restored. A record this cannot
                 // read is a gap, and a gap is the one thing the API will not
                 // take: an unanswered `tool_use` is a 400.
-                if let Some(ContentBlock::ToolResult(result)) =
+                if let Some(ContentBlock::ToolResult(mut result)) =
                     r.get("block").cloned().map(ContentBlock::from_value)
                 {
+                    rehydrate_images(&mut result);
                     self.results.push(result);
                 }
             }
@@ -790,6 +793,13 @@ impl Fold {
                                 if let ContentBlock::ToolResult(result) = block {
                                     if result.tool_use_id == id {
                                         result.content = content.clone();
+                                        // Mirrors `Agent::shed_the_running_goal`.
+                                        // Shedding takes the pictures out with
+                                        // the prose, so a fold that rewrote only
+                                        // the text would rebuild a conversation
+                                        // carrying images the run had already
+                                        // dropped.
+                                        result.images.clear();
                                     }
                                 }
                             }
@@ -798,6 +808,7 @@ impl Fold {
                     for result in self.results.iter_mut() {
                         if result.tool_use_id == id {
                             result.content = content.clone();
+                            result.images.clear();
                         }
                     }
                 }
@@ -1549,6 +1560,52 @@ fn str_of(r: &Value, key: &str) -> Option<String> {
 }
 
 // endregion: Resume
+
+/// Put the bytes back on an image the log recorded as a path.
+///
+/// The log stores a picture as `{path, media_type, bytes}` rather than as
+/// several hundred kilobytes of base64 (see `ToolImage`), so a fold that did
+/// nothing here would hand `--resume` a result carrying an image block no
+/// provider can read. Two outcomes, and neither is silent:
+///
+/// - The file is where the log said. The bytes are read and re-encoded, and the
+///   resumed conversation is byte-identical to the one that ran.
+/// - The file is gone, or the log never named one. The image is dropped and a
+///   line saying so is appended to the result's text, because a resumed model
+///   that is told a screenshot exists and shown nothing will reason about a
+///   picture it never saw. The turn is still valid: a `tool_result` may carry
+///   prose alone.
+///
+/// This is the honest half of the trade the log makes. Replay depends on a file
+/// outside the log, and when that dependency is not met the transcript says it
+/// rather than quietly becoming a text-only conversation.
+fn rehydrate_images(result: &mut ToolResult) {
+    if result.images.is_empty() {
+        return;
+    }
+    let mut kept = Vec::new();
+    let mut lost = Vec::new();
+    for image in std::mem::take(&mut result.images) {
+        if image.data.is_some() {
+            kept.push(image);
+            continue;
+        }
+        match image.path.as_deref().map(|p| (p, fs::read(p))) {
+            Some((path, Ok(bytes))) => {
+                let data = BASE64.encode(bytes);
+                kept.push(ToolImage::base64(&image.media_type, data).at_path(path));
+            }
+            Some((path, Err(e))) => lost.push(format!("{path} could not be read ({e})")),
+            None => lost.push("the capture was not kept on disk".to_string()),
+        }
+    }
+    result.images = kept;
+    for reason in lost {
+        result
+            .content
+            .push_str(&format!("\n\n[image not replayed: {reason}]"));
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -2595,6 +2652,60 @@ mod tests {
 #[cfg(test)]
 mod steer_fold_tests {
     use super::*;
+
+    /// The log holds a picture as a path, so the fold has to put the bytes
+    /// back or hand `--resume` an image block no provider can read. A file
+    /// that is there comes back as base64; one that is gone is dropped and
+    /// the result says so, because a model told a screenshot exists and shown
+    /// nothing reasons about a picture it never saw.
+    #[test]
+    fn a_logged_image_is_read_back_from_its_file_or_said_to_be_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let kept = dir.path().join("shot.png");
+        std::fs::write(&kept, b"hi").unwrap();
+        let gone = dir.path().join("gone.png");
+        let block = |path: &std::path::Path, id: &str| {
+            json!({ "kind": "tool_result", "id": id, "block": {
+                "type": "tool_result", "tool_use_id": id,
+                "content": [
+                    { "type": "text", "text": "captured" },
+                    { "type": "image", "source": { "type": "emma_file",
+                        "media_type": "image/png", "path": path.display().to_string(), "bytes": 2 } }
+                ] } })
+        };
+        let records = vec![
+            json!({"kind": "goal", "goal_id": "g1", "opening": "look"}),
+            json!({"kind": "assistant", "raw_content": [
+                {"type": "tool_use", "id": "t1", "name": "Screenshot", "input": {}},
+                {"type": "tool_use", "id": "t2", "name": "Screenshot", "input": {}}
+            ]}),
+            block(&kept, "t1"),
+            block(&gone, "t2"),
+        ];
+        let out = fold_records(&records);
+        let results: Vec<&ToolResult> = out
+            .iter()
+            .filter_map(|m| match &m.content {
+                Content::Blocks(b) => Some(b),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult(r) => Some(r),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results.len(), 2, "{out:?}");
+        let (t1, t2) = (results[0], results[1]);
+        assert_eq!(t1.images.len(), 1);
+        assert_eq!(t1.images[0].data.as_deref(), Some("aGk="), "the bytes came back");
+        assert!(t2.images.is_empty(), "a missing file is not sent as an image");
+        assert!(
+            t2.content.contains("[image not replayed:"),
+            "the loss is said: {}",
+            t2.content
+        );
+    }
 
     fn text_of(m: &Message) -> String {
         match &m.content {

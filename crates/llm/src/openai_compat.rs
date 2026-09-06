@@ -157,23 +157,28 @@ fn tools_to_openai(tools: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+/// One image as a chat-completions content part.
+///
+/// The data URL is the only form this API takes for bytes we hold; there is no
+/// base64 source object as there is on the Messages API.
+fn image_part(media_type: &str, data: &str) -> Value {
+    json!({
+        "type": "image_url",
+        "image_url": {"url": format!("data:{media_type};base64,{data}")}
+    })
+}
+
 /// Emma's messages into this format's.
 ///
-/// ⚠ A TOOL RESULT BECOMES ITS OWN MESSAGE. In Anthropic's shape a result is a
-/// `tool_result` block inside a user turn; here it is a `role: "tool"` message
-/// whose `content` is a plain string, emitted in place so that it still follows
-/// the call it answers.
-///
-/// **Pictures are not carried, because this crate has no shape that holds
-/// one.** `ToolResult` has no `images` field in this tree yet — it arrives with
-/// `content::ToolImage`, which is a later package — so there is nothing here to
-/// drop and nothing to send. When it lands, the picture cannot ride inside the
-/// tool message either: this API rejects content parts on that role, so an
-/// `image_url` part hung there is a 400. It has to follow as a user message
-/// carrying the part, named, which is the compromise `ollama.rs` makes for the
-/// same lack of a shape that could carry it. Stated here rather than left as an
-/// absence, because an image quietly missing from a request is the failure that
-/// looks like the model ignoring it.
+/// ⚠ A TOOL RESULT BECOMES ITS OWN MESSAGE, and a picture attached to one
+/// cannot travel inside it. In Anthropic's shape a result is a `tool_result`
+/// block inside a user turn and its images sit in the same block. Here a result
+/// is a `role: "tool"` message whose `content` is a plain string: the API
+/// rejects content parts on that role, so an `image_url` part hung there is a
+/// 400 and an image silently dropped is worse. The picture therefore follows as
+/// a user message carrying an `image_url` part, with one line of text naming
+/// the call it answers, which is the same compromise `ollama.rs` makes for the
+/// same reason and for the same lack of a shape that could carry it.
 fn messages_to_openai(messages: &[Message]) -> Vec<Value> {
     let mut out = Vec::new();
     for m in messages {
@@ -184,6 +189,17 @@ fn messages_to_openai(messages: &[Message]) -> Vec<Value> {
         match &m.content {
             Content::Text(t) => out.push(json!({"role": role, "content": t})),
             Content::Blocks(blocks) => {
+                // A result names the call it answers by id here, not by name,
+                // so this lookup exists only to write a legible sentence beside
+                // a picture.
+                let name_by_id: BTreeMap<&str, &str> = blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::ToolUse(c) => Some((c.id.as_str(), c.name.as_str())),
+                        _ => None,
+                    })
+                    .collect();
+
                 let mut text = String::new();
                 let mut calls = Vec::new();
                 for b in blocks {
@@ -216,6 +232,29 @@ fn messages_to_openai(messages: &[Message]) -> Vec<Value> {
                                 "tool_call_id": r.tool_use_id,
                                 "content": r.content,
                             }));
+                            // Only images carrying bytes. A log-form image has
+                            // nothing to send, and rendering one would put a
+                            // `data:image/jpeg;base64,` prefix in front of
+                            // nothing.
+                            let parts: Vec<Value> = r
+                                .images
+                                .iter()
+                                .filter_map(|i| i.wire_data().map(|d| image_part(&i.media_type, d)))
+                                .collect();
+                            if !parts.is_empty() {
+                                let called = name_by_id
+                                    .get(r.tool_use_id.as_str())
+                                    .copied()
+                                    .unwrap_or(r.tool_use_id.as_str());
+                                let mut content = vec![json!({
+                                    "type": "text",
+                                    "text": format!(
+                                        "The image below is the result of the {called} call."
+                                    )
+                                })];
+                                content.extend(parts);
+                                out.push(json!({"role": "user", "content": content}));
+                            }
                         }
                         // A block this client could not model. It was kept
                         // whole for the provider that produced it, and this is
@@ -869,7 +908,7 @@ pub static OPENAI_KIND: OpenAiCompatKind = OpenAiCompatKind(OPENAI);
 mod tests {
     use super::*;
     use crate::stub::{stub, Reply, Stub};
-    use crate::{Caching, Effort, ToolResult};
+    use crate::{Caching, Effort, ToolImage, ToolResult};
 
     const TEST_KEY: &str = "not-a-key-loopback-fixture";
 
@@ -1128,6 +1167,110 @@ mod tests {
             assistant["tool_calls"][0]["function"]["arguments"],
             json!("{\"path\":\"a.rs\"}")
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_image_on_a_tool_result_follows_as_a_user_message_with_an_image_part() {
+        // This API rejects content parts on a `role: "tool"` message, so the
+        // picture cannot ride inside the result the way it does on the Messages
+        // API. It follows instead, named, rather than being dropped.
+        let s = stub(vec![Reply::json(batch_body())]).await;
+        let mut result = ToolResult::ok("call_01", "Captured display 1.");
+        result.images = vec![ToolImage::base64("image/jpeg", "aGk=")];
+        let mut req = request();
+        req.query = vec![Message {
+            role: Role::Assistant,
+            content: Content::Blocks(vec![
+                ContentBlock::ToolUse(ToolCall {
+                    id: "call_01".into(),
+                    name: "Screenshot".into(),
+                    input: json!({}),
+                    extra: Map::new(),
+                }),
+                ContentBlock::ToolResult(result),
+            ]),
+        }];
+        provider(&s, OPENROUTER)
+            .send(req, Mode::Batch, None)
+            .await
+            .unwrap();
+
+        let msgs = s.last()["messages"].clone();
+        let msgs = msgs.as_array().unwrap();
+        let tool = msgs.iter().find(|m| m["role"] == "tool").unwrap();
+        assert!(tool["content"].is_string(), "no parts on a tool message");
+
+        let carrier = msgs
+            .iter()
+            .find(|m| m["content"].is_array())
+            .expect("a message carrying the picture");
+        assert_eq!(carrier["role"], "user");
+        assert_eq!(carrier["content"][0]["type"], "text");
+        assert!(carrier["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Screenshot"));
+        assert_eq!(
+            carrier["content"][1],
+            json!({"type": "image_url",
+                   "image_url": {"url": "data:image/jpeg;base64,aGk="}})
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_result_whose_image_has_no_bytes_sends_no_picture_at_all() {
+        // The log form has nothing to send, so the extra message is not emitted
+        // rather than emitted empty.
+        let s = stub(vec![Reply::json(batch_body())]).await;
+        let mut result = ToolResult::ok("call_01", "Captured display 1.");
+        result.images = vec![ToolImage::base64("image/jpeg", "aGk=")
+            .at_path("C:/src/emma/shot.png")
+            .for_log()];
+        let mut req = request();
+        req.query = vec![Message {
+            role: Role::Assistant,
+            content: Content::Blocks(vec![ContentBlock::ToolResult(result)]),
+        }];
+        provider(&s, OPENROUTER)
+            .send(req, Mode::Batch, None)
+            .await
+            .unwrap();
+        let raw = s.last().to_string();
+        assert!(!raw.contains("image_url"), "{raw}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_result_with_no_images_is_the_message_it_always_was() {
+        // The other half: every tool but one returns prose, and none of their
+        // results may move a byte because a picture became expressible.
+        let s = stub(vec![Reply::json(batch_body())]).await;
+        let mut req = request();
+        req.query = vec![Message {
+            role: Role::Assistant,
+            content: Content::Blocks(vec![ContentBlock::ToolResult(ToolResult::ok(
+                "call_01",
+                "file contents",
+            ))]),
+        }];
+        provider(&s, OPENROUTER)
+            .send(req, Mode::Batch, None)
+            .await
+            .unwrap();
+
+        let msgs = s.last()["messages"].clone();
+        let msgs = msgs.as_array().unwrap();
+        let tool: Vec<&Value> = msgs.iter().filter(|m| m["role"] == "tool").collect();
+        assert_eq!(tool.len(), 1);
+        assert_eq!(
+            *tool[0],
+            json!({
+                "role": "tool",
+                "tool_call_id": "call_01",
+                "content": "file contents",
+            })
+        );
+        // Nothing followed it.
+        assert!(!msgs.iter().any(|m| m["content"].is_array()), "{msgs:?}");
     }
 
     // -- the wire, back -----------------------------------------------------

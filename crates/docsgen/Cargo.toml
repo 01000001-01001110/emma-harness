@@ -31,4 +31,5 @@ syn = { version = "2", features = ["full", "extra-traits", "visit"] }
 emma-tool-api.workspace = true
 emma-tools-fs.workspace = true
 emma-tools-tasks.workspace = true
+emma-tools-screenshot.workspace = true
 emma-tools-lsp.workspace = true

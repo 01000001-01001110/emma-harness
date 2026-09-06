@@ -606,6 +606,34 @@ fn messages_to_ollama(messages: &[Message]) -> Vec<Value> {
                                 "content": r.content,
                                 "tool_name": tool_name,
                             }));
+                            // ⚠ AN IMAGE FOLLOWS ITS RESULT AS A SEPARATE
+                            // USER MESSAGE. Ollama puts pictures in an `images`
+                            // array of base64 strings hung off a message, not
+                            // in a content block, so there is no way to express
+                            // "this picture is part of that tool result" in its
+                            // shape. It is sent as a user turn because that is
+                            // the message role every vision chat template
+                            // actually renders images from; hung off the
+                            // `role: "tool"` message it is accepted by the API
+                            // and silently dropped by the template, which is the
+                            // worst of the three options because nothing reports
+                            // it. The one line of text names the call the
+                            // picture answers, so the pairing the shape cannot
+                            // carry is at least stated.
+                            let images: Vec<Value> = r
+                                .images
+                                .iter()
+                                .filter_map(|i| i.wire_data().map(|d| json!(d)))
+                                .collect();
+                            if !images.is_empty() {
+                                out.push(json!({
+                                    "role": "user",
+                                    "content": format!(
+                                        "The image above is the result of the {tool_name} call."
+                                    ),
+                                    "images": images,
+                                }));
+                            }
                         }
                         // Whatever this is, it is a shape this client could not
                         // model on the Anthropic wire, so it has no translation
@@ -1238,7 +1266,7 @@ impl ProviderKind for Ollama {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ToolResult;
+    use crate::{ToolImage, ToolResult};
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -1545,6 +1573,7 @@ mod tests {
                     tool_use_id: "toolu_01deadbeef".into(),
                     content: "file contents here".into(),
                     is_error: false,
+                    images: Vec::new(),
                     extra: Map::new(),
                 }),
             ]),
@@ -1606,6 +1635,89 @@ mod tests {
         assert_eq!(calls[0]["id"], "call_AAA");
         assert_eq!(calls[1]["id"], "call_BBB");
         assert_ne!(calls[0], calls[1]);
+    }
+
+    #[test]
+    fn an_image_on_a_tool_result_becomes_a_following_user_message() {
+        // Ollama has no content block for a picture, so the pairing this shape
+        // cannot carry is stated in the text instead. What must not happen is
+        // the image being hung off the `role: "tool"` message, where the API
+        // accepts it and every chat template silently drops it.
+        let mut result = ToolResult::ok("call_001", "Captured display 1.");
+        result.images =
+            vec![ToolImage::base64("image/jpeg", "aGk=").at_path("C:/src/emma/shot.png")];
+        let msg = Message {
+            role: Role::Assistant,
+            content: Content::Blocks(vec![
+                ContentBlock::ToolUse(ToolCall {
+                    id: "call_001".into(),
+                    name: "Screenshot".into(),
+                    input: json!({}),
+                    extra: Map::new(),
+                }),
+                ContentBlock::ToolResult(result),
+            ]),
+        };
+        let wire = messages_to_ollama(&[msg]);
+
+        let tool_msg = wire.iter().find(|m| m["role"] == "tool").expect("a result");
+        assert_eq!(tool_msg["content"], "Captured display 1.");
+        assert!(tool_msg.get("images").is_none(), "not on the tool message");
+
+        let carrier = wire
+            .iter()
+            .find(|m| m.get("images").is_some())
+            .expect("a message carrying the picture");
+        assert_eq!(carrier["role"], "user");
+        assert_eq!(carrier["images"], json!(["aGk="]));
+        assert!(carrier["content"].as_str().unwrap().contains("Screenshot"));
+    }
+
+    #[test]
+    fn a_result_whose_image_has_no_bytes_sends_no_images_key() {
+        // The log form must never reach a provider. It has nothing to send, so
+        // the extra message is not emitted at all rather than emitted empty.
+        let mut result = ToolResult::ok("call_001", "Captured display 1.");
+        result.images = vec![ToolImage::base64("image/jpeg", "aGk=")
+            .at_path("C:/src/emma/shot.png")
+            .for_log()];
+        let msg = Message {
+            role: Role::Assistant,
+            content: Content::Blocks(vec![ContentBlock::ToolResult(result)]),
+        };
+        let wire = messages_to_ollama(&[msg]);
+        assert_eq!(wire.len(), 1, "{wire:?}");
+        assert!(wire[0].get("images").is_none());
+    }
+
+    /// The other half: every tool but one returns prose, and none of their
+    /// results may move a byte because a picture became expressible.
+    #[test]
+    fn a_result_with_no_images_is_the_message_it_always_was() {
+        let msg = Message {
+            role: Role::Assistant,
+            content: Content::Blocks(vec![
+                ContentBlock::ToolUse(ToolCall {
+                    id: "call_001".into(),
+                    name: "Read".into(),
+                    input: json!({}),
+                    extra: Map::new(),
+                }),
+                ContentBlock::ToolResult(ToolResult::ok("call_001", "file contents")),
+            ]),
+        };
+        let wire = messages_to_ollama(&[msg]);
+        let tool: Vec<&Value> = wire.iter().filter(|m| m["role"] == "tool").collect();
+        assert_eq!(tool.len(), 1);
+        assert_eq!(
+            *tool[0],
+            json!({
+                "role": "tool",
+                "content": "file contents",
+                "tool_name": "Read",
+            })
+        );
+        assert!(!wire.iter().any(|m| m.get("images").is_some()), "{wire:?}");
     }
 
     /// Thinking is not echoed back and a `Passthrough` is not forwarded, but

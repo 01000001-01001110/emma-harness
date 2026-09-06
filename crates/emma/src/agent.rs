@@ -68,7 +68,7 @@ use anyhow::Result;
 use emma_harness::{Harness, HookCall, HookEvent, HookResult};
 use emma_llm::{
     AssistantTurn, Caching, Content, ContentBlock, Event, LlmError, Message, Mode, Provider,
-    Request, Role, ToolCall, ToolResult,
+    Request, Role, ToolCall, ToolImage, ToolResult,
 };
 use emma_tool_api::{Registry, ToolCtx};
 use serde_json::{json, Value};
@@ -1979,6 +1979,7 @@ impl<'a> Agent<'a> {
                 let was = block_wire_len(&ContentBlock::ToolResult(r.clone())) as i64;
                 let mut shed_block = r.clone();
                 shed_block.content = note.clone();
+                shed_block.images.clear();
                 let now = block_wire_len(&ContentBlock::ToolResult(shed_block)) as i64;
                 // A result already shorter than the note saying it is gone
                 // would make the request larger. The compactor learned this the
@@ -1992,6 +1993,10 @@ impl<'a> Agent<'a> {
                 freed += saving;
                 shed.push(json!({ "tool_use_id": r.tool_use_id, "content": note }));
                 r.content = note;
+                // The pictures go with the prose. Leaving them would ship the
+                // bytes under a note saying they are gone, and would make the
+                // fold's replay disagree with what was sent.
+                r.images.clear();
                 if freed >= need {
                     break 'outer;
                 }
@@ -2650,7 +2655,23 @@ impl<'a> Agent<'a> {
         // separate message with `role: "tool"` and a `tool_call_id`, not as a
         // block inside a user message. Both sites now say what happened and
         // leave the spelling to the provider.
-        let block = ToolResult::ok(&call.id, content);
+        let mut block = ToolResult::ok(&call.id, content);
+        // Whatever the tool produced, moved across without asking which tool it
+        // was. This is the seam the picture travels through: there is no
+        // `if call.name == "Screenshot"` here and there must not be one, or the
+        // second tool that returns an image is a change to the loop rather than
+        // a new crate.
+        block.images = outcome
+            .images
+            .iter()
+            .map(|i| {
+                let img = ToolImage::base64(&i.media_type, &i.data);
+                match &i.path {
+                    Some(p) => img.at_path(p),
+                    None => img,
+                }
+            })
+            .collect();
         self.log_result_block(
             turn_id,
             call,
@@ -2684,7 +2705,13 @@ impl<'a> Agent<'a> {
                     // Written as the content block it becomes, `type` tag and
                     // all, because that is the shape the fold reads back and the
                     // shape `restore_records` tests `is_error` on.
-                    "block": ContentBlock::ToolResult(block.clone()),
+                    // Images are written as their path and size rather than
+                    // their bytes: a bounded screenshot is still several
+                    // hundred kilobytes of base64, and a log line that size per
+                    // capture makes the transcript unreadable and the fold slow
+                    // for no gain. `session::fold` reads the file back, and says
+                    // so in the result when it cannot. See `ToolImage`.
+                    "block": ContentBlock::ToolResult(block.for_log()),
                     "truncated": truncated,
                     // Beside the block rather than inside it: the block is the
                     // wire shape and the API has no field for this. The

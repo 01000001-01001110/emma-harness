@@ -59,7 +59,8 @@ use tokio::sync::mpsc;
 pub use anthropic::{AnthropicProvider, DEFAULT_MODEL};
 pub use auth::{ApiKey, AuthError};
 pub use content::{
-    Content, ContentBlock, RedactedThinkingBlock, TextBlock, ThinkingBlock, ToolCall, ToolResult,
+    Content, ContentBlock, RedactedThinkingBlock, TextBlock, ThinkingBlock, ToolCall, ToolImage,
+    ToolResult,
 };
 pub use kind::{kind, ProviderKind, UnknownProvider, DEFAULT_PROVIDER};
 pub use models::{limits, Limits};

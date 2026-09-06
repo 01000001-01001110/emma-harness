@@ -621,6 +621,32 @@ async fn run(cli: cli::Cli) -> Result<()> {
     if let Some(delegate) = delegate {
         registry.register(Arc::new(delegate) as Arc<dyn Tool>);
     }
+    // Registered here rather than with the other tools at the top of this
+    // function because it needs the resolved provider: whether a picture
+    // attached to a tool result reaches the model is a fact about the wire, and
+    // the tool must not guess it. An unrecognised provider is told to the tool
+    // as "no", so a provider added later gets an honest refusal in the result
+    // rather than a picture dropped on the floor. On a platform with no
+    // backend the tool still registers and refuses in words at call time.
+    let delivery = match kind.name() {
+        "anthropic" => emma_tools_screenshot::ImageDelivery::Blocks {
+            provider: "anthropic",
+        },
+        // Three providers share this shape for the same reason: their wire
+        // format has no way to put a picture inside a tool result, so it rides
+        // on a message beside it. On Ollama that is an `images` array; on the
+        // two chat-completions hosts it is an `image_url` content part on a
+        // following user message. Whether the model looks at it depends on the
+        // model, which is what `Attached` says out loud.
+        "ollama" | "openrouter" | "openai" => emma_tools_screenshot::ImageDelivery::Attached {
+            provider: kind.name(),
+            model: provider.model_id().to_string(),
+        },
+        other => emma_tools_screenshot::ImageDelivery::Unsupported {
+            reason: format!("the {other} provider has no image path wired up in this build"),
+        },
+    };
+    registry.register(Arc::new(emma_tools_screenshot::Screenshot::new(delivery)) as Arc<dyn Tool>);
     // Consumes the registry: the unfiltered one must not survive the call.
     let tools = harness.select_tools(registry)?;
 

@@ -1,0 +1,28 @@
+[package]
+name = "emma-tools-screenshot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+# A capture is bytes and every provider wire format wants those bytes as
+# base64. Already in the lock file, pulled in transitively; this makes the
+# dependency the one thing in this crate that is not optional explicit.
+base64.workspace = true
+serde_json.workspace = true
+emma-tool-api.workspace = true
+
+# The Windows backend is in-process GDI and GDI+ rather than a PowerShell
+# script; the crate's module doc argues why. `Win32_Graphics_Gdi` is the blit
+# and the monitor walk, `Win32_Graphics_GdiPlus` the two encoders.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_GdiPlus",
+] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }

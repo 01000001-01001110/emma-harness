@@ -831,7 +831,7 @@ pub const READ_ONLY_TOOLS: [&str; 11] = [
 /// which is the same class of defect the fork's own doc records for
 /// `Screenshot`. The list below is derived from `main.rs`'s registrations, and
 /// the test is what keeps it derived.
-pub const ALL_TOOLS: [&str; 26] = [
+pub const ALL_TOOLS: [&str; 27] = [
     "Read",
     "Write",
     "Edit",
@@ -858,6 +858,7 @@ pub const ALL_TOOLS: [&str; 26] = [
     "BrowserFill",
     "BrowserClose",
     "Delegate",
+    "Screenshot",
 ];
 
 /// The three lists a preset means, in `permissions` order.

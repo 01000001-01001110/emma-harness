@@ -405,11 +405,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64",
  "emma-harness",
  "emma-llm",
  "emma-tool-api",
  "emma-tools-fs",
  "emma-tools-lsp",
+ "emma-tools-screenshot",
  "emma-tools-tasks",
  "emma-tools-web",
  "futures-util",
@@ -435,6 +437,7 @@ dependencies = [
  "emma-tool-api",
  "emma-tools-fs",
  "emma-tools-lsp",
+ "emma-tools-screenshot",
  "emma-tools-tasks",
  "syn 2.0.119",
 ]
@@ -510,6 +513,20 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "emma-tools-screenshot"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64",
+ "emma-tool-api",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

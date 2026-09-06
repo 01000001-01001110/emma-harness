@@ -163,6 +163,14 @@ pub fn tools(root: &Path) -> Result<String> {
     for tool in emma_tools_tasks::task_tools() {
         registry.register(tool);
     }
+    // Registered with a delivery that cannot carry a picture: the generated
+    // list wants the tool's name and description, and the wire it would use
+    // is `main.rs`'s decision, made from the resolved provider.
+    registry.register(std::sync::Arc::new(emma_tools_screenshot::Screenshot::new(
+        emma_tools_screenshot::ImageDelivery::Unsupported {
+            reason: "the documentation generator resolves no provider".to_string(),
+        },
+    )));
     let (lsp, _pool) = emma_tools_lsp::lsp_tools();
     for tool in lsp {
         registry.register(tool);
