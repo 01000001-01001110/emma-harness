@@ -157,6 +157,74 @@ async fn a_link_heavy_hub_page_names_the_cap_that_cut_it() {
     assert!(outcome.content.contains("max_links"), "{}", outcome.content);
 }
 
+/// The complaint this branch answers, certified end to end: a long page is
+/// readable past its first window, and the *only* thing the reader needs in
+/// order to keep reading is the sentence the tool already handed it.
+///
+/// Run with `cargo test -p emma-tools-web --test fetch -- --ignored`.
+#[tokio::test]
+#[ignore = "reaches the live network and launches Chrome twice; run with --ignored"]
+async fn a_long_page_can_be_read_past_its_first_window() {
+    const URL: &str = "https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html";
+    const WINDOW: u64 = 2_000;
+
+    let first = WebFetch::new()
+        .invoke(&ctx(), json!({ "url": URL, "max_chars": WINDOW }))
+        .await
+        .expect("no turn-ending fault")
+        .expect("the Rust book is a result");
+
+    let reason = first
+        .truncation
+        .as_deref()
+        .expect("a book chapter must not fit in 2000 characters")
+        .to_string();
+    assert!(reason.contains("continue with offset="), "{reason}");
+
+    let next: u64 = reason
+        .split("continue with offset=")
+        .nth(1)
+        .and_then(|rest| {
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse().ok()
+        })
+        .unwrap_or_else(|| panic!("no offset to continue from: {reason}"));
+    assert_eq!(next, WINDOW, "the next window is not where this one ended");
+
+    let second = WebFetch::new()
+        .invoke(
+            &ctx(),
+            json!({ "url": URL, "max_chars": WINDOW, "offset": next }),
+        )
+        .await
+        .expect("no turn-ending fault")
+        .expect("the continuation is a result");
+
+    let head = content_body(&first.content);
+    let tail = content_body(&second.content);
+    assert!(
+        !tail.is_empty(),
+        "the second window was empty: {}",
+        second.content
+    );
+    assert_ne!(
+        head, tail,
+        "the continuation returned the first window again"
+    );
+}
+
+fn content_body(markdown: &str) -> String {
+    markdown
+        .split("## Content")
+        .nth(1)
+        .unwrap_or("")
+        .split("\n[truncated:")
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
 #[test]
 fn webfetch_declares_itself_read_only_and_writes_nothing_here() {
     // `emma::approval` decides whether to interrupt a human from these two

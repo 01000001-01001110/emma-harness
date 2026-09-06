@@ -26,7 +26,46 @@ use tokio::task::JoinHandle;
 // ---------------------------------------------------------------------------
 
 pub const DEFAULT_TIMEOUT_MS: u64 = 45_000;
+/// The `browser-miner` CLI's default. Emma's `WebFetch` sets its own, larger
+/// one — see `crate::fetch::DEFAULT_MAX_CHARS` — because a CLI default is read
+/// by a human with a scrollback and the tool default is spent from a context
+/// window.
 pub const DEFAULT_MAX_TEXT_CHARS: usize = 8_000;
+
+/// Which slice of a page's text one read returns.
+///
+/// **Why characters and not blocks or paragraphs.** A window has to be named
+/// by an index both sides can compute from what the digest already reports,
+/// and the only such number is `text_chars_total`. Block indices would need a
+/// segmentation that survives being computed twice, on two separate renders of
+/// a page that may have changed between them — a guarantee nothing here can
+/// make. Characters also compose with `max_chars` the way the filesystem
+/// `Read` tool's `offset` composes with its `limit`, which is the pattern the
+/// model has already learned.
+///
+/// The full text is in hand when this is applied (`Probe::text` arrives
+/// uncapped from the in-page walk), so a window costs nothing here. Holding
+/// that text so the *next* window is free would be a cache with a lifetime, an
+/// eviction policy and an owner, and `WebFetch` is deliberately stateless. The
+/// price of continuing is therefore one more page load, and the notice says so
+/// rather than implying a free seek.
+#[derive(Debug, Clone, Copy)]
+pub struct TextWindow {
+    /// Characters to skip. Zero is the head of the page.
+    pub offset: usize,
+    /// Characters to return from `offset`.
+    pub max_chars: usize,
+}
+
+impl TextWindow {
+    /// The window every caller that has no offset to continue from wants.
+    pub fn head(max_chars: usize) -> Self {
+        Self {
+            offset: 0,
+            max_chars,
+        }
+    }
+}
 
 /// In-page extraction script. Deterministic DOM walk — no model anywhere.
 /// Returns a JSON string with meta, boilerplate-stripped main text, structured
@@ -571,7 +610,7 @@ pub fn assemble(
     url: &str,
     mut probe: Probe,
     include_digest: bool,
-    max_text_chars: usize,
+    window: TextWindow,
 ) -> serde_json::Value {
     let lower = probe.text.to_lowercase();
     let contains_apply = lower.contains("apply");
@@ -590,16 +629,25 @@ pub fn assemble(
         }
     }
 
-    // Context-window budget: text is the biggest section, truncate it last-
-    // priority (metadata/interactive/structured are already bounded in-page).
+    // Context-window budget: text is the biggest section, cut last-priority
+    // (metadata/interactive/structured are already bounded in-page). What is
+    // returned is a *window* into the text and not always its head, so the
+    // three numbers below are what a caller needs to ask for the next one.
     let text_chars = probe.text.chars().count();
-    let truncated = text_chars > max_text_chars;
-    if truncated {
-        let clipped: String = probe.text.chars().take(max_text_chars).collect();
-        probe.digest["text"] = serde_json::json!(clipped);
-    }
+    let shown: String = probe
+        .text
+        .chars()
+        .skip(window.offset)
+        .take(window.max_chars)
+        .collect();
+    let end = window.offset.saturating_add(shown.chars().count());
+    probe.digest["text"] = serde_json::json!(shown);
+    probe.digest["text_offset"] = serde_json::json!(window.offset);
     probe.digest["text_chars_total"] = serde_json::json!(text_chars);
-    probe.digest["text_truncated"] = serde_json::json!(truncated);
+    // "There is more after this window", which is the question a reader has.
+    // Not "the page is longer than one window": at the last window those two
+    // disagree, and answering the wrong one costs a page load for nothing.
+    probe.digest["text_truncated"] = serde_json::json!(end < text_chars);
 
     let (status, status_url) = match &probe.http_status {
         Some((s, u)) => (serde_json::json!(s), Some(u.clone())),
@@ -928,7 +976,78 @@ pub async fn settle_network_quiet(page: &chromiumoxide::Page, quiet_ms: u64, cap
 
 #[cfg(test)]
 mod tests {
-    use super::{looks_blocked, DIGEST_JS};
+    use super::{assemble, looks_blocked, Probe, TextWindow, DIGEST_JS};
+
+    fn probe(text: &str) -> Probe {
+        Probe {
+            final_url: "https://example.com/".into(),
+            title: "Example".into(),
+            http_status: Some((200, "https://example.com/".into())),
+            digest: serde_json::json!({ "text": text }),
+            text: text.into(),
+            raw_html_chars: 0,
+            fetch_timestamp: "2026-08-26T00:00:00Z".into(),
+        }
+    }
+
+    /// The full page text is in hand here — `probe.text` arrives uncapped from
+    /// the in-page walk — so a window is a slice, not a second read of
+    /// anything. What costs a second page load is the *next* window, because
+    /// nothing holds this text between tool calls.
+    #[test]
+    fn a_text_window_returns_the_slice_the_caller_asked_for() {
+        let text: String = (0..100)
+            .map(|i| char::from(b'a' + (i % 26) as u8))
+            .collect();
+        let out = assemble(
+            "digest",
+            "https://example.com/",
+            probe(&text),
+            true,
+            TextWindow {
+                offset: 40,
+                max_chars: 20,
+            },
+        );
+        let d = &out["digest"];
+        assert_eq!(d["text"].as_str().unwrap(), &text[40..60]);
+        assert_eq!(d["text_offset"].as_u64(), Some(40));
+        assert_eq!(d["text_chars_total"].as_u64(), Some(100));
+        // 60 < 100: there is more after this window.
+        assert_eq!(d["text_truncated"].as_bool(), Some(true));
+    }
+
+    /// The last window ends exactly at the end and is not "truncated" — and a
+    /// window starting past the end is empty without lying about the total.
+    #[test]
+    fn the_final_window_is_whole_and_a_window_past_the_end_is_empty() {
+        let text = "abcdefghij".to_string();
+        let whole = assemble(
+            "digest",
+            "https://example.com/",
+            probe(&text),
+            true,
+            TextWindow {
+                offset: 0,
+                max_chars: 10,
+            },
+        );
+        assert_eq!(whole["digest"]["text_truncated"].as_bool(), Some(false));
+
+        let past = assemble(
+            "digest",
+            "https://example.com/",
+            probe(&text),
+            true,
+            TextWindow {
+                offset: 900,
+                max_chars: 10,
+            },
+        );
+        assert_eq!(past["digest"]["text_offset"].as_u64(), Some(900));
+        assert_eq!(past["digest"]["text"].as_str().unwrap(), "");
+        assert_eq!(past["digest"]["text_truncated"].as_bool(), Some(false));
+    }
 
     #[test]
     fn detects_pardon_our_interruption() {

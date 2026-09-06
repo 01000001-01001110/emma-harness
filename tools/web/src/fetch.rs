@@ -57,7 +57,7 @@ use crate::digest_md;
 // ---------------------------------------------------------------------------
 
 const NAME: &str = "WebFetch";
-const KEYS: &[&str] = &["url", "max_chars", "max_links"];
+const KEYS: &[&str] = &["url", "max_chars", "max_links", "offset"];
 
 /// chromehand's own default. Roughly two thousand tokens of prose — enough for
 /// most articles, and the cap is raisable per call.
@@ -169,6 +169,17 @@ impl Tool for WebFetch {
                          Truncation is always reported, with the numbers."
                     )
                 },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": format!(
+                        "Characters of page text to skip before the returned window starts. \
+                         Default 0, the top of the page. A truncated read names the offset that \
+                         continues it. Continuing costs a second fetch of the page — nothing is \
+                         cached — so raise {DEFAULT_MAX_CHARS}-character windows only as far as \
+                         the reading needs."
+                    )
+                },
                 "max_links": {
                     "type": "integer",
                     "minimum": 1,
@@ -238,6 +249,7 @@ impl Tool for WebFetch {
                 "WebFetch.max_links must be at least 1".into(),
             ));
         }
+        args::opt_u64(args_v, NAME, "offset")?;
         Ok(())
     }
 
@@ -254,15 +266,15 @@ impl WebFetch {
     async fn run(&self, args_v: Value) -> Result<ToolOutcome, ToolError> {
         self.validate_args(&args_v)?;
         let url = args::req_str(&args_v, NAME, "url")?.trim().to_string();
-        let max_chars = args::opt_u64(&args_v, NAME, "max_chars")?
-            .unwrap_or(DEFAULT_MAX_CHARS)
-            .min(MAX_MAX_CHARS);
+        let window = text_window(&args_v)?;
+        let max_chars = window.max_chars as u64;
         let max_links = args::opt_u64(&args_v, NAME, "max_links")?
             .unwrap_or(DEFAULT_MAX_LINKS)
             .min(MAX_MAX_LINKS);
 
         let opts = DigestOptions {
-            max_text_chars: max_chars as usize,
+            max_text_chars: window.max_chars,
+            text_offset: window.offset,
             allowlist: self.allowlist.clone(),
             ..DigestOptions::default()
         };
@@ -286,10 +298,27 @@ impl WebFetch {
         // `reading`, so the selectors stay off: this tool cannot click what it
         // finds, and addresses for a thing nothing can address are a thousand
         // tokens of noise. `BrowserRead` is where they come back.
-        let limits = digest_md::Limits::reading(max_links as usize, max_chars as usize);
+        let limits = digest_md::Limits::reading(max_links as usize, max_chars as usize)
+            .at_offset(window.offset);
         let rendered = digest_md::render(&digest, &limits).map_err(ToolError::Failed)?;
         Ok(into_outcome(rendered))
     }
+}
+
+/// The slice of page text this call asked for.
+///
+/// Its own function so the defaults and the ceiling can be checked without a
+/// browser: this is where a continuation the model was *told* to make either
+/// reaches chromehand or is silently rounded back to the top of the page.
+fn text_window(args_v: &Value) -> Result<chromehand::TextWindow, ToolError> {
+    let max_chars = args::opt_u64(args_v, NAME, "max_chars")?
+        .unwrap_or(DEFAULT_MAX_CHARS)
+        .min(MAX_MAX_CHARS);
+    let offset = args::opt_u64(args_v, NAME, "offset")?.unwrap_or(0);
+    Ok(chromehand::TextWindow {
+        offset: offset.min(usize::MAX as u64) as usize,
+        max_chars: max_chars as usize,
+    })
 }
 
 /// The renderer's verdict, as a `ToolOutcome`.
@@ -552,6 +581,7 @@ mod tests {
         let props = schema["properties"].as_object().expect("no properties");
         assert!(props.contains_key("max_links"), "{schema}");
         assert!(props.contains_key("max_chars"), "{schema}");
+        assert!(props.contains_key("offset"), "{schema}");
         // And the ceiling is stated, because raising past what the browser
         // collected returns the same page and wastes a turn.
         let doc = props["max_links"]["description"].as_str().unwrap();

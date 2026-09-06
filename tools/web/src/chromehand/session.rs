@@ -385,9 +385,39 @@ fn spawn_chrome_detached(chrome: &Path, args: &[String]) -> Result<u32, String> 
             .spawn()
             .map_err(|e| format!("spawn chrome: {}", e))?;
         let pid = child.id();
-        drop(child); // do not wait — Chrome outlives this command
+        reap_when_it_exits(child);
         Ok(pid)
     }
+}
+
+/// Unix scar, 2026-08-26 (181 leaked Chromes): collect the child's exit status
+/// in the background, so that killing it actually frees the pid.
+///
+/// This was `drop(child)`, commented "do not wait, Chrome outlives this
+/// command". True of the CLI, wrong of Emma. `Child::drop` does not reap on
+/// Unix, so a killed-but-unwaited child becomes a **zombie**: the process is
+/// dead, but its pid stays in the table until its parent collects it. `kill -0`
+/// succeeds on a zombie, so every liveness check (the pool's, and
+/// `tests/browser_lifecycle.rs`'s) kept answering "still running" about a Chrome
+/// that had already taken a SIGKILL. Measured on macOS: `ps` reported
+/// `Z <defunct>` while `kill -0` returned 0 for the whole ten seconds the test
+/// waits before giving up.
+///
+/// The CLI got away with it because exiting hands its zombies to launchd, which
+/// reaps them at once. A long-lived library never exits, so it keeps them: the
+/// same "correct for a binary, wrong for a library" shape `tools/lsp` recorded
+/// about this crate's first Chrome leak.
+///
+/// A thread and not a `SIGCHLD` handler: [`crate::browser::pool::MAX_SESSIONS`]
+/// is 2, so this parks a couple of threads at worst, and a signal handler is
+/// process-global state a library has no business installing in somebody else's
+/// binary. The thread blocks for the life of the browser and dies with the
+/// process, so the CLI is unchanged: Chrome still outlives the command.
+#[cfg(not(windows))]
+fn reap_when_it_exits(mut child: std::process::Child) {
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
 }
 
 // endregion: Spawning a Chrome that outlives the command
@@ -1032,6 +1062,36 @@ mod tests {
         let started = std::time::Instant::now();
         wait_for_exit(0);
         assert!(started.elapsed() < Duration::from_millis(200));
+    }
+
+    /// The Unix half of the zombie fix: a spawned child must be reaped in the
+    /// background so its pid leaves the table after exit. Without
+    /// [`reap_when_it_exits`], `kill -0` keeps answering for a defunct Chrome.
+    ///
+    /// **Unverified on Windows** — this box cannot run it; settle it on macOS
+    /// with `ps -o stat= -p <pid>` after killing a session Chrome.
+    #[cfg(unix)]
+    #[test]
+    fn reaping_collects_a_child_exit_status() {
+        let child = std::process::Command::new("true")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn a short-lived child");
+        let pid = child.id();
+        super::reap_when_it_exits(child);
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            let alive = std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if !alive {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("pid {pid} still answered to kill -0 after reap_when_it_exits");
     }
 }
 

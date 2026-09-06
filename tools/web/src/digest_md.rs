@@ -86,6 +86,13 @@ pub struct Limits {
     /// What the caller passed as `max_chars`, used only to name the argument
     /// accurately when chromehand's text cap is the one that bound.
     pub max_chars: usize,
+    /// Where the returned text window starts. Zero is the head of the page.
+    ///
+    /// Carried here for one reason: a cut has to name the offset that returns
+    /// the *next* window, and that number is this one plus what was shown —
+    /// not `max_chars`, which is the same for every window and would send the
+    /// model back to the same text forever.
+    pub text_offset: usize,
     /// List each interactive element's stable CSS selector.
     ///
     /// Off for `WebFetch`, which cannot act on what it reads; on for
@@ -109,9 +116,16 @@ impl Limits {
         Self {
             max_links,
             max_chars,
+            text_offset: 0,
             show_selectors: false,
             selector_filter: None,
         }
+    }
+
+    /// The same limits, reading from `offset` rather than from the top.
+    pub fn at_offset(mut self, offset: usize) -> Self {
+        self.text_offset = offset;
+        self
     }
 }
 
@@ -213,7 +227,26 @@ pub fn render(v: &Value, limits: &Limits) -> Result<Rendered, String> {
     // -------------------------------------------------------------- content --
     out.push_str("## Content\n\n");
     let text = digest.get("text").and_then(Value::as_str).unwrap_or("");
-    if text.trim().is_empty() {
+    let total = digest
+        .get("text_chars_total")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    let offset = digest
+        .get("text_offset")
+        .and_then(Value::as_u64)
+        .map(|n| n as usize)
+        .unwrap_or(limits.text_offset);
+    if text.trim().is_empty() && offset > 0 && offset >= total {
+        // An offset past the end is arithmetic, not an empty page, and the two
+        // sentences send the model to opposite next moves: one to a different
+        // source, the other to a smaller offset. Naming the last window's
+        // start makes the correction one call rather than a search.
+        let last = total.saturating_sub(limits.max_chars.max(1));
+        out.push_str(&format!(
+            "(offset={offset} starts past the end of this page's text, which is {total} \
+             characters. The last window starts at offset={last}.)\n"
+        ));
+    } else if text.trim().is_empty() {
         // The governing rule, made visible: a page with nothing on it is a
         // result. This sentence is the difference between the model looking
         // elsewhere and the model retrying a fetch that will never differ.
@@ -227,16 +260,20 @@ pub fn render(v: &Value, limits: &Limits) -> Result<Rendered, String> {
     }
     if digest.get("text_truncated").and_then(Value::as_bool) == Some(true) {
         let shown = text.chars().count();
-        let total = digest
-            .get("text_chars_total")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as usize;
-        // The one cut that costs prose, so it names the argument, the value
-        // that was in force, and what to set it to — "raise max_chars" alone
-        // leaves the reader guessing what it currently is.
+        let next = offset.saturating_add(shown);
+        // The one cut that costs prose, and the only one whose remedy used to
+        // be a lie. "re-read with max_chars=61234" asked for a quarter of the
+        // model's context in one message, and on a longer page it named a
+        // number above the ceiling, so the advice could not be followed at
+        // all. What replaces it is the filesystem `Read` contract: this window,
+        // the whole document's size, and the exact call that returns the next
+        // window. The second fetch is a real page load — nothing here is
+        // cached — which is why the notice says so rather than reading like a
+        // free seek.
         let cut = format!(
-            "page text cut to {shown} of {total} characters by max_chars={}; \
-             re-read with max_chars={total} for the whole page",
+            "page text {offset}-{next} of {total} characters, cut by max_chars={}; \
+             continue with offset={next} on the same url (a second fetch of the page, \
+             not a cached slice)",
             limits.max_chars
         );
         out.push_str(&format!("\n[truncated: {cut}]\n"));
@@ -712,14 +749,18 @@ mod tests {
     #[test]
     fn a_cut_names_the_limit_the_loss_and_the_remedy() {
         let text = render_default(&digest_with(
-            "half a page",
+            &"x".repeat(8_000),
             json!({ "digest": { "text_truncated": true, "text_chars_total": 90_000 } }),
         ))
         .truncation
         .expect("text cut reported nothing");
         assert!(text.contains("max_chars=8000"), "no limit named: {text}");
         assert!(text.contains("90000"), "no size of loss: {text}");
-        assert!(text.contains("max_chars=90000"), "no remedy: {text}");
+        assert!(text.contains("offset=8000"), "no remedy: {text}");
+        assert!(
+            text.contains("continue with offset="),
+            "no continuation: {text}"
+        );
 
         let links = render_default(&many_links(70))
             .truncation
@@ -733,6 +774,91 @@ mod tests {
     /// past `max_links`. The bug was that this reported "truncated" with
     /// nothing to distinguish it from a cut article, which sent the reader to
     /// the one argument that would not have helped.
+    #[test]
+    fn a_text_cut_names_the_window_and_the_call_that_continues_it() {
+        let r = render(
+            &digest_with(
+                &"x".repeat(20_000),
+                json!({ "digest": { "text_truncated": true, "text_chars_total": 61_234 } }),
+            ),
+            &Limits::reading(50, 20_000),
+        )
+        .unwrap();
+        let cut = r.truncation.expect("a cut page must say so");
+        assert!(cut.contains("61234"), "no total: {cut}");
+        assert!(cut.contains("max_chars=20000"), "no limit named: {cut}");
+        assert!(cut.contains("offset=20000"), "no next call: {cut}");
+    }
+
+    /// Continuing from the middle: the next offset is the end of *this*
+    /// window, not `max_chars`. Getting this wrong re-reads the same text
+    /// forever, which is the failure mode that looks most like progress.
+    #[test]
+    fn the_next_offset_is_the_end_of_this_window_and_not_the_window_size() {
+        let r = render(
+            &digest_with(
+                &"x".repeat(20_000),
+                json!({ "digest": {
+                    "text_truncated": true,
+                    "text_chars_total": 61_234,
+                    "text_offset": 20_000
+                } }),
+            ),
+            &Limits::reading(50, 20_000).at_offset(20_000),
+        )
+        .unwrap();
+        let cut = r.truncation.expect("a cut page must say so");
+        assert!(cut.contains("offset=40000"), "wrong next call: {cut}");
+        assert!(
+            cut.contains("20000-40000") || cut.contains("20000 to 40000"),
+            "the window is not named: {cut}"
+        );
+    }
+
+    /// An offset past the end is the model's arithmetic being wrong, and the
+    /// one thing it must never be reported as is a page with nothing on it.
+    #[test]
+    fn a_window_past_the_end_says_so_rather_than_reporting_an_empty_page() {
+        let r = render(
+            &digest_with(
+                "",
+                json!({ "digest": {
+                    "text_truncated": false,
+                    "text_chars_total": 4_000,
+                    "text_offset": 90_000
+                } }),
+            ),
+            &Limits::reading(50, 20_000).at_offset(90_000),
+        )
+        .unwrap();
+        assert!(
+            !r.markdown.contains("held no readable text"),
+            "a bad offset was reported as an empty page: {}",
+            r.markdown
+        );
+        assert!(r.markdown.contains("90000"), "{}", r.markdown);
+        assert!(r.markdown.contains("4000"), "{}", r.markdown);
+    }
+
+    /// The last window is complete. Reporting it as cut would send the model
+    /// on one more fetch for text that does not exist.
+    #[test]
+    fn the_last_window_of_a_page_is_not_reported_as_cut() {
+        let r = render(
+            &digest_with(
+                &"x".repeat(1_234),
+                json!({ "digest": {
+                    "text_truncated": false,
+                    "text_chars_total": 61_234,
+                    "text_offset": 60_000
+                } }),
+            ),
+            &Limits::reading(50, 20_000).at_offset(60_000),
+        )
+        .unwrap();
+        assert!(!r.truncated(), "{:?}", r.truncation);
+    }
+
     #[test]
     fn a_link_cut_is_not_reported_as_a_text_cut() {
         let r = render_default(&many_links(70));

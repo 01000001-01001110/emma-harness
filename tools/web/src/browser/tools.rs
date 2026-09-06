@@ -70,7 +70,7 @@ use super::pool::{BrowserPool, Session};
 use super::render;
 use crate::args;
 use crate::chromehand::forms::{FillField, FillSpec};
-use crate::chromehand::{actions, forms};
+use crate::chromehand::{actions, forms, TextWindow};
 use crate::digest_md;
 use crate::fetch::map_error;
 
@@ -290,7 +290,11 @@ impl BrowserOpen {
         // The first read comes back with the page, selectors included, so the
         // ordinary loop is open → act → read rather than open → read → act.
         let live = Live::connect(&self.pool, &session.id).await?;
-        let read = actions::session_digest(live.page(), DEFAULT_MAX_CHARS as usize).await;
+        let read = actions::session_digest(
+            live.page(),
+            crate::chromehand::digest::TextWindow::head(DEFAULT_MAX_CHARS as usize),
+        )
+        .await;
         let digest = live.finish(read).await?;
         let (snapshot, _) = crate::chromehand::digest::compute_delta(&session.id, None, &digest);
         self.pool.set_delta_baseline(&session.id, snapshot);
@@ -298,6 +302,7 @@ impl BrowserOpen {
         let limits = digest_md::Limits {
             max_links: DEFAULT_MAX_LINKS as usize,
             max_chars: DEFAULT_MAX_CHARS as usize,
+            text_offset: 0,
             show_selectors: true,
             selector_filter: None,
         };
@@ -341,7 +346,14 @@ impl BrowserRead {
     }
 }
 
-const READ_KEYS: &[&str] = &["session", "delta", "max_chars", "max_links", "selectors"];
+const READ_KEYS: &[&str] = &[
+    "session",
+    "delta",
+    "max_chars",
+    "max_links",
+    "selectors",
+    "offset",
+];
 
 #[async_trait::async_trait]
 impl Tool for BrowserRead {
@@ -371,6 +383,11 @@ impl Tool for BrowserRead {
                     "type": "integer",
                     "minimum": 1,
                     "description": format!("Links to list. Default {DEFAULT_MAX_LINKS}, capped at {MAX_MAX_LINKS}.")
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Characters of page text to skip before the returned window starts. Default 0."
                 },
                 "selectors": {
                     "type": "string",
@@ -404,6 +421,7 @@ impl Tool for BrowserRead {
         need_session(&self.pool, "BrowserRead", args_v)?;
         args::opt_bool(args_v, "BrowserRead", "delta")?;
         args::opt_str(args_v, "BrowserRead", "selectors")?;
+        args::opt_u64(args_v, "BrowserRead", "offset")?;
         for key in ["max_chars", "max_links"] {
             if let Some(0) = args::opt_u64(args_v, "BrowserRead", key)? {
                 return Err(ToolError::BadArguments(format!(
@@ -434,12 +452,20 @@ impl BrowserRead {
         let max_links = args::opt_u64(&args_v, "BrowserRead", "max_links")?
             .unwrap_or(DEFAULT_MAX_LINKS)
             .min(MAX_MAX_LINKS);
+        let offset = args::opt_u64(&args_v, "BrowserRead", "offset")?.unwrap_or(0) as usize;
         let filter = args::opt_str(&args_v, "BrowserRead", "selectors")?
             .map(str::to_string)
             .filter(|s| !s.trim().is_empty());
 
         let live = Live::connect(&self.pool, &session.id).await?;
-        let read = actions::session_digest(live.page(), max_chars as usize).await;
+        let read = actions::session_digest(
+            live.page(),
+            TextWindow {
+                offset,
+                max_chars: max_chars as usize,
+            },
+        )
+        .await;
         let digest = live.finish(read).await?;
 
         // The baseline is always refreshed, whichever branch renders, so a
@@ -465,6 +491,7 @@ impl BrowserRead {
         let limits = digest_md::Limits {
             max_links: max_links as usize,
             max_chars: max_chars as usize,
+            text_offset: offset,
             show_selectors: true,
             selector_filter: filter,
         };

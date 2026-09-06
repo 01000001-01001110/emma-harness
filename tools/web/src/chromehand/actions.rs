@@ -683,16 +683,10 @@ pub async fn screenshot(page: &Page, out_path: &str) -> Result<serde_json::Value
 /// result for that evidence). Never fabricated.
 pub async fn session_digest(
     c: &Connected,
-    max_text_chars: usize,
+    window: digest::TextWindow,
 ) -> Result<serde_json::Value, String> {
     let probe = digest::probe_current(&c.page).await?;
-    let mut out = digest::assemble(
-        "digest",
-        &probe.final_url.clone(),
-        probe,
-        true,
-        max_text_chars,
-    );
+    let mut out = digest::assemble("digest", &probe.final_url.clone(), probe, true, window);
     if let Some(obj) = out.as_object_mut() {
         obj.remove("outcome");
         obj.insert("session".into(), serde_json::json!(c.id));
