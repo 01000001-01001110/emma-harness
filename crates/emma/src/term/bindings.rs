@@ -463,7 +463,7 @@ pub static UNDRAWN: &[(Chord, Ctx, &str)] = &[
     (
         Chord::plain(KeyCode::Char('?')),
         Ctx::IDLE,
-        "open the Help page from an empty box. The drawn chord is Ctrl+/, which          works with text in the box too; `?` is the fork's second door for          people who reach for it, and the Help page's own text names both.",
+ "open the Help page from an empty box. The drawn chord is Ctrl+/, which works with text in the box too; `?` is the fork's second door for people who reach for it, and the Help page's own text names both.",
     ),
     (
         Chord::plain(KeyCode::Char('?')),
@@ -473,7 +473,7 @@ pub static UNDRAWN: &[(Chord, Ctx, &str)] = &[
     (
         Chord::ctrl('7'),
         Ctx::IDLE,
-        "Ctrl+/ as some terminals report it. The 0x1F byte a terminal sends for          Ctrl+/ reaches crossterm as `/`, `_` or `7` depending on keyboard and          terminal, and `pane_key` folds all three to `/` before any lookup, so          this is the drawn Ctrl+/ under another name rather than a key.",
+ "Ctrl+/ as some terminals report it. The 0x1F byte a terminal sends for Ctrl+/ reaches crossterm as `/`, `_` or `7` depending on keyboard and terminal, and `pane_key` folds all three to `/` before any lookup, so this is the drawn Ctrl+/ under another name rather than a key.",
     ),
     (
         Chord::ctrl('_'),
