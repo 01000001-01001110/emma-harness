@@ -671,6 +671,11 @@ fn resume(s: &mut Session<'_, '_>, id: Option<String>) {
     };
     let Some(id) = id else {
         list_sessions(s, dir);
+        // ...and the sidebar takes the arrows, so the next Up, Down or Enter
+        // picks a row instead of walking the input history. `false` is a plain
+        // run or an empty list, and the printed list above is then the whole
+        // answer.
+        s.term.focus_sessions();
         return;
     };
     let path = match crate::session::locate(dir, Some(&id), s.cwd) {

@@ -68,11 +68,18 @@
 //! like every other one, and a second renderer for one conversation is two
 //! views that can disagree.
 //!
-//! # What this stage does not do
-//!
-//! The page arrives in three stages, and this is the third. There is no
-//! language-server decoration (the LSP half) here; its seam is named where it
-//! will go, so that stage extends this file rather than reinterpreting it.
+//! **The language server decorates; it never delays.** Diagnostics land in the
+//! gutter beside the lines they are about and under the exact span the server
+//! named, `F5` asks what is under the cursor and `F6` where it is defined, and
+//! one row under the document carries the server's state, the count and the
+//! message the cursor is sitting on. **Nothing in this module talks to a
+//! server**: it holds an [`Lsp`] that only an [`LspUpdate`] writes, delivered
+//! by the bridge in [`super::code_lsp`], which owns every `.await` in the
+//! feature. That is what makes a dead or indexing server cost the page its
+//! decorations and never a keystroke - and it is why every variant of
+//! [`LspStatus`] is a sentence rather than an absence: a page with no
+//! decorations because the server is still indexing and a page with no
+//! decorations because the file has no problems must not look the same.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -741,6 +748,12 @@ pub struct CodeView {
     /// tall enough to draw it, where the alternative would be a feature that
     /// silently does not exist.
     pub strip_shown: bool,
+    /// Everything a language server has told the page. Never written by a key:
+    /// only by an [`LspUpdate`] the bridge in [`super::code_lsp`] delivered,
+    /// through [`CodeView::apply_lsp`]. With no bridge wired it stays
+    /// [`LspStatus::Idle`] and nothing on the page changes, which is the same
+    /// state a file with no language server leaves it in.
+    pub lsp: Lsp,
 }
 
 /// The action an unsaved-changes warning is holding back.
@@ -781,6 +794,7 @@ impl CodeView {
             body_rows: 0,
             strip: Strip::default(),
             strip_shown: true,
+            lsp: Lsp::default(),
         }
     }
 
@@ -1050,6 +1064,396 @@ fn parent_of(path: &str) -> Option<String> {
 
 // endregion: State
 
+// region: LSP state
+// ---------------------------------------------------------------------------
+// LSP state: what the language server told the page, and nothing else
+// ---------------------------------------------------------------------------
+//
+// Every field here is written by an [`LspUpdate`] that arrived from the bridge
+// task in [`super::code_lsp`], and read by the paint. Nothing in this region
+// talks to a server, waits on one, or knows one exists: the page is a display
+// of the last thing it was told, which is what lets a dead or slow server cost
+// the editor its decorations and never a keystroke.
+// ---------------------------------------------------------------------------
+
+/// How bad one diagnostic is, in the four grades LSP defines.
+///
+/// Ordered worst-first on purpose: [`Lsp::at_line`] picks the gutter mark with
+/// `min_by_key`, so a line carrying an error and a hint shows the error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Severity {
+    Error,
+    Warning,
+    Info,
+    Hint,
+}
+
+impl Severity {
+    /// LSP's `DiagnosticSeverity`. Anything else is a `Hint`, because an
+    /// unknown grade is still a thing the server wanted to say and dropping it
+    /// would be the page inventing silence.
+    pub fn from_lsp(n: i64) -> Self {
+        match n {
+            1 => Severity::Error,
+            2 => Severity::Warning,
+            3 => Severity::Info,
+            _ => Severity::Hint,
+        }
+    }
+
+    /// The gutter glyph.
+    ///
+    /// **One display column, ASCII, and that is a load-bearing constraint
+    /// rather than a taste.** The mark is drawn into the gutter's separator
+    /// column — the space between the line number and the text — so that the
+    /// gutter width [`geom_for`] hands the hit test does not move when a
+    /// diagnostic arrives. A two-column glyph there would make the row one
+    /// column wider than the pane, and [`put`] would clip the last character
+    /// of every marked line. [`Severity::mark`] is pinned by a test that draws
+    /// a wide glyph at the right edge and looks for it.
+    pub fn mark(self) -> char {
+        match self {
+            Severity::Error => 'E',
+            Severity::Warning => 'W',
+            Severity::Info => 'i',
+            Severity::Hint => 'h',
+        }
+    }
+
+    fn role(self) -> Role {
+        match self {
+            Severity::Error => Role::Err,
+            Severity::Warning => Role::Warn,
+            Severity::Info | Severity::Hint => Role::Dim,
+        }
+    }
+}
+
+/// One diagnostic, in this page's coordinates: 0-based lines and **chars**,
+/// which is what [`OpenFile`] indexes by.
+///
+/// The conversion from LSP's UTF-16 columns happens once, in
+/// [`super::code_lsp`], against the buffer the server was told about. Doing it
+/// here would mean the paint converting encodings on every frame; doing it
+/// nowhere would put the underline under the wrong character on any line with
+/// a non-ASCII glyph on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diag {
+    pub line: usize,
+    pub end_line: usize,
+    /// First char of the span on [`Self::line`].
+    pub start_col: usize,
+    /// One past the last char of the span on [`Self::end_line`].
+    pub end_col: usize,
+    pub severity: Severity,
+    pub message: String,
+}
+
+/// What the page can honestly say about the language server for the open file.
+///
+/// The vocabulary is the Settings LSP card's, deliberately: **found** means an
+/// entry point is on disk, **running** means a process answered a handshake,
+/// and the two are different claims. Nothing here is ever inferred from a
+/// decoration arriving; every variant is something the bridge observed.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum LspStatus {
+    /// No file open, so there is no question to answer.
+    #[default]
+    Idle,
+    /// This file's extension names no language in `emma_tools_lsp::lang`.
+    Unsupported(String),
+    /// A language Emma knows, switched off in `lsp.enabled`.
+    Disabled(String),
+    /// Enabled, and no entry point on disk. The detail is the crate's own
+    /// refusal, which names what was looked for.
+    Absent { label: String, detail: String },
+    /// A server is being started, or is still indexing. Not yet answering.
+    Starting(String),
+    /// A handshake completed and the server is answering.
+    Running(String),
+    /// It was running and stopped, or it never started. The pool's crash
+    /// accounting decides whether another one is tried.
+    Failed(String),
+}
+
+impl LspStatus {
+    /// The one line the page shows about the server. Present tense, no
+    /// promises: a caller can print this beside a file and be right.
+    pub fn line(&self) -> String {
+        match self {
+            LspStatus::Idle => String::new(),
+            LspStatus::Unsupported(shown) => format!("no language server for {shown}"),
+            LspStatus::Disabled(label) => {
+                format!("{label} is off: lsp.enabled in settings.json is the opt-in")
+            }
+            LspStatus::Absent { label, detail } => format!("{label}: {detail}"),
+            LspStatus::Starting(what) => format!("{what} starting"),
+            LspStatus::Running(what) => format!("{what} running"),
+            LspStatus::Failed(why) => format!("language server stopped: {why}"),
+        }
+    }
+
+    fn role(&self) -> Role {
+        match self {
+            LspStatus::Running(_) => Role::Ok,
+            LspStatus::Failed(_) | LspStatus::Absent { .. } => Role::Warn,
+            _ => Role::Dim,
+        }
+    }
+}
+
+/// The hover answer, as a popup with its own scroll.
+///
+/// Bounded by construction: [`HOVER_MAX_LINES`] is applied where the popup is
+/// built, so an enormous doc comment cannot become a page-sized overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoverPopup {
+    pub lines: Vec<String>,
+    pub scroll: usize,
+}
+
+/// The most hover lines kept. rust-analyzer's hover on a trait method runs to
+/// hundreds; the popup is a glance, and the file underneath is what the page
+/// is for.
+pub const HOVER_MAX_LINES: usize = 40;
+
+/// Where a `textDocument/definition` answer points.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DefTarget {
+    /// Inside the repository root, as a repo-relative path and a 0-based
+    /// position. The column is still an LSP **UTF-16** offset here: the file
+    /// it indexes into has not been read yet, so the conversion happens in the
+    /// shell after the open, where the lines exist.
+    Inside {
+        rel: String,
+        line: usize,
+        col: usize,
+    },
+    /// Outside the root: the standard library, a registry checkout, a
+    /// generated file in a build directory. The containment law says the page
+    /// does not open it, so it says where it is instead.
+    Outside(String),
+    /// The server answered, and the answer was nothing.
+    NotFound,
+}
+
+/// One thing the bridge learned, on its way to the view.
+///
+/// Applied by [`CodeView::apply_lsp`] under the frame lock. Every variant
+/// carries the path it is about, because an answer can arrive after the person
+/// has opened a different file, and decorating the new file with the old
+/// file's diagnostics is the failure this field exists to prevent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LspUpdate {
+    Status(LspStatus),
+    Diagnostics {
+        path: String,
+        items: Vec<Diag>,
+    },
+    /// `None` is "the server had nothing to say here", which is a real answer
+    /// and gets its own sentence rather than an empty popup.
+    Hover {
+        path: String,
+        lines: Option<Vec<String>>,
+    },
+    Definition {
+        path: String,
+        target: DefTarget,
+    },
+    /// The bridge could not do the thing at all, in its own words.
+    Note {
+        path: String,
+        text: String,
+    },
+}
+
+/// Everything the language server contributes to the page.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Lsp {
+    pub status: LspStatus,
+    /// Which file [`Self::diags`] describes. `None` means the diagnostics are
+    /// about nothing and are not drawn — a stale set is not dimmed, it is
+    /// absent.
+    pub path: Option<String>,
+    pub diags: Vec<Diag>,
+    pub hover: Option<HoverPopup>,
+    /// A one-line answer that is not a diagnostic: a definition outside the
+    /// root, a hover with nothing in it, a request that timed out.
+    pub note: Option<String>,
+}
+
+impl Lsp {
+    /// Errors and warnings in the open file, for the status row's count.
+    pub fn counts(&self) -> (usize, usize) {
+        let errors = self
+            .diags
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .count();
+        let warnings = self
+            .diags
+            .iter()
+            .filter(|d| d.severity == Severity::Warning)
+            .count();
+        (errors, warnings)
+    }
+
+    /// `"2 errors, 1 warning"`, or `None` when there is nothing to count.
+    ///
+    /// Only errors and warnings are counted, and the silence about hints is
+    /// deliberate: rust-analyzer emits an "inactive code" hint for every
+    /// `cfg`-disabled block, and a count that included them would report
+    /// dozens of problems in a file that has none.
+    pub fn count_line(&self) -> Option<String> {
+        let (e, w) = self.counts();
+        if e == 0 && w == 0 {
+            return None;
+        }
+        let mut parts = Vec::new();
+        if e > 0 {
+            parts.push(format!("{e} error{}", if e == 1 { "" } else { "s" }));
+        }
+        if w > 0 {
+            parts.push(format!("{w} warning{}", if w == 1 { "" } else { "s" }));
+        }
+        Some(parts.join(", "))
+    }
+
+    /// The worst diagnostic covering a line, for the gutter mark.
+    pub fn at_line(&self, line: usize) -> Option<&Diag> {
+        self.diags
+            .iter()
+            .filter(|d| line >= d.line && line <= d.end_line)
+            .min_by_key(|d| d.severity)
+    }
+}
+
+impl CodeView {
+    /// Fold one answer from the bridge into the page.
+    ///
+    /// Returns the file the shell must open, and only that: a definition that
+    /// landed in a file which is not the open one is the one answer this page
+    /// cannot apply on its own, because opening a file is a read. Everything
+    /// else is view state and is applied here.
+    ///
+    /// **Stale answers are dropped, not drawn.** A hover that arrives two
+    /// seconds after the person moved to another file is about a buffer that
+    /// is no longer on screen, and drawing it would be the page asserting
+    /// something nobody asked about the file in front of them.
+    pub fn apply_lsp(&mut self, update: LspUpdate) -> Option<(String, usize, usize)> {
+        let open = self.open.as_ref().map(|o| o.path.clone());
+        match update {
+            LspUpdate::Status(status) => {
+                self.lsp.status = status;
+                None
+            }
+            LspUpdate::Diagnostics { path, items } => {
+                if open.as_deref() == Some(path.as_str()) {
+                    self.lsp.path = Some(path);
+                    self.lsp.diags = items;
+                }
+                None
+            }
+            LspUpdate::Hover { path, lines } => {
+                if open.as_deref() != Some(path.as_str()) {
+                    return None;
+                }
+                match lines {
+                    Some(lines) if !lines.is_empty() => {
+                        self.lsp.note = None;
+                        self.lsp.hover = Some(HoverPopup {
+                            lines: lines.into_iter().take(HOVER_MAX_LINES).collect(),
+                            scroll: 0,
+                        });
+                    }
+                    _ => {
+                        self.lsp.hover = None;
+                        self.lsp.note = Some("no hover information here".to_string());
+                    }
+                }
+                None
+            }
+            LspUpdate::Definition { path, target } => {
+                if open.as_deref() != Some(path.as_str()) {
+                    return None;
+                }
+                match target {
+                    DefTarget::NotFound => {
+                        self.lsp.note =
+                            Some("no definition found for the symbol at the cursor".to_string());
+                        None
+                    }
+                    DefTarget::Outside(shown) => {
+                        // The containment law, said out loud rather than
+                        // silently. Opening it would put a file the page
+                        // cannot save into an editor whose Save writes inside
+                        // the root.
+                        self.lsp.note = Some(format!("defined outside this repository: {shown}"));
+                        None
+                    }
+                    DefTarget::Inside { rel, line, col } => {
+                        if Some(rel.as_str()) == open.as_deref() {
+                            // Same file: the column is already a char column,
+                            // because the shell converted it against the
+                            // buffer it had. See `code_lsp::definition_target`.
+                            self.jump_to(line, col);
+                            self.lsp.note = Some(format!("jumped to line {}", line + 1));
+                            None
+                        } else {
+                            Some((rel, line, col))
+                        }
+                    }
+                }
+            }
+            LspUpdate::Note { path, text } => {
+                if open.as_deref() == Some(path.as_str()) {
+                    self.lsp.note = Some(text);
+                }
+                None
+            }
+        }
+    }
+
+    /// Put the cursor at a position and scroll it into view.
+    pub fn jump_to(&mut self, line: usize, col: usize) {
+        let rows = self.body_rows.max(1);
+        if let Some(open) = self.open.as_mut() {
+            open.line = line.min(open.lines.len().saturating_sub(1));
+            open.col = col.min(open.line_len(open.line));
+            open.anchor = None;
+            open.follow_cursor(rows);
+        }
+    }
+
+    /// The diagnostic under the cursor, which is what the status row shows.
+    ///
+    /// The path check is the same one the paint makes: a diagnostic set that
+    /// is not about the open file is not about anything.
+    pub fn diag_at_cursor(&self) -> Option<&Diag> {
+        let open = self.open.as_ref()?;
+        if self.lsp.path.as_deref() != Some(open.path.as_str()) {
+            return None;
+        }
+        self.lsp.at_line(open.line)
+    }
+
+    /// Ask for hover or a definition, if there is a file to ask about.
+    ///
+    /// The refusal is the honest half: with no readable file open there is no
+    /// position to ask about, and a request the shell cannot fill would come
+    /// back to the person as silence.
+    fn ask_lsp(&mut self, action: CodeAction) -> CodeAction {
+        if self.open.as_ref().is_none_or(|o| o.note.is_some()) {
+            self.lsp.note = Some("open a text file first".to_string());
+            return CodeAction::FocusChanged;
+        }
+        self.lsp.note = None;
+        action
+    }
+}
+
+// endregion: LSP state
+
 // region: Keys
 // ---------------------------------------------------------------------------
 // Keys — the pure seam
@@ -1095,6 +1499,16 @@ pub enum CodeAction {
     /// on the channel a typed line takes — so the steering queue decides what
     /// happens to it mid-goal, exactly as it does for a typed line.
     Ask(String),
+    /// Ask the language server what is under the cursor (`F5`).
+    ///
+    /// It carries no position, and that is the seam rather than an oversight:
+    /// the shell reads the cursor and the buffer off the page when it posts
+    /// the request, so there is one answer to "where is the cursor" and it is
+    /// [`OpenFile`]'s. A position captured here would be a second copy, taken
+    /// one key earlier.
+    Hover,
+    /// Ask where the symbol under the cursor is defined (`F6`).
+    Definition,
     /// Close the page.
     Close,
 }
@@ -1171,6 +1585,14 @@ pub fn handle_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
     if key.code == KeyCode::F(2) {
         return v.request_save();
     }
+    // The hover popup takes every key that reaches it, the accent picker's
+    // rule: it covers the text, and a key that fell through to the editor
+    // while a panel hid the line would edit a line the person cannot see. It
+    // sits below the save chord deliberately, so `Ctrl+s` and `F2` still save
+    // with a popup open.
+    if v.lsp.hover.is_some() {
+        return hover_key(v, key);
+    }
     if let Some(pending) = v.armed.take() {
         v.notice = None;
         // The same key again confirms; anything else cancels and is **not**
@@ -1189,6 +1611,13 @@ pub fn handle_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
         // and because the header names it beside the `[Editor]` button that
         // does the same thing.
         KeyCode::F(7) => return CodeAction::LaunchEditor,
+        // The two code-intelligence keys. Function keys for the reason `F3`
+        // and `F4` are: inside the document every letter is text, so a
+        // mnemonic letter could not reach them. Both work from the tree too,
+        // so a person who has not focused the body still has them — and both
+        // refuse in words when there is no readable file to ask about.
+        KeyCode::F(5) => return v.ask_lsp(CodeAction::Hover),
+        KeyCode::F(6) => return v.ask_lsp(CodeAction::Definition),
         _ => {}
     }
     v.notice = None;
@@ -1251,6 +1680,23 @@ fn strip_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
         }
         _ => CodeAction::None,
     }
+}
+
+/// The hover popup's keys. Every one of them is consumed: the popup is modal
+/// by design, and the two that do something are the arrows. Anything else
+/// closes it **without also acting**, the same rule the unsaved-changes
+/// warning follows — a key that dismisses an overlay and then does its usual
+/// job is one keystroke doing two things the person only asked for one of.
+fn hover_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
+    let Some(popup) = v.lsp.hover.as_mut() else {
+        return CodeAction::None;
+    };
+    match key.code {
+        KeyCode::Down => popup.scroll = (popup.scroll + 1).min(popup.lines.len().saturating_sub(1)),
+        KeyCode::Up => popup.scroll = popup.scroll.saturating_sub(1),
+        _ => v.lsp.hover = None,
+    }
+    CodeAction::FocusChanged
 }
 
 /// Whether this key confirms a pending discard. It is the key that asked for
@@ -1867,6 +2313,12 @@ pub struct Regions {
     /// answer to that has to be about every row the strip owns, not the last
     /// of them. The input row is `strip.bottom() - 1`.
     pub strip: Option<Rect>,
+    /// Where the hover popup landed, when one is open. Reported for the reason
+    /// every other rect here is: a thing on screen whose position nothing
+    /// reported cannot be tested, and a test that reads the whole buffer
+    /// instead cannot say the popup was *over the document* rather than
+    /// somewhere in the pane.
+    pub hover: Option<Rect>,
     /// How many rows the content region has. The key handler stores it on the
     /// view so PageDown moves by a screen; only the paint can know it.
     pub rows: usize,
@@ -2010,9 +2462,56 @@ fn content_rect(body: Rect, v: &CodeView) -> Rect {
     }
     let y = 1 + u16::from(v.notice.is_some());
     let strip_h = strip_rows(inner.height);
-    let help_h = help_rows(inner.height, y + strip_h);
-    let h = inner.height.saturating_sub(y + help_h + strip_h);
+    let lsp_h = lsp_rows(v);
+    let help_h = help_rows(inner.height, y + strip_h + lsp_h);
+    let h = inner.height.saturating_sub(y + help_h + strip_h + lsp_h);
     Rect::new(inner.x, inner.y + y, inner.width, h)
+}
+
+/// The one row the language server gets, or nothing at all when it has nothing
+/// to say.
+///
+/// Worst first, joined with the separator the status bar uses: whatever the
+/// last request had to report, then the count, then the server's state, then
+/// the diagnostic under the cursor. **One row**, because the file is what the
+/// pane is for — a problems panel would take a third of the page to restate
+/// what the gutter already marks.
+pub fn lsp_line(v: &CodeView) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    let status = v.lsp.status.line();
+    if !status.is_empty() {
+        parts.push(status);
+    }
+    if let Some(counts) = v.lsp.count_line() {
+        parts.push(counts);
+    }
+    if let Some(note) = &v.lsp.note {
+        parts.push(note.clone());
+    }
+    if let Some(d) = v.diag_at_cursor() {
+        parts.push(format!("{}: {}", d.severity.mark(), one_line(&d.message)));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" \u{b7} "))
+    }
+}
+
+/// A message flattened to one row. rust-analyzer's diagnostics routinely carry
+/// a second line, and a newline written into a `Buffer` is a cell, not a break.
+fn one_line(text: &str) -> String {
+    text.split('\n')
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Whether the body gives up a row for [`lsp_line`]. Read by [`content_rect`]
+/// and by the paint, which must agree or a click lands on the wrong line.
+fn lsp_rows(v: &CodeView) -> u16 {
+    u16::from(lsp_line(v).is_some())
 }
 
 /// Where the chat strip's three rows land, or `None` when the pane is too
@@ -2420,7 +2919,14 @@ fn draw_body(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) -> Regions
     // The same function the hit test calls, so a press cannot land on a row
     // the paint put somewhere else.
     let content = content_rect(area, v);
-    let help_h = help_rows(inner.height, y);
+    let lsp_h = lsp_rows(v);
+    // The same argument `content_rect` makes: the help row's position is
+    // derived from the same three heights the content rect was, so a row can
+    // never be drawn where the document already is. This used to pass `y`
+    // alone, which agreed with `content_rect` only because the strip's floor
+    // and the help row's happen to make the two answers equal; the language
+    // server's row breaks that coincidence.
+    let help_h = help_rows(inner.height, y + strip_rows(inner.height) + lsp_h);
     let content_h = content.height;
     if content.height > 0 {
         match v.mode {
@@ -2429,11 +2935,26 @@ fn draw_body(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) -> Regions
         }
         out.rows = content.height as usize;
     }
-    if help_h == 1 {
+    // The language server's one row, under the document and above the help.
+    // Coloured by the status rather than by the worst diagnostic: the row is
+    // mostly about whether there is a server at all, and a red row on a file
+    // with one warning in it is the page shouting.
+    if let Some(line) = lsp_line(v) {
         put(
             buf,
             inner,
             y + content_h,
+            Line::from(Span::styled(
+                fit(&sanitise(&line), inner.width as usize, skin.glyphs.ellipsis),
+                skin.palette.style(v.lsp.status.role()),
+            )),
+        );
+    }
+    if help_h == 1 {
+        put(
+            buf,
+            inner,
+            y + content_h + lsp_h,
             Line::from(Span::styled(
                 fit(&help_line(v), inner.width as usize, skin.glyphs.ellipsis),
                 skin.palette.dim(),
@@ -2446,6 +2967,14 @@ fn draw_body(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) -> Regions
     if let Some(strip) = strip_rect(area) {
         out.strip = Some(strip);
         draw_strip(strip, buf, v, skin);
+    }
+    // Last, and over the document rather than over the whole body: a popup
+    // that covered the header would hide the path of the file it is about.
+    if let Some(popup) = v.lsp.hover.as_ref() {
+        if content.width > 0 && content.height > 0 {
+            let rect = draw_hover(content, buf, popup, skin);
+            out.hover = (rect.width > 0 && rect.height > 0).then_some(rect);
+        }
     }
     out
 }
@@ -2550,7 +3079,7 @@ fn help_line(v: &CodeView) -> String {
                 .to_string()
         }
         Mode::File => "Tab pane, then the ask box · ↑/↓ move · Enter opens, then edits \
-                       · F3 HISTORY · F4 copy · F7 external editor"
+                       · F3 HISTORY · F5 hover · F6 definition · F7 editor"
             .to_string(),
     }
 }
@@ -2598,6 +3127,9 @@ fn draw_file(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) {
     let hcols = g.hcols;
     let editing = v.editing();
     let sel = open.selection();
+    // Diagnostics decorate this file only when they are *for* this file. A
+    // stale set is not drawn dim; it is not drawn.
+    let diags = (v.lsp.path.as_deref() == Some(open.path.as_str())).then_some(&v.lsp);
     for (i, ln) in open.lines.iter().enumerate().skip(top).take(h) {
         let row_chars: Vec<char> = ln.chars().collect();
         let (sel_a, sel_b) = match sel {
@@ -2608,10 +3140,25 @@ fn draw_file(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) {
             _ => (0, 0),
         };
         let cursor = (editing && i == open.line).then_some(open.col);
-        let mut spans = vec![Span::styled(
-            format!("{:>gw$} ", i + 1, gw = gw),
-            skin.palette.dim(),
-        )];
+        // The worst diagnostic on this line takes the gutter's **separator**
+        // column - the space between the number and the text - rather than a
+        // column of its own. That is what keeps `geom_for`'s gutter width, and
+        // therefore every hit test, from moving when a server answers: a page
+        // whose columns shift under the pointer as diagnostics arrive is a
+        // page where a click lands on a different character from the one it
+        // was aimed at. It is also why the mark must stay one column wide.
+        let worst = diags.and_then(|l| l.at_line(i));
+        let (sep, sep_style) = match worst {
+            Some(d) => (
+                d.severity.mark().to_string(),
+                skin.palette.bold(d.severity.role()),
+            ),
+            None => (" ".to_string(), skin.palette.dim()),
+        };
+        let mut spans = vec![
+            Span::styled(format!("{:>gw$}", i + 1, gw = gw), skin.palette.dim()),
+            Span::styled(sep, sep_style),
+        ];
         // Walk the line in display columns, skipping what the horizontal shift
         // hides. A glyph straddling the left edge is replaced by a space: half
         // a wide character is a cell the terminal and ratatui disagree about.
@@ -2633,10 +3180,19 @@ fn draw_file(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) {
                 break;
             }
             let selected = sel_a < sel_b && idx >= sel_a && idx < sel_b;
+            // The squiggle a terminal cannot draw: bold and underlined in the
+            // severity's colour, over exactly the span the server named. Under
+            // the cursor and the selection, because those say where the person
+            // is and this says where the compiler is.
+            let marked = worst.filter(|d| covers(d, i, idx));
             let style = if cursor == Some(idx) {
                 skin.palette.chip(Role::Accent)
             } else if selected {
                 skin.palette.chip(Role::Info)
+            } else if let Some(d) = marked {
+                skin.palette
+                    .bold(d.severity.role())
+                    .add_modifier(ratatui::style::Modifier::UNDERLINED)
             } else {
                 skin.palette.style(Role::Text)
             };
@@ -2651,6 +3207,87 @@ fn draw_file(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) {
         }
         put(buf, area, (i - top) as u16, Line::from(spans));
     }
+}
+
+/// Whether a diagnostic's span covers this `(line, char)`.
+///
+/// A zero-width span - which servers really do emit, for "something was
+/// expected here" - still marks one cell, because a decoration nobody can see
+/// is the same as no decoration.
+fn covers(d: &Diag, line: usize, col: usize) -> bool {
+    if line < d.line || line > d.end_line {
+        return false;
+    }
+    let start = if line == d.line { d.start_col } else { 0 };
+    let end = if line == d.end_line {
+        d.end_col.max(d.start_col + 1)
+    } else {
+        usize::MAX
+    };
+    col >= start && col < end
+}
+
+/// The hover popup, over the document.
+///
+/// Bounded on both axes and drawn last, so it covers the text rather than
+/// being covered by it. The rect is returned for the same reason the header's
+/// buttons are: a thing on screen whose position nothing reported cannot be
+/// tested. A zero-sized rect means there was no room and nothing was drawn -
+/// the popup is not squeezed into a pane that cannot hold it, because a border
+/// with one row of text inside it says less than the file it would cover.
+fn draw_hover(area: Rect, buf: &mut Buffer, popup: &HoverPopup, skin: &Skin) -> Rect {
+    let want_h = (popup.lines.len().min(HOVER_MAX_LINES) as u16 + 2).min(area.height);
+    let want_w = popup
+        .lines
+        .iter()
+        .map(|l| cols(l))
+        .max()
+        .unwrap_or(20)
+        .clamp(20, area.width.saturating_sub(2).max(20) as usize) as u16
+        + 2;
+    if want_h < 3 || area.width < 6 {
+        return Rect::new(area.x, area.y, 0, 0);
+    }
+    let rect = Rect::new(area.x, area.y, want_w.min(area.width), want_h);
+    let block = Block::bordered().border_style(skin.palette.style(Role::Accent));
+    let inner = block.inner(rect);
+    // The cells under the popup are overwritten rather than blended: a border
+    // drawn over live text with the text still showing through reads as
+    // corruption rather than as an overlay.
+    for y in inner.y..inner.bottom() {
+        put(
+            buf,
+            Rect::new(inner.x, y, inner.width, 1),
+            0,
+            Line::from(Span::styled(
+                " ".repeat(inner.width as usize),
+                skin.palette.style(Role::Text),
+            )),
+        );
+    }
+    block.render(rect, buf);
+    for (row, line) in popup
+        .lines
+        .iter()
+        .skip(popup.scroll)
+        .take(inner.height as usize)
+        .enumerate()
+    {
+        put(
+            buf,
+            inner,
+            row as u16,
+            Line::from(Span::styled(
+                // The server's own bytes, so the one sanitiser this codebase
+                // has stands between them and a cell: rust-analyzer quotes
+                // source into a hover, and source is where the control bytes
+                // this page already refuses to draw come from.
+                fit(&sanitise(line), inner.width as usize, skin.glyphs.ellipsis),
+                skin.palette.style(Role::Text),
+            )),
+        );
+    }
+    rect
 }
 
 fn draw_history(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) {
@@ -4555,4 +5192,614 @@ mod tests {
             line.len()
         );
     }
+
+    // region: The LSP half
+    // -----------------------------------------------------------------------
+    // The LSP half: decorations, the status row, hover and definition.
+    //
+    // Every one of these drives `apply_lsp`, which is the only door the bridge
+    // has into this page. Nothing here starts a server: what a server actually
+    // said is certified in `code_lsp`'s two live cases, and what this page does
+    // with what it was told is a property of this file.
+    // -----------------------------------------------------------------------
+
+    fn diag(line: usize, a: usize, b: usize, severity: Severity, message: &str) -> Diag {
+        Diag {
+            line,
+            end_line: line,
+            start_col: a,
+            end_col: b,
+            severity,
+            message: message.to_string(),
+        }
+    }
+
+    /// Hand the page a set of diagnostics the way the bridge does.
+    fn decorate(v: &mut CodeView, path: &str, items: Vec<Diag>) {
+        assert_eq!(
+            v.apply_lsp(LspUpdate::Diagnostics {
+                path: path.to_string(),
+                items,
+            }),
+            None,
+            "diagnostics never ask the shell to open anything"
+        );
+    }
+
+    /// The gutter's separator cell on the row that draws document line `line`.
+    fn gutter_mark(buf: &Buffer, v: &CodeView, area: Rect, line: usize) -> String {
+        let g = doc_geom(area, v).expect("the document is on screen");
+        let row = g.area.y + (line - g.top) as u16;
+        buf[(g.area.x + g.gutter - 1, row)].symbol().to_string()
+    }
+
+    /// The whole point of the half: a diagnostic marks the line it is about and
+    /// underlines exactly the span the server named, and neither decoration is
+    /// anywhere else.
+    #[test]
+    fn a_diagnostic_marks_the_gutter_and_underlines_the_span_it_named() {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["fn main() {", "    bod();", "}"]);
+        decorate(
+            &mut v,
+            "src/main.rs",
+            vec![diag(1, 4, 7, Severity::Error, "cannot find value `bod`")],
+        );
+        let (buf, _) = painted(&v, area);
+        assert_eq!(gutter_mark(&buf, &v, area, 1), "E");
+        assert_eq!(
+            gutter_mark(&buf, &v, area, 0),
+            " ",
+            "a line with no diagnostic keeps its blank separator"
+        );
+
+        let g = doc_geom(area, &v).expect("on screen");
+        let text_x = g.area.x + g.gutter;
+        let row = g.area.y + 1;
+        let underlined = |x: u16| {
+            buf[(x, row)]
+                .modifier
+                .contains(ratatui::style::Modifier::UNDERLINED)
+        };
+        for col in 4..7u16 {
+            assert!(underlined(text_x + col), "char {col} should be underlined");
+        }
+        assert!(
+            !underlined(text_x + 3) && !underlined(text_x + 7),
+            "the underline must stop where the server's span stopped"
+        );
+    }
+
+    /// A line carrying two grades shows the worse one, because the gutter has
+    /// one column and a hint drawn over an error is a page hiding the error.
+    #[test]
+    fn the_worst_severity_on_a_line_is_the_mark_that_is_drawn() {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["one", "two", "three"]);
+        decorate(
+            &mut v,
+            "src/main.rs",
+            vec![
+                diag(1, 0, 1, Severity::Hint, "unused"),
+                diag(1, 0, 1, Severity::Warning, "suspicious"),
+                diag(2, 0, 1, Severity::Info, "note"),
+            ],
+        );
+        let (buf, _) = painted(&v, area);
+        assert_eq!(gutter_mark(&buf, &v, area, 1), "W");
+        assert_eq!(gutter_mark(&buf, &v, area, 2), "i");
+    }
+
+    /// A set that is not about the open file is not drawn dim; it is not drawn.
+    /// An answer that arrives after the person opened something else would
+    /// otherwise decorate the new file with the old file's problems.
+    #[test]
+    fn a_diagnostic_set_for_another_file_decorates_nothing() {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["one", "two", "three"]);
+        decorate(
+            &mut v,
+            "src/term/code.rs",
+            vec![diag(1, 0, 3, Severity::Error, "not about this file")],
+        );
+        assert!(v.lsp.diags.is_empty(), "a stale set must not be kept");
+        let (buf, _) = painted(&v, area);
+        for line in 0..3 {
+            assert_eq!(gutter_mark(&buf, &v, area, line), " ", "line {line}");
+        }
+        assert!(v.diag_at_cursor().is_none());
+    }
+
+    /// The paint's own path check, and it is not the same guard as
+    /// `apply_lsp`'s.
+    ///
+    /// `set_open` deliberately leaves `lsp` alone - the bridge is the only
+    /// thing that writes it, and a page that cleared the decorations itself
+    /// would be asserting something it was never told. So between opening a
+    /// second file and the server answering about it, `lsp.diags` still
+    /// describes the *first* file, and the only thing standing between those
+    /// marks and the new file's lines is the check in `draw_file`.
+    ///
+    /// The mutation sweep found this: deleting that check left the "another
+    /// file" test green, because `apply_lsp` had already refused to store the
+    /// stale set. Two guards, one test, and the wrong one covered.
+    #[test]
+    fn opening_another_file_does_not_inherit_the_last_ones_marks() {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["one", "two", "three"]);
+        decorate(
+            &mut v,
+            "src/main.rs",
+            vec![diag(1, 0, 3, Severity::Error, "about the first file")],
+        );
+        let (buf, _) = painted(&v, area);
+        assert_eq!(
+            gutter_mark(&buf, &v, area, 1),
+            "E",
+            "the first file is marked"
+        );
+
+        open_file(&mut v, "src/term/code.rs", &["alpha", "beta", "gamma"]);
+        assert!(
+            !v.lsp.diags.is_empty(),
+            "the page must not clear what only the bridge may write"
+        );
+        let (buf, _) = painted(&v, area);
+        for line in 0..3 {
+            assert_eq!(
+                gutter_mark(&buf, &v, area, line),
+                " ",
+                "line {line} of the new file wears the old file's mark"
+            );
+        }
+    }
+
+    /// The status row is a row the document gave up, so the geometry the paint
+    /// used and the geometry the hit test uses have to agree about it. They are
+    /// the same function, and this is the test that says so.
+    #[test]
+    fn the_status_row_takes_a_row_from_the_document_and_the_hit_test_agrees() {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["one", "two", "three"]);
+        let before = doc_geom(area, &v).expect("on screen").area.height;
+        assert!(lsp_line(&v).is_none(), "a quiet server takes no row");
+
+        decorate(
+            &mut v,
+            "src/main.rs",
+            vec![diag(1, 0, 3, Severity::Error, "boom")],
+        );
+        let after = doc_geom(area, &v).expect("on screen").area;
+        assert_eq!(
+            after.height,
+            before - 1,
+            "the status row must come out of the document"
+        );
+        let (buf, _) = painted(&v, area);
+        let row = dump(&buf)[after.bottom() as usize].clone();
+        assert!(
+            row.contains("1 error"),
+            "the status row is drawn under the document: {row:?}"
+        );
+        // And the document's last row is still the document's, while the row
+        // under it is not.
+        assert!(matches!(
+            click(&v, area, after.x + after.width - 1, after.bottom() - 1),
+            Some(CodeClick::Doc(..))
+        ));
+        assert!(
+            click(&v, area, after.x + after.width - 1, after.bottom()).is_none(),
+            "the status row must not answer as a document cell"
+        );
+    }
+
+    /// **The column budget, with the thing that makes it matter.** The gutter
+    /// mark takes the *separator* column rather than a column of its own, which
+    /// is what keeps `geom_for`'s gutter width still when a server answers. A
+    /// two-column mark would make the row one column wider than the pane and
+    /// `put` would drop the last glyph of every marked line — silently, because
+    /// ratatui truncates rather than panicking.
+    ///
+    /// The line here ends in a wide glyph that lands exactly on the pane's last
+    /// two columns, so there is no slack to absorb a mistake.
+    #[test]
+    fn a_gutter_mark_is_one_column_so_a_marked_line_keeps_its_last_glyph() {
+        let area = Rect::new(0, 0, 40, 12);
+        let mut v = sample();
+        let g = {
+            let mut probe = sample();
+            open_file(&mut probe, "src/main.rs", &["x", "y"]);
+            doc_geom(area, &probe).expect("on screen")
+        };
+        let text_w = (g.area.width - g.gutter) as usize;
+        // Fills the text column exactly, ending in a two-column glyph.
+        let line = format!("{}\u{65E5}", "a".repeat(text_w - 2));
+        open_file(&mut v, "src/main.rs", &[&line, "y"]);
+        decorate(
+            &mut v,
+            "src/main.rs",
+            vec![diag(0, 0, 1, Severity::Error, "boom")],
+        );
+        let (buf, _) = painted(&v, area);
+        assert_eq!(gutter_mark(&buf, &v, area, 0), "E", "the mark is drawn");
+        let row = terminal_row(&buf, g.area.y);
+        assert!(
+            row.contains('\u{65E5}'),
+            "the mark pushed the line's last glyph off the pane: {row:?}"
+        );
+        assert!(
+            cols(&row) <= area.width as usize,
+            "row spent {} columns in a {} pane: {row:?}",
+            cols(&row),
+            area.width
+        );
+    }
+
+    /// C2's open question, closed: the per-glyph budget with a mark in the
+    /// gutter and a wide glyph at the right edge. It is the same shape as
+    /// `a_tab_and_a_wide_glyph_stay_inside_the_pane` and it is kept separate
+    /// because the mark is what C2 expected to make the two numbers differ.
+    /// **It does not** — the mark is inside the gutter, so `gutter + text_w`
+    /// still equals the pane width, and the report says so rather than claiming
+    /// a receipt this test cannot write.
+    #[test]
+    fn a_marked_gutter_and_a_wide_glyph_at_the_right_edge_stay_inside_the_pane() {
+        let area = Rect::new(0, 0, 46, 10);
+        let mut v = sample();
+        let wide = "\u{65E5}\u{672C}\u{8A9E}\u{306E}\u{30B3}\u{30FC}\u{30C9}\tand more \u{65E5}\u{672C}\u{8A9E}";
+        open_file(&mut v, "wide.rs", &[wide, "plain"]);
+        decorate(
+            &mut v,
+            "wide.rs",
+            vec![
+                diag(0, 0, 4, Severity::Error, "wide line"),
+                diag(1, 0, 5, Severity::Warning, "plain line"),
+            ],
+        );
+        let (buf, r) = painted(&v, area);
+        assert_eq!(gutter_mark(&buf, &v, area, 0), "E");
+        for y in 0..buf.area.height {
+            let row = terminal_row(&buf, y);
+            assert!(
+                cols(&row) <= area.width as usize,
+                "row {y} spent {} columns in a {} pane: {row:?}",
+                cols(&row),
+                area.width
+            );
+        }
+        let inner = Block::bordered().inner(r.body);
+        for y in 0..buf.area.height {
+            let last = buf[(inner.right() - 1, y)].symbol().to_string();
+            assert!(cols(&last) <= 1, "a wide glyph straddles the border at {y}");
+        }
+        for y in 1..buf.area.height - 1 {
+            assert_eq!(
+                buf[(area.width - 1, y)].symbol(),
+                "\u{2502}",
+                "the pane's right border was overwritten on row {y}"
+            );
+        }
+    }
+
+    /// A hover answer is a bordered popup over the document, and it reports
+    /// where it landed so a test can say "over the document" rather than
+    /// "somewhere in the buffer".
+    #[test]
+    fn a_hover_answer_is_a_popup_over_the_document() {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["fn main() {}", "second", "third"]);
+        v.apply_lsp(LspUpdate::Hover {
+            path: "src/main.rs".into(),
+            lines: Some(vec!["fn main()".into(), "The entry point.".into()]),
+        });
+        let (buf, r) = painted(&v, area);
+        let rect = r.hover.expect("the popup reports where it landed");
+        let content = doc_geom(area, &v).map(|g| g.area).unwrap_or_default();
+        assert!(
+            rect.x >= content.x && rect.y >= content.y && rect.bottom() <= content.bottom(),
+            "the popup must sit over the document, not over the header: {rect:?}"
+        );
+        let rows = dump(&buf);
+        assert!(
+            rows[rect.y as usize + 1].contains("fn main()"),
+            "{:?}",
+            rows[rect.y as usize + 1]
+        );
+        assert!(rows[rect.y as usize + 2].contains("The entry point."));
+    }
+
+    /// The popup is modal: the arrows scroll it and every other key closes it
+    /// **without also doing its usual job**, the same rule the unsaved-changes
+    /// warning follows. A key that dismissed the overlay and then edited the
+    /// line it was covering would be one keystroke doing two things.
+    #[test]
+    fn the_hover_popup_scrolls_and_any_other_key_closes_it_without_acting() {
+        let mut v = sample();
+        editing_at(&mut v, "src/main.rs", &["one", "two"]);
+        let long: Vec<String> = (0..10).map(|i| format!("line {i}")).collect();
+        v.apply_lsp(LspUpdate::Hover {
+            path: "src/main.rs".into(),
+            lines: Some(long),
+        });
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Down)),
+            CodeAction::FocusChanged
+        );
+        assert_eq!(v.lsp.hover.as_ref().expect("still open").scroll, 1);
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Up)),
+            CodeAction::FocusChanged
+        );
+        assert_eq!(v.lsp.hover.as_ref().expect("still open").scroll, 0);
+
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Char('x'))),
+            CodeAction::FocusChanged
+        );
+        assert!(v.lsp.hover.is_none(), "any other key closes the popup");
+        assert_eq!(
+            v.open.as_ref().expect("open").lines[0],
+            "one",
+            "the key that closed the popup must not also have typed into the buffer"
+        );
+    }
+
+    /// The save chord is above the popup for a reason: a person with an
+    /// overlay open and an edited buffer must not have to dismiss the overlay
+    /// to save.
+    #[test]
+    fn the_save_keys_still_reach_the_buffer_with_a_popup_open() {
+        let mut v = sample();
+        editing_at(&mut v, "src/main.rs", &["one"]);
+        handle_key(&mut v, key(KeyCode::Char('x')));
+        v.apply_lsp(LspUpdate::Hover {
+            path: "src/main.rs".into(),
+            lines: Some(vec!["hover".into()]),
+        });
+        assert!(matches!(
+            handle_key(&mut v, key(KeyCode::F(2))),
+            CodeAction::Save(_)
+        ));
+        assert!(v.lsp.hover.is_some(), "saving does not dismiss the popup");
+    }
+
+    /// A server with nothing to say said something, and the page repeats it
+    /// rather than opening an empty box.
+    #[test]
+    fn a_hover_with_nothing_in_it_is_a_sentence_rather_than_an_empty_box() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["one"]);
+        v.apply_lsp(LspUpdate::Hover {
+            path: "src/main.rs".into(),
+            lines: None,
+        });
+        assert!(v.lsp.hover.is_none());
+        assert_eq!(
+            lsp_line(&v).as_deref(),
+            Some("no hover information here"),
+            "silence must not be the answer to a key that was pressed"
+        );
+    }
+
+    /// A definition in the open file is applied here; one in another file is
+    /// the single answer this page hands back, because opening a file is a read
+    /// and this module never reads.
+    #[test]
+    fn a_definition_here_jumps_and_one_elsewhere_is_handed_to_the_shell() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["one", "two", "three", "four"]);
+        v.body_rows = 4;
+        assert_eq!(
+            v.apply_lsp(LspUpdate::Definition {
+                path: "src/main.rs".into(),
+                target: DefTarget::Inside {
+                    rel: "src/main.rs".into(),
+                    line: 2,
+                    col: 1,
+                },
+            }),
+            None
+        );
+        let o = v.open.as_ref().expect("open");
+        assert_eq!((o.line, o.col), (2, 1));
+        assert_eq!(lsp_line(&v).as_deref(), Some("jumped to line 3"));
+
+        assert_eq!(
+            v.apply_lsp(LspUpdate::Definition {
+                path: "src/main.rs".into(),
+                target: DefTarget::Inside {
+                    rel: "src/term/code.rs".into(),
+                    line: 9,
+                    col: 4,
+                },
+            }),
+            Some(("src/term/code.rs".to_string(), 9, 4)),
+            "a cross-file jump is the shell's, because it is a read"
+        );
+    }
+
+    /// The containment law, on this side of the seam: a definition outside the
+    /// repository is named and nothing opens, because this page's Save writes
+    /// inside the root and an editor over a file it cannot save is a trap.
+    #[test]
+    fn a_definition_outside_the_repository_is_named_and_nothing_opens() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["one"]);
+        assert_eq!(
+            v.apply_lsp(LspUpdate::Definition {
+                path: "src/main.rs".into(),
+                target: DefTarget::Outside("C:/src/rust/core/option.rs".into()),
+            }),
+            None
+        );
+        let line = lsp_line(&v).expect("a sentence");
+        assert!(line.contains("outside this repository"), "{line}");
+        assert!(line.contains("option.rs"), "{line}");
+        assert_eq!(
+            v.open.as_ref().expect("open").path,
+            "src/main.rs",
+            "nothing may have been opened"
+        );
+    }
+
+    /// A late answer about a file nobody is looking at any more is dropped, not
+    /// drawn. It is the same rule as the diagnostics one and it is separately
+    /// worth pinning, because the popup is the decoration a person would
+    /// actually read and believe.
+    #[test]
+    fn an_answer_about_a_file_that_is_no_longer_open_is_dropped() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["one"]);
+        v.apply_lsp(LspUpdate::Hover {
+            path: "src/term/code.rs".into(),
+            lines: Some(vec!["about the other file".into()]),
+        });
+        v.apply_lsp(LspUpdate::Note {
+            path: "src/term/code.rs".into(),
+            text: "about the other file".into(),
+        });
+        assert!(v.lsp.hover.is_none());
+        assert_eq!(lsp_line(&v), None, "nothing about the other file is shown");
+    }
+
+    /// `F5` and `F6` with nothing readable open refuse in words. A request the
+    /// shell could not fill would reach the person as silence, which is the one
+    /// answer this page never gives.
+    #[test]
+    fn f5_and_f6_refuse_in_words_when_there_is_no_readable_file() {
+        let mut v = sample();
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::F(5))),
+            CodeAction::FocusChanged
+        );
+        assert_eq!(lsp_line(&v).as_deref(), Some("open a text file first"));
+
+        v.set_open(
+            "bin".to_string(),
+            FileRead::Refused("not a text file".into()),
+            None,
+        );
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::F(6))),
+            CodeAction::FocusChanged
+        );
+        assert!(lsp_line(&v)
+            .expect("a sentence")
+            .contains("open a text file first"));
+
+        open_file(&mut v, "src/main.rs", &["one"]);
+        assert_eq!(handle_key(&mut v, key(KeyCode::F(5))), CodeAction::Hover);
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::F(6))),
+            CodeAction::Definition
+        );
+    }
+
+    /// Only errors and warnings are counted. rust-analyzer emits an "inactive
+    /// code" hint for every `cfg`-disabled block, so a count that included
+    /// hints would report dozens of problems in a file that has none.
+    #[test]
+    fn the_count_ignores_hints_so_cfg_blocks_do_not_read_as_problems() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["one", "two", "three"]);
+        decorate(
+            &mut v,
+            "src/main.rs",
+            vec![
+                diag(0, 0, 1, Severity::Hint, "inactive code"),
+                diag(1, 0, 1, Severity::Hint, "inactive code"),
+            ],
+        );
+        assert_eq!(v.lsp.count_line(), None);
+        decorate(
+            &mut v,
+            "src/main.rs",
+            vec![
+                diag(0, 0, 1, Severity::Error, "a"),
+                diag(1, 0, 1, Severity::Error, "b"),
+                diag(2, 0, 1, Severity::Warning, "c"),
+                diag(2, 1, 2, Severity::Hint, "d"),
+            ],
+        );
+        assert_eq!(v.lsp.count_line().as_deref(), Some("2 errors, 1 warning"));
+    }
+
+    /// Every kind of "no" is a different sentence, and none of them is
+    /// silence: a page with no decorations because the server is indexing and a
+    /// page with no decorations because the file is clean must not look alike.
+    #[test]
+    fn every_kind_of_no_is_its_own_sentence() {
+        let cases = [
+            (
+                LspStatus::Unsupported(".md files".into()),
+                "no language server",
+            ),
+            (LspStatus::Disabled("Terraform".into()), "lsp.enabled"),
+            (
+                LspStatus::Absent {
+                    label: "Bash".into(),
+                    detail: "no bash-language-server on PATH".into(),
+                },
+                "bash-language-server",
+            ),
+            (LspStatus::Starting("Rust".into()), "starting"),
+            (LspStatus::Running("rust-analyzer".into()), "running"),
+            (LspStatus::Failed("it died".into()), "stopped"),
+        ];
+        for (status, want) in cases {
+            let mut v = sample();
+            open_file(&mut v, "src/main.rs", &["one"]);
+            v.apply_lsp(LspUpdate::Status(status.clone()));
+            let line = lsp_line(&v).expect("every status but Idle says something");
+            assert!(line.contains(want), "{status:?} said {line:?}");
+        }
+        let mut v = sample();
+        v.apply_lsp(LspUpdate::Status(LspStatus::Idle));
+        assert_eq!(lsp_line(&v), None, "no file open is not a complaint");
+    }
+
+    /// The status row carries the message under the cursor, flattened: a
+    /// diagnostic routinely has a second line, and a newline written into a
+    /// `Buffer` is a cell rather than a break.
+    #[test]
+    fn the_message_under_the_cursor_reaches_the_status_row_on_one_line() {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["one", "two", "three"]);
+        decorate(
+            &mut v,
+            "src/main.rs",
+            vec![diag(
+                1,
+                0,
+                3,
+                Severity::Error,
+                "expected one of these\n  - a semicolon\n",
+            )],
+        );
+        v.jump_to(1, 0);
+        let line = lsp_line(&v).expect("a message");
+        assert!(
+            line.contains("E: expected one of these - a semicolon"),
+            "{line}"
+        );
+        assert!(!line.contains('\n'));
+        let (buf, _) = painted(&v, area);
+        assert!(dump(&buf).iter().any(|r| r.contains("a semicolon")));
+        v.jump_to(0, 0);
+        assert!(
+            !lsp_line(&v)
+                .expect("the count survives")
+                .contains("semicolon"),
+            "the cursor moved off the line, so its message goes with it"
+        );
+    }
+
+    // endregion: The LSP half
 }

@@ -95,6 +95,22 @@ use super::render::{rows_used, Skin};
 use super::spacing::Spacing;
 use super::view::{Mode, Prompt, View};
 
+/// The four keys the SESSIONS list answers while it has the arrows.
+///
+/// Named rather than a `KeyCode`, so this module states what the list *does*
+/// and `input.rs` states which key does it. That is the same split the `/`
+/// menu's [`super::menu::MenuKey`] already makes, and it is what lets the
+/// list's behaviour be tested without a keyboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionsKey {
+    Up,
+    Down,
+    /// Enter: resume the highlighted row.
+    Accept,
+    /// Esc: give the arrows back to the input box, resume nothing.
+    Cancel,
+}
+
 // region: Restoring
 // ---------------------------------------------------------------------------
 // Restoring
@@ -1115,7 +1131,124 @@ impl Frame {
             Ui::Full(app) if app.new_session_clicked(col, row, pending) => {
                 Some(super::app::SidebarAction::NewSession)
             }
+            // Then the rows the paint reported. A TOOLS row is its chord; a
+            // SESSIONS row is the session it names, resolved to an id **here**
+            // rather than carried as an index, because `refresh_sessions`
+            // rebuilds the list at the end of every goal and an index outlives
+            // the row it meant.
+            Ui::Full(app) => match app.sidebar_row_click(col, row, pending) {
+                Some(super::sidebar::Hit::Tool(tool)) => {
+                    Some(super::app::SidebarAction::Tool(tool))
+                }
+                Some(super::sidebar::Hit::Session(i)) => {
+                    app.session_id_at(i).map(super::app::SidebarAction::Resume)
+                }
+                None => None,
+            },
             _ => None,
+        }
+    }
+
+    /// Give the SESSIONS list the arrows, for `/resume` with no argument.
+    ///
+    /// `false` when there is no list to give them to: an empty list, or the
+    /// plain path, which has no sidebar at all. The caller says so rather than
+    /// leaving the keys pointed at nothing.
+    pub fn focus_sessions(&self) -> bool {
+        let mut inner = self.lock();
+        let taken = match &mut inner.ui {
+            Ui::Full(app) => app.focus_sessions(),
+            _ => false,
+        };
+        if taken {
+            synchronized(|| inner.paint());
+        }
+        taken
+    }
+
+    /// Whether the SESSIONS list currently holds the arrows.
+    pub fn sessions_focused(&self) -> bool {
+        matches!(&self.lock().ui, Ui::Full(app) if app.sessions_focused())
+    }
+
+    /// One key, while the SESSIONS list has the arrows.
+    ///
+    /// Returns the session id when the key was Enter on a row. What happens to
+    /// it is the shell's, and it is the same thing a click on that row does —
+    /// see `super::input::resume_session`. One picked-row path, two ways of
+    /// picking.
+    ///
+    /// **A pending approval takes the keys back outright.** That is the rule
+    /// the pointer already follows, and it is the one that matters most here: a
+    /// question on screen must not be answerable by a stray Enter that resumes
+    /// a session instead of saying yes or no.
+    pub fn sessions_key(&self, key: SessionsKey) -> Option<String> {
+        let mut inner = self.lock();
+        let pending = inner.view.prompt.is_some();
+        let Ui::Full(app) = &mut inner.ui else {
+            return None;
+        };
+        if !app.sessions_focused() {
+            return None;
+        }
+        if pending {
+            app.blur_sessions();
+            synchronized(|| inner.paint());
+            return None;
+        }
+        let picked = match key {
+            SessionsKey::Up => {
+                app.move_session_selection(false);
+                None
+            }
+            SessionsKey::Down => {
+                app.move_session_selection(true);
+                None
+            }
+            SessionsKey::Cancel => {
+                app.blur_sessions();
+                None
+            }
+            SessionsKey::Accept => {
+                let id = app.selected_session();
+                app.blur_sessions();
+                id
+            }
+        };
+        synchronized(|| inner.paint());
+        picked
+    }
+
+    /// Tell the Settings screen which provider this session actually booted
+    /// with, closing the gap [`super::app::App::set_running_provider`]
+    /// documents: a run started with `--provider` is bound to something the
+    /// settings file does not name, and the screen cannot see the flag.
+    pub fn running_provider(&self, name: &str) {
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            app.set_running_provider(name.to_string());
+        }
+    }
+
+    /// Hand the resolved `ui.hints` preference in at startup.
+    ///
+    /// The plain path keeps the compiled default: it holds no `App`, so there
+    /// is nowhere for the flag to live, and the one line it governs today —
+    /// the `[+]` control's hint — belongs to a sidebar that path does not
+    /// draw. Said here rather than left as a silent no-op.
+    pub fn set_hints(&self, on: bool) {
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            app.set_hints(on);
+        }
+    }
+
+    /// Whether interface hints are on. The plain path answers with the
+    /// compiled default, for [`Self::set_hints`]'s reason.
+    pub fn hints(&self) -> bool {
+        match &self.lock().ui {
+            Ui::Full(app) => app.hints(),
+            _ => crate::settings::HINTS_DEFAULT,
         }
     }
 
@@ -1284,10 +1417,13 @@ impl Frame {
         }
     }
 
-    /// `,` on an empty input box: the Settings screen, on and off. Inline runs
-    /// get a no-op, like every pane key — there is no full-screen pane to own.
     /// Whether a goal is mid-flight — the one fact [`super::input::quit_route`]
     /// needs. An approval question counts: the goal that asked it is running.
+    ///
+    /// (The two sentences above this one used to describe `,` opening the
+    /// Settings screen, a method that is not here: another doc paragraph that
+    /// outlived its item in the TUI import, so rustdoc printed it as this
+    /// function's summary.)
     pub fn goal_active(&self) -> bool {
         self.lock().started.is_some()
     }
@@ -1558,6 +1694,33 @@ impl Frame {
             self.run_code_job(job);
         }
         handled
+    }
+
+    /// Hand the Code page its language-server bridge, once `main` has a
+    /// runtime and a pool to give it.
+    pub fn set_code_lsp(&self, handle: super::code_lsp::Handle) {
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            app.set_code_lsp(handle);
+        }
+    }
+
+    /// One answer from the bridge, on its way to the screen.
+    ///
+    /// The established push shape, and the reason the feature cannot freeze the
+    /// terminal: this runs on a tokio task, takes the paint lock, writes view
+    /// state, drops the lock and repaints. Nothing on the input thread's side
+    /// of the channel ever waits for a language server.
+    pub fn code_lsp_update(&self, update: super::code::LspUpdate) {
+        let mut inner = self.lock();
+        let open = matches!(&inner.ui, Ui::Full(app) if app.code_open());
+        if !open {
+            return;
+        }
+        if let Ui::Full(app) = &mut inner.ui {
+            app.code_lsp_update(update);
+        }
+        synchronized(|| inner.paint());
     }
 
     /// The line the open Code page's chat strip composed, taken once.

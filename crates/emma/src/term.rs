@@ -465,6 +465,31 @@ impl Term {
     /// screen for the life of the process. Without one they are printed once as
     /// an ordinary line and scroll away, which is correct for a fact that never
     /// changes.
+    /// Tell the Settings screen which provider this session's client is
+    /// really bound to. Without this the screen resolves it from
+    /// `settings.json`, which is wrong for any run started with `--provider`:
+    /// the one case the Provider row exists to show.
+    pub fn set_running_provider(&self, name: &str) {
+        if let Some(frame) = &self.frame {
+            frame.running_provider(name);
+        }
+    }
+
+    /// The resolved `ui.hints` preference. Ignored without a viewport: the
+    /// plain path draws no sidebar, and the `[+]`'s hint is the only line the
+    /// flag governs today.
+    pub fn set_hints(&self, on: bool) {
+        if let Some(frame) = &self.frame {
+            frame.set_hints(on);
+        }
+    }
+
+    /// Give the sidebar's SESSIONS list the arrows. `false` when there is no
+    /// list to give them to: a plain run, or a list with no rows.
+    pub fn focus_sessions(&self) -> bool {
+        self.frame.as_ref().is_some_and(|f| f.focus_sessions())
+    }
+
     pub fn set_status(&self, model: &str, cwd: &Path, session: &std::path::Path) {
         let session_id = session
             .file_stem()

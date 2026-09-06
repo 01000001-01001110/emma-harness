@@ -626,6 +626,9 @@ pub enum PaneKey {
     /// `/help` typed. A toggle rather than an open: a page whose chord only
     /// opens it is a page people close by quitting.
     Help,
+    /// Alt+q: leave Emma by the same safe path `/exit` takes. See
+    /// [`quit_route`] for the running-goal half of the story.
+    Quit,
 }
 
 /// The pages that take keys while they are open, in the order the reader
@@ -684,6 +687,37 @@ pub fn run_page_key<P: PageKeys>(pages: &P, key: KeyEvent) -> bool {
         || pages.code_key(key)
         || pages.settings_key(key)
 }
+/// Where Alt+q goes, decided from one fact.
+///
+/// Idle, the key is `/exit` typed for you: the string is submitted down the
+/// same channel a typed line takes, so there is exactly one shutdown path.
+/// With a goal active (running, or holding an approval question), quitting
+/// under it would hard-kill work mid-flight, so the key becomes Ctrl+C's
+/// interrupt instead — the existing interrupt-then-confirm flow: interrupt
+/// first, and once the goal has wound down, Alt+q (or `/exit`) again quits.
+///
+/// **[`interrupt_notice`] has advertised Alt+q since it was written, and until
+/// this landed nothing answered the chord.** `tool_key` returned `Some('q')`,
+/// `Frame::launch_tool` found no catalogue entry keyed `q`, and the call
+/// returned having done nothing — a key named in a line Emma prints itself,
+/// doing nothing when pressed. That is the defect the sidebar's own chord
+/// tests exist for, arriving from the direction those tests do not look.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuitRoute {
+    /// Submit `/exit` — the safe path, unchanged.
+    SubmitExit,
+    /// Trip the interrupt, exactly as Ctrl+C does.
+    Interrupt,
+}
+
+pub fn quit_route(goal_active: bool) -> QuitRoute {
+    if goal_active {
+        QuitRoute::Interrupt
+    } else {
+        QuitRoute::SubmitExit
+    }
+}
+
 /// The one line the interrupt-then-confirm flow prints, whichever thing tripped
 /// it: Alt+q, or `/exit` typed while a goal runs.
 ///
@@ -800,6 +834,61 @@ fn submit_line(
     true
 }
 
+/// A picked session, from a click or from Enter on the focused list.
+///
+/// Both routes come here so there is one place that knows what a picked row
+/// does, and both submit **the command a person could have typed** rather than
+/// reaching for the agent: `session_command::resume` is what decides whether
+/// the session exists, whether it is the one already running, and what the
+/// receipt says. A private path from a click into the resume machinery would
+/// be a second implementation of `/resume` with no receipt and no refusals.
+///
+/// The one thing decided here is that refusal, because it is the one thing this
+/// thread knows and the queue does not: a line handed to the channel while a
+/// goal runs is applied when that goal ends, minutes later, and a resume is not
+/// a thing to apply at a moment nobody chose. See
+/// [`super::app::RESUME_BUSY_NOTICE`].
+///
+/// Returns `false` when the channel is gone, which is the reader's signal to
+/// stop.
+fn resume_session(frame: &Frame, tx: &mpsc::Sender<String>, id: &str) -> bool {
+    frame.scroll_tail();
+    match app::picked_session(id, frame.goal_active()) {
+        app::Picked::Refused(notice) => {
+            frame.note_line(notice);
+            frame.draw();
+            true
+        }
+        app::Picked::Submit(line) => {
+            frame.draw();
+            tx.blocking_send(line).is_ok()
+        }
+    }
+}
+
+/// The `[+]` on the SESSIONS header, from a click.
+///
+/// Same shape as [`resume_session`] and for the same reason: the rule is
+/// [`app::clicked_new_session`]'s, the transcript writing is here, and the line
+/// goes down the channel a typed `/clear` goes down.
+fn new_session(frame: &Frame, tx: &mpsc::Sender<String>) -> bool {
+    frame.scroll_tail();
+    match app::clicked_new_session(frame.goal_active(), frame.hints()) {
+        app::NewSession::Submit { line, notice } => {
+            if let Some(notice) = notice {
+                frame.note_line(notice);
+            }
+            frame.draw();
+            tx.blocking_send(line.to_string()).is_ok()
+        }
+        app::NewSession::Wait(notice) => {
+            frame.note_line(notice);
+            frame.draw();
+            true
+        }
+    }
+}
+
 /// Which keys the panes take, and which fall through to the editor.
 ///
 /// - `PgUp`/`PgDn` and `Ctrl-↑`/`Ctrl-↓` are unconditionally the
@@ -861,6 +950,13 @@ pub fn pane_key(key: KeyEvent, editor_empty: bool, prompt_pending: bool) -> Opti
         }
     }
     match key.code {
+        // Alt+q, and it is the one Alt chord this layer answers rather than
+        // the catalogue's: there is no "quit" tool, and `interrupt_notice`
+        // names the chord in a line Emma prints. It works **under a pending
+        // question**, unlike the rest of the Alt layer and for Ctrl+C's
+        // reason — with a goal up it routes to the interrupt (see
+        // [`quit_route`]), and wanting out mid-question is its main use.
+        KeyCode::Char('q') if alt && !ctrl => Some(PaneKey::Quit),
         KeyCode::PageUp => Some(PaneKey::PageUp),
         KeyCode::PageDown => Some(PaneKey::PageDown),
         KeyCode::Up if ctrl => Some(PaneKey::RowUp),
@@ -933,6 +1029,87 @@ pub fn tool_key(key: KeyEvent, prompt_pending: bool) -> Option<char> {
         KeyCode::Char(c) if alt && !ctrl => Some(c),
         _ => None,
     }
+}
+
+/// What a sidebar TOOLS row does, as the chord that already does it.
+///
+/// **The one place a row becomes an action, and it deliberately answers a
+/// `char` rather than a second dispatch enum.** The fork's shape here was
+/// `tool_key(Tool) -> PaneKey` over a `PaneKey` carrying one variant per page
+/// plus a `Launch(ToolLaunch)`; this tree does not dispatch that way. An Alt
+/// chord here is a `char` looked up in the `usertools` catalogue, and
+/// `Frame::launch_tool` is the exhaustive `match` that turns the found entry
+/// into a page toggle or a spawn. Giving the pointer a `PaneKey` would put a
+/// *second* table of "which tool is which page" beside that one, and the two
+/// tables drifting is the exact defect `launch_tool`'s own comment records
+/// paying for — `Alt+h` matching neither of two `if` arms while the sidebar
+/// advertised it.
+///
+/// So the click produces the same `char` the keyboard produces and hands it to
+/// the same function. Pinned by
+/// `a_click_on_a_tools_row_does_exactly_what_its_chord_does`, which compares
+/// this against `tool_key`'s answer for the Alt event, tool by tool.
+pub fn tool_row_chord(tool: super::sidebar::Tool) -> char {
+    use super::sidebar::Tool;
+    use crate::usertools::Tool as UserTool;
+    // Named per arm rather than derived, because the two enums are two
+    // vocabularies that happen to agree today: `sidebar::Tool` is what the
+    // panel draws and `usertools::Tool` is what the machine can launch, and
+    // the catalogue has a `DataExplorer` the panel does not. An exhaustive
+    // match is what makes a new row fail to compile until somebody says which
+    // tool it is.
+    match tool {
+        Tool::Shell => UserTool::Shell,
+        Tool::Code => UserTool::Code,
+        Tool::FileBrowser => UserTool::FileBrowser,
+        Tool::Search => UserTool::Search,
+        Tool::Memory => UserTool::Memory,
+        Tool::Harness => UserTool::Harness,
+        Tool::Settings => UserTool::Settings,
+    }
+    .key()
+}
+
+/// The one thing a TOOLS row's chord reaches, behind a trait.
+///
+/// A trait rather than `&Frame` for one reason: a `Frame` owns a real terminal
+/// and cannot be built in a test, so without this seam "the click does what the
+/// key does" could only be asserted by spawning the process the key spawns. A
+/// test implements this and records; nothing launches.
+pub trait ToolSink {
+    /// The Alt layer's key, whatever it turns out to mean — the catalogue
+    /// decides, and `Frame::launch_tool` is where it is decided.
+    fn launch_tool(&self, key: char);
+}
+
+impl ToolSink for Arc<Frame> {
+    fn launch_tool(&self, key: char) {
+        Frame::launch_tool(self, key);
+    }
+}
+
+/// Act on a sidebar TOOLS row, through the chord it stands for.
+///
+/// One line, and it is the line that matters: there is no branch here to get
+/// wrong, because the pointer's whole contribution is naming a row.
+pub fn run_tool_key<S: ToolSink>(sink: &S, tool: super::sidebar::Tool) {
+    sink.launch_tool(tool_row_chord(tool));
+}
+
+/// Which SESSIONS key a keystroke is, while the list has the arrows.
+///
+/// `None` for everything else, and that is what keeps the list from swallowing
+/// the keyboard: a letter typed at a focused list still reaches the input box,
+/// which is where somebody who has changed their mind is already typing.
+pub fn sessions_key(code: KeyCode) -> Option<super::frame::SessionsKey> {
+    use super::frame::SessionsKey;
+    Some(match code {
+        KeyCode::Up => SessionsKey::Up,
+        KeyCode::Down => SessionsKey::Down,
+        KeyCode::Enter => SessionsKey::Accept,
+        KeyCode::Esc => SessionsKey::Cancel,
+        _ => return None,
+    })
 }
 
 // endregion: The transcript's keys
@@ -1056,6 +1233,32 @@ impl LineSource {
                             PaneKey::Top => thread_frame.scroll_top(),
                             PaneKey::Tail => thread_frame.scroll_tail(),
                             PaneKey::Sidebar => thread_frame.toggle_sidebar(),
+                            // Alt+q. Idle: `/exit`, submitted down the same
+                            // channel a typed line takes — one shutdown path,
+                            // and no second one invented here. Goal active:
+                            // the same interrupt Ctrl+C delivers, so quitting
+                            // under a running goal becomes the existing
+                            // interrupt-then-confirm flow rather than a hard
+                            // kill of work in flight.
+                            PaneKey::Quit => match quit_route(thread_frame.goal_active()) {
+                                QuitRoute::SubmitExit => {
+                                    if !submit_line(
+                                        "/exit".to_string(),
+                                        &thread_frame,
+                                        &thread_editor,
+                                        &tx,
+                                        &on_interrupt,
+                                    ) {
+                                        break;
+                                    }
+                                }
+                                QuitRoute::Interrupt => {
+                                    thread_frame.scroll_tail();
+                                    thread_frame.note_line(&interrupt_notice("Alt+q"));
+                                    thread_frame.draw();
+                                    on_interrupt();
+                                }
+                            },
                             // The page when the run has one, the text when it
                             // does not: a plain run keeps exactly what a typed
                             // /help always did.
@@ -1165,6 +1368,24 @@ impl LineSource {
                         continue;
                     }
 
+                    // The SESSIONS list, while `/resume` has given it the
+                    // arrows. Ahead of the editor and behind the menu: a popup
+                    // that is up was opened after the list was, and the box
+                    // keeps every key the list does not claim, which is what
+                    // lets somebody who has changed their mind simply start
+                    // typing. `Frame::sessions_key` is where a pending
+                    // question takes the arrows back.
+                    if key.kind != KeyEventKind::Release && thread_frame.sessions_focused() {
+                        if let Some(picked) = sessions_key(key.code) {
+                            if let Some(id) = thread_frame.sessions_key(picked) {
+                                if !resume_session(&thread_frame, &tx, &id) {
+                                    break;
+                                }
+                            }
+                            continue;
+                        }
+                    }
+
                     let action = {
                         let mut ed = thread_editor.lock().unwrap_or_else(|e| e.into_inner());
                         let action = ed.key(key);
@@ -1254,13 +1475,24 @@ impl LineSource {
                         // of a drag.
                         match thread_frame.sidebar_click(mouse.column, mouse.row) {
                             Some(SidebarAction::NewSession) => {
-                                thread_frame.note_line(app::NEW_SESSION_NOTICE);
-                                thread_frame.scroll_tail();
-                                thread_frame.draw();
-                                if tx
-                                    .blocking_send(app::NEW_SESSION_COMMAND.to_string())
-                                    .is_err()
-                                {
+                                if !new_session(&thread_frame, &tx) {
+                                    break;
+                                }
+                            }
+                            // A TOOLS row is its chord: the same `char` the
+                            // Alt layer produces, handed to the same
+                            // `launch_tool`. No second launch path.
+                            Some(SidebarAction::Tool(tool)) => {
+                                run_tool_key(&thread_frame, tool);
+                            }
+                            // A SESSIONS row submits the command a person
+                            // could have typed, down the channel typed lines
+                            // use. Nothing is decided here: whether the
+                            // session can be resumed at all, whether it is the
+                            // one already running, and what the receipt says
+                            // are `session_command::resume`'s.
+                            Some(SidebarAction::Resume(id)) => {
+                                if !resume_session(&thread_frame, &tx, &id) {
                                     break;
                                 }
                             }
@@ -2375,5 +2607,206 @@ mod tests {
         assert_eq!(ed.text(), "two", "the walk restarted from the newest line");
         ed.key(press(KeyCode::Down));
         assert_eq!(ed.text(), "one!", "the edited line is the draft");
+    }
+
+    // -----------------------------------------------------------------------
+    // The TOOLS rows: one dispatch, two ways of reaching it
+    // -----------------------------------------------------------------------
+
+    /// A [`ToolSink`] that launches nothing and remembers what it was asked.
+    ///
+    /// The whole reason the trait exists: a `Frame` owns a real terminal, so
+    /// without this the only way to assert what a row does would be to let it
+    /// spawn the program the row names.
+    #[derive(Default)]
+    struct LaunchRecorder {
+        keys: std::cell::RefCell<Vec<char>>,
+    }
+
+    impl ToolSink for LaunchRecorder {
+        fn launch_tool(&self, key: char) {
+            self.keys.borrow_mut().push(key);
+        }
+    }
+
+    /// **The guarantee.** For every TOOLS row the sidebar draws, a click
+    /// produces exactly the key the row itself advertises — so the pointer and
+    /// the keyboard reach `Frame::launch_tool` with the same argument and
+    /// cannot come to mean different things.
+    ///
+    /// **The anchor is the drawn row, and the first version of this test had
+    /// the wrong one.** It compared `tool_row_chord` against `tool_key`'s
+    /// answer for the Alt event built from `tool_row_chord` — which is the
+    /// mapping agreeing with itself, so pointing `Tool::Memory` at the Harness
+    /// stayed green. The chord a row *promises* is the string in that row's
+    /// trailing column, written by hand in `sidebar::TOOLS`, and it is the only
+    /// thing here neither this function nor `tool_row_chord` can move.
+    #[test]
+    fn a_click_on_a_tools_row_does_exactly_what_its_chord_does() {
+        use super::super::sidebar::{self, Tool};
+        let sink = LaunchRecorder::default();
+        let every = [
+            Tool::Shell,
+            Tool::Code,
+            Tool::FileBrowser,
+            Tool::Search,
+            Tool::Memory,
+            Tool::Harness,
+            Tool::Settings,
+        ];
+        let mut advertised = Vec::new();
+        for tool in every {
+            // The drawn row, found by the one thing the caller states: which
+            // row this screen has selected.
+            let rows = sidebar::tool_rows(false, Some(tool));
+            let row = rows
+                .iter()
+                .find(|r| r.selected)
+                .unwrap_or_else(|| panic!("{tool:?} draws no row at all"));
+            // Search's column is the `/` the character already opens; every
+            // other row spells its Alt chord out.
+            let key = match row.trailing.as_str() {
+                "/" => '/',
+                other => {
+                    let rest = other
+                        .strip_prefix("Alt+")
+                        .unwrap_or_else(|| panic!("{tool:?} advertises {other:?}, not a chord"));
+                    let mut chars = rest.chars();
+                    let key = chars.next().expect("a bare `Alt+` with no key");
+                    assert!(chars.next().is_none(), "{other:?} is not one chord");
+                    key
+                }
+            };
+            assert_eq!(
+                tool_row_chord(tool),
+                key,
+                "{tool:?}'s row advertises {:?} and a click on it does something else",
+                row.trailing
+            );
+            assert_eq!(
+                tool_key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::ALT), false),
+                Some(key),
+                "{tool:?}'s row advertises a key the Alt decoder drops"
+            );
+            advertised.push(key);
+            run_tool_key(&sink, tool);
+        }
+        assert_eq!(
+            *sink.keys.borrow(),
+            advertised,
+            "a click reached the launcher with something other than the key its row named"
+        );
+    }
+
+    /// Every row's letter is the catalogue's own, and no two rows share one: a
+    /// duplicate would make two rows the same control while the panel drew two.
+    #[test]
+    fn every_tools_row_carries_its_catalogues_own_letter_and_no_two_share_one() {
+        use super::super::sidebar::Tool;
+        use crate::usertools::Tool as UserTool;
+        let pairs = [
+            (Tool::Shell, UserTool::Shell),
+            (Tool::Code, UserTool::Code),
+            (Tool::FileBrowser, UserTool::FileBrowser),
+            (Tool::Search, UserTool::Search),
+            (Tool::Memory, UserTool::Memory),
+            (Tool::Harness, UserTool::Harness),
+            (Tool::Settings, UserTool::Settings),
+        ];
+        let mut seen: Vec<char> = Vec::new();
+        for (row, tool) in pairs {
+            let key = tool_row_chord(row);
+            assert_eq!(key, tool.key(), "{row:?} does not map to {tool:?}");
+            assert!(!seen.contains(&key), "two rows share the key {key:?}");
+            seen.push(key);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Alt+q, and the notice that has been advertising it
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn alt_q_exits_when_idle_and_interrupts_a_running_goal() {
+        assert_eq!(quit_route(false), QuitRoute::SubmitExit);
+        assert_eq!(quit_route(true), QuitRoute::Interrupt);
+    }
+
+    /// The chord the notice names is a chord the decoder answers. This is the
+    /// direction the sidebar's own chord test cannot look: `q` is in no
+    /// catalogue, so nothing else in the tree would notice the key going dead.
+    #[test]
+    fn the_chord_the_interrupt_notice_names_is_one_the_decoder_answers() {
+        let notice = interrupt_notice("/exit");
+        assert!(notice.contains("Alt+q"), "{notice}");
+        assert_eq!(
+            pane_key(
+                KeyEvent::new(KeyCode::Char('q'), KeyModifiers::ALT),
+                true,
+                false
+            ),
+            Some(PaneKey::Quit),
+            "the notice names Alt+q and the decoder drops it"
+        );
+        // With text in the box too: a chord is not a character somebody was
+        // typing, so it has no editor-empty condition.
+        assert_eq!(
+            pane_key(
+                KeyEvent::new(KeyCode::Char('q'), KeyModifiers::ALT),
+                false,
+                false
+            ),
+            Some(PaneKey::Quit)
+        );
+        // And under a question, unlike the rest of the Alt layer: with a goal
+        // up it routes to the interrupt, which is the way out of a prompt
+        // nobody wants to answer.
+        assert_eq!(
+            pane_key(
+                KeyEvent::new(KeyCode::Char('q'), KeyModifiers::ALT),
+                true,
+                true
+            ),
+            Some(PaneKey::Quit)
+        );
+        // Not a bare `q`, which is how words start.
+        assert_eq!(pane_key(press(KeyCode::Char('q')), true, false), None);
+    }
+
+    #[test]
+    fn the_interrupt_notice_is_one_string_naming_both_ways_out() {
+        let by_chord = interrupt_notice("Alt+q");
+        assert!(by_chord.contains("Alt+q"), "{by_chord}");
+        assert!(by_chord.contains("/exit"), "{by_chord}");
+    }
+
+    // -----------------------------------------------------------------------
+    // The SESSIONS list's keys
+    // -----------------------------------------------------------------------
+
+    /// Four keys, and nothing else — a letter typed at a focused list still
+    /// reaches the input box, which is where somebody who has changed their
+    /// mind is already typing.
+    #[test]
+    fn the_sessions_list_claims_four_keys_and_leaves_the_rest_to_the_box() {
+        use super::super::frame::SessionsKey;
+        assert_eq!(sessions_key(KeyCode::Up), Some(SessionsKey::Up));
+        assert_eq!(sessions_key(KeyCode::Down), Some(SessionsKey::Down));
+        assert_eq!(sessions_key(KeyCode::Enter), Some(SessionsKey::Accept));
+        assert_eq!(sessions_key(KeyCode::Esc), Some(SessionsKey::Cancel));
+        for code in [
+            KeyCode::Char('r'),
+            KeyCode::Char(' '),
+            KeyCode::Left,
+            KeyCode::PageUp,
+            KeyCode::Tab,
+            KeyCode::Backspace,
+        ] {
+            assert_eq!(
+                sessions_key(code),
+                None,
+                "{code:?} was swallowed by the session list"
+            );
+        }
     }
 }

@@ -28,6 +28,32 @@ out for themselves.
 
 ## Unreleased
 
+- **The sidebar's SESSIONS list is a control, not a label.** Arrows walk it,
+  Enter resumes the highlighted session, and a click on a row does the same.
+  Both produce `/resume <id>`, a command you could have typed, rather than
+  reaching around the session machinery. The `[+]` starts a new session the
+  same way. While a goal is running both are refused with a notice saying so:
+  before this the `[+]` pushed its command into a channel nothing reads
+  mid-goal and printed a receipt saying it had worked.
+
+- **`Alt+q` is on the key panel**, because Emma already names that chord in
+  the line it prints when a goal is interrupted, and a key named in Emma's own
+  output that is missing from the list of keys is the same problem as a drawn
+  control that does nothing.
+
+- **The Settings screen's Provider row names the provider this run actually
+  booted with.** It resolved the name from `settings.json` before, so a run
+  started with `--provider` was described as bound to something it was not.
+
+- **The Code page has code intelligence.** Diagnostics appear in the gutter
+  beside the lines they belong to, `F5` asks for hover and `F6` for a
+  definition, and a definition in another file opens that file at the line. It
+  uses the same language servers the tools use, so one server per language
+  serves both you and the model, and what you type keeps the server's view
+  current for the model's next call. Nothing on the input path waits for a
+  server: a busy or dead one means no decorations, never a pause. A run
+  without the bridge says so rather than reporting that nothing was found.
+
 - **The Code page has a chat strip.** `Tab` reaches it, and a question typed
   there goes down the same channel a typed line takes, so a running goal is
   the steering queue's answer and not the page's. The question carries which

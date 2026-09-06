@@ -371,6 +371,22 @@ const ENDS: &[(Chord, Expect)] = &[
 const INTERRUPT: &[(Chord, Expect)] = &[(Chord::ctrl('c'), Expect::Interrupt)];
 const QUIT: &[(Chord, Expect)] = &[(Chord::ctrl('d'), Expect::Eof)];
 
+/// Alt+q, and it is a row of its own rather than a second chord on [`QUIT`].
+///
+/// `Binding::label` factors out a shared modifier, and `Ctrl+D` and `Alt+q`
+/// share none, so one row holding both would print `D/q` and name neither.
+/// It is drawn at all because `input::interrupt_notice` puts the chord in a
+/// line Emma prints, and a key named in Emma's own output that is absent from
+/// the panel claiming to list the keys is the drawn-control problem read
+/// backwards.
+const ALT_QUIT: &[(Chord, Expect)] = &[(
+    Chord {
+        code: KeyCode::Char('q'),
+        mods: KeyModifiers::ALT,
+    },
+    Expect::Pane(PaneKey::Quit),
+)];
+
 /// The chat pane's advertised keys — the `QUICK HELP` table, and the Settings
 /// page's copy of it.
 ///
@@ -438,6 +454,11 @@ pub static CHAT: Table = Table {
         Binding {
             trigger: Trigger::Keys(QUIT),
             what: "quit",
+            ctx: Ctx::IDLE,
+        },
+        Binding {
+            trigger: Trigger::Keys(ALT_QUIT),
+            what: "quit, or interrupt a running goal",
             ctx: Ctx::IDLE,
         },
         Binding {
@@ -1112,7 +1133,7 @@ mod tests {
                 .map(|b| b.label())
                 .collect::<Vec<_>>()
                 .join(" "),
-            "/ Enter Esc PgUp/PgDn Ctrl+Up/Dn Home/End Ctrl+B Ctrl+/ Alt+key Ctrl+C Ctrl+D Shift+drag",
+            "/ Enter Esc PgUp/PgDn Ctrl+Up/Dn Home/End Ctrl+B Ctrl+/ Alt+key Ctrl+C Ctrl+D Alt+Q Shift+drag",
             "the derived labels no longer match what the panel has always said"
         );
     }

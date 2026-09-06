@@ -964,6 +964,59 @@ mod frame_rs {
 // fires; a silent pass would be.
 // ---------------------------------------------------------------------------
 
+/// The two facts `main` has to hand the frame, which nothing else can.
+///
+/// **This module exists because "wired nowhere" is a defect this crate has
+/// shipped.** Every page's keys were once public, tested, and reachable from
+/// no running program, and each page's own tests passed throughout. These two
+/// calls have the same shape: `Term::set_running_provider` and
+/// `Term::set_hints` are one-line delegations that only a real terminal can
+/// observe, so the thing worth pinning is that `main` still makes them.
+#[cfg(test)]
+mod main_rs {
+    const SOURCE: &str = include_str!("../main.rs");
+
+    /// The Provider row on the Settings screen names the provider this run is
+    /// bound to. Without this call it resolves the name from `settings.json`
+    /// instead, so a run started with `--provider` is described as bound to
+    /// something it is not, which is the one case the row exists for.
+    #[test]
+    fn main_tells_the_frame_which_provider_this_run_actually_booted_with() {
+        assert!(
+            SOURCE.contains("term.set_running_provider("),
+            "main no longer tells the frame its provider; the Settings row reads the file"
+        );
+    }
+
+    /// The Code page's language-server bridge is spawned by `main`, because
+    /// that is the only place a runtime and a frame both exist. Without the
+    /// spawn the page's `F5` and `F6` post into a channel nothing reads, and
+    /// the page shows no decorations while every one of its own tests passes:
+    /// the wired-nowhere shape again, and the reason this module exists.
+    #[test]
+    fn main_spawns_the_code_pages_language_server_bridge() {
+        assert!(
+            SOURCE.contains("code_lsp::run("),
+            "main no longer spawns the bridge; the Code page posts into nothing"
+        );
+        assert!(
+            SOURCE.contains("f.set_code_lsp("),
+            "main no longer hands the page a bridge handle"
+        );
+    }
+
+    /// The hints preference is read from `settings.json` by `main` and pushed
+    /// in, because the frame holds no `Settings` and the reader thread is what
+    /// consults the flag.
+    #[test]
+    fn main_pushes_the_hints_preference_into_the_frame() {
+        assert!(
+            SOURCE.contains("term.set_hints("),
+            "main no longer pushes the hints preference; the toggle writes and nothing reads"
+        );
+    }
+}
+
 #[cfg(test)]
 mod app_rs {
     use ratatui::buffer::Buffer;

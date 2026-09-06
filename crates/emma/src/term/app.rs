@@ -126,6 +126,14 @@ pub struct App {
     /// dispatch, because that is what makes a question from the strip the same
     /// thing as a question somebody typed.
     code_line: Option<String>,
+    /// The Code page's language-server bridge, once `main` has a runtime and a
+    /// pool to give it. `None` in every test and in the plain fallback, which
+    /// is why every path below is a `let ... else { return; }` rather than an
+    /// `expect`: no bridge means no decorations, never a panic.
+    code_lsp: Option<super::code_lsp::Handle>,
+    /// The buffer the bridge was last told about, so an unchanged buffer is not
+    /// re-sent on every keystroke that moved the cursor.
+    code_sent: Option<(String, u64)>,
     /// The region the last paint gave the Code page, for `code::click`.
     code_area: Rect,
     /// What SESSIONS is a list of, kept from `set_identity` so the list can be
@@ -140,6 +148,31 @@ pub struct App {
     /// [`Regions::sidebar`] rather than a rectangle `sidebar.rs` hands back —
     /// that module renders and does not answer questions about itself.
     sessions_add: Option<Rect>,
+    /// Where the sidebar's clickable rows were on the last paint, straight off
+    /// [`sidebar::hits`] — the same arithmetic that drew them, not a second
+    /// copy of it. The `sessions_add` rule, one field per surface.
+    sidebar_hits: sidebar::Hits,
+    /// The session id behind each SESSIONS row, by the same index. Kept beside
+    /// the rows rather than inside [`sidebar::Row`] because the sidebar draws
+    /// text and must not carry an identifier it would be tempted to print: the
+    /// id is the shell's business, and a row that showed one would be showing
+    /// the private path this whole feature refuses to expose.
+    session_ids: Vec<String>,
+    /// Which SESSIONS row has the arrows, when the list has them at all.
+    /// `None` is the ordinary state: the arrows belong to the input box.
+    sessions_focus: Option<usize>,
+    /// Whether interface hints are on — `ui.hints`, resolved.
+    ///
+    /// Two fields hold this fact and they are two different things.
+    /// `settings.hints_on` is the Settings *row's* value, refreshed from disk
+    /// when the screen opens; this is what the interface actually obeys, and
+    /// it is what the shell hands in at startup with [`App::set_hints`]. They
+    /// are written together in [`App::settings_hints`], which is the one place
+    /// they could drift.
+    hints: bool,
+    /// The provider this session's client is really bound to, when the shell
+    /// has said so. See [`App::set_running_provider`].
+    provider_running: Option<String>,
     /// Where the chat pane was on the last paint — the message column, with
     /// the scrollbar's own column already taken out of it. The mouse hit-tests
     /// against this, so a click lands where the reader saw the text.
@@ -299,9 +332,16 @@ impl App {
             help: None,
             code: None,
             code_line: None,
+            code_lsp: None,
+            code_sent: None,
             code_area: Rect::new(0, 0, 0, 0),
             scope: None,
             sessions_add: None,
+            sidebar_hits: sidebar::Hits::default(),
+            session_ids: Vec::new(),
+            sessions_focus: None,
+            hints: crate::settings::HINTS_DEFAULT,
+            provider_running: None,
             chat_rect: r.chat,
             scrollbar: None,
             bar_grab: None,
@@ -389,7 +429,10 @@ impl App {
                 .clone()
                 .unwrap_or_else(|| emma_llm::DEFAULT_PROVIDER.to_string());
             self.settings.provider_saved = bound.clone();
-            self.settings.provider = bound;
+            // The running half prefers what the shell said it built. The file
+            // is only a guess at it, and a `--provider` flag makes the guess
+            // wrong in exactly the case the row exists to show.
+            self.settings.provider = self.provider_running.clone().unwrap_or(bound);
             self.settings.provider_keys = provider_keys(self.home.as_deref());
             // The *selection*, read where it is written. This tree has no
             // ambient "active theme": `theme::load` resolves the name once at
@@ -727,12 +770,17 @@ impl App {
     /// Store the Interface Hints toggle.
     ///
     /// [`Self::settings_training`]'s shape and its additive default-on
-    /// semantics. **The receipt bounds it, because nothing reads the key
-    /// yet**: `Settings::hints` exists and no caller consults it in this
-    /// build, so the honest thing a row can promise is that the preference is
-    /// stored. When a `set_hints` seam lands the wording loses its second
-    /// half; until then a row claiming to silence something would be claiming
-    /// an effect nobody could observe.
+    /// semantics.
+    ///
+    /// **The receipt used to end "nothing in this build reads the key yet",
+    /// and that stopped being true.** The `[+]` control's hint is the first
+    /// caller: [`clicked_new_session`] takes `hints` and drops
+    /// [`NEW_SESSION_NOTICE`] when it is off. So the wording names what is
+    /// governed and what is not — a receipt, a warning and a refusal are never
+    /// hints and are printed either way — and the toggle takes effect in this
+    /// session rather than at the next start, which is why [`Self::hints`] is
+    /// written here beside the row's own copy. Those two fields are one fact
+    /// and this is the only place both are set.
     fn settings_hints(&mut self, on: bool) {
         let Some(home) = self.home.clone() else {
             self.settings.notice = Some(NO_HOME.to_string());
@@ -743,10 +791,11 @@ impl App {
         match crate::settings::save(&home, &stored) {
             Ok(path) => {
                 self.settings.hints_on = on;
+                self.hints = on;
                 self.settings.notice = Some(format!(
-                    "interface hints {}, {} {}. Nothing in this build reads the key yet, so \
-                     the preference is stored and the screen looks the same; receipts, \
-                     warnings and refusals would never be affected by it",
+                    "interface hints {}, {} {}. It takes effect now: the informational \
+                     one-liners this interface prints of its own accord are governed by it, \
+                     and receipts, warnings and refusals never are",
                     if on { "on, the default" } else { "off" },
                     if on {
                         "the key is removed from"
@@ -1593,7 +1642,12 @@ impl App {
             let v = self.code.as_mut().expect("checked just above");
             super::code::handle_key(v, key)
         };
-        (true, self.code_act(action))
+        let job = self.code_act(action);
+        // One hash per key, click or paste. `code_lsp_changed` returns
+        // without posting when the buffer is the one already sent, so a
+        // cursor key costs a hash and nothing else.
+        self.code_lsp_changed();
+        (true, job)
     }
 
     /// A left press while the Code page is open. `false` lets the press fall
@@ -1608,7 +1662,12 @@ impl App {
             return (false, None);
         };
         let action = super::code::act(v, hit);
-        (true, self.code_act(action))
+        let job = self.code_act(action);
+        // One hash per key, click or paste. `code_lsp_changed` returns
+        // without posting when the buffer is the one already sent, so a
+        // cursor key costs a hash and nothing else.
+        self.code_lsp_changed();
+        (true, job)
     }
 
     /// A bracketed paste while the Code page is open. `false` when the page is
@@ -1618,7 +1677,12 @@ impl App {
             return (false, None);
         };
         let action = v.paste_text(text);
-        (true, self.code_act(action))
+        let job = self.code_act(action);
+        // One hash per key, click or paste. `code_lsp_changed` returns
+        // without posting when the buffer is the one already sent, so a
+        // cursor key costs a hash and nothing else.
+        self.code_lsp_changed();
+        (true, job)
     }
 
     /// A drag with the button down over the Code page's document: the
@@ -1648,7 +1712,12 @@ impl App {
         if action == super::code::CodeAction::None {
             return (false, None);
         }
-        (true, self.code_act(action))
+        let job = self.code_act(action);
+        // One hash per key, click or paste. `code_lsp_changed` returns
+        // without posting when the buffer is the one already sent, so a
+        // cursor key costs a hash and nothing else.
+        self.code_lsp_changed();
+        (true, job)
     }
 
     /// The wheel while the Code page is open: the body scrolls, the tree does
@@ -1664,14 +1733,182 @@ impl App {
         (true, self.code_act(action))
     }
 
-    /// What the Code page just sent to the clipboard, for its notice row.
-    /// Sent, not arrived: OSC 52 has no acknowledgement.
+    // region: The language-server bridge
+    // -----------------------------------------------------------------------
+    // Six small methods, and not one of them waits for anything. Each ends in a
+    // `code_lsp::Handle::post`, which is a `try_send` on a bounded channel: a
+    // full queue or a dead task drops the request and the page simply lacks
+    // decorations. See `super::code_lsp` for the law this obeys and why.
+    // -----------------------------------------------------------------------
+
+    /// Wire the page to a bridge. Called once, from `main`.
+    pub fn set_code_lsp(&mut self, handle: super::code_lsp::Handle) {
+        self.code_lsp = Some(handle);
+    }
+
+    /// Tell the server about the file that was just opened.
+    fn code_lsp_open(&mut self) {
+        let Some(handle) = self.code_lsp.as_ref() else {
+            return;
+        };
+        let Some(open) = self
+            .code
+            .as_ref()
+            .and_then(|v| v.open.as_ref())
+            .filter(|o| o.note.is_none())
+        else {
+            self.code_sent = None;
+            return;
+        };
+        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
+        self.code_sent = Some((
+            open.path.clone(),
+            super::code_git::hash_bytes(text.as_bytes()),
+        ));
+        handle.post(super::code_lsp::Request::Open {
+            rel: open.path.clone(),
+            text,
+        });
+    }
+
+    /// Send the buffer if, and only if, it is not the one already sent. A key
+    /// that moved the cursor changed nothing the server needs to hear about.
+    fn code_lsp_changed(&mut self) {
+        let Some(handle) = self.code_lsp.as_ref() else {
+            return;
+        };
+        let Some(open) = self.code.as_ref().and_then(|v| v.open.as_ref()) else {
+            return;
+        };
+        if open.note.is_some() {
+            return;
+        }
+        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
+        let hash = super::code_git::hash_bytes(text.as_bytes());
+        let rel = open.path.clone();
+        if self.code_sent.as_ref() == Some(&(rel.clone(), hash)) {
+            return;
+        }
+        self.code_sent = Some((rel.clone(), hash));
+        handle.post(super::code_lsp::Request::Change { rel, text });
+    }
+
+    /// Tell the server the buffer was written.
+    fn code_lsp_saved(&mut self) {
+        let Some(handle) = self.code_lsp.as_ref() else {
+            return;
+        };
+        let Some(open) = self.code.as_ref().and_then(|v| v.open.as_ref()) else {
+            return;
+        };
+        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
+        self.code_sent = Some((
+            open.path.clone(),
+            super::code_git::hash_bytes(text.as_bytes()),
+        ));
+        handle.post(super::code_lsp::Request::Save {
+            rel: open.path.clone(),
+            text,
+        });
+    }
+
+    /// Tell the server the buffer is gone, so a document nobody is looking at
+    /// does not sit in an index the model will later ask about.
+    fn code_lsp_close(&mut self) {
+        let Some(handle) = self.code_lsp.as_ref() else {
+            return;
+        };
+        if let Some(rel) = self
+            .code
+            .as_ref()
+            .and_then(|v| v.open.as_ref())
+            .map(|o| o.path.clone())
+        {
+            handle.post(super::code_lsp::Request::Close { rel });
+        }
+        self.code_sent = None;
+    }
+
+    /// Ask for hover, or for a definition, at the cursor.
+    fn code_lsp_ask(&mut self, definition: bool) {
+        let Some(handle) = self.code_lsp.as_ref() else {
+            // The honest refusal: "no bridge in this run" is not "no definition
+            // found", and the page must not show the second when the first is
+            // true.
+            if let Some(view) = self.code.as_mut() {
+                view.lsp.note = Some("code intelligence is not wired in this run".to_string());
+            }
+            return;
+        };
+        let Some(view) = self.code.as_ref() else {
+            return;
+        };
+        let Some(open) = view.open.as_ref().filter(|o| o.note.is_none()) else {
+            return;
+        };
+        let (rel, line, col) = (open.path.clone(), open.line, open.col);
+        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
+        handle.post(if definition {
+            super::code_lsp::Request::Definition {
+                rel,
+                text,
+                line,
+                col,
+            }
+        } else {
+            super::code_lsp::Request::Hover {
+                rel,
+                text,
+                line,
+                col,
+            }
+        });
+    }
+
+    /// Fold one answer from the bridge into the page, and follow a definition
+    /// that landed in another file.
+    ///
+    /// Runs on the frame's task side under the paint lock, which is why it does
+    /// no IO beyond the one file read a cross-file jump needs, and that read is
+    /// `code_git::read_file`, the same one `CodeAction::Open` was measured at
+    /// 195 to 677 microseconds.
+    pub fn code_lsp_update(&mut self, update: super::code::LspUpdate) {
+        let Some(view) = self.code.as_mut() else {
+            return;
+        };
+        let Some((rel, line, col)) = view.apply_lsp(update) else {
+            return;
+        };
+        // A cross-file jump, and the one place the shell still converts a
+        // column: `col` is a UTF-16 offset into a file nothing had read. The
+        // bridge converts the same-file case itself, where it holds the buffer.
+        let action = super::code::CodeAction::Open(rel.clone());
+        let _ = self.code_act(action);
+        if let Some(view) = self.code.as_mut() {
+            let converted = view
+                .open
+                .as_ref()
+                .and_then(|o| o.lines.get(line))
+                .map(|l| {
+                    let bytes = emma_tools_lsp::doc::byte_offset(l, col as u32);
+                    l[..bytes.min(l.len())].chars().count()
+                })
+                .unwrap_or(col);
+            view.jump_to(line, converted);
+            view.lsp.note = Some(format!("{rel}:{}", line + 1));
+        }
+    }
+
+    // endregion: The language-server bridge
+
     /// The line the chat strip composed, taken once. `None` on every other
     /// key, so a reader that asks after each one costs nothing.
     pub fn take_code_line(&mut self) -> Option<String> {
         self.code_line.take()
     }
 
+    /// What the Code page just sent to the clipboard, for its notice row.
+    /// Sent, not arrived: OSC 52 has no acknowledgement.
     pub fn code_notice_sent(&mut self, chars: usize) {
         if let Some(v) = self.code.as_mut() {
             v.notice_sent(chars);
@@ -1708,6 +1945,8 @@ impl App {
                 // between the two reads. See `code::OpenFile::from_read`.
                 let hash = super::code_git::file_hash(&path);
                 self.code.as_mut()?.set_open(rel, read, hash);
+                // The server hears about the file the moment the page does.
+                self.code_lsp_open();
                 None
             }
             CodeAction::LoadHistory => {
@@ -1739,6 +1978,7 @@ impl App {
                     req.expect,
                 );
                 self.code.as_mut()?.set_saved(saved);
+                self.code_lsp_saved();
                 None
             }
             CodeAction::Copy(text) => Some(CodeJob::Copy(text)),
@@ -1749,7 +1989,23 @@ impl App {
                 self.code_line = Some(line);
                 None
             }
+            // The page decided *whether* to ask (`ask_lsp` refuses in words
+            // when there is no readable file); this side decides *what to send*,
+            // because the cursor and the buffer live on the page and the
+            // channel lives here. Neither waits: `post` is a `try_send`.
+            CodeAction::Hover => {
+                self.code_lsp_ask(false);
+                None
+            }
+            CodeAction::Definition => {
+                self.code_lsp_ask(true);
+                None
+            }
             CodeAction::Close => {
+                // Before the page goes: it reads the open file's name, and a
+                // document nobody is looking at must not sit in an index the
+                // model will later ask about.
+                self.code_lsp_close();
                 self.code = None;
                 None
             }
@@ -2215,6 +2471,13 @@ impl App {
             collapsed: !hidden(total_cols, self.latch),
             by_user: true,
         };
+        // A hidden list must not keep the arrows. Otherwise Ctrl-B closes the
+        // pane and Up goes on moving a selection nobody can see, which is the
+        // same hole `focus_sessions` opens a collapsed sidebar to avoid,
+        // reached from the other side.
+        if hidden(total_cols, self.latch) {
+            self.blur_sessions();
+        }
     }
 
     /// The run's identity arrived: SESSIONS fills with the sessions that ran
@@ -2265,6 +2528,11 @@ impl App {
             trailing: relative_time(now_ms, now_ms, offset),
             selected: true,
         }];
+        // The ids move with the rows, index for index. A row that lost its id
+        // would be a row whose click resumes whatever happens to be at that
+        // position, which is the failure `SidebarAction::Resume` carries a
+        // `String` to avoid.
+        let mut ids = vec![scope.current.clone()];
         let feed = scope
             .dir
             .as_deref()
@@ -2284,13 +2552,130 @@ impl App {
                 rows[0].trailing = relative_time(s.last_event_ms, now_ms, offset);
                 continue;
             }
+            ids.push(s.id);
             rows.push(sidebar::Row {
                 name: s.name,
                 trailing: relative_time(s.last_event_ms, now_ms, offset),
                 selected: false,
             });
         }
+        // A focus that outlived the list it was on lands on the last row rather
+        // than on nothing: the list only ever changes while somebody is looking
+        // at it, and a selection that silently disappeared would be a keystroke
+        // that did nothing.
+        if let Some(i) = self.sessions_focus {
+            self.sessions_focus = Some(i.min(rows.len().saturating_sub(1)));
+        }
+        self.session_ids = ids;
         self.side.sessions = rows;
+        self.paint_session_selection();
+    }
+
+    /// Put the highlight band where the keyboard is, or back on the running
+    /// session when the keyboard is not on the list.
+    ///
+    /// One function rather than a `selected` flag written at each of the places
+    /// a row is built: the band means "this is the row your keys act on" while
+    /// the list has focus and "this is the session you are in" otherwise, and
+    /// those are different rows.
+    fn paint_session_selection(&mut self) {
+        for (i, row) in self.side.sessions.iter_mut().enumerate() {
+            row.selected = match self.sessions_focus {
+                Some(focus) => i == focus,
+                None => i == 0,
+            };
+        }
+    }
+
+    /// Give the SESSIONS list the arrows. `false` when there is nothing to
+    /// select, which is what `/resume` reports rather than leaving the user
+    /// pressing keys at a list that is not there.
+    pub fn focus_sessions(&mut self) -> bool {
+        if self.side.sessions.is_empty() {
+            return false;
+        }
+        // A collapsed sidebar is opened rather than worked around. `/resume`
+        // with no argument is a person asking to be shown the list, and the
+        // alternative is either an invisible selection eating the arrows or a
+        // second picker overlay listing the same files — a second answer to
+        // "where was I" that can disagree with this one. The latch is set as a
+        // user toggle because that is what it is: the user asked for the pane.
+        self.latch = Latch {
+            collapsed: false,
+            by_user: true,
+        };
+        self.sessions_focus = Some(0);
+        self.paint_session_selection();
+        true
+    }
+
+    pub fn sessions_focused(&self) -> bool {
+        self.sessions_focus.is_some()
+    }
+
+    /// Take the arrows back. Idempotent, because Esc is pressed at things that
+    /// are already gone.
+    pub fn blur_sessions(&mut self) {
+        if self.sessions_focus.take().is_some() {
+            self.paint_session_selection();
+        }
+    }
+
+    /// Move the selection, clamped rather than wrapped: a list that wraps makes
+    /// "hold Down" a way to arrive somewhere unintended, and the running
+    /// session is at the top where a resume is a no-op.
+    pub fn move_session_selection(&mut self, down: bool) {
+        let Some(i) = self.sessions_focus else { return };
+        let last = self.side.sessions.len().saturating_sub(1);
+        self.sessions_focus = Some(if down {
+            (i + 1).min(last)
+        } else {
+            i.saturating_sub(1)
+        });
+        self.paint_session_selection();
+    }
+
+    /// The id the highlighted row names, when the keyboard is on the list.
+    pub fn selected_session(&self) -> Option<String> {
+        self.session_ids.get(self.sessions_focus?).cloned()
+    }
+
+    /// The id a SESSIONS row names, by the index the paint reported.
+    pub fn session_id_at(&self, i: usize) -> Option<String> {
+        self.session_ids.get(i).cloned()
+    }
+
+    /// Whether interface hints are on. See the [`App::hints`] field.
+    pub fn hints(&self) -> bool {
+        self.hints
+    }
+
+    /// Hand the shell's resolved `ui.hints` in, once, at startup.
+    ///
+    /// A seam rather than a read, for the reason `policy_file_override` exists:
+    /// `App::new` runs in every test in this module, and a constructor that
+    /// read `settings.json` would make each of them a fact about whoever's
+    /// machine ran it. The shell has already loaded the file by the time it
+    /// builds a frame, so it says.
+    pub fn set_hints(&mut self, on: bool) {
+        self.hints = on;
+    }
+
+    /// Hand this screen the provider the session's client is really bound to.
+    ///
+    /// **The gap it closes.** `toggle_settings` resolves the bound provider
+    /// from `settings.json`, because that is the only source it has. A run
+    /// started with `--provider ollama` against a file that says `anthropic` is
+    /// then described by its own Settings screen as bound to something it is
+    /// not — and the Provider row exists precisely to show the two facts when
+    /// they disagree. The shell knows which client it built; this is where it
+    /// says so, and the screen prefers it over the file.
+    pub fn set_running_provider(&mut self, name: String) {
+        self.provider_running = Some(name.clone());
+        // A screen already open shows it without waiting for a reopen.
+        if self.settings_open {
+            self.settings.provider = name;
+        }
     }
 
     /// Whether a left-button press landed on the SESSIONS header's `[+]`.
@@ -2299,6 +2684,27 @@ impl App {
     /// looked up, which is what keeps the decision a pure function.
     pub fn new_session_clicked(&self, col: u16, row: u16, prompt_pending: bool) -> bool {
         !prompt_pending && self.sessions_add.is_some_and(|rect| within(rect, col, row))
+    }
+
+    /// Which sidebar row a left-button press landed on, if any.
+    ///
+    /// `prompt_pending` is the shell's to know and is passed in rather than
+    /// looked up, exactly as [`Self::new_session_clicked`] takes it: while a
+    /// question is on screen the pointer belongs to it.
+    ///
+    /// The rectangles are the last paint's, not a fresh computation — the A6
+    /// arrangement, which is what stops the hit test agreeing with itself and
+    /// disagreeing with the screen.
+    pub fn sidebar_row_click(
+        &self,
+        col: u16,
+        row: u16,
+        prompt_pending: bool,
+    ) -> Option<sidebar::Hit> {
+        if prompt_pending {
+            return None;
+        }
+        sidebar::hit(&self.sidebar_hits, col, row)
     }
 
     /// The TOOLS catalogue, as rows — mapped by [`tool_rows`] and handed in so
@@ -2402,6 +2808,12 @@ impl App {
             // itself: there is no control on screen and no cell that acts
             // like one.
             self.sessions_add = new_session_hit(r.sidebar);
+            // The clickable rows, from the paint's own arithmetic rather than
+            // from a second pass over the same state: `sidebar::hits` and
+            // `sidebar::render` both go through `painted`, so a row cannot be
+            // drawn in one place and hit-tested in another. A collapsed or
+            // too-small pane reports nothing, which is the truth about it.
+            self.sidebar_hits = sidebar::hits(r.sidebar, &side, skin);
             if self.settings_open {
                 self.settings_screen(r, buf, view);
                 // The cursor is parked because there is nothing to type into.
@@ -4149,15 +4561,34 @@ fn fmt_elapsed(ms: u64) -> String {
     }
 }
 
-/// The last path component, for the status bar's ENV cell. Local rather than
-/// borrowed from `render.rs`, whose copy is private and whose signature may
-/// move with the cell renderers.
-/// What a click on the sidebar asks for. One variant today; an enum rather
-/// than a bool so the second control does not have to rewrite the routing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What a click on the sidebar asks for.
+///
+/// **No longer `Copy`, and that is the point of the variant that made it so.**
+/// A SESSIONS row answers with the session it *names*. Carrying the row index
+/// instead would make the shell look it up again against a list
+/// [`App::refresh_sessions`] rebuilds at the end of every goal, which is how a
+/// click resumes the wrong session.
+///
+/// The stray doc paragraph that used to sit above this enum — "the last path
+/// component, for the status bar's ENV cell" — described `render.rs`'s
+/// `last_component` and arrived here with the TUI import, so rustdoc printed
+/// it as this type's summary. It is gone rather than moved: this tree's copy
+/// of that function lives in `render.rs` and nothing in `app.rs` calls it.
+/// The fork's caller is its "sessions from elsewhere" block, which needs
+/// `harness_state::sessions_elsewhere` and is not in this tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SidebarAction {
     /// The `[+]` on the SESSIONS header: start a fresh conversation.
     NewSession,
+    /// A SESSIONS row: continue that session in this process. The shell
+    /// submits [`RESUME_COMMAND`] with the id, down the same channel a typed
+    /// line uses, so a click and `/resume <id>` are one code path.
+    Resume(String),
+    /// A TOOLS row: do exactly what that row's chord does. The shell turns it
+    /// into the same `char` the Alt layer produces and hands it to the same
+    /// `Frame::launch_tool`, so there is one dispatch and not two. See
+    /// [`super::input::tool_row_chord`].
+    Tool(sidebar::Tool),
 }
 
 /// The command the `[+]` submits, and the notice that says it happened.
@@ -4170,6 +4601,110 @@ pub enum SidebarAction {
 /// the SESSIONS list does not gain a row, because no new session was made.
 pub const NEW_SESSION_COMMAND: &str = "/clear";
 pub const NEW_SESSION_NOTICE: &str = "new conversation — grants kept";
+
+/// What a press on the `[+]` does, decided from the one fact the shell holds.
+///
+/// **The defect this exists for, and it was live in this tree.** The click
+/// printed [`NEW_SESSION_NOTICE`] and handed `/clear` to the line channel
+/// unconditionally. Mid-goal nothing reads that channel, and the next prompt's
+/// own drain throws the line away before anybody sees it — so the control did
+/// nothing at all while a notice on screen said a fresh conversation had
+/// started. A dead control is bad; a dead control with a receipt is worse.
+///
+/// A function rather than a branch at the call site, for [`picked_session`]'s
+/// reason: the rule has one home. The ruling itself is not invented here, it is
+/// asked of [`crate::session_command::mid_goal`], which is the table that says
+/// what every built-in does while a goal runs. `/clear` is a `Wait` there, so
+/// the click waits.
+///
+/// `prompt_pending` is not a parameter: [`App::new_session_clicked`] has
+/// already refused the press while a question is on screen, so this is only
+/// ever reached with no prompt up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NewSession {
+    /// Submit this line down the channel a typed line uses, after saying
+    /// `notice` if there is one to say.
+    Submit {
+        line: &'static str,
+        /// [`NEW_SESSION_NOTICE`], or `None` when hints are off. It is a hint
+        /// and not a receipt: `/clear` prints its own receipt naming what it
+        /// cleared and which grants it kept, seconds later and from the loop
+        /// that actually did it. This line only says the click registered.
+        notice: Option<&'static str>,
+    },
+    /// Say this, submit nothing.
+    Wait(&'static str),
+}
+
+/// The one rule for the `[+]`, read by both the pointer and any future chord.
+pub fn clicked_new_session(goal_active: bool, hints: bool) -> NewSession {
+    use crate::session_command::MidGoal;
+    match crate::session_command::mid_goal(NEW_SESSION_COMMAND, goal_active, false) {
+        MidGoal::Send => NewSession::Submit {
+            line: NEW_SESSION_COMMAND,
+            notice: hints.then_some(NEW_SESSION_NOTICE),
+        },
+        _ => NewSession::Wait(NEW_SESSION_BUSY_NOTICE),
+    }
+}
+
+/// Why this is not [`crate::session_command::wait_notice`], which is the line a
+/// *typed* `/clear` gets mid-goal: that line ends "it is back in the box: press
+/// Enter once this goal finishes", and a click has no box to be back in. The
+/// remedy a person has here is the one [`RESUME_BUSY_NOTICE`] names, so this is
+/// worded as its sibling. Same ruling, honest remedy.
+pub const NEW_SESSION_BUSY_NOTICE: &str =
+    "a goal is running, so no new conversation was started: /clear applies between goals. Let \
+     the goal finish, or press Esc to interrupt it, then press [+] again.";
+
+/// What a SESSIONS row submits, with the row's id after it.
+///
+/// The row is not a second implementation of resume: it composes the command a
+/// person could have typed and sends it down the channel typed lines use, so
+/// the mid-goal refusal, the same-session no-op and the receipt are decided in
+/// one place. See `session_command::resume`.
+pub const RESUME_COMMAND: &str = "/resume";
+
+/// The line a row click or Enter submits.
+pub fn resume_line(id: &str) -> String {
+    format!("{RESUME_COMMAND} {id}")
+}
+
+/// What a picked SESSIONS row does, decided from the one fact the shell holds.
+///
+/// A function rather than a branch at each of the two call sites — the pointer
+/// and Enter on the focused list — for [`clicked_new_session`]'s reason: the
+/// two must not be able to disagree about what picking a row does, and a rule
+/// written twice is a rule that will.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Picked {
+    /// Submit this line, down the channel a typed line uses.
+    Submit(String),
+    /// Say this, submit nothing.
+    Refused(&'static str),
+}
+
+pub fn picked_session(id: &str, goal_active: bool) -> Picked {
+    if goal_active {
+        return Picked::Refused(RESUME_BUSY_NOTICE);
+    }
+    Picked::Submit(resume_line(id))
+}
+
+/// What a row click or Enter says while a goal is running.
+///
+/// **Refused rather than queued**, which is the difference from a typed
+/// `/resume`: a typed line goes back in the box and the person presses Enter
+/// again when they are ready, and a click has no box to go back to. Queuing it
+/// would resume a session minutes later, at whatever moment the goal happened
+/// to end, which is the click landing somewhere nobody was looking.
+///
+/// It cannot simply be done anyway. Resuming replaces the conversation the
+/// running loop is holding and moves the file it is appending to, underneath a
+/// goal that is mid-turn.
+pub const RESUME_BUSY_NOTICE: &str =
+    "a goal is running, so this session was not resumed: switching now would cut the goal off \
+     mid-turn. Let it finish, or press Esc to interrupt it, then pick the session again.";
 
 fn within(rect: Rect, col: u16, row: u16) -> bool {
     col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
@@ -4733,6 +5268,360 @@ mod tests {
         let (_, _) = draw(&mut app, &view(), 100, 30);
         assert_eq!(app.sessions_add, None);
         assert!(!app.new_session_clicked(27, 1, false));
+    }
+
+    // -----------------------------------------------------------------------
+    // The rows the paint reports, and the click that lands on one
+    // -----------------------------------------------------------------------
+
+    /// A collapsed sidebar has no rows on screen, so it has none to click.
+    ///
+    /// **Drawn expanded first, on purpose.** Asserting only that a
+    /// never-expanded app records nothing would pass with the recording deleted
+    /// outright — the field starts empty. The rows have to be there and then
+    /// go, which is the stale-rectangle failure: a control that works where
+    /// nothing is drawn.
+    #[test]
+    fn a_collapsed_sidebar_records_no_rows() {
+        let mut app = App::new((100, 40));
+        app.set_identity("sess-1787712345678-48282", "", "/repo", &skin());
+        let _ = draw(&mut app, &view(), 100, 40);
+        assert!(
+            !app.sidebar_hits.rows.is_empty(),
+            "precondition: an expanded sidebar recorded no rows at all"
+        );
+        let (rect, _) = app.sidebar_hits.rows[0];
+
+        app.toggle_sidebar(100);
+        let _ = draw(&mut app, &view(), 100, 40);
+        assert!(
+            app.sidebar_hits.rows.is_empty(),
+            "a collapsed sidebar kept the rows of the paint before it"
+        );
+        assert_eq!(app.sidebar_row_click(rect.x, rect.y, false), None);
+    }
+
+    /// The session rows are reported by index into the list the paint drew, and
+    /// the index resolves to the id the row names — the two facts a click needs
+    /// and the paint is the only thing that knows.
+    #[test]
+    fn a_session_row_is_reported_by_index_and_the_index_names_a_session() {
+        let mut app = App::new((100, 40));
+        app.set_identity("sess-1787712345678-48282", "", "/repo", &skin());
+        let (rows, _) = draw(&mut app, &view(), 100, 40);
+        let (rect, _) = app
+            .sidebar_hits
+            .rows
+            .iter()
+            .find(|(_, h)| *h == sidebar::Hit::Session(0))
+            .expect("no session row recorded");
+        assert!(
+            rows[usize::from(rect.y)].contains("345678-48282"),
+            "the recorded rectangle is not on the row the reader saw:\n{}",
+            rows[usize::from(rect.y)]
+        );
+        assert_eq!(
+            app.sidebar_row_click(rect.x, rect.y, false),
+            Some(sidebar::Hit::Session(0))
+        );
+        assert_eq!(
+            app.session_id_at(0).as_deref(),
+            Some("sess-1787712345678-48282"),
+            "the row reports an index that names no session"
+        );
+    }
+
+    /// While a question is on screen the pointer belongs to it — the rule the
+    /// `[+]` already follows, asserted through the row hit-test because a
+    /// `prompt_pending` this one ignored would resume a session from under an
+    /// unanswered approval.
+    #[test]
+    fn a_pending_prompt_suppresses_every_sidebar_row() {
+        let mut app = App::new((100, 40));
+        app.set_identity("sess-1787712345678-48282", "", "/repo", &skin());
+        let _ = draw(&mut app, &view(), 100, 40);
+        let (rect, hit) = app.sidebar_hits.rows[0];
+        assert_eq!(app.sidebar_row_click(rect.x, rect.y, false), Some(hit));
+        assert_eq!(app.sidebar_row_click(rect.x, rect.y, true), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Picking a session
+    //
+    // The keyboard half of the same control, and the one rule that is not
+    // about geometry: a goal in flight refuses the pick rather than queuing it.
+    // -----------------------------------------------------------------------
+
+    /// A list to select in: this run, plus two older rows from this repository.
+    fn app_with_sessions(dir: &std::path::Path) -> App {
+        session_file(dir, "sess-1700000000000-1", "/repo", T0, "the older one");
+        session_file(
+            dir,
+            "sess-1700000000000-3",
+            "/repo",
+            T0 + 172_800_000,
+            "the newer one",
+        );
+        let mine = session_file(
+            dir,
+            "sess-1700000000000-9",
+            "/repo",
+            T0 + 259_200_000,
+            "what I am doing now",
+        );
+        let mut app = App::new((100, 40));
+        app.set_identity("sess-1700000000000-9", &mine, "/repo", &skin());
+        app
+    }
+
+    #[test]
+    fn the_arrows_move_the_selection_and_enter_names_a_session() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let mut app = app_with_sessions(dir.path());
+
+        // Before `/resume` asks for it, the band means "the session you are
+        // in" and the arrows are the input box's.
+        assert!(!app.sessions_focused());
+        assert_eq!(app.selected_session(), None);
+
+        assert!(app.focus_sessions());
+        assert_eq!(
+            app.selected_session().as_deref(),
+            Some("sess-1700000000000-9")
+        );
+        app.move_session_selection(true);
+        assert_eq!(
+            app.selected_session().as_deref(),
+            Some("sess-1700000000000-3"),
+            "Down did not move to the next row"
+        );
+        assert!(app.side.sessions[1].selected, "the band did not follow");
+        assert!(
+            !app.side.sessions[0].selected,
+            "two rows are selected at once"
+        );
+
+        // Clamped rather than wrapped, in both directions: holding a key must
+        // not walk off one end of the list and arrive at the other.
+        for _ in 0..5 {
+            app.move_session_selection(true);
+        }
+        assert_eq!(
+            app.selected_session().as_deref(),
+            Some("sess-1700000000000-1")
+        );
+        for _ in 0..5 {
+            app.move_session_selection(false);
+        }
+        assert_eq!(
+            app.selected_session().as_deref(),
+            Some("sess-1700000000000-9")
+        );
+
+        // Esc gives the keyboard back, and the band goes back to meaning the
+        // running session.
+        app.blur_sessions();
+        assert!(!app.sessions_focused());
+        assert!(app.side.sessions[0].selected);
+    }
+
+    /// The click and the keyboard resolve the same row to the same session.
+    /// Both routes end at `picked_session`, and this is the half that proves
+    /// they start from the same list.
+    #[test]
+    fn a_clicked_row_and_the_highlighted_row_name_the_same_session() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let mut app = app_with_sessions(dir.path());
+        let _ = draw(&mut app, &view(), 100, 40);
+        app.focus_sessions();
+        app.move_session_selection(true);
+        let by_key = app.selected_session().expect("nothing highlighted");
+
+        let (rect, _) = app
+            .sidebar_hits
+            .rows
+            .iter()
+            .find(|(_, h)| *h == sidebar::Hit::Session(1))
+            .expect("no second session row recorded");
+        let Some(sidebar::Hit::Session(i)) = app.sidebar_row_click(rect.x, rect.y, false) else {
+            panic!("the second session row took no click");
+        };
+        assert_eq!(app.session_id_at(i), Some(by_key));
+    }
+
+    /// The same hole from the other side, and the one Ctrl-B could open: the
+    /// list has the arrows, the pane is hidden, and Up now moves a selection
+    /// nobody can see. Closing the sidebar hands the keyboard back.
+    #[test]
+    fn collapsing_the_sidebar_gives_the_arrows_back() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let mut app = app_with_sessions(dir.path());
+        assert!(app.focus_sessions());
+        assert!(app.sessions_focused());
+        app.toggle_sidebar(100);
+        assert!(hidden(100, app.latch), "Ctrl-B did not close it");
+        assert!(!app.sessions_focused(), "a hidden list kept the arrows");
+        // And Ctrl-B still opens it again: the toggle latches both ways.
+        app.toggle_sidebar(100);
+        assert!(!hidden(100, app.latch));
+    }
+
+    /// Otherwise the arrows are captured by a pane nobody can see.
+    #[test]
+    fn focusing_the_list_opens_a_collapsed_sidebar() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let mut app = app_with_sessions(dir.path());
+        app.toggle_sidebar(100);
+        assert!(hidden(100, app.latch), "precondition: it is not collapsed");
+        assert!(app.focus_sessions());
+        assert!(
+            !hidden(100, app.latch),
+            "the list took the arrows behind a pane nobody can see"
+        );
+    }
+
+    /// A list that is not there takes no arrows, and says so rather than
+    /// leaving somebody pressing keys at nothing.
+    #[test]
+    fn an_empty_list_refuses_the_arrows() {
+        let mut app = App::new((100, 40));
+        assert!(!app.focus_sessions());
+        assert!(!app.sessions_focused());
+        assert_eq!(app.selected_session(), None);
+    }
+
+    /// The list is rebuilt at the end of every goal. A focus that outlived the
+    /// row it was on lands on the last row rather than on nothing.
+    #[test]
+    fn a_rebuilt_list_keeps_the_selection_inside_it() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let mut app = app_with_sessions(dir.path());
+        app.focus_sessions();
+        app.move_session_selection(true);
+        app.move_session_selection(true);
+        assert_eq!(
+            app.selected_session().as_deref(),
+            Some("sess-1700000000000-1")
+        );
+        // The two older files go; only this run's remains.
+        std::fs::remove_file(dir.path().join("sess-1700000000000-1.jsonl")).expect("remove");
+        std::fs::remove_file(dir.path().join("sess-1700000000000-3.jsonl")).expect("remove");
+        app.refresh_sessions();
+        assert_eq!(
+            app.selected_session().as_deref(),
+            Some("sess-1700000000000-9"),
+            "the selection outlived the list and named nothing"
+        );
+        assert!(
+            app.side.sessions[0].selected,
+            "the band is on no row at all"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The `[+]`, and what it does when a goal is running
+    //
+    // The defect this is for. The click sent `/clear` down the line channel
+    // whatever the session was doing and printed its notice either way.
+    // Mid-goal nothing reads that channel, and the next prompt drains it before
+    // waiting, so the conversation was never cleared and the transcript said it
+    // had been.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn the_plus_between_goals_submits_the_command_a_person_could_have_typed() {
+        assert_eq!(
+            clicked_new_session(false, true),
+            NewSession::Submit {
+                line: NEW_SESSION_COMMAND,
+                notice: Some(NEW_SESSION_NOTICE)
+            }
+        );
+        // And the line it submits is one the dispatcher actually knows, which
+        // is the half a spelling mistake would otherwise reach a person with.
+        assert!(crate::session_command::parse(NEW_SESSION_COMMAND).is_some());
+    }
+
+    #[test]
+    fn a_goal_in_flight_makes_the_plus_say_so_rather_than_swallowing_the_click() {
+        let ruled = clicked_new_session(true, true);
+        let NewSession::Wait(notice) = ruled else {
+            panic!("the click was submitted into a channel nobody drains: {ruled:?}");
+        };
+        assert!(
+            notice.contains("no new conversation was started"),
+            "{notice}"
+        );
+        assert!(notice.contains("Esc"), "{notice}");
+        // The ruling is `mid_goal`'s and not a second opinion held here.
+        assert!(matches!(
+            crate::session_command::mid_goal(NEW_SESSION_COMMAND, true, false),
+            crate::session_command::MidGoal::Wait(_)
+        ));
+    }
+
+    /// The refusal is never a hint: hints off must not turn a control that
+    /// refused into a silent one.
+    #[test]
+    fn hints_off_silences_the_notice_and_nothing_else() {
+        assert_eq!(
+            clicked_new_session(false, false),
+            NewSession::Submit {
+                line: NEW_SESSION_COMMAND,
+                notice: None
+            }
+        );
+        assert!(matches!(
+            clicked_new_session(true, false),
+            NewSession::Wait(_)
+        ));
+    }
+
+    #[test]
+    fn a_pick_is_the_command_a_person_could_have_typed() {
+        assert_eq!(
+            picked_session("sess-1700000000000-3", false),
+            Picked::Submit("/resume sess-1700000000000-3".into()),
+            "a picked row must go through the same command a typed line does"
+        );
+        // And that command is one the dispatcher knows, with an id after it.
+        assert!(crate::session_command::parse(&resume_line("sess-1700000000000-3")).is_some());
+    }
+
+    #[test]
+    fn a_goal_in_flight_refuses_the_pick_rather_than_queuing_it() {
+        // The alternative is worse than doing nothing: a line handed to the
+        // queue is applied when the goal ends, which is a session switch at a
+        // moment nobody chose and possibly minutes after the click.
+        let refused = picked_session("sess-1700000000000-3", true);
+        let Picked::Refused(notice) = refused else {
+            panic!("a pick during a goal was not refused: {refused:?}");
+        };
+        assert!(notice.contains("not resumed"), "{notice}");
+        assert!(notice.contains("Esc"), "{notice}");
+    }
+
+    /// The Settings screen's Provider row shows what the session is really
+    /// bound to, which the file cannot say when `--provider` was passed.
+    #[test]
+    fn the_running_provider_beats_the_stored_one_on_the_provider_row() {
+        let home = tempfile::TempDir::new().expect("tempdir");
+        let mut app = App::new((100, 40));
+        app.set_home(home.path().to_path_buf());
+        let mut stored = crate::settings::Settings::default();
+        stored.provider = Some("anthropic".into());
+        crate::settings::save(home.path(), &stored).expect("write settings");
+
+        app.set_running_provider("ollama".into());
+        app.toggle_settings();
+        assert_eq!(
+            app.settings.provider, "ollama",
+            "the screen named the file's provider, not the one this session booted with"
+        );
+        assert_eq!(
+            app.settings.provider_saved, "anthropic",
+            "the stored half stopped being the file's"
+        );
     }
 
     // -----------------------------------------------------------------------

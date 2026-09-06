@@ -141,7 +141,7 @@ async fn run(cli: cli::Cli) -> Result<()> {
     let lsp_enabled = auth::home_dir()
         .map(|h| emma::settings::load(&h))
         .and_then(|s| s.lsp.enabled);
-    let (lsp, _lsp_pool) = match lsp_enabled {
+    let (lsp, lsp_pool) = match lsp_enabled {
         Some(keys) => emma_tools_lsp::lsp_tools_with(keys),
         None => emma_tools_lsp::lsp_tools(),
     };
@@ -688,6 +688,45 @@ async fn run(cli: cli::Cli) -> Result<()> {
         // row costs a scroll region, a scroll region costs scrollback, and the
         // owner's first complaint was that he could not scroll.
         term.set_status(provider.model_id(), &cwd, &log.path());
+        // The provider this run actually booted with, which the settings file
+        // cannot say when `--provider` was passed, and the hints preference,
+        // which nothing in the frame can read for itself.
+        term.set_running_provider(&resolved.provider);
+        term.set_hints(
+            home.as_deref()
+                .map(emma::settings::load)
+                .unwrap_or_default()
+                .hints(),
+        );
+        // **The same pool the LSP tools hold**, which is a decision with
+        // evidence rather than a convenience: one server per language serves
+        // both the model and the person editing. A second rust-analyzer is
+        // about a gigabyte of memory and, more usefully, the editor's own
+        // change notifications keep the server's view current for the model's
+        // next call.
+        //
+        // Spawned here because this is where a runtime and a frame both exist.
+        // The task holds a weak handle on the frame, so it cannot keep the
+        // terminal alive past the run, and the input thread never touches
+        // anything but the channel's `try_send`.
+        if let Some(frame) = term.frame_handle() {
+            let (handle, requests) = emma::term::code_lsp::channel();
+            if let Some(f) = frame.upgrade() {
+                f.set_code_lsp(handle);
+            }
+            let weak = frame.clone();
+            let root = cwd.clone();
+            tokio::spawn(emma::term::code_lsp::run(
+                root,
+                lsp_pool.clone(),
+                requests,
+                Arc::new(move |update| {
+                    if let Some(f) = weak.upgrade() {
+                        f.code_lsp_update(update);
+                    }
+                }),
+            ));
+        }
         // A `statusLine` in the harness's settings replaces the line above for
         // the rest of the run. Resolution, containment and the timeout are the
         // harness's; `set_status_source` is the whole of the wiring. A note
