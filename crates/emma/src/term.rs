@@ -205,7 +205,7 @@ impl Term {
                 render::UNICODE
             }
         };
-        let palette = Palette::with_theme(Level::detect(color), theme);
+        let palette = Palette::live(Level::detect(color), theme);
         // Only a run that is about to draw asks for UTF-8; everything else
         // takes the console as it found it.
         let skin = Skin::new(
@@ -252,7 +252,7 @@ impl Term {
         let color = std::io::stderr().is_terminal();
         Self {
             skin: Skin::new(
-                Palette::with_theme(Level::detect(color), theme),
+                Palette::live(Level::detect(color), theme),
                 if prefers_ascii(
                     std::env::var_os("EMMA_ASCII_FRAME").is_some(),
                     console_is_utf8(),

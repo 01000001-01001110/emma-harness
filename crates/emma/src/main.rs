@@ -186,6 +186,18 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // one if it were ever wanted.
     let (theme, theme_notices) =
         emma::term::theme::load(auth::home_dir().as_deref(), Some(&harness.root), None);
+    // The stored accent, activated before the first palette is built so a
+    // saved choice applies from the first frame. Ambient rather than a field
+    // on the skin: a `Skin` is `Copy` and the viewport holds copies, so the
+    // picker that changes it later must not have to find them all.
+    if let Some(choice) = auth::home_dir()
+        .map(|h| emma::settings::load(&h))
+        .and_then(|s| s.appearance.accent)
+        .as_deref()
+        .and_then(emma::term::palette::parse_accent)
+    {
+        emma::term::palette::activate_accent_choice(choice);
+    }
     let term = Arc::new(if opts.print {
         Term::printing(theme)
     } else {
