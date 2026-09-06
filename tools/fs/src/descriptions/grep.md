@@ -5,6 +5,10 @@ Search file contents with a regular expression.
   directory.
 - `glob` optionally filters which files are searched, e.g. `**/*.rs`.
 - `case_insensitive` does what it says.
+- `include_ignored: true` also searches paths listed in `.gitignore`, such as
+  `target/` and `node_modules/`. By default they are skipped, and any result
+  that skipped one says how many and names the first few, so "no matches" is
+  never a silent claim about a tree that was not read. `.git` is never searched.
 - `output_mode` is one of:
   - `content` (default) — matching lines, prefixed `path:line:`.
   - `files_with_matches` — one path per file containing a match.

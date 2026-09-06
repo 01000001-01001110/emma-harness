@@ -30,6 +30,9 @@ chromiumoxide = "0.9"
 futures = "0.3"
 futures-util = "0.3"
 globset = "0.4"
+# ripgrep's gitignore engine, for its matcher only: tools/fs keeps its own
+# traversal so it can count and name what an ignore file removed.
+ignore = "0.4"
 # UTS-46, used in exactly one place: composing the boot warning that tells an
 # operator what their non-ASCII `domain:` rule would have to be spelled as.
 # **Not** in the matcher — see `permissions.rs`, which stays byte-for-byte
@@ -59,7 +62,6 @@ regex = "1"
 rpassword = "7"
 tempfile = "3"
 thiserror = "2"
-walkdir = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "fs"] }
 tracing = "0.1"
 url = "2"

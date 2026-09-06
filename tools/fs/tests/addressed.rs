@@ -548,25 +548,27 @@ async fn a_line_too_long_to_have_been_shown_whole_cannot_be_addressed() {
 // silently ignoring something the model asked for.
 // ---------------------------------------------------------------------------
 
-/// Delete this and `Edit` acquires a precedence rule — `lines` wins, or
-/// `old_string` wins — and a model that supplied both gets a successful edit
-/// somewhere it did not intend, with nothing in the result to say which of its
-/// two instructions was thrown away.
+/// Saying neither, or bringing the wrong form's flag, is still settled from the
+/// arguments alone. Delete this and those migrate into the file-touching half of
+/// the tool, where a missing file masks an argument mistake.
+///
+/// **Saying BOTH deliberately no longer lives here.** It used to, and the
+/// original note warned that removing it would buy a precedence rule where a
+/// model that supplied both got a successful edit somewhere it did not intend.
+/// That warning is still correct and is still honoured: there is no precedence.
+/// An address plus a quote is accepted only when the two name the same text, so
+/// nothing is thrown away, and a disagreement is still refused — with the
+/// addressed text in the message. Judging agreement needs the file, so the check
+/// cannot be settled before the disk, and that trade is deliberate: the blanket
+/// refusal fired 14 times across recorded runs and every run it touched failed.
+/// See `both_forms_that_agree_name_one_place`.
 #[tokio::test]
-async fn both_forms_at_once_or_neither_is_refused_before_the_disk() {
+async fn saying_neither_or_the_wrong_flag_is_refused_before_the_disk() {
     let sandbox = Sandbox::new();
 
     // A path that does not exist, which proves these are settled from the
     // arguments alone: if either check migrates into the file-touching half of
     // the tool, this goes red.
-    let error = sandbox
-        .err(
-            "Edit",
-            json!({ "file_path": "absent.rs", "lines": "1#0000", "old_string": "a", "new_string": "b" }),
-        )
-        .await;
-    assert!(error.detail().contains("not both"), "{error}");
-
     let error = sandbox
         .err(
             "Edit",
@@ -587,6 +589,54 @@ async fn both_forms_at_once_or_neither_is_refused_before_the_disk() {
         )
         .await;
     assert!(error.detail().contains("old_string only"), "{error}");
+}
+
+/// Both forms, agreeing. The redundancy is the model quoting the lines it just
+/// addressed, which is what they actually do; refusing it cost 14 calls across
+/// recorded runs. There is no precedence here: the two say the same thing, so
+/// the address is used and nothing the model asked for is discarded.
+#[tokio::test]
+async fn both_forms_that_agree_name_one_place() {
+    let sandbox = Sandbox::new();
+    sandbox.write_file("a.rs", "alpha\nbeta\ngamma\n");
+    // Through Read's real output, like every other test here.
+    let label = label(&sandbox, "a.rs", 2).await;
+
+    sandbox
+        .ok(
+            "Edit",
+            json!({ "file_path": "a.rs", "lines": label, "old_string": "beta", "new_string": "BETA" }),
+        )
+        .await;
+    assert_eq!(sandbox.read_file("a.rs"), "alpha\nBETA\ngamma\n");
+}
+
+/// Both forms, disagreeing. Still refused, because this is the case the original
+/// warning was about, and the message has to say which text the address covers
+/// or the model cannot tell which of its two instructions was wrong.
+#[tokio::test]
+async fn both_forms_that_disagree_are_still_refused() {
+    let sandbox = Sandbox::new();
+    sandbox.write_file("a.rs", "alpha\nbeta\ngamma\n");
+    // Through Read's real output, like every other test here.
+    let label = label(&sandbox, "a.rs", 2).await;
+
+    let error = sandbox
+        .err(
+            "Edit",
+            json!({ "file_path": "a.rs", "lines": label, "old_string": "gamma", "new_string": "X" }),
+        )
+        .await;
+    assert!(error.detail().contains("disagree"), "{error}");
+    assert!(
+        error.detail().contains("beta"),
+        "must show the addressed text: {error}"
+    );
+    assert_eq!(
+        sandbox.read_file("a.rs"),
+        "alpha\nbeta\ngamma\n",
+        "no write on refusal"
+    );
 }
 
 /// The syntax the model has to construct rather than copy, so its errors have
@@ -638,3 +688,74 @@ async fn a_replacement_that_would_change_nothing_is_refused() {
 }
 
 // endregion: Malformed calls
+
+// region: Read's labels inside the arguments
+// ---------------------------------------------------------------------------
+// Read's labels inside the arguments
+//
+// `edit.rs` grew two fallbacks for models that echo `Read`'s `12#a3f9\t` labels
+// back inside `old_string` and `new_string`. Both were pinned only by unit
+// tests over `strip_read_labels` itself, which stay green with the fallbacks
+// deleted from `by_old_string` — a helper proved correct and never called. The
+// two tests below drive the whole tool, so deleting either fallback goes red
+// here.
+// ---------------------------------------------------------------------------
+
+/// `Read`'s rendering of one line, label and tab included, exactly as a model
+/// copying out of the transcript would paste it.
+async fn labelled_line(sandbox: &Sandbox, path: &str, line: usize) -> String {
+    let outcome = sandbox.ok("Read", json!({ "file_path": path })).await;
+    let prefix = format!("{line:>6}#");
+    outcome
+        .content
+        .lines()
+        .find(|l| l.starts_with(&prefix))
+        .unwrap_or_else(|| panic!("no line {line} in:\n{}", outcome.content))
+        .to_string()
+}
+
+/// Measured 2026-08-24: nemotron-3.5-lightning:30b-mlx sent eight labelled
+/// anchors in one run and every one missed a file it had read correctly.
+/// Refusing that is technically right and useless — the model quoted the bytes
+/// the harness printed. Delete the `relabelled` fallback in `by_old_string` and
+/// this goes red; the literal path is untouched, so a correct anchor never
+/// reaches it.
+#[tokio::test]
+async fn an_old_string_carrying_reads_labels_still_finds_its_anchor() {
+    let sandbox = Sandbox::new();
+    sandbox.write_file("a.rs", "alpha\nbeta\ngamma\n");
+    let quoted = labelled_line(&sandbox, "a.rs", 2).await;
+    assert!(quoted.contains('#') && quoted.contains('\t'), "{quoted:?}");
+
+    sandbox
+        .ok(
+            "Edit",
+            json!({ "file_path": "a.rs", "old_string": quoted, "new_string": "BETA" }),
+        )
+        .await;
+    assert_eq!(sandbox.read_file("a.rs"), "alpha\nBETA\ngamma\n");
+}
+
+/// The worse half. An unmatched anchor fails loudly; a labelled *replacement*
+/// is written into the source verbatim and the file stops compiling — ornith:35b
+/// lost a run emitting `1088#f011\t    #[test]` as replacement text. Delete the
+/// `relabelled_new` fallback and this goes red with the label in the file.
+#[tokio::test]
+async fn labels_in_the_replacement_are_never_written_into_the_file() {
+    let sandbox = Sandbox::new();
+    sandbox.write_file("b.rs", "alpha\nbeta\ngamma\n");
+    // Read once so the tracker is fresh, then hand back a labelled replacement.
+    let labelled = labelled_line(&sandbox, "b.rs", 3).await;
+
+    sandbox
+        .ok(
+            "Edit",
+            json!({ "file_path": "b.rs", "old_string": "beta", "new_string": labelled }),
+        )
+        .await;
+    let after = sandbox.read_file("b.rs");
+    assert!(!after.contains('#'), "a label reached the file: {after:?}");
+    assert_eq!(after, "alpha\ngamma\ngamma\n");
+}
+
+// endregion: Read's labels inside the arguments

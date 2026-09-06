@@ -12,8 +12,8 @@ regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-walkdir.workspace = true
 emma-tool-api.workspace = true
+ignore.workspace = true
 
 # Only for `path::hard_links`. std's `MetadataExt::number_of_links` is behind
 # the unstable `windows_by_handle` feature, and the count is the one fact that

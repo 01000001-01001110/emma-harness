@@ -50,6 +50,7 @@ const KEYS: &[&str] = &[
     "case_insensitive",
     "output_mode",
     "head_limit",
+    "include_ignored",
 ];
 
 pub const MAX_OUTPUT_LINES: usize = 500;
@@ -97,7 +98,8 @@ impl Tool for Grep {
                 // the schema is where the model learns what an argument can do.
                 // The `WebFetch` defect was exactly this: the one knob the model
                 // had been told about was the one that would not have helped.
-                "head_limit": { "type": "integer", "minimum": 1, "description": format!("Lowers the number of returned lines or paths. The ceiling is {MAX_OUTPUT_LINES} and this cannot raise it.") }
+                "head_limit": { "type": "integer", "minimum": 1, "description": format!("Lowers the number of returned lines or paths. The ceiling is {MAX_OUTPUT_LINES} and this cannot raise it.") },
+                "include_ignored": { "type": "boolean", "description": "Search paths listed in .gitignore too, such as target/ and node_modules/. Off by default; every result that skipped an ignored path says so." }
             },
             "required": ["pattern"],
             "additionalProperties": false
@@ -128,6 +130,7 @@ impl Tool for Grep {
                 "Grep.head_limit must be at least 1".into(),
             ));
         }
+        args::opt_bool(args_v, NAME, "include_ignored")?;
         // A pattern that does not compile is a fact about the call, so it is
         // caught here rather than after a walk that was never going to match.
         let insensitive = args::opt_bool(args_v, NAME, "case_insensitive")?.unwrap_or(false);
@@ -212,6 +215,7 @@ impl Grep {
         let limit = requested_limit
             .map(|v| (v as usize).min(MAX_OUTPUT_LINES))
             .unwrap_or(MAX_OUTPUT_LINES);
+        let include_ignored = args::opt_bool(&args_v, NAME, "include_ignored")?.unwrap_or(false);
         let filter = match args::opt_str(&args_v, NAME, "glob")? {
             Some(g) => Some(compile_glob(g)?),
             None => None,
@@ -232,11 +236,29 @@ impl Grep {
         // `path` and `glob` together for one file matches nothing. Naming one
         // file and then filtering the set of one is a redundant call, which is
         // why it has not bitten, but it is a real asymmetry rather than a rule.
+        //
+        // A skipped ignore path is a note and not a truncation: it says what
+        // was searched and names the argument that searches the rest, where a
+        // truncation says the answer is short and cannot be completed. Naming
+        // one file directly through `path` skips nothing, so there is no note.
+        let mut ignored_note: Option<String> = None;
         let single_file = base_meta.map(|m| m.is_file()).unwrap_or(false);
         let (candidates, walk_truncated, walk_unreadable) = if single_file {
             (vec![base.clone()], false, Vec::new())
         } else {
-            let walked = walk::files(&base);
+            let walked = walk::files(
+                &base,
+                if include_ignored {
+                    walk::Ignores::Walk
+                } else {
+                    walk::Ignores::Honour
+                },
+            );
+            ignored_note = if walked.ignored > 0 {
+                Some(walk::ignored_notice(walked.ignored, &walked.ignored_names))
+            } else {
+                None
+            };
             (walked.files, walked.truncated, walked.unreadable)
         };
 
@@ -407,23 +429,46 @@ impl Grep {
             // above turns it from a fact about the tree into a fact about the
             // part of the tree that was read, so the content carries the reason
             // even here, where there is otherwise nothing to carry it.
+            //
+            // The ignore note rides here for the same reason: "not present in
+            // this repository" is a different claim once `target` was not read.
+            let mut content = String::new();
             if truncated {
-                return Ok(ToolOutcome::new(format!("[truncated: {reason}]"))
-                    .with_display(format!(
-                        "{pattern}: no matches in {} files (search incomplete)",
-                        candidates.len()
-                    ))
-                    .truncated_because(reason));
+                content.push_str(&format!("[truncated: {reason}]"));
             }
-            return Ok(ToolOutcome::new(String::new()).with_display(format!(
-                "{pattern}: no matches in {} files",
-                candidates.len()
-            )));
+            if let Some(note) = &ignored_note {
+                if !content.is_empty() {
+                    content.push('\n');
+                }
+                content.push_str(&format!("[note: {note}]"));
+            }
+            let display = match (truncated, ignored_note.is_some()) {
+                (true, _) => format!(
+                    "{pattern}: no matches in {} files (search incomplete)",
+                    candidates.len()
+                ),
+                (false, true) => format!(
+                    "{pattern}: no matches in {} files (ignored paths not searched)",
+                    candidates.len()
+                ),
+                (false, false) => {
+                    format!("{pattern}: no matches in {} files", candidates.len())
+                }
+            };
+            let outcome = ToolOutcome::new(content).with_display(display);
+            return Ok(if truncated {
+                outcome.truncated_because(reason)
+            } else {
+                outcome
+            });
         }
 
         let mut content = lines.join("\n");
         if truncated {
             content.push_str(&format!("\n[truncated: {reason}]"));
+        }
+        if let Some(note) = &ignored_note {
+            content.push_str(&format!("\n[note: {note}]"));
         }
 
         let outcome = ToolOutcome::new(content).with_display(format!(

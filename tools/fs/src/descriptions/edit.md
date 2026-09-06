@@ -1,5 +1,6 @@
 Change part of a file. Say **where** in one of two ways — `lines` or
-`old_string` — and never both.
+`old_string`. Sending both is accepted only when they name the same text; if
+they disagree the edit is refused and the message quotes the addressed lines.
 
 ## `lines` — address by the label `Read` printed
 
@@ -42,6 +43,12 @@ of the file.
   belong. Use `lines`, which is checked at a position, or `Read` again.
 
 ## Both forms
+
+If you send `lines` **and** `old_string`, the address is what is used, and the
+quote is only checked against it — so quoting the lines you just addressed is
+harmless redundancy rather than an error. `Read`'s `<number>#<hash>` labels are
+stripped before that comparison, so a quote copied straight out of `Read` still
+agrees.
 
 The file must have been read in this session, for the same reason `Write`
 requires it: an anchor that matched a file you have not seen is a coincidence,

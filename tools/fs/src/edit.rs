@@ -56,10 +56,20 @@
 //! the addressing scheme here can only be driven by a model that has seen a
 //! `Read` from *this* harness in *this* conversation. Removing the familiar form
 //! would break the first edit of every session and every edit made from context
-//! the model was handed rather than read. So: one tool, two forms, mutually
-//! exclusive, and a call that supplies both or neither is refused rather than
-//! resolved by precedence — precedence would mean silently ignoring one of two
-//! things the model asked for.
+//! the model was handed rather than read. So: one tool, two forms, and a call
+//! that supplies **neither** is refused.
+//!
+//! A call that supplies **both** used to be refused as well, and that was
+//! wrong. There is still no precedence — picking one silently would edit a
+//! place the model did not name — but the usual reason a model sends both is
+//! that it addressed the lines and then quoted the same lines back, which is
+//! redundant rather than contradictory. Measured 2026-08-24: the blanket
+//! refusal fired 14 times across recorded runs and every run it touched went on
+//! to fail. So the pair is accepted when the two name the same text, with the
+//! address winning because it is the hash-checked one, and a genuine
+//! disagreement is still refused — with the addressed text in the message so
+//! the model can see which of its two instructions was wrong. Deciding that
+//! needs the file, so it happens in `invoke` rather than `validate_args`.
 //!
 //! # What the hash actually buys, given the tracker already exists
 //!
@@ -195,11 +205,11 @@ impl Tool for Edit {
                 },
                 "old_string": {
                     "type": "string",
-                    "description": "Exact text to replace, including indentation. Must occur exactly once unless replace_all is set. Give this or lines, not both."
+                    "description": "Exact text to replace, including indentation. Must occur exactly once unless replace_all is set. Give this or lines; giving both is accepted only when they quote the same text."
                 },
                 "lines": {
                     "type": "string",
-                    "description": "The lines to replace, addressed as printed by Read: \"12#a3f9\" for one line, or \"12#a3f9-15#b7c1\" for an inclusive range. Give this or old_string, not both."
+                    "description": "The lines to replace, addressed as printed by Read: \"12#a3f9\" for one line, or \"12#a3f9-15#b7c1\" for an inclusive range. Give this or old_string; giving both is accepted only when they name the same text."
                 },
                 "new_string": {
                     "type": "string",
@@ -238,14 +248,25 @@ impl Tool for Edit {
         // `invoke`. Nothing below needs the file to exist, and a test proves it
         // by pointing these at a path that does not.
         match (old, lines) {
-            // Refused rather than resolved by precedence. Picking one silently
-            // means ignoring something the model asked for, and the model would
-            // see a successful edit in a place it did not expect.
-            (Some(_), Some(_)) => Err(ToolError::BadArguments(
-                "Edit takes old_string or lines, not both; they are two ways of \
-                 saying where, and supplying both does not say where twice"
-                    .into(),
-            )),
+            // Both forms supplied. Still never resolved by precedence: picking
+            // one silently would edit a place the model did not name. But
+            // refusing here was wrong too, because the usual case is that the
+            // two AGREE and the model was being redundant rather than
+            // contradictory. Measured 2026-08-24: this refusal fired 14 times
+            // across recorded runs and every run it touched went on to fail.
+            //
+            // So the decision moves to `invoke`, which has the file and can ask
+            // whether they agree. Deciding here is impossible on purpose:
+            // `validate_args` never reads the file, and a test pins that by
+            // pointing it at a path that does not exist.
+            (Some(old), Some(_)) => {
+                if old.is_empty() {
+                    return Err(ToolError::BadArguments(
+                        "Edit.old_string is empty; use Write to create a file".into(),
+                    ));
+                }
+                Ok(())
+            }
             (None, None) => Err(ToolError::BadArguments(
                 "Edit needs somewhere to change: old_string with the exact text \
                  to replace, or lines with an address from Read such as 12#a3f9"
@@ -328,9 +349,31 @@ impl Edit {
                 // threading the parsed value out of a validator whose signature
                 // the `Tool` trait fixes, and parsing a fifteen-byte string
                 // twice is cheaper than that contortion.
-                let address = hashline::parse(address)
+                let parsed = hashline::parse(address)
                     .map_err(|why| ToolError::BadArguments(format!("Edit.lines {why}")))?;
-                self.by_address(ctx, &root, &file, raw, address, new)
+                // An `old_string` alongside the address is only a problem if the
+                // two disagree. If the addressed lines are the text the model
+                // quoted, both name the same place and the address wins because
+                // it is checked against content hashes.
+                if let Some(old) = args::opt_str(&args_v, NAME, "old_string")? {
+                    let body = std::fs::read_to_string(&file).map_err(|e| {
+                        ToolError::Failed(format!("{raw} could not be read for editing: {e}"))
+                    })?;
+                    let quoted = strip_read_labels(old).unwrap_or_else(|| old.to_string());
+                    let addressed = addressed_text(&body, &parsed);
+                    let agree = addressed
+                        .as_deref()
+                        .is_some_and(|at| at.trim_end() == quoted.trim_end());
+                    if !agree {
+                        return Err(ToolError::BadArguments(format!(
+                            "Edit.lines addresses {address} but Edit.old_string quotes \
+                             different text, so the two disagree about where to edit. \
+                             The addressed lines are:\n{}\nDrop whichever one is wrong.",
+                            addressed.as_deref().unwrap_or("(out of range)")
+                        )));
+                    }
+                }
+                self.by_address(ctx, &root, &file, raw, parsed, new)
             }
             None => {
                 let old = args::req_str(&args_v, NAME, "old_string")?;
@@ -393,6 +436,23 @@ impl Edit {
 
         let before = std::fs::read_to_string(file)
             .map_err(|e| ToolError::Failed(format!("{raw} could not be read for editing: {e}")))?;
+
+        // Try the bytes as given, then the same anchor with Read's labels
+        // removed. Order matters: a correct anchor never reaches the fallback,
+        // so nothing that already matched changes shape here.
+        let relabelled = (!before.contains(old))
+            .then(|| strip_read_labels(old))
+            .flatten()
+            .filter(|stripped| before.contains(stripped.as_str()));
+        let old = relabelled.as_deref().unwrap_or(old);
+
+        // The same annotation in `new_string` is worse than in `old_string`: an
+        // unmatched anchor fails loudly, but a labelled replacement is written
+        // verbatim into the source and the file stops compiling. Measured
+        // 2026-08-24: ornith:35b lost a run to exactly this, emitting
+        // "1088#f011\t    #[test]" as replacement text.
+        let relabelled_new = strip_read_labels(new);
+        let new = relabelled_new.as_deref().unwrap_or(new);
 
         // `str::matches` counts non-overlapping occurrences left to right, which
         // is the same walk `replacen`/`replace` below will make — so the count
@@ -785,15 +845,6 @@ fn moved(raw: &str, anchor: &hashline::Anchor, content: &str, lines: &[&str]) ->
     }
 }
 
-/// What a successful addressed edit says.
-///
-/// The labels on the replacement lines are the part that earns its keep: after
-/// this edit every line number below `first` has moved, and a model that makes
-/// its next edit from the numbers in its earlier `Read` will aim it at the wrong
-/// place. Handing back the new numbers *and* the new hashes means the next edit
-/// needs no `Read` at all — the same saving the scheme makes on the first edit,
-/// extended to the second. The shift is stated in words as well, because it is
-/// what the model needs for the lines it is *not* being handed.
 /// The sentence a write appends when it has just broken a hard link.
 ///
 /// **On `content` and not on `display`.** The model is the one that has to know
@@ -810,6 +861,15 @@ fn link_note(shown: &str, severed: Option<String>) -> String {
         .unwrap_or_default()
 }
 
+/// What a successful addressed edit says.
+///
+/// The labels on the replacement lines are the part that earns its keep: after
+/// this edit every line number below `first` has moved, and a model that makes
+/// its next edit from the numbers in its earlier `Read` will aim it at the wrong
+/// place. Handing back the new numbers *and* the new hashes means the next edit
+/// needs no `Read` at all — the same saving the scheme makes on the first edit,
+/// extended to the second. The shift is stated in words as well, because it is
+/// what the model needs for the lines it is *not* being handed.
 fn report(
     shown: &str,
     first: usize,
@@ -867,6 +927,217 @@ fn report(
     }
 
     ToolOutcome::new(content).with_display(summary)
+}
+
+/// The text an address points at, or `None` if it runs past the end of the file.
+///
+/// Used only to decide whether an `old_string` supplied alongside `lines` agrees
+/// with it. The authoritative content check still happens in `by_address`
+/// against the stored hashes; this is the cheaper question of whether the model
+/// named one place or two.
+fn addressed_text(body: &str, address: &Address) -> Option<String> {
+    let lines: Vec<&str> = body.split('\n').collect();
+    let first = address.first();
+    let last = address.last();
+    if first == 0 || last > lines.len() || first > last {
+        return None;
+    }
+    Some(lines[first - 1..last].join("\n"))
+}
+
+/// Strip `Read`'s line labels from an anchor the model quoted with them attached.
+///
+/// `Read` prints every line as `12#a3f9\t<text>` so an addressed edit can name a
+/// line by content. The labels are not in the file, and the error for a missed
+/// anchor already says so, but some models echo the annotation back inside
+/// `old_string` anyway. Measured 2026-08-24: nemotron-3.5-lightning:30b-mlx sent
+/// eight anchors in one run and every one carried labels, so every one missed a
+/// file it had read correctly. Refusing that is technically right and useless:
+/// the model quoted the bytes we printed.
+///
+/// Returns `Some` only when *every* non-empty line carries a label, so a real
+/// anchor that happens to contain a `#` is never rewritten. Callers try the
+/// literal text first and fall back to this, which keeps correct input on the
+/// path it already took.
+fn strip_read_labels(anchor: &str) -> Option<String> {
+    let mut out = String::with_capacity(anchor.len());
+    let mut labelled = 0usize;
+    for (i, line) in anchor.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        if line.is_empty() {
+            continue;
+        }
+        let rest = strip_one_label(line)?;
+        labelled += 1;
+        out.push_str(rest);
+    }
+    (labelled > 0).then_some(out)
+}
+
+/// One line's label, if it has one: optional digits, `#`, hex, then a tab.
+fn strip_one_label(line: &str) -> Option<&str> {
+    let body = line.trim_start_matches(' ');
+    let (num, rest) =
+        body.split_at(body.len() - body.trim_start_matches(|c: char| c.is_ascii_digit()).len());
+    let _ = num;
+    let rest = rest.strip_prefix('#')?;
+    let hex_len = rest.chars().take_while(|c| c.is_ascii_hexdigit()).count();
+    if hex_len == 0 {
+        return None;
+    }
+    let after = &rest[hex_len..];
+    // Read prints a blank source line as its label and nothing else, so a label
+    // with no tab after it is an empty line rather than a malformed one.
+    if after.is_empty() {
+        return Some("");
+    }
+    after.strip_prefix('\t')
+}
+
+#[cfg(test)]
+mod label_tolerance_tests {
+    use super::{strip_one_label, strip_read_labels};
+
+    /// The exact shape nemotron-3.5-lightning sent, hashes without line numbers.
+    #[test]
+    fn labels_without_line_numbers_are_stripped() {
+        let quoted = "#953c\tfn parse_num_ctx(raw: Option<&str>) -> u32 {\n#40e5\t    raw.and_then(|v| v.parse().ok())";
+        assert_eq!(
+            strip_read_labels(quoted).unwrap(),
+            "fn parse_num_ctx(raw: Option<&str>) -> u32 {\n    raw.and_then(|v| v.parse().ok())"
+        );
+    }
+
+    /// The full form Read actually prints: padded number, hash, tab.
+    #[test]
+    fn labels_with_line_numbers_are_stripped() {
+        let quoted = "   307#0c71\t        \"num_predict\": request.max_tokens,";
+        assert_eq!(
+            strip_read_labels(quoted).unwrap(),
+            "        \"num_predict\": request.max_tokens,"
+        );
+    }
+
+    /// A real anchor is never rewritten, even when it contains a `#`.
+    #[test]
+    fn unlabelled_text_is_left_alone() {
+        assert_eq!(strip_read_labels("let x = 1; // #hash\tnot a label"), None);
+        assert_eq!(strip_read_labels("fn main() {}"), None);
+        assert_eq!(strip_read_labels("#[test]\nfn t() {}"), None);
+    }
+
+    /// Partial labelling is refused: one bare line means this is not an anchor
+    /// that was copied wholesale out of Read, and guessing would corrupt it.
+    #[test]
+    fn a_single_unlabelled_line_refuses_the_whole_anchor() {
+        assert_eq!(strip_read_labels("#953c\tlabelled\nnot labelled"), None);
+    }
+
+    /// Blank lines inside a quoted range carry no label and must not veto it.
+    #[test]
+    fn blank_lines_do_not_veto() {
+        assert_eq!(
+            strip_read_labels("#a1b2\tfirst\n\n#c3d4\tthird").unwrap(),
+            "first\n\nthird"
+        );
+    }
+
+    #[test]
+    fn a_label_needs_hex_and_a_tab() {
+        assert_eq!(strip_one_label("#zzzz\ttext"), None);
+        assert_eq!(strip_one_label("#a1b2 text"), None);
+        assert_eq!(strip_one_label("#a1b2\ttext"), Some("text"));
+    }
+}
+
+#[cfg(test)]
+mod replacement_label_tests {
+    use super::strip_read_labels;
+
+    /// The shape that cost ornith:35b a run: labels inside the REPLACEMENT,
+    /// which get written into the file and break the build.
+    #[test]
+    fn labels_in_replacement_text_are_stripped() {
+        let written = "1088#f011\t    #[test]\n1089#a39b\t    fn t() {}";
+        assert_eq!(
+            strip_read_labels(written).unwrap(),
+            "    #[test]\n    fn t() {}"
+        );
+    }
+
+    /// Read prints a blank source line as its label alone, with no tab. That is
+    /// an empty line, and treating it as malformed vetoed the whole block.
+    #[test]
+    fn a_label_with_no_tab_is_a_blank_line() {
+        assert_eq!(
+            strip_read_labels("1087#4b82\n1088#f011\t    #[test]").unwrap(),
+            "\n    #[test]"
+        );
+    }
+
+    /// Ordinary replacement text is never rewritten.
+    #[test]
+    fn normal_replacement_text_is_untouched() {
+        assert_eq!(strip_read_labels("    let x = 1;\n    x + 1"), None);
+        assert_eq!(strip_read_labels("#[derive(Debug)]\nstruct S;"), None);
+    }
+}
+
+#[cfg(test)]
+mod both_forms_tests {
+    use super::{addressed_text, strip_read_labels};
+    use crate::hashline;
+
+    fn addr(s: &str) -> hashline::Address {
+        hashline::parse(s).expect("test address parses")
+    }
+
+    /// The redundant-but-agreeing case, which was refused 14 times across
+    /// recorded runs and failed every run it touched.
+    #[test]
+    fn an_address_and_a_matching_quote_name_one_place() {
+        let body = "alpha\nbeta\ngamma";
+        let a = addr(&format!(
+            "2#{}",
+            hashline::short(hashline::hash_line("beta"))
+        ));
+        assert_eq!(addressed_text(body, &a).as_deref(), Some("beta"));
+    }
+
+    /// A range picks up every line inclusive, so agreement is checkable over
+    /// more than one line.
+    #[test]
+    fn a_range_returns_every_addressed_line() {
+        let body = "alpha\nbeta\ngamma\ndelta";
+        let a = addr(&format!(
+            "2#{}-3#{}",
+            hashline::short(hashline::hash_line("beta")),
+            hashline::short(hashline::hash_line("gamma"))
+        ));
+        assert_eq!(addressed_text(body, &a).as_deref(), Some("beta\ngamma"));
+    }
+
+    /// Past the end of the file is None rather than a panic, so the disagreement
+    /// message can say "(out of range)" instead of the tool dying.
+    #[test]
+    fn an_address_past_the_end_is_none() {
+        let body = "only\n";
+        let a = addr(&format!(
+            "9#{}",
+            hashline::short(hashline::hash_line("nope"))
+        ));
+        assert_eq!(addressed_text(body, &a), None);
+    }
+
+    /// Agreement is judged after label stripping, because a model that quotes
+    /// the address usually quotes Read's rendering of it too.
+    #[test]
+    fn agreement_is_judged_after_labels_are_stripped() {
+        let quoted = "2#a1b2\tbeta";
+        assert_eq!(strip_read_labels(quoted).unwrap(), "beta");
+    }
 }
 
 // endregion: The addressed edit

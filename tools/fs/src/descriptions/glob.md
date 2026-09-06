@@ -6,7 +6,11 @@ Find files by path pattern, newest first.
   directory. It defaults to the working directory itself.
 - Results are files, not directories, sorted by modification time descending so
   the most recently touched work appears first.
-- `.git` is not searched.
+- Paths listed in `.gitignore` are not searched by default, which is what keeps
+  a search from spending its whole budget inside `target/`. Every result that
+  skipped one says how many and names the first few.
+- `include_ignored: true` searches them anyway, build output included.
+- `.git` is never searched, under either setting.
 
 Matching nothing is a successful result with an empty list, not an error.
 
