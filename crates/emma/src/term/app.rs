@@ -114,6 +114,10 @@ pub struct App {
     memory: Option<super::memory::MemoryView>,
     /// The Harness dashboard. Same law as memory: read fresh on open.
     harness: Option<super::harness::HarnessView>,
+    /// The Help page. `Some` while open, and it holds a scroll offset and
+    /// nothing else: the text is `term::help::SECTIONS` and is read at paint
+    /// time, so the page cannot show a stale copy of it.
+    help: Option<super::help::HelpView>,
     /// What SESSIONS is a list of, kept from `set_identity` so the list can be
     /// rebuilt later without the shell handing the same three facts in again.
     scope: Option<SessionScope>,
@@ -232,6 +236,7 @@ impl App {
             settings_open: false,
             memory: None,
             harness: None,
+            help: None,
             scope: None,
             sessions_add: None,
             chat_rect: r.chat,
@@ -299,6 +304,7 @@ impl App {
         if self.settings_open {
             self.memory = None;
             self.harness = None;
+            self.help = None;
             // The live rows read disk truth on every open — memory's law.
             // model/cwd/version stay paint-time: the `View` owns them.
             let stored = self
@@ -648,11 +654,48 @@ impl App {
             self.memory_cwd = cwd.to_string();
             self.settings_open = false;
             self.harness = None;
+            self.help = None;
         }
     }
 
     pub fn memory_open(&self) -> bool {
         self.memory.is_some()
+    }
+
+    /// Open or close the Help page.
+    ///
+    /// One main-region occupant at a time, the rule the other three obey: it
+    /// closes them and they close it. Opening resets the scroll, because a
+    /// page reopened halfway down is a page that looks empty.
+    pub fn toggle_help(&mut self) {
+        if self.help.take().is_none() {
+            self.help = Some(super::help::HelpView::default());
+            self.settings_open = false;
+            self.memory = None;
+            self.harness = None;
+        }
+    }
+
+    pub fn help_open(&self) -> bool {
+        self.help.is_some()
+    }
+
+    /// One key, while the Help page is open. `false` lets the global layer
+    /// (Ctrl+/, Ctrl-C, the Alt layer) keep it, which is what makes the chord
+    /// that opened the page the chord that closes it.
+    pub fn help_key(&mut self, key: ratatui::crossterm::event::KeyEvent) -> bool {
+        use super::help::HelpAction;
+        let Some(view) = self.help.as_mut() else {
+            return false;
+        };
+        match super::help::handle_key(view, key) {
+            HelpAction::None => false,
+            HelpAction::Close => {
+                self.help = None;
+                true
+            }
+            HelpAction::Held | HelpAction::Scrolled => true,
+        }
     }
 
     /// Alt+h. Reads real session history on every open — the dashboard shows
@@ -667,6 +710,7 @@ impl App {
             self.harness_cwd = cwd.to_string();
             self.settings_open = false;
             self.memory = None;
+            self.help = None;
         }
     }
 
@@ -1105,7 +1149,7 @@ impl App {
         // paint, and anything highlighted goes with it. Settings and Memory
         // are out of scope by the owner's decision, and "out of scope" has to
         // mean the mouse cannot reach them, not that nobody has tried.
-        if self.settings_open || self.memory.is_some() {
+        if self.settings_open || self.memory.is_some() || self.help.is_some() {
             self.chat_rect = Rect::new(0, 0, 0, 0);
             self.scrollbar = None;
             self.bar_grab = None;
@@ -1139,6 +1183,18 @@ impl App {
                 None
             } else if let Some(mv) = &self.memory {
                 super::memory::render(r.main, buf, mv, &view.skin);
+                None
+            } else if let Some(hv) = &self.help {
+                // The paint is what knows how tall the window is, so it hands
+                // back the page size and the scroll ceiling, and the view is
+                // clamped to what a smaller terminal has just made
+                // unreachable: the Run Graph's `canvas_rows` rule.
+                let m = super::help::render(r.main, buf, hv, &view.skin);
+                if let Some(hv) = self.help.as_mut() {
+                    hv.page_rows = m.page_rows;
+                    hv.max_scroll = m.max_scroll;
+                    hv.scroll = hv.scroll.min(m.max_scroll);
+                }
                 None
             } else if let Some(hv) = &self.harness {
                 // The paint reports where the clickable controls landed;

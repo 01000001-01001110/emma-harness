@@ -530,6 +530,10 @@ pub enum PaneKey {
     Top,
     Tail,
     Sidebar,
+    /// Open or close the Help page. Ctrl+/ anywhere, `?` on an empty box, and
+    /// `/help` typed. A toggle rather than an open: a page whose chord only
+    /// opens it is a page people close by quitting.
+    Help,
 }
 
 /// The pages that take keys while they are open, in the order the reader
@@ -561,8 +565,8 @@ pub trait PageKeys {
 }
 
 impl PageKeys for Arc<Frame> {
-    fn help_key(&self, _key: KeyEvent) -> bool {
-        false
+    fn help_key(&self, key: KeyEvent) -> bool {
+        Frame::help_key(self, key)
     }
     fn harness_key(&self, key: KeyEvent) -> bool {
         Frame::harness_key(self, key)
@@ -607,6 +611,48 @@ pub fn pane_key(key: KeyEvent, editor_empty: bool, prompt_pending: bool) -> Opti
         return None;
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    // Ctrl+/ is not one byte everywhere. A terminal sends 0x1F for it, and
+    // crossterm reports that as `/`, as `_` or as `7` depending on the
+    // keyboard and the terminal. All three are the same keystroke to the
+    // person pressing it, so they are folded to `/` before anything looks a
+    // chord up. Otherwise "Ctrl+/ opens help" is true on one terminal and
+    // false on the next.
+    let key = match key.code {
+        KeyCode::Char('_' | '7') if ctrl => KeyEvent::new(KeyCode::Char('/'), key.modifiers),
+        _ => key,
+    };
+    // The rebindable layer, consulted before the compiled arms below.
+    //
+    // **The arms stay.** They are the compiled defaults, and with no
+    // keybindings file the map returns exactly what they match, so a default
+    // run takes the path it always did. A file that moves a chord does two
+    // things here: `lookup` fires the action on its new chord, and `shadowed`
+    // closes the old one, because a rebind that only *added* a chord would
+    // leave "I moved it" meaning "there are two now".
+    if let KeyCode::Char(c) = key.code {
+        let map = super::keymap::active();
+        if let Some(action) = map.lookup(alt, ctrl, c) {
+            // Every rebindable action is dead under a pending question, the
+            // rule the compiled arms below obey.
+            if !prompt_pending {
+                // A chord with a modifier is never a character somebody was
+                // typing, so the editor-empty condition applies only to a
+                // bare key: `?` waits for an empty box, Ctrl+/ does not.
+                if let Some(bound) = rebound(action, editor_empty || alt || ctrl) {
+                    return Some(bound);
+                }
+            }
+            // Returning `None` here is not "the key is dead": `tool_key` runs
+            // after this function and still answers the Alt layer. It means
+            // only that this layer does not own the chord.
+            if map.customised {
+                return None;
+            }
+        } else if map.shadowed(alt, ctrl, c) {
+            return None;
+        }
+    }
     match key.code {
         KeyCode::PageUp => Some(PaneKey::PageUp),
         KeyCode::PageDown => Some(PaneKey::PageDown),
@@ -615,6 +661,34 @@ pub fn pane_key(key: KeyEvent, editor_empty: bool, prompt_pending: bool) -> Opti
         KeyCode::Home if editor_empty => Some(PaneKey::Top),
         KeyCode::End if editor_empty => Some(PaneKey::Tail),
         KeyCode::Char('b') if ctrl && !prompt_pending => Some(PaneKey::Sidebar),
+        // The compiled default of the `help` action. It carries a modifier,
+        // so unlike `?` it has no editor-empty condition: Ctrl+/ mid-sentence
+        // is not a character anybody meant to type.
+        KeyCode::Char('/') if ctrl && !alt && !prompt_pending => Some(PaneKey::Help),
+        KeyCode::Char('?') if !ctrl && !alt && !prompt_pending && editor_empty => {
+            Some(PaneKey::Help)
+        }
+        _ => None,
+    }
+}
+
+/// One resolved keymap action as the pane key it stands for.
+///
+/// Help keeps its condition: bound to a bare key it is only a pane key on an
+/// empty editor, because with text in the box a `?` is a question mark. Its
+/// compiled chord is Ctrl+/, which carries a modifier and so is
+/// unconditional; the caller resolves that and passes the answer in.
+///
+/// **Only two actions are this layer's today.** Settings, Memory, Harness and
+/// the three launches are answered by `tool_key`, `Frame::launch_tool` and
+/// `usertools::catalogue`, which do not consult the keymap yet, so moving one
+/// of those in `keybindings.json` is read but not obeyed. That gap is
+/// recorded on the docs, and closing it is the sidebar session-list package.
+fn rebound(action: super::keymap::Action, unconditional: bool) -> Option<PaneKey> {
+    use super::keymap::Action;
+    match action {
+        Action::Sidebar => Some(PaneKey::Sidebar),
+        Action::Help if unconditional => Some(PaneKey::Help),
         _ => None,
     }
 }
@@ -762,6 +836,17 @@ impl LineSource {
                             PaneKey::Top => thread_frame.scroll_top(),
                             PaneKey::Tail => thread_frame.scroll_tail(),
                             PaneKey::Sidebar => thread_frame.toggle_sidebar(),
+                            // The page when the run has one, the text when it
+                            // does not: a plain run keeps exactly what a typed
+                            // /help always did.
+                            PaneKey::Help => {
+                                if !thread_frame.toggle_help() {
+                                    thread_frame.scroll_tail();
+                                    if tx.blocking_send("/help".to_string()).is_err() {
+                                        break;
+                                    }
+                                }
+                            }
                         }
                         continue;
                     }

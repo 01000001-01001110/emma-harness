@@ -780,6 +780,19 @@ impl Term {
         self.side(self.skin.ending(message, ok, iterations, tokens));
     }
 
+    /// Open the Help page, and say whether there was one to open.
+    ///
+    /// `false` on every path with no viewport (a pipe, `-p`, `EMMA_NO_FRAME`)
+    /// and the caller then prints `cli::session_help()` instead. Both come
+    /// from `term::help::SECTIONS`, so the two answers to `/help` are the same
+    /// text in two shapes rather than two texts.
+    pub fn open_help(&self) -> bool {
+        match (&self.frame, self.enabled) {
+            (Some(frame), true) => frame.toggle_help(),
+            _ => false,
+        }
+    }
+
     pub fn goal_started(&self, goal: &str) {
         // Above the echoed goal, not below it: the gap belongs between one
         // turn and the next, and the answer to a goal is part of the same

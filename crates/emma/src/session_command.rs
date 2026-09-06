@@ -328,7 +328,11 @@ pub enum Flow {
 pub async fn run(cmd: SessionCommand, s: &mut Session<'_, '_>) -> Flow {
     match cmd {
         SessionCommand::Exit => return Flow::Exit,
-        SessionCommand::Help => say(s.term, crate::cli::SESSION_HELP),
+        SessionCommand::Help => {
+            if !s.term.open_help() {
+                say(s.term, &crate::cli::session_help());
+            }
+        }
         SessionCommand::Misuse { name, usage } => say(s.term, &format!("/{name} takes:\n{usage}")),
         SessionCommand::Agents => {
             match capture(|out| crate::commands::agents(s.session_dir, out)) {

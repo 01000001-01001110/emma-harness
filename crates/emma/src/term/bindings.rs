@@ -421,6 +421,11 @@ pub static CHAT: Table = Table {
             ctx: Ctx::IDLE,
         },
         Binding {
+            trigger: Trigger::Bound(super::keymap::Action::Help),
+            what: "help",
+            ctx: Ctx::IDLE,
+        },
+        Binding {
             trigger: Trigger::AltAny,
             what: "tool or page",
             ctx: Ctx::IDLE,
@@ -455,6 +460,26 @@ pub static CHAT: Table = Table {
 /// not here fails `every_handled_key_is_drawn_or_deliberately_hidden`; a row
 /// here whose key stopped working fails `nothing_hidden_is_already_dead`.
 pub static UNDRAWN: &[(Chord, Ctx, &str)] = &[
+    (
+        Chord::plain(KeyCode::Char('?')),
+        Ctx::IDLE,
+        "open the Help page from an empty box. The drawn chord is Ctrl+/, which          works with text in the box too; `?` is the fork's second door for          people who reach for it, and the Help page's own text names both.",
+    ),
+    (
+        Chord::plain(KeyCode::Char('?')),
+        Ctx::IDLE.with_page(),
+        "the same key over an open page, where Ctrl+/ also answers.",
+    ),
+    (
+        Chord::ctrl('7'),
+        Ctx::IDLE,
+        "Ctrl+/ as some terminals report it. The 0x1F byte a terminal sends for          Ctrl+/ reaches crossterm as `/`, `_` or `7` depending on keyboard and          terminal, and `pane_key` folds all three to `/` before any lookup, so          this is the drawn Ctrl+/ under another name rather than a key.",
+    ),
+    (
+        Chord::ctrl('_'),
+        Ctx::IDLE,
+        "Ctrl+/ as other terminals report it; see Ctrl+7.",
+    ),
     (
         Chord::ctrl('u'),
         Ctx::IDLE.typing(),
@@ -598,14 +623,19 @@ mod tests {
     use crate::term::menu::Menu;
 
     /// The keymap is process-wide state; serialise around tests that install one.
+    /// Callers hold `keymap::test_lock()` already; the lock is not reentrant.
     fn restore_keymap() {
         keymap::install(keymap::Keymap::compiled());
     }
 
     fn with_keymap(json: &str, f: impl FnOnce()) {
+        let _lock = keymap::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         keymap::install(keymap::parse(json));
         f();
-        restore_keymap();
+        // Not `restore_keymap()`: the lock above is held and is not reentrant.
+        keymap::install(keymap::Keymap::compiled());
     }
 
     fn chord_for_action(action: KeyAction) -> Chord {
@@ -736,6 +766,12 @@ mod tests {
     /// table should have had — four of its six rows would fail it.
     #[test]
     fn every_drawn_key_is_answered() {
+        // Reads the active keymap through `Trigger::Bound`, so it holds the
+        // lock every installing test holds, and starts from the compiled map.
+        let _lock = keymap::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        keymap::install(keymap::Keymap::compiled());
         restore_keymap();
         for binding in CHAT.drawn {
             match binding.trigger {
@@ -765,9 +801,14 @@ mod tests {
                          table exists to make impossible)",
                         chord.label()
                     );
+                    let expected = match action {
+                        KeyAction::Sidebar => PaneKey::Sidebar,
+                        KeyAction::Help => PaneKey::Help,
+                        other => panic!("{other:?} is drawn as a bound row and has no pane key"),
+                    };
                     assert!(
-                        matches(&got, Expect::Pane(PaneKey::Sidebar)),
-                        "{} is drawn as sidebar and reaches {got:?} instead",
+                        matches(&got, Expect::Pane(expected)),
+                        "{} is drawn as {action:?} and reaches {got:?} instead",
                         chord.label()
                     );
                 }
@@ -800,6 +841,7 @@ mod tests {
     /// for.
     #[test]
     fn a_rebound_action_updates_the_drawn_label() {
+        // `with_keymap` below takes the lock; taking it here too would deadlock.
         let sidebar = CHAT
             .drawn
             .iter()
@@ -821,6 +863,12 @@ mod tests {
     /// is what stops the next `Ctrl-U` from happening.
     #[test]
     fn every_handled_key_is_drawn_or_deliberately_hidden() {
+        // Reads the active keymap through `Trigger::Bound`, so it holds the
+        // lock every installing test holds, and starts from the compiled map.
+        let _lock = keymap::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        keymap::install(keymap::Keymap::compiled());
         let mut orphans: Vec<String> = Vec::new();
         for key in every_keystroke() {
             for ctx in every_context() {
@@ -890,6 +938,28 @@ mod tests {
     /// A terminal may eat `Ctrl+Shift+PgUp` before Emma sees it; that is on
     /// the human certification list, not here.
     fn is_a_tolerated_spelling(key: KeyEvent, ctx: Ctx, got: &(Answer, String, usize)) -> bool {
+        // A capital with a modifier is Shift held on the same key, spelled by
+        // the terminal in the character rather than in the modifier bits
+        // (Ctrl+Shift+B arrives as `Char('B')` with CONTROL). The keymap
+        // lookup folds case, so the chord answers; it is the Shift tolerance
+        // above in another spelling, and is tolerated on the same terms: the
+        // lower-case chord must answer identically and be accounted for.
+        if let KeyCode::Char(c) = key.code {
+            if c.is_ascii_uppercase() && !key.modifiers.is_empty() {
+                let lowered = Chord {
+                    code: KeyCode::Char(c.to_ascii_lowercase()),
+                    mods: key.modifiers,
+                };
+                let theirs = outcome(lowered.press(), ctx);
+                // The lowered chord may itself carry a spare Shift bit (some
+                // terminals send both), so it gets the modifier tolerance too.
+                if theirs == *got
+                    && (accounted(lowered) || is_a_tolerated_spelling(lowered.press(), ctx, got))
+                {
+                    return true;
+                }
+            }
+        }
         let held = [
             KeyModifiers::CONTROL,
             KeyModifiers::ALT,
@@ -1027,6 +1097,12 @@ mod tests {
     /// and should be argued rather than slipped in.
     #[test]
     fn the_printed_label_comes_from_the_chord() {
+        // Reads the active keymap through `Trigger::Bound`, so it holds the
+        // lock every installing test holds, and starts from the compiled map.
+        let _lock = keymap::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        keymap::install(keymap::Keymap::compiled());
         assert_eq!(Chord::ctrl('b').label(), "Ctrl+B");
         assert_eq!(Chord::plain(KeyCode::Char('/')).label(), "/");
         assert_eq!(Chord::plain(KeyCode::PageUp).label(), "PgUp");
@@ -1036,7 +1112,7 @@ mod tests {
                 .map(|b| b.label())
                 .collect::<Vec<_>>()
                 .join(" "),
-            "/ Enter Esc PgUp/PgDn Ctrl+Up/Dn Home/End Ctrl+B Alt+key Ctrl+C Ctrl+D Shift+drag",
+            "/ Enter Esc PgUp/PgDn Ctrl+Up/Dn Home/End Ctrl+B Ctrl+/ Alt+key Ctrl+C Ctrl+D Shift+drag",
             "the derived labels no longer match what the panel has always said"
         );
     }
@@ -1047,6 +1123,10 @@ mod tests {
     /// aspirational.
     #[test]
     fn the_panel_renders_this_table_and_nothing_else() {
+        let _lock = keymap::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        keymap::install(keymap::Keymap::compiled());
         restore_keymap();
         let hints = CHAT.hints();
         assert_eq!(hints.len(), CHAT.drawn.len());

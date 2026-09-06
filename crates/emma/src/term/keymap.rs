@@ -541,6 +541,17 @@ pub fn active() -> Arc<Keymap> {
         .unwrap_or_else(|e| e.into_inner().clone())
 }
 
+/// The lock every test that installs a keymap takes first.
+///
+/// The keymap is one process-wide cell and the test harness runs tests on
+/// parallel threads: `bindings.rs`, `help.rs` and this file all install into
+/// it. Without this a green run is a scheduling accident.
+#[doc(hidden)]
+pub fn test_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    &LOCK
+}
+
 /// Install a map, from the startup read or from a preset switch.
 pub fn install(map: Keymap) {
     let next = Arc::new(map);

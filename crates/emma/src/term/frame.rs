@@ -1293,7 +1293,9 @@ impl Frame {
         let Ui::Full(app) = &mut inner.ui else {
             return false;
         };
-        if app.settings_open() {
+        if app.help_open() {
+            app.toggle_help();
+        } else if app.settings_open() {
             app.toggle_settings();
         } else if app.memory_open() {
             app.toggle_memory(&cwd);
@@ -1402,6 +1404,36 @@ impl Frame {
             app.toggle_memory(&cwd);
             synchronized(|| inner.paint());
         }
+    }
+
+    /// Open or close the Help page, and say whether there was a page to open.
+    ///
+    /// `false` when the UI is not `Full`, the inline and plain paths, which
+    /// is what lets `/help` print instead of silently doing nothing.
+    pub fn toggle_help(&self) -> bool {
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            app.toggle_help();
+            synchronized(|| inner.paint());
+            return true;
+        }
+        false
+    }
+
+    /// The Help page's keys, the same seam as memory's and harness's: `false`
+    /// when the page is shut or the key is a chord or a release, so the global
+    /// layer keeps it and Ctrl+/ closes what it opened.
+    pub fn help_key(&self, key: ratatui::crossterm::event::KeyEvent) -> bool {
+        let mut inner = self.lock();
+        let handled = if let Ui::Full(app) = &mut inner.ui {
+            app.help_key(key)
+        } else {
+            false
+        };
+        if handled {
+            synchronized(|| inner.paint());
+        }
+        handled
     }
 
     /// One key for the open Harness page. `false` when the page is closed or

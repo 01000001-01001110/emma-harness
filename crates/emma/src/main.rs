@@ -34,7 +34,7 @@ fn main() -> Result<()> {
     // start in this directory" must not need Emma to start.
     match cli.command {
         Command::Help => {
-            print!("{}", cli::HELP);
+            print!("{}", cli::help());
             return Ok(());
         }
         Command::Version => {
@@ -208,6 +208,12 @@ async fn run(cli: cli::Cli) -> Result<()> {
         .and_then(emma::term::palette::parse_accent)
     {
         emma::term::palette::activate_accent_choice(choice);
+    }
+    // The keybindings file, read once, here: the input layer resolves a chord
+    // on every keystroke and must not touch the filesystem to do it. An edit
+    // to the file applies to the next run.
+    if let Some(home) = auth::home_dir() {
+        emma::term::keymap::install(emma::term::keymap::load(&home));
     }
     let term = Arc::new(if opts.print {
         Term::printing(theme)
