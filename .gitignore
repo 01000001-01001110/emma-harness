@@ -98,7 +98,9 @@ docs/AUTHORITY.md
 *.png
 *.jpg
 *.jpeg
-!docs/img/emma-session.png
 *.gif
 *.webp
-docs/img/
+# The directory stays ignored for anything else dropped into it; git cannot
+# un-ignore a file inside an ignored directory, hence the two-step below.
+docs/img/*
+!docs/img/emma-session.png
