@@ -51,11 +51,11 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # One thread, for now: the suite passes on the owner's box and hangs on
-      # this runner, and with one thread the last "ok" line in the log names
-      # the test before the one that hung. Revert to parallel once it is found.
+      # --no-fail-fast because cargo stops at the first failing target, and a
+      # run that reports two failures while fourteen targets never ran reads
+      # as a smaller problem than it is.
       - name: test
-        run: cargo test --workspace --no-fail-fast -- --test-threads=1
+        run: cargo test --workspace --no-fail-fast
 
   build:
     needs: test
