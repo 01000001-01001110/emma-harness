@@ -452,7 +452,16 @@ pub fn save(home: &Path, settings: &Settings) -> Result<PathBuf> {
     let dir = path.parent().expect("settings path always has a parent");
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let body = serde_json::to_string_pretty(settings)?;
-    std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+    // Temp file beside the target, renamed over it: the shape
+    // `permissions::remember` and `platform` already use, and this was the
+    // one writer left doing a direct write. A crash between the truncate and
+    // the last byte of a direct write leaves a settings.json that no longer
+    // parses, and the next boot reads a file with nothing in it where the
+    // provider, model and theme were. The rename is atomic within a
+    // directory, so a reader sees the old file or the new one, never half.
+    let temp = path.with_extension("json.emma-tmp");
+    std::fs::write(&temp, body).with_context(|| format!("writing {}", temp.display()))?;
+    std::fs::rename(&temp, &path).with_context(|| format!("writing {}", path.display()))?;
     Ok(path)
 }
 
@@ -767,5 +776,39 @@ mod port_blocks_tests {
             serde_json::from_str(r#"{"training_capture": false, "ui": {"hints": false}}"#).unwrap();
         assert!(!off.capture_training());
         assert!(!off.hints());
+    }
+}
+
+#[cfg(test)]
+mod atomic_save_tests {
+    use super::*;
+
+    /// A save goes through a temp file and a rename, and leaves neither the
+    /// temp file nor a stale target behind. Writing the target directly
+    /// instead (the old code) leaves this green; dropping the rename turns it
+    /// red on both counts, which is the half of atomicity a test can see
+    /// without a crash injected into the filesystem.
+    #[test]
+    fn a_save_renames_its_temp_file_over_the_target_and_keeps_nothing_else() {
+        let home = tempfile::tempdir().unwrap();
+        let mut s = Settings::default();
+        s.theme = Some("first".into());
+        let path = save(home.path(), &s).unwrap();
+        s.theme = Some("second".into());
+        save(home.path(), &s).unwrap();
+        let back = load(home.path());
+        assert_eq!(back.theme.as_deref(), Some("second"));
+        let temp = path.with_extension("json.emma-tmp");
+        assert!(
+            !temp.exists(),
+            "the temp file must be renamed away, not left beside the target"
+        );
+        // A stale temp file from an interrupted earlier save is overwritten,
+        // never read.
+        std::fs::write(&temp, "{ not json").unwrap();
+        s.theme = Some("third".into());
+        save(home.path(), &s).unwrap();
+        assert_eq!(load(home.path()).theme.as_deref(), Some("third"));
+        assert!(!temp.exists());
     }
 }
