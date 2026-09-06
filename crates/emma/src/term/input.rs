@@ -574,8 +574,8 @@ impl PageKeys for Arc<Frame> {
     fn memory_key(&self, key: KeyEvent) -> bool {
         Frame::memory_key(self, key)
     }
-    fn code_key(&self, _key: KeyEvent) -> bool {
-        false
+    fn code_key(&self, key: KeyEvent) -> bool {
+        Frame::code_key(self, key)
     }
     fn settings_key(&self, key: KeyEvent) -> bool {
         Frame::settings_key(self, key)
@@ -992,12 +992,12 @@ impl LineSource {
                     // seen, so scrolling it would move something nobody is
                     // looking at.
                     MouseEventKind::ScrollUp => {
-                        if !thread_frame.harness_scroll(true) {
+                        if !thread_frame.code_scroll(true) && !thread_frame.harness_scroll(true) {
                             thread_frame.scroll_rows(true, WHEEL_ROWS);
                         }
                     }
                     MouseEventKind::ScrollDown => {
-                        if !thread_frame.harness_scroll(false) {
+                        if !thread_frame.code_scroll(false) && !thread_frame.harness_scroll(false) {
                             thread_frame.scroll_rows(false, WHEEL_ROWS);
                         }
                     }
@@ -1015,6 +1015,9 @@ impl LineSource {
                         // under it cannot be selected anyway, so a press that
                         // lands on a run box or a settings chevron is that
                         // control being used and nothing else.
+                        if thread_frame.code_click(mouse.column, mouse.row) {
+                            continue;
+                        }
                         if thread_frame.harness_click(mouse.column, mouse.row) {
                             continue;
                         }

@@ -118,6 +118,10 @@ pub struct App {
     /// nothing else: the text is `term::help::SECTIONS` and is read at paint
     /// time, so the page cannot show a stale copy of it.
     help: Option<super::help::HelpView>,
+    /// The Code page, when it is the main-region occupant.
+    code: Option<super::code::CodeView>,
+    /// The region the last paint gave the Code page, for `code::click`.
+    code_area: Rect,
     /// What SESSIONS is a list of, kept from `set_identity` so the list can be
     /// rebuilt later without the shell handing the same three facts in again.
     scope: Option<SessionScope>,
@@ -208,6 +212,30 @@ fn today_local() -> sidebar::Today {
     sidebar::civil_from_secs(secs + crate::harness_state::local_offset_secs())
 }
 
+/// Git work the Code page asked for that must not run on the input thread.
+///
+/// `code_git::history` and `code_git::diff_at` were measured at 17 to 475 ms
+/// on this 289-commit repository (2026-09-06, Windows); the frame runs these
+/// on a worker and hands the answer back through the two setters. Launching
+/// the editor is here for the older reason `launch_tool` already spawns a
+/// thread: a keystroke handler that waits on a process is an event loop that
+/// has stopped.
+#[derive(Debug, Clone)]
+pub enum CodeJob {
+    History {
+        root: std::path::PathBuf,
+        rel: String,
+    },
+    Diff {
+        root: std::path::PathBuf,
+        rel: String,
+        hash: String,
+    },
+    Editor {
+        root: std::path::PathBuf,
+    },
+}
+
 impl App {
     pub fn new(size: (u16, u16)) -> Self {
         let (cols, rows) = size;
@@ -237,6 +265,8 @@ impl App {
             memory: None,
             harness: None,
             help: None,
+            code: None,
+            code_area: Rect::new(0, 0, 0, 0),
             scope: None,
             sessions_add: None,
             chat_rect: r.chat,
@@ -305,6 +335,7 @@ impl App {
             self.memory = None;
             self.harness = None;
             self.help = None;
+            self.code = None;
             // The live rows read disk truth on every open — memory's law.
             // model/cwd/version stay paint-time: the `View` owns them.
             let stored = self
@@ -655,6 +686,7 @@ impl App {
             self.settings_open = false;
             self.harness = None;
             self.help = None;
+            self.code = None;
         }
     }
 
@@ -673,6 +705,7 @@ impl App {
             self.settings_open = false;
             self.memory = None;
             self.harness = None;
+            self.code = None;
         }
     }
 
@@ -698,6 +731,119 @@ impl App {
         }
     }
 
+    /// Alt+c. The repository root is the run's working directory.
+    ///
+    /// `code_git::paths` shells `git ls-files` (16 to 46 ms measured) once,
+    /// here, on the same footing as the Harness page's read, not per key.
+    pub fn toggle_code(&mut self, cwd: &str) {
+        if self.code.take().is_none() {
+            let root = std::path::PathBuf::from(cwd);
+            let nodes = super::code::build_nodes(&super::code_git::paths(&root));
+            self.code = Some(super::code::CodeView::new(root, nodes));
+            self.settings_open = false;
+            self.memory = None;
+            self.harness = None;
+            self.help = None;
+        }
+    }
+
+    pub fn code_open(&self) -> bool {
+        self.code.is_some()
+    }
+
+    /// One key for the open Code page. The bool is whether the page kept it;
+    /// the predicate is [`super::code::takes_key`], so the shell and the page
+    /// cannot disagree about which keys belong to it.
+    pub fn code_key(
+        &mut self,
+        key: ratatui::crossterm::event::KeyEvent,
+    ) -> (bool, Option<CodeJob>) {
+        if self.code.is_none() || !super::code::takes_key(key) {
+            return (false, None);
+        }
+        let action = {
+            let v = self.code.as_mut().expect("checked just above");
+            super::code::handle_key(v, key)
+        };
+        (true, self.code_act(action))
+    }
+
+    /// A left press while the Code page is open. `false` lets the press fall
+    /// through: two controls work on this page, and a page must not swallow
+    /// the rest of the surface (the sidebar's rule).
+    pub fn code_click(&mut self, col: u16, row: u16) -> (bool, Option<CodeJob>) {
+        let area = self.code_area;
+        let Some(v) = self.code.as_mut() else {
+            return (false, None);
+        };
+        let Some(hit) = super::code::click(v, area, col, row) else {
+            return (false, None);
+        };
+        let action = super::code::act(v, hit);
+        (true, self.code_act(action))
+    }
+
+    /// The wheel while the Code page is open: the body scrolls, the tree does
+    /// not. `false` gives the notch back to the transcript.
+    pub fn code_scroll(&mut self, up: bool) -> (bool, Option<CodeJob>) {
+        let Some(v) = self.code.as_mut() else {
+            return (false, None);
+        };
+        let action = v.wheel(up);
+        if action == super::code::CodeAction::None {
+            return (false, None);
+        }
+        (true, self.code_act(action))
+    }
+
+    /// The worker's answer to `CodeJob::History`, and the hash whose patch to
+    /// fetch next.
+    pub fn code_set_history(&mut self, commits: Vec<super::code_git::Commit>) -> Option<String> {
+        self.code.as_mut()?.set_history(commits, None)
+    }
+
+    /// The worker's answer to `CodeJob::Diff`. `false` when it was for a
+    /// commit that is no longer selected, which is dropped rather than drawn.
+    pub fn code_set_diff(&mut self, hash: &str, rows: Vec<super::code_git::DiffRow>) -> bool {
+        self.code.as_mut().is_some_and(|v| v.set_diff(hash, rows))
+    }
+
+    /// One dispatch for every `CodeAction`, whether a key or a click produced
+    /// it. The reads that are cheap happen here; the ones that are not become
+    /// a `CodeJob`.
+    fn code_act(&mut self, action: super::code::CodeAction) -> Option<CodeJob> {
+        use super::code::CodeAction;
+        let root = self.code.as_ref()?.root.clone();
+        match action {
+            // Measured at 195 to 677 microseconds on real files, capped by
+            // `read_file` itself. Cheap enough for the input thread.
+            CodeAction::Open(rel) => {
+                let read = super::code_git::read_file(&super::code_git::abs(&root, &rel));
+                self.code.as_mut()?.set_open(rel, read);
+                None
+            }
+            CodeAction::LoadHistory => {
+                self.code.as_ref()?.open.as_ref().map(|o| CodeJob::History {
+                    root,
+                    rel: o.path.clone(),
+                })
+            }
+            CodeAction::LoadDiff(hash) => {
+                self.code.as_ref()?.open.as_ref().map(|o| CodeJob::Diff {
+                    root,
+                    rel: o.path.clone(),
+                    hash,
+                })
+            }
+            CodeAction::LaunchEditor => Some(CodeJob::Editor { root }),
+            CodeAction::Close => {
+                self.code = None;
+                None
+            }
+            CodeAction::None | CodeAction::FocusChanged => None,
+        }
+    }
+
     /// Alt+h. Reads real session history on every open — the dashboard shows
     /// what actually ran in this repo, not the mock's sample day.
     pub fn toggle_harness(&mut self, cwd: &str) {
@@ -711,6 +857,7 @@ impl App {
             self.settings_open = false;
             self.memory = None;
             self.help = None;
+            self.code = None;
         }
     }
 
@@ -1132,6 +1279,8 @@ impl App {
                         Some(sidebar::Tool::Memory)
                     } else if self.harness.is_some() {
                         Some(sidebar::Tool::Harness)
+                    } else if self.code.is_some() {
+                        Some(sidebar::Tool::Code)
                     } else {
                         None
                     },
@@ -1149,7 +1298,8 @@ impl App {
         // paint, and anything highlighted goes with it. Settings and Memory
         // are out of scope by the owner's decision, and "out of scope" has to
         // mean the mouse cannot reach them, not that nobody has tried.
-        if self.settings_open || self.memory.is_some() || self.help.is_some() {
+        if self.settings_open || self.memory.is_some() || self.help.is_some() || self.code.is_some()
+        {
             self.chat_rect = Rect::new(0, 0, 0, 0);
             self.scrollbar = None;
             self.bar_grab = None;
@@ -1160,6 +1310,7 @@ impl App {
         // Stale control rects must not keep catching clicks after the page
         // closes or a sub-page takes over; the pages' paints refill them.
         self.harness_hits = super::harness::Hits::default();
+        self.code_area = Rect::new(0, 0, 0, 0);
         self.settings_hits = super::settings::Hits::default();
 
         // The main region's width is what the input box wraps to, so the
@@ -1211,6 +1362,17 @@ impl App {
                     gv.canvas_rows = rows;
                     gv.scroll = gv.scroll.min(super::rungraph::max_scroll(gv));
                 }
+                None
+            } else if let Some(cv) = &self.code {
+                let regions = super::code::render(r.main, buf, cv, &view.skin);
+                // Only the paint knows how many rows the body had; the key
+                // handler needs it for PageUp and PageDown.
+                self.code_area = r.main;
+                let rows = regions.rows;
+                if let Some(cv) = self.code.as_mut() {
+                    cv.body_rows = rows;
+                }
+                // The cursor is parked: nothing on this page is typed into.
                 None
             } else {
                 self.chat_screen(r, buf, view)

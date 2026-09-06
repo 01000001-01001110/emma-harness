@@ -677,7 +677,19 @@ fn in_app_detail(tool: Tool) -> String {
 fn catalogue_on(cwd: &Path, m: &dyn Machine) -> Vec<Entry> {
     ALL.iter()
         .map(|&tool| {
-            let (detail, available) = if tool.in_app() {
+            let (detail, available) = if tool == Tool::Code {
+                // Two doors since 2026-09-06: `Alt+c` opens the in-app Code
+                // page, which always works, and F7 there launches the editor
+                // below. The row is available because the chord is; the
+                // editor's own availability is the page's to report, and a
+                // row reading `n/a` beside a working chord is the availability
+                // contract broken in the direction nobody checks.
+                let detail = match plan(tool, cwd, m) {
+                    Ok(l) => format!("the Code page; F7 there opens {}", l.what),
+                    Err(e) => format!("the Code page; no external editor ({e})"),
+                };
+                (detail, true)
+            } else if tool.in_app() {
                 // Available only when something actually takes the key. An
                 // in-app tool with no route is listed, so the operator can see
                 // it is intended, and shows `n/a` rather than a chord that
@@ -1431,7 +1443,7 @@ mod tests {
             "no page takes Alt+d in this build, so the chord must not be advertised"
         );
         // And the ones that really do launch still say so honestly.
-        for tool in [Tool::Shell, Tool::Code, Tool::FileBrowser] {
+        for tool in [Tool::Shell, Tool::FileBrowser] {
             let e = cat.iter().find(|e| e.tool == tool).expect("in catalogue");
             assert!(
                 !e.available,
@@ -1439,6 +1451,19 @@ mod tests {
                 e.label
             );
         }
+        // Code is a page since 2026-09-06 (owner ruling D1): the chord always
+        // works, and the row says the external editor is absent rather than
+        // marking the chord dead.
+        let code = cat
+            .iter()
+            .find(|e| e.tool == Tool::Code)
+            .expect("in catalogue");
+        assert!(code.available, "Alt+c opens the Code page on any machine");
+        assert!(
+            code.detail.contains("no external editor"),
+            "the row must say the editor is missing: {}",
+            code.detail
+        );
     }
 
     #[test]

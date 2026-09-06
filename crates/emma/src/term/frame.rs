@@ -1301,6 +1301,8 @@ impl Frame {
             app.toggle_memory(&cwd);
         } else if app.harness_open() {
             app.toggle_harness(&cwd);
+        } else if app.code_open() {
+            app.toggle_code(&cwd);
         } else {
             return false;
         }
@@ -1370,7 +1372,15 @@ impl Frame {
             // `DataExplorer` is superseded and its row reads `n/a`, and the
             // rest are real programs the launcher below spawns.
             Tool::Search | Tool::DataExplorer => {}
-            Tool::Shell | Tool::Code | Tool::FileBrowser => {}
+            // Owner ruling D1, 2026-09-06: `Alt+c` opens the page. The
+            // external editor is not lost; it is F7 and the [Editor] button
+            // inside the page, which is why `Tool::Code` stays out of
+            // `in_app()` and `plan_code` stays reachable.
+            Tool::Code => {
+                self.toggle_code();
+                return;
+            }
+            Tool::Shell | Tool::FileBrowser => {}
         }
         let frame = Arc::clone(self);
         std::thread::spawn(move || {
@@ -1434,6 +1444,129 @@ impl Frame {
             synchronized(|| inner.paint());
         }
         handled
+    }
+
+    /// `Alt+c`, and the sidebar's TOOLS Code row. Same shape as the Memory
+    /// and Harness toggles: the repo's cwd is the tree it browses.
+    pub fn toggle_code(&self) {
+        let mut inner = self.lock();
+        let cwd = inner.view.status.cwd.clone();
+        if let Ui::Full(app) = &mut inner.ui {
+            app.toggle_code(&cwd);
+            synchronized(|| inner.paint());
+        }
+    }
+
+    /// One key for the open Code page. `false` when the page is closed or the
+    /// key is a chord or a release; the caller's global layer keeps it, which
+    /// is what makes `Alt+c` still close the page it opened.
+    pub fn code_key(self: &Arc<Self>, key: ratatui::crossterm::event::KeyEvent) -> bool {
+        let (handled, job) = {
+            let mut inner = self.lock();
+            let out = if let Ui::Full(app) = &mut inner.ui {
+                app.code_key(key)
+            } else {
+                (false, None)
+            };
+            if out.0 {
+                synchronized(|| inner.paint());
+            }
+            out
+        };
+        if let Some(job) = job {
+            self.run_code_job(job);
+        }
+        handled
+    }
+
+    /// A left press while the Code page is open: the tabs and the [Editor]
+    /// button. Same one-dispatch rule as the keys.
+    pub fn code_click(self: &Arc<Self>, col: u16, row: u16) -> bool {
+        let (handled, job) = {
+            let mut inner = self.lock();
+            let out = if let Ui::Full(app) = &mut inner.ui {
+                app.code_click(col, row)
+            } else {
+                (false, None)
+            };
+            if out.0 {
+                synchronized(|| inner.paint());
+            }
+            out
+        };
+        if let Some(job) = job {
+            self.run_code_job(job);
+        }
+        handled
+    }
+
+    /// The wheel while the Code page is open.
+    pub fn code_scroll(self: &Arc<Self>, up: bool) -> bool {
+        let (handled, job) = {
+            let mut inner = self.lock();
+            let out = if let Ui::Full(app) = &mut inner.ui {
+                app.code_scroll(up)
+            } else {
+                (false, None)
+            };
+            if out.0 {
+                synchronized(|| inner.paint());
+            }
+            out
+        };
+        if let Some(job) = job {
+            self.run_code_job(job);
+        }
+        handled
+    }
+
+    /// The Code page's git work, off the input thread.
+    ///
+    /// Measured, not assumed: `git log --follow` and `git show` ran at 56 to
+    /// 475 ms on this repository's 289 commits (2026-09-06, Windows). Running
+    /// either under the frame lock is a terminal that stops answering keys for
+    /// half a second, which is why the page has sinks rather than return
+    /// values. The lock is taken only to deliver the answer.
+    fn run_code_job(self: &Arc<Self>, job: crate::term::app::CodeJob) {
+        use crate::term::app::CodeJob;
+        use crate::term::code_git;
+        let frame = Arc::clone(self);
+        std::thread::spawn(move || match job {
+            CodeJob::History { root, rel } => {
+                let commits = code_git::history(&root, &rel);
+                let next = {
+                    let mut inner = frame.lock();
+                    let n = if let Ui::Full(app) = &mut inner.ui {
+                        app.code_set_history(commits)
+                    } else {
+                        None
+                    };
+                    synchronized(|| inner.paint());
+                    n
+                };
+                if let Some(hash) = next {
+                    frame.run_code_job(CodeJob::Diff { root, rel, hash });
+                }
+            }
+            CodeJob::Diff { root, rel, hash } => {
+                let rows = code_git::diff_at(&root, &hash, &rel);
+                let mut inner = frame.lock();
+                if let Ui::Full(app) = &mut inner.ui {
+                    app.code_set_diff(&hash, rows);
+                }
+                synchronized(|| inner.paint());
+            }
+            // The second door of ruling D1. `Tool::Code` is deliberately still
+            // not `in_app()`, which is the whole reason this call still
+            // resolves `tools.editor`, `$VISUAL`, `$EDITOR` and the PATH probe.
+            CodeJob::Editor { root } => {
+                let lines = match crate::usertools::launch(crate::usertools::Tool::Code, &root) {
+                    Ok(msg) => frame.skin.note(&format!("Code: {msg}")),
+                    Err(err) => frame.skin.warn(&format!("Code: {err}")),
+                };
+                frame.write_lines(lines);
+            }
+        });
     }
 
     /// One key for the open Harness page. `false` when the page is closed or
