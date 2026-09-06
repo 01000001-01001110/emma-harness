@@ -271,10 +271,19 @@
     <li>
       <a href="terminal-pages.html">Pages inside the frame</a>
       <span>
-        Settings, the Data Explorer and Memory replace the middle and nothing
-        else. Each draws only what Emma has, and names in words the panel it is
-        refusing to draw. An empty one would read as a number kept
-        somewhere else.
+        Settings, Memory, the Harness dashboard, Code and Help each replace the
+        middle and nothing else. Each draws only what Emma has, and names in
+        words the panel it is refusing to draw. An empty one would read as a
+        number kept somewhere else.
+      </span>
+    </li>
+    <li>
+      <a href="terminal-runctl.html">Acting on a run</a>
+      <span>
+        Pause, resume, cancel, archive and starting a run, over the pid a
+        session id already carries. Every signal is verified against a recycled
+        pid first, Windows refuses all three signals rather than faking them,
+        and none of it is reachable from a key yet.
       </span>
     </li>
     <li>
@@ -540,6 +549,27 @@
     <span class="chip unv">unverified</span> Nothing here presses a key on a
     real console, and the module says so. Only a person at a terminal can
     confirm that the terminal emits the chords these tables name.
+  </p>
+
+  <p>
+    Two rows on that panel do not name a chord at all, since 2026-09-06.
+    <code>Trigger::Bound</code> names an <em>action</em>, and the spelling is
+    resolved out of the keymap in force at the moment the label is drawn. The
+    sidebar toggle and the help chord are both rebindable, so a literal in the
+    table would go stale the first time somebody rebound one, which is the same
+    drift the table was built to remove one level down. The
+    <code>QUICK HELP</code> panel itself is derived rather than typed now: its
+    rows come from the bindings table, and the six hand-written
+    <code>(key, label)</code> pairs that arrived with the import, one of which
+    said <code>Ctrl+k</code> for a binding that is <code>Ctrl-U</code>, are
+    gone.
+    <span class="chip test">tested</span> &mdash;
+    <code>every_drawn_key_is_answered</code> drives every drawn chord through
+    the real decoders, and a rebound keymap is installed and asserted to change
+    the printed label.
+    <span class="chip unv">unverified</span> on a real console: nobody has put a
+    <code>~/.emma/keybindings.json</code> on disk, started Emma and pressed the
+    new chord, which is what would settle it.
   </p>
   <span class="src">crates/emma/src/term/bindings.rs — <code>Table::hints</code>, <code>resolve</code>, <code>UNDRAWN</code>, <code>Chord</code></span>
 

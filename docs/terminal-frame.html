@@ -83,6 +83,7 @@
       <a href="terminal-dock.html">Dock</a>
       <a href="terminal-usertools.html">User tools</a>
       <a href="terminal-pages.html">Pages</a>
+      <a href="terminal-runctl.html">Run control</a>
       <a href="terminal-copying.html">Copying out</a>
     </nav>
 
@@ -643,13 +644,28 @@ fn resize_target(pinned: bool, screen_rows: u16, height: u16) -&gt; Option&lt;u1
   </p>
 
   <p>
-    The <code>Bar</code> construction encodes one rule. An
-    unmeasured <code>context</code> or <code>spend</code> becomes
-    <code>(0, 0)</code>, never <code>(0, real_cap)</code>, <em>&ldquo;which
-    would draw an invented &lsquo;0% of the budget&rsquo; before the first model
-    call reports.&rdquo;</em> The <code>up</code>/<code>down</code> raw token
-    split is <code>None</code> because the loop does not carry it yet: absent,
-    not zero.
+    The <code>Bar</code> construction encodes two rules. The first: an unmeasured
+    <code>context</code> or <code>spend</code> becomes <code>(0, 0)</code>,
+    never <code>(0, real_cap)</code>, <em>&ldquo;which would draw an invented
+    &lsquo;0% of the budget&rsquo; before the first model call
+    reports.&rdquo;</em>
+  </p>
+
+  <p>
+    The second is about scope, and this paragraph used to get it wrong. The
+    <code>up</code>/<code>down</code> split is no longer <code>None</code>: the
+    loop carries it, <code>Status::record_call</code> sums it per call, and both
+    reach the bar as <code>Some</code>. It is session-scoped, and so is the
+    <code>TOKENS</code> cell's <code>total_used</code>, which is
+    <code>session_tokens</code> rather than <code>spend</code>. Feeding
+    <code>spend</code> there is what made the cell reset on every submission on
+    2026-08-26. <code>spend</code> is the running <em>goal</em>'s budget meter
+    and belongs to the inline row.
+    <code>total_max</code> is still the goal's cap only because the
+    full-screen cell draws no cap at all: there is no session budget, and
+    inventing one to fill the field would put a number on screen that nothing
+    enforces. <a href="terminal-status.html#scope">The status page</a> has the
+    whole of the scoping.
   </p>
 
   <p>

@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Acting on a run &middot; The terminal &middot; Emma</title>
+<link rel="stylesheet" href="assets/docs.css">
+</head>
+<body>
+<div class="shell">
+
+<!-- ===========================================================================
+     THE SHARED SIDEBAR. Copy this block verbatim into every page, directly
+     inside <div class="shell">, and change exactly one thing: add class
+     "here" to the <a> for the page you are writing.
+
+     It is duplicated per page. These pages must open from file://
+     with no server, no build step and no JavaScript, so there is nothing to
+     include a partial with. The cost is that adding a page means editing this
+     file and every page's copy of it, which is why the list
+     is kept short.
+     =========================================================================== -->
+<nav class="side">
+  <div class="brand">
+    <a href="index.html"><b>emma<i>·</i>harness</b></a>
+    <span>0.1.0 · single-user · rust</span>
+  </div>
+
+  <h4>Start here</h4>
+  <ul>
+    <li><a class="nav" href="index.html">What Emma is</a></li>
+    <li><a class="nav" href="getting-started.html">Getting started</a></li>
+    <li><a class="nav" href="architecture.html">Architecture</a></li>
+  </ul>
+
+  <h4>Running a goal</h4>
+  <ul>
+    <li><a class="nav" href="loop.html">The agent loop</a></li>
+    <li><a class="nav" href="session.html">Sessions &amp; context</a></li>
+    <li><a class="nav" href="providers.html">Providers &amp; models</a></li>
+  </ul>
+
+  <h4>Doing work</h4>
+  <ul>
+    <li><a class="nav" href="tools.html">Tools</a></li>
+    <li><a class="nav" href="consent.html">Consent &amp; permissions</a></li>
+    <li><a class="nav" href="delegation.html">Delegation</a></li>
+  </ul>
+
+  <h4>Surface</h4>
+  <ul>
+    <li><a class="nav here" href="terminal.html">The terminal</a></li>
+    <li><a class="nav" href="config.html">Configuration</a></li>
+  </ul>
+
+  <h4>The project</h4>
+  <ul>
+    <li><a class="nav" href="records.html">Records &amp; house rules</a></li>
+    <li><a class="nav" href="roadmap.html">Roadmap &amp; defects</a></li>
+    <li><a class="nav" href="unverified.html">What is not verified</a></li>
+  </ul>
+</nav>
+
+<main>
+<div class="col">
+
+  <p class="eyebrow">crates/emma</p>
+  <h1>Acting on a run</h1>
+
+  <nav class="chapter">
+      <a class="up" href="terminal.html">The terminal</a>
+      <a href="terminal-surface.html">Surface</a>
+      <a href="terminal-frame.html">Frame</a>
+      <a href="terminal-layout.html">Layout</a>
+      <a href="terminal-colour.html">Colour</a>
+      <a href="terminal-themes.html">Themes</a>
+      <a href="terminal-skin.html">Vocabulary</a>
+      <a href="terminal-transcript.html">Transcript</a>
+      <a href="terminal-markdown.html">Markdown</a>
+      <a href="terminal-diff.html">Diffs</a>
+      <a href="terminal-status.html">Status</a>
+      <a href="terminal-sidebar.html">Sidebar</a>
+      <a href="terminal-dock.html">Dock</a>
+      <a href="terminal-usertools.html">User tools</a>
+      <a href="terminal-pages.html">Pages</a>
+      <span class="now">Run control</span>
+      <a href="terminal-copying.html">Copying out</a>
+    </nav>
+
+  <p class="lede">
+    <code>harness_state</code> answers what ran. <code>runctl</code> is the
+    other half: pause, resume, cancel, archive, delete, and starting a new run.
+    It exists because the Harness page drew those controls against a scheduler
+    Emma does not have, and the answer was not to delete the controls but to
+    notice that Emma already owns the things they name.
+    <strong>None of the page's controls reach it yet.</strong> This page
+    describes the module; the keys arrive with the Harness package.
+  </p>
+
+  <h2 id="pid">A run is a process, and the process is named in the run's id</h2>
+
+  <p>
+    A session id is <code>sess-&lt;millis&gt;-&lt;pid&gt;</code>, so the pid that
+    wrote a session log can be read back out of the log's own file name. That is
+    the whole backend. Pause is <code>SIGSTOP</code>, resume is
+    <code>SIGCONT</code>, and cancel is <code>SIGINT</code>, which the loop
+    already handles and answers by writing its ending. No queue, no supervisor,
+    no invented state.
+  </p>
+
+  <p>
+    Cancel is <code>SIGINT</code> rather than <code>SIGKILL</code> for a reason
+    worth stating: a run that is killed writes no ending, and its log is then
+    indistinguishable from a crashed one. The distinction between &ldquo;somebody
+    stopped this&rdquo; and &ldquo;this fell over&rdquo; is the whole value of
+    the record.
+  </p>
+  <span class="src">crates/emma/src/runctl.rs &mdash; module doc, <code>Action</code>, <code>pid_of</code>; crates/emma/src/session.rs &mdash; <code>SessionLog::new_id</code></span>
+
+  <h2 id="verify">Pids are recycled, so every signal is verified first</h2>
+
+  <p>
+    A stored id can name a process that has nothing to do with Emma, and
+    signalling it would be this program reaching into a stranger's.
+    <code>verify</code> stands in front of every signal and refuses unless all
+    four hold: the id parses and carries a pid above 1, so never init and never a
+    nonsense zero; the pid is not this process, so the TUI cannot stop itself;
+    the program running at that pid is named <code>emma</code>; and the run's
+    recorded <code>cwd</code> is the repository the page is open on.
+  </p>
+
+  <p>
+    The last of those is policy rather than safety. A Harness page filtered to
+    one repository must not reach into a run somewhere else on the machine,
+    because the reader cannot see that run and cannot judge what stopping it
+    costs.
+  </p>
+
+  <p>
+    Every refusal is a sentence the page can show, and there are seven of them:
+    no pid in the id, the pid is this process, nothing is running there,
+    something is running there and it is not Emma, the run belongs elsewhere, the
+    run already finished, and the platform has no such control. A control that
+    goes quiet is the failure this module exists to avoid.
+  </p>
+
+  <p>
+    Nothing here calls <code>kill</code> directly. <code>Control</code> is a
+    trait with one real implementation and one recording fake, so the
+    verification logic is exercised mechanically and no test ever signals a real
+    process.
+    <span class="chip test">tested</span> &mdash; nine mutations were applied to
+    the verification and each turned the suite red: the recycled pid, this
+    process's own pid, a run in another repository, and a finished run are all
+    pinned individually.
+  </p>
+  <span class="src">crates/emma/src/runctl.rs &mdash; <code>verify</code>, <code>Refusal</code>, <code>Control</code>, <code>Os</code>, <code>is_emma</code>, <code>BINARY</code></span>
+
+  <h2 id="windows">Windows, which is a target rather than a <code>cfg</code> hole</h2>
+
+  <p>
+    Three of the five things this module does have no Unix-shaped equivalent on
+    Windows, and each answers rather than going quiet.
+  </p>
+
+  <p>
+    <strong>Asking what is running at a pid works.</strong>
+    <code>Os::name_of</code> is <code>OpenProcess</code> plus
+    <code>QueryFullProcessImageNameW</code>, so the recycled-pid guard is as real
+    there as on Unix. The image name carries <code>.exe</code> and the file
+    system is case-insensitive, which is why <code>is_emma</code> exists rather
+    than a bare comparison.
+    <span class="chip cert">certified</span> on this box: the test asks about
+    this process's own pid and asserts the answer equals the leaf of
+    <code>current_exe</code>, which on this machine is
+    <code>emma-&hellip;.exe</code>. Two pids that cannot be live both answer
+    <code>None</code>, one of them chosen because Windows pids are multiples of
+    four so 3 cannot race a real process into existence.
+  </p>
+
+  <p>
+    <strong>Signalling does not.</strong> There is no <code>SIGSTOP</code>,
+    <code>SIGCONT</code> or <code>SIGINT</code> for an unrelated, detached
+    process. <code>GenerateConsoleCtrlEvent</code> reaches only the caller's own
+    console group, which a detached run is not, and
+    <code>TerminateProcess</code> is not what Cancel means. So all three answer
+    <code>Refusal::Unsupported</code>, which names the action and says why, and
+    <code>supported</code> lets the page ask <em>before</em> it draws, so it can
+    print a sentence instead of a control that refuses on every press.
+    <span class="chip cert">certified</span>: the test calls the real
+    <code>Os</code> for all three actions and asserts the refusal and its
+    wording. Nothing is signalled, because the refusal returns before any
+    syscall.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span>: every Unix path.
+    <code>libc::kill</code>, <code>setsid</code>,
+    <code>/proc/&lt;pid&gt;/comm</code> and the <code>ps -o comm=</code>
+    fallback are the fork's code, unchanged, and this box has no Unix to run
+    them on. The macOS leg of the port's certification order settles them.
+  </p>
+  <span class="src">crates/emma/src/runctl.rs &mdash; <code>Os::name_of</code>, <code>Os::send</code>, <code>supported</code>, <code>Refusal::Unsupported</code></span>
+
+  <h2 id="record">What a control writes down</h2>
+
+  <p>
+    Every carried-out action appends one record to the run's own session file, in
+    the same one-JSON-per-line shape everything else in that file uses:
+  </p>
+
+  <pre><code>{"kind":"harness_control","at_ms":1756512000000,"action":"pause","signal":"SIGSTOP","pid":4812}</code></pre>
+
+  <p>
+    It appends rather than rewrites, because a live process has that file open
+    for append too and a rename underneath it would leave that process writing to
+    an unlinked inode. The timestamp comes from the same clock every other record
+    is stamped with, so the reader that folds the file sorts them together. The
+    line ends with <code>\n</code> on every platform, never <code>\r\n</code>:
+    the session log is LF-delimited JSON, and a CRLF here would put a stray
+    carriage return inside the last field of every record this function writes.
+  </p>
+  <span class="src">crates/emma/src/runctl.rs &mdash; <code>record</code>; crates/emma/src/session.rs &mdash; <code>now_ms</code>, <code>SessionLog::append</code></span>
+
+  <h2 id="archive">Archiving, and the guard Windows needs and Unix does not</h2>
+
+  <p>
+    Archiving moves a session file into an <code>archive</code> subdirectory.
+    A subdirectory rather than a marker record, because the run reader reads one
+    directory level and no deeper, so moving a file there removes it from every
+    feed without a line of reader code learning a new rule. It is reversible on
+    request: this is the control somebody reaches for to tidy the list, and
+    tidying must not be able to lose a transcript, so a file that is already
+    archived is an error naming that rather than a silent success.
+  </p>
+
+  <p>
+    A live run is refused. Renaming the file out from under a process that holds
+    it open for append does not stop that process writing: the handle follows the
+    inode, so every record after the rename lands in a file with no name, the
+    archived copy is missing exactly the tail still being written, and the
+    transcript is split in two with one half unreachable.
+  </p>
+
+  <p>
+    On Unix, &ldquo;<code>verify</code> would have refused to signal it&rdquo; is
+    taken as proof enough, because every way <code>verify</code> refuses is a run
+    that cannot be signalled. That reasoning has a hole, since
+    <code>Elsewhere</code> refuses a run that may be very much alive, and on Unix
+    the hole is narrow because the page only offers archive on rows it listed and
+    it lists rows whose <code>cwd</code> matched. On Windows the same hole is
+    wider and the consequence worse, because Rust's <code>File</code> opens with
+    <code>FILE_SHARE_DELETE</code> and the rename therefore <em>succeeds</em> over
+    a live writer's handle with no error anywhere. So Windows asks the other
+    question: not &ldquo;would we have refused to signal it&rdquo; but &ldquo;can
+    we show nothing is running there&rdquo;. An ending was written, or the pid
+    names nothing, or it names something that is not Emma. Everything else,
+    including a run in another directory and an id with no pid in it, is unknown,
+    and unknown does not archive.
+    <span class="chip test">tested</span> against a fake process table, both
+    directions.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> as an observation. What the guard
+    defends against &mdash; the rename succeeding over an open
+    <code>FILE_SHARE_DELETE</code> handle while the writer keeps writing into the
+    moved file &mdash; is read out of the standard library's documented open
+    flags rather than watched. Two processes and a <code>std::fs::rename</code>
+    under a live appender, twenty lines, on this box, would settle it.
+  </p>
+
+  <p>
+    <code>session_file</code> refuses any id containing a separator, a
+    <code>..</code> or a NUL rather than sanitising it, because there is no
+    correct file for such a name to mean. The ids these functions receive come
+    from file names this program enumerated itself, so in practice they are
+    already plain; the check is there because two of the three callers are
+    destructive, and &ldquo;the input is always clean&rdquo; is the assumption
+    every path-traversal defect was written under.
+  </p>
+  <span class="src">crates/emma/src/runctl.rs &mdash; <code>archive</code>, <code>shown_to_have_stopped</code>, <code>session_file</code>, <code>ARCHIVE_DIR</code></span>
+
+  <h2 id="spawn">Starting a run that outlives the window it was started from</h2>
+
+  <p>
+    A new run is a detached child. On Unix, <code>setsid</code> puts it in its own
+    session so a <code>SIGHUP</code> aimed at Emma's process group does not take
+    it too, and the three standard streams go to <code>/dev/null</code> so
+    nothing it prints lands on top of the drawn page. This is the one call in the
+    module that is <code>unsafe</code>, because the standard library has no safe
+    spelling for <code>setsid</code>; the other spawn site in the tree uses the
+    safe <code>process_group(0)</code> and is right to, because a shell window
+    only has to not take a signal aimed at Emma, while a detached run has to
+    outlive the terminal.
+  </p>
+
+  <p>
+    On Windows the flags are <code>DETACHED_PROCESS</code> and
+    <code>CREATE_NEW_PROCESS_GROUP</code> with null stdio. No console at all,
+    which is right for a headless run, and it is the one way this differs from
+    the user-tools launcher, whose whole purpose is a child that <em>does</em>
+    own a console.
+    <span class="chip cert">certified</span> that the child starts: the test
+    spawns a real command with those flags and waits for the file it writes to
+    appear, and it appears on the first poll. That test found a real defect in
+    its own first draft, where the redirection was passed as one argument and
+    Rust's quoting plus <code>cmd /C</code>'s unwrapping between them lost it, so
+    the child ran and wrote nothing.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> that the child <em>outlives Emma</em>
+    on Windows. Removing the creation flags leaves the test green, because a
+    child that inherits the console writes its marker too. What would settle it:
+    start a long run from the Harness page on a real console, close Emma's window
+    rather than pressing Ctrl-C, since the window close is what sends
+    <code>CTRL_CLOSE_EVENT</code> to the console's process group, and check that
+    the child's session file keeps growing. That needs the page's controls and an
+    installed binary.
+  </p>
+  <span class="src">crates/emma/src/runctl.rs &mdash; <code>spawn</code>, <code>Launch</code>; crates/emma/src/usertools.rs &mdash; <code>spawn_detached</code></span>
+
+  <h2 id="policy">Deny All has to name every tool, one at a time</h2>
+
+  <p>
+    A new run can be started under a permissions preset, and <code>Deny All</code>
+    writes out all 26 tool names rather than a wildcard. That is not verbosity:
+    Emma <a href="consent-rules.html">refuses a <code>*</code> in the tool slot of
+    a rule</a>, so &ldquo;deny everything&rdquo; has to be spelled out, and a list
+    that silently missed a tool would be a protection somebody believed they had.
+  </p>
+
+  <p>
+    The list is kept in step by a test rather than by memory:
+    <code>every_registered_tool_is_in_the_deny_all_list</code> builds every tool
+    constructor <code>main.rs</code> registers and fails naming any whose name is
+    missing. That test is the reason the list can be trusted, and it earned its
+    place immediately, because <strong>the list was wrong on arrival in both
+    directions</strong>. The fork's list carried three tools this build does not
+    register, which is harmless since denying a tool that does not exist denies
+    nothing, and it was missing <code>BashOutput</code> and
+    <code>KillShell</code>, which this build does register. A <code>Deny All</code>
+    written from that list left the two background-execution tools callable on
+    the next run.
+    <span class="chip test">tested</span>, and the test is the whole of the
+    list's trustworthiness.
+  </p>
+
+  <p>
+    Writing a policy merges into whatever the settings file already holds, for
+    the same reason the permissions module's own writer does: the file belongs to
+    more than one program, and losing somebody's hooks block to a settings write
+    is a defect found weeks later. A file that is not JSON, or not an object, or
+    whose <code>permissions</code> key is not an object, is not written to at all
+    and the caller is told why.
+    <span class="chip cert">certified</span>: the test parses what it wrote back
+    through the real rule engine and asserts the decision is <code>Deny</code>
+    for <code>Bash</code>, <code>BashOutput</code> and <code>KillShell</code>.
+    Valid JSON is not the guarantee; a decision is.
+  </p>
+  <span class="src">crates/emma/src/runctl.rs &mdash; <code>ALL_TOOLS</code>, <code>READ_ONLY_TOOLS</code>, <code>Policy</code>, <code>lists</code>, <code>write_policy</code>; crates/emma/src/permissions.rs &mdash; <code>Rules::parse</code>, <code>remember</code></span>
+
+  <h2 id="open">What is still open</h2>
+
+  <p>
+    <span class="chip unv">unverified</span> Two reports disagree about Cancel on
+    Windows. One says it should be <code>CTRL_BREAK_EVENT</code>; the other says
+    that only reaches the caller's own console group, which a detached run is
+    not, and recommends refusing. The refusal is what shipped. Trying
+    <code>GenerateConsoleCtrlEvent</code> against a detached child on this box
+    would settle it, and the reading that stopped it being implemented is that
+    the call returns success and delivers nothing, which would be a control that
+    reports it worked and did not.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> Whether <code>verify</code>'s
+    <code>Elsewhere</code> refusal should stop an archive on Unix too. The
+    argument that it should is above; it was not changed, because no report
+    sanctioned the behaviour change and it flips a fork test. The change is
+    deleting two <code>#[cfg(windows)]</code> markers, and it needs a ruling
+    rather than a measurement.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> Everything a person would see. No
+    key on the Harness page reaches this module, so no refusal sentence has been
+    drawn, no <code>harness_control</code> record has been written by a person
+    pressing anything, and <code>supported</code> has never been asked before a
+    control was drawn. The Harness package is what settles all three.
+  </p>
+
+  <footer class="pg">
+    <p>
+      Back to <a href="terminal.html">The terminal</a>, or to
+      <a href="terminal-pages.html">Pages</a>, which is where these controls
+      will be drawn.
+    </p>
+  </footer>
+
+</div>
+</main>
+</div>
+</body>
+</html>

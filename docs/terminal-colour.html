@@ -83,6 +83,7 @@
       <a href="terminal-dock.html">Dock</a>
       <a href="terminal-usertools.html">User tools</a>
       <a href="terminal-pages.html">Pages</a>
+      <a href="terminal-runctl.html">Run control</a>
       <a href="terminal-copying.html">Copying out</a>
     </nav>
 
@@ -530,16 +531,78 @@
   <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/src/term/palette.rs">crates/emma/src/term/palette.rs</a>
   </p>
 
+  <h2 id="accent">The accent can be overridden, by role or by cube index</h2>
+
+  <p>
+    <code>appearance.accent</code> in <code>settings.json</code> holds one of two
+    shapes. A role name &mdash; <code>theme</code>, <code>ok</code>,
+    <code>info</code>, <code>warn</code>, <code>err</code> &mdash; makes the
+    accent <em>borrow</em> that role's swatch from whatever theme is in force.
+    <code>cube:N</code> for <code>N</code> in 16&ndash;231 pins a literal xterm
+    cube index. Anything else parses as nothing, and an unset preference is
+    <code>theme</code>, which is why <code>theme</code> is index 0 of
+    <code>ACCENTS</code>.
+  </p>
+
+  <p>
+    A borrowed accent is a name and a role, never a colour, and that is the whole
+    reason to spell it as a borrow. The swatch still comes out of the theme, so
+    the override survives a theme switch, degrades through <code>Level</code>
+    exactly as every other colour does, and cannot introduce a hex no theme
+    approved. The cube form gives that up on request: it is a literal index, so
+    <code>cube_renderable</code> is false below <code>Level::Ansi256</code> and
+    the picker does not offer the cube at all on a 16-colour terminal, where the
+    theme's own accent is what is drawn.
+    <span class="chip test">tested</span> &mdash;
+    <code>parse_accent_reads_role_names_and_cube_indices</code> (which pins
+    <code>cube:0</code> and <code>cube:999</code> as refusals, not clamps) and
+    <code>a_cube_accent_is_an_index_on_a_256_colour_terminal</code>. Replacing
+    the borrow with a fresh hex fails with <code>the override must be the
+    theme's Ok swatch, not a new hex</code>.
+  </p>
+
+  <p>
+    The choice is ambient rather than a field on the <code>Skin</code>, and the
+    reason is the section below this one: a <code>Skin</code> is
+    <code>Copy</code> and the viewport holds copies, so a picker that changes the
+    accent later must not have to find them all.
+    <code>main.rs</code> reads the stored value and calls
+    <code>activate_accent_choice</code> before the first palette is built, so a
+    saved choice applies from the first frame, and only a <em>live</em> palette
+    (<code>Palette::live</code>) consults the override. A pinned
+    <code>Palette::new</code> or <code>with_theme</code> ignores it, which is the
+    seam that keeps the colour tests independent of whatever a settings file
+    happens to say.
+  </p>
+  <span class="src">crates/emma/src/term/palette.rs &mdash; <code>Accent</code>, <code>ACCENTS</code>, <code>AccentChoice</code>, <code>parse_accent</code>, <code>activate_accent_choice</code>, <code>active_accent_cube</code>, <code>cube_renderable</code>, <code>ACCENT_CUBE</code>, <code>ACCENT_CUBE_COLS</code>, <code>Palette::live</code>; crates/emma/src/main.rs</span>
+
+  <p>
+    <span class="chip unv">unverified</span>: there is no way to pick an accent
+    from inside Emma yet. <code>ACCENT_CUBE</code> is a curated 36-swatch grid,
+    six to a row, drawn for a Settings picker that is not wired, so today the
+    only way to set <code>appearance.accent</code> is to write it into
+    <code>settings.json</code> and restart. What would settle the picker half:
+    the Settings row and its write-back, then opening Settings, choosing a role
+    and a cube swatch, and watching the goal line and the status bar re-hue on a
+    real console.
+  </p>
+
   <h2 id="coverage">Coverage</h2>
 
   <p>
-    <code>palette.rs</code> is 814 lines and was read in full for this page,
-    tests included. It declares 12 function items above the test boundary:
+    <code>palette.rs</code> was read in full for this page, tests included; it
+    is 1,143 lines now that the accent override has landed, up from the 814
+    this paragraph counted. The twelve functions it always had are
     <code>Level::of</code>, <code>Level::detect</code>,
     <code>Palette::new</code>, <code>with_theme</code>, <code>color</code>,
     <code>style</code>, <code>dim</code>, <code>bold</code>, <code>chip</code>,
     <code>band</code>, <code>nearest_index</code> and its inner
-    <code>dist</code>. All 12 are named here: 12 of 12. Two constants
+    <code>dist</code>. The accent adds <code>Palette::live</code>,
+    <code>Accent::role</code>, <code>accent</code>, <code>active_accent</code>,
+    <code>activate_accent</code>, <code>AccentChoice::name</code>,
+    <code>parse_accent</code>, <code>active_accent_cube</code>,
+    <code>activate_accent_choice</code> and <code>cube_renderable</code>, all
+    named above. Two constants
     (<code>BAND_ANSI16_BG</code>, and <code>LEVELS</code> inside the
     derivation) and three types (<code>Level</code>, <code>Role</code>,
     <code>Palette</code>) are covered. Eleven of its eighteen tests are cited by

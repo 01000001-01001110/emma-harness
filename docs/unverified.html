@@ -125,6 +125,58 @@
             against the estimate.</td>
       </tr>
       <tr>
+        <td><strong>The Ollama window estimator against a real tokeniser.</strong>
+            <code>estimate_prompt_tokens</code> counts at four characters per
+            token and a quarter is added as headroom. On the one certified run
+            it over-estimated, which is the safe direction, but that was one
+            prompt of repeated ASCII filler and English prose, CJK or dense JSON
+            would each land differently. See
+            <a href="providers-boundary.html#numctx">the boundary page</a>.</td>
+        <td>Run a corpus of real session prompts through
+            <code>estimate_prompt_tokens</code> and compare each against the
+            server's <code>prompt_eval_count</code>; the ratio must never exceed
+            1.25 in the unsafe direction.</td>
+      </tr>
+      <tr>
+        <td><strong>Anything at all about OpenAI.</strong> Nothing in
+            <code>openai_compat.rs</code> has reached
+            <code>api.openai.com</code>. Both values that distinguish the OpenAI
+            wire from OpenRouter's &mdash;
+            <code>max_completion_tokens</code> and a refused
+            <code>temperature</code> &mdash; are the fork's claims restated, and
+            a loopback stub can only prove Emma sends what the constant says.</td>
+        <td>One call with an OpenAI key to a cheap model sending
+            <code>max_tokens</code>, expecting a 400 that names
+            <code>max_completion_tokens</code>, then
+            <code>temperature: 0.9</code> on a reasoning model. Ten minutes with
+            a key.</td>
+      </tr>
+      <tr>
+        <td><strong>Six of the seven language servers.</strong> Bash, terraform,
+            ansible and python are installed on neither machine; bicep resolves
+            here and has never been started; the PowerShell command line has
+            never been executed because there is no <code>pwsh</code>. Their
+            <code>caveat</code> and <code>install</code> strings are the fork's
+            claims with the platform wording rewritten. See
+            <a href="tools-lsp.html#languages">Code intelligence</a>.</td>
+        <td>Install the server named in that page's table and run
+            <code>Diagnostics</code> on a file of that kind with a deliberate
+            error in it. One language at a time.</td>
+      </tr>
+      <tr>
+        <td><strong>Whether the two model measurements behind
+            <code>Edit</code>'s label tolerance are reproducible.</strong>
+            &ldquo;nemotron-3.5-lightning:30b-mlx sent eight labelled anchors in
+            one run&rdquo; and &ldquo;ornith:35b lost a run emitting
+            <code>1088#f011</code> as replacement text&rdquo; are the fork's
+            comments, dated 2026-08-24, and neither was reproduced here. The same
+            goes for the 14 firings that justified accepting both addressing
+            forms at once.</td>
+        <td>A keyless local run against Ollama with a model of that class,
+            driving <code>Read</code> then <code>Edit</code>; and the owner's
+            session store, if those runs survive.</td>
+      </tr>
+      <tr>
         <td><strong>Whether the two SVG figures on each page render correctly.</strong>
             Every diagram in this site was validated by parsing the XML and
             checking coordinates against the <code>viewBox</code>. None was
@@ -162,13 +214,17 @@
             daemon's post-abandonment <code>SIGPIPE</code> result.</td>
       </tr>
       <tr>
-        <td><strong>Chrome is never reaped on unix.</strong> The child is
-            dropped without waiting, so every killed browser should leave a
-            zombie. Found by reading; never observed. Note that
-            <code>kill -0</code> succeeds against a zombie, so the obvious check
-            reports the opposite of the truth.</td>
-        <td>Open and close a session on Linux or macOS, then check
-            <code>ps -o state=</code> for the pid.</td>
+        <td><strong>Whether Chrome is reaped on unix now.</strong> It was not,
+            and every killed browser left a zombie;
+            <code>reap_when_it_exits</code> fixed that on 2026-09-06 by moving
+            the handle onto a thread that waits. The fix is
+            <code>#[cfg(unix)]</code> and this is a Windows box, so the arm is
+            not even compiled here. Note that <code>kill -0</code> succeeds
+            against a zombie, so the obvious check reports the opposite of the
+            truth.</td>
+        <td>On Linux or macOS, kill a session's Chrome and check
+            <code>ps -o stat= -p &lt;pid&gt;</code>; and run
+            <code>reaping_collects_a_child_exit_status</code> there.</td>
       </tr>
       <tr>
         <td><strong>Whether <code>/copy</code> reaches the clipboard.</strong>
@@ -220,6 +276,35 @@
             warning fires and whether the directories it names are on disk.</td>
       </tr>
       <tr>
+        <td><strong>Every unix path in <code>runctl</code>.</strong>
+            <code>libc::kill</code>, <code>setsid</code>,
+            <code>/proc/&lt;pid&gt;/comm</code> and the <code>ps -o comm=</code>
+            fallback are the fork's code, unchanged, and this box has no unix to
+            run them on. On Windows all three signals refuse outright, so the
+            only platform where pause, resume and cancel do anything is the one
+            that has never run them. See
+            <a href="terminal-runctl.html">Acting on a run</a>.</td>
+        <td>The macOS leg of the port's certification order.</td>
+      </tr>
+      <tr>
+        <td><strong>The symlink containment guarantee under
+            <code>include_ignored</code>.</strong>
+            <code>a_symlink_out_of_the_tree_is_never_followed</code> is
+            <code>#[cfg(unix)]</code> and did not run here, and
+            <code>include_ignored</code> is a new argument that widens what the
+            walk reaches.</td>
+        <td>Run the suite on macOS, or enable Developer Mode here and add a
+            <code>#[cfg(windows)]</code> twin.</td>
+      </tr>
+      <tr>
+        <td><strong>That archiving a live run on Windows really would split a
+            transcript.</strong> The guard is tested against a fake process
+            table; what it defends against is read out of the standard library's
+            documented open flags rather than watched.</td>
+        <td>Two processes and a <code>std::fs::rename</code> under a live
+            appender. Twenty lines, on this box.</td>
+      </tr>
+      <tr>
         <td><strong>Whether a daemonized hook outlives Emma's own process.</strong>
             The environment it was tested in confounds the result: a plain
             unrelated parent behaved the same way, so nothing there is
@@ -251,6 +336,24 @@
           <td>Press Ctrl-C in a real session and confirm the terminal is intact.</td></tr>
       <tr><td>Whether a <code>#[cfg(unix)]</code> arm added for the platform sweep even compiles.</td>
           <td>Build on the Mac. It could not be compiled on this machine.</td></tr>
+      <tr><td>The Help page and the Code page, drawn on a console. Both landed 2026-09-06 and what exists for each is a <code>Buffer</code>.</td>
+          <td>Open a framed session, press <code>Ctrl+/</code> and <code>Alt+c</code>, at a few widths and at 40 columns.</td></tr>
+      <tr><td>Whether <code>Ctrl+/</code> arrives as <code>Ctrl+/</code>. Some terminals send <code>0x1F</code>, <code>Ctrl+_</code> or <code>Ctrl+7</code>; the folding is copied from the fork and believed rather than measured.</td>
+          <td>A keystroke dump on macOS Terminal.app, iTerm2 and Windows Terminal.</td></tr>
+      <tr><td>Whether a rebound chord in <code>~/.emma/keybindings.json</code> actually takes. The parse, the load and the printed label are tested; no key has been pressed.</td>
+          <td>Write the file, start Emma, press the new chord.</td></tr>
+      <tr><td>Whether a two-row scrollbar thumb is grabbable with a mouse, and whether an anchored drag after a wheel scroll really leaves the view still.</td>
+          <td>On a long session, grab the thumb without moving the pointer and watch.</td></tr>
+      <tr><td>The sidebar calendar on a real console, with the machine's real local offset, and whether it survives a short pane once QUICK HELP has taken its rows.</td>
+          <td>Run it and look at a few pane heights.</td></tr>
+      <tr><td>Whether a click on a sidebar TOOLS row does anything. <code>hits</code> reports a rectangle per clickable row and nothing consults it.</td>
+          <td>The dispatch in <code>App::click</code>, plus a test driving a click and the chord through one path.</td></tr>
+      <tr><td>The accent override end to end. There is no way to pick one from inside Emma; <code>appearance.accent</code> has to be written into <code>settings.json</code> by hand.</td>
+          <td>The Settings row and its write-back, then choose a role and a cube swatch and watch the goal line re-hue.</td></tr>
+      <tr><td>Every control on the Harness page. The nine action-bar keys are inert: <a href="terminal-runctl.html"><code>runctl</code></a> exists and no key reaches it.</td>
+          <td>The Harness package's wiring.</td></tr>
+      <tr><td>Whether a run spawned from Emma outlives Emma on Windows. Removing the detached creation flags leaves the test green, because a child that inherits the console writes its marker too.</td>
+          <td>Start a long run, close Emma's window rather than pressing Ctrl-C, and watch the child's session file keep growing.</td></tr>
     </tbody>
   </table>
   </div>

@@ -159,6 +159,20 @@
 </p>
 <span class="src">tools/web/src/search.rs &mdash; <code>ENGINE</code>, <code>WebSearch::network_target</code></span>
 
+<p>
+  <code>count</code> cuts the list after the results have been read off the
+  page, so the tool knows how many it threw away and says so:
+  <code>{n} of {arrived} results shown, cut by count={m}; re-search with
+  count={arrived} for the rest &mdash; {arrived} is all this page held</code>.
+  The last clause is the part that matters, because it is the difference between
+  a remedy a caller can follow and one that invites a second search for results
+  that were never there. A results page holds what it holds.
+  <span class="chip test">tested</span> &mdash;
+  <code>a_count_below_what_arrived_names_the_cut</code>, which goes red when the
+  count of what arrived is replaced by the count of what was kept.
+</p>
+<span class="src">tools/web/src/search.rs &mdash; <code>hits</code>, <code>render</code></span>
+
 <h3>Why a browser and not an API</h3>
 
 <p>
@@ -277,6 +291,7 @@
       <tr><td><code>url</code> <em>required</em></td><td>none</td><td>http/https only; loopback, <code>file:</code> and <code>chrome:</code> refused</td></tr>
       <tr><td><code>max_chars</code></td><td class="num">8000</td><td class="num">200,000; bounds the prose only</td></tr>
       <tr><td><code>max_links</code></td><td class="num">50</td><td class="num">120, which is also the most this browser collects from one page</td></tr>
+      <tr><td><code>offset</code></td><td class="num">0</td><td>a character offset into the page's prose; past the end names the last window rather than reading as an empty page</td></tr>
     </tbody>
   </table>
 </div>
@@ -334,7 +349,7 @@
     <tbody>
       <tr>
         <td>page text</td>
-        <td><code>page text cut to {shown} of {total} characters by max_chars={n}; re-read with max_chars={total} for the whole page</code></td>
+        <td><code>page text {offset}-{next} of {total} characters, cut by max_chars={n}; continue with offset={next} on the same url (a second fetch of the page, not a cached slice)</code></td>
       </tr>
       <tr>
         <td>links</td>
@@ -351,6 +366,28 @@
     </tbody>
   </table>
 </div>
+
+<p>
+  The page-text remedy used to be <code>re-read with max_chars={total}</code>,
+  and it was a lie in two directions. On a long page it asked for a quarter of
+  the model's context in one message; on a longer one it named a number above
+  the 200,000 ceiling, so the advice could not be followed at all. What replaced
+  it on 2026-09-06 is the filesystem <code>Read</code> contract: name this
+  window, name the whole document's size, and name the exact call that returns
+  the next window. <code>offset</code> is that call's argument, and the notice
+  says the second fetch is a real page load rather than a cached slice, because
+  nothing here is cached and a reader who assumes a free seek has budgeted
+  wrongly. An offset past the end is arithmetic rather than an empty page, so it
+  says where the last window starts instead of returning nothing.
+  <code>BrowserRead</code> gains the same argument under the same contract.
+  <span class="chip test">tested</span> &mdash;
+  <code>a_text_cut_names_the_window_and_the_call_that_continues_it</code>.
+  <span class="chip unv">unverified</span> against a live page: the two-window
+  continuation has only been driven over fixtures here.
+  <code>cargo test -p emma-tools-web --test fetch -- --ignored a_long_page</code>
+  needs network and Chrome twice, and would settle it.
+</p>
+<span class="src">tools/web/src/digest_md.rs &mdash; <code>Limits::at_offset</code>, <code>render</code>; tools/web/src/fetch.rs &mdash; <code>text_window</code>, <code>schema</code></span>
 
 <p>
   <code>max_links</code> exists because the two budgets cut different things and
@@ -931,6 +968,35 @@
 </p>
 <span class="src">tools/web/src/args.rs — module doc, <code>deny_unknown</code>, <code>object</code></span>
 
+<h2 id="reaping">A killed Chrome that answers &ldquo;alive&rdquo;</h2>
+
+<p>
+  On Unix, spawning a detached Chrome used to end in <code>drop(child)</code>,
+  commented <em>&ldquo;do not wait, Chrome outlives this command&rdquo;</em>.
+  That is true of the command-line binary and wrong of Emma.
+  <code>Child::drop</code> does not reap on Unix, so a child that has been
+  killed but never waited on becomes a zombie: the process is dead and its pid
+  stays in the table until its parent collects it. <code>kill -0</code> succeeds
+  on a zombie, so every liveness check in the crate went on answering &ldquo;still
+  running&rdquo; about a Chrome that had already taken a SIGKILL. The fork
+  measured 181 leaked Chromes on macOS on 2026-08-26, and <code>ps</code>
+  reported <code>Z &lt;defunct&gt;</code> while <code>kill -0</code> returned 0
+  for the whole ten seconds the lifecycle test waits.
+  <code>reap_when_it_exits</code> now moves the handle onto a thread that blocks
+  in <code>wait</code> for the life of the browser, so the CLI is unchanged and
+  Emma's pid table is not. It is the same shape <code>tools/lsp</code> recorded:
+  correct for a binary, wrong for a library.
+</p>
+<span class="src">tools/web/src/chromehand/session.rs &mdash; <code>reap_when_it_exits</code>, <code>spawn_chrome_detached</code></span>
+
+<p>
+  <span class="chip unv">unverified</span> on the machine that has the defect.
+  <code>reaping_collects_a_child_exit_status</code> is <code>#[cfg(unix)]</code>
+  and this box is Windows, where the arm is not even compiled. What would settle
+  it: on macOS, kill a session's Chrome, run <code>ps -o stat= -p &lt;pid&gt;</code>
+  and confirm the pid clears, and run that test there.
+</p>
+
 <h2 id="unverified">What is not verified here</h2>
 
 <p>
@@ -964,7 +1030,7 @@
 <p>
   <span class="chip unv">unverified</span> This page reads
   <code>lib.rs</code>, <code>fetch.rs</code>, <code>search.rs</code>,
-  <code>credentials.rs</code>, <code>browser/mod.rs</code>,
+  <code>browser/mod.rs</code>,
   <code>browser/tools.rs</code>, <code>browser/render.rs</code> and
   <code>chromehand/policy.rs</code> in full, and <code>browser/pool.rs</code>,
   <code>digest_md.rs</code> and <code>chromehand/mod.rs</code> in part. The

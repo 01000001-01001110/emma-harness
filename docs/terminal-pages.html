@@ -83,18 +83,20 @@
       <a href="terminal-dock.html">Dock</a>
       <a href="terminal-usertools.html">User tools</a>
       <span class="now">Pages</span>
+      <a href="terminal-runctl.html">Run control</a>
       <a href="terminal-copying.html">Copying out</a>
     </nav>
 
   <p class="lede">
-    <code>Alt+,</code>, <code>Alt+m</code> and <code>Alt+h</code> each replace
-    the middle of the frame with a page and nothing else: Settings, Memory and
-    the Harness dashboard. The sidebar, the dock and the status row stay exactly
-    where they were, and <code>Esc</code> puts the conversation back with its
-    scroll position intact. A fourth chord, <code>Alt+d</code>, used to do the
-    same for a Data Explorer page. That page was removed 2026-08-27, so the
-    sidebar shows the row as <code>n/a</code> and pressing the chord prints a
-    line saying there is nothing to open. What the three pages draw is only what
+    Five chords each replace the middle of the frame with a page and nothing
+    else: <code>Alt+,</code> Settings, <code>Alt+m</code> Memory,
+    <code>Alt+h</code> the Harness dashboard, <code>Alt+c</code> Code, and
+    <code>Ctrl+/</code> Help. The sidebar, the dock and the status row stay
+    exactly where they were, and <code>Esc</code> puts the conversation back
+    with its scroll position intact. A sixth chord, <code>Alt+d</code>, used to
+    do the same for a Data Explorer page. That page was removed 2026-08-27, so
+    the sidebar shows the row as <code>n/a</code> and pressing the chord prints
+    a line saying there is nothing to open. What the pages draw is only what
     Emma actually has, and each one names in words the panel it is not
     drawing.
   </p>
@@ -111,15 +113,22 @@
 
   <pre><code>settings_open: bool,
 memory: Option&lt;super::memory::MemoryView&gt;,
-harness: Option&lt;super::harness::HarnessView&gt;,</code></pre>
-  <span class="src">crates/emma/src/term/app.rs &mdash; <code>App</code>'s page fields, <code>App::toggle_settings</code>, <code>App::toggle_memory</code>, <code>App::toggle_harness</code></span>
+harness: Option&lt;super::harness::HarnessView&gt;,
+help: Option&lt;super::help::HelpView&gt;,
+code: Option&lt;super::code::CodeView&gt;,</code></pre>
+  <span class="src">crates/emma/src/term/app.rs &mdash; <code>App</code>'s page fields, <code>App::toggle_settings</code>, <code>App::toggle_memory</code>, <code>App::toggle_harness</code>, <code>App::toggle_help</code>, <code>App::toggle_code</code></span>
 
   <p>
-    Three pages, and Data Explorer is not among them. Settings is a
-    <code>bool</code> because its interaction state lives in a
-    <code>SettingsView</code> that is always present. Memory and Harness are
-    <code>Option</code>s because each one is rebuilt from disk when it opens, so
-    the absence of the value and the absence of the page are the same fact.
+    Five pages, and Data Explorer is not among them. This paragraph said three
+    until 2026-09-06, when Help and Code landed; the shape it describes did not
+    have to change to take them, which is the argument for the shape. Settings
+    is a <code>bool</code> because its interaction state lives in a
+    <code>SettingsView</code> that is always present. Memory, Harness, Help and
+    Code are <code>Option</code>s because each is rebuilt when it opens, so the
+    absence of the value and the absence of the page are the same fact. Each
+    <code>toggle_</code> clears the other four: one occupant of the main region
+    at a time, which is a rule every page obeys rather than a rule any one page
+    enforces.
   </p>
 
   <p>
@@ -229,6 +238,16 @@ harness: Option&lt;super::harness::HarnessView&gt;,</code></pre>
           <td>The mock's full chrome: an action bar, six cards, an event log and a trace band. RUNTIME STATUS is live today, since the binary, the version and the workspace are things Emma knows.</td>
           <td>The rest of the numbers. ACTIVE RUNS, WORKER POOL, TASK QUEUE, TOOL GATES and RESOURCES render from a <code>HarnessView</code> that is empty until a backend exists, so the cards keep their shape and show honest zeros and one-line dim empty states. Drawing the mock's sample runs as though they were real would be the status bar's own rule broken at page size.</td>
         </tr>
+        <tr>
+          <td>Help</td>
+          <td><code>help::SECTIONS</code>, scrolled. The chords it prints are the chords bound now, resolved through the keymap rather than typed into the text.</td>
+          <td>Nothing, because there is nothing here that is not Emma's own surface. The page has no second copy of the text to be wrong: <code>emma --help</code> is built from the same constant at call time, so a rebound chord shows up in both and the two cannot drift.</td>
+        </tr>
+        <tr>
+          <td>Code</td>
+          <td>An EXPLORER tree of the tracked files, the selected file's contents, and that file's commit history with the patch each commit introduced. Read-only.</td>
+          <td>Editing. There is no cursor and no write path in this stage, and the footer says <code>read-only</code> rather than leaving the reader to find out by pressing a key. <code>F7</code> and the header's <code>[Editor]</code> button hand the file to the external editor, which is where editing happens.</td>
+        </tr>
       </tbody>
     </table>
   </div>
@@ -246,9 +265,25 @@ harness: Option&lt;super::harness::HarnessView&gt;,</code></pre>
   </p>
 
   <p>
+    One thing the Harness row does not yet say out loud: <strong>the action
+    bar's nine keys are inert.</strong> <code>ACTIONS</code> is the mock's pairs
+    in the mock's order &mdash; <code>a</code> Run, <code>p</code> Pause,
+    <code>r</code> Resume, <code>x</code> Cancel and five more &mdash; and
+    nothing routes any of them. The module that would answer them exists:
+    <a href="terminal-runctl.html"><code>runctl</code></a> landed on 2026-09-06
+    with the verification, the signalling and the detached spawn behind it, and
+    no key on this page reaches it. That is a drawn control that does nothing,
+    which is the defect class this page's own Memory story is about, so it is
+    named here rather than left to be discovered.
+    <span class="chip cert">certified</span>: grep the tree for
+    <code>runctl</code> and the only hit outside the module is its
+    <code>pub mod</code> line in <code>lib.rs</code>.
+  </p>
+
+  <p>
     <span class="chip test">tested</span> for the Harness row above, since
     2026-09-05. <code>each_pages_disclosure_belongs_to_that_page_alone</code>
-    now opens all three pages: its third arm points the Harness page at an empty
+    now opens Settings, Memory and Harness: its third arm points the Harness page at an empty
     session directory and asserts <code>EMPTY_RUNS</code> is on its painted
     cells and on neither of the other two. That arm needed a seam
     (<code>App::set_harness_dir</code>) before it could be honest, because the
@@ -268,18 +303,125 @@ harness: Option&lt;super::harness::HarnessView&gt;,</code></pre>
     parsed would describe a damaged library as a tidy one.
   </p>
 
+  <h2 id="help">Help, which is the same text <code>--help</code> prints</h2>
+
+  <p>
+    <code>Ctrl+/</code> opens the Help page, and <code>?</code> at an empty
+    prompt does the same. It is checked first in the page reader, before every
+    other page's key, so it opens over whatever else is up. The page holds no
+    text of its own: <code>HelpView</code> is a scroll offset and two numbers the
+    last paint discovered, and the rows are built from
+    <code>help::SECTIONS</code> at paint time because they depend on the width. A
+    stored copy would be the second source of truth the module exists to avoid.
+  </p>
+
+  <p>
+    The interesting half is one file over. <strong><code>cli.rs</code> no longer
+    holds the session help text at all.</strong> <code>emma --help</code> is
+    built at call time from the same <code>SECTIONS</code> the page draws, so a
+    rebound chord shows up in <code>--help</code> and the page cannot drift from
+    the terminal output. A chord in the text is an <code>Entry</code> keyed by
+    <code>Key::Bound(Action)</code> rather than a literal, which is what makes
+    that true: the keymap resolves it when it is drawn.
+    <span class="chip test">tested</span> &mdash; the key seam and both
+    renderings are covered, and
+    <code>a_rebound_chord_reaches_both_renderings</code> installs a keymap and
+    asserts the new spelling appears in the page and in the plain text.
+  </p>
+  <span class="src">crates/emma/src/term/help.rs &mdash; <code>SECTIONS</code>, <code>HelpView</code>, <code>handle_key</code>, <code>plain</code>; crates/emma/src/cli.rs; crates/emma/src/term/input.rs &mdash; <code>run_page_key</code></span>
+
+  <h2 id="code">Code, and the chord that stopped launching an editor</h2>
+
+  <p>
+    <code>Alt+c</code> opened the configured editor on the project until
+    2026-09-06. It now opens a page, on the owner's ruling, and the editor is
+    <code>F7</code> or the header's <code>[Editor]</code> button inside that
+    page. Nothing about the editor launch was thrown away: the same
+    <code>usertools::launch</code> call runs, so the
+    <code>tools.editor</code> setting, the <code>$VISUAL</code> and
+    <code>$EDITOR</code> fallbacks and the PATH probe all stay live and
+    reachable. One row in the sidebar, two doors.
+  </p>
+
+  <p>
+    Three regions: an EXPLORER tree on the left, and on the right a header over
+    either the open file's contents or its commit history with the patch the
+    selected commit introduced. <code>F3</code> and the clickable
+    <code>FILE&nbsp;&middot;&nbsp;HISTORY</code> tabs move between the two.
+    <code>Tab</code> moves between panes, <code>Enter</code> opens, and the
+    footer says <code>read-only</code> in as many words.
+  </p>
+
+  <p>
+    Two numbers bound what the page will take on. <code>MAX_FILE</code> is
+    1&nbsp;MiB, past which a file is not read into the viewer, and
+    <code>MAX_PATHS</code> is 20,000 entries in the tree. Raw file bytes are
+    sanitised before they reach a cell, because a TAB in a cell is the
+    column-budget class this repository has already fixed once elsewhere.
+  </p>
+
+  <p>
+    The page is read-only and the write path is not, which matters for whoever
+    adds one: <code>code_git::joined</code> puts a file back with the line ending
+    the file itself had, CRLF or LF, and the trailing-newline shape it had when
+    it was opened. A save that normalises to LF on a Windows checkout rewrites
+    every line of the file and calls it an edit.
+    <span class="chip test">tested</span> &mdash; making
+    <code>detect_line_ending</code> always answer LF, and making
+    <code>joined</code> always append a trailing newline, each turn the
+    round-trip tests red.
+  </p>
+  <span class="src">crates/emma/src/term/code.rs &mdash; <code>CodeView</code>, <code>takes_key</code>, <code>handle_key</code>, <code>click</code>, <code>CodeAction::LaunchEditor</code>, <code>EDITOR_LABEL</code>; crates/emma/src/term/code_git.rs &mdash; <code>MAX_FILE</code>, <code>MAX_PATHS</code>, <code>paths</code>, <code>read_file</code>, <code>detect_line_ending</code>, <code>joined</code>, <code>history</code>, <code>diff_at</code>; crates/emma/src/term/frame.rs &mdash; <code>Frame::launch_tool</code></span>
+
+  <p>
+    <span class="chip cert">certified</span> against this repository on
+    2026-09-06, Windows: the real <code>code_git</code> answered
+    <code>paths</code> with 355 entries in 16.2 ms and read a file in 0.68 ms;
+    the tree nested correctly, Windows separators came back as <code>/</code>,
+    and no escape byte reached a cell over a real patch. The same run measured
+    <code>git log --follow</code> and <code>git show</code> at 32 ms and 20 ms on
+    a 289-commit repository, and the report's wider range is 17 to 475 ms.
+  </p>
+
+  <p>
+    One module beside it is a declared stub and not a defect:
+    <code>crates/emma/src/term/code_lsp.rs</code> is the bridge between this
+    page's editor and the language servers the model's tools already run. It is
+    blocked on client methods that do not exist yet, and its own doc says not to
+    stub a second language table in this crate to unblock it. It is named here
+    so that a reader who finds an empty module knows it is waiting rather than
+    forgotten.
+  </p>
+
+  <p>
+    That measurement is the reason the page has sinks rather than return values.
+    History and diff run on a worker and hand their answers back through two
+    setters, because a keystroke handler that waits on a process is an event loop
+    that has stopped. Anybody simplifying it back to a synchronous call needs the
+    475 in front of them.
+  </p>
+
   <h2 id="keys">Getting in, and getting back out</h2>
 
   <p>
-    The chords are the tools&rsquo; own, unchanged: the sidebar advertises
-    <code>Alt+,</code>, <code>Alt+d</code> and <code>Alt+m</code>, but only
-    two of them are intercepted before they reach
-    <code>usertools::launch</code>: <code>Frame::launch_tool</code> handles
-    <code>Alt+,</code> and <code>Alt+m</code> itself. <code>Alt+d</code> falls
-    through to <code>usertools::launch</code>, which refuses it, because no
-    page has taken that key since the Data Explorer was removed. Where a page
-    does open, the frame already knows the session path because the status
-    row shows it, and the page is handed a finished snapshot.
+    Four of the five chords are the tools&rsquo; own, intercepted in
+    <code>Frame::launch_tool</code> before they reach
+    <code>usertools::launch</code>: <code>Alt+,</code>, <code>Alt+m</code>,
+    <code>Alt+h</code> and, since 2026-09-06, <code>Alt+c</code>.
+    <code>Alt+d</code> falls through to <code>usertools::launch</code>, which
+    refuses it, because no page has taken that key since the Data Explorer was
+    removed. <code>Ctrl+/</code> is not a tool chord at all and is answered by
+    the page reader directly. Where a page does open, the frame already knows the
+    session path because the status row shows it, and the page is handed a
+    finished snapshot.
+  </p>
+
+  <p>
+    <code>Tool::Code</code> stays out of <code>in_app()</code> even though
+    <code>Alt+c</code> now opens a page, and that is not an oversight. The
+    predicate governs whether <code>plan_code</code>'s settings chain and PATH
+    probe stay reachable, and they have to, because <code>F7</code> inside the
+    page still calls them.
   </p>
   <span class="src">crates/emma/src/term/frame.rs &mdash; <code>Frame::launch_tool</code>, <code>Frame::leave_page</code></span>
 
@@ -355,19 +497,68 @@ harness: Option&lt;super::harness::HarnessView&gt;,</code></pre>
     <code>Alt+,</code> as the frame expects, or that the page painted without
     tearing. <code>Frame</code> cannot be constructed in a test binary at all, so
     the chord path from key press to painted page is genuinely uncovered.
-    <em>What would settle it:</em> open a framed session, press each of the three
-    chords and <code>Esc</code>, and say what appeared.
+    <em>What would settle it:</em> open a framed session, press each of the five
+    chords and <code>Esc</code>, and say what appeared. Help and Code, which
+    landed on 2026-09-06, have never been drawn on a console at all: what exists
+    for each is a <code>Buffer</code>, and a cell buffer is not a console. This
+    repository has shipped a fully-tested scrollback defect twice out of exactly
+    that gap.
   </p>
 
   <p>
     <span class="chip unv">unverified</span> Behaviour at very narrow widths is
-    untested for all three pages named in the lede. Settings at 80×24 is covered
+    untested for every page named in the lede. Settings at 80×24 is covered
     by <code>a_page_that_runs_out_of_room_says_how_much_is_missing</code> in
     <code>term/guarantees.rs</code>; Memory compresses rather than clips. At 40
     columns specifically, nobody has rendered each remaining page and decided
     whether clipping or wrapping is wanted.
-    <em>What would settle it:</em> render Settings and Memory at 40 columns on
-    a <code>TestBackend</code> and inspect the painted cells.
+    <em>What would settle it:</em> render each page at 40 columns on a
+    <code>TestBackend</code> and inspect the painted cells.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> <code>Ctrl+/</code> may not arrive
+    as <code>Ctrl+/</code>. Some terminals report that chord as
+    <code>0x1F</code>, as <code>Ctrl+_</code> or as <code>Ctrl+7</code>, and the
+    reader folds all three into one action. The folding is copied from the fork
+    and believed rather than measured: no terminal on either machine reports it
+    the other way, so the arm is exercised only by a unit test that feeds the
+    event its author assumed.
+    <em>What would settle it:</em> a keystroke dump on macOS Terminal.app,
+    iTerm2 and Windows Terminal, recording which of the three each actually
+    sends. <code>?</code> at an empty prompt opens the same page and does not
+    depend on any of this.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> The Code viewer's column arithmetic
+    on wide characters. Rows go through <code>fit</code>, which is column-aware,
+    so a CJK line should not overrun its pane, and there is no cursor in this
+    stage so the char-versus-column desynchronisation the fork hit cannot bite
+    here. It becomes live the moment a cursor is added.
+    <em>What would settle it:</em> open a file with a CJK line in the page on a
+    real terminal.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> Whether <code>git ls-files</code>
+    at 16 to 46 ms is acceptable synchronously when the Code page opens. It runs
+    once, on the same footing as the Harness page's read. On a monorepo it will
+    be worse, and <code>MAX_PATHS</code> bounds the vector rather than the git
+    call.
+    <em>What would settle it:</em> time <code>git ls-files</code> on a
+    repository with more than 100,000 tracked files; past roughly 150 ms the
+    page open needs the same worker treatment the history already has.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> The keymap is one process-wide
+    cell, and three test modules install into it on different threads of one
+    <code>cargo test</code> process with nothing serialising them. A green run
+    is not proof they cannot interleave; it has not flaked in about ten runs
+    here.
+    <em>What would settle it:</em> a shared test lock in <code>keymap.rs</code>
+    that all three take.
   </p>
 
   <footer class="pg">

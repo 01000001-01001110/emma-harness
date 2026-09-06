@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Compaction without a model call · Sessions &amp; context · Emma</title>
+<title>Compaction, and the model call it now makes · Sessions &amp; context · Emma</title>
 <link rel="stylesheet" href="assets/docs.css">
 </head>
 <body>
@@ -54,7 +54,7 @@
 <div class="col">
 
   <p class="eyebrow">Sessions &amp; context</p>
-  <h1>Compaction without a model call</h1>
+  <h1>Compaction, and the model call it now makes</h1>
 
   <nav class="chapter">
     <a class="up" href="session.html">Sessions &amp; context</a>
@@ -68,12 +68,16 @@
   </nav>
 
   <p class="lede">
-    Whole finished goals, replaced oldest-first with their goal text, their
-    final answer and a fixed sentence saying the tool traffic is gone. No model
-    is asked anything. The design note for this feature recommended the
-    opposite, and that reversal is the main subject of this page.
+    Whole finished goals, replaced oldest-first with a summary a model writes,
+    falling back to their goal text, their final answer and a fixed sentence
+    when the model cannot be asked or does not help. This page used to be called
+    <em>&ldquo;Compaction without a model call&rdquo;</em> and its subject was a
+    reversal: the design note recommended asking a model and was overruled. On
+    2026-09-06 the reversal was reversed, so the subject is now what it cost to
+    overrule the note, what changed, and the four guardrails that answer each
+    objection it raised.
   </p>
-  <span class="src">crates/emma/src/agent.rs — <code>compact_if_needed</code>, <code>compact</code>, <code>summarise</code>, <code>estimate</code></span>
+  <span class="src">crates/emma/src/agent.rs — <code>compact_if_needed</code>, <code>model_summary</code>, <code>compact</code>, <code>summarise</code>, <code>shed_the_running_goal</code>, <code>estimate</code></span>
 
   <div class="key">
     <div><span class="chip cert">certified</span> proven, and repeatable: a file, a command, a count you can redo</div>
@@ -502,13 +506,16 @@ self.s.log.append(
 
   <ul class="body">
     <li>
-      <strong>No model call.</strong> Three arguments, in the order
-      <code>agent.rs</code> makes them: it would spend the budget of whichever
-      goal happens to be running; it can fail in the middle of one; and it
-      produces a claim about the conversation where the mechanical version
-      produces a record of it. The note also warned that a model-written summary
-      can be wrong. It offered two mitigations and described neither as a
-      fix.
+      <strong>No model call &mdash; until 2026-09-06.</strong> Three arguments
+      were made against it: it would spend the budget of whichever goal happens
+      to be running; it can fail in the middle of one; and it produces a claim
+      about the conversation where the mechanical version produces a record of
+      it. The note also warned that a model-written summary can be wrong, and
+      offered two mitigations while describing neither as a fix. Every one of
+      those objections is still true. What changed is that the deterministic
+      collapse was measured and found to be worse than a wrong summary, and each
+      objection was answered with a guardrail rather than argued away. The next
+      section is the whole of it.
     </li>
     <li>
       <strong>Half the cap, not a fixed floor.</strong>
@@ -529,6 +536,184 @@ self.s.log.append(
     </li>
   </ul>
   <span class="src">crates/emma/src/agent.rs — <code>compact_if_needed</code> doc</span>
+
+  <h2 id="summariser">What it cost to overrule the note, and what changed</h2>
+
+  <p>
+    The deterministic collapse replaces a finished goal with its goal text, its
+    answer, and a sentence saying the tool traffic is gone. That is a faithful
+    record of what happened and it is not a usable handover: the reasoning, the
+    constraints the user stated, and the state of the work all lived in the tool
+    traffic. The measurement that moved this was 129,254 tokens of conversation
+    collapsing to something a model could not pick the work up from.
+  </p>
+
+  <p>
+    So <code>model_summary</code> asks. One call, no tools, no history,
+    <code>Caching::Off</code>, against a prompt asking for the decisions and why,
+    the current state, what remains, the file paths by full path, and any
+    constraint or correction the user stated in their own terms; and asking it to
+    drop tool-result bodies, dead ends and commentary about the summary itself.
+    It asks for prose rather than JSON, because what the answer becomes is a
+    message in a conversation and a structure would add a parse that can fail
+    and buy nothing.
+  </p>
+
+  <p>
+    Four guardrails, one per objection.
+  </p>
+
+  <ul class="body">
+    <li>
+      <strong>A budget floor.</strong> The tokens are the running goal's,
+      metered on the same <code>Spend</code> as every other call, so a
+      compaction that pushed the goal over <code>max_tokens</code> would have
+      ended the goal in order to shorten its conversation.
+      <code>SUMMARY_BUDGET_FLOOR</code> is 50,000 weighted tokens, sized above
+      the answer budget plus the input, so the call cannot be started when it
+      could not be afforded. Under the floor, the deterministic collapse runs
+      and the reason is written down.
+    </li>
+    <li>
+      <strong>A timeout.</strong> <code>SUMMARY_TIMEOUT</code> is 120 seconds.
+      Compaction sits on the path of a request that has already passed the cap,
+      so somebody is waiting on it, and a compaction nobody can interrupt for an
+      hour is worse than a deterministic summary now.
+    </li>
+    <li>
+      <strong>An input cap.</strong> <code>SUMMARY_INPUT_CHARS</code> is
+      120,000, roughly 30,000 tokens at the packer's ratio. The conversation
+      being folded is by construction the largest thing in the session, which is
+      why it is being folded, so sending all of it would reproduce the oversized
+      request compaction is being run to prevent.
+    </li>
+    <li>
+      <strong>A size check that has the last word.</strong>
+      <code>compact</code> still refuses a replacement that does not shrink the
+      conversation, and that guard is not a formality. A model that returns a
+      long answer to a short stretch of goals is answered with the collapse.
+    </li>
+  </ul>
+
+  <p>
+    <code>ModelSummary</code> carries the text or the reason there is none, and
+    the tokens either way. A call that failed <em>after</em> the provider
+    answered was still billed, and a record showing zero would understate what
+    compaction spent. The failure modes are all one shape: no text, a
+    <code>fallback</code> sentence, and the deterministic collapse.
+  </p>
+
+  <p>
+    The note under a summary is a different sentence from the note under a
+    collapse, and the reason is worth keeping. <code>COMPACTED_NOTE</code> opens
+    by promising the text above it is preserved word for word, which is the
+    whole reason the collapse can be trusted and is exactly what a summary is
+    not. <code>SUMMARISED_NOTE</code> says the text was written by a model
+    rather than quoted, tells the model to treat it as a recap rather than a
+    quotation, and tells it not to attribute the words to the user. Saying the
+    first sentence over a summary would be a sentence that is true of the
+    mechanism it was written for and false about the text it is attached to.
+  </p>
+
+  <p>
+    The replacement is a user message and an assistant text message and nothing
+    else: no thinking block, so no signature, so nothing bound to the model that
+    produced it. That is the property the recovery path relies on when it
+    compacts to escape a provider that has rejected signed content, and it is
+    why a summary survives a <code>/model</code> switch for the same reason the
+    answer text already did.
+  </p>
+  <span class="src">crates/emma/src/agent.rs &mdash; <code>model_summary</code>, <code>ModelSummary</code>, <code>model_replacement</code>, <code>SUMMARY_PROMPT</code>, <code>SUMMARY_TIMEOUT</code>, <code>SUMMARY_INPUT_CHARS</code>, <code>SUMMARY_BUDGET_FLOOR</code>, <code>SUMMARY_MAX_TOKENS</code>, <code>SUMMARISED_NOTE</code></span>
+
+  <p>
+    <span class="chip cert">certified</span> against a real model on 2026-09-06:
+    <code>gemma4:12b</code> on the local Ollama, with
+    <code>SUMMARY_PROMPT</code> lifted out of <code>agent.rs</code> at run time
+    and a synthetic two-goal transcript as the user message. The answer was 461
+    characters against an 816-character transcript, kept all three file paths
+    and the reason for the decision, and dropped the tool-result body. So the
+    &ldquo;does not shrink&rdquo; guard is not a formality on a real answer; it
+    simply did not fire on that one.
+  </p>
+
+  <p>
+    <strong>The same run found two things the design did not predict, and both
+    are amber.</strong>
+    <span class="chip unv">unverified</span> The prompt says &ldquo;no
+    headings&rdquo; and the model added a <code>Files involved:</code> heading
+    with a bullet list under it anyway. Harmless, since this is prose in a
+    conversation and not a parsed structure, but the instruction is not obeyed,
+    so no future code may assume the answer's shape. One model, one prompt, one
+    transcript: the same call against the three other local models would say
+    whether it is a habit of this model or of the prompt.
+    <span class="chip unv">unverified</span> The answer's last clause was
+    garbled &mdash; <em>&ldquo;remains updated to be corrected&rdquo;</em> is not
+    English and inverts what the transcript said. <strong>That is the objection
+    the design answered rather than removed.</strong> A summary is a
+    claim, a bad one is recorded verbatim, and it is replayed on every resume
+    for the life of the session. It is the reason
+    <code>SUMMARISED_NOTE</code> tells the model not to treat the text as a
+    quotation. What would settle how often it happens: read a corpus of real
+    summaries against the transcripts they replaced.
+  </p>
+
+  <h2 id="shedding">Shedding, for the goal that is too big on its own</h2>
+
+  <p>
+    Compaction takes whole finished goals, so a single long goal has nothing for
+    it to take: the running goal is the whole conversation, and a request over
+    the cap goes out over the cap. <code>shed_the_running_goal</code> is the
+    answer. It rewrites the running goal's message list in place, replacing the
+    <em>bodies</em> of old tool results with a note. The user turns, the
+    assistant text, the thinking blocks and the tool <em>calls</em> with their
+    arguments all stay; only the results go, which is what makes the note
+    actionable: it names the tool and says re-run rather than recall.
+  </p>
+
+  <p>
+    <code>KEEP_RECENT_TURNS</code> is 1, so the most recent tool-calling turn is
+    never shed. Its results are the answer to a call the model has just made and
+    not yet acted on, and taking those would delete the step in progress rather
+    than save context. A result already shorter than the note saying it is gone
+    is left alone, because replacing it would make the request larger; the
+    compactor learned that same lesson on a four-word goal.
+    <code>SHED_MARK</code> is the note's opening and doubles as the test for
+    &ldquo;this one has already gone&rdquo;, a prefix rather than a stored flag,
+    because the block crosses the wire and comes back through a fold and a flag
+    would have to be kept in step with the text.
+  </p>
+
+  <p>
+    There is no flag for it, and it is on whenever the cap is. The alternatives
+    are worse in ways the module names. <code>prune</code> removes traffic a
+    later call superseded, so twenty-five reads of twenty-five different files
+    are twenty-five live results and it has nothing to take; it also runs on
+    every call whether or not the request is near the cap, paying the
+    prompt-cache invalidation unconditionally. Shedding runs only when a
+    measured request has already passed the cap, so the cache cost is paid
+    exactly when the alternative is a request the provider will refuse. An
+    amnesiac conversation beats a refused one.
+  </p>
+  <span class="src">crates/emma/src/agent.rs &mdash; <code>shed_the_running_goal</code>, <code>shed_note</code>, <code>KEEP_RECENT_TURNS</code>, <code>SHED_MARK</code>, <code>block_wire_len</code></span>
+
+  <p>
+    <span class="chip test">tested</span> A resume replays it. The
+    <code>shed</code> record carries a <code>tool_use_id</code> and the
+    replacement text for every block that went, and
+    <a href="session-fold.html">the fold</a> has an arm that rewrites those
+    blocks, so a resumed session is the one that was sent, shed results and all.
+    <code>a_single_long_goal_sheds_its_own_oldest_tool_results</code> asserts
+    <code>fold(log) == conversation</code> and, separately, that every recorded
+    row is complete enough to replay from.
+    <span class="chip unv">unverified</span> The <code>SHED_MARK</code>
+    early-out's remaining case. The argument that it is not dead code &mdash; a
+    result whose <code>tool_use</code> has left the query gets a
+    differently-sized note &mdash; is reasoned from the code and not tested,
+    because that state cannot be constructed from outside the loop. It may be
+    unreachable, in which case it should be deleted with a note rather than kept
+    with a story. A unit test on the shedder with a hand-built orphaned
+    <code>tool_result</code> would settle it, and needs a seam.
+  </p>
 
   <h2 id="commands">The two doors a user has</h2>
 
@@ -818,13 +1003,16 @@ fn estimate(messages: &amp;[Message]) -&gt; i64 {
   <h2 id="never">It has never fired outside a test</h2>
 
   <p>
-    <span class="chip cert">certified</span>: zero <code>compacted</code>
-    records exist in the 103 session files on this machine, across 177
-    <code>model_call</code> records, at 2026-08-16 20:28 EDT. The largest input
-    any call carried is 95,524 tokens against the 120,000 default cap. Close,
-    and never over. So every claim on this page about the <em>trigger</em> rests
-    on tests and on reading, with no production firing behind it. The
-    <em>mechanism</em> is exercised by tests that set
+    <span class="chip unv">unverified</span>, and this chip moved on 2026-09-06.
+    It used to be <code>certified</code>: zero <code>compacted</code> records in
+    the 103 session files on this machine, across 177 <code>model_call</code>
+    records, at 2026-08-16 20:28 EDT, with the largest input any call carried
+    being 95,524 tokens against the 120,000 default cap. Close, and never over.
+    That count certifies a build which had neither the summariser nor shedding,
+    so it says nothing about this one and the green would be stale. Re-counting
+    the corpus is what would settle it. Every claim on this page about the
+    <em>trigger</em> still rests on tests and on reading, with no production
+    firing behind it, and the <em>mechanism</em> is exercised by tests that set
     <code>max_context</code> to 400 and to 1.
     <span class="chip unv">unverified</span> against a live provider: settle it
     by running a real session with <code>--max-context</code> set to something
@@ -838,9 +1026,15 @@ fn estimate(messages: &amp;[Message]) -&gt; i64 {
   <p>
     From <code>agent.rs</code>: <code>compact_if_needed</code>,
     <code>compact</code>, <code>compact_now</code>, <code>summarise</code>,
-    <code>COMPACTED_NOTE</code>, <code>estimate</code>,
+    <code>model_summary</code>, <code>model_replacement</code>,
+    <code>shed_the_running_goal</code>, <code>shed_note</code>,
+    <code>block_wire_len</code>, <code>COMPACTED_NOTE</code>,
+    <code>SUMMARISED_NOTE</code>, <code>SUMMARY_PROMPT</code> and the four
+    constants around it, <code>KEEP_RECENT_TURNS</code>,
+    <code>SHED_MARK</code>, <code>estimate</code>,
     <code>estimated_context</code>, <code>conversation</code>,
-    <code>clear</code>, and the <code>Chapter</code>, <code>Compacted</code> and
+    <code>clear</code>, and the <code>Chapter</code>,
+    <code>ModelSummary</code>, <code>Compacted</code> and
     <code>Cleared</code> types. From <code>session_command.rs</code>: the
     <code>compact</code> and <code>clear</code> handlers.
     <code>cost_tokens</code> is quoted on <a href="loop-budgets.html">Budgets</a>

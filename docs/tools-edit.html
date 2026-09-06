@@ -83,9 +83,10 @@
 </nav>
 
 <p class="lede">
-  One tool, two mutually exclusive addressing modes: quote the text, or name
-  the line and the four characters <code>Read</code> printed beside it. A call
-  supplying both, or neither, is refused rather than resolved by precedence.
+  One tool, two addressing modes: quote the text, or name the line and the four
+  characters <code>Read</code> printed beside it. A call supplying neither is
+  refused. A call supplying both is resolved by agreement rather than by
+  precedence, and refused when the two do not agree.
 </p>
 
 <div class="tw">
@@ -94,8 +95,8 @@
     <tbody>
       <tr><td><code>file_path</code> <em>required</em></td><td>string</td><td>Relative to the working directory, or absolute inside it.</td></tr>
       <tr><td><code>new_string</code> <em>required</em></td><td>string</td><td>The replacement. With <code>lines</code>, empty deletes.</td></tr>
-      <tr><td><code>old_string</code></td><td>string</td><td>Exact text, must occur once. This or <code>lines</code>.</td></tr>
-      <tr><td><code>lines</code></td><td>string</td><td><code>12#a3f9</code>, or <code>12#a3f9-15#b7c1</code> for an inclusive range. This or <code>old_string</code>.</td></tr>
+      <tr><td><code>old_string</code></td><td>string</td><td>Exact text, must occur once. This, or <code>lines</code>, or both when they agree.</td></tr>
+      <tr><td><code>lines</code></td><td>string</td><td><code>12#a3f9</code>, or <code>12#a3f9-15#b7c1</code> for an inclusive range. Wins when both are sent.</td></tr>
       <tr><td><code>replace_all</code></td><td>boolean</td><td>Default false. Only valid with <code>old_string</code>.</td></tr>
     </tbody>
   </table>
@@ -138,7 +139,6 @@
   <table>
     <thead><tr><th>Call</th><th>Refusal</th></tr></thead>
     <tbody>
-      <tr><td>both <code>old_string</code> and <code>lines</code></td><td><code>Edit takes old_string or lines, not both; they are two ways of saying where, and supplying both does not say where twice</code></td></tr>
       <tr><td>neither</td><td><code>Edit needs somewhere to change: old_string with the exact text to replace, or lines with an address from Read such as 12#a3f9</code></td></tr>
       <tr><td>empty <code>old_string</code></td><td><code>Edit.old_string is empty; use Write to create a file</code></td></tr>
       <tr><td><code>old_string</code> equal to <code>new_string</code></td><td><code>Edit.old_string and Edit.new_string are identical; the edit would do nothing</code></td></tr>
@@ -153,6 +153,74 @@
   Accepting and ignoring it would teach the model the flag does nothing, which
   is the lesson it must never learn about the <code>old_string</code> form.
 </p>
+
+<h3>Both forms at once, which used to be a seventh refusal</h3>
+
+<p>
+  Sending <code>old_string</code> <em>and</em> <code>lines</code> was refused
+  outright until 2026-09-06, with <code>Edit takes old_string or lines, not
+  both; they are two ways of saying where, and supplying both does not say where
+  twice</code>. That was wrong, and it is off this table because the decision
+  needs the file and so cannot be made in <code>validate_args</code>. The usual
+  reason a model sends both is that it addressed the lines and then quoted the
+  same lines back, which is redundant rather than contradictory.
+</p>
+
+<p>
+  What happens now: the addressed text is read out of the file, the quoted text
+  has <code>Read</code>'s labels stripped from it, and the two are compared with
+  trailing whitespace ignored. If they agree the edit goes ahead and
+  <strong>the address wins</strong>, because the address is the form checked
+  against content hashes. If they disagree the call is refused with
+  <code>Edit.lines addresses {a} but Edit.old_string quotes different text, so
+  the two disagree about where to edit. The addressed lines are: &hellip; Drop
+  whichever one is wrong.</code> Quoting the addressed text back is what makes
+  the refusal actionable, because the model can see which of its own two
+  instructions was the wrong one. There is still no precedence: picking one
+  silently would edit a place the model did not name.
+  <span class="chip test">tested</span> &mdash;
+  <code>both_forms_that_agree_name_one_place</code> and
+  <code>both_forms_that_disagree_are_still_refused</code>, each shown to go red
+  when the agreement check is removed.
+</p>
+<span class="src">tools/fs/src/edit.rs &mdash; module doc, <code>Edit::invoke</code>, <code>addressed_text</code></span>
+
+<p>
+  <span class="chip unv">unverified</span> The measurement the reversal rests on
+  is the fork's: the blanket refusal fired 14 times across recorded runs and
+  every run it touched went on to fail. Those runs are not in this repository.
+  The owner's session store would settle it if they survive.
+</p>
+
+<h3><code>Read</code>'s labels, tolerated in both strings</h3>
+
+<p>
+  A model that has just read a file will sometimes quote the file back with the
+  labels still attached, and the labels are not in the file. So an anchor is
+  tried as the bytes given first, and only if that misses is the same anchor
+  retried with the labels stripped. Order matters here: an anchor that already
+  matched never reaches the fallback, so nothing that worked changes shape. The
+  stripping is all-or-nothing, applying only when every non-empty line carries a
+  label, so a file that genuinely contains something label-shaped is not
+  mangled.
+</p>
+
+<p>
+  The same tolerance applies to <code>new_string</code>, and that is the half
+  that matters more. A labelled anchor fails loudly. A labelled
+  <em>replacement</em> is written verbatim into the source and the file stops
+  compiling.
+  <span class="chip cert">certified</span> for the mechanism: the tool is driven
+  end to end through both paths in the port's own run.
+  <span class="chip unv">unverified</span> for the two model measurements behind
+  it, both quoted from the fork's comments and dated 2026-08-24:
+  <code>nemotron-3.5-lightning:30b-mlx</code> sending eight labelled anchors in
+  one run, and <code>ornith:35b</code> losing a run to
+  <code>1088#f011\t    #[test]</code> as replacement text. Neither was
+  reproduced here. A keyless local run against Ollama with a model of that class,
+  driving <code>Read</code> then <code>Edit</code>, would settle them.
+</p>
+<span class="src">tools/fs/src/edit.rs &mdash; <code>strip_read_labels</code>, <code>strip_one_label</code>, <code>Edit::by_anchor</code></span>
 <span class="src">tools/fs/src/edit.rs — <code>validate_args</code></span>
 
 <h2 id="anchor">The literal anchor</h2>

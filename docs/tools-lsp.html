@@ -65,7 +65,7 @@
 <div class="col">
 
 <p class="eyebrow">Doing work</p>
-<h1>Code intelligence: asking rust-analyzer</h1>
+<h1>Code intelligence: asking a language server</h1>
 
 <nav class="chapter">
   <a class="up" href="tools.html">Tools</a>
@@ -85,12 +85,12 @@
 <p class="lede">
   <code>Grep</code> finds a name. It cannot tell a call from a comment, does not
   know that <code>Config</code> here is the type declared over there, and cannot
-  answer what breaks if a signature changes. These four tools ask the compiler's
-  own understanding instead, and the whole crate is arranged around one rule:
-  an empty answer is only an answer when the index was complete.
+  answer what breaks if a signature changes. These five tools ask a language
+  server's own understanding instead, and the whole crate is arranged around one
+  rule: an empty answer is only an answer when the index was complete.
 </p>
 
-<h2 id="tools">The four tools</h2>
+<h2 id="tools">The five tools</h2>
 
 <div class="tw">
   <table>
@@ -100,12 +100,13 @@
       <tr><td><code>GoToDefinition</code></td><td>the position schema</td></tr>
       <tr><td><code>Hover</code></td><td>the position schema</td></tr>
       <tr><td><code>DocumentSymbols</code></td><td><code>file_path</code> only</td></tr>
+      <tr><td><code>Diagnostics</code></td><td><code>file_path</code> only</td></tr>
     </tbody>
   </table>
 </div>
 
 <p>
-  All four declare the same <code>const READ_ONLY: ToolMeta</code>:
+  All five declare the same <code>const READ_ONLY: ToolMeta</code>:
   <code>read_only: true</code>, <code>reaches_network: false</code>,
   <code>idempotent: true</code>. None of them prompts.
 </p>
@@ -176,15 +177,79 @@
 </p>
 <span class="src">tools/lsp/src/doc.rs — <code>locate</code>, <code>utf16_column</code>, <code>byte_offset</code></span>
 
-<h2 id="rustonly">Rust only, and it says so</h2>
+<h2 id="languages">Seven languages, four launchers, and three that are off</h2>
 
-<pre><code><span class="k">pub fn</span> unsupported_language(shown: &amp;<span class="k">str</span>) -&gt; ToolError {
-    ToolError::Unavailable(format!(
-        <span class="s">"{shown} is not a Rust file, and rust-analyzer is the only language server Emma has \
-         wired. Use Grep for a text search, knowing that it is a text search: it cannot tell a \
-         definition from a mention, and it will match the same name in an unrelated crate."</span>
-    ))
-}</code></pre>
+<p>
+  This section said <em>&ldquo;Rust only, and it says so&rdquo;</em> until
+  2026-09-06, and every word of it is now wrong. <code>LANGUAGES</code> is a
+  table of seven, and a language is data rather than code: a key, a label, the
+  LSP <code>languageId</code>, the extensions it claims, its server candidates
+  in preference order, its <code>initializationOptions</code>, an install
+  sentence for the refusal, whether the server may reach the network, and a
+  caveat naming a hole the server has.
+</p>
+
+<div class="tw">
+  <table>
+    <thead><tr><th>Key</th><th>Extensions</th><th>Server</th><th>Launcher</th><th>On by default</th></tr></thead>
+    <tbody>
+      <tr><td><code>rust</code></td><td><code>rs</code></td><td>rust-analyzer</td><td>direct</td><td>yes</td></tr>
+      <tr><td><code>bash</code></td><td><code>sh</code>, <code>bash</code>, <code>zsh</code>, <code>ksh</code></td><td>bash-language-server</td><td><code>node</code></td><td>yes</td></tr>
+      <tr><td><code>powershell</code></td><td><code>ps1</code>, <code>psm1</code>, <code>psd1</code></td><td>PowerShell Editor Services</td><td><code>pwsh</code></td><td>yes</td></tr>
+      <tr><td><code>python</code></td><td><code>py</code>, <code>pyi</code></td><td>pyright / python-lsp-server</td><td><code>node</code> or direct</td><td>yes</td></tr>
+      <tr><td><code>terraform</code></td><td><code>tf</code>, <code>tfvars</code></td><td>terraform-ls / tofu-ls</td><td>direct</td><td><strong>no</strong></td></tr>
+      <tr><td><code>bicep</code></td><td><code>bicep</code>, <code>bicepparam</code></td><td>Bicep.LangServer.dll</td><td><code>dotnet</code></td><td><strong>no</strong></td></tr>
+      <tr><td><code>ansible</code></td><td><code>yml</code>, <code>yaml</code></td><td>ansible-language-server</td><td><code>node</code></td><td><strong>no</strong></td></tr>
+    </tbody>
+  </table>
+</div>
+<span class="src">tools/lsp/src/lang.rs &mdash; <code>Language</code>, <code>LANGUAGES</code>, <code>Launcher</code>, <code>DEFAULT_ENABLED</code></span>
+
+<p>
+  <code>DEFAULT_ENABLED</code> is <code>rust</code>, <code>bash</code>,
+  <code>powershell</code> and <code>python</code>. The three that are off are
+  the three whose servers may reach the network while answering, and these tools
+  declare <code>reaches_network: false</code>: terraform-ls fetches provider
+  schemas, the Bicep server resolves modules from a registry, and
+  ansible-language-server shells out to <code>ansible-lint</code> when it is
+  installed. A tool that says it stays local and then does not is the kind of
+  claim the consent gate is built on, so the reason is put to the user rather
+  than decided for them. <code>lsp.enabled</code> in
+  <code>settings.json</code> is the whole switch, and the refusal for a language
+  that is wired and switched off says which language, why it is off when the
+  reason is network, and the one line that turns it on.
+  <span class="chip test">tested</span> &mdash;
+  <code>tests/discovery.rs</code> drives all seven against an injected
+  <code>Env</code>, which proves the <em>decision</em> for each of them and
+  proves nothing about any server starting.
+</p>
+<span class="src">tools/lsp/src/lang.rs &mdash; <code>DEFAULT_ENABLED</code>; tools/lsp/src/pool.rs &mdash; <code>Pool::is_enabled</code>; tools/lsp/src/server.rs &mdash; <code>disabled_language</code></span>
+
+<p>
+  A launcher is the program that has to be on <code>PATH</code> before an entry
+  point can run at all, which is a different absence from the server being
+  missing. <code>Direct</code> executes the entry point;
+  <code>Node</code>, <code>Dotnet</code> and <code>PowerShell</code> put
+  <code>node</code>, <code>dotnet</code> or <code>pwsh</code> in front of it. On
+  this Windows box the PowerShell entry point is present inside
+  <code>ms-vscode.powershell-2025.4.0</code> and there is no <code>pwsh</code>,
+  because Windows PowerShell 5.1 is a different program, so the refusal names
+  the launcher and how to install it for the host it is running on rather than
+  telling a Windows user to <code>brew install node</code>.
+</p>
+
+<p>
+  There are now three refusals rather than one, because the reader should learn
+  the rule rather than the verdict. <code>unsupported_language</code> lists the
+  extensions that <em>are</em> served, computed from the table so it cannot
+  drift from it. <code>disabled_language</code> is the paragraph above.
+  <code>yaml_not_ansible</code> is the case an extension cannot decide:
+  <code>.yml</code> is handed to a playbook server only when the tree says
+  Ansible, meaning an <code>ansible.cfg</code> at the working directory or one
+  of a fixed list of path segments, because answering about a compose file or a
+  CI workflow with a playbook server would produce a result that reads exactly
+  like a real one.
+</p>
 
 <p>
   And when no server can be found at all, the refusal declines to substitute in
@@ -193,7 +258,27 @@
   different question, and nothing in the result would say so.</code> It also
   names what it looked for, where, and any candidate it found and rejected.
 </p>
-<span class="src">tools/lsp/src/server.rs — <code>unsupported_language</code>, <code>nothing_found</code></span>
+<span class="src">tools/lsp/src/server.rs &mdash; <code>unsupported_language</code>, <code>disabled_language</code>, <code>nothing_found</code>; tools/lsp/src/lang.rs &mdash; <code>yaml_not_ansible</code>, <code>ANSIBLE_DIRS</code></span>
+
+<p>
+  Six of the seven have never spoken to Emma.
+  <span class="chip unv">unverified</span> for bash, terraform, ansible and
+  python: nothing is installed on either machine, and their <code>caveat</code>
+  and <code>install</code> strings are the fork's claims with the platform
+  wording rewritten, of which only the Windows halves were ever exercised. What
+  would settle each: install the server named in the table and run
+  <code>Diagnostics</code> on a file of that kind with a deliberate error in it.
+  <span class="chip unv">unverified</span> for bicep in a narrower way: the
+  <code>Bicep.LangServer.dll</code> and <code>dotnet</code> are both on this box,
+  so discovery and the launcher path are real here, but the server has never
+  been started. Adding <code>"bicep"</code> to <code>lsp.enabled</code> and
+  asking for diagnostics on a broken <code>.bicep</code> file settles it.
+  <span class="chip unv">unverified</span> for the PowerShell parameter set:
+  <code>-Stdio</code>, <code>-BundledModulesPath</code> and the rest were read
+  out of <code>Start-EditorServices.ps1</code> and are asserted against a
+  fixture, and no <code>pwsh</code> exists on either machine, so that command
+  line has never been executed.
+</p>
 
 <h3>Which binary, and the probe that <code>Bash</code> does not do</h3>
 
@@ -538,16 +623,72 @@
 <h2 id="cut">What was cut</h2>
 
 <p>
-  <strong><code>Diagnostics</code>.</strong> It was the third most valuable tool
-  on the list and it is not here, because it is not the same mechanism.
-  Diagnostics are pushed, not requested, so "get the diagnostics for this file"
-  means waiting an unknowable time for a notification that may never come:
-  the readiness problem again, without the progress notifications that make
-  readiness solvable. Worse, the useful diagnostics are
-  <code>cargo check</code>'s, which this crate disables. With it off the tool
-  would return syntax and name-resolution errors only and silently omit every
-  type error. <code>Bash</code> running <code>cargo check</code> is the honest
-  tool for this and already exists.
+  <strong><code>Diagnostics</code> was cut, and on 2026-09-06 it shipped.</strong>
+  The argument for cutting it is still true and is why the tool is shaped the
+  way it is. Diagnostics are pushed rather than requested, so &ldquo;get the
+  diagnostics for this file&rdquo; means waiting an unknowable time for a
+  notification that may never come: the readiness problem again, without the
+  progress notifications that make readiness solvable. What changed is that the
+  wait was given a third outcome instead of two. The result is an
+  <code>Option</code>: a set of diagnostics, or an explicit empty publication
+  which is a real clean answer, or the sentence <code>The language server
+  published no diagnostics for &hellip; within 20.0s. That is not a clean
+  result: it means the server did not answer, not that the file has no
+  problems.</code> The ceiling moves with
+  <code>EMMA_LSP_DIAGNOSTICS_MS</code>.
+</p>
+
+<p>
+  The other half of the cut argument stands and is now stated in the tool's own
+  description. <code>check.enable</code> is false, which is what makes
+  <code>read_only: true</code> a fact rather than a hope, so for Rust this tool
+  reports <strong>syntax errors only</strong>. A file whose only fault was a
+  call to a function that does not exist came back as an explicit empty
+  publication, twice, on separate runs: a real &ldquo;clean&rdquo; answer to a
+  file that does not compile. <code>Bash</code> running <code>cargo check</code>
+  is still the tool for type errors. Where <code>Diagnostics</code> earns its
+  place unambiguously is bash, terraform, bicep and ansible, none of which have
+  a <code>cargo check</code> and none of which are installed here.
+  <span class="chip cert">certified</span> on this box, 2026-09-06:
+  <code>cargo test -p emma-tools-lsp --test real_server a_real_server_publishes
+  -- --nocapture</code> against rust-analyzer 1.94.1 returned seven
+  <code>rust-analyzer:syntax-error</code> diagnostics with 1-based positions on
+  a broken file, and the explicit-empty answer on the two clean ones, each call
+  in 0.00 s after a 3.99 s readiness wait.
+</p>
+
+<p>
+  The bug this tool shipped with is worth more than the tool. The publication
+  map was keyed on the URI <em>Emma</em> writes, and rust-analyzer lowercases the
+  Windows drive letter in everything it sends back, so the lookup could never
+  succeed: the diagnostics arrived, were stored under one spelling, were read
+  under another, and the tool returned the honest-looking timeout sentence every
+  time, after the full 20 seconds. That is the worst available shape, because it
+  reads as careful behaviour. <code>doc.rs</code>'s module doc had said since the
+  crate was written that the comparison in that direction cannot be a string
+  comparison, and this map was the one place that had not read it.
+  <code>client::published_key</code> now parses with <code>doc::from_uri</code>
+  and case-folds on Windows only, since there a path is case-insensitive and on
+  Unix it is not. <strong>No fake could have caught it</strong>, because a fake
+  echoes back the URI it was handed and both spellings are one string inside the
+  suite; the fix ships with a fake that respells URIs the way a real server does.
+  <span class="chip cert">certified</span>: the trace and both outputs are in the
+  port report, and the test fails without the fix.
+</p>
+<span class="src">tools/lsp/src/tools.rs &mdash; <code>Diagnostics</code>; tools/lsp/src/client.rs &mdash; <code>published_key</code>, <code>Client::diagnostics</code>; tools/lsp/src/doc.rs &mdash; module doc, <code>from_uri</code></span>
+
+<p>
+  <span class="chip unv">unverified</span>: <code>published_key</code>'s case
+  folding is wrong on a case-sensitive NTFS directory, where two files differing
+  only in case would collide in the map. It is not reachable through the tool
+  surface, because containment resolves a real path first, but it is a hole in
+  the key. <code>fsutil file setCaseSensitiveInfo</code> and two such files would
+  settle it.
+  <span class="chip unv">unverified</span> too: <code>all_running</code> and
+  <code>unknown_keys</code> have no test. Both are surface for a
+  <code>/lsp</code> status command and a settings screen, neither of which
+  exists yet, so they are exercised only by the type checker. Whichever package
+  lands the status command settles them.
 </p>
 
 <p>

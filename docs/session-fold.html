@@ -68,7 +68,7 @@
   </nav>
 
   <p class="lede">
-    One walk over the records, seven arms and one catch-all, and a rule about
+    One walk over the records, nine arms and one catch-all, and a rule about
     when half a turn is worse than none of it. What comes out is the message
     list the last request carried, not a tidied version of the conversation.
   </p>
@@ -446,6 +446,31 @@ match r["kind"].as_str().unwrap_or_default() {
     fields are reset by name rather than by assigning
     <code>Self::default()</code>, so a field added later has to be considered
     here rather than silently surviving a clear.
+  </p>
+
+  <p>
+    <code>shed</code> is the newest arm, landed 2026-09-06 with
+    <a href="session-compaction.html#shedding">shedding</a>. It does not add or
+    drop a message: it walks every <code>tool_use_id</code> the record names and
+    rewrites that block's content in the history, in the open query and in the
+    pending results, to the replacement text the record carries. The record
+    stores the replacement rather than the fold deriving it, which is the same
+    rule the <code>compacted</code> arm follows and for the same reason: two
+    derivations of one edit are two things a resume can disagree with.
+    <span class="chip test">tested</span> &mdash;
+    <code>a_single_long_goal_sheds_its_own_oldest_tool_results</code> asserts
+    the folded session equals the conversation that was held, and asserts
+    separately that every recorded row names a block and carries the text that
+    replaced it.
+  </p>
+
+  <p>
+    <code>steer</code> takes a line typed while the goal was running, closing
+    the held turn and taking it up at the next one. The text stored is the
+    <em>composed</em> string, attribution and all, for the reason the
+    <code>goal</code> record stores <code>opening</code> rather than the user's
+    words: a fold that recomposed it would replay a conversation the model never
+    had, the moment the wording changed.
   </p>
 
   <p>

@@ -176,10 +176,39 @@
   <figcaption>
     <code>truncated_because</code> fills <code>ToolOutcome::content</code> and
     <code>ToolOutcome::truncation</code> from one string; the runtime passes
-    both on verbatim. <code>Read</code>'s <code>render</code> says why in a
-    comment. Drawn from <code>crates/tool-api/src/lib.rs</code>.
+    both on, and appends the note only when the content does not already end
+    with it. <code>Read</code>'s <code>render</code> says why in a comment.
+    Drawn from <code>crates/tool-api/src/lib.rs</code>.
   </figcaption>
 </figure>
+
+<h2 id="once">The note is said once, and it used to be said twice</h2>
+
+<p>
+  The rule &mdash; name the limit, name the loss, name the remedy &mdash; is
+  unchanged. What changed on 2026-09-06 is that it is said <strong>once</strong>.
+  <code>tools/fs</code> writes <code>[truncated: reason]</code> into the content
+  <em>and</em> sets <code>truncated_because(reason)</code>, and the runtime used
+  to append its note unconditionally, so the same sentence arrived at the model
+  twice: every one of the 24 truncated <code>Read</code> results and both
+  truncated <code>Glob</code>s in the audited logs carried it doubled. A tool
+  that sets the flag without writing the line, which is the other half of the
+  API, still gets the note.
+</p>
+
+<p>
+  The check matches the whole rendered sentence rather than the
+  <code>[truncated:</code> prefix alone, because a file whose own contents
+  contain that string would otherwise suppress a note it never carried.
+  Trailing whitespace is ignored on both sides, since the reader ends its line
+  with a newline and the runtime's note begins with one.
+  <span class="chip test">tested</span> &mdash;
+  <code>a_truncated_result_says_so_once_rather_than_twice</code> and
+  <code>a_tool_that_only_sets_the_flag_still_gets_the_note</code> pin both
+  halves, so removing the check turns the first red and inverting it turns the
+  second red.
+</p>
+<span class="src">crates/emma/src/agent.rs &mdash; <code>ends_with_note</code>, <code>truncation_note</code>, the append in <code>run_tool_call</code></span>
 
 <h2 id="shape">The shape, from a real call</h2>
 

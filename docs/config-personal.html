@@ -595,6 +595,75 @@ expected ident at line 1 column 2</code></pre>
     </p>
   </div>
 
+  <h2 id="keybindings">A second personal file: <code>~/.emma/keybindings.json</code></h2>
+
+  <p>
+    Nine actions can be moved onto a different chord: the four Alt tool chords
+    (<code>shell</code>, <code>code</code>, <code>reveal</code>,
+    <code>search</code>), the three page chords (<code>settings</code>,
+    <code>memory</code>, <code>harness</code>), and the two toggles
+    (<code>sidebar</code>, <code>help</code>). Those names are exactly the keys
+    the file uses, and they are named for the surface rather than for the key,
+    so a rebound chord still reads as what it opens.
+  </p>
+
+  <p>
+    <strong>Alt+q and Ctrl-C are not in the layer at all</strong>, and that is a
+    hole rather than an omission. They are the way out of a running goal, and a
+    keymap file that could take the exit away is a keymap file that can lock
+    somebody in. <code>REBINDABLE</code> is the whole list rather than a filter
+    applied somewhere else downstream, so there is one place to read to know
+    what can move.
+  </p>
+
+  <p>
+    A file may hold several named presets, and two facts about timing that the
+    Settings rows state separately. <strong>The file is read once, at
+    startup</strong>: nothing watches it, so an edit in an editor applies to the
+    next run, which is the same rule the LSP card follows and for the same
+    reason. <strong>Selecting a preset is live</strong>: every preset was
+    already parsed by that one read, so switching swaps a table this process is
+    holding and binds immediately. Making a preset change wait for a restart
+    would be a control that does nothing on a screen whose whole point is that
+    its controls do something.
+  </p>
+
+  <p>
+    <strong>A duplicate chord is refused rather than resolved.</strong> Two
+    actions on one chord has no correct answer, and whichever the loader picked
+    would be arbitrary and silent. Both clashing entries fall back to their
+    compiled defaults, and the keymap carries a note naming the chord and the
+    actions that wanted it, which the Settings row prints. An unknown action
+    name is kept as a note too rather than failing the file, which is
+    <code>lsp.enabled</code>'s rule.
+    <span class="chip test">tested</span> on the parse and the load, including
+    the duplicate refusal and the note it leaves.
+  </p>
+
+  <p>
+    The help chord is <code>ctrl+/</code> and a bare <code>?</code> on an empty
+    box is not the same thing. <code>?</code> stays compiled in beside
+    <code>,</code> for Settings: it is a convenience on an empty box rather than
+    a chord, it cannot be typed by accident mid-sentence, and it is out of this
+    layer for the reason <code>Enter</code> is. Both the Help page and
+    <code>emma --help</code> print whichever chord is bound now, because the
+    text names an action and the keymap resolves it at the moment it is drawn.
+  </p>
+  <span class="src">crates/emma/src/term/keymap.rs &mdash; module doc, <code>Action</code>, <code>REBINDABLE</code>, <code>Keymap::notes</code>, <code>load</code>, <code>install</code>; crates/emma/src/main.rs</span>
+
+  <p>
+    <span class="chip unv">unverified</span> No rebinding has been driven on a
+    real console. The parse, the load, the duplicate refusal and the label the
+    panel prints are all covered by tests, and none of them presses a key. What
+    would settle it: write a <code>~/.emma/keybindings.json</code> that moves
+    one action, start Emma, and press the new chord.
+    <span class="chip unv">unverified</span> too: <code>Ctrl+/</code> is folded
+    from <code>0x1F</code>, <code>Ctrl+_</code> and <code>Ctrl+7</code>, because
+    terminals disagree about which they send, and no terminal on either machine
+    here reports it as anything but <code>Ctrl+/</code>. A keystroke dump on
+    macOS Terminal.app, iTerm2 and Windows Terminal settles it.
+  </p>
+
   <h2 id="notverified">What this page did not settle</h2>
 
   <ul class="body">
@@ -609,8 +678,12 @@ expected ident at line 1 column 2</code></pre>
       anything reads. No program was launched from a running frame here, and the
       <code>code --wait</code> message was never seen on a screen.
       <span class="chip unv">unverified</span>. Settle it by setting
-      <code>tools.editor</code> to a value with an argument in it, pressing
-      <code>c</code> in the frame, and reading the sentence.
+      <code>tools.editor</code> to a value with an argument in it, opening the
+      Code page with <code>Alt+c</code> and pressing <code>F7</code> inside it,
+      and reading the sentence. <code>Alt+c</code> itself stopped launching the
+      editor on 2026-09-06: it opens the Code page, and <code>F7</code> or that
+      page's <code>[Editor]</code> button is what resolves
+      <code>tools.editor</code> now.
     </li>
     <li>
       <strong>The Windows credential ACL.</strong> The claim in
@@ -633,7 +706,8 @@ expected ident at line 1 column 2</code></pre>
 
   <footer class="pg">
     Emma 0.1.0 · this page covers <code>crates/emma/src/settings.rs</code> in
-    full and the parts of <code>crates/llm/src/auth.rs</code> and
+    full, <code>crates/emma/src/term/keymap.rs</code>'s file format and load
+    rules, and the parts of <code>crates/llm/src/auth.rs</code> and
     <code>crates/emma/src/usertools.rs</code> that a configuration file reaches ·
     the key's own chapter is <a href="providers-credentials.html">Credentials</a> ·
     contract: <code>DOCS.md</code>

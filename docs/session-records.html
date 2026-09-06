@@ -68,12 +68,12 @@
   </nav>
 
   <p class="lede">
-    Seventeen kinds, written from four files, plus the same kinds again under a
+    Eighteen kinds, written from five files, plus the same kinds again under a
     <code>sub.</code> prefix when a delegation is running. This page is meant to
     be enough on its own: what writes each one, every field on it, who reads it
     back, and the two pairing rules a parser gets wrong if nobody says them.
   </p>
-  <span class="src">crates/emma/src/agent.rs · delegate.rs · main.rs · session.rs</span>
+  <span class="src">crates/emma/src/agent.rs · delegate.rs · main.rs · session.rs · runctl.rs</span>
 
   <div class="key">
     <div><span class="chip cert">certified</span> proven, and repeatable: a file, a command, a count you can redo</div>
@@ -145,6 +145,16 @@
         <td><code>Agent::clear</code>, which is <code>/clear</code></td>
         <td><code>goals</code>, <code>messages</code></td>
         <td>fold, which empties both its lists</td>
+      </tr>
+      <tr>
+        <td><code>harness_control</code></td>
+        <td><code>runctl::record</code>, after a control action was carried out</td>
+        <td><code>action</code> (<code>pause</code>, <code>resume</code> or
+            <code>cancel</code>), <code>signal</code> (<code>SIGSTOP</code>,
+            <code>SIGCONT</code> or <code>SIGINT</code>), <code>pid</code></td>
+        <td>nobody yet. It is written into the controlled run's <em>own</em>
+            session file, so the transcript of that run carries the fact that a
+            person stopped it</td>
       </tr>
       <tr>
         <td><code>model_changed</code></td>
@@ -600,7 +610,11 @@ tap: Option&lt;Records&gt;,</code></pre>
     records was not checked here. The two terminal views that would draw them,
     <code>term/inspect.rs</code> and <code>term/rungraph.rs</code>, render from
     their own view types and say the harness behind them does not exist yet.
-    Grepping for the record kinds outside this module would settle it.
+    Grepping for the record kinds outside this module would settle it. Part of
+    the same amber is settled in the affirmative now: the acting half exists as
+    <code>runctl</code>, which reads a run's id for its pid and appends to that
+    run's file. What is not settled is whether anything <em>draws</em> any of
+    it, and that stays open until the Harness page's keys are wired.
   </p>
   <span class="src">crates/emma/src/runfacts.rs — the addressing scheme; crates/emma/src/session.rs — <code>SessionLog::new_id</code>, <code>SessionLog::subagent</code></span>
 
@@ -611,10 +625,18 @@ tap: Option&lt;Records&gt;,</code></pre>
     derivation over the records described on this page. It adds no record and
     decides nothing: nothing in it starts a run, ends one, or asks the model
     anything, and every number comes off the same session JSONL that
-    <code>emma agents</code> counts and <code>--resume</code> folds. The harness
-    its fork's mocks draw does not exist here. There is no worker pool, no task
-    queue and no DAG, so <code>runs</code> returns goals in a session and the
-    delegations inside them, and a card the log cannot feed stays empty. Nearly
+    <code>emma agents</code> counts and <code>--resume</code> folds. That is
+    still true of <em>this</em> module, and the sentence that used to follow it
+    is not. It said the harness the fork's mocks draw does not exist here.
+    <a href="terminal-runctl.html"><code>runctl</code></a> landed on 2026-09-06
+    and is exactly the acting half: pause, resume, cancel, archive, delete and
+    starting a run, over the pid a session id already carries. What is still
+    absent is the <em>scheduler</em>, and that distinction is the whole of the
+    module's argument: there is no worker pool, no task queue and no DAG, so
+    <code>runs</code> returns goals in a session and the delegations inside
+    them, and a card the log cannot feed stays empty. No key reaches
+    <code>runctl</code> yet either, so nothing has written a
+    <code>harness_control</code> record outside a test. Nearly
     every field is an <code>Option</code> carrying the reason it is optional.
     <span class="chip cert">certified</span>:
     <code>grep -c "Option&lt;" crates/emma/src/harness_state/mod.rs</code>

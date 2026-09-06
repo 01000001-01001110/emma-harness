@@ -638,10 +638,12 @@ impl std::fmt::Debug for AnthropicProvider {
     rather than <code>localhost</code>, because a name resolves through the
     box's resolver and on Windows commonly answers <code>::1</code> first
     against a server bound only to the v4 address.
-    <code>DEFAULT_NUM_CTX</code> is 32,768 because Ollama's own default is small
-    enough that an agent conversation overruns it in a few turns, and the
-    overrun is silent: the server drops the front of the prompt, so the model
-    loses its instructions rather than returning an error.
+    <code>DEFAULT_NUM_CTX</code> is 32,768, and since 2026-09-06 it is the
+    <em>floor</em> for a window rather than the window: Ollama's own default is
+    small enough that an agent conversation overruns it in a few turns, and the
+    overrun is silent, because the server drops the front of the prompt so the
+    model loses its instructions rather than returning an error. The section
+    below is what now sits above that floor.
     <code>REQUEST_TIMEOUT</code> is 3,600 seconds, and the file says outright
     that the figure is not measured in this tree.
     <span class="chip cert">certified</span>: all three are <code>const</code> items in
@@ -651,6 +653,205 @@ impl std::fmt::Debug for AnthropicProvider {
     replace the guess with a number.
   </p>
   <span class="src">crates/llm/src/ollama.rs — <code>DEFAULT_HOST</code>, <code>DEFAULT_NUM_CTX</code>, <code>REQUEST_TIMEOUT</code>, <code>DEFAULT_MODEL</code></span>
+
+  <h2 id="numctx">The window is derived per request, and it used to be a constant</h2>
+
+  <p>
+    Until 2026-09-06 every request carried <code>num_ctx: 32768</code>, and that
+    was a cap one level up rather than a generous default. Emma's own
+    <code>max_context</code> is 120,000, so a prompt packed against that budget
+    arrived here and went out under a window less than a third of it. Ollama
+    does not refuse an overlong prompt: it drops the front and answers, and the
+    answer reads as a model that has forgotten its instructions rather than as a
+    harness that cut it off. The measurement that moved this came from the Mac
+    branch and is in the constant's doc comment: an audit of 117 logged calls
+    found 28 over the window, 8 of them showing the plateau at about 32k where
+    <code>prompt_eval_count</code> stops growing.
+  </p>
+  <span class="src">crates/llm/src/ollama.rs &mdash; <code>DEFAULT_NUM_CTX</code> doc comment</span>
+
+  <p>
+    <code>OllamaProvider::num_ctx</code> now sizes the window from the request
+    it is about to send. <code>estimate_prompt_tokens</code> weighs the whole
+    prompt at four characters per token, the ratio the rest of the workspace
+    estimates with, which under-counts; <code>derive_num_ctx</code> adds a
+    quarter of that estimate as headroom to cover the under-count, adds
+    <code>max_tokens</code> because Ollama's window covers the generation and
+    the prompt together, rounds the sum up to a multiple of 4,096 and clamps it
+    between 32,768 and 262,144. The rounding step exists so that a conversation
+    growing by a handful of tokens a turn reuses the KV cache Ollama has already
+    allocated instead of making it allocate a new one every call.
+    <code>OLLAMA_NUM_CTX</code> is consulted first and wins outright when it
+    names a usable number.
+  </p>
+  <span class="src">crates/llm/src/ollama.rs &mdash; <code>OllamaProvider::num_ctx</code>, <code>derive_num_ctx</code>, <code>estimate_prompt_tokens</code>, <code>NUM_CTX_STEP</code>, <code>MAX_NUM_CTX</code>, <code>NUM_CTX_HEADROOM_FACTOR</code></span>
+
+  <p>
+    <span class="chip cert">certified</span> against a real Ollama on
+    2026-09-06: <code>gemma4:12b</code> at <code>127.0.0.1:11434</code>, with a
+    recording TCP proxy standing between the provider and the server, so the
+    figure asserted on is the one the socket carried rather than one a mock
+    agreed to. A prompt of roughly 200,000 characters derived
+    <code>num_ctx: 94208</code> on the wire, 2.9 times the old constant and on
+    the 4,096 step, and the server counted 44,038 prompt tokens. Under the old
+    constant about 11,000 of those tokens would have been dropped from the front
+    without a word. Repeat it with
+    <code>cargo test -p emma-llm --lib the_derived_window_reaches_a_real_ollama
+    -- --ignored --nocapture</code> against a running Ollama.
+  </p>
+
+  <p>
+    Setting <code>OLLAMA_NUM_CTX</code> below what a conversation needs
+    reproduces the original defect on request, and Ollama says nothing about it.
+    The same run with <code>OLLAMA_NUM_CTX=40960</code> carried 40,960 instead
+    of the derived 94,208, and the server reported
+    <code>prompt_eval_count</code> as <strong>20,483</strong> for the prompt it
+    had counted at 44,038 a moment earlier. More than half the prompt was
+    discarded, no error came back, and the truncated count was returned as
+    though it were the whole thing.
+    <span class="chip cert">certified</span>, same test, same command, with the
+    variable set in the environment.
+  </p>
+
+  <p>
+    <code>Usage::context_window</code> carries the window the call actually ran
+    under, stamped on the result of both the batch and the streaming arm, so it
+    is no longer always zero on this path. That is the field that makes a clip
+    auditable afterwards: <code>input_tokens</code> at or near
+    <code>context_window</code> in a session record is the signature of a prompt
+    that was cut.
+    <span class="chip test">tested</span> &mdash;
+    <code>a_long_conversation_widens_the_window_and_the_window_is_reported</code>
+    goes red when the stamp is removed.
+  </p>
+  <span class="src">crates/llm/src/ollama.rs &mdash; <code>OllamaProvider::send</code>; crates/llm/src/lib.rs &mdash; <code>Usage::context_window</code></span>
+
+  <p>
+    Three things this leaves open. The estimator over-estimated on the certified
+    run, which is the safe direction, but that was one prompt of one shape and
+    English prose, CJK or dense JSON would each land differently.
+    <span class="chip unv">unverified</span>: run a corpus of real session
+    prompts through <code>estimate_prompt_tokens</code>, compare each against
+    the server's <code>prompt_eval_count</code>, and check the ratio never
+    exceeds 1.25 in the unsafe direction. The 262,144 ceiling is a guard against
+    unbounded growth and not a claim that a 12B model loads at that window on
+    this machine.
+    <span class="chip unv">unverified</span>: one request derived to the
+    ceiling, watching whether Ollama loads it or errors. And the terminal's
+    context meter measures against the configured <code>max_context</code>,
+    which for Ollama is not necessarily the window in effect.
+    <span class="chip unv">unverified</span>, and that one needs a ruling on
+    which of the two numbers the meter should show rather than a measurement.
+  </p>
+
+  <h2 id="compat">A third and a fourth provider, which needed the trait to give nothing</h2>
+
+  <p>
+    The section above is the story of what a second provider cost. On 2026-09-06
+    a third and a fourth arrived and cost nothing at all:
+    <code>crates/llm/src/openai_compat.rs</code> serves OpenRouter and OpenAI
+    from one file, and no method was added to <code>Provider</code>, no
+    defaulted hook was introduced, and nothing in <code>agent.rs</code> moved.
+    That is stronger evidence that the boundary is one than the Ollama section
+    could offer, because Ollama at least made the trait give three times.
+  </p>
+
+  <p>
+    The two hosts differ by values rather than by code. <code>Wire</code> is a
+    struct of constants and each host is one <code>const</code> item of it.
+    OpenRouter spells its output cap <code>max_tokens</code> and accepts
+    <code>temperature</code>; OpenAI spells the cap
+    <code>max_completion_tokens</code>, which its newer reasoning models
+    require, and carries <code>temperature_field: None</code> because those
+    models refuse the parameter. A trait would have meant five methods returning
+    constants and one implementation per host to keep in step.
+    <span class="chip test">tested</span> &mdash; the two hosts are asserted to
+    differ only in the cap's spelling, against a loopback stub.
+  </p>
+
+  <p>
+    That stub is a real socket rather than an injectable transport, and it is
+    shared. The assertions it carries are about <em>wire bytes</em>: where the
+    cache breakpoints land, that the prefix order survives serialisation, that a
+    <code>retry-after</code> header is honoured, that the client re-sends on a
+    fresh connection. A transport trait would test the assembler while stubbing
+    out exactly the layer those claims live in, and would put a seam in the
+    public API that exists only for tests. It moved out of
+    <code>anthropic.rs</code>'s test module when <code>openai_compat.rs</code>
+    needed the same socket for the same reasons, because two copies of a stub
+    that have to agree about chunked reads and <code>connection: close</code> is
+    a slower way to have one.
+  </p>
+  <span class="src">crates/llm/src/openai_compat.rs &mdash; <code>Wire</code>, <code>OPENROUTER</code>, <code>OPENAI</code>; crates/llm/src/stub.rs &mdash; module doc</span>
+
+  <p>
+    Two capabilities are absent rather than approximated. There are no cache
+    breakpoints, because <code>cache_control</code> is Anthropic's own key and
+    sending it here is a 400; and there is no <code>reasoning_effort</code>,
+    because it is a 400 on some models and a passthrough model id cannot be
+    classified into the ones that take it. <code>web_search()</code> is false
+    for both kinds, and on OpenRouter a web-searching model is a different model
+    <em>name</em>, the <code>:online</code> suffix, rather than a flag on the
+    request.
+  </p>
+
+  <p>
+    Two decoding traps the file names in its own comments. The first is that
+    <code>finish_reason</code> is not <code>stop_reason</code>: the loop
+    branches on <code>"tool_use"</code>, so a host emitting tool calls while
+    reporting <code>"stop"</code> would end a goal in the middle of a plan, and
+    the content is therefore what decides. The second is the usage mapping.
+    <code>input_tokens</code> in Emma's <code>Usage</code> means the uncached
+    remainder; <code>prompt_tokens</code> on this wire means the whole prompt
+    including whatever was served from cache, so
+    <code>prompt_tokens_details.cached_tokens</code> is subtracted, and copying
+    one number straight into the other would over-count every cached call.
+  </p>
+  <span class="src">crates/llm/src/openai_compat.rs &mdash; module doc, <code>stop_reason_of</code>, <code>usage_of</code></span>
+
+  <p>
+    <span class="chip cert">certified</span> against the real OpenRouter on
+    2026-09-06, keyed from the owner's file outside the repository:
+    <code>cargo test -p emma-llm --test openrouter_live -- --ignored</code>. A
+    live free-tier call returned <code>stop_reason: end_turn</code>, non-empty
+    text and a <code>usage</code> whose split this crate's mapping reproduces,
+    and a live tool call arrived with its <code>arguments</code> as a JSON
+    <em>string</em> and decoded into <code>Object {"path": &hellip;}</code> with
+    the host's own id. That second one is the scar this project has recorded
+    twice: a strict decoder that passed every fixture and then decoded no real
+    tool call. <code>context_window</code> came back zero, because the live body says
+    nothing about the window it ran in.
+  </p>
+
+  <p>
+    The live test picks its model out of the roster rather than naming one, and
+    that is a finding rather than a style. The first version hardcoded
+    <code>meta-llama/llama-3.3-70b-instruct:free</code>, the id anyone would
+    reach for, and the real host answered <em>&ldquo;This model is unavailable
+    for free&rdquo;</em> with a 400. A fixture would have gone on pretending the
+    model existed. The failure also certified the error path: the 400 came back
+    as <code>LlmError::BadRequest</code> carrying the host's own prose, and was
+    not retried.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span>: nothing in this file has ever
+    reached <code>api.openai.com</code>. Both of the values that distinguish
+    <code>OPENAI</code> from <code>OPENROUTER</code> are the fork's claims
+    restated, and the loopback stub can only prove that Emma sends what the
+    constant says, never that the constant is right. What would settle it: one
+    call with an OpenAI key to a cheap model sending <code>max_tokens</code>,
+    expecting a 400 that names <code>max_completion_tokens</code>, then
+    <code>temperature: 0.9</code> on a reasoning model, expecting a 400 about
+    the fixed temperature.
+    <span class="chip unv">unverified</span> too:
+    <code>OPENROUTER.default_model</code> is
+    <code>anthropic/claude-opus-4.1</code>, taken from the fork and never
+    exercised, and every test that touches a default model asserts only that the
+    id reaches the wire rather than that it routes. Given what the live run
+    found about a free-tier slug, a compiled-in id should be treated as
+    perishable; asking <code>roster.rs</code> would settle it.
+  </p>
 
   <h2 id="fake">A scripted provider drives the loop with no socket and no key</h2>
 

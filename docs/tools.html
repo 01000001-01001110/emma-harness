@@ -117,8 +117,9 @@ tool schema    ce26c5f39467e4f0</code></pre>
   command started in the background.
   <code>tools/tasks</code> is four tools over one markdown file.
   <code>tools/web</code> is two stateless tools plus five that drive a live
-  Chrome. <code>tools/lsp</code> is four that ask rust-analyzer instead of
-  guessing from text. Each crate exposes one builder function. Calling it is the
+  Chrome. <code>tools/lsp</code> is five that ask a language server instead of
+  guessing from text, over seven languages of which four start without being
+  asked. Each crate exposes one builder function. Calling it is the
   only supported way to get the set, because three of the four share mutable
   state that <code>ToolCtx</code> has no room for.
 </p>
@@ -194,10 +195,11 @@ tool schema    ce26c5f39467e4f0</code></pre>
     Emma never reads.</span>
   </li>
   <li>
-    <a href="tools-lsp.html">Code intelligence: asking rust-analyzer</a>
-    <span>Four read-only tools, the readiness signal that replaced a heuristic
-    declaring ready at 0.36 seconds, containment applied to what comes back,
-    and the crate that uses the weak truncation form.</span>
+    <a href="tools-lsp.html">Code intelligence: asking a language server</a>
+    <span>Five read-only tools over seven languages, the readiness signal that
+    replaced a heuristic declaring ready at 0.36 seconds, why three languages
+    are off until asked for, containment applied to what comes back, and the
+    crate that uses the weak truncation form.</span>
   </li>
 </ol>
 
