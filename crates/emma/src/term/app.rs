@@ -135,7 +135,12 @@ pub struct App {
     /// A live scrollbar drag: how many rows below the thumb's top the button
     /// went down, held for the length of the drag so the thumb stays under
     /// the pointer that picked it up. `None` when no drag is running.
-    bar_grab: Option<u16>,
+    /// The thumb press that started a drag: the scroll offset at the press
+    /// and the track row it landed on. Both, because the drag is anchored:
+    /// each move is a delta from the press rather than an absolute mapping of
+    /// the pointer onto the track, which is what made the first drag event
+    /// lurch the view by hundreds of rows.
+    bar_grab: Option<(usize, u16)>,
     /// The bottom-right notice: what a mouse selection just put on the
     /// clipboard, standing in the same slot as `↓ N rows below`.
     ///
@@ -1274,6 +1279,13 @@ impl App {
         if col != x || row < pane.y || row >= pane.bottom() {
             return false;
         }
+        // Dead travel first: an offset past the last useful row draws the
+        // same screen as the last useful row, and a drag measured from it
+        // would spend its first pixels moving nothing.
+        let top = transcript::max_offset(self.transcript.total_rows(), pane.height);
+        if self.transcript.scroll_offset() > top {
+            self.transcript.scroll_to(top);
+        }
         let hit = transcript::grab(
             self.transcript.total_rows(),
             pane.height,
@@ -1281,8 +1293,15 @@ impl App {
             row - pane.y,
         );
         match hit {
-            Some(transcript::Grab::Thumb(held)) => self.bar_grab = Some(held),
-            Some(transcript::Grab::PageUp) => self.transcript.scroll_up(self.page()),
+            Some(transcript::Grab::Thumb(_)) => {
+                self.bar_grab = Some((self.transcript.scroll_offset(), row - pane.y));
+            }
+            Some(transcript::Grab::PageUp) => {
+                self.transcript.scroll_up(self.page());
+                if self.transcript.scroll_offset() > top {
+                    self.transcript.scroll_to(top);
+                }
+            }
             Some(transcript::Grab::PageDown) => self.transcript.scroll_down(self.page()),
             None => return false,
         }
@@ -1297,7 +1316,7 @@ impl App {
     /// The pointer moved with the thumb held. `true` when the view moved,
     /// which is the answer the caller repaints on.
     pub fn bar_drag(&mut self, row: u16) -> bool {
-        let Some(held) = self.bar_grab else {
+        let Some(press) = self.bar_grab else {
             return false;
         };
         let pane = self.chat_rect;
@@ -1308,7 +1327,7 @@ impl App {
         // ordinary drag, and the two clamps are the two ends of the track.
         let track_row = row.clamp(pane.y, pane.bottom() - 1) - pane.y;
         let offset =
-            transcript::drag_offset(self.transcript.total_rows(), pane.height, held, track_row);
+            transcript::drag_offset(self.transcript.total_rows(), pane.height, press, track_row);
         let moved = offset != self.transcript.scroll_offset();
         self.transcript.scroll_to(offset);
         moved
