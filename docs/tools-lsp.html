@@ -700,6 +700,39 @@
 </p>
 <span class="src">tools/lsp/src/lib.rs — module doc</span>
 
+<h2 id="two-writers">There are two writers to these servers, not one</h2>
+
+<p>
+  <strong>This page described one writer until 2026-09-06 and there are two.</strong>
+  The <a href="terminal-pages.html#code">Code page</a> holds the same
+  <code>Pool</code> the five tools hold, deliberately: a second copy of a
+  language server is about a gigabyte of memory, and the editor's own change
+  notifications keep the server's view current for the model's next call. One
+  server per language serves both the person editing and the model asking.
+</p>
+
+<p>
+  <strong>The consequence is the part worth reading.</strong> The page sends the
+  buffer, not the file, so while somebody is editing, the document the server
+  holds is the unsaved text. A tool call that asks about the same file gets an
+  answer about what is on screen rather than what is on disk. That is almost
+  always what a person wants and it is not what a reader of this page would have
+  assumed, which is why it is written down rather than left to be discovered.
+  The page sends nothing when the buffer is unchanged, so a cursor key costs a
+  hash and no traffic.
+  <span class="chip cert">certified</span> diagnostics were produced for a
+  buffer deliberately not written to disk, and the file read back
+  byte-identical afterwards.
+</p>
+
+<p>
+  Nothing on the input path waits for a server. The page offers a request to a
+  bounded channel and never blocks: a busy or dead server means the page lacks
+  decorations, never that a keystroke pauses. The model's tools keep their own
+  timeouts, which this page describes above.
+</p>
+<span class="src">crates/emma/src/term/code_lsp.rs; crates/emma/src/main.rs &mdash; the spawn, with the pool the tools hold</span>
+
 <h2 id="lifecycle">One server per root, and what happens when it dies</h2>
 
 <p>

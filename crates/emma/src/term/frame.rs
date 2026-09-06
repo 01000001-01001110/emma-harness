@@ -173,6 +173,23 @@ fn install_panic_hook() {
     });
 }
 
+/// Whether [`restore_terminal`] has nothing to undo.
+///
+/// **A function, and exhaustively tested, because the guard it replaces could
+/// not be tested at all.** It was four negations joined by `&&`, and the test
+/// over it read the source for the four latch names. Changing one `&&` to a
+/// `||` keeps all four names, keeps the test green, and makes the teardown
+/// return early whenever any single latch is off: a shell with no echo, on a
+/// screen that is not the user's, which `CLAUDE.md` names as the failure people
+/// uninstall over. A source-grep cannot see the difference between a
+/// conjunction and a disjunction; sixteen cases can.
+///
+/// Every latch alone is enough to make the teardown run, so this answers true
+/// for exactly one of the sixteen inputs.
+pub(crate) fn nothing_to_restore(frame: bool, raw: bool, alt: bool, mouse: bool) -> bool {
+    !frame && !raw && !alt && !mouse
+}
+
 pub fn restore_terminal() {
     // **Each latch answers for itself.** This used to return early unless
     // `FRAME_ON` was set — and `FRAME_ON` is set *last*, after raw mode, the
@@ -186,11 +203,12 @@ pub fn restore_terminal() {
     // it. Restored 2026-08-27: the TUI import brought back the single-latch
     // guard, and the hardening net caught it.
     let was_frame = FRAME_ON.swap(false, Ordering::SeqCst);
-    if !was_frame
-        && !RAW_ON.load(Ordering::SeqCst)
-        && !ALT_ON.load(Ordering::SeqCst)
-        && !MOUSE_ON.load(Ordering::SeqCst)
-    {
+    if nothing_to_restore(
+        was_frame,
+        RAW_ON.load(Ordering::SeqCst),
+        ALT_ON.load(Ordering::SeqCst),
+        MOUSE_ON.load(Ordering::SeqCst),
+    ) {
         return;
     }
     if RAW_ON.swap(false, Ordering::SeqCst) {

@@ -174,21 +174,31 @@ fn powershell_editor_services_is_started_through_pwsh_with_stdio() {
 /// `PATH` lookup, and an extensionless entry point inside an extension. The
 /// Windows box carries `rust-lang.rust-analyzer-0.3.3033-win32-x64`, whose
 /// server is `rust-analyzer.exe` while the table spells the bare name.
+///
+/// **The fixture spells its Windows paths with forward slashes, and that is
+/// not cosmetic.** `Path` is a platform type: on unix a backslash is an
+/// ordinary character, so `file_name()` of a backslash-separated string is
+/// the whole string, the extension-directory prefix match never fires, and
+/// this test fails on macOS for a reason that has nothing to do with what it
+/// is testing. It did, on 2026-09-06, the first time the suite ran there.
+/// Forward slashes parse as separators on both platforms, so the test now
+/// exercises `Env::windows` rather than the host it happens to run on, which
+/// is the whole point of that flag being a field.
 #[test]
 fn on_windows_a_bare_name_is_also_tried_with_an_exe_suffix() {
     const EXT_DIR: &str =
-        r"C:\Users\a\.vscode\extensions\rust-lang.rust-analyzer-0.3.3033-win32-x64";
+        "C:/Users/a/.vscode/extensions/rust-lang.rust-analyzer-0.3.3033-win32-x64";
     let exists = only(&[
-        r"C:\Users\a\.vscode\extensions\rust-lang.rust-analyzer-0.3.3033-win32-x64\server\rust-analyzer.exe",
+        "C:/Users/a/.vscode/extensions/rust-lang.rust-analyzer-0.3.3033-win32-x64/server/rust-analyzer.exe",
     ]);
     let probe = prints("rust-analyzer 1.94.1");
     let e = Env {
         windows: true,
-        path_dirs: vec![PathBuf::from(r"C:\Windows\System32")],
+        path_dirs: vec![PathBuf::from("C:/Windows/System32")],
         extension_dirs: vec![PathBuf::from(EXT_DIR)],
         exists: &exists,
         probe: &probe,
-        temp_dir: PathBuf::from(r"C:\Temp"),
+        temp_dir: PathBuf::from("C:/Temp"),
     };
     let found = server::resolve_with(language("rust"), None, &e).expect("the extension server");
     assert_eq!(found.source, Source::VsCodeExtension);
@@ -202,11 +212,11 @@ fn on_windows_a_bare_name_is_also_tried_with_an_exe_suffix() {
     // fixture.
     let unix = Env {
         windows: false,
-        path_dirs: vec![PathBuf::from(r"C:\Windows\System32")],
+        path_dirs: vec![PathBuf::from("C:/Windows/System32")],
         extension_dirs: vec![PathBuf::from(EXT_DIR)],
         exists: &exists,
         probe: &probe,
-        temp_dir: PathBuf::from(r"C:\Temp"),
+        temp_dir: PathBuf::from("C:/Temp"),
     };
     assert!(
         server::resolve_with(language("rust"), None, &unix).is_err(),

@@ -2956,7 +2956,16 @@ fn draw_body(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) -> Regions
             inner,
             y + content_h + lsp_h,
             Line::from(Span::styled(
-                fit(&help_line(v), inner.width as usize, skin.glyphs.ellipsis),
+                // The exit hint rides the help row rather than each branch of
+                // `help_line`, so a mode added later cannot forget it, and it
+                // goes first because this row is fitted to the pane: a hint
+                // that says how to leave is the one part of it a reader who is
+                // stuck needs, and the tail is what an ellipsis eats.
+                fit(
+                    &format!("{EXIT_HINT} · {}", help_line(v)),
+                    inner.width as usize,
+                    skin.glyphs.ellipsis,
+                ),
                 skin.palette.dim(),
             )),
         );
@@ -3056,6 +3065,19 @@ fn draw_strip(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) {
     put(buf, area, 2, Line::from(spans));
 }
 
+/// The key that leaves this page, in the words the page itself uses.
+///
+/// **Every other full-screen page has had one and this page had none**, which
+/// the cross-page guarantee could not see, because the page was not in the list
+/// that guarantee sweeps. Named here rather than in the test for the reason the
+/// other three are: a constant the test owned would go on agreeing with itself
+/// after the page changed its key.
+///
+/// `Alt+c` rather than `Esc`, because `Esc` is layered here: it leaves the
+/// editor, then the ask box, then the page, so a hint promising the last of
+/// those would be wrong twice before it was right.
+pub const EXIT_HINT: &str = "Alt+c closes";
+
 /// The page's keys, named where a reader will look for them. Four rows and not
 /// one, because the editor's keys and the browser's mean different things on
 /// the same keyboard and a row naming both would be a row naming neither.
@@ -3099,9 +3121,12 @@ fn draw_file(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) {
             buf,
             area,
             0,
+            // The exit hint belongs here too: with no file open this line is
+            // the only thing on the pane, so a reader who cannot find the way
+            // out has nowhere else to look.
             Line::from(dim(
                 skin,
-                "select a file: ↑/↓ move, Enter opens, F3 for history",
+                &format!("{EXIT_HINT} · select a file: ↑/↓ move, Enter opens, F3 for history"),
             )),
         );
         return;

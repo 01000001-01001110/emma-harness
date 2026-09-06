@@ -425,8 +425,8 @@
           <td>On a long session, grab the thumb without moving the pointer and watch.</td></tr>
       <tr><td>The sidebar calendar on a real console, with the machine's real local offset, and whether it survives a short pane once QUICK HELP has taken its rows.</td>
           <td>Run it and look at a few pane heights.</td></tr>
-      <tr><td>Whether a click on a sidebar TOOLS row does anything. <code>hits</code> reports a rectangle per clickable row and nothing consults it.</td>
-          <td>The dispatch in <code>App::click</code>, plus a test driving a click and the chord through one path.</td></tr>
+      <tr><td>Whether a click on a sidebar row does anything <em>on a real console</em>. The rectangles are consulted since 2026-09-06 and the routing is tested against a painted buffer, but no mouse has been used on either box.</td>
+          <td>Click a session row and a TOOLS row on each box.</td></tr>
       <tr><td>The accent override end to end. There is no way to pick one from inside Emma; <code>appearance.accent</code> has to be written into <code>settings.json</code> by hand.</td>
           <td>The Settings row and its write-back, then choose a role and a cube swatch and watch the goal line re-hue.</td></tr>
       <tr><td>Every control on the Harness page. The nine action-bar keys are inert: <a href="terminal-runctl.html"><code>runctl</code></a> exists and no key reaches it.</td>
@@ -439,12 +439,16 @@
           <td>An 80-column and a 60-column terminal with a goal running.</td></tr>
       <tr><td>The reader thread's steering seam on a console: the box emptying, the queued row appearing, and the answer changing. <code>submit_line</code> runs on the thread where every scrollback defect this crate has shipped was.</td>
           <td>Type during a real goal on both terminals.</td></tr>
+      <tr><td>The Code page's pane-gap constant and the test named for it on the layout page, which do not exist in the tree. The three layout facts the page states are visible in the drawn output; nothing asserts them.</td>
+          <td>Find what the carve does with the gap, name it, and pin it at the mockup's own grid including the collapsed case.</td></tr>
+      <tr><td>Whether asking a language server about an unsaved buffer is what a reader expects. The page and the model's tools share one server, so a tool call about an open file answers about the text on screen rather than the text on disk.</td>
+          <td>Use it for an hour with a file open and edited, and see whether an answer about unsaved text ever surprises.</td></tr>
       <tr><td>Everything the frame draws, on both platforms. The port was certified end to end in <code>-p</code> mode, which never opens the alternate screen: a goal, a real tool call and a real answer on Windows and macOS, against local Ollama and a free hosted model. Nothing interactive was driven.</td>
           <td>An interactive session on each box, with the pages opened and the keys pressed.</td></tr>
       <tr><td>Whether a task has ever been moved or a completed one swept through a running Emma. <code>Doc::move_task</code> and <code>Doc::remove_completed</code> have no caller.</td>
           <td>The Harness page package, and one press.</td></tr>
-      <tr><td>The Settings screen's Font Family and Font Size rows, which still say Emma cannot set a font and still store nothing. A font can only be set by hand in <code>settings.json</code>.</td>
-          <td>The rows' wiring, then a press on the Mac.</td></tr>
+      <tr><td>Whether asking a terminal to change its own font does anything. The Settings screen's Font Family and Font Size rows write their keys since 2026-09-06, and the notice beside them names the terminal actually in front of you, but no font has been changed by a press on any terminal here.</td>
+          <td>Press the rows on Terminal.app, and on Windows Terminal, and look at the window.</td></tr>
       <tr><td>The claude engine's stream shape. The fixture its decoder is tested against is synthetic, written from the documented event shapes, so a shape transcribed wrongly is one every test agrees with. This is the strict-decoder failure in a new place.</td>
           <td>One real run with the streaming output format, diffing event keys against the fixture.</td></tr>
       <tr><td>The claude engine on macOS. Nothing in it has run there; the unix liveness check reads a zombie as alive, mitigated by racing the stop against the child's own wait, and that race is untested.</td>

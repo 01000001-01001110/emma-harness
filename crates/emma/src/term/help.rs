@@ -31,12 +31,18 @@
 //! The structure is the fork's; the sentences are mainline's, taken from the
 //! `session_help!()` macro this module replaced and from the surfaces that
 //! answer the keys — `bindings::CHAT`, `bindings::UNDRAWN`, `input::pane_key`
-//! and `frame::launch_tool`. Where the two trees differ the tree wins: there
-//! is no steering queue here (nothing reads the keyboard while a goal runs),
-//! no `Alt+q` (the way out is `Ctrl-C` and `Ctrl-D`), no `/mode`, `/voice`,
-//! `/presence` or `/init`, and `Alt+c` opens the configured editor rather
-//! than a page. A help text that describes a different program is worse than
-//! no help text, because it is read as evidence.
+//! and `frame::launch_tool`. Where the two trees differ the tree wins, and
+//! **this paragraph is what happens when that rule is followed once and not
+//! again**: it said there was no steering queue, no `Alt+q`, no `/mode`, and
+//! that `Alt+c` opened the configured editor. All four were true when it was
+//! written and none is true now. A help text that describes a different
+//! program is worse than no help text, because it is read as evidence, and
+//! that is exactly what this paragraph became.
+//!
+//! What is true: a goal can be steered while it runs, `Alt+q` quits or
+//! interrupts, `/mode` sets the posture, and `Alt+c` opens the Code page while
+//! `F7` inside it hands the repository to the configured editor. `/voice`,
+//! `/presence` and `/init` are still absent.
 //!
 //! # The text is ASCII, deliberately
 //!
@@ -183,11 +189,11 @@ pub const SECTIONS: &[Section] = &[
         title: "The Alt layer",
         intro: &[
             "Alt with a letter reaches the user tools, wherever the cursor is and whatever is on screen. A bare letter is never a shortcut here, because the first character of every goal lands on an empty box. The sidebar's TOOLS column lists the letters, and its n/a column says when a tool is not available on this machine or in this directory rather than offering a key that does nothing.",
-            "Ctrl+Alt with the same letter works where a terminal eats Alt; macOS terminals need Option-as-Meta (Terminal: Use Option as Meta key; iTerm2: Option sends Esc+). Every Alt chord is dead while an approval question is on screen.",
+            "Ctrl+Alt with the same letter works where a terminal eats Alt; macOS terminals need Option-as-Meta (Terminal: Use Option as Meta key; iTerm2: Option sends Esc+). While an approval question is on screen the keyboard belongs to the answer, so the Alt layer does not take it.",
         ],
         entries: &[
             bound(Action::LaunchTerminal, "open a terminal window in this directory."),
-            bound(Action::Code, "open the configured editor on this project: tools.editor if it is set, then $VISUAL and $EDITOR, then the first of a short list found on PATH."),
+            bound(Action::Code, "open the Code page: the tracked files, the selected file with an editor over it, and that file's history. F7 inside it hands the repository to the configured editor instead: tools.editor if it is set, then $VISUAL and $EDITOR, then the first of a short list found on PATH."),
             bound(Action::LaunchReveal, "open a file-browser window here."),
         ],
     },

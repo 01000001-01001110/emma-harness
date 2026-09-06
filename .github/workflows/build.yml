@@ -12,9 +12,24 @@
 # matrix is a paid minute on a private-credit budget; macOS minutes cost ten
 # times Linux ones. Add it when somebody is going to open the artifact.
 #
-# The suite gates the build, once, on Windows, for the same reason as in
+# The suite gates the build on both platforms, for the same reason as in
 # `release.yml`: a binary from a commit that fails its own tests is not worth
 # the minutes it took.
+#
+# **It ran on Windows alone until 2026-09-06, and that was a hole rather than a
+# saving.** This project has whole features that exist only on unix -- the
+# harness page's pause, resume and cancel send signals Windows has no
+# equivalent of -- so the platform where those paths are actually taken was the
+# one nothing tested. A macOS review of the fork port found two failures a
+# green Windows run had not: a prose gate that lives in another crate's test
+# binary, and a fixture that respelled a URI in a way that is right on Windows
+# and names a different file on a case-sensitive file system. Both were found
+# by hand on a Mac. This job is that check, made to happen on its own.
+#
+# The cost is real and is the reason to say it out loud: macOS minutes bill at
+# ten times Linux ones, and this roughly doubles the workflow's spend. It buys
+# the difference between a suite that passes and a suite that passes where the
+# code runs.
 name: build
 
 on:
@@ -33,7 +48,14 @@ env:
 
 jobs:
   test:
-    runs-on: windows-latest
+    strategy:
+      # Both, always: a failure on one platform must not hide the other's
+      # result, which is the same argument `--no-fail-fast` makes one level
+      # down.
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     # The first three runs of this workflow hung inside `cargo test` for hours
     # with no log to read, because a running job's log is not served. A
     # timeout turns a hang into a failure with a log attached.
@@ -45,10 +67,15 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
 
+      # Once, not twice: formatting and lints are a property of the source and
+      # cannot differ by platform, so the second run would be minutes spent to
+      # learn the same thing.
       - name: fmt
+        if: matrix.os == 'windows-latest'
         run: cargo fmt --all -- --check
 
       - name: clippy
+        if: matrix.os == 'windows-latest'
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       # --no-fail-fast because cargo stops at the first failing target, and a

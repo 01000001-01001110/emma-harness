@@ -442,38 +442,26 @@ mod frame_rs {
     }
 
     // -- F2, F3, F4: the teardown --------------------------------------------
-
-    /// **Any one of the four latches is enough to make the teardown run.**
-    /// (F2, F3)
+    /// **Every latch alone is enough to make the teardown run**, and this is
+    /// sixteen cases rather than a look at the source.
     ///
-    /// `FRAME_ON` is set *last*. The guard used to return early unless it was
-    /// set, so a panic anywhere in install left raw mode, the alternate screen
-    /// and mouse capture on with the only thing that turns them off refusing
-    /// to run — "a shell with no echo, on a screen that is not the user's".
-    /// The install-site comment claimed `ALT_ON` prevented it; it could not,
-    /// because nothing ever reached the code that read it.
-    ///
-    /// `MOUSE_ON` is called out on its own because deleting just that conjunct
-    /// left the whole lib suite green (`221a813`): the test that existed set
-    /// three latches, and the guard needs only one to carry on. Capture left
-    /// on means the inheriting shell has `?1000`/`?1006` enabled by a dead
-    /// process — every click and every wheel notch types an escape sequence at
-    /// the prompt, forever.
-    ///
-    /// The latches are private, so this reads the guard rather than driving
-    /// it: everything before the early return has to mention all four.
+    /// It used to read `restore_terminal`'s early return for the four latch
+    /// names. That could not fail: changing one `&&` to a `||` keeps all four
+    /// names and turns the guard into "return if any latch is off", which
+    /// strands the alternate screen on every path where one of them is. The
+    /// decision is `frame::nothing_to_restore` now, and this exercises the
+    /// whole truth table, so a conjunction that became a disjunction fails
+    /// fourteen of the sixteen.
     #[test]
     fn every_latch_alone_is_enough_to_make_the_teardown_run() {
-        let body = code_only(fn_body("pub fn restore_terminal("));
-        let guard_end = body
-            .find("return;")
-            .expect("restore_terminal has no early return; this assertion is now vacuous");
-        let guard = &body[..guard_end];
-        for latch in ["FRAME_ON", "RAW_ON", "ALT_ON", "MOUSE_ON"] {
-            assert!(
-                guard.contains(latch),
-                "restore_terminal's early return does not consult {latch}, so a frame that \
-                 got that far and no further is never torn down: {guard}"
+        for bits in 0u8..16 {
+            let (frame, raw, alt, mouse) =
+                (bits & 1 != 0, bits & 2 != 0, bits & 4 != 0, bits & 8 != 0);
+            let skip = crate::term::frame::nothing_to_restore(frame, raw, alt, mouse);
+            let any = frame || raw || alt || mouse;
+            assert_eq!(
+                skip, !any,
+                "frame={frame} raw={raw} alt={alt} mouse={mouse}: wrong teardown answer"
             );
         }
     }
@@ -976,6 +964,25 @@ mod frame_rs {
 mod main_rs {
     const SOURCE: &str = include_str!("../main.rs");
 
+    /// `main.rs` with its comments removed.
+    ///
+    /// **Without this the assertions below are satisfied by a comment**, which
+    /// is the shape a source-reading test fails in: `main.rs` argues about
+    /// these calls in prose right beside them, so a `contains` over the raw
+    /// file passes when somebody deletes the call and leaves the paragraph
+    /// explaining it. The sibling module reading `frame.rs` strips comments for
+    /// the same reason and said so; this one did not, for a day.
+    fn code() -> String {
+        SOURCE
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            )
+    }
+
     /// The Provider row on the Settings screen names the provider this run is
     /// bound to. Without this call it resolves the name from `settings.json`
     /// instead, so a run started with `--provider` is described as bound to
@@ -983,7 +990,7 @@ mod main_rs {
     #[test]
     fn main_tells_the_frame_which_provider_this_run_actually_booted_with() {
         assert!(
-            SOURCE.contains("term.set_running_provider("),
+            code().contains("term.set_running_provider("),
             "main no longer tells the frame its provider; the Settings row reads the file"
         );
     }
@@ -996,11 +1003,11 @@ mod main_rs {
     #[test]
     fn main_spawns_the_code_pages_language_server_bridge() {
         assert!(
-            SOURCE.contains("code_lsp::run("),
+            code().contains("code_lsp::run("),
             "main no longer spawns the bridge; the Code page posts into nothing"
         );
         assert!(
-            SOURCE.contains("f.set_code_lsp("),
+            code().contains("f.set_code_lsp("),
             "main no longer hands the page a bridge handle"
         );
     }
@@ -1011,7 +1018,7 @@ mod main_rs {
     #[test]
     fn main_pushes_the_hints_preference_into_the_frame() {
         assert!(
-            SOURCE.contains("term.set_hints("),
+            code().contains("term.set_hints("),
             "main no longer pushes the hints preference; the toggle writes and nothing reads"
         );
     }
@@ -1185,10 +1192,20 @@ mod app_rs {
         Settings,
         Memory,
         Harness,
+        Code,
     }
 
     /// Every screen in [`Screen`] — what the "each page" guarantees loop over.
-    const RENDERABLE: [Screen; 3] = [Screen::Settings, Screen::Memory, Screen::Harness];
+    const RENDERABLE: [Screen; 4] = [
+        Screen::Settings,
+        Screen::Memory,
+        Screen::Harness,
+        // Added 2026-09-06, and it is the largest page in the tree. Its absence
+        // was invisible: these guarantees sweep this list, so a page missing
+        // from it is a page nothing checks, and the Code page had no exit hint
+        // at all until the sweep reached it.
+        Screen::Code,
+    ];
 
     /// Put `app` on `screen`, through the real toggles. Called twice, it closes
     /// what it opened: these are toggles, not setters.
@@ -1204,6 +1221,7 @@ mod app_rs {
         match screen {
             Screen::Settings => app.toggle_settings(),
             Screen::Memory => app.toggle_memory(&store.to_string_lossy()),
+            Screen::Code => app.toggle_code(&store.to_string_lossy()),
             Screen::Harness => {
                 // Both halves matter: the session directory decides what the
                 // feed reads, and the cwd decides which runs are *this* repo's.
@@ -1228,6 +1246,7 @@ mod app_rs {
             Screen::Settings => super::super::settings::EXIT_HINT,
             Screen::Memory => super::super::memory::EXIT_HINT,
             Screen::Harness => super::super::harness::EXIT_HINT,
+            Screen::Code => super::super::code::EXIT_HINT,
         }
     }
 

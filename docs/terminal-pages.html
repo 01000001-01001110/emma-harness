@@ -236,7 +236,7 @@ code: Option&lt;super::code::CodeView&gt;,</code></pre>
         <tr>
           <td>Harness</td>
           <td>The mock's full chrome: an action bar, six cards, an event log and a trace band. RUNTIME STATUS is live today, since the binary, the version and the workspace are things Emma knows.</td>
-          <td>The rest of the numbers. ACTIVE RUNS, WORKER POOL, TASK QUEUE, TOOL GATES and RESOURCES render from a <code>HarnessView</code> that is empty until a backend exists, so the cards keep their shape and show honest zeros and one-line dim empty states. Drawing the mock's sample runs as though they were real would be the status bar's own rule broken at page size. One card understates a session since plan mode landed: TOOL GATES draws <code>harness_state::gate_label</code>, which names the gate the run <em>started</em> with, so a session put into plan with <code>/mode plan</code> still reads <code>ASK</code> there while the status bar's MODE cell reads <code>PLAN</code>. The gate really has not moved; the refusal in force is the posture, and this card does not show postures yet. <span class="chip cert">certified</span> read the two functions: <code>gate_label</code> matches on <code>Gate</code> and <code>current_mode_label</code> on <code>Mode</code>.</td>
+          <td>Nothing on the cards is a placeholder any more. ACTIVE RUNS, TASK QUEUE, TOOL GATES and RESOURCES all read real stores: the session directory, the project's task file, the posture in force and the process itself. This cell said the cards were empty until a backend existed, and separately said TOOL GATES draws the gate a run <em>started</em> with so a session put into plan mode still read <code>ASK</code>. Both stopped being true on 2026-09-06: the gates card names the posture, because plan mode resolves to a gate that then asks nothing, and a card drawing the gate alone promises a question that never comes. <span class="chip test">tested</span> the card keeping the started gate under plan mode turns its test red.</td>
         </tr>
         <tr>
           <td>Help</td>
@@ -368,6 +368,19 @@ code: Option&lt;super::code::CodeView&gt;,</code></pre>
   </p>
 
   <p>
+    <strong>The keys, in full, because four of them appear nowhere else on this
+    site.</strong> <code>Tab</code> moves between the tree, the body and the ask
+    box at the foot of the page; <code>Enter</code> opens a file from the tree
+    and starts editing in the body; <code>F2</code> or <code>Ctrl+s</code>
+    saves; <code>F3</code> switches between the file and its history;
+    <code>F4</code> copies; <code>F5</code> asks the language server what is
+    under the cursor and <code>F6</code> asks where it is defined;
+    <code>F7</code> hands the repository to the configured editor;
+    <code>Alt+c</code> closes the page, which its own footer says in every mode.
+    A definition in another file opens that file at the line.
+  </p>
+
+  <p>
     <strong>The page edits and saves since 2026-09-06.</strong>
     <code>Enter</code> on the body starts editing and the header says
     <code>EDIT</code>; <code>Ctrl+s</code> and <code>F2</code> both save, and
@@ -423,13 +436,29 @@ code: Option&lt;super::code::CodeView&gt;,</code></pre>
   </p>
 
   <p>
-    One module beside it is a declared stub and not a defect:
-    <code>crates/emma/src/term/code_lsp.rs</code> is the bridge between this
-    page's editor and the language servers the model's tools already run. It is
-    blocked on client methods that do not exist yet, and its own doc says not to
-    stub a second language table in this crate to unblock it. It is named here
-    so that a reader who finds an empty module knows it is waiting rather than
-    forgotten.
+    <code>crates/emma/src/term/code_lsp.rs</code> was a declared stub until
+    2026-09-06 and this paragraph said so. It is the bridge between this page
+    and the language servers the model's tools already run, and it is 1,646
+    live lines that <code>main.rs</code> spawns. Nothing on the input path waits
+    for a server: the handle only ever offers a request to a bounded channel, so
+    a busy or dead server means the page lacks decorations rather than pausing.
+    It calls the language table in <code>tools/lsp</code> rather than carrying a
+    second one, which was the thing its stub doc warned against.
+    <span class="chip test">tested</span> a mutation proving the call into that
+    table is real, among thirty-three in the package's report.
+  </p>
+
+  <p>
+    <strong>One consequence is worth stating because nothing else on this site
+    does.</strong> The page and the model's tools share one server per language,
+    which is deliberate: a second copy of a language server is about a gigabyte
+    of memory, and what you type keeps the server's view current for the model's
+    next call. It also means an unsaved buffer is what the server knows about,
+    so the model can ask a question and get an answer about text that is not on
+    disk. That is usually what you want and is never said out loud anywhere else.
+    <span class="chip cert">certified</span> diagnostics were produced for a
+    buffer deliberately not written to disk, and the file read back
+    byte-identical afterwards.
   </p>
 
   <p>

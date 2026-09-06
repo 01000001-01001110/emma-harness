@@ -5424,29 +5424,63 @@ mod tests {
         assert!(!app.sessions_focused());
         assert!(app.side.sessions[0].selected);
     }
-
-    /// The click and the keyboard resolve the same row to the same session.
-    /// Both routes end at `picked_session`, and this is the half that proves
-    /// they start from the same list.
+    /// **A clicked row names the session that was drawn on it**, checked
+    /// against the painted text rather than against the id table twice.
+    ///
+    /// The version this replaces asked the id table for row 1 and compared it
+    /// with the id table for row 1: `session_ids[1] == session_ids[1]`, true
+    /// however the rows and the ids are paired. Nothing tied a drawn row to
+    /// its id, so a one-line reorder in `refresh_sessions` would make every
+    /// click resume the wrong session with the suite green. This walks every
+    /// row, reads the name off the buffer, and asserts the id at that index
+    /// belongs to the session with that name.
     #[test]
     fn a_clicked_row_and_the_highlighted_row_name_the_same_session() {
         let dir = tempfile::TempDir::new().expect("tempdir");
         let mut app = app_with_sessions(dir.path());
-        let _ = draw(&mut app, &view(), 100, 40);
-        app.focus_sessions();
-        app.move_session_selection(true);
-        let by_key = app.selected_session().expect("nothing highlighted");
+        let (painted, _) = draw(&mut app, &view(), 100, 40);
 
-        let (rect, _) = app
+        // The names the fixture wrote, against the ids they were written under.
+        // Prefixes, because the sidebar truncates a name to its column and
+        // these three are distinct well before the ellipsis.
+        let by_name = [
+            ("what I am", "sess-1700000000000-9"),
+            ("the newer", "sess-1700000000000-3"),
+            ("the older", "sess-1700000000000-1"),
+        ];
+        let rows: Vec<(Rect, usize)> = app
             .sidebar_hits
             .rows
             .iter()
-            .find(|(_, h)| *h == sidebar::Hit::Session(1))
-            .expect("no second session row recorded");
-        let Some(sidebar::Hit::Session(i)) = app.sidebar_row_click(rect.x, rect.y, false) else {
-            panic!("the second session row took no click");
-        };
-        assert_eq!(app.session_id_at(i), Some(by_key));
+            .filter_map(|(r, h)| match h {
+                sidebar::Hit::Session(i) => Some((*r, *i)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rows.len(), 3, "the fixture drew three sessions: {rows:?}");
+
+        for (rect, i) in rows {
+            // What the row actually says on screen.
+            let drawn = painted
+                .get(usize::from(rect.y))
+                .cloned()
+                .unwrap_or_default();
+            let (_, expected) = by_name
+                .iter()
+                .find(|(name, _)| drawn.contains(name))
+                .unwrap_or_else(|| panic!("row {i} drew none of the fixture's names: {drawn:?}"));
+            assert_eq!(
+                app.session_id_at(i).as_deref(),
+                Some(*expected),
+                "the row drawing {drawn:?} resolves to the wrong session"
+            );
+            // And a click on it resolves to that same row.
+            let Some(sidebar::Hit::Session(clicked)) = app.sidebar_row_click(rect.x, rect.y, false)
+            else {
+                panic!("the row drawing {drawn:?} took no click");
+            };
+            assert_eq!(clicked, i, "the click resolved to a different row");
+        }
     }
 
     /// The same hole from the other side, and the one Ctrl-B could open: the

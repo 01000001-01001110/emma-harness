@@ -115,9 +115,13 @@
     Four invariants hold across the chapter. A record goes down before the thing
     it describes happens. A turn and the results that answer it are kept
     together or dropped together, because the API rejects either half alone.
-    Compaction is deterministic and asks no model anything. A session is one
-    continuous conversation, so a finished goal stays in it whole until
-    compaction or <code>/clear</code> takes it out.
+    <strong>Compaction asks a model for a summary.</strong> This line read
+    &ldquo;compaction is deterministic and asks no model anything&rdquo; until
+    2026-09-06, and it was a chapter invariant, which is the worst place for a
+    claim to go stale: everything below it was written as though it held.
+    <code>Agent::model_summary</code> makes a call, with fallbacks for when it
+    does not answer. A session is one continuous conversation, so a finished
+    goal stays in it whole until compaction or <code>/clear</code> takes it out.
   </p>
   <span class="src">crates/emma/src/session.rs — module doc, <code>place_turn</code>; crates/emma/src/agent.rs — <code>compact_if_needed</code></span>
 

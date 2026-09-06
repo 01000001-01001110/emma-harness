@@ -533,22 +533,30 @@ pub struct Theme {
   </p>
 
   <p>
-    <strong>Nothing on screen drives any of this yet.</strong>
-    <code>main.rs</code> re-asks for <code>appearance.font_family</code> and
-    <code>appearance.font_size</code> at startup, silently, because there is no
-    screen to print a refusal onto at that point. The Settings screen's Font
-    Family and Font Size rows are still <code>Absent("n/a")</code> carrying
-    <code>NOTICE_FONT</code>, which reads <em>&ldquo;Fonts belong to your
-    terminal emulator; Emma cannot set one from inside it&rdquo;</em>, a sentence
-    this section has just made half wrong.
-    <span class="chip cert">certified</span> Grep
-    <code>crates/emma/src/term/settings.rs</code> for <code>NOTICE_FONT</code>:
-    two rows, both <code>Absent</code>, no cycler and no step handler. Until
-    those rows land, the only way to set a font is to write
-    <code>appearance.font_family</code> into <code>settings.json</code> by hand
-    and restart.
+    <strong>The screen drives it since 2026-09-06, and this paragraph said the
+    opposite until then.</strong> <code>main.rs</code> still re-asks for
+    <code>appearance.font_family</code> and <code>appearance.font_size</code> at
+    startup, silently, because there is no screen to print a refusal onto at
+    that point. What changed is the Settings screen: the Font Family row is a
+    cycler and the Font Size row a step, both writing the key they name.
   </p>
-  <span class="src">crates/emma/src/main.rs &mdash; the startup re-apply; crates/emma/src/term/settings.rs &mdash; <code>NOTICE_FONT</code>; crates/emma/src/term/termfont.rs &mdash; <code>restore</code>, <code>apply</code>, <code>seed_families</code></span>
+
+  <p>
+    <strong>The sentence beside them is a function now, and that is the
+    finding.</strong> It was a constant reading <em>&ldquo;Fonts belong to your
+    terminal emulator; Emma cannot set one from inside it&rdquo;</em>, and the
+    fork's version of it named Terminal.app unconditionally, which is false on
+    Windows where <code>termfont</code> has had an arm since the font package
+    landed. <code>notice_font_scope</code> asks the terminal it is actually
+    looking at, and answers three ways: that the terminal has not been read
+    yet, that Emma asks <em>this</em> terminal to change its own font, or that
+    this one offers no way to ask. It never claims the window changed, because
+    a name the terminal does not have is accepted and ignored there.
+    <span class="chip test">tested</span> a mutation making the notice name one
+    terminal unconditionally passed at first, because the test only exercised
+    the branch that returns early; the test now covers both.
+  </p>
+  <span class="src">crates/emma/src/main.rs &mdash; the startup re-apply; crates/emma/src/term/settings.rs &mdash; <code>notice_font_scope</code>, <code>RowKind::FontFamilyCycle</code>, <code>RowKind::FontSizeStep</code>; crates/emma/src/term/termfont.rs &mdash; <code>restore</code>, <code>apply</code>, <code>seed_families</code>, <code>offers_control</code></span>
 
   <h2 id="coverage">Coverage</h2>
 

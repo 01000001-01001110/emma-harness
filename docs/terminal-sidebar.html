@@ -372,12 +372,17 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
       <code>App::click</code> hit-tests the SESSIONS header row and toggles the
       sidebar, and <code>a_click_on_the_sessions_header_toggles_the_sidebar_and_latches</code>
       asserts it end to end. A reader of this file alone would conclude the
-      <code>[+]</code> is decorative. Still true on 2026-09-06, and now with a
-      second half: <a href="#hits"><code>hits</code></a> exists and reports a
-      rectangle for every clickable row, and nothing consults it, so the file
-      now denies a click it routes and advertises clicks it does not.
-      <span class="chip cert">certified</span>: the two are in the tree together
-      at <code>62ab9c3</code> and the click test passes in the 477-test suite.
+      <code>[+]</code> is decorative, and until 2026-09-06 the second half of
+      that was true as well: <a href="#hits"><code>hits</code></a> reported a
+      rectangle for every clickable row and nothing consulted it. Both halves
+      are now wired. <code>App::sidebar_row_click</code> reads those rectangles,
+      a click on a session row resolves to that session's id, and a click on a
+      TOOLS row produces the chord that row advertises, so the click and the key
+      cannot drift apart.
+      <span class="chip test">tested</span> every drawn session row is matched
+      against the name painted on it and the id it resolves to; reversing the id
+      table turns it red, which the version of this test written first could not
+      do, because it compared the id table with itself.
     </p>
     <span class="src">crates/emma/src/term/sidebar.rs — <code>COLLAPSE_HINT</code>; crates/emma/src/term/app.rs — <code>App::click</code></span>
   </div>
