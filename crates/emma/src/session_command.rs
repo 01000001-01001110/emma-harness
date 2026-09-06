@@ -361,7 +361,7 @@ pub async fn run(cmd: SessionCommand, s: &mut Session<'_, '_>) -> Flow {
         SessionCommand::Compact {
             everything,
             instruction,
-        } => compact(s, everything, instruction),
+        } => compact(s, everything, instruction).await,
         SessionCommand::Clear => clear(s).await,
         SessionCommand::Model { id, save } => model(s, id, save),
         SessionCommand::Theme { name } => theme(s, name),
@@ -927,20 +927,19 @@ pub(crate) fn write_theme(home: &Path, name: &str) -> anyhow::Result<PathBuf> {
 
 // region: /compact and /clear
 
-fn compact(s: &mut Session<'_, '_>, everything: bool, instruction: Option<String>) {
+async fn compact(s: &mut Session<'_, '_>, everything: bool, instruction: Option<String>) {
     if let Some(words) = instruction {
-        // Said rather than ignored. `Agent::compact`'s doc rules that
-        // compaction is not model-summarised — a call there spends the running
-        // goal's budget, can fail mid-goal, and produces a *claim* about the
-        // conversation where the current code produces a *record* of it. An
-        // instruction can only be honoured by a model, so the honest answer is
-        // to say so and name the workflow that does work.
+        // Said rather than ignored. Compaction asks the model for the summary
+        // now, but with a fixed prompt (`agent::SUMMARY_PROMPT`); there is no
+        // seam for an instruction yet, and one would go on the end of that
+        // prompt when somebody wants it. Until then the honest answer is to say
+        // so and name the workflow that does work.
         say(
             s.term,
             &format!(
-                "compaction replaces each finished goal with its goal text and its final \
-                 answer. It does not call a model, so it cannot follow an instruction — \
-                 \"{words}\" would be silently ignored, which is worse than saying so.\n\
+                "compaction asks the model for the summary now, but it asks with a fixed \
+                 prompt: there is no seam for an instruction, so \"{words}\" would be \
+                 silently ignored, which is worse than saying so.\n\
                  Run /compact on its own, or state what to keep as an ordinary goal first \
                  (\"summarise what we established about the API\") — the answer of a goal \
                  always survives compaction, so it will still be there afterwards."
@@ -948,7 +947,7 @@ fn compact(s: &mut Session<'_, '_>, everything: bool, instruction: Option<String
         );
         return;
     }
-    match s.agent.compact_now(everything) {
+    match s.agent.compact_now(everything).await {
         Compacted::Nothing(why) => s.term.note(&format!("nothing to compact — {why}")),
         Compacted::Done {
             goals,

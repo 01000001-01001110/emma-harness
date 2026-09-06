@@ -58,7 +58,7 @@
 //! would fire on the length of the conversation rather than on the bill — see
 //! [`Budgets::max_tokens`], which is where that argument is written out.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -684,6 +684,24 @@ pub struct Agent<'a> {
     /// says it must. The old behaviour is now the fallback rather than the
     /// policy.
     chapters: Vec<Chapter>,
+    /// The chapter count at which a compaction was last refused as unwinnable.
+    ///
+    /// **A cost memo, and it exists because the model path made a free mistake
+    /// expensive.** A conversation that is over its cap and has nothing left to
+    /// give re-enters [`Agent::compact_if_needed`] before every single request
+    /// and is refused every time. That was harmless while the replacement was
+    /// assembled locally. It is not harmless now: without this, each of those
+    /// refusals would first pay for a summarisation call whose answer is then
+    /// thrown away. Compaction is not the thing that spends a goal's budget.
+    ///
+    /// Keyed on the chapter count because that is what has to change for the
+    /// answer to change: a goal finishing adds a chapter, and a compaction
+    /// succeeding replaces several with one.
+    ///
+    /// It is a separate memo from [`Agent::said_compaction_stuck`], which is
+    /// about the *sentence*: that one is said once for the life of the session,
+    /// this one is cleared the moment a compaction succeeds again.
+    no_summary_at: Option<usize>,
     /// How the last goal ended, until the next one opens. See
     /// [`Agent::close_previous_goal`].
     last_ending: Option<&'static str>,
@@ -726,6 +744,7 @@ impl<'a> Agent<'a> {
         Self {
             s,
             chapters: Vec::new(),
+            no_summary_at: None,
             last_ending: None,
             said_compaction_stuck: false,
             last_input: None,
@@ -814,31 +833,47 @@ impl<'a> Agent<'a> {
         cleared
     }
 
-    /// Compact at the user's request rather than at the threshold.
+    /// `/compact`, with the provider asked to write the summary first.
     ///
-    /// `everything` includes the goal that has just finished. The default keeps
-    /// it because "everything but the last goal" is a rule somebody can hold in
-    /// their head, where a target size is arithmetic they would have to be told.
+    /// The same counting, the same single [`Agent::compact`], the same record;
+    /// the only difference is that the replacement text may be the model's
+    /// words rather than the loop's. Every way that call can fail comes back as
+    /// the deterministic collapse — see [`Agent::model_summary`] — so this
+    /// door is never less able to compact than the threshold path is.
+    pub async fn compact_now(&mut self, everything: bool) -> Compacted {
+        let Some((take, size)) = self.user_compaction(everything) else {
+            return self.nothing_to_compact_now();
+        };
+        let summary = self.model_summary(take).await;
+        self.compact(take, size, "/compact", summary)
+    }
+
+    /// How many chapters a user-asked compaction takes, and what the
+    /// conversation weighed when it was asked. `None` when there is nothing to
+    /// take, and both doors then say the same sentence.
     ///
-    /// It goes through the same [`Agent::compact`] the threshold does, so there
-    /// is one compaction implementation, one `compacted` record and one fold
-    /// arm replaying it.
-    pub fn compact_now(&mut self, everything: bool) -> Compacted {
+    /// Shared rather than written twice for the reason [`Agent::compact`] is:
+    /// two spellings of "how much does `/compact` take" would be two answers
+    /// the moment either moved.
+    fn user_compaction(&self, everything: bool) -> Option<(usize, i64)> {
         let n = self.chapters.len();
         let take = if everything { n } else { n.saturating_sub(1) };
         if take == 0 {
-            return Compacted::Nothing(match n {
-                0 => "there is no conversation yet".into(),
-                _ => "the only thing in the conversation is the goal you just finished. \
-                      `/compact all` includes it."
-                    .into(),
-            });
+            return None;
         }
         // The size a threshold compaction would have measured. Nothing is being
         // decided from it — the count is already fixed above — so the estimate
         // is only what the record and the report quote.
-        let size = self.estimated_context();
-        self.compact(take, size, "/compact")
+        Some((take, self.estimated_context()))
+    }
+
+    fn nothing_to_compact_now(&self) -> Compacted {
+        Compacted::Nothing(match self.chapters.len() {
+            0 => "there is no conversation yet".into(),
+            _ => "the only thing in the conversation is the goal you just finished. \
+                  `/compact all` includes it."
+                .into(),
+        })
     }
 
     /// The recovery for a model change that the provider would not accept.
@@ -912,7 +947,15 @@ impl<'a> Agent<'a> {
             "the provider rejected this conversation after the model changed from {was}: \
              {message}"
         ));
-        match self.compact(take, size, "a model change invalidated signed content") {
+        // `None`, deliberately: this is the recovery for a provider that has
+        // just refused this conversation, so asking that same provider to
+        // summarise it would be a second call down the path that is failing.
+        match self.compact(
+            take,
+            size,
+            "a model change invalidated signed content",
+            None,
+        ) {
             Compacted::Done { messages, .. } => {
                 self.s.term.note(&format!(
                     "summarised {messages} messages — a summary carries no signed thinking \
@@ -972,7 +1015,8 @@ impl<'a> Agent<'a> {
         // session, or a goal typed after a very long one, would otherwise start
         // in. There is no measurement to use yet at this point, so the estimate
         // stands in; see `Agent::compact`.
-        self.compact_if_needed(None, "a new goal opened over the context limit");
+        self.compact_if_needed(&mut [], None, "a new goal opened over the context limit")
+            .await;
         self.warn_if_the_budget_is_nearly_spent_on_arrival();
 
         let tool_defs = self.s.tools.wire_definitions();
@@ -1061,7 +1105,9 @@ impl<'a> Agent<'a> {
             // said the previous request weighed; on the first call of a goal it
             // is whatever the previous goal ended at, which is the right number
             // — the conversation has not shrunk since.
-            self.compact_if_needed(self.last_input, "the request passed the context limit");
+            let measured = self.last_input;
+            self.compact_if_needed(&mut query, measured, "the request passed the context limit")
+                .await;
 
             self.turn_seq += 1;
             let turn_id = format!("turn-{}", self.turn_seq);
@@ -1425,13 +1471,45 @@ impl<'a> Agent<'a> {
     /// second read. Nothing else is dropped — every goal's words and every
     /// answer survive for the life of the session.
     ///
-    /// **It is not summarised by a model, deliberately.** A model call here
-    /// would spend the budget of the goal that happens to be running, can fail
-    /// in the middle of one, and produces a claim about the conversation where
-    /// this produces a record of it. What is written into the session file is
-    /// the replacement itself, so a resume rebuilds the conversation that was
-    /// sent rather than re-deriving one that might differ.
-    fn compact_if_needed(&mut self, measured: Option<i64>, why: &str) {
+    /// **It is summarised by a model, and the three objections to that are
+    /// answered rather than dismissed.** They were real — they are the
+    /// argument this doc carried until 2026-09-06 — and each one is now the
+    /// shape of a guardrail rather than a reason to have none.
+    ///
+    /// *It spends the running goal's budget.* It does, and the spend is metered
+    /// on the same [`Spend`] as every other call and recorded on the
+    /// `compacted` record as `summary_tokens`. Under [`SUMMARY_BUDGET_FLOOR`]
+    /// remaining, the model is not asked at all: a compaction that ended the
+    /// goal it was shortening the conversation for would be strictly worse than
+    /// a mediocre summary.
+    ///
+    /// *It can fail in the middle of a goal.* Every way it can fail returns the
+    /// deterministic replacement instead, named on the record as
+    /// `summary_fallback`. Compaction is what keeps a session under its cap, so
+    /// it has to work when the provider does not.
+    ///
+    /// *It produces a claim where this produces a record.* Only if the claim
+    /// were re-derived, and it is not: the text the model returns is written
+    /// into the session file exactly as the deterministic replacement is, and
+    /// `session::Fold` splices those recorded messages back in without calling
+    /// anything. What is genuinely lost is that the words are no longer the
+    /// user's and the assistant's own, and that is why a summary carries
+    /// [`SUMMARISED_NOTE`] rather than [`COMPACTED_NOTE`]: the note under a
+    /// preserved answer promises it is word for word, and over a summary that
+    /// promise would be false.
+    ///
+    /// **And it no longer stops at the finished goals.** Whatever they could
+    /// not give is asked of the goal in flight, by
+    /// [`Agent::shed_the_running_goal`]. This used to stop here, on the
+    /// argument that within one goal the conversation grows as it always did
+    /// and the token budget bounds it. The token budget does not bound one
+    /// *request*, and a measured run showed the cost: a goal making twenty-nine
+    /// tool calls, twenty-five of them reads, sent a 129,254 token request
+    /// under a 96,000 cap and wrote no `compacted` record at all. There was one
+    /// small finished goal to take and taking it freed nothing, because none of
+    /// the weight was there. A cap that cannot reach the only list that is
+    /// growing is not a cap.
+    async fn compact_if_needed(&mut self, query: &mut [Message], measured: Option<i64>, why: &str) {
         let cap = self.s.budgets.max_context;
         if cap <= 0 {
             return;
@@ -1464,18 +1542,304 @@ impl<'a> Agent<'a> {
         // already reduced to summaries — grew on every single call in silence
         // until the token budget or a provider 400 ended it. The user's first
         // sign was the run stopping.
-        if let Compacted::Nothing(reason) = self.compact(take, size, why) {
-            if !self.said_compaction_stuck {
-                self.said_compaction_stuck = true;
-                self.s.term.warn(&format!(
-                    "this conversation is over the context limit and compaction cannot \
-                     shrink it: {reason}. Every request from here is larger than the cap, \
-                     and the run will end on a budget or a provider error rather than on \
-                     the goal. `/clear` starts a fresh conversation; a smaller goal would \
-                     also fit."
-                ));
+        let summary = self.model_summary(take).await;
+        let reclaimed = match self.compact(take, size, why, summary) {
+            Compacted::Done { before, after, .. } => {
+                self.no_summary_at = None;
+                before - after
+            }
+            Compacted::Nothing(reason) => {
+                // Two memos, because they answer two questions. This one stops
+                // the *cost*: a conversation that cannot be compacted re-enters
+                // here before every request, and without it each of those
+                // refusals would first pay for a summarisation call whose
+                // answer is then thrown away.
+                self.no_summary_at = Some(self.chapters.len());
+                if !self.said_compaction_stuck {
+                    self.said_compaction_stuck = true;
+                    self.s.term.warn(&format!(
+                        "this conversation is over the context limit and compaction cannot \
+                         shrink it: {reason}. Every request from here is larger than the cap, \
+                         and the run will end on a budget or a provider error rather than on \
+                         the goal. `/clear` starts a fresh conversation; a smaller goal would \
+                         also fit."
+                    ));
+                }
+                0
+            }
+        };
+        // Whatever the finished goals could not give is asked of the goal that
+        // is running. `size` is the provider's tokens and `reclaimed` is the
+        // estimator's, so this subtraction mixes two units. It is allowed to,
+        // in one direction only: the estimator under-counts what the provider
+        // bills, so a shortfall computed this way is too large rather than too
+        // small and the shed frees at least what is needed. Erring the other
+        // way would be a request that still does not fit, which is the failure
+        // this exists to stop.
+        self.shed_the_running_goal(query, size - reclaimed - target, size, why);
+    }
+
+    /// Replace the oldest tool results of the goal in flight with a note.
+    ///
+    /// **In place, never removed, and that is the safety argument.** A
+    /// `tool_result` whose `tool_use` is gone is a 400, and so is a `tool_use`
+    /// nothing answers. This writes the `content` of blocks that are already
+    /// there and adds, removes and reorders nothing, so both the pairings and
+    /// the user/assistant alternation are the same after it as before it. That
+    /// is the same invariant [`crate::prune`] holds, for the same reason, and
+    /// `tests/conversation.rs` asserts both shapes on this path.
+    ///
+    /// **What goes is recoverable and what stays is not.** A file can be read
+    /// again and a command can be run again; a decision the model stated in
+    /// prose cannot be recovered by any tool. So the assistant's own text, the
+    /// thinking blocks, the tool *calls* and their arguments all stay, and only
+    /// the results are shed. The note says so in the words the model needs to
+    /// act on it: re-run rather than recall.
+    ///
+    /// **The most recent tool-calling turn is never shed.** Its results are the
+    /// answer to the call the model has just made and has not yet acted on;
+    /// taking those would not save context so much as delete the step in
+    /// progress and invite the model to make the same call again.
+    ///
+    /// **No flag, and it is on whenever the cap is.** The alternative shapes
+    /// were considered and are worse. Turning [`crate::prune`] on by default
+    /// does not cover this workload: it removes traffic a *later* call
+    /// superseded, so twenty-five reads of twenty-five different files are
+    /// twenty-five live results and it has nothing to take. It also runs on
+    /// every call whether or not the request is near the cap, which pays the
+    /// prompt-cache invalidation unconditionally. This runs only when a
+    /// measured request has already passed the cap, so the cache cost is paid
+    /// exactly when the alternative is a request the model will not accept at
+    /// all. A conversation that is amnesiac beats one the provider refuses.
+    ///
+    /// Answers whether anything was shed, which is what a test asserts and what
+    /// the `shed` record's absence otherwise has to be read for.
+    fn shed_the_running_goal(
+        &mut self,
+        query: &mut [Message],
+        need: i64,
+        size: i64,
+        why: &str,
+    ) -> bool {
+        if need <= 0 {
+            return false;
+        }
+        // The tool call each result answers, so the note can name it. Built
+        // from `query` alone: a result in `query` answers a call in `query`,
+        // because a turn and its results are placed together.
+        let names: HashMap<String, String> = query
+            .iter()
+            .flat_map(|m| m.content.blocks())
+            .filter_map(|b| match b {
+                ContentBlock::ToolUse(c) => Some((c.id.clone(), c.name.clone())),
+                _ => None,
+            })
+            .collect();
+        let mut holders: Vec<usize> = query
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| {
+                m.content
+                    .blocks()
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::ToolResult(_)))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        holders.truncate(holders.len().saturating_sub(KEEP_RECENT_TURNS));
+
+        let mut freed = 0i64;
+        let mut before = 0i64;
+        let mut after = 0i64;
+        let mut shed: Vec<Value> = Vec::new();
+        'outer: for m in holders {
+            let Content::Blocks(blocks) = &mut query[m].content else {
+                continue;
+            };
+            for block in blocks.iter_mut() {
+                let ContentBlock::ToolResult(r) = block else {
+                    continue;
+                };
+                // Already gone.
+                //
+                // **A cheap early-out that reads as a safety property, and it
+                // is worth saying which it is.** What actually stops a session
+                // pinned over its cap from re-shedding the same block on every
+                // request is the `saving <= 0` test below: re-shedding a block
+                // that already holds the note produces the identical note, so
+                // `was == now`, so nothing is written and nothing is logged.
+                // Mutating this line away leaves the churn test green for that
+                // reason, and the mutation was run.
+                //
+                // It stays for the case that test does not reach. The note
+                // names the tool, and the name is looked up in `query` — so a
+                // block whose `tool_use` is no longer there gets the unnamed
+                // note instead, which is a *different* length. Without this
+                // line that block would be rewritten and logged a second time,
+                // reporting a saving it did not make.
+                if r.content.starts_with(SHED_MARK) {
+                    continue;
+                }
+                let note = shed_note(names.get(&r.tool_use_id).map(String::as_str));
+                // Measured as the block renders, not as its text reads: the
+                // quotes and the escapes are bytes the provider tokenises too,
+                // which is the argument `Content::wire_len` already carries.
+                let was = block_wire_len(&ContentBlock::ToolResult(r.clone())) as i64;
+                let mut shed_block = r.clone();
+                shed_block.content = note.clone();
+                let now = block_wire_len(&ContentBlock::ToolResult(shed_block)) as i64;
+                // A result already shorter than the note saying it is gone
+                // would make the request larger. The compactor learned this the
+                // same way, on a four-word goal.
+                let saving = (was - now) / 4;
+                if saving <= 0 {
+                    continue;
+                }
+                before += was / 4;
+                after += now / 4;
+                freed += saving;
+                shed.push(json!({ "tool_use_id": r.tool_use_id, "content": note }));
+                r.content = note;
+                if freed >= need {
+                    break 'outer;
+                }
             }
         }
+        if shed.is_empty() {
+            return false;
+        }
+        // A sibling of `compacted` rather than a field on it, because it is a
+        // different edit: `compacted` replaces whole messages off the front of
+        // the history and is replayed by an index, this rewrites named blocks
+        // wherever they sit. Sharing one record would mean one fold arm doing
+        // two unrelated things to two different lists. The fields the two do
+        // share are spelled the same, so a reader comparing them is comparing
+        // like with like.
+        //
+        // `results_shed` carries the replacement text verbatim, for the same
+        // reason `compacted` carries its messages: the fold replays what
+        // happened rather than re-deciding it, so a resumed conversation is the
+        // one that was sent and not a second guess at it.
+        self.s.log.append(
+            "shed",
+            json!({
+                "why": why,
+                "results": shed.len(),
+                "results_shed": shed,
+                "request_tokens": size,
+                "max_context": self.s.budgets.max_context,
+                "needed": need,
+                "estimated_freed": freed,
+                "estimated_before": before,
+                "estimated_after": after,
+            }),
+        );
+        self.s.term.note(&format!(
+            "shed {} earlier tool result(s) from the goal that is running — roughly \
+             {before} tokens down to {after}. Those file contents and command outputs are no \
+             longer in context; the goal, the calls and everything said about them are.",
+            shed.len()
+        ));
+        true
+    }
+
+    /// Ask the provider to summarise the chapters compaction is about to fold.
+    ///
+    /// **Best effort, and that word is load-bearing.** Every failure this can
+    /// have — an unreachable provider, a timeout, an error, an answer with no
+    /// text in it, a goal with too little budget left to pay for the call —
+    /// returns a [`ModelSummary`] with no text and a reason, and
+    /// [`Agent::compact`] then writes the deterministic replacement it has
+    /// always written. Compaction is what keeps a session under its context
+    /// cap, so a compaction that needed the model to be healthy would fail
+    /// exactly when the model is being asked for the most, and the failure
+    /// would be a request the provider refuses rather than a worse summary.
+    ///
+    /// **The budget floor is not a courtesy.** The tokens this spends are the
+    /// running goal's, metered on the same [`Spend`] as every other call, and a
+    /// compaction that pushed a goal over [`Budgets::max_tokens`] would have
+    /// ended the goal in order to shorten its conversation.
+    ///
+    /// **Its own request is capped too**, at [`SUMMARY_INPUT_CHARS`], because
+    /// the conversation being folded is by construction the largest thing in
+    /// the session — that is why it is being folded — and sending all of it
+    /// to summarise it would be the same oversized request compaction exists to
+    /// prevent.
+    ///
+    /// No tools, no history, and `Caching::Off`: this is one question about a
+    /// fixed body of text, it must not be able to call anything, and writing it
+    /// into the prompt cache would evict the prefix of the conversation that is
+    /// about to be sent for real.
+    async fn model_summary(&self, take: usize) -> Option<ModelSummary> {
+        let take = take.min(self.chapters.len());
+        if take == 0 {
+            return None;
+        }
+        // A stretch that is already nothing but summaries is one
+        // `Agent::compact` will refuse, because summarising it again cannot
+        // make it smaller. Asking the model first would pay for an answer that
+        // is then thrown away, on every call, for the life of a session that
+        // cannot get under its cap.
+        if self.chapters[..take].iter().all(|c| c.summarised)
+            || self.no_summary_at == Some(self.chapters.len())
+        {
+            return None;
+        }
+        let remaining = self.s.budgets.max_tokens - self.s.spend.get();
+        if remaining < SUMMARY_BUDGET_FLOOR {
+            return Some(ModelSummary::skipped(format!(
+                "only {remaining} tokens of the goal's budget were left, under the \
+                 {SUMMARY_BUDGET_FLOOR} a summarisation call is allowed to cost"
+            )));
+        }
+        let transcript = summary_input(&self.chapters[..take]);
+        if transcript.trim().is_empty() {
+            return Some(ModelSummary::skipped(
+                "there was no text in the goals being folded to summarise".into(),
+            ));
+        }
+        let mut request = Request::new(SUMMARY_PROMPT, Vec::new());
+        request.query = vec![Message::user(transcript)];
+        request.max_tokens = SUMMARY_MAX_TOKENS;
+        request.caching = Caching::Off;
+        let sent = tokio::time::timeout(
+            SUMMARY_TIMEOUT,
+            self.s.provider.send(request, Mode::Batch, None),
+        )
+        .await;
+        let turn = match sent {
+            Ok(Ok(turn)) => turn,
+            Ok(Err(e)) => {
+                return Some(ModelSummary::skipped(format!(
+                    "the summarisation call failed: {e}"
+                )))
+            }
+            Err(_) => {
+                return Some(ModelSummary::skipped(format!(
+                    "the summarisation call passed its {}s timeout",
+                    SUMMARY_TIMEOUT.as_secs()
+                )))
+            }
+        };
+        // Charged before the answer is judged, because it was paid for before
+        // the answer was judged. A call whose text is unusable still cost what
+        // it cost, and a record showing zero there would understate what
+        // compaction spent.
+        let tokens = cost_tokens(&turn.usage);
+        self.s.spend.add(tokens);
+        let text = turn.text().trim().to_string();
+        if text.is_empty() {
+            return Some(ModelSummary {
+                text: None,
+                tokens,
+                fallback: Some("the summarisation call answered with no text".into()),
+            });
+        }
+        Some(ModelSummary {
+            text: Some(text),
+            tokens,
+            fallback: None,
+        })
     }
 
     /// Replace the oldest `take` chapters with their summaries.
@@ -1487,7 +1851,22 @@ impl<'a> Agent<'a> {
     /// nothing-happened guard, the record the fold replays, the arithmetic in
     /// the report — is here once, because two compaction implementations would
     /// be two things a resume could disagree with.
-    fn compact(&mut self, take: usize, size: i64, why: &str) -> Compacted {
+    ///
+    /// **`summary` is the model's answer, already obtained, or `None`.** The
+    /// call that produces it is [`Agent::model_summary`], and it happens before
+    /// this function deliberately: this one is synchronous, it is the single
+    /// place a `compacted` record is written, and it is reached from a recovery
+    /// path that must not touch the provider at all. Passing the text in keeps
+    /// all three true. `None` means the deterministic collapse, which is what
+    /// this did before the summariser existed and what it still does whenever
+    /// the model path is unavailable, unaffordable or unhelpful.
+    fn compact(
+        &mut self,
+        take: usize,
+        size: i64,
+        why: &str,
+        summary: Option<ModelSummary>,
+    ) -> Compacted {
         let take = take.min(self.chapters.len());
         if take == 0 {
             return Compacted::Nothing("there is nothing behind the current goal".into());
@@ -1496,7 +1875,33 @@ impl<'a> Agent<'a> {
             .iter()
             .map(|c| estimate(&c.messages))
             .sum();
-        let replacement: Vec<Message> = self.chapters[..take].iter().flat_map(summarise).collect();
+        let deterministic: Vec<Message> =
+            self.chapters[..take].iter().flat_map(summarise).collect();
+        // The model's text is used only if it is actually smaller than what it
+        // replaces. A summariser that answers with more words than the
+        // conversation it was given has produced a plausible sentence and no
+        // saving, and compaction exists for the saving. Falling back here
+        // rather than refusing outright means such an answer costs its tokens
+        // and nothing else.
+        let (replacement, summary_source, summary_tokens, summary_fallback) = match summary {
+            Some(m) => match m.text {
+                Some(text) => {
+                    let candidate = model_replacement(&text);
+                    if estimate(&candidate) < before {
+                        (candidate, "model", m.tokens, None)
+                    } else {
+                        (
+                            deterministic,
+                            "deterministic",
+                            m.tokens,
+                            Some("the summary was not smaller than what it replaced".to_string()),
+                        )
+                    }
+                }
+                None => (deterministic, "deterministic", m.tokens, m.fallback),
+            },
+            None => (deterministic, "deterministic", 0, None),
+        };
         let after = estimate(&replacement);
         // A conversation summarising would not shrink has nothing to give.
         // Stopping here rather than rewriting it into itself is what keeps a
@@ -1553,6 +1958,21 @@ impl<'a> Agent<'a> {
                 "max_context": self.s.budgets.max_context,
                 "estimated_before": before,
                 "estimated_after": after,
+                // Which path wrote the text above, and what asking for it cost.
+                // Both on the record rather than derived, because a summary is
+                // a claim about the conversation and a reader has to be able to
+                // tell one a model wrote from one this file assembled.
+                // `summary_tokens` is weighted spend, the same unit the budget
+                // is tested in, and it is non-zero even on a fallback that a
+                // model call preceded: that call was paid for whether or not
+                // its answer was used.
+                //
+                // Three added keys and no changed one, which is why
+                // `session::Fold` reads this record unmodified: the fold takes
+                // `drop_messages` and `messages`, and neither moved.
+                "summary_source": summary_source,
+                "summary_tokens": summary_tokens,
+                "summary_fallback": summary_fallback,
             }),
         );
         // The threshold path narrates itself here, because nobody asked for it
@@ -1904,7 +2324,17 @@ impl<'a> Agent<'a> {
 
         let mut content = outcome.content.clone();
         if outcome.truncated {
-            content.push_str(&truncation_note(outcome.truncation.as_deref()));
+            let note = truncation_note(outcome.truncation.as_deref());
+            // Only when the tool has not said it already. `tools/fs` writes
+            // `[truncated: reason]` into the content *and* sets
+            // `truncated_because(reason)`, so appending unconditionally said
+            // the same sentence twice: every one of the 24 truncated `Read`
+            // results and both truncated `Glob`s in the audited logs carried it
+            // doubled. A tool that reports the flag without writing the line,
+            // which is the other half of the API, still gets the note.
+            if !ends_with_note(&content, &note) {
+                content.push_str(&note);
+            }
         }
         self.note_task_progress();
         let post = self
@@ -2064,6 +2494,220 @@ fn summarise(c: &Chapter) -> Vec<Message> {
         Message::user(goal),
         Message::assistant_text(format!("{answer}\n\n{COMPACTED_NOTE}")),
     ]
+}
+
+/// The provider's answer to [`SUMMARY_PROMPT`], and what asking for it cost.
+///
+/// `text` is `None` for every way the model path can fail to produce something
+/// usable, and `fallback` then says which way. `tokens` is filled in both
+/// cases: a call that failed after the provider answered was still billed, and
+/// a record showing zero there would understate what compaction spent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelSummary {
+    /// The summary, or `None` when the model did not produce a usable one.
+    pub text: Option<String>,
+    /// Weighted spend for the summarisation call, in the units [`cost_tokens`]
+    /// produces.
+    pub tokens: i64,
+    /// Why the deterministic replacement is being used instead, when it is.
+    pub fallback: Option<String>,
+}
+
+impl ModelSummary {
+    /// No text, no cost: the call was not made.
+    fn skipped(why: String) -> Self {
+        Self {
+            text: None,
+            tokens: 0,
+            fallback: Some(why),
+        }
+    }
+}
+
+/// What a model-written summary leaves behind, in the same shape the
+/// deterministic collapse leaves: one user message saying what this is, one
+/// assistant message carrying the text.
+///
+/// **Assistant text, and nothing else.** No thinking block, so no signature, so
+/// nothing bound to the model that produced it. That is the same property the
+/// deterministic replacement has, and it is the property
+/// [`Agent::recover_from_a_model_change`] relies on when it compacts to escape
+/// a provider that has rejected signed content. A summary is safe to carry
+/// across a `/model` switch for exactly the reason the answer text already was.
+fn model_replacement(summary: &str) -> Vec<Message> {
+    vec![
+        Message::user(SUMMARY_RECAP_ASK),
+        Message::assistant_text(format!("{}\n\n{SUMMARISED_NOTE}", summary.trim())),
+    ]
+}
+
+/// Said to the model under a summary a model wrote, where [`COMPACTED_NOTE`] is
+/// said under an answer preserved verbatim.
+///
+/// **The two cannot share one sentence.** `COMPACTED_NOTE` opens by promising
+/// the text above it is preserved word for word, which is the whole reason the
+/// deterministic collapse can be trusted and is exactly what a summary is not.
+/// Saying it over a summary would be this repository's worst class of untruth:
+/// a sentence that is true of the mechanism it was written for and false about
+/// the text it is attached to. Everything else carries over unchanged, because
+/// the rest of the note is about the tool results, and they are gone either
+/// way.
+const SUMMARISED_NOTE: &str = "[Context note: the text above is a summary of earlier goals in \
+     this session, written by a model rather than quoted from them. Their tool calls and \
+     results — file contents, command output, diffs — are gone, and so is their exact \
+     wording. Treat it as a recap and not as a quotation: re-read files rather than recalling \
+     their contents, and do not attribute the words above to the user.]";
+
+/// The user turn a model-written summary answers, so the pair reads as a
+/// conversation rather than as an assistant statement with nothing prompting
+/// it.
+const SUMMARY_RECAP_ASK: &str =
+    "[Earlier goals in this session have been compacted. Recap where the work stands.]";
+
+/// What the chapters being folded are rendered into, as the one user message
+/// the summariser sees.
+///
+/// The tail rather than the head when it does not fit: what a resumed
+/// conversation needs is the state the work reached, and the end of a stretch
+/// of goals is closer to that than its opening. The cut is announced in the
+/// text, because a summariser that does not know it was handed a fragment will
+/// summarise the fragment as though it were the whole.
+fn summary_input(chapters: &[Chapter]) -> String {
+    let mut out = String::new();
+    for c in chapters {
+        for m in &c.messages {
+            let who = match m.role {
+                Role::User => "User",
+                Role::Assistant => "Assistant",
+            };
+            out.push_str(who);
+            out.push_str(": ");
+            out.push_str(&m.content.to_string());
+            out.push_str("\n\n");
+        }
+    }
+    if out.len() <= SUMMARY_INPUT_CHARS {
+        return out;
+    }
+    let cut = out.len() - SUMMARY_INPUT_CHARS;
+    let cut = (cut..out.len())
+        .find(|i| out.is_char_boundary(*i))
+        .unwrap_or(out.len());
+    format!(
+        "[The opening of this transcript was cut to fit. What follows is its last part.]\n\n{}",
+        &out[cut..]
+    )
+}
+
+/// Said to the summarising model, and pinned by `tests/conversation.rs`.
+///
+/// **What it keeps and what it drops is the whole design.** The parts of a
+/// finished stretch of work that cannot be recovered are the decisions and the
+/// reasons behind them, where the work stands, what is still outstanding, and
+/// anything the user said that constrains the work. The parts that can be
+/// recovered are file contents, command output and diffs, so those go, and a
+/// path is worth more than the bytes at it: a model told which file matters can
+/// read it again.
+///
+/// **Prose, not JSON.** What this answer becomes is a message in a
+/// conversation, so asking for a structure that then has to be rendered back
+/// into prose adds a parse that can fail and buys nothing. The instruction to
+/// answer with the summary alone is here because a preamble ends up in the
+/// session file word for word: the text this returns is recorded verbatim and
+/// replayed by `session::fold` on every resume, so "Here is the summary you
+/// asked for" would be permanent.
+const SUMMARY_PROMPT: &str = "\
+You are compacting the earlier part of a coding session so the work can continue with less \
+context. You will be given a transcript of goals that are finished.
+
+Write a summary that lets someone pick the work up cold. Keep:
+- the decisions that were made, and why each one was made
+- the current state of the work: what is done and what is known to be true now
+- what remains to be done, including anything that was started and not finished
+- the paths of files that were read, written or discussed, by full path
+- any constraint, preference or correction stated by the user, in their terms
+
+Drop:
+- the bodies of tool results: file contents, command output, diffs, search hits
+- exploration that led nowhere, unless a dead end is itself a finding worth keeping
+- restatements of the same point, and any commentary about the summary itself
+
+Write plain prose or short bullets, no headings, and be specific: name files, functions, \
+commands and values rather than describing them. If the transcript does not say something, do \
+not supply it. Answer with the summary and nothing else, with no preamble and no sign-off.";
+
+/// The answer budget for one summarisation call.
+///
+/// Large enough for a real recap of a long stretch of work, small enough that
+/// the call cannot cost a meaningful fraction of a goal's budget.
+/// [`Agent::compact`] still refuses an answer that does not shrink the
+/// conversation, so this is a cost bound rather than the thing keeping the
+/// summary short.
+const SUMMARY_MAX_TOKENS: u32 = 2_000;
+
+/// How long a summarisation call may take before compaction stops waiting.
+///
+/// Compaction is on the path of a request that has already passed the context
+/// cap, so the user is waiting on it. A local model is slow — `emma-llm`'s
+/// Ollama provider allows an hour for a real answer — but a compaction nobody
+/// can interrupt for that long is worse than a deterministic summary now.
+const SUMMARY_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The size cap on the summarisation call's own request, in characters.
+///
+/// Roughly 30,000 tokens at the packer's ratio. The conversation being folded
+/// is the largest thing in the session by definition, so sending all of it
+/// would reproduce the oversized request this is being run to avoid, and on
+/// Ollama it would be silently clipped besides.
+const SUMMARY_INPUT_CHARS: usize = 120_000;
+
+/// Remaining goal budget, in weighted tokens, under which the model is not
+/// asked at all.
+///
+/// A compaction that ended the goal it was shortening the conversation for
+/// would be a strictly worse outcome than a mediocre summary. Sized above
+/// [`SUMMARY_MAX_TOKENS`] plus the input, so the call cannot be started when it
+/// could not be afforded.
+const SUMMARY_BUDGET_FLOOR: i64 = 50_000;
+
+/// How many of the most recent tool-calling turns are never shed. One, because
+/// the last one is the answer to the call the model is in the middle of.
+const KEEP_RECENT_TURNS: usize = 1;
+
+/// The opening of [`shed_note`], and the test for "this one has already gone".
+///
+/// A prefix rather than a flag on the block, because the block is what crosses
+/// the wire and comes back through a fold; a flag would have to be stored, and
+/// then kept in step with the text.
+const SHED_MARK: &str = "[Context note: this tool result was dropped";
+
+/// Said to the model in the place one tool result used to be.
+///
+/// Names the tool, because "something was here" is not actionable and "the
+/// `ReadOne` result was here" is. Says re-run rather than recall for the reason
+/// [`COMPACTED_NOTE`] does: a model that does not know a file has left its
+/// context answers from a memory of it.
+fn shed_note(tool: Option<&str>) -> String {
+    let what = match tool {
+        Some(name) => format!("the {name} result that was here"),
+        None => "the result that was here".to_string(),
+    };
+    format!(
+        "{SHED_MARK} to save context: {what} is no longer in the conversation. The call above \
+         it, and everything said about it since, are untouched. Run the tool again or re-read \
+         the file if you need what it returned; do not answer from a memory of its contents.]"
+    )
+}
+
+/// How many bytes one block is on the wire.
+///
+/// [`emma_llm::Content::wire_len`] answers this for a whole message and there
+/// is no per-block equivalent, and the shedder needs one: what it decides is
+/// whether replacing *this* result with a note is worth the rewrite. Rendered
+/// rather than `content.len()` for the reason `wire_len` gives — the quotes
+/// and the escapes are bytes the provider tokenises too.
+fn block_wire_len(block: &ContentBlock) -> usize {
+    serde_json::to_string(block).map(|s| s.len()).unwrap_or(0)
 }
 
 /// Said to the model, in the place the traffic used to be.
@@ -2283,6 +2927,18 @@ fn failure_result(id: &str, tool: &str, kind: &str, detail: &str) -> ToolResult 
 /// advice is marked as advice — "narrow the request" is simply wrong when what
 /// was dropped is an inventory the model has no way to narrow, so the model is
 /// told that nobody named a limit rather than being sent to guess at one.
+/// Whether a tool result already ends with the note the runtime is about to
+/// append.
+///
+/// Matched against the whole rendered sentence rather than against
+/// `[truncated:` alone, because a file whose own contents contain that string
+/// would otherwise suppress a note it never carried. Trailing whitespace is
+/// ignored on both sides: `tools/fs`'s reader ends the line with a newline and
+/// the runtime's note begins with one.
+fn ends_with_note(content: &str, note: &str) -> bool {
+    content.trim_end().ends_with(note.trim())
+}
+
 fn truncation_note(reason: Option<&str>) -> String {
     match reason {
         Some(reason) => format!("\n[truncated: {reason}]"),
@@ -2341,6 +2997,144 @@ fn trim_oldest(v: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
+    /// The prompt is a `const` so a change to it is a change somebody reviewed.
+    /// What is pinned is the contract the design rests on: what a summary must
+    /// keep, what it must drop, and that the answer is the summary alone — a
+    /// preamble would be recorded verbatim and replayed on every resume for the
+    /// life of the session.
+    #[test]
+    fn the_summary_prompt_still_says_what_to_keep_and_what_to_drop() {
+        for keep in [
+            "the decisions that were made, and why",
+            "current state of the work",
+            "what remains to be done",
+            "paths of files",
+            "constraint, preference or correction stated by the user",
+        ] {
+            assert!(
+                SUMMARY_PROMPT.contains(keep),
+                "the prompt stopped asking for `{keep}`"
+            );
+        }
+        for drop in ["file contents, command output, diffs", "led nowhere"] {
+            assert!(
+                SUMMARY_PROMPT.contains(drop),
+                "the prompt stopped dropping `{drop}`"
+            );
+        }
+        assert!(SUMMARY_PROMPT.contains("Answer with the summary and nothing else"));
+        assert!(
+            !SUMMARY_PROMPT.contains("JSON"),
+            "the prompt asks for a structure again"
+        );
+    }
+
+    /// The summariser's own request is capped, because the conversation being
+    /// folded is the largest thing in the session by definition. The tail is
+    /// kept: what a resumed conversation needs is the state the work reached.
+    #[test]
+    fn an_oversized_transcript_is_cut_to_its_tail_and_says_so() {
+        let long = "x".repeat(SUMMARY_INPUT_CHARS);
+        let chapters = vec![Chapter {
+            goal: "g".into(),
+            answer: "a".into(),
+            messages: vec![
+                Message::user(long),
+                Message::assistant_text("ZZZZ-THE-END-OF-IT"),
+            ],
+            summarised: false,
+        }];
+        let out = summary_input(&chapters);
+        assert!(
+            out.len() < SUMMARY_INPUT_CHARS + 200,
+            "the cap did not hold: {}",
+            out.len()
+        );
+        assert!(
+            out.contains("ZZZZ-THE-END-OF-IT"),
+            "the tail was cut instead of the head"
+        );
+        assert!(
+            out.starts_with("[The opening of this transcript was cut"),
+            "the cut is silent"
+        );
+    }
+
+    /// A transcript that fits is passed through whole, with no cut marker.
+    #[test]
+    fn a_transcript_that_fits_is_not_announced_as_cut() {
+        let chapters = vec![Chapter {
+            goal: "g".into(),
+            answer: "a".into(),
+            messages: vec![
+                Message::user("short"),
+                Message::assistant_text("also short"),
+            ],
+            summarised: false,
+        }];
+        let out = summary_input(&chapters);
+        assert!(!out.contains("cut to fit"), "{out}");
+        assert!(
+            out.starts_with("User: ") && out.contains("Assistant: "),
+            "{out}"
+        );
+        assert!(out.contains("short") && out.contains("also short"), "{out}");
+    }
+
+    /// The two notes cannot share a sentence. `COMPACTED_NOTE` opens by
+    /// promising the text above it is preserved word for word, and over a
+    /// model-written summary that promise is false.
+    #[test]
+    fn a_summary_is_not_labelled_as_a_quotation() {
+        let out = model_replacement("the work stands here");
+        let rendered: String = out.iter().map(|m| m.content.to_string()).collect();
+        assert!(rendered.contains("the work stands here"), "{rendered}");
+        assert!(
+            rendered.contains("a summary of earlier goals"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("preserved word for word"),
+            "a summary is being sold as a quotation: {rendered}"
+        );
+        // The property `recover_from_a_model_change` leans on: nothing here is
+        // bound to the model that wrote it.
+        assert!(!out
+            .iter()
+            .any(|m| m.content.blocks().iter().any(ContentBlock::is_model_bound)));
+    }
+
+    /// The guard behind the doubled truncation sentence. `tools/fs` ends the
+    /// line with a newline and the runtime's note begins with one, so neither
+    /// side can be compared untrimmed.
+    #[test]
+    fn a_note_the_tool_already_wrote_is_recognised_whatever_the_whitespace() {
+        let note = truncation_note(Some("the file is longer than the read limit"));
+        let from_fs = "some file text\n[truncated: the file is longer than the read limit]\n";
+        assert!(ends_with_note(from_fs, &note));
+        assert!(!ends_with_note("some file text", &note));
+        // A file whose own contents mention truncation has not said this note.
+        assert!(!ends_with_note(
+            "a line about [truncated: something else]",
+            &note
+        ));
+    }
+
+    /// The note names the tool, because "something was here" is not actionable,
+    /// and it opens with [`SHED_MARK`] so the shedder can tell a block it has
+    /// already emptied from a live one.
+    #[test]
+    fn a_shed_note_names_the_tool_and_carries_the_mark() {
+        let named = shed_note(Some("ReadOne"));
+        assert!(named.starts_with(SHED_MARK), "{named}");
+        assert!(
+            named.contains("the ReadOne result that was here"),
+            "{named}"
+        );
+        assert!(named.contains("Run the tool again"), "{named}");
+        assert!(shed_note(None).starts_with(SHED_MARK));
+    }
+
     use super::*;
 
     #[test]

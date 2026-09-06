@@ -400,7 +400,7 @@ async fn compact_with_an_instruction_says_it_cannot_follow_one() {
     // Quoted back, so the user can see which words were not acted on. Ignoring
     // them silently is the failure this is written against.
     assert!(said.contains("keep the API details"), "{said}");
-    assert!(said.contains("does not call a model"), "{said}");
+    assert!(said.contains("no seam for an instruction"), "{said}");
     // …and nothing happened, because a half-honoured instruction is worse than
     // a refused one.
     assert_eq!(agent.conversation(), before);

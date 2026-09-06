@@ -634,6 +634,38 @@ impl Fold {
                 self.pending = None;
                 self.results.clear();
             }
+            // Shedding rewrites named blocks wherever they sit, where `compacted`
+            // replaces messages off the front by an index. Replayed rather than
+            // re-decided, for the same reason: the record carries the replacement
+            // text verbatim, so a resumed conversation is the one that was sent.
+            "shed" => {
+                let shed: Vec<(String, String)> = r["results_shed"]
+                    .as_array()
+                    .map(|rows| {
+                        rows.iter()
+                            .map(|row| (string(row, "tool_use_id"), string(row, "content")))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                for (id, content) in shed {
+                    for message in self.history.iter_mut().chain(self.query.iter_mut()) {
+                        if let Content::Blocks(blocks) = &mut message.content {
+                            for block in blocks.iter_mut() {
+                                if let ContentBlock::ToolResult(result) = block {
+                                    if result.tool_use_id == id {
+                                        result.content = content.clone();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    for result in self.results.iter_mut() {
+                        if result.tool_use_id == id {
+                            result.content = content.clone();
+                        }
+                    }
+                }
+            }
             // A line typed while the goal ran, taken up at the next turn. The
             // text is the *composed* string, attribution and all, for the reason
             // the `goal` record stores `opening` rather than the user's words: a
