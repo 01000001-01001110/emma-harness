@@ -795,8 +795,10 @@ mod atomic_save_tests {
     #[test]
     fn a_save_renames_its_temp_file_over_the_target_and_keeps_nothing_else() {
         let home = tempfile::tempdir().unwrap();
-        let mut s = Settings::default();
-        s.theme = Some("first".into());
+        let mut s = Settings {
+            theme: Some("first".into()),
+            ..Default::default()
+        };
         let path = save(home.path(), &s).unwrap();
         s.theme = Some("second".into());
         save(home.path(), &s).unwrap();
