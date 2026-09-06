@@ -66,7 +66,7 @@ use emma_tools_lsp::{doc, lang, Pool};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use super::code::{DefTarget, Diag, LspStatus, LspUpdate, Severity};
+use super::code::{Candidate, DefTarget, Diag, LspStatus, LspUpdate, Severity};
 
 // region: The seam
 // ---------------------------------------------------------------------------
@@ -129,6 +129,25 @@ pub enum Request {
         col: usize,
     },
     Definition {
+        rel: String,
+        text: String,
+        line: usize,
+        col: usize,
+    },
+    /// Ask what could be typed here.
+    ///
+    /// Carries the same buffer every other question does, for the same reason:
+    /// a completion computed against the text the server saw three hundred
+    /// milliseconds ago offers members of a type the person has just finished
+    /// changing.
+    Completion {
+        rel: String,
+        text: String,
+        line: usize,
+        col: usize,
+    },
+    /// Ask which argument the cursor is in.
+    Signature {
         rel: String,
         text: String,
         line: usize,
@@ -288,6 +307,45 @@ pub async fn run(root: PathBuf, pool: Arc<Pool>, mut rx: mpsc::Receiver<Request>
                     );
                 }
             }
+            Request::Completion {
+                rel,
+                text,
+                line,
+                col,
+            } => {
+                if let Some(o) = open.as_ref().filter(|o| o.rel == rel) {
+                    sync_now(o, &text, &mut pending, &mut deadline);
+                    let answer = Answer::Completion(text.clone());
+                    ask(
+                        o,
+                        &sink,
+                        "textDocument/completion",
+                        line,
+                        col,
+                        &text,
+                        answer,
+                    );
+                }
+            }
+            Request::Signature {
+                rel,
+                text,
+                line,
+                col,
+            } => {
+                if let Some(o) = open.as_ref().filter(|o| o.rel == rel) {
+                    sync_now(o, &text, &mut pending, &mut deadline);
+                    ask(
+                        o,
+                        &sink,
+                        "textDocument/signatureHelp",
+                        line,
+                        col,
+                        &text,
+                        Answer::Signature,
+                    );
+                }
+            }
             Request::Definition {
                 rel,
                 text,
@@ -312,6 +370,73 @@ pub async fn run(root: PathBuf, pool: Arc<Pool>, mut rx: mpsc::Receiver<Request>
     }
 }
 
+/// One protocol completion, narrowed to what the page draws and inserts.
+///
+/// The conversion that matters is the range: the wire counts UTF-16 code units
+/// on a line and the page counts characters, and they differ on any line with a
+/// character outside the basic plane. Doing it here keeps the rule this crate
+/// already has, which is that a column crosses the boundary exactly once.
+fn candidate(c: &emma_tools_lsp::render::Completion, buffer: &str) -> Candidate {
+    let replace = c.replace.and_then(|(start, end)| {
+        // Only a range on one line can be a word under the cursor. A
+        // multi-line edit is a refactor, not a completion, and the page
+        // declines it rather than applying half.
+        if start.line != end.line {
+            return None;
+        }
+        let line = buffer.lines().nth(start.line as usize)?;
+        let to_chars = |utf16: u32| {
+            let bytes = doc::byte_offset(line, utf16);
+            line[..bytes.min(line.len())].chars().count()
+        };
+        Some((to_chars(start.character), to_chars(end.character)))
+    });
+    Candidate {
+        label: c.label.clone(),
+        filter: c.filter.clone(),
+        // A snippet the page cannot expand is offered as its label rather than
+        // its placeholders: `push(${1:value})` typed literally into a file is
+        // worse than a plain `push`.
+        insert: if c.snippet {
+            c.filter.clone()
+        } else {
+            c.insert.clone()
+        },
+        replace,
+        kind: c.kind,
+        detail: c.detail.clone(),
+    }
+}
+
+/// The active signature as one line, with the current argument marked.
+///
+/// One line because it shares the note row: two floating boxes over three lines
+/// of code is a page nobody can read. The marker is square brackets rather than
+/// a colour, so it survives the ASCII skin and a terminal with no colour at
+/// all.
+fn signature_line(value: &Value) -> Option<String> {
+    let (sigs, active) = emma_tools_lsp::render::parse_signatures(value)?;
+    let sig = sigs.get(active)?;
+    let Some(at) = sig.active_parameter else {
+        return Some(sig.label.clone());
+    };
+    let Some(param) = sig.parameters.get(at) else {
+        return Some(sig.label.clone());
+    };
+    // Mark the parameter where it appears in the signature. Falling back to the
+    // bare label rather than guessing: a marker on the wrong argument is worse
+    // than none.
+    match sig.label.find(param.as_str()) {
+        Some(i) => Some(format!(
+            "{}[{}]{}",
+            &sig.label[..i],
+            param,
+            &sig.label[i + param.len()..]
+        )),
+        None => Some(sig.label.clone()),
+    }
+}
+
 /// A question needs the server to have the buffer, so asking one cancels the
 /// debounce and sends it. Otherwise `F5` answers about the text as it was three
 /// hundred milliseconds ago — which is the version the person has just changed.
@@ -330,6 +455,10 @@ fn sync_now(
 /// Which shape the answer is read back in.
 enum Answer {
     Hover,
+    /// Carries the buffer, because what the popup filters against is the word
+    /// already typed, and that word is in the buffer rather than on the wire.
+    Completion(String),
+    Signature,
     /// Carries the root, because containment is decided against it, and the
     /// buffer, because a definition landing in the file that is already open
     /// can have its column converted here rather than by the shell.
@@ -362,6 +491,23 @@ fn ask(
                 Answer::Hover => LspUpdate::Hover {
                     path: rel,
                     lines: hover_lines(&a.value),
+                },
+                Answer::Completion(buffer) => {
+                    let (items, incomplete) = emma_tools_lsp::render::parse_completions(&a.value);
+                    LspUpdate::Completions {
+                        path: rel,
+                        // The wire's ranges are UTF-16 columns on a line; the
+                        // page counts characters. Converted here, where the
+                        // buffer that decides the answer is in hand, which is
+                        // the same rule the definition arm follows.
+                        items: items.iter().map(|c| candidate(c, &buffer)).collect(),
+                        incomplete,
+                        origin: (line, col),
+                    }
+                }
+                Answer::Signature => LspUpdate::Signature {
+                    path: rel,
+                    line: signature_line(&a.value),
                 },
                 Answer::Definition(root, buffer) => {
                     let mut target = definition_target(&a.value, &root);

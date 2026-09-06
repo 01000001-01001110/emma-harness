@@ -1829,6 +1829,42 @@ impl App {
         self.code_sent = None;
     }
 
+    /// Ask what could be typed at the cursor, and for the signature the cursor
+    /// is inside.
+    ///
+    /// **Both, on one key.** They answer different halves of the same question
+    /// and a person pressing for help wants whichever exists: a completion list
+    /// when there is one, and the signature of the call they are inside when
+    /// there is not. Two keys would make the useful one a guess.
+    fn code_lsp_complete(&mut self) {
+        let Some(handle) = self.code_lsp.as_ref() else {
+            if let Some(view) = self.code.as_mut() {
+                view.lsp.note = Some("code intelligence is not wired in this run".to_string());
+            }
+            return;
+        };
+        let Some(view) = self.code.as_ref() else {
+            return;
+        };
+        let Some(open) = view.open.as_ref().filter(|o| o.note.is_none()) else {
+            return;
+        };
+        let (rel, line, col) = (open.path.clone(), open.line, open.col);
+        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
+        handle.post(super::code_lsp::Request::Completion {
+            rel: rel.clone(),
+            text: text.clone(),
+            line,
+            col,
+        });
+        handle.post(super::code_lsp::Request::Signature {
+            rel,
+            text,
+            line,
+            col,
+        });
+    }
+
     /// Ask for hover, or for a definition, at the cursor.
     fn code_lsp_ask(&mut self, definition: bool) {
         let Some(handle) = self.code_lsp.as_ref() else {
@@ -1995,6 +2031,10 @@ impl App {
             // channel lives here. Neither waits: `post` is a `try_send`.
             CodeAction::Hover => {
                 self.code_lsp_ask(false);
+                None
+            }
+            CodeAction::Complete => {
+                self.code_lsp_complete();
                 None
             }
             CodeAction::Definition => {
