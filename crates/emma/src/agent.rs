@@ -707,6 +707,10 @@ pub struct Agent<'a> {
     /// It exists for one recovery and buys nothing else — see
     /// [`Agent::recover_from_a_model_change`], which is the only reader.
     changed_from: Option<String>,
+    /// The task counts as last recorded, so the Run Graph's task-progress
+    /// record is written only when the numbers moved. See
+    /// [`Agent::note_task_progress`].
+    tasks_seen: std::sync::Mutex<Option<(usize, usize)>>,
 }
 
 impl<'a> Agent<'a> {
@@ -728,6 +732,7 @@ impl<'a> Agent<'a> {
             turn_seq: 0,
             resumed: None,
             changed_from: None,
+            tasks_seen: std::sync::Mutex::new(None),
         }
     }
 
@@ -1062,6 +1067,7 @@ impl<'a> Agent<'a> {
             let turn_id = format!("turn-{}", self.turn_seq);
 
             let request = Request {
+                temperature: None,
                 // The harness prompt, then the framing that is true of every
                 // goal. It goes here rather than into the opening message
                 // because a preamble on the user's words is an instruction
@@ -1900,6 +1906,7 @@ impl<'a> Agent<'a> {
         if outcome.truncated {
             content.push_str(&truncation_note(outcome.truncation.as_deref()));
         }
+        self.note_task_progress();
         let post = self
             .run_post_hooks(turn_id, call, &content, outcome.truncated, None)
             .await;
@@ -2063,6 +2070,33 @@ fn summarise(c: &Chapter) -> Vec<Message> {
 const COMPACTED_NOTE: &str = "[Summarised to save context. The tool calls from this goal and \
      their results — file contents, command output, diffs — are no longer in this conversation. \
      Read anything you need again rather than recalling it.]";
+
+impl Agent<'_> {
+    /// Sample the project's task list after a tool ran, and record it if it
+    /// moved.
+    ///
+    /// `TaskUpdate` is the obvious hook and the wrong one: the harness contract
+    /// explicitly allows a person editing the markdown while the agent works.
+    /// So the file is sampled after every call that ran, and a record is
+    /// written only when the numbers changed. The cost is one read of a small
+    /// markdown file per successful tool call, against a model call; a project
+    /// with no task list pays a failed `stat` and writes nothing at all. See
+    /// [`crate::runfacts::worth_recording`].
+    ///
+    /// Written on this run's own log view, so a delegation's progress lands as
+    /// `sub.task_progress` and stays attributable to the node that made it.
+    fn note_task_progress(&self) {
+        let now = crate::runfacts::sample_tasks(&self.s.cwd);
+        let Ok(mut seen) = self.tasks_seen.lock() else {
+            return;
+        };
+        if !crate::runfacts::worth_recording(*seen, now) {
+            return;
+        }
+        *seen = Some(now);
+        crate::runfacts::task_progress(self.s.log, now.0, now.1);
+    }
+}
 
 /// Said to the model when the goal before this one did not finish.
 ///
@@ -2655,6 +2689,7 @@ mod tests {
         // context is a cache read, which is the case the budget used to get
         // wrong.
         let cached = emma_llm::Usage {
+            context_window: 0,
             input_tokens: 1_000,
             output_tokens: 500,
             cache_creation_input_tokens: 0,
@@ -2685,6 +2720,7 @@ mod tests {
         // A cache *write* is the other direction — billed above face value, so
         // counting it at size under-charges.
         let written = emma_llm::Usage {
+            context_window: 0,
             input_tokens: 0,
             output_tokens: 0,
             cache_creation_input_tokens: 1_000,

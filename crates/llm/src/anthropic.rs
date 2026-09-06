@@ -404,7 +404,13 @@ impl AnthropicProvider {
         let message = self.scrub(trim_body(&api_message(&body)));
 
         match status.as_u16() {
-            401 => LlmError::Unauthorized { message },
+            401 => LlmError::Unauthorized {
+                fix: format!(
+                    "Check {}, or run `emma api` to store a working one.",
+                    crate::auth::ENV_VAR
+                ),
+                message,
+            },
             403 => LlmError::Forbidden { message },
             400 | 404 | 413 | 422 => LlmError::BadRequest { message },
             429 => LlmError::RateLimited {

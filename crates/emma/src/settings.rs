@@ -118,6 +118,60 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_search: Option<bool>,
 
+    // ----------------------------------------------------------------------
+    // The blocks below arrived with the port of the macOS fork (2026-09-06).
+    // Each is additive and skipped when empty, the `tools` rule: a settings
+    // file must not grow a `"voice": {}` block because this build knows the
+    // word. Where a block's reader has not landed yet, the field doc says
+    // which package brings it, so a key that is stored and not yet honoured
+    // is never mistaken for one that is.
+    // ----------------------------------------------------------------------
+    /// Whether session transcripts are kept in the shape the training
+    /// exporter reads. **Absent means on**, per [`TRAINING_CAPTURE_DEFAULT`]:
+    /// a settings file written before this build knew the word reads as
+    /// capturing. Nothing leaves the machine either way: the export is a local
+    /// file built from a local transcript. Read by the `export-training`
+    /// command once it lands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub training_capture: Option<bool>,
+
+    /// Whether answers are read aloud, and with which voice. See
+    /// [`VoiceSettings`] and `crate::speech`.
+    #[serde(default, skip_serializing_if = "VoiceSettings::is_empty")]
+    pub voice: VoiceSettings,
+
+    /// provider -> the sampling knobs set by hand for it. The `models` map's
+    /// shape, for its reason: these are per-provider answers and one global
+    /// value would be wrong for whichever provider it was not set on. See
+    /// [`SamplingSettings`]; the resolver arrives with the temperature port.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sampling: BTreeMap<String, SamplingSettings>,
+
+    /// Which language servers Emma may start. See [`LspSettings`]; read once
+    /// the multi-language `tools/lsp` port lands.
+    #[serde(default, skip_serializing_if = "LspSettings::is_empty")]
+    pub lsp: LspSettings,
+
+    /// What the user has said about the memory wiki beyond the `memory`
+    /// toggle above. See [`MemoryPolicy`].
+    ///
+    /// **Named `memory_policy` and not `memory`, and the name is a
+    /// compatibility decision.** The fork wrote this block under `"memory"`;
+    /// mainline has read `"memory"` as a boolean since the wiki was ported,
+    /// and neither shape parses as the other. A file written by either build
+    /// keeps working under both keys.
+    #[serde(default, skip_serializing_if = "MemoryPolicy::is_empty")]
+    pub memory_policy: MemoryPolicy,
+
+    /// The look of the frame beyond the theme name. See
+    /// [`AppearanceSettings`]. `theme` stays a top-level field above.
+    #[serde(default, skip_serializing_if = "AppearanceSettings::is_empty")]
+    pub appearance: AppearanceSettings,
+
+    /// What the interface says without being asked. See [`UiSettings`].
+    #[serde(default, skip_serializing_if = "UiSettings::is_empty")]
+    pub ui: UiSettings,
+
     /// The pre-provider spelling. Deserialized and never written back, so it
     /// survives being read and disappears on the first save. Private because
     /// nothing outside this module has any business setting it: it is an input
@@ -171,6 +225,194 @@ pub enum How {
     Checked,
     /// Set past the check, on purpose. A model can exist before it is listed.
     Forced,
+}
+
+/// The training-capture default when the key is absent. A named constant
+/// rather than a literal so the resolver and the pin test cannot drift.
+pub const TRAINING_CAPTURE_DEFAULT: bool = true;
+
+/// The hints default when the key is absent.
+pub const HINTS_DEFAULT: bool = true;
+
+impl Settings {
+    /// Whether transcripts are kept in the exporter's shape.
+    pub fn capture_training(&self) -> bool {
+        self.training_capture.unwrap_or(TRAINING_CAPTURE_DEFAULT)
+    }
+
+    /// Whether the informational one-liners are printed.
+    pub fn hints(&self) -> bool {
+        self.ui.hints.unwrap_or(HINTS_DEFAULT)
+    }
+}
+
+/// Which language servers Emma may start. An absent list means the default
+/// set; a name this build does not know is kept and reported, never an error.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LspSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<Vec<String>>,
+}
+
+impl LspSettings {
+    pub fn is_empty(&self) -> bool {
+        self.enabled.is_none()
+    }
+}
+
+/// What the user has said about spoken output. See `crate::speech`.
+///
+/// `name: None` is not "no voice": it is the platform default. The
+/// distinction matters enough that the absent case is documented rather than
+/// inferred.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoiceSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<bool>,
+    /// The voice by the name the platform's speech engine lists, exactly. A
+    /// name rather than an identifier, for the reason `theme` is a name: a
+    /// machine that lacks this voice falls back to its default, which is the
+    /// right failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// How many bytes of an answer are read aloud before the rest is left on
+    /// screen. Absent means the built-in default. Not clamped: a person who
+    /// sets it to their whole screen has said what they want.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spoken_limit: Option<usize>,
+}
+
+impl VoiceSettings {
+    pub fn is_empty(&self) -> bool {
+        self.on.is_none() && self.name.is_none() && self.spoken_limit.is_none()
+    }
+}
+
+/// Per-provider sampling overrides, keyed by provider name in
+/// [`Settings::sampling`]. Every field is optional and an absent field means
+/// the provider's own default, which for `temperature` means nothing is sent.
+///
+/// ```json
+/// "sampling": {
+///   "anthropic": { "temperature": 0.2, "max_output_tokens": 16000, "stream": false }
+/// }
+/// ```
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SamplingSettings {
+    /// Not clamped here: the legal range differs per host, and an
+    /// out-of-range value is the host's 400 to explain, which names the range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    /// The ceiling on one turn's output, thinking included where thinking is
+    /// billed as output. Providers already clamp to the model's own maximum,
+    /// so a value above it is lowered rather than rejected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    /// Whether an interactive turn streams. Absent means on. `-p` is always
+    /// batch whatever this says: there is no terminal to stream into.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream: Option<bool>,
+}
+
+impl SamplingSettings {
+    pub fn is_empty(&self) -> bool {
+        self.temperature.is_none() && self.max_output_tokens.is_none() && self.stream.is_none()
+    }
+}
+
+/// Retention meaning "keep forever", the absent value's reading.
+pub const RETENTION_KEEP_FOREVER: u64 = 0;
+
+/// What the user has said about the memory wiki beyond the capture toggle.
+///
+/// Three `Option`s rather than three values: "never said" and "said no" are
+/// different answers. Nothing prunes yet and recall does not consult this
+/// yet; the keys are stored so a choice survives the session that made it.
+/// Deleting somebody's notes is not a side effect a settings screen acquires
+/// quietly, so the pruner is its own change with its own tests.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryPolicy {
+    /// How many days a captured page is kept. Absent, or
+    /// [`RETENTION_KEEP_FOREVER`], means nothing is ever pruned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retention_days: Option<u64>,
+    /// Whether recall consults the wiki without being asked. Absent means on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_recall: Option<bool>,
+    /// `project` or `global`. Absent means `project`, which is what every
+    /// write does today.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+}
+
+impl MemoryPolicy {
+    pub fn is_empty(&self) -> bool {
+        self.retention_days.is_none() && self.auto_recall.is_none() && self.scope.is_none()
+    }
+}
+
+/// What the interface says of its own accord.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UiSettings {
+    /// Whether the informational one-liners are printed. Absent means on, per
+    /// [`HINTS_DEFAULT`]. A hint is informational, repeats on a path a person
+    /// takes many times, and can be dropped without losing a fact about what
+    /// happened; refusals, receipts and warnings are never gated by this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hints: Option<bool>,
+}
+
+impl UiSettings {
+    pub fn is_empty(&self) -> bool {
+        self.hints.is_none()
+    }
+}
+
+/// The look of the frame beyond the theme name.
+///
+/// Names, not values, wherever a table exists to index into: a name this build
+/// does not know resolves to the default, which is the right failure. The
+/// font fields are the exception and have to be, because a font family is the
+/// terminal's vocabulary rather than Emma's.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppearanceSettings {
+    /// Which role's swatch the accent borrows. Read by the palette once the
+    /// accent port lands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+    /// `unicode`, `ascii`, or absent for auto-detection. Read once, at
+    /// startup, where the skin is built. `unicode` is a request and not a
+    /// guarantee: a console that cannot do UTF-8 still gets ASCII.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glyphs: Option<String>,
+    /// `full` or `compact`. Read by the status bar once its density port
+    /// lands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_bar: Option<String>,
+    /// The font families the Font Family row cycles. Absent means the seed
+    /// list in `term::termfont`; the row's Add path writes a longer one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub font_families: Vec<String>,
+    /// The family last asked for, re-applied at startup. Absent means Emma
+    /// has never touched the terminal's font, which is not the same as the
+    /// terminal having no font: nothing is asked for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<String>,
+    /// The size last asked for, in points. Absent means the same as an absent
+    /// family.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<u32>,
+}
+
+impl AppearanceSettings {
+    pub fn is_empty(&self) -> bool {
+        self.accent.is_none()
+            && self.glyphs.is_none()
+            && self.status_bar.is_none()
+            && self.font_families.is_empty()
+            && self.font_family.is_none()
+            && self.font_size.is_none()
+    }
 }
 
 pub fn path(home: &Path) -> PathBuf {
@@ -476,5 +718,54 @@ mod tests {
         save(home.path(), &settings).unwrap();
         let raw = std::fs::read_to_string(path(home.path())).unwrap();
         assert!(raw.contains("forced"), "{raw}");
+    }
+}
+
+#[cfg(test)]
+mod port_blocks_tests {
+    use super::*;
+
+    /// A file written by the fork, with `"memory"` as a block, and one written
+    /// by mainline, with `"memory"` as a bool, both parse; and the fork's
+    /// block lands under `memory_policy` when spelled that way.
+    #[test]
+    fn both_spellings_of_memory_parse() {
+        let mainline: Settings = serde_json::from_str(r#"{"memory": true}"#).unwrap();
+        assert_eq!(mainline.memory, Some(true));
+        let policy: Settings =
+            serde_json::from_str(r#"{"memory_policy": {"retention_days": 30}}"#).unwrap();
+        assert_eq!(policy.memory_policy.retention_days, Some(30));
+        assert!(policy.memory.is_none());
+    }
+
+    /// An empty block is not written back: a file must not grow keys because
+    /// this build knows the words. Removing any `skip_serializing_if` fails it.
+    #[test]
+    fn empty_blocks_are_not_written() {
+        let raw = serde_json::to_string(&Settings::default()).unwrap();
+        for key in [
+            "voice",
+            "sampling",
+            "lsp",
+            "memory_policy",
+            "appearance",
+            "ui",
+            "training_capture",
+        ] {
+            assert!(!raw.contains(key), "{key} in {raw}");
+        }
+    }
+
+    /// Absent means on for capture and hints, and the constants are the ones
+    /// the resolvers read.
+    #[test]
+    fn capture_and_hints_default_on() {
+        let s = Settings::default();
+        assert_eq!(s.capture_training(), TRAINING_CAPTURE_DEFAULT);
+        assert_eq!(s.hints(), HINTS_DEFAULT);
+        let off: Settings =
+            serde_json::from_str(r#"{"training_capture": false, "ui": {"hints": false}}"#).unwrap();
+        assert!(!off.capture_training());
+        assert!(!off.hints());
     }
 }

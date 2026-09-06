@@ -46,7 +46,6 @@ mod retry;
 pub mod roster;
 
 use async_trait::async_trait;
-use auth::ENV_VAR;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::{OnceLock, RwLock};
@@ -239,6 +238,12 @@ pub struct Request {
     /// not coming back is a search vendor's own API key: the owner's ruling on
     /// 2026-09-05, after the tool that needed one was removed.
     pub web_search: bool,
+    /// Sampling temperature, or `None` for "the provider's default".
+    ///
+    /// An ask, like the other knobs here: a provider that has no such
+    /// parameter ignores it. Carried on the request rather than a global
+    /// because the settings resolve it per provider.
+    pub temperature: Option<f64>,
 }
 
 impl Request {
@@ -259,7 +264,13 @@ impl Request {
             effort: Effort::XHigh,
             caching: Caching::On,
             web_search: false,
+            temperature: None,
         }
+    }
+
+    pub fn with_temperature(mut self, temperature: Option<f64>) -> Self {
+        self.temperature = temperature;
+        self
     }
 
     pub fn with_web_search(mut self, on: bool) -> Self {
@@ -325,6 +336,16 @@ pub struct Usage {
     /// that never searches must not read as "unknown".
     #[serde(default)]
     pub server_tool_use: ServerToolUse,
+    /// The context window the provider actually ran this call in, in tokens,
+    /// when it says. Zero means "not reported", never "zero tokens".
+    ///
+    /// Ollama reports it as `num_ctx` in effect, and it is the number that
+    /// catches a silent clip: a request whose prompt is larger than this was
+    /// truncated on the provider's side without an error. The fork measured
+    /// that clip at 28 of 117 logged calls under a flat 32,768 default, which
+    /// is why the number is recorded rather than assumed.
+    #[serde(default)]
+    pub context_window: i64,
 }
 
 /// Work the provider performed for the model inside one call, billed apart
@@ -491,7 +512,13 @@ pub enum LlmError {
     // at the printing boundary; that was a workaround for a wrong string, and
     // the string is now right. `rename_auth` is therefore a no-op in practice
     // and can be deleted once nothing else depends on it.
+    // `fix` is the provider's own sentence: its environment variable and the
+    // command that stores its key. It is a field rather than a constant because
+    // this used to name Anthropic's variable unconditionally, and a second
+    // provider inheriting that string sent a user to check a key that was
+    // never involved in the request that failed.
     Unauthorized {
+        fix: String,
         message: String,
     },
 
@@ -545,10 +572,9 @@ impl LlmError {
     fn sentence(&self) -> String {
         match self {
             Self::Auth(e) => format!("no API key: {e}"),
-            Self::Unauthorized { message } => format!(
-                "the API rejected this key (HTTP 401). Check {ENV_VAR}, or run `emma api` to \
-                 store a working one. Provider said: {message}"
-            ),
+            Self::Unauthorized { fix, message } => {
+                format!("the API rejected this key (HTTP 401). {fix} Provider said: {message}")
+            }
             Self::Forbidden { message } => format!(
                 "the API key is valid but not allowed to do this (HTTP 403) — check the key's \
                  workspace and model permissions. Provider said: {message}"
@@ -749,6 +775,7 @@ mod tests {
     #[test]
     fn billable_counts_all_three_input_fields() {
         let usage = Usage {
+            context_window: 0,
             input_tokens: 41,
             output_tokens: 17,
             cache_creation_input_tokens: 3_200,
@@ -787,6 +814,7 @@ mod tests {
         let payload = format!("the provider echoed {KEY} back in its error body");
         let variants = vec![
             LlmError::Unauthorized {
+                fix: String::new(),
                 message: payload.clone(),
             },
             LlmError::Forbidden {

@@ -21,6 +21,9 @@ on:
   push:
     branches:
       - main
+      # The fork port: every push gets the macOS and Windows build the merge
+      # bar requires, before the review rather than after it.
+      - port/mac-fork
 
 permissions:
   contents: read

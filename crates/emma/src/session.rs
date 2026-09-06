@@ -82,7 +82,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
-use emma_llm::{ContentBlock, Message, Role, ToolResult};
+use emma_llm::{Content, ContentBlock, Message, Role, ToolResult};
 use serde_json::{json, Value};
 
 use crate::agent::{label_of, memo_key_of, Resumed};
@@ -136,11 +136,7 @@ impl SessionLog {
     /// A session id that sorts by time and cannot collide between two `emma`
     /// processes started in the same millisecond.
     pub fn new_id() -> String {
-        let ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        format!("sess-{ms:013}-{}", std::process::id())
+        format!("sess-{:013}-{}", now_ms(), std::process::id())
     }
 
     /// `~/.emma/sessions/`, or `EMMA_SESSION_DIR` when set — which is how a
@@ -208,13 +204,7 @@ impl SessionLog {
         };
         if let Some(obj) = payload.as_object_mut() {
             obj.insert("kind".into(), json!(kind));
-            obj.insert(
-                "at_ms".into(),
-                json!(SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0)),
-            );
+            obj.insert("at_ms".into(), json!(now_ms()));
             for (key, value) in &self.stamp {
                 obj.insert(key.clone(), value.clone());
             }
@@ -456,6 +446,22 @@ pub fn fold(path: &Path) -> Result<Vec<Message>> {
     Ok(fold_records(&SessionLog::read(path)?))
 }
 
+/// Milliseconds since the Unix epoch, which is what every `at_ms` in this file
+/// and in `runfacts` means.
+///
+/// One function rather than several copies of the same `duration_since`,
+/// because two records whose timestamps come from differently-written clocks
+/// cannot be ordered against each other, and ordering them is the whole point
+/// of a run graph. A clock before the epoch reads as zero rather than
+/// panicking: a record with a wrong timestamp is a blemish, a crash is a lost
+/// session.
+pub fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// [`fold`] over records already read — the testable half, and the one a caller
 /// that has the records for another reason should use.
 pub fn fold_records(records: &[Value]) -> Vec<Message> {
@@ -487,7 +493,7 @@ pub fn fold_records_reporting(records: &[Value]) -> (Vec<Message>, Vec<String>) 
 /// in the conversation in full, and the *only* thing that shortens it is
 /// compaction — which writes what it replaced the messages with into the
 /// record, so this reads it rather than re-deriving it.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Fold {
     /// Records this fold refused to act on because they were damaged.
     ///
@@ -628,6 +634,15 @@ impl Fold {
                 self.pending = None;
                 self.results.clear();
             }
+            // A line typed while the goal ran, taken up at the next turn. The
+            // text is the *composed* string, attribution and all, for the reason
+            // the `goal` record stores `opening` rather than the user's words: a
+            // fold that recomposed it would replay a conversation the model
+            // never had the moment the wording changed.
+            "steer" => {
+                self.close_turn();
+                append_user_text(&mut self.query, string(r, "text"));
+            }
             "goal_finished" => self.finished = Some(string(r, "ending")),
             _ => {}
         }
@@ -676,6 +691,60 @@ impl Fold {
         }
         self.history.extend(messages);
         self.in_goal = false;
+    }
+}
+
+/// The conversation as it stood immediately *before* each `assistant` record,
+/// paired with that record's index.
+///
+/// The training exporter's per-turn context, and it is the same fold rather
+/// than a second one: the walk is [`fold_records`] stopped early, so a
+/// `compacted` record that had already been applied when a turn was sent is
+/// applied here too, and one that came later is not. That is the property the
+/// exporter claims, and claiming it from a re-derivation would be a second
+/// implementation of one decision.
+///
+/// Cloning the fold at each assistant record rather than re-walking the prefix
+/// keeps it linear in the records and quadratic only in the messages that are
+/// copied, which for a session file is a few hundred small structs.
+pub fn fold_prefixes(records: &[Value]) -> Vec<(usize, Vec<Message>)> {
+    let mut fold = Fold::default();
+    let mut out = Vec::new();
+    for (i, record) in records.iter().enumerate() {
+        if record["kind"] == "assistant" {
+            // `finish` places the turn that is still pending, which is the
+            // previous one, with the results that answered it. That list is
+            // exactly what the request carrying turn `i` sent.
+            out.push((i, fold.clone().finish()));
+        }
+        fold.record(record);
+    }
+    out
+}
+
+/// Append user text to the turn already at the end, or open a new one.
+///
+/// **Two user turns in a row is a 400, not a conversation**, and this is the
+/// one rule that keeps steering from producing one. At the top of a loop
+/// iteration the last message is always a user turn (the goal's opening, the
+/// tool results of the round-trip just placed, or a kick), so almost every
+/// call appends. The push arm is for the case that does not arise in the loop
+/// and does in the fold: a record stream whose last placed message was an
+/// assistant turn.
+///
+/// Shared between the loop's steering drain and the fold's `steer` arm,
+/// because a fold that composed the turn differently from the run is a
+/// resumed session that is not the one that was sent.
+pub(crate) fn append_user_text(out: &mut Vec<Message>, text: String) {
+    match out.last_mut() {
+        Some(last) if last.role == Role::User => match &mut last.content {
+            Content::Text(existing) => {
+                existing.push_str("\n\n");
+                existing.push_str(&text);
+            }
+            Content::Blocks(blocks) => blocks.push(ContentBlock::text(text)),
+        },
+        _ => out.push(Message::user(text)),
     }
 }
 
@@ -2206,5 +2275,62 @@ mod tests {
         // The control: a name that is simply wrong is still refused, so the
         // stripping above is not an accident of accepting anything at all.
         assert!(locate(dir.path(), Some("sess-nope.jsonl"), here.path()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod steer_fold_tests {
+    use super::*;
+
+    fn text_of(m: &Message) -> String {
+        match &m.content {
+            Content::Text(t) => t.clone(),
+            Content::Blocks(b) => panic!("these tests build text turns only: {b:?}"),
+        }
+    }
+
+    /// A `steer` record joins the user turn already at the end rather than
+    /// opening a second one: two user turns in a row is a 400.
+    #[test]
+    fn a_steer_record_folds_into_the_open_user_turn() {
+        let records = vec![
+            json!({"kind": "goal", "goal_id": "g1", "opening": "do the thing"}),
+            json!({"kind": "steer", "text": "and also this"}),
+        ];
+        let out = fold_records(&records);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].role, Role::User);
+        assert_eq!(text_of(&out[0]), "do the thing\n\nand also this");
+    }
+
+    /// `append_user_text` opens a new turn only when the last one is not the
+    /// user's. Removing the role check makes this push twice and fails.
+    #[test]
+    fn append_user_text_opens_a_turn_only_after_an_assistant() {
+        let mut out = vec![Message::assistant_text("done")];
+        append_user_text(&mut out, "more".into());
+        append_user_text(&mut out, "and more".into());
+        assert_eq!(out.len(), 2);
+        assert_eq!(text_of(&out[1]), "more\n\nand more");
+    }
+
+    /// Each prefix is the conversation as sent with that assistant turn: the
+    /// first turn sees only the opening, the second sees the first turn too.
+    #[test]
+    fn fold_prefixes_is_the_fold_stopped_before_each_assistant_record() {
+        let records = vec![
+            json!({"kind": "goal", "goal_id": "g1", "opening": "q"}),
+            json!({"kind": "assistant", "raw_content": [{"type": "text", "text": "a1"}]}),
+            json!({"kind": "kick", "text": "go on"}),
+            json!({"kind": "assistant", "raw_content": [{"type": "text", "text": "a2"}]}),
+        ];
+        let prefixes = fold_prefixes(&records);
+        assert_eq!(prefixes.iter().map(|p| p.0).collect::<Vec<_>>(), vec![1, 3]);
+        assert_eq!(prefixes[0].1.len(), 1);
+        assert!(
+            prefixes[1].1.len() > prefixes[0].1.len(),
+            "{:?}",
+            prefixes[1].1
+        );
     }
 }

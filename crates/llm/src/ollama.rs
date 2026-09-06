@@ -702,6 +702,8 @@ fn turn_from_ollama(body: &Value) -> Result<AssistantTurn, LlmError> {
     };
 
     let usage = Usage {
+        // Filled by the derived-`num_ctx` port; until then not reported.
+        context_window: 0,
         input_tokens: body
             .get("prompt_eval_count")
             .and_then(Value::as_i64)
@@ -768,7 +770,12 @@ async fn classify(resp: reqwest::Response) -> LlmError {
         // Unauthenticated on loopback, but a reverse proxy in front of a shared
         // server is a real deployment, and its 401/403/429 mean here what they
         // mean anywhere.
-        401 => LlmError::Unauthorized { message },
+        401 => LlmError::Unauthorized {
+            fix: "Ollama itself asks for no key; whatever answered 401 sits in front of it. \
+                  Check OLLAMA_HOST and the proxy or gateway at that address."
+                .into(),
+            message,
+        },
         403 => LlmError::Forbidden { message },
         429 => LlmError::RateLimited {
             retry_after,

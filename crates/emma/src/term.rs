@@ -72,6 +72,9 @@ use ratatui::text::Line;
 pub mod app;
 pub mod bindings;
 pub mod chat;
+pub mod code;
+pub mod code_git;
+pub mod code_lsp;
 pub mod diff;
 pub mod frame;
 /// The net over `frame.rs` and `app.rs`. Green as of 2026-08-27, and it earned
@@ -88,8 +91,10 @@ pub mod frame;
 /// defends.
 pub mod guarantees;
 pub mod harness;
+pub mod help;
 pub mod input;
 pub mod inspect;
+pub mod keymap;
 pub mod layout;
 pub mod markdown;
 pub mod memory;
@@ -102,6 +107,7 @@ pub mod sidebar;
 pub mod spacing;
 pub mod statusbar;
 pub mod statusline;
+pub mod termfont;
 pub mod theme;
 pub mod transcript;
 pub mod view;
