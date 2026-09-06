@@ -643,7 +643,9 @@ mod tests {
             provider: Some("bedrock".into()),
             ..Default::default()
         };
-        settings.models.insert("bedrock".into(), "some-model".into());
+        settings
+            .models
+            .insert("bedrock".into(), "some-model".into());
         save(home.path(), &settings).unwrap();
 
         let err = resolve_kind(None, None, Some(home.path()))
