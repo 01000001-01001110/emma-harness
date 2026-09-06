@@ -100,6 +100,7 @@ static KINDS: &[&'static dyn ProviderKind] = &[
     &crate::ollama::Ollama,
     &crate::openai_compat::OPENROUTER_KIND,
     &crate::openai_compat::OPENAI_KIND,
+    &crate::claude_cli::ClaudeCli,
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -180,5 +181,16 @@ mod tests {
         // than an empty string reaching the wire.
         let p = k.build(ApiKey::new("sk-ant-x"), None);
         assert_eq!(p.model_id(), k.default_model());
+    }
+
+    /// **If this breaks:** the startup line tells a claude-engine user the model
+    /// cannot look anything up, while the child CLI has `WebSearch` and will use
+    /// it. `web_search()` is about *provider-side* search on Emma's key, and for
+    /// this kind there is no such thing, which is not the same claim as "no
+    /// search". See the claude branch in `main.rs`.
+    #[test]
+    fn the_claude_kind_sells_no_provider_side_search_and_that_is_not_a_capability_claim() {
+        assert!(!kind("claude").unwrap().web_search());
+        assert!(!kind("claude").unwrap().requires_key());
     }
 }

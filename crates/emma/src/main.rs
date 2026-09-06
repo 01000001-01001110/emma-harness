@@ -439,6 +439,12 @@ async fn run(cli: cli::Cli) -> Result<()> {
             "and each search is billed apart from tokens. `\"web_search\": false` in ",
             "~/.emma/settings.json turns it off."
         ));
+    } else if wanted && kind.name() == emma::engine::claude::NAME {
+        term.note(
+            "web search is on. Under the claude engine the search is the child CLI's, on its \
+             own account and under its own rules: not a provider-side search on Emma's key, and \
+             not something `\"web_search\": false` here turns off.",
+        );
     } else if wanted {
         term.note(&format!(
             concat!(
@@ -727,6 +733,53 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // running is a leak, and one that kills them silently is a surprise.
     let background = emma_tool_api::background::Registry::new();
 
+    // The claude engine's whole run, as one value, built once. `--model` is
+    // passed through only when a model was actually chosen, flag or settings,
+    // because passing the built-in default would override whatever the user's
+    // own `claude` is configured to run with a value Emma invented on their
+    // behalf. The CLI is resolved here, so a missing one is a sentence at
+    // startup rather than a failed spawn in the middle of a goal.
+    let claude_handoff = kind
+        .name()
+        .eq(emma::engine::claude::NAME)
+        .then(|| {
+            emma::engine::claude::resolve(emma::engine::claude::NAME).map(|cli| {
+                emma::engine::claude::Handoff {
+                    cwd: cwd.clone(),
+                    model: match resolved.model_source {
+                        "built-in default" => None,
+                        _ => Some(resolved.model.clone()),
+                    },
+                    // **The escalation rule.** The same bit that puts Emma's own
+                    // gate in `Gate::SkipAll` is the only thing that may unlock
+                    // the child's bypass. Emma hands the child the posture the
+                    // user handed Emma, never more.
+                    allow_all: opts.skip_permissions,
+                    timeout: opts.budgets.wall_clock,
+                    interrupt: interrupt.clone(),
+                    log: log.clone(),
+                    term: term.clone(),
+                    session_id: session_id.clone(),
+                    spend: spend.clone(),
+                    cli,
+                }
+            })
+        })
+        .flatten();
+    if kind.name() == emma::engine::claude::NAME {
+        if let Some(missing) = emma::engine::claude::missing_cli(&cwd) {
+            term.warn(&missing);
+        }
+        // The claude engine hands a whole goal to a `claude -p` child whose
+        // stdin is closed, so there is no turn boundary inside it a steer could
+        // land on. Typing during one is not dead: the queue still takes it and
+        // the between-goals drain turns it into the next goal. But the queued
+        // row has to say *that* rather than promise a turn that will not come.
+        if let Some(frame) = term.frame_handle().and_then(|f| f.upgrade()) {
+            frame.set_steerable(emma::engine::claude::STEERABLE);
+        }
+    }
+
     let agent = Agent::new(Setup {
         // One registry for the whole interactive session, so a task started in
         // one goal is still findable in the next. Scoping it per goal would make
@@ -954,9 +1007,20 @@ async fn run(cli: cli::Cli) -> Result<()> {
         // library, where a test can reach both halves of it; it used to be the
         // `if` here, and the `-p` half was asserted nowhere.
         interrupt.starting_goal(opts.print);
-        let outcome = agent
-            .run_goal(&Goal::new(text).with_injected(submitted.context))
-            .await;
+        // The one branch between engines, and it is deliberately this shallow.
+        // Everything the claude engine does (the command line, the stream, the
+        // transcript, the records, the signals) belongs to its module, so
+        // adding it changes the loop by a handful of lines and changes
+        // `agent.rs` by none. The two arms agree on exactly one thing: a goal
+        // in, an `Outcome` out. See `engine::claude`.
+        let outcome = match &claude_handoff {
+            Some(h) => emma::engine::claude::run_goal(h, &text).await,
+            None => {
+                agent
+                    .run_goal(&Goal::new(text).with_injected(submitted.context))
+                    .await
+            }
+        };
         // "cache-weighted" rather than "tokens", because it is not the number
         // the provider reports and a person comparing this line with a bill
         // should know which one it is: a cached read counts here at the tenth

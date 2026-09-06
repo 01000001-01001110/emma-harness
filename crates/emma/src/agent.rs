@@ -3189,7 +3189,11 @@ fn web_searches(content: &[ContentBlock]) -> Vec<String> {
         .collect()
 }
 
-fn cost_tokens(u: &emma_llm::Usage) -> i64 {
+/// The weighted figure a goal is charged, as against the provider's raw token
+/// count: a cache read costs a tenth of a token and is counted as one. Reached
+/// by `engine::claude` as well as by the loop, so that a claude goal and an Emma
+/// goal are comparable numbers rather than two spellings of "tokens".
+pub(crate) fn cost_tokens(u: &emma_llm::Usage) -> i64 {
     u.input_tokens
         + (u.cache_creation_input_tokens * 5) / 4
         + u.cache_read_input_tokens / 10

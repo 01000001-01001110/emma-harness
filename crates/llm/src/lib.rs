@@ -38,6 +38,7 @@
 
 pub mod anthropic;
 pub mod auth;
+pub mod claude_cli;
 pub mod content;
 pub mod kind;
 pub mod models;

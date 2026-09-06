@@ -48,11 +48,13 @@
 //! everything the person at the keyboard sees. `main.rs` only wires them
 //! together.
 //!
-//! Two providers, Anthropic and Ollama, and the loop knows neither by name:
-//! `emma_llm::kind` is the list, and the wire shape lives inside each one.
-//! This sentence said "Anthropic is the only provider" until 2026-09-05, weeks
-//! after that stopped being true, which is why it now names the file that
-//! decides rather than restating the answer.
+//! Four provider names, and the loop knows only one of them by name:
+//! `emma_llm::kind` is the list, and the wire shape lives inside each one. The
+//! exception is `claude`, which is not a client at all: `main.rs` branches on
+//! it and hands the whole goal to `engine::claude`. This sentence said
+//! "Anthropic is the only provider" until 2026-09-05 and "two providers" until
+//! 2026-09-06, both times weeks after they stopped being true, which is why it
+//! now names the file that decides rather than restating the answer.
 
 pub mod agent;
 pub mod approval;

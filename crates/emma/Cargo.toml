@@ -31,7 +31,10 @@ serde_json.workspace = true
 # spawns a process: the tools do that, behind the approval gate.
 # `time` and `macros` for the Code page's LSP bridge (`tokio::select!`,
 # `sleep_until`, `timeout`), which arrives with the fork port.
-tokio = { workspace = true, features = ["macros", "signal", "sync", "time"] }
+# `process` and `io-util` for `engine/claude.rs`: it spawns the CLI and reads its
+# stdout line by line. Declared rather than inherited from another crate's
+# feature unification, which is what was actually holding the build up.
+tokio = { workspace = true, features = ["io-util", "macros", "process", "signal", "sync", "time"] }
 
 # One method: `FutureExt::catch_unwind`, used in `agent.rs` so a panicking tool
 # becomes a `tool_result` the model reads rather than the end of the session.
