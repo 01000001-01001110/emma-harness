@@ -155,7 +155,7 @@ impl Fake {
         };
         assert_ne!(
             out, uri,
-            "this fake respells a URI so the lookup is tested rather than              echoed, and it could not respell this one"
+            "the fake could not respell this URI, so the lookup is untested",
         );
         out
     }
