@@ -779,6 +779,13 @@ impl Term {
         self.separate();
         self.side(self.skin.ending(message, ok, iterations, tokens));
     }
+    /// A weak handle on the full-screen frame, for the background tasks that
+    /// must not keep it alive. `None` on the plain-output path, which is what
+    /// makes "there is no frame to flag without a viewport" structural rather
+    /// than a check.
+    pub fn frame_handle(&self) -> Option<std::sync::Weak<Frame>> {
+        self.frame.as_ref().map(std::sync::Arc::downgrade)
+    }
 
     /// Open the Help page, and say whether there was one to open.
     ///

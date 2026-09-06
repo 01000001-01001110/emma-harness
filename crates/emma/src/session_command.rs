@@ -339,6 +339,241 @@ pub struct Session<'a, 'agent> {
     pub theme_at_start: Option<String>,
 }
 
+// region: A line typed while a goal runs
+// ---------------------------------------------------------------------------
+// A line typed while a goal runs
+//
+// The header above says there is no mid-goal, and as far as *execution* goes
+// that is still true: `main` awaits `run_goal` and every command still runs
+// between goals. What it did not say is what happens to a line typed anyway,
+// and that turned out to be the defect.
+//
+// What happened: the reader thread is eager. `Action::Submit` pushed the line
+// into the `mpsc` queue, nothing read it while the goal ran, and the next
+// prompt called `Approvals::read_line`, whose first act is `drain()`. So the
+// line was *discarded* — announced, but discarded. For `/exit` that reads
+// exactly as the owner reported it: the command does not work. The hint row
+// (`term/view.rs`, `Mode::Working`) meanwhile promised "what you type now runs
+// next", which the drain has never honoured for anything.
+//
+// So the fix is a decision taken *before* the line reaches the queue, in the
+// one place that is awake while a goal runs — the reader thread. It is pure and
+// it lives here, next to `parse`, because a policy about commands that is not
+// beside the command table is a policy that will drift from it.
+//
+// # Why nothing is queued to run at the goal boundary
+//
+// Considered and rejected, on three grounds:
+//
+// 1. **The obvious queue is the one that must not be used.** The `mpsc` channel
+//    already reaches `main` at the goal boundary — and is drained there on
+//    purpose. Exempting a command from the drain re-opens the hole
+//    `approval.rs` exists to close: an approval question raised later in the
+//    same goal calls `lines.next()`, and a `/theme dracula` still in the queue
+//    would be handed over as the answer to it.
+// 2. **A side queue is a different change.** It needs shared state the reader
+//    can write and `main` can read, plus a dispatch point inside `main`'s loop
+//    — the goal loop is where control returns, and nothing else can run a
+//    `SessionCommand` because `Session` borrows `main`'s own bindings.
+// 3. **Deferred execution is its own hazard.** `/clear` or `/model` firing four
+//    minutes after it was typed, into a conversation the person has moved on
+//    from, is the half-applied command in a different costume.
+//
+// The line is put back in the input box instead. One Enter at the next prompt
+// runs it, the box is visible evidence it was not eaten, and no promise is made
+// that some later moment will honour. A drain can still take it — an approval
+// question mid-goal clears the box, and says so — which is the existing rule
+// working, not a new hole.
+// ---------------------------------------------------------------------------
+
+/// What to do with a line submitted while a goal is running.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MidGoal {
+    /// Down the line channel, exactly as before. Ordinary text, a project
+    /// command, a near-miss like `/models` — and every line at all when no goal
+    /// is running.
+    Send,
+    /// `/exit` and `/quit`: the interrupt-then-confirm flow Alt+q already
+    /// takes. See `term/input.rs`'s `quit_route`, which this joins rather than
+    /// duplicates — there is one shutdown path and this is not a second one.
+    Interrupt,
+    /// `/help`: printable now, from the reader thread, because
+    /// the text is built from `term::help` data and touches no session state
+    /// at all. With a full-screen frame it opens the Help page instead; the
+    /// same two outcomes `run` reaches between goals.
+    Help,
+    /// Every other built-in: say so, apply nothing. Carries the command's name
+    /// so the notice can say which one waited.
+    Wait(&'static str),
+    /// Ordinary words typed while a goal runs: steering. They join the queue in
+    /// [`crate::steering`] and are injected as attributed user content at the
+    /// next turn boundary. Never reached while a question is pending: there,
+    /// typed input is the answer path and this function returns [`Self::Send`].
+    Queue,
+    /// A built-in that is safe to apply *between turns* and is applied there:
+    /// it joins the same queue and runs at the drain point, exactly as if it
+    /// had been typed between goals. Carries its name for the queued row.
+    Boundary(&'static str),
+}
+
+/// Decide what a submitted line does, from the line and the one fact
+/// `Frame::goal_active` knows.
+///
+/// **A built-in must never reach the model as text, and must never half-apply.**
+/// Those are the two failures this function is between. Anything `parse` does
+/// not recognise is somebody's actual work and is untouched.
+pub fn mid_goal(line: &str, goal_active: bool, prompt_pending: bool) -> MidGoal {
+    if !goal_active {
+        return MidGoal::Send;
+    }
+    match parse(line) {
+        // Nothing typed. There is no steer here to queue and no command to
+        // rule on, so it goes where an empty line has always gone: down the
+        // channel, where the next drain discards it.
+        None if line.trim().is_empty() => MidGoal::Send,
+        // **The poisoning invariant, and it is this line.** A question is on
+        // screen, so what is being typed is an answer to it, and an answer
+        // belongs to `Approvals::ask` on the line channel. Nothing reaches the
+        // steering queue in this state, which is why a `y` can never come back
+        // four turns later as an instruction to the model.
+        None if prompt_pending => MidGoal::Send,
+        None => MidGoal::Queue,
+        Some(SessionCommand::Exit) => MidGoal::Interrupt,
+        Some(SessionCommand::Help) => MidGoal::Help,
+        // A command typed under a question is not an answer to it, so it is not
+        // sent; and it is not queued either, because the queue is closed in
+        // this state and a command that vanished into it would be the drain
+        // hole reopened from the other side. It waits, in the box, exactly as
+        // every non-immediate command did before boundary commands existed.
+        Some(other) if prompt_pending => MidGoal::Wait(name_of(&other)),
+        Some(other) => match boundary_of(&other) {
+            Some(name) => MidGoal::Boundary(name),
+            None => MidGoal::Wait(name_of(&other)),
+        },
+    }
+}
+
+/// Which built-ins may run at a turn boundary, and the argument for each.
+///
+/// **Exhaustive on purpose, like [`name_of`], and it is the guard doing its
+/// job.** A new variant will not compile until somebody has decided whether it
+/// is safe to apply between two model calls of a goal that is still running.
+/// The test each arm has to pass is not "is it useful mid-goal" but "does it
+/// change something the running goal is standing on".
+fn boundary_of(cmd: &SessionCommand) -> Option<&'static str> {
+    match cmd {
+        // Immediate, and never reached here: `mid_goal` answers both above.
+        SessionCommand::Exit | SessionCommand::Help => None,
+
+        // --- Boundary. Safe between turns, applied there. ---
+        //
+        // A colour scheme. It repaints and writes a settings file, and the
+        // running goal is standing on neither. The old ruling was that a theme
+        // arriving four minutes late answers a question nobody is asking; that
+        // was true when the only thing on offer was the *whole* line being
+        // silently deferred to the next prompt, and it is not true of a
+        // command that runs seconds later at a boundary and prints its receipt.
+        SessionCommand::Theme { .. } => Some("theme"),
+        // The posture. It is deliberately in, and it is the one arm worth
+        // arguing hardest: `/mode` changes what the *gate* does, and the gate
+        // is what an approval question comes from. It is safe because it takes
+        // effect at the next `Approvals::decide`, which is what `mode_receipt`
+        // has always promised, and because a question already on screen keeps
+        // the queue shut (see `mid_goal`), so the switch can never land
+        // between a question and its answer. Tightening to `plan` mid-goal is
+        // also the one thing somebody watching a run go wrong actually wants.
+        SessionCommand::Mode(_) => Some("mode"),
+        // Shortening the conversation. It is the agent's own operation
+        // (`Agent::compact_now`), it happens between turns anyway whenever
+        // `max_context` says so, and the loop's next request is built after the
+        // drain, so a boundary compaction is the same event the loop performs
+        // on its own, asked for by a person.
+        SessionCommand::Compact { .. } => Some("compact"),
+
+        // The usage line is the whole of what it does.
+        SessionCommand::Misuse { name, .. } => Some(name),
+
+        // --- Still refused, with the wait notice. ---
+        //
+        // Session-structural. `/clear` empties the conversation the running
+        // goal is mid-way through; there is no turn boundary at which that is
+        // anything but the goal losing its own history under it.
+        SessionCommand::Clear => None,
+        // Session-structural, and the strongest case in this list for waiting.
+        // `/resume` does the thing rather than printing advice, and what it
+        // does is `/clear` plus a fold: it empties the conversation the running
+        // goal is mid-way through *and* moves the file the loop is appending
+        // to. There is no turn boundary at which that is safe.
+        SessionCommand::Resume(_) => None,
+        // The model under the goal. Swapping the provider between two turns of
+        // one goal leaves the conversation half-written by each, and
+        // `Agent::recover_from_a_model_change` exists because that is already
+        // the hardest case in the loop. Between goals it is a clean swap; here
+        // it is not, so it waits.
+        SessionCommand::Model { .. } => None,
+        // Both read the session log for "the last answer", and mid-goal the
+        // last answer is the previous goal's. Somebody typing `/copy` while a
+        // goal runs almost certainly means the answer that is about to arrive,
+        // and one Enter at the next prompt is that answer.
+        SessionCommand::Copy | SessionCommand::Export(_) => None,
+        // Both are pure reports and neither could half-apply, so the argument
+        // against them is not safety: it is reach. They read the harness, the
+        // tool registry, the provider kind and the list of tools `web_tools`
+        // skipped, and the drain point inside `run_goal` holds none of those.
+        // The agent has a provider, not the binding and the kind `main` owns.
+        // Queueing them would mean widening the boundary context to carry a
+        // session's whole configuration into the loop for two commands that
+        // print. They wait, and one Enter at the next prompt runs them.
+        SessionCommand::Config | SessionCommand::Agents => None,
+    }
+}
+
+/// The name a command is spelled with, for the notice. Exhaustive on purpose:
+/// a new variant will not compile until somebody decides what it is called
+/// mid-goal.
+fn name_of(cmd: &SessionCommand) -> &'static str {
+    match cmd {
+        SessionCommand::Exit => "exit",
+        SessionCommand::Help => "help",
+        SessionCommand::Config => "config",
+        SessionCommand::Agents => "agents",
+        SessionCommand::Model { .. } => "model",
+        SessionCommand::Resume(_) => "resume",
+        SessionCommand::Compact { .. } => "compact",
+        SessionCommand::Clear => "clear",
+        SessionCommand::Copy => "copy",
+        SessionCommand::Export(_) => "export",
+        SessionCommand::Theme { .. } => "theme",
+        SessionCommand::Mode(_) => "mode",
+        // The usage line is the answer, and it is still the answer later; the
+        // name it was misused under is the one to report.
+        SessionCommand::Misuse { name, .. } => name,
+    }
+}
+
+/// The one line [`MidGoal::Wait`] prints.
+///
+/// It says what did *not* happen and what to do, and it promises nothing about
+/// a later moment: the text is back in the box, so the remedy is one keystroke
+/// and the evidence is on screen.
+/// The one line [`MidGoal::Boundary`] prints when the command is queued.
+///
+/// It promises a moment, unlike [`wait_notice`], because there is now one to
+/// promise: the drain at the top of the next iteration of the loop. The receipt
+/// the command itself prints when it runs is what closes the promise.
+pub fn boundary_notice(name: &str) -> String {
+    format!("/{name} is queued: it runs at the next turn boundary, and says so when it does.")
+}
+
+pub fn wait_notice(name: &str) -> String {
+    format!(
+        "/{name} runs between goals — nothing was applied. It is back in the box: press Enter \
+         once this goal finishes."
+    )
+}
+
+// endregion: A line typed while a goal runs
+
 /// Whether the loop keeps going. Two variants rather than plumbing a `break`
 /// out of a function.
 #[derive(Debug, PartialEq, Eq)]
@@ -392,8 +627,8 @@ pub async fn run(cmd: SessionCommand, s: &mut Session<'_, '_>) -> Flow {
         } => compact(s, everything, instruction).await,
         SessionCommand::Clear => clear(s).await,
         SessionCommand::Model { id, save } => model(s, id, save),
-        SessionCommand::Theme { name } => theme(s, name),
-        SessionCommand::Mode(name) => mode(s, name),
+        SessionCommand::Theme { name } => theme(&s.boundary(), name),
+        SessionCommand::Mode(name) => mode(&s.boundary(), name),
     }
     Flow::Continue
 }
@@ -846,7 +1081,7 @@ fn available(home: Option<&Path>, root: &Path) -> Vec<Found> {
 /// the header of this file says why, so there is no in-flight call for a
 /// switch to half-apply to. Tightening takes effect before the next tool call
 /// and loosening before the next question, which are the same moment.
-fn mode(s: &Session<'_, '_>, name: Option<String>) {
+fn mode(s: &Boundary<'_>, name: Option<String>) {
     let Some(name) = name else {
         say(s.term, &mode_listing(s.approvals.mode()));
         return;
@@ -974,10 +1209,61 @@ fn peek(path: &Path) -> (Option<String>, Option<String>) {
         None => (None, Some("is not a JSON object".to_string())),
     }
 }
+/// Everything a boundary command is allowed to touch.
+///
+/// **Deliberately less than [`Session`].** The loop holds an agent, a terminal,
+/// the approvals and a home directory, and that is the whole list; a command
+/// that needs more than this is a command that cannot run at a turn boundary,
+/// and [`boundary_of`] says so by refusing it.
+///
+/// `Session::boundary` is the other constructor, so a command typed between
+/// goals and the same command drained mid-goal run the *same function* over the
+/// same fields. There is no second implementation of `/theme` to drift.
+pub struct Boundary<'a> {
+    pub term: &'a Term,
+    pub approvals: &'a Approvals,
+    /// Where settings are written. `None` on a platform that gave none, which
+    /// every command here reports rather than failing silently.
+    pub home: Option<PathBuf>,
+    /// The harness root, where a project's own themes live.
+    pub root: PathBuf,
+    /// The theme on screen for the life of the process. See
+    /// [`Session::theme_at_start`].
+    pub theme_at_start: Option<String>,
+}
 
-fn theme(s: &Session<'_, '_>, name: Option<String>) {
+impl<'a, 'agent> Session<'a, 'agent> {
+    fn boundary(&self) -> Boundary<'_> {
+        Boundary {
+            term: self.term,
+            approvals: self.approvals,
+            home: self.home.clone(),
+            root: self.harness.root.clone(),
+            theme_at_start: self.theme_at_start.clone(),
+        }
+    }
+}
+
+/// Run one boundary-safe command. See [`boundary_of`] for which are, and why.
+///
+/// `/compact` is the one absentee: it is the agent's own operation and the
+/// drain point calls [`crate::agent::Agent::compact_now`] directly, because the
+/// agent is the one thing the loop has that this context does not.
+pub fn run_boundary(cmd: SessionCommand, b: &Boundary<'_>) {
+    match cmd {
+        SessionCommand::Theme { name } => theme(b, name),
+        SessionCommand::Mode(name) => mode(b, name),
+        SessionCommand::Misuse { name, usage } => say(b.term, &format!("/{name} takes:\n{usage}")),
+        // Unreachable by construction: `mid_goal` queues only what
+        // `boundary_of` accepts. Said rather than silently dropped, in case a
+        // later change to one table forgets the other.
+        other => say(b.term, &wait_notice(name_of(&other))),
+    }
+}
+
+fn theme(s: &Boundary<'_>, name: Option<String>) {
     let home = s.home.as_deref();
-    let root = s.harness.root.as_path();
+    let root = s.root.as_path();
     let all = available(home, root);
     let selected = home.and_then(|h| crate::settings::load(h).theme);
 
@@ -1187,38 +1473,47 @@ pub(crate) fn write_theme(home: &Path, name: &str) -> anyhow::Result<PathBuf> {
 
 async fn compact(s: &mut Session<'_, '_>, everything: bool, instruction: Option<String>) {
     if let Some(words) = instruction {
-        // Said rather than ignored. Compaction asks the model for the summary
-        // now, but with a fixed prompt (`agent::SUMMARY_PROMPT`); there is no
-        // seam for an instruction yet, and one would go on the end of that
-        // prompt when somebody wants it. Until then the honest answer is to say
-        // so and name the workflow that does work.
-        say(
-            s.term,
-            &format!(
-                "compaction asks the model for the summary now, but it asks with a fixed \
-                 prompt: there is no seam for an instruction, so \"{words}\" would be \
-                 silently ignored, which is worse than saying so.\n\
-                 Run /compact on its own, or state what to keep as an ordinary goal first \
-                 (\"summarise what we established about the API\") — the answer of a goal \
-                 always survives compaction, so it will still be there afterwards."
-            ),
-        );
+        say(s.term, &compact_instruction_refusal(&words));
         return;
     }
-    match s.agent.compact_now(everything).await {
-        Compacted::Nothing(why) => s.term.note(&format!("nothing to compact — {why}")),
+    let done = s.agent.compact_now(everything).await;
+    match &done {
+        Compacted::Nothing(_) => s.term.note(&compact_receipt(&done)),
+        Compacted::Done { .. } => say(s.term, &compact_receipt(&done)),
+    }
+}
+
+/// What `/compact <words>` is told, here and at a turn boundary.
+///
+/// Said rather than ignored. Compaction asks the model for the summary now,
+/// but with a fixed prompt (`agent::SUMMARY_PROMPT`); there is no seam for an
+/// instruction yet, and one would go on the end of that prompt when somebody
+/// wants it. Until then the honest answer is to say so and name the workflow
+/// that does work.
+pub fn compact_instruction_refusal(words: &str) -> String {
+    format!(
+        "compaction asks the model for the summary now, but it asks with a fixed \
+         prompt: there is no seam for an instruction, so \"{words}\" would be \
+         silently ignored, which is worse than saying so.\n\
+         Run /compact on its own, or state what to keep as an ordinary goal first \
+         (\"summarise what we established about the API\") — the answer of a goal \
+         always survives compaction, so it will still be there afterwards."
+    )
+}
+
+/// The receipt for a compaction that has already happened, or not.
+pub fn compact_receipt(done: &Compacted) -> String {
+    match done {
+        Compacted::Nothing(why) => format!("nothing to compact — {why}"),
         Compacted::Done {
             goals,
             messages,
             before,
             after,
-        } => say(
-            s.term,
-            &format!(
-                "compacted {messages} messages from {goals} finished goal(s) — roughly {before} \
-                 tokens down to {after}. Their tool results are no longer in context.\n\
-                 The cached prefix is gone; the next call re-reads what is left at full price."
-            ),
+        } => format!(
+            "compacted {messages} messages from {goals} finished goal(s) — roughly {before} \
+             tokens down to {after}. Their tool results are no longer in context.\n\
+             The cached prefix is gone; the next call re-reads what is left at full price."
         ),
     }
 }

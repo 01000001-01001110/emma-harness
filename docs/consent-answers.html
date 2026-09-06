@@ -263,6 +263,29 @@ loop {
   <span class="src">crates/emma/src/approval.rs — Approvals::read_line, Approvals::ask; tests::a_line_dropped_at_the_goal_prompt_is_reported_rather_than_vanishing</span>
 
   <p>
+    Since the port of 2026-09-06 the framed run rarely reaches that drain with
+    a typed line in it, because the reader thread decides before the line goes
+    anywhere. With a goal running and no question on screen, ordinary words are
+    <em>steering</em>: they join a second queue in <code>steering.rs</code> that
+    no prompt ever reads, and the loop injects them as attributed user content
+    at the top of its next iteration. A built-in that is safe between turns
+    (<code>/theme</code>, <code>/mode</code>, <code>/compact</code>) joins the
+    same queue and runs at that boundary; one that is not (<code>/clear</code>,
+    <code>/model</code>, <code>/resume</code>) is put back in the box with a
+    notice. While a question is on screen nothing is queued at all: typed input
+    is the answer path, which is what keeps a <code>y</code> from coming back
+    four turns later as an instruction to the model.
+    <span class="chip test">tested</span> <a href="https://github.com/01000001-01001110/emma-harness/blob/main/crates/emma/tests/steering.rs">crates/emma/tests/steering.rs</a>
+    <code>a_queued_steer_never_answers_a_later_approval</code> queues an
+    emphatic <code>y</code> and scripts one <code>No</code>; both writes are
+    refused. <code>a_line_typed_while_a_question_is_pending_never_reaches_the_queue</code>
+    goes red when the pending-question guard in <code>mid_goal</code> is
+    removed. The inline and plain paths have no reader thread and keep the
+    drain above.
+  </p>
+  <span class="src">crates/emma/src/session_command.rs — mid_goal, boundary_of; crates/emma/src/steering.rs; crates/emma/src/agent.rs — drain_the_steering_queue</span>
+
+  <p>
     Under <code>Asker::Scripted</code>, <code>read_line</code> returns
     <code>None</code> unconditionally. A scripted run has no keyboard, and the
     goal prompt is not something a test drives through this path.

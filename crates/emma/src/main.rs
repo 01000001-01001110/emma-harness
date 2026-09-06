@@ -759,7 +759,7 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // The restored conversation and counters go in here, and the loop below is
     // unchanged by the resume: a resumed run is a run with something behind it,
     // not a different mode.
-    let mut agent = match restored {
+    let agent = match restored {
         Some(restored) => agent.resuming(restored.resumed),
         None => agent,
     };
@@ -782,13 +782,65 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // `/theme` writes that same key and the two are then deliberately
     // different facts.
     let theme_at_start = home.as_deref().and_then(|h| emma::settings::load(h).theme);
-    loop {
+    // The one steering queue this process has: filled by the reader thread when
+    // somebody types while a goal is running, drained by the loop at every turn
+    // boundary. See `emma::steering`.
+    let steering = emma::steering::global();
+    let mut agent = agent.steered_by(steering.clone(), theme_at_start.clone());
+    'session: loop {
         // Whether this line came from a person at the prompt or from the
         // command line. Only the first is second-guessed: `emma goal "init"` is
         // somebody stating a goal in the one place goals are unambiguous, and
         // intercepting it would be overruling them.
         let mut from_the_prompt = false;
-        let raw = match next.take() {
+        // Anything the loop never reached: what was typed during the last
+        // model call of a goal, after its final drain. It opens the next goal
+        // rather than meeting the prompt's own drain, which is the whole point:
+        // typing while a goal runs must never be silently dead.
+        //
+        // Here rather than at the prompt because at this point it *is* between
+        // goals, so a queued command gets the full dispatcher rather than the
+        // boundary subset: `/model` and `/clear`, refused mid-goal, are
+        // ordinary commands again.
+        let mut queued = None;
+        if next.is_none() && !steering.is_empty() {
+            let mut said: Vec<String> = Vec::new();
+            for steer in steering.take() {
+                match steer {
+                    emma::steering::Steer::Text(line) => said.push(line),
+                    emma::steering::Steer::Command(cmd) => {
+                        let mut session = emma::session_command::Session {
+                            agent: &mut agent,
+                            term: &term,
+                            approvals: &approvals,
+                            harness: &harness,
+                            tools: &tools,
+                            cwd: &cwd,
+                            session_dir: session_dir_for_welcome.as_deref(),
+                            unavailable: &web.skipped,
+                            provider: &mut provider,
+                            running: &running,
+                            kind,
+                            key: key.clone(),
+                            log_path: log.path().to_path_buf(),
+                            home: home.clone(),
+                            theme_at_start: theme_at_start.clone(),
+                        };
+                        if emma::session_command::run(*cmd, &mut session).await
+                            == emma::session_command::Flow::Exit
+                        {
+                            break 'session;
+                        }
+                    }
+                }
+            }
+            if !said.is_empty() {
+                let goal = said.join("\n");
+                term.note(&format!("queued while the last goal ran: {goal}"));
+                queued = Some(goal);
+            }
+        }
+        let raw = match next.take().or(queued) {
             Some(text) => text,
             None => {
                 from_the_prompt = true;

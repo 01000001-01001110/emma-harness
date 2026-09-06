@@ -592,6 +592,121 @@ pub fn run_page_key<P: PageKeys>(pages: &P, key: KeyEvent) -> bool {
         || pages.code_key(key)
         || pages.settings_key(key)
 }
+/// The one line the interrupt-then-confirm flow prints, whichever thing tripped
+/// it: Alt+q, or `/exit` typed while a goal runs.
+///
+/// One string rather than two, because the two are the *same* flow — the second
+/// was added by routing `/exit` into the first, not by inventing a shutdown
+/// path beside it. `by` names what the person did, so the transcript says which.
+pub fn interrupt_notice(by: &str) -> String {
+    format!("goal interrupted ({by}) — Alt+q or /exit again once idle to quit")
+}
+
+/// Everything a submitted line can do, in one place.
+///
+/// The reader thread is the only thing awake while a goal runs, so this is the
+/// only place a built-in can be caught before it reaches a queue nobody drains
+/// in its favour. Three callers — a typed Enter, `?` on an empty box, and the
+/// idle half of Alt+q — so a rule stated here holds for all of them.
+///
+/// Returns whether to keep reading; `false` is the receiver gone.
+///
+/// Only the framed path calls it. A fallback run has no `Frame` and therefore
+/// no `goal_active` to ask, so it keeps the behaviour it has always had: the
+/// line goes down the channel and the next prompt's drain reports it.
+fn submit_line(
+    line: String,
+    frame: &Frame,
+    editor: &std::sync::Mutex<Editor>,
+    tx: &mpsc::Sender<String>,
+    on_interrupt: &dyn Fn(),
+) -> bool {
+    use crate::session_command::MidGoal;
+    // `prompt_pending` is the guard that keeps an approval answer out of the
+    // steering queue. It is read here, on the thread that owns the keyboard,
+    // in the same breath as `goal_active`: while a question is on screen the
+    // line goes down the channel `Approvals::ask` is waiting on, and nothing is
+    // queued at all.
+    match crate::session_command::mid_goal(&line, frame.goal_active(), frame.prompt_pending()) {
+        MidGoal::Send => {
+            // A submit snaps the view to the tail (a no-op inline): the answer
+            // to what was just sent is about to arrive there, and a reader
+            // parked fifty rows up would watch nothing happen.
+            frame.scroll_tail();
+            frame.draw();
+            return tx.blocking_send(line).is_ok();
+        }
+        // The reported bug. Same flow Alt+q takes with a goal up, reached from
+        // the other direction.
+        MidGoal::Interrupt => {
+            frame.scroll_tail();
+            frame.note_line(&interrupt_notice("/exit"));
+            frame.draw();
+            on_interrupt();
+        }
+        // The same bytes `/help` prints between goals: `session_command::run`
+        // reads the same constant. Printable from this thread precisely
+        // because it reads nothing else.
+        MidGoal::Help => {
+            if frame.toggle_help() {
+                return true;
+            }
+            frame.scroll_tail();
+            for row in crate::cli::session_help().lines() {
+                frame.note_line(row);
+            }
+            frame.draw();
+        }
+        // Steering. The box empties, the queue takes it, and the transcript
+        // says so immediately: a queued line that left no trace is the
+        // silently-eaten line this whole seam exists to stop being.
+        MidGoal::Queue => {
+            {
+                let mut ed = editor.lock().unwrap_or_else(|e| e.into_inner());
+                ed.clear();
+                frame.set_input("", 0);
+            }
+            let at_the_next_turn = frame.steers_at_the_next_turn();
+            crate::steering::global().push(crate::steering::Steer::Text(line.clone()));
+            frame.scroll_tail();
+            frame.note_line(&crate::steering::queued_notice(
+                line.trim(),
+                at_the_next_turn,
+            ));
+            frame.draw();
+        }
+        // A boundary-safe built-in, on the same queue and drained at the same
+        // point. It is parsed twice, once by `mid_goal` to reach this arm and
+        // once here, rather than threaded out of the ruling, because `parse`
+        // is pure and a `MidGoal` carrying a `SessionCommand` would put the
+        // command table inside the routing decision.
+        MidGoal::Boundary(name) => {
+            {
+                let mut ed = editor.lock().unwrap_or_else(|e| e.into_inner());
+                ed.clear();
+                frame.set_input("", 0);
+            }
+            if let Some(cmd) = crate::session_command::parse(&line) {
+                crate::steering::global().push(crate::steering::Steer::Command(Box::new(cmd)));
+            }
+            frame.scroll_tail();
+            frame.note_line(&crate::session_command::boundary_notice(name));
+            frame.draw();
+        }
+        MidGoal::Wait(name) => {
+            {
+                let mut ed = editor.lock().unwrap_or_else(|e| e.into_inner());
+                ed.clear();
+                let _ = ed.paste(&line);
+                frame.set_input(&ed.text(), ed.cursor());
+            }
+            frame.scroll_tail();
+            frame.note_line(&crate::session_command::wait_notice(name));
+            frame.draw();
+        }
+    }
+    true
+}
 
 /// Which keys the panes take, and which fall through to the editor.
 ///
@@ -839,12 +954,21 @@ impl LineSource {
                             // The page when the run has one, the text when it
                             // does not: a plain run keeps exactly what a typed
                             // /help always did.
+                            // `?` on an empty box is `/help` typed for you, and
+                            // goes through the same dispatch a typed one does,
+                            // so with a goal up it prints rather than joining a
+                            // queue the next prompt empties.
                             PaneKey::Help => {
-                                if !thread_frame.toggle_help() {
-                                    thread_frame.scroll_tail();
-                                    if tx.blocking_send("/help".to_string()).is_err() {
-                                        break;
-                                    }
+                                if !thread_frame.toggle_help()
+                                    && !submit_line(
+                                        "/help".to_string(),
+                                        &thread_frame,
+                                        &thread_editor,
+                                        &tx,
+                                        &on_interrupt,
+                                    )
+                                {
+                                    break;
                                 }
                             }
                         }
@@ -962,13 +1086,8 @@ impl LineSource {
                         }
                         Action::Eof => break,
                         Action::Submit(line) => {
-                            // A submit snaps the view to the tail (a no-op
-                            // inline): the answer to what was just sent is
-                            // about to arrive there, and a reader parked
-                            // fifty rows up would watch nothing happen.
-                            thread_frame.scroll_tail();
-                            thread_frame.draw();
-                            if tx.blocking_send(line).is_err() {
+                            if !submit_line(line, &thread_frame, &thread_editor, &tx, &on_interrupt)
+                            {
                                 break;
                             }
                         }

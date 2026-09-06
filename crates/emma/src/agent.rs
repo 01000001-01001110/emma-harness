@@ -754,6 +754,12 @@ pub struct Agent<'a> {
     /// call of the process, where an estimate stands in.
     last_input: Option<i64>,
     turn_seq: u64,
+    /// What a person typed while a goal was running, injected at the next
+    /// turn boundary. Empty unless [`Agent::steered_by`] was called.
+    steering: crate::steering::Steering,
+    /// The theme on screen, for a `/theme` listing drained at a boundary. See
+    /// `session_command::Session::theme_at_start`.
+    theme_at_start: Option<String>,
     /// Consumed by the first `run_goal` and never again: what it carries is one
     /// interrupted goal's conversation and one interrupted goal's spend, and a
     /// second goal typed at the prompt afterwards is a new goal with its own
@@ -799,6 +805,8 @@ impl<'a> Agent<'a> {
             said_compaction_stuck: false,
             last_input: None,
             turn_seq: 0,
+            steering: crate::steering::Steering::new(),
+            theme_at_start: None,
             resumed: None,
             changed_from: None,
             tasks_seen: std::sync::Mutex::new(None),
@@ -831,6 +839,23 @@ impl<'a> Agent<'a> {
     /// all.
     pub fn resuming(mut self, resumed: Resumed) -> Self {
         self.resumed = Some(resumed);
+        self
+    }
+    /// Take steering from this queue at every turn boundary. See
+    /// [`crate::steering`].
+    ///
+    /// A builder rather than a `Setup` field because the default is right: an
+    /// agent nobody steers keeps its own empty queue and drains nothing, which
+    /// is what a delegated sub-run wants: a steer is aimed at the session, and
+    /// a subagent is not the session. `theme_at_start` is what a `/theme`
+    /// listing drained here marks as the one on screen.
+    pub fn steered_by(
+        mut self,
+        steering: crate::steering::Steering,
+        theme_at_start: Option<String>,
+    ) -> Self {
+        self.steering = steering;
+        self.theme_at_start = theme_at_start;
         self
     }
 
@@ -1261,6 +1286,18 @@ impl<'a> Agent<'a> {
             if iterations >= self.s.budgets.max_iterations {
                 break Ending::Iterations;
             }
+            // **The steering seam.** Before the compaction check and before
+            // the request is built, so a steer typed during the last model call
+            // is in front of the model on the very next one, and so a queued
+            // `/compact` shortens the conversation the check is about to
+            // measure rather than the one after it.
+            //
+            // After the budget tests above, deliberately: a goal that has run
+            // out of iterations, tokens or wall clock is over, and injecting a
+            // sentence into a request that will never be sent would leave a
+            // `steer` record in the file with no call after it.
+            self.drain_the_steering_queue(&mut query).await;
+
             // Between the budget tests and the request, so the request that
             // goes out is the compacted one. `last_input` is what the provider
             // said the previous request weighed; on the first call of a goal it
@@ -1571,6 +1608,93 @@ impl<'a> Agent<'a> {
             summarised: false,
         });
         outcome
+    }
+    /// Apply everything typed since the last turn boundary.
+    ///
+    /// **Text and commands drain from one queue, in the order they were
+    /// typed**, because that is the order they were meant in: somebody who
+    /// types `/mode plan` and then "stop editing and explain" means the second
+    /// under the first. Splitting them into two queues would apply them in an
+    /// order nobody chose.
+    ///
+    /// The text is accumulated rather than injected line by line: several
+    /// sentences typed in one turn are one interjection, and one attributed
+    /// block reads as a person talking where three would read as three
+    /// interruptions. The block is written to the session log as the user
+    /// record it is, at the position it entered, so a `--resume` replays the
+    /// conversation that was actually sent.
+    async fn drain_the_steering_queue(&mut self, query: &mut Vec<Message>) {
+        let queued = self.steering.take();
+        if queued.is_empty() {
+            return;
+        }
+        let mut lines: Vec<String> = Vec::new();
+        for steer in queued {
+            match steer {
+                crate::steering::Steer::Text(text) => lines.push(text),
+                // Commands run in place, between the sentences around them,
+                // for the ordering reason above.
+                crate::steering::Steer::Command(cmd) => self.run_at_the_boundary(*cmd).await,
+            }
+        }
+        if lines.is_empty() {
+            return;
+        }
+        let text = crate::steering::attributed(&lines);
+        // Screen first, then the record, then the conversation. The person is
+        // told the line landed at the moment it lands, which is the promise the
+        // queued row made.
+        for line in &lines {
+            self.s
+                .term
+                .note(&format!("steering applied: {}", line.trim()));
+        }
+        self.s.log.append(
+            "steer",
+            json!({ "text": text, "lines": lines, "turn": self.turn_seq }),
+        );
+        crate::session::append_user_text(query, text);
+    }
+
+    /// One queued built-in, at the boundary, exactly as if it had been typed
+    /// between goals.
+    ///
+    /// `/compact` is answered here rather than in
+    /// [`crate::session_command::run_boundary`] because it is the agent's own
+    /// operation and the agent is the one thing this drain point holds that a
+    /// [`crate::session_command::Boundary`] does not.
+    async fn run_at_the_boundary(&mut self, cmd: crate::session_command::SessionCommand) {
+        use crate::session_command::SessionCommand as Cmd;
+        match cmd {
+            Cmd::Compact {
+                everything,
+                instruction,
+            } => match instruction {
+                // The same refusal `/compact <words>` gets between goals, from
+                // the same function. A boundary is not a place to start
+                // honouring an instruction the command does not honour.
+                Some(words) => self
+                    .s
+                    .term
+                    .note(&crate::session_command::compact_instruction_refusal(&words)),
+                None => {
+                    let done = self.compact_now(everything).await;
+                    self.s
+                        .term
+                        .note(&crate::session_command::compact_receipt(&done));
+                }
+            },
+            other => {
+                let boundary = crate::session_command::Boundary {
+                    term: self.s.term,
+                    approvals: self.s.approvals,
+                    home: emma_llm::auth::home_dir(),
+                    root: self.s.harness.root.clone(),
+                    theme_at_start: self.theme_at_start.clone(),
+                };
+                crate::session_command::run_boundary(other, &boundary);
+            }
+        }
     }
 
     /// Say that the previous goal stopped short, if it did.

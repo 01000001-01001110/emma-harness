@@ -28,6 +28,17 @@ out for themselves.
 
 ## Unreleased
 
+- Typing while a goal runs now steers it. Ordinary words typed in the frame
+  with a goal up are queued, the transcript says so at once, and the loop
+  hands them to the model as your own mid-task instruction at its next turn.
+  `/theme`, `/mode` and `/compact` typed then run at that same boundary and
+  print their receipts; `/clear`, `/model`, `/resume`, `/copy`, `/export`,
+  `/config` and `/agents` go back into the input box with a line saying they
+  run between goals. `/exit` interrupts, as Alt+q does. Nothing is queued
+  while an approval question is on screen: what you type then is the answer.
+  Anything still queued when the goal ends opens the next goal instead of
+  being dropped.
+
 - A mouse selection in the chat pane now follows the text rather than the
   screen. Holding the button at the top or bottom edge of the pane scrolls
   the transcript and takes the rows it reveals into the selection; a pointer

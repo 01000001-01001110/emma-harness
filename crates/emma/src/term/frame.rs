@@ -372,6 +372,20 @@ pub struct Frame {
     /// inside paths that already hold `inner`, and one mutex for two unrelated
     /// things is how a repaint ends up waiting on a subprocess.
     status_requests: Mutex<Option<super::statusline::Requests>>,
+    /// Whether the engine in force can be steered *during* a goal.
+    ///
+    /// True for Emma's own loop, which drains the steering queue at every turn
+    /// boundary. False for the claude engine, whose child is a `claude -p` run
+    /// with its stdin closed: there is no turn boundary Emma can reach, so a
+    /// steer typed during one waits for the goal to end and opens the next.
+    /// The flag exists so the queued row can promise the right moment. A
+    /// transcript that said "the next turn" on a claude goal would be Emma
+    /// making a promise the code does not keep.
+    ///
+    /// An atomic rather than a field in `inner`: it is read by the reader
+    /// thread on every submit, and taking the paint lock to answer a question
+    /// about which engine booted would be a lock held for no reason.
+    steerable: std::sync::atomic::AtomicBool,
 }
 
 /// Which of the two interactive frames this run is drawing.
@@ -587,6 +601,7 @@ impl Frame {
             }),
             skin,
             status_requests: Mutex::new(None),
+            steerable: std::sync::atomic::AtomicBool::new(true),
         });
         frame.draw();
         spawn_clock(Arc::downgrade(&frame));
@@ -754,6 +769,17 @@ impl Frame {
     pub fn set_menu(&self, menu: Option<super::menu::MenuView>) {
         let mut inner = self.lock();
         inner.view.menu = menu;
+    }
+    /// Whether a steer queued now lands at the next turn or after the goal.
+    /// See [`Frame::steerable`].
+    pub fn steers_at_the_next_turn(&self) -> bool {
+        self.steerable.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Said once, by `main`, when the engine in force is not Emma's own loop.
+    pub fn set_steerable(&self, steerable: bool) {
+        self.steerable
+            .store(steerable, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Whether a question is on screen. Asked by the reader before it lets `/`
@@ -1565,6 +1591,21 @@ impl Frame {
                     Err(err) => frame.skin.warn(&format!("Code: {err}")),
                 };
                 frame.write_lines(lines);
+            }
+            // The same `to_clipboard` the answer-copy key and a mouse
+            // selection use. One mechanism, three callers: a second escape
+            // sequence written from the Code page would be a second thing to
+            // get wrong on the terminals that already refuse this one. The
+            // page is told what was sent, never what arrived - nothing
+            // downstream of OSC 52 can know.
+            CodeJob::Copy(text) => {
+                let chars = text.chars().count();
+                to_clipboard(&text);
+                let mut inner = frame.lock();
+                if let Ui::Full(app) = &mut inner.ui {
+                    app.code_notice_sent(chars);
+                }
+                synchronized(|| inner.paint());
             }
         });
     }
