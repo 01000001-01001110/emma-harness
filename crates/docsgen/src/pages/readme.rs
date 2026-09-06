@@ -77,9 +77,24 @@ pub fn providers(root: &Path) -> Result<String> {
                 break;
             }
         }
+        // The second shape a registry entry takes: a `static` built from a
+        // `const` that carries the name, for a type shared by several hosts.
+        // `name()` on such a type returns a field, so the literal is read from
+        // the const the static was built from, in two hops.
+        if found.is_none() {
+            for (path, file) in &files {
+                if let Some(arg) = rust::static_call_arg(file, &ty.name)? {
+                    if let Some(name) = rust::const_struct_field(file, &arg, "name")? {
+                        found = Some((name, default_needs_key, path));
+                        break;
+                    }
+                }
+            }
+        }
         let Some((name, needs_key, _)) = found else {
             bail!(
-                "KINDS names `{}` and no file under {} implements ProviderKind for it",
+                "KINDS names `{}` and no file under {} implements ProviderKind for it, \
+                 nor declares it as a static built from a const with a `name`",
                 ty.name,
                 dir.display()
             );

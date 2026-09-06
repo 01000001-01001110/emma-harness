@@ -42,8 +42,11 @@ pub mod content;
 pub mod kind;
 pub mod models;
 pub mod ollama;
+pub mod openai_compat;
 mod retry;
 pub mod roster;
+#[cfg(test)]
+pub mod stub;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -59,6 +62,7 @@ pub use content::{
 };
 pub use kind::{kind, ProviderKind, UnknownProvider, DEFAULT_PROVIDER};
 pub use models::{limits, Limits};
+pub use openai_compat::{OpenAiCompatProvider, Wire, OPENAI, OPENROUTER};
 pub use retry::Retry;
 pub use roster::{ModelInfo, Roster, RosterError};
 

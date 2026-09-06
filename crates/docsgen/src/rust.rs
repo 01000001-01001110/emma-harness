@@ -466,6 +466,83 @@ pub fn has_fn(file: &syn::File, name: &str) -> bool {
     walk(&file.items, name)
 }
 
+/// The one argument a `static` passes to a tuple-struct constructor, as
+/// written: `static OPENROUTER_KIND: OpenAiCompatKind = OpenAiCompatKind(OPENROUTER);`
+/// answers `OPENROUTER`.
+///
+/// A registry can hold two entries of one type that differ only by the value
+/// they were built from, and then `impl_method_value` cannot say which is
+/// which: the `name()` method returns a field, not a literal. The literal
+/// lives in the constant the static was built from, and this is the first
+/// hop to it; [`const_struct_field`] is the second.
+pub fn static_call_arg(file: &syn::File, name: &str) -> Result<Option<String>> {
+    fn find(items: &[syn::Item], name: &str) -> Option<Option<String>> {
+        for item in items {
+            match item {
+                syn::Item::Static(s) if s.ident == name => {
+                    let syn::Expr::Call(call) = &*s.expr else {
+                        return Some(None);
+                    };
+                    return Some(call.args.first().map(expr_text));
+                }
+                syn::Item::Mod(m) => {
+                    if let Some((_, inner)) = &m.content {
+                        if let Some(found) = find(inner, name) {
+                            return Some(found);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    Ok(find(&file.items, name).flatten())
+}
+
+/// One field of a `const` struct literal, as written: for
+/// `const OPENROUTER: Wire = Wire { name: "openrouter", .. }` and `name`,
+/// the string `openrouter`. `None` when the const is not here, is not a
+/// struct literal, or lacks the field; a non-literal field value is returned
+/// as its source text, the way [`const_value`] does.
+pub fn const_struct_field(file: &syn::File, name: &str, field: &str) -> Result<Option<String>> {
+    fn find(items: &[syn::Item], name: &str, field: &str) -> Option<Option<String>> {
+        for item in items {
+            match item {
+                syn::Item::Const(c) if c.ident == name => {
+                    let syn::Expr::Struct(s) = &*c.expr else {
+                        return Some(None);
+                    };
+                    for f in &s.fields {
+                        if let syn::Member::Named(id) = &f.member {
+                            if id == field {
+                                return Some(Some(match &f.expr {
+                                    syn::Expr::Lit(syn::ExprLit {
+                                        lit: syn::Lit::Str(l),
+                                        ..
+                                    }) => l.value(),
+                                    other => expr_text(other),
+                                }));
+                            }
+                        }
+                    }
+                    return Some(None);
+                }
+                syn::Item::Mod(m) => {
+                    if let Some((_, inner)) = &m.content {
+                        if let Some(found) = find(inner, name, field) {
+                            return Some(found);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    Ok(find(&file.items, name, field).flatten())
+}
+
 /// What a method on a type's `impl` block returns, as source text, for a
 /// method whose whole body is one expression.
 ///
@@ -1185,5 +1262,31 @@ const N: u8 = 3;",
         let f = file("fn p(a: &str) { match a { \"--max-kicks\" => {} _ => {} } }");
         let s = string_literals(&f);
         assert_eq!(s, ["--max-kicks"]);
+    }
+
+    /// A registry entry that is a `static` built from a `const` is read in two
+    /// hops: the constructor's argument, then the field on that const.
+    #[test]
+    fn a_static_built_from_a_const_is_read_in_two_hops() {
+        let f = file(
+            "pub const OPENROUTER: Wire = Wire { name: \"openrouter\", env_var: \"X\" };\n\
+             pub static OPENROUTER_KIND: Kind = Kind(OPENROUTER);\n\
+             pub static PLAIN: Kind = Kind;",
+        );
+        assert_eq!(
+            static_call_arg(&f, "OPENROUTER_KIND").unwrap().as_deref(),
+            Some("OPENROUTER")
+        );
+        assert_eq!(static_call_arg(&f, "PLAIN").unwrap(), None);
+        assert_eq!(
+            const_struct_field(&f, "OPENROUTER", "name")
+                .unwrap()
+                .as_deref(),
+            Some("openrouter")
+        );
+        assert_eq!(
+            const_struct_field(&f, "OPENROUTER", "absent").unwrap(),
+            None
+        );
     }
 }

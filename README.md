@@ -27,8 +27,8 @@ failed, so try another way; the tests are still red, so read the failure and fix
 it — until done is true or it runs out of room.
 
 <!-- diagram:readme-providers -->
-**Any model that can call tools.** Anthropic over the API, or Ollama on your own
-machine.
+**Any model that can call tools.** Anthropic over the API, Openrouter over the
+API, Openai over the API, or Ollama on your own machine.
 <!-- /diagram -->
 
 ### What it is not

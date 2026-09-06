@@ -95,7 +95,12 @@ impl ProviderKind for Anthropic {
 /// Every provider this build can actually run. One entry, and the list is the
 /// point: it is what an unknown name is measured against and what the error
 /// message quotes, so a second provider becomes reachable by appending to it.
-static KINDS: &[&'static dyn ProviderKind] = &[&Anthropic, &crate::ollama::Ollama];
+static KINDS: &[&'static dyn ProviderKind] = &[
+    &Anthropic,
+    &crate::ollama::Ollama,
+    &crate::openai_compat::OPENROUTER_KIND,
+    &crate::openai_compat::OPENAI_KIND,
+];
 
 #[derive(Debug, thiserror::Error)]
 #[error("unknown provider `{name}`. This build supports: {}", known().join(", "))]
@@ -145,7 +150,11 @@ mod tests {
         assert!(err.contains("antropic"), "{err}");
         assert!(err.contains("anthropic"), "{err}");
         assert!(
-            kind("openai").is_err(),
+            kind("openai").is_ok(),
+            "the OpenAI-compatible provider is registered and did not resolve"
+        );
+        assert!(
+            kind("bedrock").is_err(),
             "a provider nobody implemented resolved"
         );
     }
