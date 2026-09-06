@@ -392,7 +392,7 @@ async fn compaction_drops_the_oldest_tool_traffic_and_keeps_the_words() {
 
     // It is recorded, with the replacement in the record, so a resume of this
     // session rebuilds the conversation that was actually sent.
-    let records = SessionLog::read(log.path()).unwrap();
+    let records = SessionLog::read(&log.path()).unwrap();
     let compacted: Vec<&Value> = records
         .iter()
         .filter(|r| r["kind"] == "compacted")
@@ -400,7 +400,7 @@ async fn compaction_drops_the_oldest_tool_traffic_and_keeps_the_words() {
     assert_eq!(compacted.len(), 1, "{records:#?}");
     assert!(compacted[0]["drop_messages"].as_u64().unwrap() > 0);
     assert_eq!(
-        emma::session::fold(log.path()).unwrap(),
+        emma::session::fold(&log.path()).unwrap(),
         conversation,
         "the folded session is not the conversation that was held"
     );
@@ -446,7 +446,7 @@ async fn compaction_stops_when_there_is_nothing_left_to_win() {
 
     assert!(outs.iter().all(|o| o.ending == Ending::Done));
     assert!(alternates(&conversation), "{conversation:#?}");
-    let records = SessionLog::read(log.path()).unwrap();
+    let records = SessionLog::read(&log.path()).unwrap();
     let compactions = records.iter().filter(|r| r["kind"] == "compacted").count();
     assert!(compactions <= 2, "compaction churned: {compactions}");
     // Three goals and two summarisation calls, and no more: the cost memo is
@@ -457,7 +457,7 @@ async fn compaction_stops_when_there_is_nothing_left_to_win() {
         5,
         "the summariser was asked more often than the conversation changed"
     );
-    assert_eq!(emma::session::fold(log.path()).unwrap(), conversation);
+    assert_eq!(emma::session::fold(&log.path()).unwrap(), conversation);
 }
 
 // endregion: Compaction
@@ -515,7 +515,7 @@ async fn compacting_fixture(
 
 /// The `compacted` record, of which these tests produce exactly one.
 fn only_compacted(log: &SessionLog) -> Value {
-    let records = SessionLog::read(log.path()).unwrap();
+    let records = SessionLog::read(&log.path()).unwrap();
     let found: Vec<&Value> = records
         .iter()
         .filter(|r| r["kind"] == "compacted")
@@ -589,7 +589,7 @@ async fn compaction_records_the_model_summary_and_a_resume_replays_it() {
     // that ran — and it reads this record through the same two keys it always
     // read, `drop_messages` and `messages`, neither of which moved.
     assert_eq!(
-        emma::session::fold(log.path()).unwrap(),
+        emma::session::fold(&log.path()).unwrap(),
         conversation,
         "the folded session is not the conversation that was held"
     );
@@ -631,7 +631,7 @@ async fn a_refused_summarisation_falls_back_and_the_record_says_which_path_ran()
         why.contains("failed"),
         "the record does not say why the model path was not used: {record:#?}"
     );
-    assert_eq!(emma::session::fold(log.path()).unwrap(), conversation);
+    assert_eq!(emma::session::fold(&log.path()).unwrap(), conversation);
 }
 
 /// Under the budget floor the model is not asked at all, so the summarisation
@@ -668,7 +668,7 @@ async fn a_goal_with_little_budget_left_skips_the_summariser_entirely() {
         rendered(&fake.last_messages()).contains("the first file parses cookies"),
         "the deterministic replacement did not run"
     );
-    assert_eq!(emma::session::fold(log.path()).unwrap(), conversation);
+    assert_eq!(emma::session::fold(&log.path()).unwrap(), conversation);
 }
 
 /// A summariser that answers with more words than the conversation it was
@@ -715,7 +715,7 @@ async fn a_summary_larger_than_what_it_replaces_is_paid_for_and_not_used() {
         sent.contains("the first file parses cookies"),
         "the deterministic replacement did not run: {sent}"
     );
-    assert_eq!(emma::session::fold(log.path()).unwrap(), conversation);
+    assert_eq!(emma::session::fold(&log.path()).unwrap(), conversation);
 }
 
 /// `Agent::recover_from_a_model_change` compacts to escape a provider that has
@@ -844,7 +844,7 @@ async fn a_single_long_goal_sheds_its_own_oldest_tool_results() {
     assert!(unmatched(&conversation).is_empty());
     assert!(alternates(&conversation), "{conversation:#?}");
 
-    let records = SessionLog::read(log.path()).unwrap();
+    let records = SessionLog::read(&log.path()).unwrap();
     let shed: Vec<&Value> = records.iter().filter(|r| r["kind"] == "shed").collect();
     assert!(!shed.is_empty(), "nothing was recorded: {records:#?}");
     assert!(
@@ -871,7 +871,7 @@ async fn a_single_long_goal_sheds_its_own_oldest_tool_results() {
     // separately that the record is complete enough to replay from (a
     // `tool_use_id` and the replacement text for every block that went).
     assert_eq!(
-        emma::session::fold(log.path()).unwrap(),
+        emma::session::fold(&log.path()).unwrap(),
         conversation,
         "the folded session is not the conversation that was held"
     );
@@ -958,7 +958,7 @@ async fn a_goal_under_the_cap_keeps_every_result() {
     let seen = rendered(&conversation);
     assert!(seen.contains("AAAA-FIRST-BODY"), "{seen}");
     assert!(seen.contains("BBBB-SECOND-BODY"), "{seen}");
-    let records = SessionLog::read(log.path()).unwrap();
+    let records = SessionLog::read(&log.path()).unwrap();
     assert_eq!(records.iter().filter(|r| r["kind"] == "shed").count(), 0);
 }
 

@@ -385,7 +385,7 @@ pub async fn run(cmd: SessionCommand, s: &mut Session<'_, '_>) -> Flow {
                 Err(e) => s.term.warn(&format!("/config: {e}")),
             }
         }
-        SessionCommand::Resume(_) => say(s.term, RESUME_ADVICE),
+        SessionCommand::Resume(id) => resume(s, id),
         SessionCommand::Compact {
             everything,
             instruction,
@@ -411,13 +411,134 @@ pub async fn run(cmd: SessionCommand, s: &mut Session<'_, '_>) -> Flow {
 /// So it answers with the thing that does work, in the shape
 /// `cli::typed_at_the_prompt` already established for a command that runs
 /// somewhere else.
-const RESUME_ADVICE: &str = "\
-/resume continues a session that was interrupted, and it has to happen before one
-starts: this process already has a transcript open and a conversation in it.
+/// `/resume`, `/resume <id>`.
+///
+/// In place, since the port of 2026-09-06: the conversation this process holds
+/// is swapped for the recorded one, the transcript this process was writing
+/// ends with a record saying where the session went, and the process appends
+/// to the resumed session's file from here on. `emma --resume` from the shell
+/// still works and is what the advice names for a run with no session
+/// directory.
+///
+/// Every session command runs between goals, so there is no goal in flight for
+/// the swap to interrupt. The receipt says what was restored, what was left,
+/// and every continuity difference the recorded session carries against this
+/// harness, tool set, model and directory, because a resumed conversation
+/// that silently runs under different instructions is the failure the
+/// continuity record exists to catch.
+fn resume(s: &mut Session<'_, '_>, id: Option<String>) {
+    let Some(dir) = s.session_dir else {
+        s.term.warn(
+            "/resume needs a session directory and this run has none, so there is nothing \
+             recorded to continue.",
+        );
+        return;
+    };
+    let Some(id) = id else {
+        list_sessions(s, dir);
+        return;
+    };
+    let path = match crate::session::locate(dir, Some(&id), s.cwd) {
+        Ok(path) => path,
+        Err(e) => {
+            s.term.warn(&format!("/resume: {e}"));
+            return;
+        }
+    };
+    if path == s.agent.session_path() {
+        say(
+            s.term,
+            "already here: this is the session you are in, and nothing was changed.",
+        );
+        return;
+    }
+    let restored = match crate::session::restore(&path) {
+        Ok(restored) => restored,
+        Err(e) => {
+            s.term.warn(&format!("/resume: {e:#}"));
+            return;
+        }
+    };
+    let recorded = restored.continuity.clone();
+    let leaving = s.agent.session_id().to_string();
+    let out = match s.agent.resume_in_place(dir, restored) {
+        Ok(out) => out,
+        Err(e) => {
+            s.term.warn(&format!("/resume: {e:#}"));
+            return;
+        }
+    };
+    let now_at = s.agent.session_path();
+    s.term.set_status(s.provider.model_id(), s.cwd, &now_at);
+    s.log_path = now_at.clone();
+    let mut lines = vec![
+        format!(
+            "resumed   {}: {} messages restored, and this process is appending to its \
+             transcript from here on ({})",
+            out.id,
+            out.messages,
+            now_at.display()
+        ),
+        format!(
+            "left      {leaving}: {} goal(s), {} messages. Its transcript is intact and says \
+             where the session went, and `emma --resume {leaving}` picks it up again.",
+            out.dropped_goals, out.dropped_messages
+        ),
+    ];
+    if !recorded.cwd.is_empty() {
+        lines.push(format!("directory {}", recorded.cwd));
+    }
+    if let Some(note) = &out.directory_note {
+        lines.push(format!("          {note}"));
+    }
+    lines.push(
+        "kept      the grants you have given this session, the model in force, and the \
+         posture."
+            .into(),
+    );
+    for line in recorded.differences(
+        &emma_harness::hash::short(&s.harness.instructions),
+        &s.tools.schema_hash(),
+        s.provider.model_id(),
+        &s.cwd.display().to_string(),
+    ) {
+        lines.push(format!("warning   {line}"));
+    }
+    say(s.term, &lines.join("\n"));
+}
 
-Use /exit, then `emma --resume` in your shell — or `emma --resume sess-…` for a
-particular one. Bare `emma --resume` continues the newest session started in
-this directory. /config prints this session's transcript path.";
+/// `/resume` with no id: the sessions recorded from this directory, most
+/// recent first, and how to name one. The sidebar picker the fork drove from
+/// here is the sidebar session-list package's; until it lands this is the
+/// list.
+fn list_sessions(s: &Session<'_, '_>, dir: &Path) {
+    let mut lines = vec![RESUME_LIST.to_string()];
+    let now = crate::session::now_ms();
+    let rows = crate::harness_state::sessions_for(dir, s.cwd, now)
+        .map(|f| f.sessions)
+        .unwrap_or_default();
+    if rows.is_empty() {
+        lines.push("  (none recorded from this directory)".to_string());
+    }
+    for row in rows.iter().take(crate::harness_state::SIDEBAR_SESSIONS) {
+        lines.push(format!("  {}  {}", row.id, row.name));
+    }
+    lines.push(String::new());
+    lines.push(RESUME_ADVICE.to_string());
+    say(s.term, &lines.join("\n"));
+}
+
+const RESUME_LIST: &str = "\
+/resume <id> continues one of these here, in this process. The sessions recorded
+from this directory, most recent first:";
+
+const RESUME_ADVICE: &str = "\
+/resume sess-… continues that session in this process: the conversation is
+swapped for the recorded one and this transcript ends with a note saying where
+the session went. From the shell, /exit and then `emma --resume` (or
+`emma --resume sess-…`) does the same from a fresh process; bare `emma --resume`
+continues the newest session started in this directory. /config prints this
+session's transcript path.";
 
 // endregion: What a command can reach
 

@@ -90,9 +90,23 @@ use crate::agent::{label_of, memo_key_of, Resumed};
 /// The records one delegation wrote, in order — see [`SessionLog::subagent`].
 pub type Records = Arc<Mutex<Vec<Value>>>;
 
-pub struct SessionLog {
+/// Which file this log is on, and the handle open on it.
+///
+/// **One struct rather than three fields because they change together and must
+/// never disagree.** An in-place `/resume` closes one session's file and opens
+/// another's, and an id left pointing at the abandoned file would stamp the
+/// resumed session's records with the wrong name — which is a transcript that
+/// says it is a session it is not. See [`SessionLog::move_to`].
+///
+/// The file stays `Option` for the reason it always was: [`SessionLog::none`]
+/// records nothing and has no handle to hold.
+struct Handle {
     id: String,
     path: PathBuf,
+    file: Option<File>,
+}
+
+pub struct SessionLog {
     /// A plain `std::fs::File` behind a `std::sync::Mutex`, in an async
     /// program, on purpose: a record is a few hundred bytes and is written
     /// between a model call and a subprocess. Making it async would buy
@@ -101,10 +115,12 @@ pub struct SessionLog {
     /// a cancellation can land.
     ///
     /// `Arc` because [`SessionLog::subagent`] hands out a second view of the
-    /// *same* file rather than a second file. One process, one writer, one
-    /// mutex — the module doc's "a second writer" caveat is about a second
-    /// process, not a second logical run inside this one.
-    file: Arc<Mutex<Option<File>>>,
+    /// *same* file rather than a second file, and because the process shares
+    /// the log as `&SessionLog`: nothing anywhere holds a `&mut`, so moving
+    /// the session onto another file has to happen through here. One process,
+    /// one writer, one mutex — the module doc's "a second writer" caveat is
+    /// about a second process, not a second logical run inside this one.
+    handle: Arc<Mutex<Handle>>,
     /// Prefixed onto every `kind` this view writes. `None` for the session's own
     /// records; `Some("sub")` for a delegation's — see [`SessionLog::subagent`].
     prefix: Option<&'static str>,
@@ -132,6 +148,28 @@ pub struct SessionLog {
     write_failed: Arc<AtomicBool>,
 }
 
+/// The last record an abandoned session file gets: this session moved to
+/// another file, in this process, and nothing after this line belongs to it.
+///
+/// **The fold needs no arm for it, and that is a decision rather than an
+/// omission.** Everything before it in that file is still that session's
+/// conversation and a later `--resume` of it must get all of it back;
+/// everything after it is in another file. [`Fold::record`] ignores a kind it
+/// does not know, so an old build folds a moved session correctly too — and
+/// `a_moved_record_costs_the_fold_nothing` is what stops somebody adding an
+/// arm for it later on the reasonable-sounding grounds that every other record
+/// has one.
+pub const MOVED: &str = "session_moved";
+
+/// The first record a session gets when it is picked back up inside a running
+/// process: how many messages came back, and what was dropped to make room.
+///
+/// Ignored by the fold for the same reason [`MOVED`] is, and it is the sharper
+/// of the two: the messages it counts are already in this file, *above* this
+/// line, so an arm that replayed them would hand back the conversation twice.
+/// `a_resumed_record_does_not_double_the_conversation` is that assertion.
+pub const RESUMED: &str = "resumed";
+
 impl SessionLog {
     /// A session id that sorts by time and cannot collide between two `emma`
     /// processes started in the same millisecond.
@@ -158,9 +196,11 @@ impl SessionLog {
             .open(&path)
             .with_context(|| format!("opening {}", path.display()))?;
         Ok(Self {
-            id,
-            path,
-            file: Arc::new(Mutex::new(Some(file))),
+            handle: Arc::new(Mutex::new(Handle {
+                id,
+                path,
+                file: Some(file),
+            })),
             prefix: None,
             stamp: Vec::new(),
             tap: None,
@@ -174,9 +214,11 @@ impl SessionLog {
     /// working tool for a diary.
     pub fn none() -> Self {
         Self {
-            id: "sess-none".into(),
-            path: PathBuf::new(),
-            file: Arc::new(Mutex::new(None)),
+            handle: Arc::new(Mutex::new(Handle {
+                id: "sess-none".into(),
+                path: PathBuf::new(),
+                file: None,
+            })),
             prefix: None,
             stamp: Vec::new(),
             tap: None,
@@ -184,12 +226,100 @@ impl SessionLog {
         }
     }
 
-    pub fn id(&self) -> &str {
-        &self.id
+    /// The session this log is writing *now*, which is not always the one it
+    /// opened: an in-place `/resume` moves it — see [`SessionLog::move_to`].
+    ///
+    /// Owned rather than borrowed for that reason, and it is the whole cost of
+    /// the move being possible at all: the identity lives behind the same lock
+    /// as the handle, and a borrow out of a `MutexGuard` cannot outlive it.
+    pub fn id(&self) -> String {
+        self.lock().id.clone()
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
+    /// The file this log is appending to now. See [`Self::id`] for why it is
+    /// owned.
+    pub fn path(&self) -> PathBuf {
+        self.lock().path.clone()
+    }
+
+    /// The handle, with a poisoned lock recovered rather than propagated.
+    ///
+    /// Same ruling as [`SessionLog::append`]'s, and now in one place because
+    /// four callers need it: a panic in some other thread says nothing about
+    /// whether this file is still writable, and the data inside is a `File`
+    /// plus two strings, which a panic elsewhere cannot leave torn.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Handle> {
+        self.handle.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Continue a *different* session in this same process: stop writing to
+    /// the file this log is on, and append to `id`'s file from here on.
+    ///
+    /// **The abandoned file gets the last word.** A [`MOVED`] record is written
+    /// into it before the handle is swapped, so a human reading it later, or a
+    /// `--resume` of it, finds a session that stops rather than a session that
+    /// was truncated. The record is deliberately the last line of that file:
+    /// nothing this process does afterwards belongs to that session.
+    ///
+    /// **The resumed file is opened in append mode**, which is exactly what
+    /// `emma --resume` does to it, so an in-place resume and a process-boundary
+    /// one leave the same file on disk. Nothing is rewritten and nothing is
+    /// replayed; the records already in it are the conversation, and [`fold`]
+    /// is what reads them back.
+    ///
+    /// **Nothing is renamed, and that is deliberate rather than incidental.**
+    /// The obvious implementation of "move this session onto that file" is a
+    /// rename, and on Windows a rename of a file this process still holds open
+    /// fails with `ERROR_SHARING_VIOLATION` unless every handle was opened
+    /// sharing delete — which `OpenOptions` does not do. Opening the
+    /// destination and dropping the old handle needs no such favour from the
+    /// filesystem and is what the operation actually means: two files, both
+    /// kept, one writer moving between them.
+    ///
+    /// The new handle is opened **before** the old one is given up, so a
+    /// destination that cannot be opened leaves the log exactly where it was
+    /// rather than in a session with nowhere to write.
+    ///
+    /// **A log with no file at all ([`SessionLog::none`]) moves its identity
+    /// and stays silent.** It is the constructor for "there is nowhere to write
+    /// a transcript", and a move that opened one would make the one path in
+    /// this file that promises to record nothing start recording — for the sake
+    /// of a file nothing would ever read. The id still moves, so whoever asks
+    /// this log what session it is gets the right answer.
+    pub fn move_to(&self, dir: &Path, id: &str) -> Result<PathBuf> {
+        // Bound rather than tested inline: a `MutexGuard` in an `if`
+        // condition is alive for the whole `if`, and the arm below re-locks.
+        let silent = {
+            let handle = self.lock();
+            handle.file.is_none()
+        };
+        if silent {
+            let path = dir.join(format!("{id}.jsonl"));
+            let mut handle = self.lock();
+            handle.id = id.to_string();
+            handle.path = path.clone();
+            return Ok(path);
+        }
+        fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        let path = dir.join(format!("{id}.jsonl"));
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        // Before the swap, and outside the lock, because `append` takes it.
+        self.append(
+            MOVED,
+            json!({ "to": id, "to_path": path.display().to_string() }),
+        );
+        let mut handle = self.lock();
+        handle.id = id.to_string();
+        handle.path = path.clone();
+        // The old handle is dropped here, by the assignment. On a log that
+        // never had one this is the whole operation: the identity moves and
+        // there is nothing to close.
+        handle.file = Some(file);
+        Ok(path)
     }
 
     /// Append one record.
@@ -227,10 +357,16 @@ impl SessionLog {
         // `unwrap_or_else(|e| e.into_inner())` sites across `term`, `agent` and
         // `input` -- and this file was the outlier. The data inside is a `File`
         // handle, which a panic elsewhere cannot leave torn.
-        let mut guard = self.file.lock().unwrap_or_else(|e| e.into_inner());
+        //
+        // The recovery is `Self::lock` now rather than an `unwrap_or_else`
+        // here, because `move_to` and the two accessors take the same lock and
+        // one of them writing `.unwrap()` would reintroduce exactly this.
+        let mut guard = self.lock();
         // `None` is the no-log constructor and is the one silence here that is
         // correct: a run with no session directory has nothing to append to.
-        let Some(file) = guard.as_mut() else { return };
+        let Some(file) = guard.file.as_mut() else {
+            return;
+        };
         let mut line = payload.to_string();
         line.push('\n');
         // Not `let _ =`. This file is the only record of the run: resume folds
@@ -320,9 +456,9 @@ impl SessionLog {
         let tap: Records = Arc::new(Mutex::new(Vec::new()));
         (
             Self {
-                id: self.id.clone(),
-                path: self.path.clone(),
-                file: self.file.clone(),
+                // The same handle, not a copy of it: a delegation writes into
+                // the file its parent is on *now*, including after a move.
+                handle: self.handle.clone(),
                 write_failed: self.write_failed.clone(),
                 prefix: Some("sub"),
                 stamp: vec![
@@ -1425,7 +1561,7 @@ mod tests {
         log.append("goal", json!({ "text": "do the thing" }));
         log.append("assistant", json!({ "text": "done" }));
 
-        let records = SessionLog::read(log.path()).unwrap();
+        let records = SessionLog::read(&log.path()).unwrap();
         assert_eq!(records.len(), 2);
         assert_eq!(records[0]["kind"], "goal");
         assert_eq!(records[0]["text"], "do the thing");
@@ -1506,6 +1642,148 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // Moving a running process onto another session's file
+    //
+    // What an in-place `/resume` does to the log. Two files and one handle:
+    // the one being left has to stop cleanly and say where the session went,
+    // and the one being picked up has to be appended to rather than rewritten.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn moving_ends_one_file_and_appends_to_the_other() {
+        let dir = tempfile::tempdir().unwrap();
+        // The session being picked up already has a conversation in it, written
+        // by an earlier run. Nothing here may touch those bytes.
+        let old = SessionLog::open(dir.path(), "sess-old").unwrap();
+        old.append("goal", json!({ "text": "the earlier work" }));
+        drop(old);
+
+        let log = SessionLog::open(dir.path(), "sess-here").unwrap();
+        log.append("goal", json!({ "text": "what I was doing" }));
+        let moved = log.move_to(dir.path(), "sess-old").unwrap();
+
+        // The identity moved with the handle, which is the point: every record
+        // written from here on, and every reader asking this log what session
+        // it is, gets the resumed one.
+        assert_eq!(log.id(), "sess-old");
+        assert_eq!(log.path(), moved);
+
+        log.append("goal", json!({ "text": "what I am doing now" }));
+
+        let left = SessionLog::read(&dir.path().join("sess-here.jsonl")).unwrap();
+        assert_eq!(left.len(), 2, "{left:?}");
+        assert_eq!(left[0]["text"], "what I was doing");
+        // The last word, and it is the last line: nothing this process does
+        // after the move belongs to the session it left.
+        assert_eq!(left[1]["kind"], MOVED);
+        assert_eq!(left[1]["to"], "sess-old");
+
+        let picked = SessionLog::read(&moved).unwrap();
+        assert_eq!(picked.len(), 2, "the earlier conversation was not kept");
+        assert_eq!(picked[0]["text"], "the earlier work");
+        assert_eq!(picked[1]["text"], "what I am doing now");
+    }
+
+    /// The move is not a rename, and this is the assertion that says so.
+    ///
+    /// **Windows is why.** A rename of a file this process still holds open
+    /// fails with a sharing violation unless every handle on it was opened
+    /// sharing delete, which `OpenOptions` does not do — so the obvious
+    /// implementation of "move the session onto that file" is one that works on
+    /// the developer's Mac and fails on the owner's box. Both files exist
+    /// afterwards, both keep their own history, and the only thing that moved
+    /// is which of them this process is writing to.
+    #[test]
+    fn both_files_are_still_there_afterwards_and_neither_was_renamed() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SessionLog::open(dir.path(), "sess-here").unwrap();
+        log.append("goal", json!({ "text": "here" }));
+        let moved = log.move_to(dir.path(), "sess-there").unwrap();
+        log.append("goal", json!({ "text": "there" }));
+
+        let left = dir.path().join("sess-here.jsonl");
+        assert!(left.is_file(), "the abandoned file was renamed away");
+        assert!(moved.is_file());
+        // And a third session can still be opened on the abandoned file, which
+        // a rename or a still-exclusive handle would refuse.
+        let again = SessionLog::open(dir.path(), "sess-here").unwrap();
+        again.append("goal", json!({ "text": "picked up again" }));
+        let records = SessionLog::read(&left).unwrap();
+        assert_eq!(records.len(), 3, "{records:?}");
+        assert_eq!(records[2]["text"], "picked up again");
+    }
+
+    /// A move onto a directory that cannot be opened leaves the log where it
+    /// was, rather than in a session with nowhere to write.
+    ///
+    /// The destination handle is taken before the old one is given up for this
+    /// reason alone: the failure mode being refused is a `/resume` that reports
+    /// an error *and* silently stops recording the session the user is still
+    /// sitting in.
+    #[test]
+    fn a_move_that_cannot_open_its_destination_keeps_the_session_it_had() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SessionLog::open(dir.path(), "sess-here").unwrap();
+        // A file where the destination directory would be: `create_dir_all`
+        // fails on it on every platform.
+        let blocked = dir.path().join("not-a-dir");
+        fs::write(&blocked, "").unwrap();
+
+        assert!(log.move_to(&blocked, "sess-there").is_err());
+        assert_eq!(log.id(), "sess-here");
+        log.append("goal", json!({ "text": "still recording" }));
+        let records = SessionLog::read(&log.path()).unwrap();
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0]["text"], "still recording");
+    }
+
+    /// The no-log constructor moves its identity and stays silent.
+    ///
+    /// `none()` is "there is nowhere to write a transcript". A move that opened
+    /// a file for it would make the one path that promises to record nothing
+    /// start recording, for a file nothing would ever read.
+    #[test]
+    fn moving_a_log_that_records_nothing_moves_only_its_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SessionLog::none();
+        let path = log.move_to(dir.path(), "sess-elsewhere").unwrap();
+        assert_eq!(log.id(), "sess-elsewhere");
+        assert_eq!(log.path(), path);
+        log.append("goal", json!({ "text": "x" }));
+        assert!(!path.exists(), "a silent log started writing a file");
+    }
+
+    #[test]
+    fn a_moved_record_costs_the_fold_nothing() {
+        // The arm that is deliberately absent. Everything before the move is
+        // still that session's conversation, so a `--resume` of the file that
+        // was left has to get all of it back.
+        let msgs = fold_records(&[
+            opened(),
+            assistant_with(&["tu_1"]),
+            result_for("tu_1"),
+            json!({ "kind": MOVED, "to": "sess-elsewhere" }),
+        ]);
+        assert_eq!(msgs.len(), 3, "{msgs:?}");
+        assert_eq!(msgs[0], Message::user("work on g"));
+    }
+
+    #[test]
+    fn a_resumed_record_does_not_double_the_conversation() {
+        // The other half: the record lands in the file whose messages it
+        // counts, above them in the file it describes. An arm that replayed it
+        // would put the conversation in twice.
+        let with = fold_records(&[
+            opened(),
+            assistant_with(&["tu_1"]),
+            result_for("tu_1"),
+            json!({ "kind": RESUMED, "messages": 3 }),
+        ]);
+        let without = fold_records(&[opened(), assistant_with(&["tu_1"]), result_for("tu_1")]);
+        assert_eq!(with, without);
+    }
+
+    // -----------------------------------------------------------------------
     // The fold, on records a crash or an interrupt left half-written.
     //
     // The end-to-end round trip lives in `tests/loop.rs`, driven by the real
@@ -1560,9 +1838,11 @@ mod tests {
         let handle = OpenOptions::new().read(true).open(&path).unwrap();
 
         let log = SessionLog {
-            id: "s".into(),
-            path: path.clone(),
-            file: Arc::new(Mutex::new(Some(handle))),
+            handle: Arc::new(Mutex::new(Handle {
+                id: "s".into(),
+                path: path.clone(),
+                file: Some(handle),
+            })),
             prefix: None,
             stamp: Vec::new(),
             tap: None,
@@ -1727,9 +2007,11 @@ mod tests {
             .unwrap();
 
         let log = SessionLog {
-            id: "s".into(),
-            path: path.clone(),
-            file: Arc::new(Mutex::new(Some(handle))),
+            handle: Arc::new(Mutex::new(Handle {
+                id: "s".into(),
+                path: path.clone(),
+                file: Some(handle),
+            })),
             prefix: None,
             stamp: Vec::new(),
             tap: None,
@@ -1739,7 +2021,7 @@ mod tests {
         log.append("goal", json!({ "text": "before" }));
 
         // Poison it for real.
-        let file = log.file.clone();
+        let file = log.handle.clone();
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
         let panicked = std::thread::spawn(move || {
@@ -1750,7 +2032,7 @@ mod tests {
         std::panic::set_hook(hook);
         assert!(panicked.is_err(), "the fixture thread did not panic");
         assert!(
-            log.file.lock().is_err(),
+            log.handle.lock().is_err(),
             "the lock is not poisoned, so this test would pass without testing anything"
         );
 
@@ -1948,7 +2230,7 @@ mod tests {
         let log = SessionLog::open(dir.path(), "sess-keys").unwrap();
         log.append("goal", json!({ "text": "g", "cwd": "/work" }));
 
-        let records = SessionLog::read(log.path()).unwrap();
+        let records = SessionLog::read(&log.path()).unwrap();
         let mut keys: Vec<&str> = records[0]
             .as_object()
             .unwrap()
@@ -1968,7 +2250,7 @@ mod tests {
         // greppable back apart, and still nothing else.
         let (sub, _tap) = log.subagent("sub-1", "turn-1", "Explore");
         sub.append("goal", json!({ "text": "g" }));
-        let records = SessionLog::read(log.path()).unwrap();
+        let records = SessionLog::read(&log.path()).unwrap();
         let mut keys: Vec<&str> = records[1]
             .as_object()
             .unwrap()
@@ -2022,7 +2304,7 @@ mod tests {
             json!({ "long": long, "forgery": forgery, "crlf": crlf, "odd": odd }),
         );
 
-        let records = SessionLog::read(log.path()).unwrap();
+        let records = SessionLog::read(&log.path()).unwrap();
         assert_eq!(
             records.len(),
             1,

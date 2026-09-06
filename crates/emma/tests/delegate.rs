@@ -505,14 +505,14 @@ async fn folding_a_session_containing_a_delegation_returns_the_parents_conversat
     .await;
     assert_eq!(run.outcome.ending, Ending::Done);
 
-    let folded = emma::session::fold(log.path()).unwrap();
+    let folded = emma::session::fold(&log.path()).unwrap();
     assert_eq!(
         folded, run.conversation,
         "folding a session with a delegation in it did not reproduce the parent's conversation"
     );
     // The sub's traffic really is in the same file — the audit trail is not the
     // thing being protected here, the parent's fold is.
-    let records = SessionLog::read(log.path()).unwrap();
+    let records = SessionLog::read(&log.path()).unwrap();
     let kinds: Vec<&str> = records.iter().filter_map(|r| r["kind"].as_str()).collect();
     assert!(kinds.contains(&"sub.goal"), "{kinds:?}");
     assert!(kinds.contains(&"sub.tool_call"), "{kinds:?}");
@@ -1264,7 +1264,7 @@ async fn a_delegation_is_lent_half_of_what_is_left_and_the_files_own_iteration_c
     .await;
     assert_eq!(run.outcome.ending, Ending::Done);
 
-    let records = SessionLog::read(log.path()).unwrap();
+    let records = SessionLog::read(&log.path()).unwrap();
     let record = records
         .iter()
         .find(|r| r["kind"] == "delegation")
@@ -1330,7 +1330,7 @@ async fn a_sub_run_gets_its_own_wall_clock_and_a_single_nudge() {
     .await;
     assert_eq!(run.outcome.ending, Ending::Done);
 
-    let records = SessionLog::read(log.path()).unwrap();
+    let records = SessionLog::read(&log.path()).unwrap();
     let record = records
         .iter()
         .find(|r| r["kind"] == "delegation")
@@ -1392,7 +1392,7 @@ async fn the_ending_recorded_for_each_delegation_is_the_one_that_happened() {
     .await;
     assert_eq!(run.outcome.ending, Ending::Done);
 
-    let records = SessionLog::read(log.path()).unwrap();
+    let records = SessionLog::read(&log.path()).unwrap();
     let endings: Vec<(String, String)> = records
         .iter()
         .filter(|r| r["kind"] == "delegation")

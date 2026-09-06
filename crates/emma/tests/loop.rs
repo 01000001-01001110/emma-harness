@@ -608,7 +608,7 @@ async fn the_token_budget_stops_the_loop_and_the_run_is_charged_for_what_it_spen
     // The scar this is guarding: in tustle-agent a token count only reached the
     // log on a *completed* turn, so every abort was recorded at zero and
     // aborting became the cheapest way to spend money.
-    let records = SessionLog::read(log.path()).unwrap();
+    let records = SessionLog::read(&log.path()).unwrap();
     let spent: i64 = records
         .iter()
         .filter(|r| r["kind"] == "model_call")
@@ -945,7 +945,7 @@ async fn the_kick_fires_when_the_model_stops_without_claiming_completion() {
         seen.contains("make it work"),
         "the kick did not restate the goal: {seen}"
     );
-    let records = SessionLog::read(log.path()).unwrap();
+    let records = SessionLog::read(&log.path()).unwrap();
     assert!(records.iter().any(|r| r["kind"] == "kick"));
 }
 
@@ -1221,7 +1221,7 @@ async fn the_log_folds_back_to_the_conversation_that_was_held() {
 
     assert_eq!(out[0].ending, Ending::Done);
     assert_eq!(out[0].kicks, 1);
-    let folded = emma::session::fold(log.path()).unwrap();
+    let folded = emma::session::fold(&log.path()).unwrap();
     // Stated as a number as well as compared, so a fold that returned nothing
     // against a provider that was sent nothing could not pass.
     assert_eq!(folded.len(), 10, "{folded:#?}");
@@ -1261,7 +1261,7 @@ async fn the_fold_carries_a_finished_goal_forward_the_way_the_loop_does() {
 
     assert_eq!(out[0].ending, Ending::Done);
     assert_eq!(out[1].ending, Ending::Done);
-    let folded = emma::session::fold(log.path()).unwrap();
+    let folded = emma::session::fold(&log.path()).unwrap();
     // The first goal in full — opening and answer — then the second goal's
     // opening, its tool round-trip, and its answer.
     assert_eq!(folded.len(), 6, "{folded:#?}");
@@ -1616,7 +1616,7 @@ async fn a_cancelled_tool_is_recorded_as_cancelled_and_a_finished_one_is_not() {
             sampling: Default::default(),
         });
         let out = agent.run_goal(&goal()).await;
-        let kinds = SessionLog::read(log.path())
+        let kinds = SessionLog::read(&log.path())
             .unwrap()
             .iter()
             .map(|r| r["kind"].as_str().unwrap_or_default().to_string())

@@ -59,7 +59,7 @@
 //! [`Budgets::max_tokens`], which is where that argument is written out.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -76,7 +76,7 @@ use tokio::sync::mpsc;
 
 use crate::approval::{Approvals, Verdict};
 use crate::goal::{self, Done, DoneCheck, Goal};
-use crate::session::SessionLog;
+use crate::session::{Restored, SessionLog};
 use crate::term::Term;
 
 // region: Budgets and endings
@@ -349,6 +349,38 @@ pub struct Cleared {
     /// Finished goals. A chapter that is already a summary is not one.
     pub goals: usize,
     pub messages: usize,
+}
+
+/// What an in-place `/resume` swapped, so its receipt is counted rather than
+/// claimed.
+///
+/// The `dropped_*` halves are [`Cleared`]'s numbers under another name, because
+/// that is exactly what happened to the conversation that was here: `/resume`
+/// is `/clear` with a fold put in the hole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumedInPlace {
+    /// The session now being written and read.
+    pub id: String,
+    /// Messages the fold handed back.
+    pub messages: usize,
+    /// Finished goals the conversation that was here had.
+    pub dropped_goals: usize,
+    /// Messages it had.
+    pub dropped_messages: usize,
+    /// The directory sentence the next goal will carry, when the resumed
+    /// session was recorded somewhere else. `None` when it ran here.
+    pub directory_note: Option<String>,
+    /// What the fold could not rebuild and what the read could not parse,
+    /// already worded — [`crate::session::resume_damage_note`]'s sentence, or
+    /// `None` when the session came back whole.
+    ///
+    /// **Carried here because the process-boundary resume learned this the
+    /// expensive way.** `--resume` computed the same note, and for a while
+    /// nothing printed it: the damage was on the value, the value went into
+    /// the loop, and a resumed run that was quietly missing turns looked
+    /// entirely normal. An in-place resume has exactly the same hole and one
+    /// fewer excuse, since the person is sitting there watching it happen.
+    pub damage_note: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -737,6 +769,16 @@ pub struct Agent<'a> {
     /// record is written only when the numbers moved. See
     /// [`Agent::note_task_progress`].
     tasks_seen: std::sync::Mutex<Option<(usize, usize)>>,
+    /// A sentence to put in front of the next goal's opening, set by an
+    /// in-place `/resume` of a session that was recorded in another directory.
+    ///
+    /// Held here rather than prepended to the restored conversation because the
+    /// restored messages are a record of what was sent and must stay one: a
+    /// line added inside them would be a turn the model never had. This is
+    /// spent on the next goal that opens, once, exactly as [`Agent::resumed`]
+    /// is, and it is spent *into the recorded opening*, so a fold of the file
+    /// rebuilds the same turn the model was given.
+    resume_note: Option<String>,
 }
 
 impl<'a> Agent<'a> {
@@ -760,7 +802,24 @@ impl<'a> Agent<'a> {
             resumed: None,
             changed_from: None,
             tasks_seen: std::sync::Mutex::new(None),
+            resume_note: None,
         }
+    }
+
+    /// The session this loop is recording into *now*, which an in-place
+    /// `/resume` moves — see [`Agent::resume_in_place`].
+    ///
+    /// Asked of the agent rather than of the log because the agent is what the
+    /// command dispatcher already holds, and because the two must not be able
+    /// to disagree: `Setup::session_id` is stamped onto every `goal` record and
+    /// the log's own id names the file those records land in.
+    pub fn session_id(&self) -> &str {
+        &self.s.session_id
+    }
+
+    /// The transcript this loop is appending to now. See [`Agent::session_id`].
+    pub fn session_path(&self) -> PathBuf {
+        self.s.log.path()
     }
 
     /// Continue a session rather than start one.
@@ -839,6 +898,83 @@ impl<'a> Agent<'a> {
             json!({ "goals": cleared.goals, "messages": cleared.messages }),
         );
         cleared
+    }
+
+    /// Continue a different session without leaving this process.
+    ///
+    /// **The inverse of [`Agent::clear`], and deliberately its sibling.**
+    /// `/clear` replaces the conversation with nothing; this replaces it with a
+    /// fold of another session file. Everything `/clear` had to decide, this
+    /// has to decide the same way and for the same reasons: the chapters go,
+    /// the pending resume goes, `last_ending` and `last_input` go because they
+    /// describe a conversation that is no longer here, and a record is written
+    /// saying what happened so a later fold is not left guessing.
+    ///
+    /// **What survives, and the argument.** The approval grants do, and they
+    /// are not this type's to touch: they live in `Approvals`, which belongs to
+    /// the process. That is the right ruling as well as the mechanical one. A
+    /// grant is a person saying "yes, this tool, in this working tree, for this
+    /// sitting", and the person is still sitting there. Dropping the grants
+    /// would re-ask questions they answered ten minutes ago and teach them to
+    /// answer without reading, which is the failure the whole approval surface
+    /// exists to avoid. `/clear` already rules this way and says so in its
+    /// receipt; the two would be incoherent apart.
+    ///
+    /// **What does not survive**: the goal budget. The counters come back from
+    /// the restored file rather than from the conversation being left, because
+    /// they are the resumed goal's spend, exactly as `--resume` restores them.
+    ///
+    /// `turn_seq` is kept, for [`Agent::clear`]'s reason turned around: turn
+    /// ids have to be unique inside one file, and this process is now writing
+    /// into a file that already has turns in it. A counter restarted at zero
+    /// would mint a `turn-1` beside the resumed session's own `turn-1`.
+    ///
+    /// The log is moved *first* and by this method rather than by the caller,
+    /// so the ordering cannot be got wrong: the abandoned file gets its
+    /// [`crate::session::MOVED`] record while the log is still on it, and the
+    /// [`crate::session::RESUMED`] record lands in the file it describes.
+    ///
+    /// **The move is also the only step that can fail, and it is taken before
+    /// anything is dropped.** A destination that will not open leaves the
+    /// conversation, the chapters and the log exactly as they were; the caller
+    /// reports the error and the session the person is in carries on.
+    pub fn resume_in_place(&mut self, dir: &Path, restored: Restored) -> Result<ResumedInPlace> {
+        let dropped = Cleared {
+            goals: self.chapters.iter().filter(|c| !c.summarised).count(),
+            messages: self.chapters.iter().map(|c| c.messages.len()).sum(),
+        };
+        // Before anything is thrown away. See the doc above.
+        self.s.log.move_to(dir, &restored.id)?;
+        let damage_note = crate::session::resume_damage_note(&restored);
+        let messages = restored.resumed.messages.len();
+        self.chapters.clear();
+        self.last_ending = None;
+        self.last_input = None;
+        self.no_summary_at = None;
+        self.resumed = Some(restored.resumed);
+        self.s.session_id = restored.id.clone();
+        let recorded_cwd = restored.continuity.cwd.clone();
+        self.resume_note = directory_contract(&recorded_cwd, &self.s.cwd);
+        let out = ResumedInPlace {
+            id: restored.id,
+            messages,
+            dropped_goals: dropped.goals,
+            dropped_messages: dropped.messages,
+            directory_note: self.resume_note.clone(),
+            damage_note,
+        };
+        self.s.log.append(
+            crate::session::RESUMED,
+            json!({
+                "messages": out.messages,
+                "dropped_goals": out.dropped_goals,
+                "dropped_messages": out.dropped_messages,
+                "cwd": self.s.cwd.display().to_string(),
+                "recorded_cwd": recorded_cwd,
+                "directory_note": out.directory_note,
+            }),
+        );
+        Ok(out)
     }
 
     /// `/compact`, with the provider asked to write the summary first.
@@ -996,6 +1132,17 @@ impl<'a> Agent<'a> {
         // from this field, so recording the user's words alone would replay a
         // conversation the model never had.
         let opening = goal.opening_turn();
+        // The directory contract, when an in-place `/resume` set one. It goes
+        // into the *recorded* opening rather than beside it: the fold rebuilds
+        // this turn from this field, so a sentence added after the record was
+        // written would be one the resumed conversation could never replay.
+        // Taken, not read, for `resumed`'s reason one line down: it belongs to
+        // the goal that picks the session back up, and the goal after that is
+        // an ordinary goal.
+        let opening = match self.resume_note.take() {
+            Some(note) => format!("{note}\n\n{opening}"),
+            None => opening,
+        };
         // Taken before the record is written, so `resumed` is the only place a
         // resume can influence this goal and it can influence it exactly once.
         let resumed = self.resumed.take().unwrap_or_default();
@@ -2764,6 +2911,50 @@ impl Agent<'_> {
 /// which is the kind of difference nothing notices until a cache miss or a 400.
 pub(crate) fn ended_note(ending: &str) -> String {
     format!("[The previous goal stopped before it was finished: {ending}.]")
+}
+
+/// The sentence a resumed session carries when it was recorded somewhere else.
+///
+/// **Attributed, because it is not the user's words.** Everything else in a
+/// goal's opening was typed by a person; this was not, and a model that cannot
+/// tell the difference will quote it back as an instruction it was given. So it
+/// says who is speaking in its first clause, the same discipline [`ended_note`]
+/// follows.
+///
+/// **It says what cannot be done, rather than implying it can.** Emma cannot
+/// change the process working directory mid-run: tools resolve relative paths
+/// against the directory the process was started in, and a `cd` would move them
+/// for every other running thing at once. So the sentence does not say "work in
+/// that directory"; it says the paths have to be absolute, which is the thing
+/// the model can actually act on, and it names both directories so the model
+/// can tell which one a relative path would have hit.
+///
+/// `None` when the session was recorded here, or when the file is old enough
+/// not to have recorded a directory at all: an instruction derived from a
+/// missing value is noise, and this one would be a false claim about where the
+/// work lives.
+///
+/// **The comparison canonicalises both sides**, which is `session::same_dir`'s
+/// ruling and is here for the reason that one gives: `C:\src\emma`,
+/// `C:\src\emma\` and `c:\src\emma` are one directory spelled three ways, and a
+/// contract that fired on a trailing separator would tell the model its own
+/// tree is somewhere else.
+pub fn directory_contract(recorded: &str, here: &Path) -> Option<String> {
+    if recorded.is_empty() {
+        return None;
+    }
+    let real = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    if real(Path::new(recorded)) == real(here) {
+        return None;
+    }
+    Some(format!(
+        "Context added by Emma, not typed by the user: this conversation was recorded in \
+         {recorded}, and that is where its work belongs. This process is running in {} and \
+         cannot change its own working directory while it runs, so a relative path resolves in \
+         the wrong tree. Use absolute paths under {recorded} for every file you read, write or \
+         search, and name that directory explicitly to any command that takes one.",
+        here.display()
+    ))
 }
 
 /// Roughly how many tokens a message list is worth.

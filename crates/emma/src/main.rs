@@ -628,7 +628,7 @@ async fn run(cli: cli::Cli) -> Result<()> {
         // There is no pinned status row and this is not one pretending. A fixed
         // row costs a scroll region, a scroll region costs scrollback, and the
         // owner's first complaint was that he could not scroll.
-        term.set_status(provider.model_id(), &cwd, log.path());
+        term.set_status(provider.model_id(), &cwd, &log.path());
         // A `statusLine` in the harness's settings replaces the line above for
         // the rest of the run. Resolution, containment and the timeout are the
         // harness's; `set_status_source` is the whole of the wiring. A note
