@@ -252,6 +252,9 @@ pub enum Trigger {
     /// that into two rows would be a change to the screen rather than to its
     /// honesty.
     Keys(&'static [(Chord, Expect)]),
+    /// Resolves from the active keymap at [`Binding::label`] time, so a
+    /// rebound chord cannot leave a stale spelling on the QUICK HELP panel.
+    Bound(super::keymap::Action),
     /// `Alt+<any letter>`: the whole family, because the letters belong to the
     /// user-tool catalogue and change with it.
     AltAny,
@@ -279,6 +282,24 @@ impl Binding {
         match self.trigger {
             Trigger::Terminal(text) => text.to_string(),
             Trigger::AltAny => "Alt+key".to_string(),
+            Trigger::Bound(action) => super::keymap::active()
+                .chord_for(action)
+                .and_then(|s| super::keymap::parse_chord(&s))
+                .map(|kc| {
+                    let mut mods = KeyModifiers::NONE;
+                    if kc.ctrl {
+                        mods |= KeyModifiers::CONTROL;
+                    }
+                    if kc.alt {
+                        mods |= KeyModifiers::ALT;
+                    }
+                    Chord {
+                        code: KeyCode::Char(kc.key),
+                        mods,
+                    }
+                    .label()
+                })
+                .unwrap_or_else(|| "?".to_string()),
             Trigger::Keys(keys) => {
                 let shared = keys
                     .first()
@@ -347,7 +368,6 @@ const ENDS: &[(Chord, Expect)] = &[
     (Chord::plain(KeyCode::Home), Expect::Pane(PaneKey::Top)),
     (Chord::plain(KeyCode::End), Expect::Pane(PaneKey::Tail)),
 ];
-const SIDEBAR: &[(Chord, Expect)] = &[(Chord::ctrl('b'), Expect::Pane(PaneKey::Sidebar))];
 const INTERRUPT: &[(Chord, Expect)] = &[(Chord::ctrl('c'), Expect::Interrupt)];
 const QUIT: &[(Chord, Expect)] = &[(Chord::ctrl('d'), Expect::Eof)];
 
@@ -396,7 +416,7 @@ pub static CHAT: Table = Table {
             ctx: Ctx::IDLE,
         },
         Binding {
-            trigger: Trigger::Keys(SIDEBAR),
+            trigger: Trigger::Bound(super::keymap::Action::Sidebar),
             what: "toggle sidebar",
             ctx: Ctx::IDLE,
         },
@@ -574,7 +594,37 @@ pub fn resolve(editor: &mut Editor, key: KeyEvent, ctx: Ctx) -> Answer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::term::keymap::{self, Action as KeyAction};
     use crate::term::menu::Menu;
+
+    /// The keymap is process-wide state; serialise around tests that install one.
+    fn restore_keymap() {
+        keymap::install(keymap::Keymap::compiled());
+    }
+
+    fn with_keymap(json: &str, f: impl FnOnce()) {
+        keymap::install(keymap::parse(json));
+        f();
+        restore_keymap();
+    }
+
+    fn chord_for_action(action: KeyAction) -> Chord {
+        let spell = keymap::active()
+            .chord_for(action)
+            .expect("action has a chord");
+        let kc = keymap::parse_chord(&spell).expect("parses");
+        let mut mods = KeyModifiers::NONE;
+        if kc.ctrl {
+            mods |= KeyModifiers::CONTROL;
+        }
+        if kc.alt {
+            mods |= KeyModifiers::ALT;
+        }
+        Chord {
+            code: KeyCode::Char(kc.key),
+            mods,
+        }
+    }
 
     /// Resolve a chord against a freshly-built editor whose emptiness matches the
     /// context, which is what nearly every check below wants.
@@ -686,6 +736,7 @@ mod tests {
     /// table should have had — four of its six rows would fail it.
     #[test]
     fn every_drawn_key_is_answered() {
+        restore_keymap();
         for binding in CHAT.drawn {
             match binding.trigger {
                 Trigger::Terminal(_) => {}
@@ -702,6 +753,22 @@ mod tests {
                     assert!(
                         matches(&got, Expect::Tool),
                         "the panel advertises Alt+key and the decoder answers {got:?}"
+                    );
+                }
+                Trigger::Bound(action) => {
+                    let chord = chord_for_action(action);
+                    let got = answer(chord, binding.ctx);
+                    assert!(
+                        got.is_live(),
+                        "{} is drawn in QUICK HELP and nothing answers it \
+                         (a dead key on screen is the whole defect this \
+                         table exists to make impossible)",
+                        chord.label()
+                    );
+                    assert!(
+                        matches(&got, Expect::Pane(PaneKey::Sidebar)),
+                        "{} is drawn as sidebar and reaches {got:?} instead",
+                        chord.label()
                     );
                 }
                 Trigger::Keys(keys) => {
@@ -724,6 +791,25 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A rebound chord must change the derived label, or QUICK HELP lies.
+    ///
+    /// The decoder half waits on `input::pane_key` consulting the keymap;
+    /// this test pins the label half, which is what [`Trigger::Bound`] exists
+    /// for.
+    #[test]
+    fn a_rebound_action_updates_the_drawn_label() {
+        let sidebar = CHAT
+            .drawn
+            .iter()
+            .find(|b| matches!(b.trigger, Trigger::Bound(KeyAction::Sidebar)))
+            .expect("sidebar is keymap-bound");
+        restore_keymap();
+        assert_eq!(sidebar.label(), "Ctrl+B");
+        with_keymap(r#"{ "bindings": { "sidebar": "ctrl+x" } }"#, || {
+            assert_eq!(sidebar.label(), "Ctrl+X");
+        });
     }
 
     /// Half one, backwards, and the half people skip: nothing that works is a
@@ -846,6 +932,15 @@ mod tests {
         {
             return true;
         }
+        let bound = CHAT.drawn.iter().any(|b| {
+            let Trigger::Bound(action) = b.trigger else {
+                return false;
+            };
+            chord_for_action(action) == chord
+        });
+        if bound {
+            return true;
+        }
         let drawn = CHAT.drawn.iter().any(|b| match b.trigger {
             Trigger::Keys(keys) => keys.iter().any(|(c, _)| *c == chord),
             _ => false,
@@ -952,6 +1047,7 @@ mod tests {
     /// aspirational.
     #[test]
     fn the_panel_renders_this_table_and_nothing_else() {
+        restore_keymap();
         let hints = CHAT.hints();
         assert_eq!(hints.len(), CHAT.drawn.len());
         assert_eq!(
