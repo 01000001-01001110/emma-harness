@@ -124,6 +124,18 @@ fn harness_with(tag: &str, body: &str, timeout_ms: u64) -> Harness {
     Harness::load(&root).expect("a hook that exists loads")
 }
 
+/// How long a test waits for the grandchild's pid file. A deadline on a
+/// poll, so a fast machine pays nothing; the number is for a cold runner.
+///
+/// Ten seconds was enough on the owner's desktop and not on the GitHub
+/// Windows runner, where all four daemonising tests failed on 2026-09-06 with
+/// "the grandchild never recorded its pids": a cold `powershell.exe` whose
+/// first statement is `Get-CimInstance` can take longer than that on a fresh
+/// VM. The sixty seconds are a ceiling on how long a broken fixture takes to
+/// report itself, not a sleep.
+#[cfg(windows)]
+const PID_WAIT: Duration = Duration::from_secs(60);
+
 /// The two pids the grandchild recorded: `(direct child, grandchild)`.
 ///
 /// Polled rather than read once — `start` returns the instant the process is
@@ -241,7 +253,7 @@ async fn a_hook_that_exited_zero_is_not_reported_as_timed_out_because_a_grandchi
     let started = Instant::now();
     let verdict = harness.on_user_prompt("hello", "sess-1", "t.jsonl").await;
     let waited = started.elapsed();
-    let (child, grandchild) = pids(&pidfile, Duration::from_secs(10));
+    let (child, grandchild) = pids(&pidfile, PID_WAIT);
 
     let run = &verdict.runs[0];
     assert_eq!(
@@ -292,7 +304,7 @@ async fn a_daemonizing_hooks_child_is_still_running_after_emma_walks_away() {
 
     let verdict = harness.on_user_prompt("hello", "sess-1", "t.jsonl").await;
     assert_eq!(verdict.runs[0].exit_code, Some(0));
-    let (_child, grandchild) = pids(&pidfile, Duration::from_secs(10));
+    let (_child, grandchild) = pids(&pidfile, PID_WAIT);
 
     // Long enough that the daemon has attempted many writes into the pipe Emma
     // stopped reading. A death by broken pipe would have happened by now.
@@ -332,7 +344,7 @@ async fn a_timed_out_hooks_descendants_survive_by_ruling_not_by_accident() {
     );
 
     let verdict = harness.on_user_prompt("hello", "sess-1", "t.jsonl").await;
-    let (child, grandchild) = pids(&pidfile, Duration::from_secs(10));
+    let (child, grandchild) = pids(&pidfile, PID_WAIT);
 
     assert!(
         verdict.runs[0].stderr.contains("timed out"),
@@ -379,7 +391,7 @@ async fn output_written_before_a_hook_daemonized_and_exited_is_all_collected() {
     let started = Instant::now();
     let verdict = harness.on_user_prompt("hello", "sess-1", "t.jsonl").await;
     let waited = started.elapsed();
-    let (_child, grandchild) = pids(&pidfile, Duration::from_secs(10));
+    let (_child, grandchild) = pids(&pidfile, PID_WAIT);
     reap(grandchild);
 
     let ctx = verdict.context.join("\n");
@@ -437,7 +449,7 @@ async fn a_status_line_that_daemonizes_is_not_reported_as_timed_out_either() {
         .run(&emma_harness::StatusPayload::default(), 80, 24)
         .await;
     let waited = started.elapsed();
-    let (_child, grandchild) = pids(&pidfile, Duration::from_secs(10));
+    let (_child, grandchild) = pids(&pidfile, PID_WAIT);
     reap(grandchild);
 
     let out = out.expect("a status script that exited 0 must not report a failure");
@@ -556,7 +568,7 @@ async fn certify_the_misreport_rate_over_twenty_trials() {
             3_000,
         );
         let verdict = harness.on_user_prompt("hello", "sess-1", "t.jsonl").await;
-        let (_c, g) = pids(&pidfile, Duration::from_secs(10));
+        let (_c, g) = pids(&pidfile, PID_WAIT);
         if verdict.runs[0].stderr.contains("timed out") {
             misreported += 1;
         }
