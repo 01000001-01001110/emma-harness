@@ -305,7 +305,7 @@ fn the_frame_leaves_the_alternate_screen_on_a_clean_exit() {
         eprintln!(
             "the frame never entered the alternate screen in this environment; \
              INV-002 was not exercised. Output: {:?}",
-            &run.output.chars().take(400).collect::<String>()
+            run.output.chars().take(400).collect::<String>()
         );
         return;
     };
