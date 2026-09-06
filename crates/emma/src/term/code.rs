@@ -1364,6 +1364,13 @@ pub enum LspUpdate {
         path: String,
         target: DefTarget,
     },
+    /// Which characters the server says should open a list, learned from the
+    /// handshake. Sent once per server rather than guessed, because a guess is
+    /// wrong for every language whose server disagrees with it.
+    Triggers {
+        completion: Vec<String>,
+        signature: Vec<String>,
+    },
     /// What could be typed here. An empty list is a real answer and closes the
     /// popup rather than leaving the last one on screen.
     Completions {
@@ -1399,6 +1406,18 @@ pub struct Lsp {
     pub hover: Option<HoverPopup>,
     /// The completion popup, when one is open.
     pub popup: Option<Popup>,
+    /// Characters that open a completion list, as the server named them.
+    pub completion_triggers: Vec<String>,
+    /// Characters that open signature help, as the server named them.
+    pub signature_triggers: Vec<String>,
+    /// Set by typing when the character warrants asking, read and cleared by
+    /// the shell.
+    ///
+    /// **A flag rather than a call, because the page cannot reach the
+    /// bridge.** The page knows what was typed and the shell owns the channel,
+    /// and this is the seam between them: the same shape `code_line` uses for
+    /// the chat strip.
+    pub want_completion: bool,
     /// A one-line answer that is not a diagnostic: a definition outside the
     /// root, a hover with nothing in it, a request that timed out.
     pub note: Option<String>,
@@ -1526,6 +1545,14 @@ impl CodeView {
                         }
                     }
                 }
+            }
+            LspUpdate::Triggers {
+                completion,
+                signature,
+            } => {
+                self.lsp.completion_triggers = completion;
+                self.lsp.signature_triggers = signature;
+                None
             }
             LspUpdate::Completions {
                 path,
@@ -1947,6 +1974,51 @@ fn confirms(p: &Pending, code: KeyCode) -> bool {
 /// typing a character both inserts it and narrows the list.
 ///
 /// `None` means the popup did not take the key.
+/// Whether typing `c` should ask for a completion list.
+///
+/// **Two reasons to ask, and they are different questions.** A trigger
+/// character is the server's own claim that something follows it: a dot in
+/// Rust, a colon, an open bracket. Those open a list immediately, with nothing
+/// typed, because the useful answer is the whole set of members. An identifier
+/// character opens one only once there are enough letters to narrow it, because
+/// a list of everything in scope after one letter is a list nobody reads.
+///
+/// The word is measured **after** the typed character has gone in, so
+/// `MIN_WORD` of 3 means the list appears on the third letter. Later than a
+/// graphical editor, deliberately: there a suggestion list floats over its own
+/// layer, and here it covers the code being written, so it has to earn the
+/// rows. Three is also far enough in that the request is cheap while still
+/// ahead of the person.
+fn should_complete(v: &CodeView, c: char) -> bool {
+    if v.lsp
+        .completion_triggers
+        .iter()
+        .any(|t| t == &c.to_string())
+    {
+        return true;
+    }
+    if !(c.is_alphanumeric() || c == '_') {
+        return false;
+    }
+    // Already open: typing narrows what is there rather than asking again,
+    // unless the server truncated its own answer and asked to be re-queried.
+    if let Some(popup) = v.lsp.popup.as_ref() {
+        return popup.incomplete;
+    }
+    let Some(o) = v.open.as_ref() else {
+        return false;
+    };
+    let Some(line) = o.lines.get(o.line) else {
+        return false;
+    };
+    let chars: Vec<char> = line.chars().collect();
+    o.col.saturating_sub(word_start(&chars, o.col)) >= MIN_WORD
+}
+
+/// How long the word must be, counting the character just typed, before a list
+/// opens by itself.
+pub const MIN_WORD: usize = 3;
+
 /// Where the identifier under the cursor starts.
 ///
 /// The fallback when a server names no range, and deliberately the dullest
@@ -2007,6 +2079,9 @@ fn edit_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
     }
     // Set by the character arm below, applied after the buffer borrow ends.
     let mut narrow: Option<char> = None;
+    // The character typed, so the trigger decision can be made once the borrow
+    // is over and the whole view is readable again.
+    let mut ask = '\0';
     let Some(o) = v.open.as_mut() else {
         return CodeAction::None;
     };
@@ -2070,6 +2145,7 @@ fn edit_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
             // server marked incomplete, which it truncated and expects to be
             // asked about again.
             narrow = Some(c);
+            ask = c;
         }
         _ => return CodeAction::None,
     }
@@ -2089,6 +2165,10 @@ fn edit_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
         if gone {
             v.lsp.popup = None;
         }
+    }
+    if ask != '\0' && should_complete(v, ask) {
+        // The shell reads and clears this; the page cannot reach the channel.
+        v.lsp.want_completion = true;
     }
     CodeAction::FocusChanged
 }
@@ -6463,5 +6543,101 @@ mod tests {
         v.accept_completion();
         assert_eq!(v.open.as_ref().unwrap().lines[0], "fn main() { pu");
         assert!(v.lsp.popup.is_none());
+    }
+
+    // -- opening by itself ---------------------------------------------------
+
+    /// A view that has been told what the server's trigger characters are, the
+    /// way the bridge tells it after a handshake.
+    fn with_triggers(word: &str) -> CodeView {
+        let mut v = with_word(word);
+        v.apply_lsp(LspUpdate::Triggers {
+            completion: vec![".".to_string(), ":".to_string()],
+            signature: vec!["(".to_string()],
+        });
+        v
+    }
+
+    /// **A trigger character opens a list immediately**, with nothing typed,
+    /// because after a dot the useful answer is the whole set of members.
+    #[test]
+    fn a_trigger_character_asks_at_once() {
+        let mut v = with_triggers("c");
+        handle_key(&mut v, key(KeyCode::Char('.')));
+        assert!(
+            v.lsp.want_completion,
+            "a dot did not ask, so the list never opens by itself"
+        );
+    }
+
+    /// An identifier opens one only once there is enough to narrow it. A list
+    /// of everything in scope after one letter is a list nobody reads.
+    #[test]
+    fn an_identifier_asks_only_once_it_is_long_enough_to_narrow() {
+        let mut v = with_triggers("");
+        handle_key(&mut v, key(KeyCode::Char('p')));
+        assert!(!v.lsp.want_completion, "one letter is not enough");
+        handle_key(&mut v, key(KeyCode::Char('u')));
+        assert!(!v.lsp.want_completion, "two letters is not enough");
+        handle_key(&mut v, key(KeyCode::Char('s')));
+        assert!(
+            v.lsp.want_completion,
+            "the list must open on the third letter, where every editor puts it"
+        );
+    }
+
+    /// Nothing asks for a character that starts no word and triggers nothing:
+    /// a space, a bracket the server did not name.
+    #[test]
+    fn an_ordinary_character_asks_for_nothing() {
+        let mut v = with_triggers("push");
+        handle_key(&mut v, key(KeyCode::Char(' ')));
+        assert!(!v.lsp.want_completion);
+        handle_key(&mut v, key(KeyCode::Char(';')));
+        assert!(!v.lsp.want_completion);
+    }
+
+    /// **Typing into an open popup narrows it rather than asking again**, which
+    /// is what keeps this from being one request per keystroke. The exception
+    /// is a list the server truncated and asked to be re-queried.
+    #[test]
+    fn typing_into_an_open_list_narrows_it_unless_the_server_wants_re_asking() {
+        let mut v = with_triggers("pu");
+        v.lsp.popup = Some(Popup {
+            items: vec![candidate("push(…)", "push", "push")],
+            typed: "pu".to_string(),
+            ..Popup::default()
+        });
+        handle_key(&mut v, key(KeyCode::Char('s')));
+        assert!(
+            !v.lsp.want_completion,
+            "an open list was re-asked instead of narrowed"
+        );
+
+        // The same keystroke against a list the server marked incomplete.
+        let mut v = with_triggers("pu");
+        v.lsp.popup = Some(Popup {
+            items: vec![candidate("push(…)", "push", "push")],
+            typed: "pu".to_string(),
+            incomplete: true,
+            ..Popup::default()
+        });
+        handle_key(&mut v, key(KeyCode::Char('s')));
+        assert!(
+            v.lsp.want_completion,
+            "a truncated list must be re-asked, or it only ever narrows"
+        );
+    }
+
+    /// A server that names no trigger characters gets no guesses. Emma asks
+    /// where the language says to ask, and nowhere else.
+    #[test]
+    fn with_no_triggers_named_a_dot_asks_for_nothing() {
+        let mut v = with_word("c");
+        handle_key(&mut v, key(KeyCode::Char('.')));
+        assert!(
+            !v.lsp.want_completion,
+            "a dot was hard-coded rather than read from the server"
+        );
     }
 }

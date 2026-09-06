@@ -1647,6 +1647,9 @@ impl App {
         // without posting when the buffer is the one already sent, so a
         // cursor key costs a hash and nothing else.
         self.code_lsp_changed();
+        // After the buffer has been sent, so a list asked for by a typed dot is
+        // computed against the text that includes it.
+        self.code_lsp_auto_complete();
         (true, job)
     }
 
@@ -1667,6 +1670,9 @@ impl App {
         // without posting when the buffer is the one already sent, so a
         // cursor key costs a hash and nothing else.
         self.code_lsp_changed();
+        // After the buffer has been sent, so a list asked for by a typed dot is
+        // computed against the text that includes it.
+        self.code_lsp_auto_complete();
         (true, job)
     }
 
@@ -1682,6 +1688,9 @@ impl App {
         // without posting when the buffer is the one already sent, so a
         // cursor key costs a hash and nothing else.
         self.code_lsp_changed();
+        // After the buffer has been sent, so a list asked for by a typed dot is
+        // computed against the text that includes it.
+        self.code_lsp_auto_complete();
         (true, job)
     }
 
@@ -1717,6 +1726,9 @@ impl App {
         // without posting when the buffer is the one already sent, so a
         // cursor key costs a hash and nothing else.
         self.code_lsp_changed();
+        // After the buffer has been sent, so a list asked for by a typed dot is
+        // computed against the text that includes it.
+        self.code_lsp_auto_complete();
         (true, job)
     }
 
@@ -1773,6 +1785,23 @@ impl App {
 
     /// Send the buffer if, and only if, it is not the one already sent. A key
     /// that moved the cursor changed nothing the server needs to hear about.
+    /// Ask, if typing just warranted it.
+    ///
+    /// **The page decides and this carries**, which is the same split every
+    /// other question on this page follows: the page holds the buffer, the
+    /// cursor and the characters the server named, and the shell holds the
+    /// channel. Called on the same beat as `code_lsp_changed`, so the server
+    /// has the buffer before it is asked about it.
+    fn code_lsp_auto_complete(&mut self) {
+        let wanted = self
+            .code
+            .as_mut()
+            .is_some_and(|v| std::mem::take(&mut v.lsp.want_completion));
+        if wanted {
+            self.code_lsp_complete();
+        }
+    }
+
     fn code_lsp_changed(&mut self) {
         let Some(handle) = self.code_lsp.as_ref() else {
             return;

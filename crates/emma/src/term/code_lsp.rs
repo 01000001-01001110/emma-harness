@@ -588,6 +588,15 @@ async fn start(root: &Path, pool: &Arc<Pool>, rel: &str, text: &str, sink: &Sink
     // `running` rather than `found`: a handshake completed, which is the
     // stronger of the two claims the Settings card distinguishes.
     sink(LspUpdate::Status(LspStatus::Running(entry_name(&client))));
+    // What this server says opens a list, sent once. Read from the handshake
+    // rather than guessed: rust-analyzer names `.`, `:`, `'` and `(`, and a
+    // client with its own hard-coded set is wrong for every language whose
+    // server disagrees.
+    let caps = client.capabilities();
+    sink(LspUpdate::Triggers {
+        completion: caps.completion_triggers,
+        signature: caps.signature_triggers,
+    });
 
     let buffer = Arc::new(Mutex::new(text.to_string()));
     client.sync_document(&path, text);

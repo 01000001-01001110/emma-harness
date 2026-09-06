@@ -779,3 +779,39 @@ async fn a_real_server_marks_the_argument_the_cursor_is_in() {
         "the cursor is past the comma, so the second argument is active: {sig:?}"
     );
 }
+
+/// **What the real server says it can do, which the handshake used to throw
+/// away.** The trigger characters are the whole reason to read the reply: they
+/// are what makes a list open by itself, and a client that hard-codes its own
+/// guess is wrong for every language whose server disagrees. Printed as well as
+/// asserted, because the exact set is a fact about a version of rust-analyzer
+/// and the next reader should see it rather than trust this sentence.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_real_server_names_the_characters_that_should_open_a_list() {
+    let Some((sandbox, pool)) = fixture().await else {
+        return;
+    };
+    let client = pool
+        .client(&sandbox.canonical(), rust())
+        .await
+        .expect("started");
+    let caps = client.capabilities();
+    eprintln!("real capabilities: {caps:?}");
+
+    assert!(
+        caps.completion,
+        "the server did not offer completion at all: {caps:?}"
+    );
+    assert!(
+        caps.completion_triggers.iter().any(|t| t == "."),
+        "a dot must open a completion list, or nothing feels like an editor: {caps:?}"
+    );
+    assert!(
+        caps.signature_help,
+        "the server did not offer signature help: {caps:?}"
+    );
+    assert!(
+        caps.signature_triggers.iter().any(|t| t == "("),
+        "an open bracket must open signature help: {caps:?}"
+    );
+}

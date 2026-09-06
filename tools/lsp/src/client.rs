@@ -329,6 +329,66 @@ pub struct Diagnosis {
 /// reads [`crate::lang::Language::init_options`] and this constant is rust's.
 pub const INIT_OPTIONS: &str = crate::lang::RUST_INIT;
 
+/// What the server said it can do, narrowed to what a caller acts on.
+///
+/// **The whole point is the trigger characters.** They are what makes a
+/// completion list open by itself: rust-analyzer names `.` and `:`, and a
+/// client that hard-codes its own guess is wrong for every other language.
+/// Reading them from the server is the difference between an editor that
+/// completes where the language says it should and one that completes where
+/// somebody assumed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Capabilities {
+    /// Characters that should open a completion list. Empty when the server
+    /// offers completion but names none, which means "only when asked".
+    pub completion_triggers: Vec<String>,
+    /// Whether the server offers completion at all. A caller that asks anyway
+    /// gets an error rather than an answer, so the popup key can refuse in
+    /// words instead.
+    pub completion: bool,
+    /// Characters that should open signature help, usually `(` and `,`.
+    pub signature_triggers: Vec<String>,
+    pub signature_help: bool,
+    /// Whether `completionItem/resolve` will fill in documentation that the
+    /// first answer left out. Asking a server that cannot is a round trip for
+    /// nothing.
+    pub resolve_completion: bool,
+}
+
+impl Capabilities {
+    /// Read them off an `initialize` result.
+    ///
+    /// Everything absent is `false` or empty rather than assumed: a server that
+    /// does not say it completes is one this client will not ask.
+    pub fn parse(result: &Value) -> Self {
+        let caps = result.get("capabilities");
+        let provider = |name: &str| caps.and_then(|c| c.get(name));
+        let triggers = |p: Option<&Value>| -> Vec<String> {
+            p.and_then(|p| p.get("triggerCharacters"))
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let completion = provider("completionProvider");
+        let signature = provider("signatureHelpProvider");
+        Self {
+            completion_triggers: triggers(completion),
+            completion: completion.is_some(),
+            signature_triggers: triggers(signature),
+            signature_help: signature.is_some(),
+            resolve_completion: completion
+                .and_then(|c| c.get("resolveProvider"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        }
+    }
+}
+
 pub struct Client {
     server: Server,
     root: PathBuf,
@@ -351,6 +411,12 @@ pub struct Client {
     /// which they do constantly, because the whole point of `Diagnostics`-shaped
     /// work is asking right after an `Edit`.
     documents: Mutex<HashMap<PathBuf, Document>>,
+    /// What the server said it can do, read from the handshake reply.
+    ///
+    /// A `Mutex` rather than a field set once because the handshake happens
+    /// after the client exists, and the alternative is a half-built client that
+    /// every caller has to remember is half-built.
+    capabilities: Mutex<Capabilities>,
     /// What the server has pushed, and a counter that ticks on every push.
     ///
     /// Diagnostics are the one thing in LSP that is not a request. The server
@@ -545,6 +611,7 @@ impl Client {
             death,
             next_id: AtomicI64::new(1),
             documents: Mutex::new(HashMap::new()),
+            capabilities: Mutex::new(Capabilities::default()),
             published,
             publish_tick: publish_rx,
             child: Mutex::new(None),
@@ -676,12 +743,21 @@ impl Client {
         let result = self
             .raw_request("initialize", params, HANDSHAKE_TIMEOUT)
             .await?;
-        // Not inspected beyond existing. Emma asks for four things every LSP
-        // server implements; refusing to start over a missing capability would
-        // trade a working tool for a strict one.
-        let _ = result;
+        // **Read, since 2026-09-06, and this line used to discard it.** The
+        // reply names the characters that should open a completion list, and a
+        // client that guesses them instead is wrong for every language whose
+        // server disagrees with the guess. Nothing here refuses to start over a
+        // missing capability — that would trade a working tool for a strict one
+        // — but what the server does say is now kept rather than dropped.
+        *self.capabilities.lock().expect("capabilities") = Capabilities::parse(&result);
         self.notify("initialized", json!({}));
         Ok(())
+    }
+
+    /// What this server said it can do. Empty until the handshake finishes,
+    /// which is the honest answer during it.
+    pub fn capabilities(&self) -> Capabilities {
+        self.capabilities.lock().expect("capabilities").clone()
     }
 
     /// The current readiness without waiting for anything.
