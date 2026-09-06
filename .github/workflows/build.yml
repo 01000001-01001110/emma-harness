@@ -34,6 +34,10 @@ env:
 jobs:
   test:
     runs-on: windows-latest
+    # The first three runs of this workflow hung inside `cargo test` for hours
+    # with no log to read, because a running job's log is not served. A
+    # timeout turns a hang into a failure with a log attached.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -47,8 +51,11 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # One thread, for now: the suite passes on the owner's box and hangs on
+      # this runner, and with one thread the last "ok" line in the log names
+      # the test before the one that hung. Revert to parallel once it is found.
       - name: test
-        run: cargo test --workspace --no-fail-fast
+        run: cargo test --workspace --no-fail-fast -- --test-threads=1
 
   build:
     needs: test
