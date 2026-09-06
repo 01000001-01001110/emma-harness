@@ -336,6 +336,43 @@ mod frame_rs {
     /// in one function with no runtime moment at which it can be observed:
     /// by the time a panic proves the hook was missing, the process is going
     /// down.
+    /// The Settings screen's Open Keybindings row writes a starter file and
+    /// leaves the path in a slot for the shell to act on. **`App` deliberately
+    /// spawns nothing**: a key reaches it with the paint lock held, and an
+    /// editor can take a second to start.
+    ///
+    /// So the drain is the whole feature, and nothing can observe it at
+    /// runtime: `Frame` needs a real terminal to exist, so the row's own tests
+    /// can only assert that the slot was filled. A slot filled and never
+    /// emptied is the shape that shipped once already in this crate, when every
+    /// page's keys were wired nowhere and each page's own tests passed.
+    ///
+    /// Source order again, and for the same reason as the hook above: the
+    /// property is which statements are in one function, and there is no moment
+    /// at which a test could watch the editor not open.
+    #[test]
+    fn the_settings_screen_drains_its_editor_launch_outside_the_paint_lock() {
+        let body = fn_body("    pub fn settings_key(");
+        let code = code_only(body);
+        let take = code
+            .find("take_settings_launch()")
+            .expect("settings_key no longer drains the launch slot; nothing opens");
+        let drop_lock = code
+            .find("};")
+            .expect("settings_key no longer scopes the lock; this assertion is now vacuous");
+        let open = code
+            .find("open_file(")
+            .expect("settings_key no longer opens the drained path");
+        assert!(
+            take < drop_lock,
+            "the launch is drained after the lock scope ends, so it is drained from nothing"
+        );
+        assert!(
+            drop_lock < open,
+            "the editor is spawned while the paint lock is held, freezing every repaint"
+        );
+    }
+
     #[test]
     fn the_panic_hook_goes_on_before_the_first_mode_it_undoes() {
         let body = body_between("pub fn install(", "FRAME_ON.store(true", "install");
@@ -1527,7 +1564,7 @@ mod app_rs {
     fn each_pages_disclosure_belongs_to_that_page_alone() {
         use super::super::harness::EMPTY_RUNS;
         use super::super::memory::{NOTICE_M2, NO_INDEX};
-        use super::super::settings::NOTICE_PROVIDER;
+        use super::super::settings::NOTICE_MODEL;
         use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
         let v = view();
@@ -1539,6 +1576,11 @@ mod app_rs {
         app.set_tools(one_tool());
         open(&mut app, Screen::Settings, store.path());
         app.settings_key(KeyEvent::from(KeyCode::Tab));
+        // Down once, to the Model row. Card 1's first row was a notice row
+        // until the settings write-back landed and made it the Provider
+        // cycler; Enter on it now writes settings.json rather than speaking,
+        // and this test needs a row whose whole answer is a sentence.
+        app.settings_key(KeyEvent::from(KeyCode::Down));
         app.settings_key(KeyEvent::from(KeyCode::Enter));
         let (rows, _) = cells(&mut app, &v, 120, 40);
         let settings = main_text(&rows, &layout_for(&v, 120, 40));
@@ -1554,8 +1596,8 @@ mod app_rs {
 
         // A prefix each, because the notice row is cut to the pane's width and
         // an assertion on the whole sentence is an assertion about the window.
-        let provider = NOTICE_PROVIDER
-            .split(':')
+        let provider: &str = NOTICE_MODEL
+            .split(';')
             .next()
             .expect("a notice with no text");
         for (name, screen, mine, theirs) in [

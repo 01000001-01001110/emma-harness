@@ -235,6 +235,24 @@ pub const TRAINING_CAPTURE_DEFAULT: bool = true;
 /// The hints default when the key is absent.
 pub const HINTS_DEFAULT: bool = true;
 
+/// What an absent `memory_policy.auto_recall` means. Named so the field's doc
+/// and the screen that writes it cannot drift: a default written twice is a
+/// default that eventually disagrees with itself.
+pub const AUTO_RECALL_DEFAULT: bool = true;
+
+/// What an absent `memory_policy.scope` means.
+pub const MEMORY_SCOPE_DEFAULT: &str = "project";
+
+/// What an absent `appearance.accent` means: the theme's own accent, which is
+/// the first entry of `palette::ACCENTS`.
+pub const ACCENT_THEME_DEFAULT: &str = "theme";
+
+/// What an absent `appearance.glyphs` means: detect.
+pub const GLYPHS_AUTO: &str = "auto";
+
+/// What an absent `appearance.status_bar` means.
+pub const STATUS_BAR_DEFAULT: &str = "full";
+
 impl Settings {
     /// Whether transcripts are kept in the exporter's shape.
     pub fn capture_training(&self) -> bool {

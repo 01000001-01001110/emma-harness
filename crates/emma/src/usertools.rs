@@ -471,6 +471,27 @@ fn plan_shell(cwd: &Path, m: &dyn Machine) -> Result<Launch, String> {
     }
 }
 
+/// Open one file in the editor the Code chord already resolves.
+///
+/// **The same resolution, not a second one.** `plan_code` is the whole of how
+/// this project decides what an editor is (`tools.editor`, then `$VISUAL`, then
+/// `$EDITOR`, then a PATH probe), and a settings row that spawned its own would
+/// be the second answer to one question that this repository keeps paying for.
+///
+/// The one difference is what it hands over: the file as the argument, and the
+/// file's directory as the working directory. `plan_code` uses its path for
+/// both, which is right for a repository and wrong for a file: a process
+/// spawned with a file as its working directory does not start.
+pub fn open_file(path: &Path) -> Result<String, String> {
+    let m = RealMachine;
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let mut plan = plan_code(dir, &m)?;
+    plan.what = format!("{} at {}", stem(&plan.program), path.display());
+    plan.args = vec![path.as_os_str().to_os_string()];
+    adopt(spawn_detached(&plan)?);
+    Ok(format!("opened {}", plan.what))
+}
+
 fn plan_code(cwd: &Path, m: &dyn Machine) -> Result<Launch, String> {
     let (editor, source) = resolve_editor(m)?;
     let window = editor_window(&editor, &source, m.os())?;

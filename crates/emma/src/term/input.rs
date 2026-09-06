@@ -1018,11 +1018,24 @@ impl LineSource {
                 Err(_) => break,
                 Ok(Event::Key(key)) => {
                     // The open page's keys, before the pane layer. Reader-local
-                    // like the pane keys: a page mutates through the frame and
-                    // nothing here enters the line channel, so the drain
-                    // guarantee is untouched. See [`run_page_key`] for why this
-                    // line was missing and what it cost.
+                    // like the pane keys: a page mutates through the frame, and
+                    // the one thing that can reach the line channel from here,
+                    // the Code page's chat strip, reaches it through
+                    // `submit_line`, the same call a typed Enter makes. See
+                    // [`run_page_key`] for why this line was missing and what
+                    // it cost.
                     if run_page_key(&thread_frame, key) {
+                        // A question composed by the Code page. It goes down
+                        // the channel a typed line takes, so `mid_goal`, the
+                        // steering queue and the drain guarantee govern it
+                        // exactly as they govern anything typed: nothing on the
+                        // page decides whether a goal is running.
+                        if let Some(line) = thread_frame.take_code_line() {
+                            if !submit_line(line, &thread_frame, &thread_editor, &tx, &on_interrupt)
+                            {
+                                break;
+                            }
+                        }
                         continue;
                     }
                     // The pane keys act first and locally — they mutate view

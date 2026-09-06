@@ -120,6 +120,12 @@ pub struct App {
     help: Option<super::help::HelpView>,
     /// The Code page, when it is the main-region occupant.
     code: Option<super::code::CodeView>,
+    /// A line the Code page's chat strip composed, taken once by the reader
+    /// thread. Deliberately **not** a [`CodeJob`]: a job runs on the frame, and
+    /// this has to reach the thread that owns the line channel and the mid-goal
+    /// dispatch, because that is what makes a question from the strip the same
+    /// thing as a question somebody typed.
+    code_line: Option<String>,
     /// The region the last paint gave the Code page, for `code::click`.
     code_area: Rect,
     /// What SESSIONS is a list of, kept from `set_identity` so the list can be
@@ -197,9 +203,26 @@ pub struct App {
     /// Where the Settings screen's controls were on the last paint — the
     /// harness's rule, one field per page.
     settings_hits: super::settings::Hits,
+    /// A file the Settings screen asked the shell to open in an editor.
+    ///
+    /// A field rather than a direct spawn because this half of the seam owns
+    /// no process: `App` is under the frame lock when a key reaches it, and
+    /// launching an editor there would block every repaint until it exited.
+    /// `Frame::settings_key` drains it with [`App::take_settings_launch`]
+    /// after the lock is released; nothing else may.
+    settings_launch: Option<std::path::PathBuf>,
     /// The home directory settings.json lives under. Resolved once; a test
     /// points it at a tempdir so no test touches the real file.
     home: Option<std::path::PathBuf>,
+    /// Test seam for the tool-permission card: `Some` overrides the harness
+    /// discovery so a test writes a rule into a tempdir rather than into
+    /// whatever project the test binary was launched from.
+    ///
+    /// The `set_harness_dir` precedent, and for the same reason it exists: a
+    /// test that wrote a real `settings.local.json` would be a test that
+    /// changes what the developer's own Emma is allowed to do, and one that
+    /// only read would be a fact about their checkout.
+    policy_file_override: Option<std::path::PathBuf>,
     /// Test seam for the Ollama ping: `Some` overrides the `OLLAMA_HOST`
     /// resolution so a test can aim at a listener it owns.
     ollama_host_override: Option<String>,
@@ -275,6 +298,7 @@ impl App {
             harness: None,
             help: None,
             code: None,
+            code_line: None,
             code_area: Rect::new(0, 0, 0, 0),
             scope: None,
             sessions_add: None,
@@ -290,7 +314,9 @@ impl App {
             harness_hits: super::harness::Hits::default(),
             settings: super::settings::SettingsView::default(),
             settings_hits: super::settings::Hits::default(),
+            settings_launch: None,
             home: emma_llm::auth::home_dir(),
+            policy_file_override: None,
             ollama_host_override: None,
             harness_dir: std::env::var_os("HOME")
                 .map(|h| std::path::Path::new(&h).join(".emma/sessions"))
@@ -353,10 +379,18 @@ impl App {
                 .as_deref()
                 .map(crate::settings::load)
                 .unwrap_or_default();
-            self.settings.provider = stored
+            // Two provider facts, not one. `provider` is what this session is
+            // bound to and cannot be changed from here; `provider_saved` is
+            // what the file says and is what the row's chevrons write. They
+            // are equal until somebody presses one, and the row shows both
+            // whenever they differ — see `settings::provider_value`.
+            let bound = stored
                 .provider
                 .clone()
                 .unwrap_or_else(|| emma_llm::DEFAULT_PROVIDER.to_string());
+            self.settings.provider_saved = bound.clone();
+            self.settings.provider = bound;
+            self.settings.provider_keys = provider_keys(self.home.as_deref());
             // The *selection*, read where it is written. This tree has no
             // ambient "active theme": `theme::load` resolves the name once at
             // startup and `Palette` is `Copy`, so what is live on screen is
@@ -377,6 +411,82 @@ impl App {
             // deliberately so — `crate::settings::Settings::prune_history`
             // carries the argument.
             self.settings.prune_on = stored.prune_history.unwrap_or(false);
+            self.settings.training_on = stored.capture_training();
+            self.settings.hints_on = stored.hints();
+            // The memory policy block, defaults resolved here rather than in
+            // the page: the page draws what it is handed, and "absent means
+            // keep forever" is a fact about `crate::settings`, not about a
+            // row.
+            self.settings.memory_retention = stored
+                .memory_policy
+                .retention_days
+                .unwrap_or(crate::settings::RETENTION_KEEP_FOREVER);
+            self.settings.auto_recall = stored
+                .memory_policy
+                .auto_recall
+                .unwrap_or(crate::settings::AUTO_RECALL_DEFAULT);
+            self.settings.memory_scope = stored
+                .memory_policy
+                .scope
+                .clone()
+                .unwrap_or_else(|| crate::settings::MEMORY_SCOPE_DEFAULT.to_string());
+            // Raw, not resolved. Absence is what the three sampling rows have
+            // to show: `None` is "the host decides" and `Some(0.0)` is a
+            // chosen zero, and a resolved value could not tell them apart.
+            let sampling = stored
+                .sampling
+                .get(self.settings.provider_saved.as_str())
+                .cloned()
+                .unwrap_or_default();
+            self.settings.sampling_temperature = sampling.temperature;
+            self.settings.sampling_max_output_tokens = sampling.max_output_tokens;
+            self.settings.sampling_stream = sampling.stream;
+            self.settings.accent = stored
+                .appearance
+                .accent
+                .clone()
+                .unwrap_or_else(|| crate::settings::ACCENT_THEME_DEFAULT.to_string());
+            self.settings.glyphs = stored
+                .appearance
+                .glyphs
+                .clone()
+                .unwrap_or_else(|| crate::settings::GLYPHS_AUTO.to_string());
+            self.settings.status_bar = stored
+                .appearance
+                .status_bar
+                .clone()
+                .unwrap_or_else(|| crate::settings::STATUS_BAR_DEFAULT.to_string());
+            // The terminal, read once here rather than at every draw: the
+            // environment does not change under a running process.
+            let terminal = super::termfont::detect_here();
+            self.settings.font_families = font_families(&stored.appearance, &terminal);
+            self.settings.font_family = stored
+                .appearance
+                .font_family
+                .clone()
+                .unwrap_or_else(|| self.settings.font_families[0].clone());
+            self.settings.font_size = stored
+                .appearance
+                .font_size
+                .unwrap_or(super::termfont::DEFAULT_SIZE);
+            self.settings.terminal = Some(terminal);
+            // The keymap as this process is holding it, and every preset the
+            // file offered. Not a fresh read: what the preset row switches
+            // between is what `main.rs` installed at startup, and a row
+            // offering a preset added to the file since would be offering one
+            // this process cannot select.
+            let map = super::keymap::active();
+            self.settings.key_preset = map.preset.clone();
+            self.settings.key_presets = map.presets.clone();
+            self.settings.key_notes = map.notes.clone();
+            self.settings.keys_file = self
+                .home
+                .as_deref()
+                .map(|home| super::keymap::path(home).display().to_string());
+            // The per-tool rules, read from the same file a row would write.
+            let policy = self.policy_file();
+            self.settings.tools = tool_states(policy.as_deref());
+            self.settings.tools_file = policy.as_ref().map(|p| p.display().to_string());
             // The project's permission rules, read where they are written.
             // Same law as the rest of this block: on every open, never cached
             // across one, so a grant made at a prompt since the last look is
@@ -419,6 +529,23 @@ impl App {
             SettingsAction::Theme(name) => self.settings_theme(name),
             SettingsAction::MemoryCapture(on) => self.settings_memory(on),
             SettingsAction::PruneHistory(on) => self.settings_prune(on),
+            SettingsAction::TrainingCapture(on) => self.settings_training(on),
+            SettingsAction::Hints(on) => self.settings_hints(on),
+            SettingsAction::Provider(name) => self.settings_provider(name),
+            SettingsAction::ToolPolicy(tool, state) => self.settings_tool(tool, state),
+            SettingsAction::Retention(days) => self.settings_memory_block(Some(days), None, None),
+            SettingsAction::AutoRecall(on) => self.settings_memory_block(None, Some(on), None),
+            SettingsAction::MemoryScope(s) => self.settings_memory_block(None, None, Some(s)),
+            SettingsAction::Temperature(t) => self.settings_sampling(Some(t), None, None),
+            SettingsAction::MaxOutputTokens(n) => self.settings_sampling(None, Some(n), None),
+            SettingsAction::Streaming(on) => self.settings_sampling(None, None, Some(on)),
+            SettingsAction::Accent(name) => self.settings_accent(&name),
+            SettingsAction::Glyphs(name) => self.settings_glyphs(name),
+            SettingsAction::StatusBar(name) => self.settings_status_bar(name),
+            SettingsAction::FontFamily(name) => self.settings_font_family(&name),
+            SettingsAction::FontSize(pt) => self.settings_font_size(pt),
+            SettingsAction::KeyPreset(name) => self.settings_key_preset(&name),
+            SettingsAction::OpenKeybindings => self.settings_open_keybindings(),
             SettingsAction::Save => self.settings_save(),
             SettingsAction::Export => self.settings_export(),
             SettingsAction::Reset => self.settings_reset(),
@@ -554,6 +681,643 @@ impl App {
         }
     }
 
+    /// Take the file the Settings screen asked to open, if it asked.
+    /// `Frame::settings_key` drains this; nothing else may.
+    pub fn take_settings_launch(&mut self) -> Option<std::path::PathBuf> {
+        self.settings_launch.take()
+    }
+
+    /// Store the Capture Training Data toggle, the same additive default-on
+    /// semantics [`Self::settings_memory`] has: On removes the key (absent
+    /// means on), Off writes `false`.
+    ///
+    /// Its own method rather than folded into that one because the two
+    /// toggles own different keys, and a shared setter taking a field name is
+    /// how a click on one starts writing the other.
+    fn settings_training(&mut self, on: bool) {
+        let Some(home) = self.home.clone() else {
+            self.settings.notice = Some(NO_HOME.to_string());
+            return;
+        };
+        let mut stored = crate::settings::load(&home);
+        stored.training_capture = if on { None } else { Some(false) };
+        match crate::settings::save(&home, &stored) {
+            Ok(path) => {
+                self.settings.training_on = on;
+                // The claim that had to change: `emma export-training`
+                // shipped, so the row no longer says the command is coming.
+                self.settings.notice = Some(if on {
+                    format!(
+                        "training capture on, the default; the key is removed from {}. \
+                         Transcripts are kept locally and `emma export-training` reads them",
+                        path.display()
+                    )
+                } else {
+                    format!(
+                        "training capture off, written to {}. Sessions already captured are \
+                         left where they are; nothing is deleted by this row",
+                        path.display()
+                    )
+                });
+            }
+            Err(e) => self.settings.notice = Some(format!("settings could not be written: {e}")),
+        }
+    }
+
+    /// Store the Interface Hints toggle.
+    ///
+    /// [`Self::settings_training`]'s shape and its additive default-on
+    /// semantics. **The receipt bounds it, because nothing reads the key
+    /// yet**: `Settings::hints` exists and no caller consults it in this
+    /// build, so the honest thing a row can promise is that the preference is
+    /// stored. When a `set_hints` seam lands the wording loses its second
+    /// half; until then a row claiming to silence something would be claiming
+    /// an effect nobody could observe.
+    fn settings_hints(&mut self, on: bool) {
+        let Some(home) = self.home.clone() else {
+            self.settings.notice = Some(NO_HOME.to_string());
+            return;
+        };
+        let mut stored = crate::settings::load(&home);
+        stored.ui.hints = if on { None } else { Some(false) };
+        match crate::settings::save(&home, &stored) {
+            Ok(path) => {
+                self.settings.hints_on = on;
+                self.settings.notice = Some(format!(
+                    "interface hints {}, {} {}. Nothing in this build reads the key yet, so \
+                     the preference is stored and the screen looks the same; receipts, \
+                     warnings and refusals would never be affected by it",
+                    if on { "on, the default" } else { "off" },
+                    if on {
+                        "the key is removed from"
+                    } else {
+                        "written to"
+                    },
+                    path.display()
+                ));
+            }
+            Err(e) => self.settings.notice = Some(format!("settings could not be written: {e}")),
+        }
+    }
+
+    /// Store the provider for the next run.
+    ///
+    /// **The write is real and immediate, and the binding is not.** Rebinding
+    /// a live client mid-session means rebuilding the provider, its key, its
+    /// model and the agent around them, which is `main.rs` machinery; a
+    /// settings screen that did half of it would leave a session whose
+    /// answers came from one provider and whose status row named another. So
+    /// the file moves now, the session does not, and the row shows both names
+    /// until they agree.
+    ///
+    /// A provider with no key still gets written. The owner may be about to
+    /// add one, and refusing the write would mean the screen deciding the
+    /// order somebody does two things in; the receipt names the command
+    /// instead. The key itself never reaches this layer, so there is nothing
+    /// here that could be echoed.
+    fn settings_provider(&mut self, name: &'static str) {
+        let Some(home) = self.home.clone() else {
+            self.settings.notice = Some(NO_HOME.to_string());
+            return;
+        };
+        let mut stored = crate::settings::load(&home);
+        stored.provider = Some(name.to_string());
+        match crate::settings::save(&home, &stored) {
+            Ok(path) => {
+                self.settings.provider_saved = name.to_string();
+                // Reread the sampling block: the three rows on this card are
+                // keyed per provider, so the numbers beside them belong to
+                // whichever provider was just named and not to the last one.
+                let sampling = stored.sampling.get(name).cloned().unwrap_or_default();
+                self.settings.sampling_temperature = sampling.temperature;
+                self.settings.sampling_max_output_tokens = sampling.max_output_tokens;
+                self.settings.sampling_stream = sampling.stream;
+                let keyless = self
+                    .settings
+                    .provider_keys
+                    .iter()
+                    .any(|(p, k)| p == name && *k == super::settings::KeyPresence::Missing);
+                let mut notice = if name == self.settings.provider {
+                    format!(
+                        "provider {name}, written to {}; this session was already bound to it",
+                        path.display()
+                    )
+                } else {
+                    format!(
+                        "provider {name}, written to {}; this session keeps the {} client it \
+                         booted with, so {name} starts at the next run",
+                        path.display(),
+                        self.settings.provider
+                    )
+                };
+                if keyless {
+                    notice.push_str(&format!(
+                        ". No key is stored for {name}: `emma set-provider {name}` stores one, \
+                         and `emma set-provider {name} --key -` reads it from stdin"
+                    ));
+                }
+                self.settings.notice = Some(notice);
+            }
+            Err(e) => self.settings.notice = Some(format!("settings could not be written: {e}")),
+        }
+    }
+
+    /// Store one tool's bare-name permission rule in this project's
+    /// settings.local.json.
+    ///
+    /// The merge discipline is [`crate::permissions::set_bare_rule`]'s, which
+    /// is `permissions::remember`'s: a file that is not JSON is not written to
+    /// at all, and a hand-written specifier grant is never touched. The
+    /// wording is the harness gate's, because the mechanism is the harness
+    /// gate's: rules are parsed at boot, so a run already going keeps what it
+    /// booted with.
+    fn settings_tool(&mut self, tool: &'static str, state: super::settings::ToolState) {
+        use super::settings::ToolState;
+        let Some(file) = self.policy_file() else {
+            self.settings.notice = Some(
+                "no harness root here, so there is no settings.local.json to write a rule to. \
+                 Start Emma inside a project with a .emma or .claude directory"
+                    .to_string(),
+            );
+            return;
+        };
+        let decision = match state {
+            ToolState::Ask => None,
+            ToolState::Allow => Some(crate::permissions::Decision::Allow),
+            ToolState::Deny => Some(crate::permissions::Decision::Deny),
+        };
+        match crate::permissions::set_bare_rule(&file, tool, decision) {
+            Ok(()) => {
+                // Reread rather than assume: the write may have removed a
+                // rule that another list also held, and the row must show the
+                // file rather than the press.
+                self.settings.tools = tool_states(Some(&file));
+                let (perms, perms_file, perms_read) = permission_rows();
+                self.settings.perms = perms;
+                self.settings.perms_file = perms_file;
+                self.settings.perms_read = perms_read;
+                self.settings.notice = Some(match state {
+                    ToolState::Ask => format!(
+                        "{tool} back to asking: the rule is removed from {}. Rules are read at \
+                         boot, so this binds the next run; this run keeps the gate it booted \
+                         with",
+                        file.display()
+                    ),
+                    _ => format!(
+                        "{tool} {}, written to {}. Rules are read at boot, so this binds the \
+                         next run; this run keeps the gate it booted with",
+                        state.word().to_lowercase(),
+                        file.display()
+                    ),
+                });
+            }
+            // `set_bare_rule`'s refusals already name the file and say that
+            // nothing was written; repeating that here would say it twice.
+            Err(e) => self.settings.notice = Some(format!("{e:#}")),
+        }
+    }
+
+    /// Store one of the three memory-policy keys.
+    ///
+    /// **One method for three rows because the three are one block on disk**:
+    /// a per-key writer would read settings.json three times and each write
+    /// would race the other two. The absent-means rules are kept by writing
+    /// `None` for the value that *is* the default, so a settings file never
+    /// grows a key restating what this build already does.
+    ///
+    /// **All three are read by nothing today**, and the receipt says so. The
+    /// write is real either way; what is bounded is the effect, and stating
+    /// the bound is the difference between a forward setting and a fake
+    /// control.
+    fn settings_memory_block(
+        &mut self,
+        retention: Option<u64>,
+        recall: Option<bool>,
+        scope: Option<&'static str>,
+    ) {
+        let Some(home) = self.home.clone() else {
+            self.settings.notice = Some(NO_HOME.to_string());
+            return;
+        };
+        let mut stored = crate::settings::load(&home);
+        if let Some(days) = retention {
+            stored.memory_policy.retention_days =
+                (days != crate::settings::RETENTION_KEEP_FOREVER).then_some(days);
+        }
+        if let Some(on) = recall {
+            stored.memory_policy.auto_recall =
+                (on != crate::settings::AUTO_RECALL_DEFAULT).then_some(on);
+        }
+        if let Some(s) = scope {
+            stored.memory_policy.scope =
+                (s != crate::settings::MEMORY_SCOPE_DEFAULT).then(|| s.to_string());
+        }
+        let days = stored
+            .memory_policy
+            .retention_days
+            .unwrap_or(crate::settings::RETENTION_KEEP_FOREVER);
+        let recall_on = stored
+            .memory_policy
+            .auto_recall
+            .unwrap_or(crate::settings::AUTO_RECALL_DEFAULT);
+        let scope_now = stored
+            .memory_policy
+            .scope
+            .clone()
+            .unwrap_or_else(|| crate::settings::MEMORY_SCOPE_DEFAULT.to_string());
+        match crate::settings::save(&home, &stored) {
+            Ok(path) => {
+                self.settings.memory_retention = days;
+                self.settings.auto_recall = recall_on;
+                self.settings.memory_scope = scope_now.clone();
+                let kept = if days == crate::settings::RETENTION_KEEP_FOREVER {
+                    "kept forever".to_string()
+                } else {
+                    format!("kept {days} days")
+                };
+                self.settings.notice = Some(format!(
+                    "memory {kept}, auto-recall {}, scope {scope_now}; written to {}. Capture \
+                     is in force now; these three are stored and read by nothing in this \
+                     build, so nothing prunes and nothing recalls differently yet",
+                    if recall_on { "on" } else { "off" },
+                    path.display()
+                ));
+            }
+            Err(e) => self.settings.notice = Some(format!("settings could not be written: {e}")),
+        }
+    }
+
+    /// Store one of the three sampling knobs for the **saved** provider.
+    ///
+    /// [`Self::settings_memory_block`]'s shape: one method for one block on
+    /// disk, so three rows cannot race each other through three loads.
+    ///
+    /// **Absence is a value here, which it is not on the other blocks.**
+    /// `Some(None)` for the temperature means Host Default and removes the
+    /// key, and `Some(Some(0))` means a chosen zero and writes `0.0`; a
+    /// writer that collapsed the two would pin every provider to greedy
+    /// decoding while the row said the host was deciding. `None` for an
+    /// argument means the caller is not editing that knob at all, which is
+    /// the third state and the reason for the nesting.
+    ///
+    /// The saved provider, not the running one, because sampling resolves
+    /// once in `main.rs` when a provider is built: the run these knobs
+    /// configure is the next one.
+    fn settings_sampling(
+        &mut self,
+        temperature: Option<Option<u32>>,
+        max_output: Option<Option<u32>>,
+        stream: Option<bool>,
+    ) {
+        let Some(home) = self.home.clone() else {
+            self.settings.notice = Some(NO_HOME.to_string());
+            return;
+        };
+        let provider = super::settings::sampling_provider(&self.settings).to_string();
+        let mut stored = crate::settings::load(&home);
+        let mut set = stored.sampling.get(&provider).cloned().unwrap_or_default();
+        if let Some(t) = temperature {
+            set.temperature = t.map(super::settings::temperature_value);
+        }
+        if let Some(n) = max_output {
+            set.max_output_tokens = n;
+        }
+        if let Some(on) = stream {
+            // The `memory` rule: on is the default, so on is the absence of
+            // the key rather than a `true` restating it.
+            set.stream = (!on).then_some(false);
+        }
+        stored.set_sampling(&provider, set.clone());
+        match crate::settings::save(&home, &stored) {
+            Ok(path) => {
+                self.settings.sampling_temperature = set.temperature;
+                self.settings.sampling_max_output_tokens = set.max_output_tokens;
+                self.settings.sampling_stream = set.stream;
+                let bind = format!(
+                    "written to {}; sampling resolves once when the provider is built, so this \
+                     binds the next run",
+                    path.display()
+                );
+                let mut notice = if temperature.is_some() {
+                    let what = match set.temperature {
+                        None => "host default (no temperature is sent)".to_string(),
+                        Some(t) => format!("{t:.2}"),
+                    };
+                    format!("temperature for {provider}: {what}, {bind}")
+                } else if max_output.is_some() {
+                    let what = match set.max_output_tokens {
+                        None => format!("default ({})", crate::settings::EMMA_MAX_OUTPUT_TOKENS),
+                        Some(n) => n.to_string(),
+                    };
+                    format!(
+                        "max output tokens for {provider}: {what}, {bind}. A cap above what \
+                         the model takes is clamped down to the model's own maximum"
+                    )
+                } else {
+                    let on = set.stream.unwrap_or(true);
+                    format!(
+                        "streaming for {provider}: {}, {bind}. A --print run is always batch, \
+                         because there is no terminal to stream into",
+                        if on { "on" } else { "off" }
+                    )
+                };
+                // The caveat the wire forced. A fact about the transport, not
+                // about the setting, so the key is still written and the
+                // receipt says what will happen to it.
+                if stream.is_some() && provider == "ollama" {
+                    notice.push_str(
+                        ". The setting is stored, but the ollama transport does not stream \
+                         yet: that provider answers in one batch either way",
+                    );
+                }
+                self.settings.notice = Some(notice);
+            }
+            Err(e) => self.settings.notice = Some(format!("settings could not be written: {e}")),
+        }
+    }
+
+    /// Apply and persist an accent override, the Theme row's pattern exactly:
+    /// `palette::activate_accent_choice` for the switch, settings.json for the
+    /// memory of it, and the receipt names the file.
+    ///
+    /// **A name the palette does not know changes nothing, anywhere.** The
+    /// parse happens before the activation and before the load, so a refused
+    /// value leaves the ambient accent, the view and the file exactly as they
+    /// were, and the notice says which name was refused. A half-applied accent
+    /// — repainted but not stored, or stored but not repainted — is the shape
+    /// `/theme` was ruled against.
+    fn settings_accent(&mut self, name: &str) {
+        // One parse for both shapes. A role name and a `cube:N` value are the
+        // same setting, and both commit through this one path, so a cube
+        // accent cannot end up on a code path the role accents were never
+        // tested on.
+        let Some(choice) = super::palette::parse_accent(name) else {
+            self.settings.notice = Some(format!(
+                "no accent named {name}: the roles are {}, or cube:N for an xterm index \
+                 between 16 and 231",
+                super::palette::ACCENTS
+                    .iter()
+                    .map(|a| a.name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            return;
+        };
+        super::palette::activate_accent_choice(choice);
+        let stored_name = choice.name();
+        self.settings.accent = stored_name.clone();
+        // A cube accent below the xterm cube is not renderable. The row can
+        // still hold one — it is a value somebody hand-edited in, or carried
+        // to a poorer terminal — and saying so is better than drawing the
+        // theme's accent under a row that names a cube.
+        let cube_note = match choice {
+            super::palette::AccentChoice::Cube(_) if self.settings.no_cube => {
+                ". This terminal reports fewer than 256 colours, so the cube index cannot be \
+                 drawn here and the theme's own accent is showing instead"
+            }
+            _ => "",
+        };
+        self.settings.notice = Some(match self.home.clone() {
+            Some(home) => {
+                let mut stored = crate::settings::load(&home);
+                stored.appearance.accent = (stored_name != crate::settings::ACCENT_THEME_DEFAULT)
+                    .then(|| stored_name.clone());
+                match crate::settings::save(&home, &stored) {
+                    Ok(path) => format!(
+                        "accent {stored_name}, written to {}{cube_note}",
+                        path.display()
+                    ),
+                    Err(e) => {
+                        format!("accent {stored_name}, not written ({e}), so it lasts until /exit")
+                    }
+                }
+            }
+            None => format!("accent {stored_name}, no home directory, so this lasts until /exit"),
+        });
+    }
+
+    /// Store the glyph set for the next run.
+    ///
+    /// **Not live, and the receipt says so.** A `Skin` is `Copy` and its
+    /// glyphs are a field, not an ambient read: by the time a frame is drawn
+    /// there are copies of it in the viewport, in every view and in `Term`.
+    /// The theme could be made live because a palette resolves its colours at
+    /// draw time; this cannot, without threading a new seam through every one
+    /// of those copies. The LSP card's wording, for the same mechanism: read
+    /// once at startup, applies to the next run.
+    fn settings_glyphs(&mut self, name: &'static str) {
+        let Some(home) = self.home.clone() else {
+            self.settings.notice = Some(NO_HOME.to_string());
+            return;
+        };
+        let mut stored = crate::settings::load(&home);
+        stored.appearance.glyphs = (name != crate::settings::GLYPHS_AUTO).then(|| name.to_string());
+        match crate::settings::save(&home, &stored) {
+            Ok(path) => {
+                self.settings.glyphs = name.to_string();
+                let caveat = if name == "unicode" {
+                    ". A console that cannot prove UTF-8 still gets ASCII: this is a \
+                     preference, not an override of the detection"
+                } else {
+                    ""
+                };
+                self.settings.notice = Some(format!(
+                    "glyphs {name}, written to {}. Nothing in this build reads the key yet — \
+                     the skin is built from the console's own UTF-8 answer — so it applies \
+                     from the run after one does{caveat}",
+                    path.display()
+                ));
+            }
+            Err(e) => self.settings.notice = Some(format!("settings could not be written: {e}")),
+        }
+    }
+
+    /// Store the status bar density.
+    ///
+    /// **Stored and read by nothing, and the receipt says so.** Mainline's
+    /// status bar has no density switch: there is no `statusbar::Density` to
+    /// set, so a row claiming the next frame would be thinner would be a
+    /// control that does nothing. The key is still written, because it is a
+    /// choice a person made and the alternative is losing it.
+    fn settings_status_bar(&mut self, name: &'static str) {
+        let Some(home) = self.home.clone() else {
+            self.settings.notice = Some(NO_HOME.to_string());
+            return;
+        };
+        let mut stored = crate::settings::load(&home);
+        stored.appearance.status_bar =
+            (name != crate::settings::STATUS_BAR_DEFAULT).then(|| name.to_string());
+        match crate::settings::save(&home, &stored) {
+            Ok(path) => {
+                self.settings.status_bar = name.to_string();
+                self.settings.notice = Some(format!(
+                    "status bar {name}, written to {}. This build's status bar has one \
+                     density, so nothing on screen changes: the key is stored for the build \
+                     that reads it",
+                    path.display()
+                ));
+            }
+            Err(e) => self.settings.notice = Some(format!("settings could not be written: {e}")),
+        }
+    }
+
+    /// Ask the terminal for a font family, and store it.
+    ///
+    /// The ask comes first and its answer is the receipt, so the sentence a
+    /// person reads is `termfont`'s own — including, on a terminal with no
+    /// font control, the sentence saying nothing was asked. The value is
+    /// stored either way: a family chosen under Windows Terminal is what
+    /// `main.rs` re-applies the next time Emma runs under Terminal.app.
+    fn settings_font_family(&mut self, name: &str) {
+        let terminal = self.settings_terminal();
+        let asked = super::termfont::apply_here(
+            &super::termfont::TerminalFont::Family(name.to_string()),
+            &terminal,
+        );
+        self.settings.font_family = name.to_string();
+        let families = self.settings.font_families.clone();
+        self.settings.notice = Some(match self.home.clone() {
+            Some(home) => {
+                let mut stored = crate::settings::load(&home);
+                stored.appearance.font_family = Some(name.to_string());
+                stored.appearance.font_families = families;
+                match crate::settings::save(&home, &stored) {
+                    Ok(path) => format!("{asked}. Written to {}", path.display()),
+                    Err(e) => format!("{asked}. Not written ({e}), so it lasts until /exit"),
+                }
+            }
+            None => format!("{asked}. No home directory, so this lasts until /exit"),
+        });
+    }
+
+    /// Ask the terminal for a font size, and store it.
+    ///
+    /// **A size outside `termfont`'s clamp never reaches disk.** The step
+    /// function clamps, so the arrows cannot produce one; this guards the
+    /// other door — an Enter on a view built by hand, or a value carried in
+    /// from a settings file — and refuses with the range rather than storing
+    /// a number the terminal would reject.
+    fn settings_font_size(&mut self, pt: u32) {
+        if !(super::termfont::MIN_SIZE..=super::termfont::MAX_SIZE).contains(&pt) {
+            self.settings.notice = Some(format!(
+                "font size {pt} is outside {}-{} pt, so nothing was asked and nothing was \
+                 written",
+                super::termfont::MIN_SIZE,
+                super::termfont::MAX_SIZE
+            ));
+            return;
+        }
+        let terminal = self.settings_terminal();
+        let asked =
+            super::termfont::apply_here(&super::termfont::TerminalFont::Size(pt), &terminal);
+        self.settings.font_size = pt;
+        self.settings.notice = Some(match self.home.clone() {
+            Some(home) => {
+                let mut stored = crate::settings::load(&home);
+                stored.appearance.font_size = Some(pt);
+                match crate::settings::save(&home, &stored) {
+                    Ok(path) => format!("{asked}. Written to {}", path.display()),
+                    Err(e) => format!("{asked}. Not written ({e}), so it lasts until /exit"),
+                }
+            }
+            None => format!("{asked}. No home directory, so this lasts until /exit"),
+        });
+    }
+
+    /// The terminal the font rows drive. Read when the screen opened; a view
+    /// nobody opened falls back to a fresh detection rather than to a claim.
+    fn settings_terminal(&self) -> super::termfont::Terminal {
+        self.settings
+            .terminal
+            .clone()
+            .unwrap_or_else(super::termfont::detect_here)
+    }
+
+    /// Switch the active keybinding preset.
+    ///
+    /// **Live, and the receipt says which half is.** The file was read once at
+    /// startup, so an edit to it still waits for a restart; every preset in
+    /// that one read is already in memory, and switching between them swaps a
+    /// table this process is holding. Making the switch wait as well would be
+    /// a control that does nothing on a screen whose point is that its
+    /// controls do something.
+    ///
+    /// A name the file does not offer changes nothing: `with_preset` answers
+    /// `None`, the installed map is untouched, and the row says which name
+    /// was refused.
+    fn settings_key_preset(&mut self, name: &str) {
+        let map = super::keymap::active();
+        let Some(next) = map.with_preset(name) else {
+            self.settings.notice = Some(format!(
+                "~/.emma/keybindings.json defines no preset named {name}; this file offers {}",
+                if map.presets.is_empty() {
+                    super::keymap::DEFAULT_PRESET.to_string()
+                } else {
+                    map.presets.join(", ")
+                }
+            ));
+            return;
+        };
+        let notes = next.notes.clone();
+        let chords: Vec<String> = super::keymap::REBINDABLE
+            .iter()
+            .filter_map(|a| next.chord_for(*a).map(|c| format!("{} {c}", a.name())))
+            .collect();
+        self.settings.key_preset = name.to_string();
+        self.settings.key_notes = notes.clone();
+        super::keymap::install(next);
+        let refused = if notes.is_empty() {
+            String::new()
+        } else {
+            format!(". {}", notes.join(" | "))
+        };
+        self.settings.notice = Some(format!(
+            "keybinding preset {name} is in force now: {}. The file itself is read once at \
+             startup, so an edit there still applies to the next run{refused}",
+            chords.join(", ")
+        ));
+    }
+
+    /// Open `~/.emma/keybindings.json` in the editor, writing a commented
+    /// starter first if there is none.
+    ///
+    /// The starter is written rather than an empty file, because the schema
+    /// has no other home: JSON has no comments, so the documentation is
+    /// `_comment` keys inside the file a person is about to edit.
+    fn settings_open_keybindings(&mut self) {
+        let Some(home) = self.home.clone() else {
+            self.settings.notice =
+                Some("no home directory, so there is no ~/.emma/keybindings.json to open".into());
+            return;
+        };
+        let path = super::keymap::path(&home);
+        let mut wrote = false;
+        if !path.exists() {
+            if let Some(dir) = path.parent() {
+                if let Err(e) = std::fs::create_dir_all(dir) {
+                    self.settings.notice =
+                        Some(format!("{} could not be created: {e}", dir.display()));
+                    return;
+                }
+            }
+            if let Err(e) = std::fs::write(&path, super::keymap::starter()) {
+                self.settings.notice =
+                    Some(format!("{} could not be written: {e}", path.display()));
+                return;
+            }
+            wrote = true;
+        }
+        self.settings.keys_file = Some(path.display().to_string());
+        self.settings.notice =
+            Some(format!(
+            "{} {} in your editor; it documents its own schema in _comment keys. Emma reads it \
+             once at startup, so an edit there applies to the next run",
+            path.display(),
+            if wrote { "written and opening" } else { "opening" }
+        ));
+        self.settings_launch = Some(path);
+    }
+
     /// `[ Save Now ]`: write settings.json as it stands, with a receipt. The
     /// live controls each persist on use, so this is a re-assertion — the
     /// receipt names the file so the choice is visible and removable.
@@ -596,33 +1360,69 @@ impl App {
         });
     }
 
-    /// The confirmed Reset: clear the additive keys this screen owns — theme
-    /// and memory_capture — and say exactly that. Provider, models, tools and
-    /// voice belong to other surfaces and are left alone.
+    /// The confirmed Reset: clear the additive keys this screen owns, and say
+    /// exactly that.
+    ///
+    /// **A key this screen can set is a key its Reset has to clear, or Reset
+    /// quietly means "most of it".** The write-back package added eleven of
+    /// them, so the list below grew with it. What is *not* cleared is
+    /// deliberate and named in the receipt: the provider and the models belong
+    /// to `emma set-provider` and `/model`, and the tool rules live in
+    /// settings.local.json, which is a different document that another program
+    /// also reads.
     fn settings_reset(&mut self) {
         let Some(home) = self.home.clone() else {
-            self.settings.notice =
-                Some("no home directory — settings.json cannot be written here".to_string());
+            self.settings.notice = Some(NO_HOME.to_string());
             return;
         };
         let mut stored = crate::settings::load(&home);
         stored.theme = None;
         stored.memory = None;
-        // Added with the row: a key this screen can set is a key its Reset
-        // has to clear, or Reset quietly means "most of it".
         stored.prune_history = None;
+        stored.training_capture = None;
+        stored.memory_policy = crate::settings::MemoryPolicy::default();
+        stored.appearance = crate::settings::AppearanceSettings::default();
+        stored.ui = crate::settings::UiSettings::default();
+        // The whole sampling block, every provider's entry. It is entirely
+        // this screen's to write: nothing else in Emma sets a key in it, and
+        // an entry left behind after a reset would be three knobs nobody can
+        // see from any other screen.
+        stored.sampling = std::collections::BTreeMap::new();
         match crate::settings::save(&home, &stored) {
             Ok(path) => {
-                // Nothing to activate: the theme in force is the one this
-                // process started with — see `settings_theme`. Clearing the key
-                // is the whole of the reset, and the notice below already says
-                // "cleared to defaults" rather than claiming a repaint.
+                // The theme is not activated: the one in force is the one this
+                // process started with — see `settings_theme`. The accent is,
+                // because it is ambient and a `Palette` resolves it at draw
+                // time, so leaving it would mean the file and the screen
+                // disagreeing about a colour that is on screen right now.
                 self.settings.theme = super::theme::BUILT_IN.to_string();
+                super::palette::activate_accent(&super::palette::ACCENTS[0]);
+                let terminal = self.settings_terminal();
                 self.settings.memory_on = true;
                 self.settings.prune_on = false;
+                self.settings.training_on = crate::settings::TRAINING_CAPTURE_DEFAULT;
+                self.settings.hints_on = crate::settings::HINTS_DEFAULT;
+                self.settings.memory_retention = crate::settings::RETENTION_KEEP_FOREVER;
+                self.settings.auto_recall = crate::settings::AUTO_RECALL_DEFAULT;
+                self.settings.memory_scope = crate::settings::MEMORY_SCOPE_DEFAULT.to_string();
+                self.settings.accent = crate::settings::ACCENT_THEME_DEFAULT.to_string();
+                self.settings.glyphs = crate::settings::GLYPHS_AUTO.to_string();
+                self.settings.status_bar = crate::settings::STATUS_BAR_DEFAULT.to_string();
+                // The font rows go back to the seeds. Nothing is asked of the
+                // terminal: reset clears what Emma stores, and a terminal
+                // whose font somebody set by hand is not Emma's to undo.
+                self.settings.font_families = font_families(&stored.appearance, &terminal);
+                self.settings.font_family = self.settings.font_families[0].clone();
+                self.settings.font_size = super::termfont::DEFAULT_SIZE;
+                self.settings.sampling_temperature = None;
+                self.settings.sampling_max_output_tokens = None;
+                self.settings.sampling_stream = None;
                 self.settings.notice = Some(format!(
-                    "reset: theme, memory capture and prune history cleared to defaults — \
-                     written to {}",
+                    "reset: theme, accent, glyphs, status bar, fonts, hints, memory capture, \
+                     training capture, prune history, the memory policy block and the \
+                     per-provider sampling block cleared to defaults — written to {}. The \
+                     provider, the models and the tool rules in settings.local.json were not \
+                     touched, and the terminal's own font is left exactly as it is",
                     path.display()
                 ));
             }
@@ -665,6 +1465,20 @@ impl App {
     #[cfg(test)]
     pub(crate) fn set_home(&mut self, home: std::path::PathBuf) {
         self.home = Some(home);
+    }
+
+    /// Aim the tool-permission rows at a settings.local.json a test owns.
+    #[cfg(test)]
+    pub(crate) fn set_policy_file(&mut self, file: std::path::PathBuf) {
+        self.policy_file_override = Some(file);
+    }
+
+    /// Where a tool rule is written and read: the seam a test overrides, and
+    /// otherwise this project's own file.
+    fn policy_file(&self) -> Option<std::path::PathBuf> {
+        self.policy_file_override
+            .clone()
+            .or_else(settings_policy_file)
     }
 
     /// Aim the Test Connection ping at a listener a test owns.
@@ -852,6 +1666,12 @@ impl App {
 
     /// What the Code page just sent to the clipboard, for its notice row.
     /// Sent, not arrived: OSC 52 has no acknowledgement.
+    /// The line the chat strip composed, taken once. `None` on every other
+    /// key, so a reader that asks after each one costs nothing.
+    pub fn take_code_line(&mut self) -> Option<String> {
+        self.code_line.take()
+    }
+
     pub fn code_notice_sent(&mut self, chars: usize) {
         if let Some(v) = self.code.as_mut() {
             v.notice_sent(chars);
@@ -922,6 +1742,13 @@ impl App {
                 None
             }
             CodeAction::Copy(text) => Some(CodeJob::Copy(text)),
+            // Composed by the page, because the page is the half that holds the
+            // buffer, its unsaved edits, the visible line range and the reason a
+            // read had to be changed. This side only carries it.
+            CodeAction::Ask(line) => {
+                self.code_line = Some(line);
+                None
+            }
             CodeAction::Close => {
                 self.code = None;
                 None
@@ -1616,10 +2443,17 @@ impl App {
                 // handler needs it for PageUp and PageDown.
                 self.code_area = r.main;
                 let rows = regions.rows;
+                let strip = regions.strip.is_some();
                 if let Some(cv) = self.code.as_mut() {
                     cv.body_rows = rows;
+                    // And only the paint knows whether the pane had room for
+                    // the chat strip. Tab must not reach a box nobody can see.
+                    cv.strip_shown = strip;
                 }
-                // The cursor is parked: nothing on this page is typed into.
+                // The terminal cursor stays parked. The chat strip *is* typed
+                // into, but it draws its own cursor cell, like every other
+                // cursor on this page; this line used to say nothing on this
+                // page is typed into, and that stopped being true here.
                 None
             } else {
                 self.chat_screen(r, buf, view)
@@ -3075,6 +3909,108 @@ fn lsp_rows(stored: &crate::settings::Settings) -> (Vec<super::settings::LspRow>
 ///
 /// **Nothing here writes.** See `settings::perm_rows` for why that is the
 /// design and not an unfinished half.
+/// What every settings write says when there is no home directory to write
+/// to. One constant so eleven methods cannot spell the same refusal eleven
+/// ways, and so a test can assert it without copying a sentence.
+const NO_HOME: &str = "no home directory — settings.json cannot be written here";
+
+/// What an absent `memory_policy.auto_recall` means.
+///
+/// The families the Font Family row cycles: what settings.json holds, or the
+/// seed list for this terminal when it holds none.
+///
+/// Never empty, so the row's `[0]` fallback cannot panic:
+/// `termfont::seed_families_here` answers with at least one name on every
+/// platform.
+fn font_families(
+    appearance: &crate::settings::AppearanceSettings,
+    terminal: &super::termfont::Terminal,
+) -> Vec<String> {
+    if !appearance.font_families.is_empty() {
+        return appearance.font_families.clone();
+    }
+    super::termfont::seed_families_here(terminal)
+        .iter()
+        .map(|f| (*f).to_string())
+        .collect()
+}
+
+/// Where a tool rule is written: this project's `settings.local.json`.
+///
+/// The same discovery [`permission_rows`] does, and deliberately the same
+/// function call rather than a second answer — a card whose read and whose
+/// write disagreed about which file they meant would be worse than one that
+/// could do neither. `None` when there is no harness root, which the row says
+/// in words rather than by writing somewhere it guessed.
+fn settings_policy_file() -> Option<std::path::PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    let root = emma_harness::discover_from(
+        &cwd,
+        std::env::var_os(emma_harness::ROOT_ENV).map(std::path::PathBuf::from),
+    )
+    .ok()?;
+    Some(crate::permissions::file_for(&root))
+}
+
+/// Every tool this build can register, and what `file` says about it.
+///
+/// Derived from [`crate::runctl::ALL_TOOLS`] rather than from the file's keys:
+/// a tool with no rule is `Ask`, and a card built from the file alone would
+/// simply not show it. `None` for the file — no harness root — answers the
+/// same way, because "no project rules" and "every tool asks" are the same
+/// fact.
+fn tool_states(file: Option<&std::path::Path>) -> Vec<(String, super::settings::ToolState)> {
+    use super::settings::ToolState;
+    let rules = file.map(crate::permissions::bare_rules).unwrap_or_default();
+    crate::runctl::ALL_TOOLS
+        .iter()
+        .map(|name| {
+            let state = match rules.get(*name) {
+                Some(crate::permissions::Decision::Allow) => ToolState::Allow,
+                Some(crate::permissions::Decision::Deny) => ToolState::Deny,
+                // A `permissions.ask` entry and no entry at all both read as
+                // Ask on the row, and they are not the same thing on disk —
+                // see `set_bare_rule`, which writes the absence rather than an
+                // ask rule. The row cannot show the difference in one word,
+                // and the word it shows is the one the gate will act on.
+                Some(crate::permissions::Decision::Ask) | None => ToolState::Ask,
+            };
+            ((*name).to_string(), state)
+        })
+        .collect()
+}
+
+/// Every provider this build can run, and whether a key for it is on this
+/// machine.
+///
+/// Presence only. The key never reaches this layer, so there is nothing here
+/// that could be echoed into a notice or a screen dump by accident.
+fn provider_keys(home: Option<&std::path::Path>) -> Vec<(String, super::settings::KeyPresence)> {
+    use super::settings::KeyPresence;
+    let stored = home
+        .map(emma_llm::auth::stored_providers)
+        .unwrap_or_default();
+    emma_llm::kind::known()
+        .into_iter()
+        .map(|name| {
+            let presence = match emma_llm::kind(name) {
+                Ok(kind) if !kind.requires_key() => KeyPresence::NotNeeded,
+                Ok(kind)
+                    if std::env::var(kind.env_var()).is_ok_and(|v| !v.trim().is_empty())
+                        || stored.iter().any(|p| p == name) =>
+                {
+                    KeyPresence::Stored
+                }
+                // The unreachable arm is the registry disagreeing with itself
+                // — `known()` just produced this name. Missing rather than a
+                // panic: a settings screen is not the place to abort a run.
+                _ => KeyPresence::Missing,
+            };
+            (name.to_string(), presence)
+        })
+        .collect()
+}
+
 fn permission_rows() -> (Vec<super::settings::PermRow>, Option<String>, bool) {
     use super::settings::PermRow;
 
@@ -5609,6 +6545,38 @@ mod tests {
         app.render(area, &mut buf, &view(), &settings_bar());
     }
 
+    /// The Settings screen over a tempdir home *and* a tempdir rules file, so
+    /// no test here reads or writes anything the developer owns.
+    fn open_settings_with_policy(home: &std::path::Path, policy: &std::path::Path) -> App {
+        let mut app = App::new((161, 75));
+        app.set_home(home.to_path_buf());
+        app.set_policy_file(policy.to_path_buf());
+        app.toggle_settings();
+        assert!(app.settings_open());
+        app
+    }
+
+    /// Focus the row of `card` carrying `kind`, by asking the page where it
+    /// is rather than by counting rows here — the slot numbers moved once
+    /// already, and a literal in a test is what goes stale when they move
+    /// again.
+    fn focus_kind(app: &mut App, card: usize, kind: super::super::settings::RowKind) {
+        let slot = super::super::settings::row_slot(&app.settings, card, kind)
+            .unwrap_or_else(|| panic!("card {card} has no {kind:?} row"));
+        app.settings.focus = Some((card, slot));
+    }
+
+    /// Focus a row and press `→`, which is every cycler's and every toggle's
+    /// verb.
+    fn step(app: &mut App, card: usize, kind: super::super::settings::RowKind) {
+        focus_kind(app, card, kind);
+        assert!(skey(app, KeyCode::Right));
+    }
+
+    fn stored(home: &std::path::Path) -> crate::settings::Settings {
+        crate::settings::load(home)
+    }
+
     /// Class A: the Theme row cycles the names this run can actually select
     /// and persists exactly as /theme does — the name lands in this home's
     /// settings.json and the receipt names the file.
@@ -5807,26 +6775,407 @@ mod tests {
             "the click must land the key's own write"
         );
         assert_eq!(app.settings.focus, Some((2, 0)), "the click focuses too");
-        // A static row answers with the honest notice. Font Family rather
+        // A static row answers with the honest notice. The Model row rather
         // than a permission row: card 6's rows are a function of whichever
         // project the test binary happens to be run from, and a test that is
         // silently a fact about the developer's checkout is the shape
-        // `guarantees.rs` refuses for the Harness page.
+        // `guarantees.rs` refuses for the Harness page. Font Family used to
+        // be this row and is a live cycler now, which is the whole of the
+        // write-back package.
         paint_settings(&mut app);
-        let font = app
+        let model = app
             .settings_hits
             .controls
             .iter()
-            .find(|(_, h)| *h == super::super::settings::Hit::Act(2, 2))
+            .find(|(_, h)| *h == super::super::settings::Hit::Act(0, 1))
             .map(|(r, _)| *r)
-            .expect("the Font Family value was painted");
-        assert!(app.settings_click(font.x, font.y));
+            .expect("the Model value was painted");
+        assert!(app.settings_click(model.x, model.y));
         assert_eq!(
             app.settings.notice.as_deref(),
-            Some(super::super::settings::NOTICE_FONT)
+            Some(super::super::settings::NOTICE_MODEL)
         );
         // Empty ground falls through — the sidebar's rule.
         assert!(!app.settings_click(0, 0));
+    }
+
+    // -- the write-back, card by card (settings-wiring) ----------------------
+
+    /// **Every write-back row reaches `settings.json` and reads back.**
+    ///
+    /// One test rather than eleven because the guarantee is one: a key
+    /// pressed on this screen ends up in a file `crate::settings::load` can
+    /// read, under the name the rest of Emma looks for. Eleven near-identical
+    /// tests would each be a copy of the same three lines with a different
+    /// field name, and the one that got the field name wrong would still pass.
+    ///
+    /// Read back with the real `load`, never by parsing the JSON here: the
+    /// question is whether the value survives the round trip through serde's
+    /// `skip_serializing_if` rules, and a hand-written assertion on the raw
+    /// text answers a different question.
+    #[test]
+    fn every_write_back_row_reaches_settings_json_and_reads_back() {
+        use super::super::settings::RowKind as K;
+        let home = tempfile::tempdir().unwrap();
+        let policy = tempfile::tempdir()
+            .unwrap()
+            .path()
+            .join("settings.local.json");
+        let mut app = open_settings_with_policy(home.path(), &policy);
+
+        // Card 5, the toggles. Each is additive: the *default* is the absence
+        // of the key, so pressing once has to produce the non-default value or
+        // the write cannot be seen at all.
+        step(&mut app, 4, K::MemoryToggle);
+        assert_eq!(stored(home.path()).memory, Some(false));
+        step(&mut app, 4, K::TrainingToggle);
+        assert_eq!(stored(home.path()).training_capture, Some(false));
+        assert!(!stored(home.path()).capture_training());
+        step(&mut app, 4, K::PruneToggle);
+        assert_eq!(stored(home.path()).prune_history, Some(true));
+        step(&mut app, 4, K::MemoryRetention);
+        assert_eq!(stored(home.path()).memory_policy.retention_days, Some(7));
+        step(&mut app, 4, K::AutoRecall);
+        assert_eq!(stored(home.path()).memory_policy.auto_recall, Some(false));
+        step(&mut app, 4, K::MemoryScope);
+        assert_eq!(
+            stored(home.path()).memory_policy.scope.as_deref(),
+            Some("global")
+        );
+
+        // Card 3, appearance. Accent and Glyphs and Status Bar are names;
+        // Font Family and Font Size are the terminal's vocabulary.
+        step(&mut app, 2, K::AccentCycle);
+        let accent = stored(home.path()).appearance.accent;
+        assert_eq!(
+            accent.as_deref(),
+            Some(super::super::palette::ACCENTS[1].name)
+        );
+        step(&mut app, 2, K::GlyphsCycle);
+        assert_eq!(
+            stored(home.path()).appearance.glyphs.as_deref(),
+            Some("unicode")
+        );
+        step(&mut app, 2, K::StatusBarCycle);
+        assert_eq!(
+            stored(home.path()).appearance.status_bar.as_deref(),
+            Some("compact")
+        );
+        step(&mut app, 2, K::HintsToggle);
+        assert_eq!(stored(home.path()).ui.hints, Some(false));
+        assert!(!stored(home.path()).hints());
+        let before = app.settings.font_size;
+        step(&mut app, 2, K::FontSizeStep);
+        assert_eq!(
+            stored(home.path()).appearance.font_size,
+            Some(before + 1),
+            "the size row must store the point it just asked for"
+        );
+        step(&mut app, 2, K::FontFamilyCycle);
+        let families = stored(home.path()).appearance.font_families;
+        assert!(
+            !families.is_empty(),
+            "the family list must be stored with the choice, or the next run \
+             cycles a different ladder"
+        );
+        assert_eq!(
+            stored(home.path()).appearance.font_family.as_deref(),
+            Some(app.settings.font_family.as_str())
+        );
+
+        // Card 1, sampling — keyed per provider, and the key is the *saved*
+        // provider's name.
+        let saved = app.settings.provider_saved.clone();
+        step(&mut app, 0, K::TemperatureCycle);
+        assert_eq!(
+            stored(home.path())
+                .sampling
+                .get(&saved)
+                .and_then(|s| s.temperature),
+            Some(0.0),
+            "the first rung off Host default is a chosen zero, and it is written"
+        );
+        step(&mut app, 0, K::MaxOutputCycle);
+        assert_eq!(
+            stored(home.path())
+                .sampling
+                .get(&saved)
+                .and_then(|s| s.max_output_tokens),
+            Some(4096)
+        );
+        step(&mut app, 0, K::StreamingCycle);
+        assert_eq!(
+            stored(home.path())
+                .sampling
+                .get(&saved)
+                .and_then(|s| s.stream),
+            Some(false)
+        );
+
+        // Card 1, the provider itself. Written for the next run; the bound
+        // session does not move, and the row says both.
+        let bound = app.settings.provider.clone();
+        step(&mut app, 0, K::ProviderCycle);
+        let next = stored(home.path())
+            .provider
+            .expect("a provider was written");
+        assert_ne!(next, bound, "the chevron must have stepped somewhere");
+        assert_eq!(app.settings.provider, bound, "the session must not rebind");
+        assert!(
+            app.settings
+                .notice
+                .as_deref()
+                .is_some_and(|n| n.contains("next run")),
+            "the receipt must say when it takes effect: {:?}",
+            app.settings.notice
+        );
+    }
+
+    /// **A refused value leaves the file and the screen agreeing.**
+    ///
+    /// The one that matters most, and the reason it is its own test: a
+    /// half-applied setting — stored but not shown, or shown but not stored —
+    /// is worse than a refusal, because nothing on screen says which of the
+    /// two the reader is looking at. Three doors that are not the arrows: a
+    /// name the palette does not know, a size outside `termfont`'s clamp, and
+    /// a preset the keybindings file does not define.
+    #[test]
+    fn a_refused_value_changes_nothing_on_disk_and_says_so_on_screen() {
+        let home = tempfile::tempdir().unwrap();
+        let policy = tempfile::tempdir()
+            .unwrap()
+            .path()
+            .join("settings.local.json");
+        let mut app = open_settings_with_policy(home.path(), &policy);
+        // Something real on disk first, so "nothing changed" is a claim about
+        // a file that exists rather than about one that never did.
+        app.settings_theme("emma".to_string());
+        let before = std::fs::read(crate::settings::path(home.path())).unwrap();
+        let accent_before = app.settings.accent.clone();
+        let size_before = app.settings.font_size;
+        let preset_before = app.settings.key_preset.clone();
+
+        app.settings_accent("chartreuse");
+        assert_eq!(app.settings.accent, accent_before, "the screen moved");
+        assert!(
+            app.settings
+                .notice
+                .as_deref()
+                .is_some_and(|n| n.contains("no accent named chartreuse")),
+            "the refusal must name what was refused: {:?}",
+            app.settings.notice
+        );
+
+        app.settings_font_size(super::super::termfont::MAX_SIZE + 1);
+        assert_eq!(app.settings.font_size, size_before, "the screen moved");
+        assert!(
+            app.settings
+                .notice
+                .as_deref()
+                .is_some_and(|n| n.contains("nothing was written")),
+            "{:?}",
+            app.settings.notice
+        );
+
+        app.settings_key_preset("dvorak-in-a-hat");
+        assert_eq!(app.settings.key_preset, preset_before, "the screen moved");
+        assert!(
+            app.settings
+                .notice
+                .as_deref()
+                .is_some_and(|n| n.contains("no preset named dvorak-in-a-hat")),
+            "{:?}",
+            app.settings.notice
+        );
+
+        assert_eq!(
+            std::fs::read(crate::settings::path(home.path())).unwrap(),
+            before,
+            "a refused value reached settings.json"
+        );
+    }
+
+    /// **A tool row writes the bare rule and leaves a hand-written specifier
+    /// grant exactly where it is.**
+    ///
+    /// The permissions card's write side, and the coexistence rule is the
+    /// half worth a test: the two kinds of rule answer different questions,
+    /// so they stack. A row that rewrote the tool's whole list would silently
+    /// drop a `Bash(cargo *)` somebody granted at a prompt weeks ago, and
+    /// nothing on this screen would ever have shown it going.
+    #[test]
+    fn a_tool_row_writes_the_bare_rule_and_never_a_hand_written_grant() {
+        use super::super::settings::{RowKind as K, ToolState};
+        let dir = tempfile::tempdir().unwrap();
+        let policy = dir.path().join("settings.local.json");
+        std::fs::write(
+            &policy,
+            r#"{"permissions":{"allow":["Bash(cargo *)"]},"hooks":{"keep":"me"}}"#,
+        )
+        .unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let mut app = open_settings_with_policy(home.path(), &policy);
+        assert_eq!(
+            app.settings.tools.len(),
+            crate::runctl::ALL_TOOLS.len(),
+            "the card must show one row per registered tool"
+        );
+
+        // Ask -> Allow, and read it back through the same function the gate's
+        // own screen reads.
+        step(&mut app, 5, K::ToolPermission("Bash"));
+        let rules = crate::permissions::bare_rules(&policy);
+        assert_eq!(
+            rules.get("Bash"),
+            Some(&crate::permissions::Decision::Allow)
+        );
+        assert_eq!(
+            app.settings
+                .tools
+                .iter()
+                .find(|(t, _)| t == "Bash")
+                .map(|(_, s)| *s),
+            Some(ToolState::Allow),
+            "the row must show the file rather than the press"
+        );
+
+        // Allow -> Deny.
+        step(&mut app, 5, K::ToolPermission("Bash"));
+        assert_eq!(
+            crate::permissions::bare_rules(&policy).get("Bash"),
+            Some(&crate::permissions::Decision::Deny)
+        );
+
+        // Deny -> Ask, which is the absence of a rule rather than a fourth
+        // word: `permissions.ask` stays empty.
+        step(&mut app, 5, K::ToolPermission("Bash"));
+        assert_eq!(crate::permissions::bare_rules(&policy).get("Bash"), None);
+
+        // And nothing else in the document moved.
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&policy).unwrap()).unwrap();
+        assert_eq!(doc["hooks"]["keep"], "me", "a foreign block was dropped");
+        let allow = doc["permissions"]["allow"].as_array().unwrap();
+        assert!(
+            allow.iter().any(|v| v == "Bash(cargo *)"),
+            "the hand-written specifier grant was touched: {doc}"
+        );
+        assert!(
+            app.settings
+                .notice
+                .as_deref()
+                .is_some_and(|n| n.contains("binds the next run")),
+            "the receipt must say when the rule takes effect: {:?}",
+            app.settings.notice
+        );
+    }
+
+    /// Reset clears every key this screen can set, and says which it did not
+    /// touch. A key a control can write and Reset cannot clear is a key that
+    /// makes Reset mean "most of it".
+    #[test]
+    fn reset_clears_every_key_this_screen_can_write() {
+        use super::super::settings::RowKind as K;
+        let home = tempfile::tempdir().unwrap();
+        let policy = tempfile::tempdir()
+            .unwrap()
+            .path()
+            .join("settings.local.json");
+        let mut app = open_settings_with_policy(home.path(), &policy);
+        for (card, kind) in [
+            (4, K::MemoryToggle),
+            (4, K::TrainingToggle),
+            (4, K::PruneToggle),
+            (4, K::MemoryRetention),
+            (4, K::AutoRecall),
+            (4, K::MemoryScope),
+            (2, K::AccentCycle),
+            (2, K::GlyphsCycle),
+            (2, K::StatusBarCycle),
+            (2, K::HintsToggle),
+            (2, K::FontSizeStep),
+            (0, K::TemperatureCycle),
+        ] {
+            step(&mut app, card, kind);
+        }
+        // A key that is *not* this screen's, to prove the receipt's second
+        // half rather than assume it.
+        let mut kept = crate::settings::load(home.path());
+        kept.models
+            .insert("anthropic".to_string(), "claude-x".to_string());
+        crate::settings::save(home.path(), &kept).unwrap();
+
+        focus_kind(&mut app, 7, K::Reset);
+        assert!(skey(&mut app, KeyCode::Enter), "the first Enter arms");
+        assert!(skey(&mut app, KeyCode::Enter), "the second fires");
+
+        let after = crate::settings::load(home.path());
+        assert_eq!(after.memory, None);
+        assert_eq!(after.training_capture, None);
+        assert_eq!(after.prune_history, None);
+        assert_eq!(after.ui, crate::settings::UiSettings::default());
+        assert_eq!(
+            after.memory_policy,
+            crate::settings::MemoryPolicy::default()
+        );
+        assert_eq!(
+            after.appearance,
+            crate::settings::AppearanceSettings::default()
+        );
+        assert!(after.sampling.is_empty());
+        assert_eq!(
+            after.models.get("anthropic").map(String::as_str),
+            Some("claude-x"),
+            "Reset touched a key belonging to another surface"
+        );
+        // And the screen agrees with the file it just wrote.
+        assert!(app.settings.training_on);
+        assert!(app.settings.hints_on);
+        assert_eq!(app.settings.sampling_temperature, None);
+    }
+
+    /// `Open Keybindings` writes the commented starter on first use and hands
+    /// the path to the shell, rather than launching anything from under the
+    /// frame lock.
+    #[test]
+    fn open_keybindings_writes_a_starter_and_hands_the_path_to_the_shell() {
+        use super::super::settings::RowKind as K;
+        let home = tempfile::tempdir().unwrap();
+        let policy = tempfile::tempdir()
+            .unwrap()
+            .path()
+            .join("settings.local.json");
+        let mut app = open_settings_with_policy(home.path(), &policy);
+        let path = super::super::keymap::path(home.path());
+        assert!(!path.exists());
+
+        focus_kind(&mut app, 3, K::OpenKeybindings);
+        assert!(skey(&mut app, KeyCode::Enter));
+        assert!(path.exists(), "the starter was not written");
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            body.contains("_comment"),
+            "the starter must document its own schema"
+        );
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&body).is_ok(),
+            "the starter must be the JSON it asks somebody to edit"
+        );
+        assert_eq!(app.take_settings_launch().as_deref(), Some(path.as_path()));
+        assert!(
+            app.take_settings_launch().is_none(),
+            "the launch must drain exactly once, or the editor opens twice"
+        );
+
+        // A second press finds the file and does not overwrite what is in it.
+        std::fs::write(&path, "{\"preset\":\"mine\"}").unwrap();
+        focus_kind(&mut app, 3, K::OpenKeybindings);
+        assert!(skey(&mut app, KeyCode::Enter));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\"preset\":\"mine\"}",
+            "the starter overwrote an edited file"
+        );
     }
 
     /// Test Connection is real against a local Ollama: a listener answers
@@ -5838,7 +7187,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let mut app = open_settings_at(home.path());
         app.settings.provider = "ollama".to_string();
-        app.settings.focus = Some((0, 5));
+        focus_kind(&mut app, 0, super::super::settings::RowKind::TestConnection);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let alive = listener.local_addr().unwrap();
         app.set_ollama_host(format!("127.0.0.1:{}", alive.port()));
@@ -6195,5 +7544,49 @@ mod tests {
         );
         // Nothing selected, so a release copies nothing and says nothing.
         assert!(matches!(app.code_release(), (false, None)));
+    }
+
+    /// A question the Code page composed reaches the shell, which is the seam
+    /// both earlier stages of this page were missing for a whole round: every
+    /// page-level test passed while nothing in a running program could reach
+    /// the thing they tested. Taken once, and gone afterwards, because a line
+    /// left in the slot would be sent twice.
+    #[test]
+    fn a_question_from_the_code_page_is_taken_once_by_the_shell() {
+        let td = tempfile::tempdir().unwrap();
+        std::fs::write(
+            td.path().join("a.txt"),
+            "hello
+world
+",
+        )
+        .unwrap();
+        let mut app = App::new((120, 40));
+        assert_eq!(
+            app.take_code_line(),
+            None,
+            "nothing is waiting before a page opens"
+        );
+        app.toggle_code(&td.path().display().to_string());
+        let action = {
+            let v = app.code.as_mut().expect("the page opened");
+            v.set_open(
+                "a.txt".to_string(),
+                crate::term::code_git::read_file(&td.path().join("a.txt")),
+                None,
+            );
+            v.body_rows = 8;
+            v.ask("what does this do?")
+        };
+        assert!(app.code_act(action).is_none(), "a question is not a job");
+        let line = app
+            .take_code_line()
+            .expect("the question reached the shell");
+        assert!(line.contains("what does this do?"), "{line}");
+        assert!(
+            line.contains("a.txt"),
+            "the question says which file: {line}"
+        );
+        assert_eq!(app.take_code_line(), None, "a taken line is gone");
     }
 }

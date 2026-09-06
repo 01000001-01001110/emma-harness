@@ -68,6 +68,7 @@ use ratatui::widgets::{Block, Widget};
 
 use super::palette::Role;
 use super::render::{cols, corner_row, fit, Skin, ASCII};
+use super::termfont;
 
 // region: State
 // ---------------------------------------------------------------------------
@@ -85,10 +86,26 @@ pub struct SettingsView {
     pub model: String,
     /// The live working directory, from `Status.cwd`.
     pub cwd: String,
-    /// The provider in force, by its registry name (`anthropic`, `ollama`).
-    /// Displayed with its first letter raised; cycling it is a notice, not a
-    /// switch — see [`NOTICE_PROVIDER`].
+    /// The provider **this session is bound to**, by its registry name
+    /// (`anthropic`, `ollama`). Set when the screen opens and never changed
+    /// from here: see [`SettingsView::provider_saved`].
     pub provider: String,
+    /// The provider stored in settings.json, which is what the next run will
+    /// boot with. Cycling the row writes this one.
+    ///
+    /// Two fields rather than one because they are two facts and the row shows
+    /// both whenever they disagree. Rebinding a live client mid-session is
+    /// `main.rs` machinery and this screen does not own half of it, so the
+    /// alternative to a second field is a row that reads as a switch and
+    /// silently is not.
+    pub provider_saved: String,
+    /// Every provider this build can run, and whether a key for it is on
+    /// disk. Names and a yes/no only: the key itself never reaches this layer,
+    /// so there is nothing here that could be printed by accident.
+    ///
+    /// Empty means the screen has not read it, which the row says rather than
+    /// claiming nothing is configured.
+    pub provider_keys: Vec<(String, KeyPresence)>,
     /// The selected theme, by the name `/theme` takes. Live: ←/→ on the Theme
     /// row steps through [`SettingsView::themes`] exactly as `/theme <name>`
     /// does.
@@ -149,6 +166,70 @@ pub struct SettingsView {
     /// rather than dropped: a settings file written by a newer Emma is a fact
     /// worth showing, not an error.
     pub lsp_unknown: Vec<String>,
+    /// The `training_capture` setting, absent-means-on already resolved by
+    /// the caller (`Settings::capture_training`).
+    pub training_on: bool,
+    /// The `ui.hints` setting, absent-means-on already resolved by the caller
+    /// (`Settings::hints`). Whether the interface prints its informational
+    /// one-liners; receipts, warnings and refusals are not governed by it.
+    pub hints_on: bool,
+    /// Every tool this build can register, and what the project's
+    /// settings.local.json says about it. Empty means the screen has not read
+    /// it, which the card says rather than claiming everything asks.
+    pub tools: Vec<(String, ToolState)>,
+    /// Where a tool rule would be written, for the receipt. `None` when no
+    /// harness root was found here.
+    pub tools_file: Option<String>,
+    /// The three `memory_policy` settings, defaults already resolved by the
+    /// caller.
+    pub memory_retention: u64,
+    pub auto_recall: bool,
+    pub memory_scope: String,
+    /// The saved provider's `sampling` entry, **raw**: not resolved, because
+    /// absence is what the three rows have to show. `temperature: None` is
+    /// "the host decides" and `Some(0.0)` is a chosen zero, and a resolved
+    /// value could not tell the row which of those it was holding.
+    ///
+    /// Keyed by [`sampling_provider`], the provider the next run will boot
+    /// with, because that is the run these knobs configure.
+    pub sampling_temperature: Option<f64>,
+    pub sampling_max_output_tokens: Option<u32>,
+    pub sampling_stream: Option<bool>,
+    /// The three `appearance` name settings, defaults already resolved by the
+    /// caller.
+    pub accent: String,
+    pub glyphs: String,
+    pub status_bar: String,
+    /// Whether this terminal is below the xterm cube, so a stored `cube:N`
+    /// accent cannot be drawn here. Set at paint from the live palette's
+    /// level, which is the only place that fact is known.
+    pub no_cube: bool,
+    /// The stored font family list the Font Family row cycles, and the one it
+    /// is on. Seeded from [`termfont::seed_families_here`] when settings.json
+    /// holds none.
+    pub font_families: Vec<String>,
+    pub font_family: String,
+    /// The stored font size, in points.
+    pub font_size: u32,
+    /// What terminal this is and what it will answer to. Read once, when the
+    /// screen opens, because the environment does not change under a running
+    /// process and a row must not read it on every draw.
+    ///
+    /// `Option` rather than a bare `Terminal` because [`termfont::Terminal`]
+    /// has no `Default` and inventing one here would mean this page deciding,
+    /// for a view nobody has filled in, that the terminal offers no font
+    /// control — which is a claim, not an absence. `None` says the screen has
+    /// not looked, and the rows say that rather than guessing.
+    pub terminal: Option<termfont::Terminal>,
+    /// The active keybinding preset and every preset the file offers.
+    pub key_preset: String,
+    pub key_presets: Vec<String>,
+    /// What loading the keybindings file had to say: a refused duplicate, an
+    /// action name this build does not know. Empty on a clean load.
+    pub key_notes: Vec<String>,
+    /// Where the keybindings file is, for the receipts. `None` when no home
+    /// directory was found.
+    pub keys_file: Option<String>,
 }
 
 /// One permission rule as card 6 prints it: the rule text exactly as it is
@@ -209,6 +290,68 @@ pub fn lsp_value(row: &LspRow) -> String {
     }
 }
 
+/// Whether a provider's key is on this machine, as the Keys Stored row says
+/// it. Presence only: the key itself never reaches this layer, so there is
+/// nothing here that could be printed by accident.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyPresence {
+    /// A key for this provider is in `~/.emma/credentials.json`, or its
+    /// environment variable is exported in this shell.
+    Stored,
+    Missing,
+    /// The provider takes no key — a local Ollama, or the `claude` CLI, which
+    /// carries its own credentials.
+    NotNeeded,
+}
+
+impl KeyPresence {
+    /// The word the row prints. Never the key, and never a prefix of it.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Stored => "yes",
+            Self::Missing => "no",
+            Self::NotNeeded => "n/a",
+        }
+    }
+}
+
+/// What the permission rules say about one tool, as a row shows it.
+///
+/// Three states and no fourth, because the file has three lists. `Ask` is the
+/// **absence** of a bare-name rule rather than a `permissions.ask` entry: an
+/// ask rule forces a prompt even where a session grant already exists, and
+/// writing one for every tool somebody never touched would be this screen
+/// quietly redefining the default. See [`crate::permissions::set_bare_rule`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToolState {
+    #[default]
+    Ask,
+    Allow,
+    Deny,
+}
+
+impl ToolState {
+    /// The word the row shows, and the word a test asserts.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Ask => "Ask",
+            Self::Allow => "Allow",
+            Self::Deny => "Deny",
+        }
+    }
+}
+
+/// The three states in the order arrows walk them: absence, then the two
+/// rules, weakest first. One place, so the row and the test cannot disagree.
+pub const TOOL_STATES: [ToolState; 3] = [ToolState::Ask, ToolState::Allow, ToolState::Deny];
+
+/// The next state from `current`, `dir` steps around [`TOOL_STATES`].
+pub fn tool_step(current: ToolState, dir: isize) -> ToolState {
+    let n = TOOL_STATES.len() as isize;
+    let i = TOOL_STATES.iter().position(|t| *t == current).unwrap_or(0) as isize;
+    TOOL_STATES[((i + dir).rem_euclid(n)) as usize]
+}
+
 /// The Test Connection button's face. `Idle` says `Test` rather than the
 /// mock's `OK`, because an OK nobody measured is a claim about a connection
 /// nobody checked.
@@ -232,7 +375,7 @@ pub const EXIT_HINT: &str = "Esc closes";
 /// LANGUAGE SERVERS, so the two-by-four grid is a two-by-five with the last
 /// right-hand cell empty; the grid paints what there is rather than padding
 /// with a card that says nothing.
-pub const CARDS: usize = 9;
+pub const CARDS: usize = 10;
 
 // endregion: State
 
@@ -245,14 +388,17 @@ pub const CARDS: usize = 9;
 // alone.
 // ---------------------------------------------------------------------------
 
-pub const NOTICE_PROVIDER: &str = "Provider is chosen per run: `emma set-provider <name>` stores \
-     its key and selects it; /model --save picks its model";
+/// Where a provider key lives, and — deliberately — no claim about its mode.
+///
+/// The fork's sentence said *"at mode 600"*. There is no mode 600 on Windows,
+/// and a permission bit named on a screen that runs on both is the kind of
+/// detail a reader checks and finds absent. What is true everywhere is that
+/// the key is never shown here and that one command puts it there.
+pub const NOTICE_PROVIDER_KEYS: &str = "Keys live in ~/.emma/credentials.json and are never \
+     shown on this screen; `emma set-provider <name> --key -` reads one from stdin, and n/a \
+     means the provider needs none";
 pub const NOTICE_MODEL: &str =
     "/model lists this provider's models; /model <id> switches this session, --save remembers it";
-pub const NOTICE_SAMPLING: &str =
-    "Sampling is the provider's default today; no temperature or output-cap setting exists yet";
-pub const NOTICE_STREAMING: &str =
-    "Streaming is always on; the transcript renders deltas as they arrive";
 /// The cap row's mechanism. Named separately from [`NOTICE_CONTEXT_ABSENT`]
 /// because the two rows on that card are now different *states*, and one
 /// sentence covering both is how the old page ended up calling a live number
@@ -263,27 +409,75 @@ pub const NOTICE_CONTEXT_ABSENT: &str = "No number yet: the meter reads the prov
      from the last call, so it is set by the first model call of the run and not before";
 pub const NOTICE_OUTPUT_CAP: &str = "Emma has no output-token setting; --max-tokens is the \
      per-goal spend budget shown below it, not a cap on one response";
-pub const NOTICE_THEME_OWNED: &str =
-    "Colours come from the theme: cycle the Theme row, or /theme <name>";
-pub const NOTICE_FONT: &str =
-    "Fonts belong to your terminal emulator; Emma cannot set one from inside it";
-pub const NOTICE_STATUSBAR: &str = "The status bar follows the statusLine block of the \
-     project's settings.json, read by the harness";
-pub const NOTICE_KEYS: &str =
-    "Keybindings are fixed today; the sidebar's QUICK HELP lists them, and no keymap file exists";
-pub const NOTICE_MEMORY_STAGES: &str = "Memory pages live under .emma/memory (Alt+m manages \
-     them); retention, auto-recall and scope need the retrieval stage (M2)";
+/// Why the Accent row's chevrons walk five names and no more.
+///
+/// A `cube:N` accent is a real stored value — `palette::parse_accent` reads
+/// one and the palette draws it — and this screen has no picker for it yet.
+/// Saying so is the difference between a ladder that is short and a ladder
+/// that is lying about the space.
+pub const NOTICE_ACCENT: &str = "The chevrons walk the five role accents. A `cube:N` value \
+     (16-231) in appearance.accent is also honoured on a 256-colour terminal; there is no \
+     picker for one on this screen yet, so it is set by hand";
+/// Why a stored cube accent is not on screen right now.
+pub const NOTICE_ACCENT_NO_CUBE: &str = "This terminal reports fewer than 256 colours, so a \
+     cube accent cannot be drawn here and the theme's own accent is showing instead; the \
+     stored value is untouched";
+pub const NOTICE_KEYS: &str = "Keybindings live in ~/.emma/keybindings.json, read once at \
+     startup: an edit there applies to the next run. Switching between presets in that one \
+     read takes effect now. Alt+q is not rebindable, because the way out of a running goal \
+     is not a preference";
+/// The MEMORY PREFERENCES description. **The forward-setting sentence**, and
+/// a constant because it is the only thing keeping three real writes from
+/// reading as three live controls: it names what reads each value today.
+pub const DESC_MEMORY: &str = "Enable Memory and Capture Training Data are in force now. \
+     Retention, Auto-Recall and Scope are stored now and read by nothing yet; nothing prunes \
+     today, and the receipt on each says so.";
+/// The TOOL PERMISSIONS description. The harness gate's own wording: rules are
+/// read at boot, so a change binds the next run.
+pub const DESC_PERMISSIONS: &str = "Ask, Allow or Deny per tool, written to settings.local.json. \
+     Rules are read at boot, so a change binds the next run; a run already going keeps the gate \
+     it booted with. Rules with a specifier, like Bash(cargo *), are left alone.";
+/// The MODEL PROVIDER description. **Which provider the three sampling rows
+/// edit, and when the edit takes effect**, because neither is guessable from
+/// the rows: sampling is keyed per provider and resolved once, in `main.rs`,
+/// when the provider is built.
+pub const DESC_SAMPLING: &str = "Temperature, Max Output Tokens and Streaming edit the sampling \
+     entry for the saved provider, the one Provider names for the next run. Sampling resolves \
+     once when the provider is built, so a change binds the next run.";
+/// The APPEARANCE description.
+///
+/// Five mechanisms on one card and each named, because they really are five:
+/// two repaint, two wait for a restart, and two leave the process entirely to
+/// ask another application for something.
+pub const DESC_APPEARANCE: &str = "Theme and Accent repaint now. Glyphs is read once at \
+     startup, so it applies to the next run. Font Family and Font Size store the value always \
+     and ask the terminal to change its own font where it has a way to be asked. Status Bar \
+     and Interface Hints are stored and read by nothing yet; each receipt says so.";
+/// The KEYBINDINGS description. Two mechanisms, one row each, and the split
+/// between them is the whole content: the file is read once and the preset is
+/// not.
+pub const DESC_KEYS: &str = "Chords for the Alt layer, from ~/.emma/keybindings.json. The file \
+     is read once at startup; the preset switches now. Open writes a commented starter on \
+     first use.";
 pub const NOTICE_PRUNE: &str = "Prune History drops superseded tool results from what is sent \
      back to the model; off unless set, because it changes what the model is shown";
 pub const NOTICE_PERMISSIONS: &str = "Permission rules live in settings.local.json. [r] or [t] \
      at an approval prompt writes one, and it is honoured by every later run in this project";
-/// Why the card is read-only, said on the card rather than in a design note.
+/// What the tool rows write, and what they will not touch.
 ///
-/// **This is the security constraint made visible.** A row that could edit a
-/// permission would be a settings route into an execution decision, and the
-/// only reason it is safe today is that no key on this page writes one.
-pub const NOTICE_PERMISSIONS_READONLY: &str = "This card reads the rules and never writes one: a \
-     permission is granted at the approval prompt, where the call that wants it is on screen";
+/// **This replaces `NOTICE_PERMISSIONS_READONLY`, which this package made
+/// false.** That sentence — *"This card reads the rules and never writes
+/// one"* — was true while the card had no keys, and the argument under it was
+/// that a settings route into an execution decision is a second door into a
+/// decision that already has a good one. The owner's ruling reverses it for
+/// the *bare-name* case only, and the reason it is not the same door: an
+/// ask/allow/deny preference per tool is a standing consent, made with the
+/// whole tool surface in front of you and nothing running. The prompt is
+/// still the only place a *specifier* grant is made, and
+/// [`crate::permissions::set_bare_rule`] never touches one.
+pub const NOTICE_PERMISSIONS_WRITES: &str = "These rows write a bare-name rule to \
+     settings.local.json, the file the approval prompt's [r] and [t] write. A hand-written \
+     rule with a specifier, like Bash(cargo *), is never touched by any state of this row";
 /// The gate is consent, not containment — `CLAUDE.md` calls documentation
 /// implying otherwise a defect, and a screen headed TOOL PERMISSIONS is the
 /// most likely place to imply it.
@@ -308,9 +502,36 @@ pub const NOTICE_LSP_FOUND: &str = "found means an entry point is on disk, not t
      this screen starts no process, and only a real tool call proves a server answers";
 pub const NOTICE_LSP_UNKNOWN: &str = "these lsp.enabled keys name no language this build knows; \
      they are kept, not rejected, and the languages it does know still start";
-pub const NOTICE_RESET_CONFIRM: &str =
-    "Reset clears theme and memory capture to defaults — Enter again confirms, Esc cancels";
+pub const NOTICE_RESET_CONFIRM: &str = "Reset clears the keys this screen owns in \
+     settings.json: theme, accent, glyphs, status bar, fonts, hints, memory capture, training \
+     capture, prune history, the memory policy block and the per-provider sampling block. It \
+     does NOT touch the provider, the models, or the tool rules in settings.local.json. Enter \
+     again confirms, Esc cancels";
 pub const NOTICE_RESET_CANCELLED: &str = "Reset cancelled — nothing changed";
+
+/// The Font rows' own honesty, shown when either is focused with no terminal
+/// to drive.
+///
+/// A function rather than a constant because the sentence names the terminal
+/// it is looking at, and the fork's constant named Terminal.app
+/// unconditionally — false on Windows, where `termfont` has had an arm since
+/// F1. The rows are live where they can be; this is what decides which.
+pub fn notice_font_scope(terminal: Option<&termfont::Terminal>) -> String {
+    let Some(terminal) = terminal else {
+        return "The screen has not read this terminal yet, so it cannot say whether a font \
+                can be asked for here"
+            .to_string();
+    };
+    if termfont::offers_control(terminal) {
+        return format!(
+            "Emma cannot draw a font; it asks {} to change its own. A name the terminal does \
+             not have is accepted and ignored there, so the receipt says what was asked, not \
+             that the window changed",
+            terminal.name
+        );
+    }
+    termfont::no_control_note(terminal)
+}
 
 // endregion: The honest notices
 
@@ -350,10 +571,55 @@ pub enum RowKind {
     /// ←/→/Enter step through [`SettingsView::themes`], selected and
     /// persisted.
     ThemeCycle,
-    /// Enter/←/→ flip `memory_capture` in settings.json.
+    /// Enter/←/→ flip `memory` in settings.json.
     MemoryToggle,
     /// Enter/←/→ flip `prune_history` in settings.json.
     PruneToggle,
+    /// Enter/←/→ flip `training_capture`, the `MemoryToggle` pattern: a real
+    /// key, absent means on, and the row says what it did.
+    TrainingToggle,
+    /// Enter/←/→ flip `ui.hints`, on the same rule.
+    HintsToggle,
+    /// ←/→ step the provider through `emma_llm::kind::known()`, written to
+    /// settings.json for the next run. The live binding does not move.
+    ProviderCycle,
+    /// ←/→ step one tool through [`TOOL_STATES`], written to
+    /// settings.local.json. Binds the next run.
+    ToolPermission(&'static str),
+    /// ←/→ step `memory_policy.retention_days` through [`RETENTION_STEPS`].
+    MemoryRetention,
+    /// Enter/←/→ flip `memory_policy.auto_recall`.
+    AutoRecall,
+    /// ←/→ step `memory_policy.scope` through [`MEMORY_SCOPES`].
+    MemoryScope,
+    /// ←/→ step `appearance.accent` through `palette::ACCENTS`, applied and
+    /// persisted — the Theme row's pattern exactly.
+    AccentCycle,
+    /// ←/→ step `appearance.glyphs` through [`GLYPH_SETS`]. Next run.
+    GlyphsCycle,
+    /// ←/→ step `appearance.status_bar` through [`STATUS_BARS`].
+    StatusBarCycle,
+    /// ←/→ step `appearance.font_family` through the stored list.
+    FontFamilyCycle,
+    /// ←/→ step `appearance.font_size` by one point, clamped. Enter re-asks
+    /// for the size already stored, which is the row's only idempotent verb.
+    FontSizeStep,
+    /// ←/→ step the active keybinding preset through the file's list.
+    KeyPresetCycle,
+    /// Open ~/.emma/keybindings.json in the editor, writing a commented
+    /// starter first if there is none.
+    OpenKeybindings,
+    /// Show what loading the keybindings file had to say.
+    KeyNotes,
+    /// ←/→ step the saved provider's `sampling.temperature` through
+    /// [`TEMPERATURE_STEPS`]. The first rung removes the key.
+    TemperatureCycle,
+    /// ←/→ step the saved provider's `sampling.max_output_tokens` through
+    /// [`MAX_OUTPUT_STEPS`]. The first rung removes the key.
+    MaxOutputCycle,
+    /// ←/→ flip the saved provider's `sampling.stream`. On removes the key,
+    /// the `memory` rule: absent means on.
+    StreamingCycle,
     /// A reachability check against a local Ollama host.
     TestConnection,
     /// Write settings.json now, with a receipt.
@@ -376,6 +642,68 @@ enum CardRow {
 struct Card {
     header: &'static str,
     rows: Vec<CardRow>,
+    /// At most this many Kv rows are drawn at once, scrolled to keep the
+    /// focused one in view. `None` draws them all, which is every card but
+    /// one.
+    ///
+    /// **The tool list is as long as the tool registry, and the grid is
+    /// not.** TOOL PERMISSIONS draws one row per registered tool — 27 of them
+    /// today — and a card 27 rows tall pushes ENVIRONMENT, SAVE & RESET and
+    /// LANGUAGE SERVERS off the bottom of any real terminal. The choice was
+    /// between a shorter list that lies about the tool surface and a window
+    /// over the true one; the window keeps every tool reachable by the same
+    /// arrow keys that reach every other row, and the card's description says
+    /// how many there are.
+    window: Option<usize>,
+}
+
+/// How many Kv rows the TOOL PERMISSIONS card shows at once. Sized to leave
+/// that card roughly as tall as the MEMORY PREFERENCES card it shares a grid
+/// band with, so the band does not grow at all.
+const TOOL_WINDOW: usize = 6;
+
+impl Card {
+    /// A card that draws all its rows — every card but TOOL PERMISSIONS.
+    fn new(header: &'static str, rows: Vec<CardRow>) -> Self {
+        Self {
+            header,
+            rows,
+            window: None,
+        }
+    }
+
+    /// The first Kv row drawn, given where the focus is.
+    ///
+    /// Deterministic rather than sticky: the same focus always produces the
+    /// same window, so a test can assert what is on screen without replaying
+    /// the path that got there.
+    fn offset(&self, focused_slot: Option<usize>) -> usize {
+        let Some(window) = self.window else {
+            return 0;
+        };
+        let total = self.kv_count();
+        let last = total.saturating_sub(window);
+        match focused_slot {
+            Some(slot) => slot.saturating_sub(window / 2).min(last),
+            None => 0,
+        }
+    }
+
+    fn kv_count(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|r| matches!(r, CardRow::Kv(..)))
+            .count()
+    }
+
+    /// How many lines the card wants, border included.
+    fn height(&self) -> u16 {
+        let shown = match self.window {
+            Some(window) => self.rows.len() - self.kv_count().saturating_sub(window),
+            None => self.rows.len(),
+        };
+        shown as u16 + 3
+    }
 }
 
 fn kv(label: &str, v: Value, k: RowKind) -> CardRow {
@@ -404,49 +732,67 @@ fn test_label(t: TestState) -> &'static str {
 /// The cards, in the mock's order for the first eight: left column odd, right
 /// column even, top to bottom.
 ///
-/// Every row is one of the module doc's three states. Live and editable:
-/// Theme, Enable Memory, Prune History, Test Connection, Save, Export, Reset.
-/// Live and read-only: Provider, Model, Streaming, the two context numbers,
-/// Telemetry, Working Directory, and every row of cards 6 and 9. Absent —
-/// `Value::Absent`, dim: Temperature, Max Output Tokens, Response Budget, the
-/// appearance rows below Theme, both keybinding rows, the three memory rows
-/// below Enable Memory, Environment and Log Level.
+/// Every row is one of the module doc's three states. **The balance moved with
+/// the write-back package**: what used to be a screen of six live controls and
+/// fourteen `n/a` rows is a screen where every appearance, sampling,
+/// memory-policy, keybinding and tool row writes a real key. Live and
+/// read-only is now the small set — Model, the context numbers, Keys Stored,
+/// the keybindings file's path, Telemetry, Working Directory, the rules list
+/// on card 6 and every row of card 9. Absent — `Value::Absent`, dim — is what
+/// is left: Response Budget, Environment, Log Level, and the context rows
+/// before the first model call has reported one.
+///
+/// **A row that writes a key nothing reads yet is still a live row, and its
+/// receipt says so.** Status Bar, Interface Hints and the three memory-policy
+/// rows are in that state today. The alternative was `n/a` on a key this
+/// screen can genuinely store and a later build will genuinely read, which
+/// loses the choice rather than bounding it; [`DESC_MEMORY`] and
+/// [`DESC_APPEARANCE`] name the bound on the card itself.
 fn cards(s: &SettingsView) -> Vec<Card> {
     use RowKind::Note;
     use Value::{Absent, Button, Cycler, Plain};
     vec![
-        Card {
-            header: "1. MODEL PROVIDER",
-            rows: vec![
-                // Live and read-only, and the cycler dress is gone with the
-                // pretence: `emma_llm::known()` has exactly one entry in this
-                // build, so a chevron would step from anthropic to anthropic.
+        Card::new(
+            "1. MODEL PROVIDER",
+            vec![
                 kv(
                     "Provider",
-                    Plain(title_case(&s.provider)),
-                    Note(NOTICE_PROVIDER),
+                    Cycler(provider_value(s)),
+                    RowKind::ProviderCycle,
                 ),
                 kv("Model", Plain(s.model.clone()), Note(NOTICE_MODEL)),
-                kv("Temperature", Absent("n/a".into()), Note(NOTICE_SAMPLING)),
                 kv(
-                    "Max Output Tokens",
-                    Absent("n/a".into()),
-                    Note(NOTICE_SAMPLING),
+                    &sampling_label(s, "Temperature"),
+                    Cycler(temperature_label(s.sampling_temperature)),
+                    RowKind::TemperatureCycle,
                 ),
-                // A fact about the build rather than a setting: there is no
-                // non-streaming path to switch to.
-                kv("Streaming", Plain("On".into()), Note(NOTICE_STREAMING)),
+                kv(
+                    &sampling_label(s, "Max Output Tokens"),
+                    Cycler(max_output_label(s.sampling_max_output_tokens)),
+                    RowKind::MaxOutputCycle,
+                ),
+                kv(
+                    &sampling_label(s, "Streaming"),
+                    Cycler(on_off(s.sampling_stream.unwrap_or(true)).into()),
+                    RowKind::StreamingCycle,
+                ),
+                kv(
+                    "Keys Stored",
+                    Plain(keys_value(s)),
+                    Note(NOTICE_PROVIDER_KEYS),
+                ),
                 CardRow::Divider,
                 kv(
                     "Test Connection",
                     Button(test_label(s.test).into()),
                     RowKind::TestConnection,
                 ),
+                CardRow::Desc(DESC_SAMPLING.into()),
             ],
-        },
-        Card {
-            header: "2. CONTEXT LIMITS",
-            rows: vec![
+        ),
+        Card::new(
+            "2. CONTEXT LIMITS",
+            vec![
                 kv(
                     "Max Context Tokens",
                     match s.context {
@@ -509,74 +855,92 @@ fn cards(s: &SettingsView) -> Vec<Card> {
                 ),
                 CardRow::Desc("Manage how much context Emma can use.".into()),
             ],
-        },
-        Card {
-            header: "3. APPEARANCE",
-            rows: vec![
+        ),
+        Card::new(
+            "3. APPEARANCE",
+            vec![
                 kv("Theme", Cycler(title_case(&s.theme)), RowKind::ThemeCycle),
                 kv(
                     "Accent Color",
-                    Absent("n/a".into()),
-                    Note(NOTICE_THEME_OWNED),
+                    Cycler(accent_label(&s.accent)),
+                    RowKind::AccentCycle,
                 ),
-                kv("Font Family", Absent("n/a".into()), Note(NOTICE_FONT)),
-                kv("Font Size", Absent("n/a".into()), Note(NOTICE_FONT)),
-                kv("Status Bar", Absent("n/a".into()), Note(NOTICE_STATUSBAR)),
-                CardRow::Desc("Customize Emma's look and feel.".into()),
+                kv(
+                    "Glyphs",
+                    Cycler(title_case(&s.glyphs)),
+                    RowKind::GlyphsCycle,
+                ),
+                kv(
+                    "Font Family",
+                    Cycler(font_family_label(s)),
+                    RowKind::FontFamilyCycle,
+                ),
+                kv(
+                    "Font Size",
+                    Cycler(font_size_label(s)),
+                    RowKind::FontSizeStep,
+                ),
+                kv(
+                    "Status Bar",
+                    Cycler(title_case(&s.status_bar)),
+                    RowKind::StatusBarCycle,
+                ),
+                kv(
+                    "Interface Hints",
+                    Plain(on_off(s.hints_on).into()),
+                    RowKind::HintsToggle,
+                ),
+                CardRow::Desc(DESC_APPEARANCE.into()),
             ],
-        },
-        Card {
-            header: "4. KEYBINDINGS",
-            rows: vec![
-                // Both dresses dropped. A cycler with one preset and a button
-                // that opens nothing are the `QUICK HELP` defect one level
-                // down: an affordance no key answers.
-                kv("Keybinding Preset", Absent("n/a".into()), Note(NOTICE_KEYS)),
-                kv("Edit Keybindings", Absent("n/a".into()), Note(NOTICE_KEYS)),
-                CardRow::Desc("Keys are fixed; the sidebar's QUICK HELP lists them.".into()),
-            ],
-        },
-        Card {
-            header: "5. MEMORY PREFERENCES",
-            rows: vec![
+        ),
+        Card::new("4. KEYBINDINGS", keybinding_rows(s)),
+        Card::new(
+            "5. MEMORY PREFERENCES",
+            vec![
                 kv(
                     "Enable Memory",
-                    Plain(if s.memory_on { "On" } else { "Off" }.into()),
+                    Plain(on_off(s.memory_on).into()),
                     RowKind::MemoryToggle,
+                ),
+                kv(
+                    "Capture Training Data",
+                    Plain(on_off(s.training_on).into()),
+                    RowKind::TrainingToggle,
                 ),
                 // New here, and the ruling's "even if they were not before"
                 // half: `prune_history` is personal settings with no UI until
                 // now.
                 kv(
                     "Prune History",
-                    Plain(if s.prune_on { "On" } else { "Off" }.into()),
+                    Plain(on_off(s.prune_on).into()),
                     RowKind::PruneToggle,
                 ),
                 kv(
                     "Memory Retention",
-                    Absent("n/a".into()),
-                    Note(NOTICE_MEMORY_STAGES),
+                    Cycler(retention_label(s.memory_retention)),
+                    RowKind::MemoryRetention,
                 ),
                 kv(
                     "Auto-Recall",
-                    Absent("n/a".into()),
-                    Note(NOTICE_MEMORY_STAGES),
+                    Plain(on_off(s.auto_recall).into()),
+                    RowKind::AutoRecall,
                 ),
                 kv(
                     "Memory Scope",
-                    Absent("n/a".into()),
-                    Note(NOTICE_MEMORY_STAGES),
+                    Cycler(title_case(&s.memory_scope)),
+                    RowKind::MemoryScope,
                 ),
-                CardRow::Desc("Control how Emma remembers information.".into()),
+                CardRow::Desc(DESC_MEMORY.into()),
             ],
-        },
+        ),
         Card {
             header: "6. TOOL PERMISSIONS",
-            rows: perm_rows(s),
+            rows: tool_rows(s),
+            window: Some(TOOL_WINDOW),
         },
-        Card {
-            header: "7. ENVIRONMENT",
-            rows: vec![
+        Card::new(
+            "7. ENVIRONMENT",
+            vec![
                 kv("Working Directory", Plain(s.cwd.clone()), Note(NOTICE_CWD)),
                 kv("Environment", Absent("n/a".into()), Note(NOTICE_ENV)),
                 kv("Log Level", Absent("n/a".into()), Note(NOTICE_ENV)),
@@ -588,22 +952,145 @@ fn cards(s: &SettingsView) -> Vec<Card> {
                 ),
                 CardRow::Desc("Environment and runtime configuration.".into()),
             ],
-        },
-        Card {
-            header: "8. SAVE & RESET",
-            rows: vec![
+        ),
+        Card::new(
+            "8. SAVE & RESET",
+            vec![
                 kv("Save Settings", Button("Save Now".into()), RowKind::Save),
                 kv("Export Settings", Button("Export".into()), RowKind::Export),
                 CardRow::Divider,
                 kv("Reset to Defaults", Button("Reset".into()), RowKind::Reset),
                 CardRow::Desc("Reset will restore all settings to defaults.".into()),
             ],
-        },
-        Card {
-            header: "9. LANGUAGE SERVERS",
-            rows: lsp_rows(s),
-        },
+        ),
+        Card::new("9. LANGUAGE SERVERS", lsp_rows(s)),
+        Card::new("10. RULES IN FORCE", perm_rows(s)),
     ]
+}
+
+/// The Provider row's value: **both truths when they differ**.
+///
+/// One name when the session is running what the file says, and
+/// `Ollama (running) -> Openrouter (next run)` when it is not. The row could
+/// have shown the saved name alone and read as a switch, or the live name
+/// alone and read as a control that does nothing; neither is what happened.
+/// Rebinding the live client is `main.rs` machinery, and a settings screen
+/// that half-did it would be worse than one that says what it did.
+fn provider_value(s: &SettingsView) -> String {
+    if s.provider_saved.is_empty() || s.provider_saved == s.provider {
+        return title_case(&s.provider);
+    }
+    format!(
+        "{} (running) -> {} (next run)",
+        title_case(&s.provider),
+        title_case(&s.provider_saved)
+    )
+}
+
+/// The Accent row's value.
+///
+/// A role name is title-cased like every other name on the screen; a cube
+/// accent shows its index, because there is no name to show. `Cube 81` rather
+/// than `81` so the number is never read as a size or a count.
+fn accent_label(accent: &str) -> String {
+    match accent.strip_prefix(super::palette::ACCENT_CUBE_PREFIX) {
+        Some(i) => format!("Cube {i}"),
+        None => title_case(accent),
+    }
+}
+
+/// The Font Family row's value: the family, and `(stored)` where there is no
+/// terminal to ask.
+///
+/// **Both truths where they differ**, the Provider row's rule. A row showing
+/// `Menlo` alone under Windows Terminal would read as a setting that took, and
+/// one showing nothing would hide a value that really is stored and really
+/// will be asked for the next time Emma runs somewhere that can be asked.
+fn font_family_label(s: &SettingsView) -> String {
+    if offers_font_control(s) {
+        return s.font_family.clone();
+    }
+    format!("{} (stored)", s.font_family)
+}
+
+/// The Font Size row's value, on the same rule.
+fn font_size_label(s: &SettingsView) -> String {
+    if offers_font_control(s) {
+        return format!("{} pt", s.font_size);
+    }
+    format!("{} pt (stored)", s.font_size)
+}
+
+/// Whether the terminal this screen read has a font control Emma can drive.
+/// A view nobody filled in answers `false` and the rows say `(stored)`, which
+/// is the honest reading of "nobody looked".
+fn offers_font_control(s: &SettingsView) -> bool {
+    s.terminal.as_ref().is_some_and(termfont::offers_control)
+}
+
+/// The KEYBINDINGS card's rows.
+///
+/// The Load Notes row exists only when the load had something to say. A row
+/// permanently reading `0 notes` would be noise on every clean start, and the
+/// one time it matters is the time it appears.
+fn keybinding_rows(s: &SettingsView) -> Vec<CardRow> {
+    let mut rows = vec![
+        kv(
+            "Keybinding Preset",
+            Value::Cycler(title_case(&s.key_preset)),
+            RowKind::KeyPresetCycle,
+        ),
+        kv(
+            "Open Keybindings",
+            Value::Button("Open".into()),
+            RowKind::OpenKeybindings,
+        ),
+        kv(
+            "Keybindings File",
+            match &s.keys_file {
+                Some(path) => Value::Plain(path.clone()),
+                None => Value::Absent("no home directory".into()),
+            },
+            RowKind::Note(NOTICE_KEYS),
+        ),
+    ];
+    if !s.key_notes.is_empty() {
+        let n = s.key_notes.len();
+        rows.push(kv(
+            "Load Notes",
+            Value::Plain(format!("{n} refused")),
+            RowKind::KeyNotes,
+        ));
+    }
+    rows.push(CardRow::Desc(DESC_KEYS.into()));
+    rows
+}
+
+/// The Keys Stored row's value: every provider this build can run, named,
+/// with a yes/no beside it.
+///
+/// Every provider rather than only the configured ones: "openrouter no" is
+/// the answer somebody opening this screen is looking for, and a list of the
+/// yes-set alone leaves them guessing what the set was.
+fn keys_value(s: &SettingsView) -> String {
+    if s.provider_keys.is_empty() {
+        return "not read".to_string();
+    }
+    s.provider_keys
+        .iter()
+        .map(|(name, presence)| format!("{name} {}", presence.word()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The two words a toggle row shows. One function so the toggles cannot spell
+/// it several ways.
+fn on_off(v: bool) -> &'static str {
+    if v {
+        "On"
+    } else {
+        "Off"
+    }
 }
 
 /// How many rules card 6 draws before it stops and says how many are left.
@@ -618,17 +1105,64 @@ pub const PERM_ROWS_SHOWN: usize = 8;
 pub const NOTICE_PERMISSIONS_MORE: &str = "This card shows the first rules only; no key raises \
      the cap. Open the file named above to read them all";
 
-/// The TOOL PERMISSIONS card's rows: the real rules, in the order they are
-/// consulted, and the file a new one would be written to.
+/// The TOOL PERMISSIONS card's rows: one Ask/Allow/Deny cycler per tool this
+/// build can register, and the file they are written to.
 ///
-/// **Every row is [`RowKind::Note`], and that is the security constraint
-/// rather than an unfinished half.** Editing a permission from here would
-/// write `settings.local.json` — the same file `[r]` and `[t]` at an approval
-/// prompt write — and a settings route into an execution decision is a second
-/// door into a decision that already has one good door. The keyboard is not a
-/// model-reachable route today, but the good door has the call that wants the
-/// grant on screen beside it, and a second door would not. So this card reads
-/// and never writes.
+/// **This card writes now, and the argument for the old read-only rule is
+/// half kept.** It used to say that editing a permission from here would be a
+/// settings route into an execution decision — a second door into a decision
+/// that already has one good door, the approval prompt, which has the call
+/// that wants the grant on screen beside it. What the owner's ruling
+/// separates is *which* decision. A bare-name Ask/Allow/Deny is a standing
+/// preference about a whole tool, chosen with the tool surface in front of
+/// you and nothing running; a **specifier** grant — `Bash(cargo *)`,
+/// `WebFetch(domain:docs.rs)` — answers a question about one call, and that
+/// one is still made only at the prompt. [`crate::permissions::set_bare_rule`]
+/// enforces the split: it removes and writes bare rules only, and never
+/// touches a hand-written specifier in any list.
+///
+/// **The tool list is derived, never hand-written.** One row per
+/// [`crate::runctl::ALL_TOOLS`] entry, which is the same list `Deny All`
+/// writes and the registry test holds: a tool added to Emma appears here with
+/// nobody remembering to add it. The card's `window` is what makes 27 rows
+/// fit a grid cell.
+fn tool_rows(s: &SettingsView) -> Vec<CardRow> {
+    use RowKind::Note;
+    use Value::{Absent, Cycler, Plain};
+    let mut rows: Vec<CardRow> = crate::runctl::ALL_TOOLS
+        .iter()
+        .map(|name| {
+            kv(
+                name,
+                Cycler(tool_state(s, name).word().to_string()),
+                RowKind::ToolPermission(name),
+            )
+        })
+        .collect();
+    rows.push(CardRow::Divider);
+    rows.push(kv(
+        "Written To",
+        match &s.tools_file {
+            Some(path) => Plain(path.clone()),
+            None => Absent("no harness root".into()),
+        },
+        Note(NOTICE_PERMISSIONS_WRITES),
+    ));
+    rows.push(CardRow::Desc(DESC_PERMISSIONS.into()));
+    rows
+}
+
+/// The RULES IN FORCE card's rows: every rule the gate will really consult,
+/// in the order it consults them, read-only.
+///
+/// **A separate card from the cyclers, and the split is the disclosure.** The
+/// cyclers say what this project's `settings.local.json` holds for each tool;
+/// this says what is in force, which is that file *merged with the spine
+/// file beside the harness* — a document this screen must not write, and one
+/// whose `deny` outranks a local `allow`. Folding the two into one card meant
+/// one of them was below a window and therefore invisible until somebody
+/// scrolled, and the read-only half is the half a reader has to be able to
+/// see without pressing anything.
 fn perm_rows(s: &SettingsView) -> Vec<CardRow> {
     use RowKind::Note;
     use Value::{Absent, Plain};
@@ -676,14 +1210,25 @@ fn perm_rows(s: &SettingsView) -> Vec<CardRow> {
         Note(NOTICE_PERMISSIONS),
     ));
     rows.push(kv(
-        "Changed From",
-        Plain("the approval prompt".into()),
-        Note(NOTICE_PERMISSIONS_READONLY),
+        "Specifier Rules",
+        Plain("only at the prompt".into()),
+        Note(NOTICE_PERMISSIONS_WRITES),
     ));
     rows.push(CardRow::Desc(
-        "Read-only: a grant is made at the prompt, with the call on screen.".into(),
+        "Read-only: card 6 writes bare names, and a specifier is granted at the prompt.".into(),
     ));
     rows
+}
+
+/// What the rules say about one tool, as the view holds it. A tool the screen
+/// has no entry for reads as [`ToolState::Ask`], which is the absence of a
+/// bare rule and is exactly what an unread file means.
+fn tool_state(s: &SettingsView, tool: &str) -> ToolState {
+    s.tools
+        .iter()
+        .find(|(t, _)| t == tool)
+        .map(|(_, st)| *st)
+        .unwrap_or_default()
 }
 
 /// The LANGUAGE SERVERS card's rows: one per language, the unknown keys when
@@ -741,6 +1286,223 @@ fn lsp_rows(s: &SettingsView) -> Vec<CardRow> {
     rows
 }
 
+// ---------------------------------------------------------------------------
+// The ladders
+//
+// One walker, `name_step`, and one table per row that steps names — so a
+// provider, an accent, a glyph set and a scope cannot each grow their own
+// off-by-one. The numeric ladders are fixed rungs rather than plus-or-minus
+// one, because the useful values are far apart and thirty presses is not a
+// control; each lands a hand-written value on the nearest rung at or above it,
+// so a number typed into settings.json is stepped *from* rather than snapped
+// to the start.
+// ---------------------------------------------------------------------------
+
+/// The next name from `current`, `dir` steps around `names`. A name the ladder
+/// does not hold steps from index 0, which is where an unknown name resolves
+/// anyway.
+fn name_step(names: &[&'static str], current: &str, dir: isize) -> &'static str {
+    if names.is_empty() {
+        return "";
+    }
+    let n = names.len() as isize;
+    let i = names.iter().position(|t| *t == current).unwrap_or(0) as isize;
+    names[((i + dir).rem_euclid(n)) as usize]
+}
+
+/// Every provider this build can run, in the order the row cycles them.
+///
+/// Read from the registry rather than listed here: a provider added to
+/// `emma_llm::kind::KINDS` becomes reachable from this row with no second list
+/// to forget, which is the `ALL_TOOLS` lesson applied before it can be
+/// repeated.
+pub fn providers() -> Vec<&'static str> {
+    emma_llm::kind::known()
+}
+
+/// The next provider from `current`.
+pub fn provider_step(current: &str, dir: isize) -> &'static str {
+    name_step(&providers(), current, dir)
+}
+
+/// What `Memory Retention` steps through, in days. `0` is Keep Forever, the
+/// stored default; see [`crate::settings::RETENTION_KEEP_FOREVER`].
+pub const RETENTION_STEPS: [u64; 5] = [0, 7, 30, 90, 365];
+
+/// The next retention from `current`, `dir` steps around [`RETENTION_STEPS`].
+pub fn retention_step(current: u64, dir: isize) -> u64 {
+    let at = RETENTION_STEPS
+        .iter()
+        .position(|d| *d >= current)
+        .unwrap_or(RETENTION_STEPS.len() - 1);
+    let n = RETENTION_STEPS.len() as isize;
+    RETENTION_STEPS[(at as isize + dir).rem_euclid(n) as usize]
+}
+
+/// How a retention reads on the row.
+fn retention_label(days: u64) -> String {
+    if days == crate::settings::RETENTION_KEEP_FOREVER {
+        "Keep Forever".to_string()
+    } else {
+        format!("{days} days")
+    }
+}
+
+/// What `Memory Scope` steps through, and the first entry is the default.
+pub const MEMORY_SCOPES: [&str; 2] = ["project", "global"];
+
+/// What `Glyphs` steps through. `auto` is the detection Emma already does;
+/// see `settings::AppearanceSettings::glyphs` for why `unicode` is a request
+/// rather than a guarantee.
+pub const GLYPH_SETS: [&str; 3] = ["auto", "unicode", "ascii"];
+
+/// What `Status Bar` steps through. Two, and the missing third is the point:
+/// a hidden status bar would take the mode cell and `q quit` off the screen,
+/// which are the two things that hold the row at every width.
+pub const STATUS_BARS: [&str; 2] = ["full", "compact"];
+
+/// The provider whose `sampling` entry the three rows edit.
+///
+/// The **saved** provider, not the running one, because these knobs are read
+/// once when a provider is built and the next build is the saved provider's.
+/// Editing the running provider's entry would write knobs for a run that is
+/// already past the only moment it could read them.
+pub fn sampling_provider(s: &SettingsView) -> &str {
+    if s.provider_saved.is_empty() {
+        &s.provider
+    } else {
+        &s.provider_saved
+    }
+}
+
+/// A sampling row's label, naming the provider when the saved and the running
+/// halves disagree.
+///
+/// Silent while they agree, for the reason the Provider row shows one name
+/// then: a suffix on every row would be noise, and the case worth spending
+/// width on is the one where "which provider is this" has two answers.
+fn sampling_label(s: &SettingsView, base: &str) -> String {
+    if s.provider_saved.is_empty() || s.provider_saved == s.provider {
+        base.to_string()
+    } else {
+        format!("{base} ({})", s.provider_saved)
+    }
+}
+
+/// What `Temperature` steps through, in hundredths. `None` is the first rung:
+/// the key absent, so nothing reaches the wire and the host decides.
+///
+/// **Hundredths rather than `f64` so the ladder is exact and the action that
+/// carries a rung can be compared.** [`SettingsAction`] is `Eq`, which a float
+/// cannot be, and a ladder of literals a test has to compare with an epsilon
+/// is a ladder that can drift a rung without saying so.
+pub const TEMPERATURE_STEPS: [Option<u32>; 6] =
+    [None, Some(0), Some(20), Some(40), Some(70), Some(100)];
+
+/// The next temperature rung from `current`, `dir` steps around
+/// [`TEMPERATURE_STEPS`].
+pub fn temperature_step(current: Option<f64>, dir: isize) -> Option<u32> {
+    let at = match current {
+        None => 0,
+        Some(t) => {
+            let hundredths = (t * 100.0).round().max(0.0) as u32;
+            TEMPERATURE_STEPS
+                .iter()
+                .position(|r| matches!(r, Some(v) if *v >= hundredths))
+                .unwrap_or(TEMPERATURE_STEPS.len() - 1)
+        }
+    };
+    let n = TEMPERATURE_STEPS.len() as isize;
+    TEMPERATURE_STEPS[(at as isize + dir).rem_euclid(n) as usize]
+}
+
+/// A rung as the file holds it: hundredths back to the number that goes out.
+pub fn temperature_value(rung: u32) -> f64 {
+    f64::from(rung) / 100.0
+}
+
+/// How a temperature reads on the row: the provenance, honestly.
+///
+/// "Host default" is not a number this build knows. Anthropic, Ollama,
+/// OpenRouter and OpenAI each apply their own and the four do not agree, so
+/// printing one would be Emma inventing a fact about somebody else's server.
+fn temperature_label(t: Option<f64>) -> String {
+    match t {
+        None => "Host default".to_string(),
+        Some(t) => format!("{t:.2}"),
+    }
+}
+
+/// What `Max Output Tokens` steps through. `None` is the first rung: the key
+/// absent, which means [`crate::settings::EMMA_MAX_OUTPUT_TOKENS`].
+pub const MAX_OUTPUT_STEPS: [Option<u32>; 5] =
+    [None, Some(4096), Some(8192), Some(16384), Some(65536)];
+
+/// The next output cap from `current`, [`temperature_step`]'s rule.
+pub fn max_output_step(current: Option<u32>, dir: isize) -> Option<u32> {
+    let at = match current {
+        None => 0,
+        Some(n) => MAX_OUTPUT_STEPS
+            .iter()
+            .position(|r| matches!(r, Some(v) if *v >= n))
+            .unwrap_or(MAX_OUTPUT_STEPS.len() - 1),
+    };
+    let n = MAX_OUTPUT_STEPS.len() as isize;
+    MAX_OUTPUT_STEPS[(at as isize + dir).rem_euclid(n) as usize]
+}
+
+/// How an output cap reads on the row.
+///
+/// The default rung names its number, unlike Temperature's: this value is
+/// always sent, on every provider, so the row can say what it is. That is the
+/// whole difference between a host default and an Emma default, shown rather
+/// than explained.
+fn max_output_label(n: Option<u32>) -> String {
+    match n {
+        None => format!("Default ({})", crate::settings::EMMA_MAX_OUTPUT_TOKENS),
+        Some(n) => n.to_string(),
+    }
+}
+
+/// The next accent name from `current`, `dir` steps around `palette::ACCENTS`.
+///
+/// The chevrons stay the five-role ladder. A `cube:N` accent is not on that
+/// ladder, so a chevron press from one steps back onto it at the first rung —
+/// the same rule an unknown theme name has, and [`NOTICE_ACCENT`] says so on
+/// the row.
+fn accent_step(current: &str, dir: isize) -> &'static str {
+    let names: Vec<&'static str> = super::palette::ACCENTS.iter().map(|a| a.name).collect();
+    name_step(&names, current, dir)
+}
+
+/// The next font family from the stored list, `dir` steps around it.
+///
+/// Borrowed from the view rather than returning a `&'static str`, because the
+/// list is somebody's typing and there is no static to point at.
+fn font_family_step(s: &SettingsView, dir: isize) -> &str {
+    if s.font_families.is_empty() {
+        return &s.font_family;
+    }
+    let list = &s.font_families;
+    let n = list.len() as isize;
+    let i = list.iter().position(|f| *f == s.font_family).unwrap_or(0) as isize;
+    &list[((i + dir).rem_euclid(n)) as usize]
+}
+
+/// The next keybinding preset, `dir` steps around the file's list.
+fn key_preset_step(s: &SettingsView, dir: isize) -> &str {
+    if s.key_presets.is_empty() {
+        return &s.key_preset;
+    }
+    let n = s.key_presets.len() as isize;
+    let i = s
+        .key_presets
+        .iter()
+        .position(|p| *p == s.key_preset)
+        .unwrap_or(0) as isize;
+    &s.key_presets[((i + dir).rem_euclid(n)) as usize]
+}
+
 /// How many focusable (Kv) rows card `c` has.
 fn slots(s: &SettingsView, c: usize) -> usize {
     cards(s)
@@ -752,6 +1514,25 @@ fn slots(s: &SettingsView, c: usize) -> usize {
                 .count()
         })
         .unwrap_or(0)
+}
+
+/// Where the row carrying `kind` sits on card `card`, as [`SettingsView::focus`]
+/// counts slots.
+///
+/// Exported for the shell's tests: a slot number written out by hand is the
+/// thing that goes stale when a row is added above it, and this package added
+/// eleven. `None` when the card has no such row, so a caller says which one it
+/// could not find rather than focusing something else.
+pub fn row_slot(s: &SettingsView, card: usize, kind: RowKind) -> Option<usize> {
+    cards(s).get(card).and_then(|c| {
+        c.rows
+            .iter()
+            .filter_map(|r| match r {
+                CardRow::Kv(_, _, k) => Some(*k),
+                _ => None,
+            })
+            .position(|k| k == kind)
+    })
 }
 
 /// The focused row's class, if a row is focused.
@@ -789,13 +1570,57 @@ pub enum SettingsAction {
     /// including its "from the next start" effect. `String` rather than
     /// `&'static str`: a theme name is a filename here, not a table entry.
     Theme(String),
-    /// Store `memory_capture`: `true` removes the key (absent means on),
-    /// `false` writes `false`.
+    /// Store `memory`: `true` removes the key (absent means on), `false`
+    /// writes `false`.
     MemoryCapture(bool),
     /// Store `prune_history`: `false` removes the key (absent means off),
     /// `true` writes `true`. The mirror image of [`Self::MemoryCapture`],
     /// because the two defaults are opposite.
     PruneHistory(bool),
+    /// Store `training_capture`, on [`Self::MemoryCapture`]'s rule: `true`
+    /// removes the key (absent means on), `false` writes `false`.
+    TrainingCapture(bool),
+    /// Store `ui.hints`, on the same rule.
+    Hints(bool),
+    /// Store `provider` for the next run. The live client is not rebound.
+    Provider(&'static str),
+    /// Store one tool's bare-name rule in settings.local.json.
+    ToolPolicy(&'static str, ToolState),
+    /// Store `memory_policy.retention_days`.
+    Retention(u64),
+    /// Store `memory_policy.auto_recall`.
+    AutoRecall(bool),
+    /// Store `memory_policy.scope`.
+    MemoryScope(&'static str),
+    /// Apply and persist an accent override: a role name from
+    /// `palette::ACCENTS`.
+    ///
+    /// A `String` rather than a `&'static str` because the same path has to
+    /// carry a `cube:N` value a hand-edited settings file may hold, and there
+    /// is no static to point at for a number somebody chose.
+    Accent(String),
+    /// Store `appearance.glyphs`, for the next run.
+    Glyphs(&'static str),
+    /// Store `appearance.status_bar`.
+    StatusBar(&'static str),
+    /// Ask the terminal for a font family, and store it.
+    FontFamily(String),
+    /// Ask the terminal for a font size, and store it.
+    FontSize(u32),
+    /// Switch the active keybinding preset, now, and remember the name for
+    /// this screen's row.
+    KeyPreset(String),
+    /// Open ~/.emma/keybindings.json in the editor.
+    OpenKeybindings,
+    /// Store the saved provider's `sampling.temperature`, in hundredths.
+    /// `None` removes the key: the host decides, and 0 is not that.
+    Temperature(Option<u32>),
+    /// Store the saved provider's `sampling.max_output_tokens`. `None`
+    /// removes the key, which means the Emma default.
+    MaxOutputTokens(Option<u32>),
+    /// Store the saved provider's `sampling.stream`. `true` removes the key
+    /// (absent means on), `false` writes `false`.
+    Streaming(bool),
     /// Ping the provider's host and report into the button.
     TestConnection,
     /// Write settings.json now, receipt in the notice.
@@ -876,6 +1701,51 @@ fn cycle(v: &mut SettingsView, dir: isize) -> SettingsAction {
         Some(RowKind::ThemeCycle) => SettingsAction::Theme(theme_step(&v.themes, &v.theme, dir)),
         Some(RowKind::MemoryToggle) => SettingsAction::MemoryCapture(!v.memory_on),
         Some(RowKind::PruneToggle) => SettingsAction::PruneHistory(!v.prune_on),
+        Some(RowKind::TrainingToggle) => SettingsAction::TrainingCapture(!v.training_on),
+        Some(RowKind::HintsToggle) => SettingsAction::Hints(!v.hints_on),
+        // Stepped from the *saved* name, not the running one: the ladder has
+        // to walk from where the last press left it, or a second press would
+        // step back onto the booted provider.
+        Some(RowKind::ProviderCycle) => {
+            SettingsAction::Provider(provider_step(sampling_provider(v), dir))
+        }
+        Some(RowKind::ToolPermission(tool)) => {
+            SettingsAction::ToolPolicy(tool, tool_step(tool_state(v, tool), dir))
+        }
+        Some(RowKind::MemoryRetention) => {
+            SettingsAction::Retention(retention_step(v.memory_retention, dir))
+        }
+        Some(RowKind::AutoRecall) => SettingsAction::AutoRecall(!v.auto_recall),
+        Some(RowKind::MemoryScope) => {
+            SettingsAction::MemoryScope(name_step(&MEMORY_SCOPES, &v.memory_scope, dir))
+        }
+        Some(RowKind::AccentCycle) => {
+            SettingsAction::Accent(accent_step(&v.accent, dir).to_string())
+        }
+        Some(RowKind::GlyphsCycle) => {
+            SettingsAction::Glyphs(name_step(&GLYPH_SETS, &v.glyphs, dir))
+        }
+        Some(RowKind::StatusBarCycle) => {
+            SettingsAction::StatusBar(name_step(&STATUS_BARS, &v.status_bar, dir))
+        }
+        Some(RowKind::FontFamilyCycle) => {
+            SettingsAction::FontFamily(font_family_step(v, dir).to_string())
+        }
+        Some(RowKind::FontSizeStep) => {
+            SettingsAction::FontSize(termfont::step_size(v.font_size, dir))
+        }
+        Some(RowKind::KeyPresetCycle) => {
+            SettingsAction::KeyPreset(key_preset_step(v, dir).to_string())
+        }
+        Some(RowKind::TemperatureCycle) => {
+            SettingsAction::Temperature(temperature_step(v.sampling_temperature, dir))
+        }
+        Some(RowKind::MaxOutputCycle) => {
+            SettingsAction::MaxOutputTokens(max_output_step(v.sampling_max_output_tokens, dir))
+        }
+        Some(RowKind::StreamingCycle) => {
+            SettingsAction::Streaming(!v.sampling_stream.unwrap_or(true))
+        }
         Some(RowKind::Note(text)) => {
             v.notice = Some(text.to_string());
             SettingsAction::FocusChanged
@@ -888,17 +1758,47 @@ fn cycle(v: &mut SettingsView, dir: isize) -> SettingsAction {
 /// Enter on the focused row.
 fn activate(v: &mut SettingsView) -> SettingsAction {
     match focused_kind(v) {
-        Some(RowKind::ThemeCycle) => {
+        // Enter steps forward on every cycler and flips every toggle, the
+        // Theme row's convention: one verb, so a row cannot mean one thing to
+        // the arrows and another to Enter.
+        Some(
+            RowKind::ThemeCycle
+            | RowKind::MemoryToggle
+            | RowKind::PruneToggle
+            | RowKind::TrainingToggle
+            | RowKind::HintsToggle
+            | RowKind::ProviderCycle
+            | RowKind::ToolPermission(_)
+            | RowKind::MemoryRetention
+            | RowKind::AutoRecall
+            | RowKind::MemoryScope
+            | RowKind::AccentCycle
+            | RowKind::GlyphsCycle
+            | RowKind::StatusBarCycle
+            | RowKind::FontFamilyCycle
+            | RowKind::KeyPresetCycle
+            | RowKind::TemperatureCycle
+            | RowKind::MaxOutputCycle
+            | RowKind::StreamingCycle,
+        ) => {
             v.confirm_reset = false;
-            SettingsAction::Theme(theme_step(&v.themes, &v.theme, 1))
+            cycle(v, 1)
         }
-        Some(RowKind::MemoryToggle) => {
+        // The one idempotent Enter on the screen. This row's verb is the
+        // arrows, and Enter re-asks the terminal for the size already stored,
+        // which is what somebody presses it for after switching windows.
+        Some(RowKind::FontSizeStep) => {
             v.confirm_reset = false;
-            SettingsAction::MemoryCapture(!v.memory_on)
+            SettingsAction::FontSize(v.font_size)
         }
-        Some(RowKind::PruneToggle) => {
+        Some(RowKind::OpenKeybindings) => {
             v.confirm_reset = false;
-            SettingsAction::PruneHistory(!v.prune_on)
+            SettingsAction::OpenKeybindings
+        }
+        Some(RowKind::KeyNotes) => {
+            v.confirm_reset = false;
+            v.notice = Some(v.key_notes.join(" | "));
+            SettingsAction::FocusChanged
         }
         Some(RowKind::TestConnection) => {
             v.confirm_reset = false;
@@ -1089,11 +1989,7 @@ fn render_grid(area: Rect, buf: &mut Buffer, s: &SettingsView, skin: &Skin) -> H
             if y >= height {
                 break;
             }
-            let tallest = pair
-                .iter()
-                .map(|c| c.rows.len() as u16 + 3) // header + rows + border
-                .max()
-                .unwrap_or(0);
+            let tallest = pair.iter().map(Card::height).max().unwrap_or(0);
             let h = tallest.min(height - y);
             if h < 3 {
                 break;
@@ -1119,11 +2015,7 @@ fn render_grid(area: Rect, buf: &mut Buffer, s: &SettingsView, skin: &Skin) -> H
         if y >= area.y + grid_h {
             break;
         }
-        let tallest = pair
-            .iter()
-            .map(|c| c.rows.len() as u16 + 3) // header + rows + border
-            .max()
-            .unwrap_or(0);
+        let tallest = pair.iter().map(Card::height).max().unwrap_or(0);
         let room = (area.y + grid_h).saturating_sub(y);
         let h = tallest.min(room);
         if h < 3 {
@@ -1192,8 +2084,22 @@ fn render_card(
         )),
         None,
     ));
+    let focused_slot = match s.focus {
+        Some((c, slot)) if c == index => Some(slot),
+        _ => None,
+    };
+    let offset = card.offset(focused_slot);
+    let window = card.window.unwrap_or(usize::MAX);
     let mut slot = 0usize;
     for row in &card.rows {
+        // Outside the window: the row keeps its slot number, so focus and the
+        // hit rects stay in the card's own coordinates whatever is on screen.
+        if matches!(row, CardRow::Kv(..))
+            && (slot < offset || slot >= offset.saturating_add(window))
+        {
+            slot += 1;
+            continue;
+        }
         lines.push(match row {
             CardRow::Kv(label, value, _) => {
                 let hot = s.focus == Some((index, slot));
@@ -1225,10 +2131,14 @@ fn render_card(
     } else {
         lines.len()
     };
-    let mut dresses = card.rows.iter().filter_map(|r| match r {
-        CardRow::Kv(_, v, _) => Some(v),
-        _ => None,
-    });
+    let mut dresses = card
+        .rows
+        .iter()
+        .filter_map(|r| match r {
+            CardRow::Kv(_, v, _) => Some(v),
+            _ => None,
+        })
+        .skip(offset);
     for (i, (line, kv)) in lines
         .iter()
         .take(body.min(usize::from(inner.height)))
@@ -1377,8 +2287,63 @@ mod tests {
             perms: perm_fixture(),
             perms_file: Some("/repo/.emma/settings.local.json".into()),
             perms_read: true,
+            provider_saved: "ollama".into(),
+            provider_keys: vec![
+                ("anthropic".into(), KeyPresence::Missing),
+                ("ollama".into(), KeyPresence::NotNeeded),
+            ],
+            training_on: true,
+            hints_on: true,
+            tools: vec![("Bash".into(), ToolState::Deny)],
+            tools_file: Some("/repo/.emma/settings.local.json".into()),
+            memory_retention: 0,
+            auto_recall: true,
+            memory_scope: "project".into(),
+            accent: "theme".into(),
+            glyphs: "auto".into(),
+            status_bar: "full".into(),
+            font_families: vec!["Menlo".into(), "Cascadia Mono".into()],
+            font_family: "Menlo".into(),
+            font_size: 13,
+            terminal: Some(termfont::Terminal {
+                name: "Terminal.app".into(),
+                control: termfont::Control::AppleScript,
+            }),
+            key_preset: "default".into(),
+            key_presets: vec!["default".into(), "vim".into()],
+            keys_file: Some("/home/.emma/keybindings.json".into()),
             ..SettingsView::default()
         }
+    }
+
+    /// Every Kv row of `card`, with the slot number the keys use.
+    ///
+    /// Derived from [`cards`] rather than written out, because the slot
+    /// numbers moved when the write-back package landed and a table of
+    /// literals is the thing that goes quietly stale when they move again.
+    fn rows_of(v: &SettingsView, card: usize) -> Vec<(usize, String, RowKind)> {
+        cards(v)
+            .into_iter()
+            .nth(card)
+            .expect("a card index this screen has")
+            .rows
+            .into_iter()
+            .filter_map(|r| match r {
+                CardRow::Kv(label, _, kind) => Some((label, kind)),
+                _ => None,
+            })
+            .enumerate()
+            .map(|(slot, (label, kind))| (slot, label, kind))
+            .collect()
+    }
+
+    /// The slot the row with this kind sits at.
+    fn slot_of(v: &SettingsView, card: usize, want: RowKind) -> usize {
+        rows_of(v, card)
+            .into_iter()
+            .find(|(_, _, k)| *k == want)
+            .unwrap_or_else(|| panic!("card {card} has no {want:?} row"))
+            .0
     }
 
     /// Two rules, one of each of the two verdicts a reader most needs to tell
@@ -1493,9 +2458,8 @@ mod tests {
     fn values_right_align_against_the_card_border() {
         let rows = draw(&view(), 120, 60);
         for (label, value) in [
-            ("Temperature", "n/a"),
             ("Max Context Tokens", "120000"),
-            ("Memory Scope", "n/a"),
+            ("Log Level", "n/a"),
             ("Telemetry", "none sent"),
         ] {
             let row = rows
@@ -1521,23 +2485,47 @@ mod tests {
     /// a chevron with no handler is the `QUICK HELP` defect this repository
     /// has already had a bug report about.
     ///
-    /// The negative half is the half that matters and the half a `contains`
-    /// test cannot express: the provider cycler, the keybinding preset cycler,
-    /// the `[ Open ]` button and the six `Ask ›` / `Allow ›` chevrons must
-    /// **not** be on the page, because no key changes any of them.
+    /// **The negative half moved, and had to.** It used to name five dead
+    /// dresses — `‹ Ollama ›`, `‹ Default ›`, `[ Open ]` and the invented tool
+    /// chevrons — and four of those five are live controls now, so keeping
+    /// the list would pin the page to the absence this package exists to
+    /// remove. What survives is the rule the list was an instance of,
+    /// asserted over every row the screen builds: a chevron or a button
+    /// appears exactly where a key crosses the seam, and an `Absent` value
+    /// never wears one.
     #[test]
     fn an_edit_affordance_is_drawn_only_where_a_key_answers_it() {
-        let all = draw(&view(), 130, 60).join("\n");
+        let v = view();
+        let all = draw(&v, 130, 60).join("\n");
         assert!(all.contains("‹ Dracula ›"), "theme cycler missing");
         for b in ["[ OK ]", "[ Save Now ]", "[ Export ]", "[ Reset ]"] {
             assert!(all.contains(b), "button {b} missing");
         }
-        for dead in ["‹ Ollama ›", "‹ Default ›", "[ Open ]", "Ask ›", "Allow ›"] {
-            assert!(
-                !all.contains(dead),
-                "{dead} is drawn as editable and no key changes it"
-            );
+        let mut dressed = 0usize;
+        for card in 0..CARDS {
+            for row in cards(&v).into_iter().nth(card).expect("a card").rows {
+                let CardRow::Kv(label, value, kind) = row else {
+                    continue;
+                };
+                let wears_affordance = matches!(value, Value::Cycler(_) | Value::Button(_));
+                let answered = !matches!(kind, RowKind::Note(_));
+                // A chevron or a bracket is a promise, so it may only appear
+                // on a row a key really changes. The converse does not hold
+                // and never did: a toggle is `Plain` — `On` / `Off` with no
+                // chevron — because its two states *are* its affordance, and
+                // that is mainline's own dress for Enable Memory.
+                assert!(
+                    !wears_affordance || answered,
+                    "{label:?} on card {card} is dressed as editable and no key changes it"
+                );
+                assert!(
+                    !matches!(value, Value::Absent(_)) || !answered,
+                    "{label:?} says it has no value and offers a key that changes it"
+                );
+                dressed += usize::from(wears_affordance);
+            }
         }
+        assert!(dressed > 20, "only {dressed} live controls on the page");
     }
 
     /// **Nothing on the page reads as a value that is not one.** The mock's
@@ -1559,8 +2547,6 @@ mod tests {
             "JetBrains",     // Font Family
             "14px",          // Font Size
             "Detailed",      // Status Bar
-            "30 days",       // Memory Retention
-            "Project",       // Memory Scope
             "Disabled",      // Telemetry
             "File Browser",  // a permission row about a launcher
             "Data Explorer", // ditto
@@ -1573,7 +2559,10 @@ mod tests {
         // `local` and `Info` are the other two, and both are substrings of
         // strings that legitimately appear (`settings.local.json`), so they
         // are checked on their own rows rather than across the page.
-        for label in ["Environment", "Log Level"] {
+        // `30 days`, `Project` and `0.70` left this list with the write-back:
+        // each is now a rung a person can really select, and asserting their
+        // absence would pin the page to the `n/a` it replaced.
+        for label in ["Environment", "Log Level", "Response Budget"] {
             let row = draw(&view(), 161, 95)
                 .into_iter()
                 .find(|r| r.contains(label))
@@ -1702,17 +2691,22 @@ mod tests {
         assert_eq!(v.focus, Some((CARDS - 1, 0)), "BackTab did not wrap back");
     }
 
-    /// ↑/↓ move within the focused card and clamp at its edges — the first
-    /// card has six rows (Test Connection is the sixth), and ↓ never leaves it.
+    /// ↑/↓ move within the focused card and clamp at its edges: ↓ stops on the
+    /// card's last row and never walks into the next card.
+    ///
+    /// The row count is asked of the page rather than written out. It was six
+    /// when this test was written and is eight now, and a literal here would
+    /// have gone on passing at the wrong number by clamping to it.
     #[test]
     fn arrows_move_within_a_card_and_clamp() {
         let mut v = view();
+        let last = slots(&v, 0) - 1;
         handle_key(&mut v, press(KeyCode::Tab));
-        for _ in 0..9 {
+        for _ in 0..last + 4 {
             handle_key(&mut v, press(KeyCode::Down));
         }
-        assert_eq!(v.focus, Some((0, 5)), "↓ escaped card 1 or overclamped");
-        for _ in 0..9 {
+        assert_eq!(v.focus, Some((0, last)), "↓ escaped card 1 or overclamped");
+        for _ in 0..last + 4 {
             handle_key(&mut v, press(KeyCode::Up));
         }
         assert_eq!(v.focus, Some((0, 0)), "↑ escaped card 1");
@@ -1807,7 +2801,8 @@ mod tests {
     #[test]
     fn the_buttons_ask_for_their_real_actions() {
         let mut v = view();
-        focus(&mut v, 0, 5);
+        let test = slot_of(&v, 0, RowKind::TestConnection);
+        focus(&mut v, 0, test);
         assert_eq!(
             handle_key(&mut v, press(KeyCode::Enter)),
             SettingsAction::TestConnection
@@ -1861,70 +2856,96 @@ mod tests {
 
     /// Class B, the whole table: every static row answers its activation
     /// with the notice that names its real mechanism.
+    ///
+    /// **Swept rather than tabulated, and that is this package's correction.**
+    /// The table used to be twenty-five `(card, slot, notice)` literals, and
+    /// the write-back moved almost every slot number in it: a row that became
+    /// live simply left the table, and one that stayed static kept whatever
+    /// row number it used to have. A literal table cannot notice either. This
+    /// walks every `RowKind::Note` the screen actually builds, so a notice row
+    /// added anywhere is covered the moment it exists and a moved one cannot
+    /// silently stop being checked.
     #[test]
     fn every_static_row_answers_with_the_mechanism_that_exists() {
-        let table: &[(usize, usize, &str)] = &[
-            (0, 0, NOTICE_PROVIDER),
-            (0, 1, NOTICE_MODEL),
-            (0, 2, NOTICE_SAMPLING),
-            (0, 3, NOTICE_SAMPLING),
-            (0, 4, NOTICE_STREAMING),
-            (1, 0, NOTICE_CONTEXT),
-            (1, 2, NOTICE_OUTPUT_CAP),
-            (1, 5, NOTICE_CONTEXT),
-            (2, 1, NOTICE_THEME_OWNED),
-            (2, 2, NOTICE_FONT),
-            (2, 3, NOTICE_FONT),
-            (2, 4, NOTICE_STATUSBAR),
-            (3, 0, NOTICE_KEYS),
-            (3, 1, NOTICE_KEYS),
-            (4, 2, NOTICE_MEMORY_STAGES),
-            (4, 3, NOTICE_MEMORY_STAGES),
-            (4, 4, NOTICE_MEMORY_STAGES),
-            (5, 0, NOTICE_PERMISSIONS_GATE),
-            (5, 1, NOTICE_PERMISSIONS_GATE),
-            (5, 2, NOTICE_PERMISSIONS),
-            (5, 3, NOTICE_PERMISSIONS_READONLY),
-            (6, 0, NOTICE_CWD),
-            (6, 1, NOTICE_ENV),
-            (6, 2, NOTICE_ENV),
-            (6, 3, NOTICE_TELEMETRY),
-        ];
-        for &(card, slot, expected) in table {
-            let mut v = view();
-            focus(&mut v, card, slot);
-            assert_eq!(
-                handle_key(&mut v, press(KeyCode::Enter)),
-                SettingsAction::FocusChanged,
-                "({card},{slot}) is not a notice row"
-            );
-            assert_eq!(
-                v.notice.as_deref(),
-                Some(expected),
-                "({card},{slot}) told the wrong truth"
-            );
+        let base = view();
+        let mut seen = 0usize;
+        for card in 0..CARDS {
+            for (slot, label, kind) in rows_of(&base, card) {
+                let RowKind::Note(expected) = kind else {
+                    continue;
+                };
+                seen += 1;
+                let mut v = base.clone();
+                focus(&mut v, card, slot);
+                assert_eq!(
+                    handle_key(&mut v, press(KeyCode::Enter)),
+                    SettingsAction::FocusChanged,
+                    "({card},{slot}) {label:?} is a Note row that asked the shell to act"
+                );
+                assert_eq!(
+                    v.notice.as_deref(),
+                    Some(expected),
+                    "({card},{slot}) {label:?} told the wrong truth"
+                );
+            }
         }
+        assert!(seen > 8, "the sweep found only {seen} static rows");
         // And the notices point at things that exist, not at absences.
         assert!(NOTICE_PERMISSIONS.contains("settings.local.json"));
-        assert!(NOTICE_PROVIDER.contains("set-provider"));
         assert!(NOTICE_MODEL.contains("/model"));
-        assert!(NOTICE_MEMORY_STAGES.contains(".emma/memory"));
-        assert!(NOTICE_STATUSBAR.contains("statusLine"));
+        assert!(NOTICE_PROVIDER_KEYS.contains("credentials.json"));
+        // The three claims the docs pass found false, pinned where they can go
+        // red. Each names the thing that landed, and none of the three says
+        // the facility is missing.
+        assert!(
+            NOTICE_KEYS.contains("~/.emma/keybindings.json"),
+            "NOTICE_KEYS must name the file K1 landed, not deny it exists"
+        );
+        assert!(!NOTICE_KEYS.contains("no keymap file"));
+        assert!(
+            notice_font_scope(base.terminal.as_ref()).contains("Terminal.app"),
+            "the font notice must name the terminal it is looking at"
+        );
+        // **The defect the docs pass found, pinned.** The sentence used to be
+        // a constant naming Terminal.app whatever it was running on, which is
+        // false on Windows and was false the moment `termfont` grew its
+        // Windows arm. On a terminal with no font control it must say what is
+        // missing and must not name a terminal it cannot drive.
+        let windows = termfont::Terminal {
+            name: termfont::WINDOWS_TERMINAL.into(),
+            control: termfont::Control::None,
+        };
+        let said = notice_font_scope(Some(&windows));
+        assert!(
+            !said.contains("Terminal.app"),
+            "the font notice named a terminal that is not there: {said:?}"
+        );
+        assert!(
+            said.contains(termfont::WINDOWS_TERMINAL) && said.contains("stored"),
+            "the notice must name this terminal and say the value is kept: {said:?}"
+        );
+        assert!(
+            !notice_font_scope(None).contains("Terminal.app"),
+            "the font notice must not name a terminal it has not read"
+        );
         // And the permission card does not imply enforcement it does not
         // have — `CLAUDE.md` calls that a defect in its own right.
         assert!(NOTICE_PERMISSIONS_GATE.contains("never a sandbox"));
     }
 
-    /// **No key on this page writes a permission.** The security constraint,
-    /// asserted where it can go red: every row of card 6, in every state the
-    /// card has, answers Enter and ←/→ with a notice and never with an action
-    /// that crosses the seam.
+    /// **The permission card writes exactly one kind of rule, and reads the
+    /// rest.** The security constraint as it stands after the owner's ruling,
+    /// asserted where it can go red.
     ///
-    /// A row that became editable would return something other than
-    /// `FocusChanged` here, so this fails the moment the card grows a write —
-    /// which is the only way the failure could be noticed before it shipped.
+    /// This replaces `no_key_on_the_permission_card_asks_the_shell_to_write`,
+    /// which asserted that *no* row crossed the seam. That test was correct
+    /// while it was the guarantee and would now be a false receipt: it would
+    /// have to be deleted or weakened to a tautology. What is left of the
+    /// guarantee, and what this holds instead, is the split — a tool row asks
+    /// for a bare-name rule and nothing else on the card asks for anything,
+    /// in every state the card has.
     #[test]
-    fn no_key_on_the_permission_card_asks_the_shell_to_write() {
+    fn only_the_tool_rows_of_the_permission_card_write_and_only_bare_names() {
         let states: [SettingsView; 3] = [
             view(),
             SettingsView {
@@ -1937,20 +2958,144 @@ mod tests {
             },
         ];
         for (i, base) in states.into_iter().enumerate() {
-            let n = slots(&base, 5);
-            assert!(n > 0, "state {i} drew no rows at all");
-            for slot in 0..n {
+            let rows = rows_of(&base, 5);
+            assert!(!rows.is_empty(), "state {i} drew no rows at all");
+            let mut writers = 0usize;
+            for (slot, label, kind) in rows {
                 for code in [KeyCode::Enter, KeyCode::Left, KeyCode::Right] {
                     let mut v = base.clone();
                     focus(&mut v, 5, slot);
+                    let action = handle_key(&mut v, press(code));
+                    match kind {
+                        RowKind::ToolPermission(tool) => {
+                            assert!(
+                                matches!(action, SettingsAction::ToolPolicy(t, _) if t == tool),
+                                "state {i} {label:?} answered {code:?} with {action:?}"
+                            );
+                        }
+                        _ => assert_eq!(
+                            action,
+                            SettingsAction::FocusChanged,
+                            "state {i} row {label:?} asked the shell to act on {code:?}"
+                        ),
+                    }
+                }
+                if matches!(kind, RowKind::ToolPermission(_)) {
+                    writers += 1;
+                }
+            }
+            assert_eq!(
+                writers,
+                crate::runctl::ALL_TOOLS.len(),
+                "state {i} drew a tool list that is not the registry's"
+            );
+
+            // **RULES IN FORCE keeps the original guarantee whole.** That
+            // card shows the merge of this project's settings.local.json with
+            // the spine file beside the harness — a document this screen must
+            // not write at all, and one whose deny outranks a local allow. No
+            // key on it may cross the seam, in any of the card's states.
+            let rules = rows_of(&base, 9);
+            assert!(!rules.is_empty(), "state {i} drew no rules card");
+            for (slot, label, _) in rules {
+                for code in [KeyCode::Enter, KeyCode::Left, KeyCode::Right] {
+                    let mut v = base.clone();
+                    focus(&mut v, 9, slot);
                     assert_eq!(
                         handle_key(&mut v, press(code)),
                         SettingsAction::FocusChanged,
-                        "state {i} row {slot} asked the shell to act on {code:?}"
+                        "state {i} rules row {label:?} asked the shell to act on {code:?}"
                     );
                 }
             }
         }
+    }
+
+    /// The three states walk in a ring, and `Ask` is the absence rather than a
+    /// fourth word.
+    #[test]
+    fn a_tool_row_walks_ask_allow_deny_and_comes_back() {
+        let mut v = view();
+        v.tools = Vec::new();
+        let slot = slot_of(&v, 5, RowKind::ToolPermission("Bash"));
+        let press_right = |v: &mut SettingsView| {
+            focus(v, 5, slot);
+            handle_key(v, press(KeyCode::Right))
+        };
+        assert_eq!(
+            press_right(&mut v),
+            SettingsAction::ToolPolicy("Bash", ToolState::Allow),
+            "a tool with no rule starts at Ask"
+        );
+        v.tools = vec![("Bash".into(), ToolState::Allow)];
+        assert_eq!(
+            press_right(&mut v),
+            SettingsAction::ToolPolicy("Bash", ToolState::Deny)
+        );
+        v.tools = vec![("Bash".into(), ToolState::Deny)];
+        assert_eq!(
+            press_right(&mut v),
+            SettingsAction::ToolPolicy("Bash", ToolState::Ask),
+            "Deny must step back to Ask, which is the absence of a rule"
+        );
+    }
+
+    /// **A card taller than its cell is windowed, and the window keeps the
+    /// slot numbers.** Twenty-seven tool rows in a grid cell that holds six:
+    /// what changes is which are painted, never what a slot means, or a click
+    /// recorded at paint would focus a different row from the one under the
+    /// pointer.
+    #[test]
+    fn the_tool_card_windows_its_rows_without_renumbering_them() {
+        let v = view();
+        let cards = cards(&v);
+        let tools = &cards[5];
+        assert_eq!(tools.window, Some(TOOL_WINDOW));
+        assert!(
+            tools.kv_count() > TOOL_WINDOW * 2,
+            "the card is not long enough for this test to mean anything"
+        );
+        assert!(
+            tools.height() < cards[4].height() + 4,
+            "a windowed card must not tower over the one beside it"
+        );
+        // The window follows the focus and stops at the end of the list.
+        assert_eq!(tools.offset(None), 0);
+        assert_eq!(tools.offset(Some(0)), 0);
+        assert_eq!(tools.offset(Some(10)), 10 - TOOL_WINDOW / 2);
+        let last = tools.kv_count() - TOOL_WINDOW;
+        assert_eq!(tools.offset(Some(tools.kv_count() - 1)), last);
+        // And what a slot means does not move with it: the twentieth tool row
+        // is still slot 19 when the window has scrolled to show it.
+        let twentieth = crate::runctl::ALL_TOOLS[19];
+        assert_eq!(
+            slot_of(&v, 5, RowKind::ToolPermission(twentieth)),
+            19,
+            "the window renumbered a row"
+        );
+        // And the paint agrees. **This is the half that can go wrong
+        // silently**: the rects are recorded from the same arithmetic that
+        // painted, so a scrolled window that renumbered as it skipped would
+        // record slot 0 for the first *visible* row, and a click on it would
+        // focus the first row of the whole list instead. Nothing on screen
+        // would look wrong.
+        let mut focused = v.clone();
+        focused.focus = Some((5, 19));
+        let hits = hits_at(&focused, 161, 95);
+        let painted: Vec<usize> = hits
+            .controls
+            .iter()
+            .filter_map(|(_, h)| match h {
+                Hit::Row(5, slot) => Some(*slot),
+                _ => None,
+            })
+            .collect();
+        let first = 19 - TOOL_WINDOW / 2;
+        assert_eq!(
+            painted,
+            (first..first + TOOL_WINDOW).collect::<Vec<_>>(),
+            "the painted rects do not carry the card's own slot numbers"
+        );
     }
 
     /// The card shows the rules that are really in force, and says which file
@@ -2107,12 +3252,14 @@ mod tests {
     #[test]
     fn the_prune_toggle_asks_for_the_flip() {
         let mut v = view();
-        focus(&mut v, 4, 1);
+        let slot = slot_of(&v, 4, RowKind::PruneToggle);
+        focus(&mut v, 4, slot);
         assert_eq!(
             handle_key(&mut v, press(KeyCode::Enter)),
             SettingsAction::PruneHistory(true)
         );
         v.prune_on = true;
+        focus(&mut v, 4, slot);
         assert_eq!(
             handle_key(&mut v, press(KeyCode::Left)),
             SettingsAction::PruneHistory(false)
@@ -2122,18 +3269,141 @@ mod tests {
         assert!(draw(&v, 130, 60).join("\n").contains("Prune History"));
     }
 
-    /// The provider cycler's ←/→ answer with the honest notice too — the
-    /// display never pretends the session switched.
+    /// **The provider cycler writes the next run's provider and never
+    /// pretends the session switched.**
+    ///
+    /// This is the row that used to answer with a notice, and the reversal is
+    /// the whole point of the row: the file moves now, the bound session does
+    /// not, and the value shows both names until they agree. The old test
+    /// asserted the notice; asserting it now would pin the page to the
+    /// behaviour this package replaced.
     #[test]
-    fn the_provider_cycler_tells_the_truth_instead_of_pretending() {
+    fn the_provider_cycler_writes_the_next_run_and_shows_both_names() {
         let mut v = view();
+        v.provider = "ollama".into();
+        v.provider_saved = "ollama".into();
+        focus(&mut v, 0, 0);
+        let action = handle_key(&mut v, press(KeyCode::Right));
+        let SettingsAction::Provider(next) = action else {
+            panic!("the row must ask the shell to write: {action:?}");
+        };
+        assert_ne!(next, "ollama", "the chevron must step off the current name");
+        assert_eq!(
+            v.provider, "ollama",
+            "the bound provider must not move from this page"
+        );
+        // The shell is what sets `provider_saved`; with the two disagreeing,
+        // the row says so rather than showing one of them.
+        v.provider_saved = next.to_string();
+        let text = draw(&v, 200, 95).join("\n");
+        assert!(text.contains("(running)"), "{text}");
+        assert!(text.contains("(next run)"), "{text}");
+        // And the ladder steps from the saved name, not the running one, or a
+        // second press would walk back onto the booted provider.
         focus(&mut v, 0, 0);
         assert_eq!(
-            handle_key(&mut v, press(KeyCode::Right)),
-            SettingsAction::FocusChanged
+            handle_key(&mut v, press(KeyCode::Left)),
+            SettingsAction::Provider("ollama"),
+            "the ladder must walk from where the last press left it"
         );
-        assert_eq!(v.notice.as_deref(), Some(NOTICE_PROVIDER));
-        assert_eq!(v.provider, "ollama", "the display must not fake a switch");
+    }
+
+    /// A refused value leaves the screen exactly as it was — the pure half of
+    /// the guarantee the write-back's own tests check on disk.
+    ///
+    /// The ladders are what the arrows produce, so none of these three is
+    /// reachable by pressing a key; each is the *other* door — a settings file
+    /// somebody hand-edited, or a view a caller built. A ladder that snapped
+    /// an unknown value to its first rung would silently rewrite that choice
+    /// on the first arrow press.
+    #[test]
+    fn a_value_the_ladder_does_not_hold_is_stepped_from_and_never_snapped() {
+        // An accent the palette has no name for: the chevrons step back onto
+        // the five-role ladder rather than refusing to move at all.
+        let mut v = view();
+        v.accent = "cube:81".into();
+        let slot = slot_of(&v, 2, RowKind::AccentCycle);
+        focus(&mut v, 2, slot);
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Right)),
+            SettingsAction::Accent(super::super::palette::ACCENTS[1].name.to_string()),
+            "an off-ladder accent must step onto the ladder, not stay put"
+        );
+        // A font size nobody could have cycled to: stepped from, and clamped
+        // by `termfont` rather than by this page.
+        let mut v = view();
+        v.font_size = 999;
+        let slot = slot_of(&v, 2, RowKind::FontSizeStep);
+        focus(&mut v, 2, slot);
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Right)),
+            SettingsAction::FontSize(termfont::MAX_SIZE)
+        );
+        // A retention typed into settings.json by hand lands on the nearest
+        // rung at or above it, and steps from there.
+        let mut v = view();
+        v.memory_retention = 45;
+        let slot = slot_of(&v, 4, RowKind::MemoryRetention);
+        focus(&mut v, 4, slot);
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Right)),
+            SettingsAction::Retention(365),
+            "45 sits between 30 and 90; the next rung up from 90 is 365"
+        );
+    }
+
+    /// **The temperature ladder can say "the host decides" and can say zero,
+    /// and they are different rungs.**
+    ///
+    /// The rung is hundredths, not an `f64`, so the action is `Eq` and a test
+    /// can compare it exactly rather than with an epsilon. A writer that
+    /// collapsed `None` and `Some(0)` would pin every provider to greedy
+    /// decoding while the row said the host was deciding.
+    #[test]
+    fn host_default_and_a_chosen_zero_are_two_rungs_not_one() {
+        let mut v = view();
+        let slot = slot_of(&v, 0, RowKind::TemperatureCycle);
+        v.sampling_temperature = None;
+        focus(&mut v, 0, slot);
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Right)),
+            SettingsAction::Temperature(Some(0)),
+            "the rung after Host default is a chosen zero"
+        );
+        v.sampling_temperature = Some(0.0);
+        focus(&mut v, 0, slot);
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Left)),
+            SettingsAction::Temperature(None),
+            "and stepping back from it removes the key"
+        );
+        assert_eq!(temperature_label(None), "Host default");
+        assert_eq!(temperature_label(Some(0.0)), "0.00");
+    }
+
+    /// The font rows say `(stored)` where there is no terminal to ask, and
+    /// drop the word where there is — so a value that really was asked for
+    /// and one that was only kept are never drawn the same.
+    #[test]
+    fn the_font_rows_say_when_nothing_was_asked_of_the_terminal() {
+        let mut v = view();
+        v.font_family = "Menlo".into();
+        v.font_size = 14;
+        v.terminal = Some(termfont::Terminal {
+            name: termfont::WINDOWS_TERMINAL.into(),
+            control: termfont::Control::None,
+        });
+        assert_eq!(font_family_label(&v), "Menlo (stored)");
+        assert_eq!(font_size_label(&v), "14 pt (stored)");
+        v.terminal = Some(termfont::Terminal {
+            name: "Terminal.app".into(),
+            control: termfont::Control::AppleScript,
+        });
+        assert_eq!(font_family_label(&v), "Menlo");
+        assert_eq!(font_size_label(&v), "14 pt");
+        // And a view nobody filled in does not claim a terminal it never read.
+        v.terminal = None;
+        assert_eq!(font_family_label(&v), "Menlo (stored)");
     }
 
     // -- the rendered notice and the button faces ----------------------------
@@ -2293,13 +3563,31 @@ mod tests {
     /// summary.
     #[test]
     fn every_row_records_a_click_rect() {
-        let hits = hits_at(&view(), 161, 95);
+        let v = view();
+        let hits = hits_at(&v, 161, 95);
         let rows: Vec<_> = hits
             .controls
             .iter()
             .filter(|(_, h)| matches!(h, Hit::Row(..)))
             .collect();
-        assert_eq!(rows.len(), 43, "one Row rect per Kv row");
+        // One rect per Kv row that was **painted**, which is not the same as
+        // one per Kv row the cards hold: TOOL PERMISSIONS is windowed, and a
+        // row outside the window is deliberately not clickable — a rect
+        // recorded for a row nobody can see is a click that lands on nothing.
+        // Counted from the cards rather than written out, because the number
+        // moves whenever a row is added and a literal would then be asserting
+        // the old screen.
+        let painted: usize = (0..CARDS)
+            .map(|c| {
+                let card = &cards(&v)[c];
+                card.kv_count().min(card.window.unwrap_or(usize::MAX))
+            })
+            .sum();
+        assert_eq!(rows.len(), painted, "one Row rect per painted Kv row");
+        assert!(
+            painted < (0..CARDS).map(|c| cards(&v)[c].kv_count()).sum(),
+            "the windowed card painted everything, so this proves nothing"
+        );
         // The cyclers report chevron rects; the buttons report Act rects.
         assert!(hits.controls.iter().any(|(_, h)| *h == Hit::Prev(2, 0)));
         assert!(hits.controls.iter().any(|(_, h)| *h == Hit::Next(2, 0)));

@@ -28,6 +28,22 @@ out for themselves.
 
 ## Unreleased
 
+- **The Code page has a chat strip.** `Tab` reaches it, and a question typed
+  there goes down the same channel a typed line takes, so a running goal is
+  the steering queue's answer and not the page's. The question carries which
+  file it is about and which lines are on screen, and says so when the buffer
+  has unsaved edits or when the read had to replace bytes. A file that is not
+  open, or that could not be read, is refused in words.
+
+- **The Settings screen writes back, card by card.** Appearance, sampling,
+  the memory policy, the keybinding preset and every tool's rule now persist,
+  and the permissions card writes. Four keys are stored and read by nothing
+  yet, and each receipt says so rather than claiming an effect. Open
+  Keybindings writes a starter file and opens it in the editor the `Alt+c`
+  chord already resolves. An accent named `cube:N` is read, stored and drawn
+  but cannot yet be chosen from the screen, which its notice says while
+  naming the file where it can.
+
 - **The Harness page (`Alt+h`) is a process manager, not a history view.** It
   starts a run, archives one, deletes one, signals one, reorders the task
   queue, adds and sweeps tasks, and writes the next run's permission preset.

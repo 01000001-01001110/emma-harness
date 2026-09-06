@@ -1560,6 +1560,20 @@ impl Frame {
         handled
     }
 
+    /// The line the open Code page's chat strip composed, taken once.
+    ///
+    /// Not run from here, which is the whole point. Everything else the page
+    /// asks for is a [`CodeJob`] the frame runs; a question is the one thing
+    /// that has to go down the line channel, and only the reader thread holds
+    /// it.
+    pub fn take_code_line(&self) -> Option<String> {
+        let mut inner = self.lock();
+        match &mut inner.ui {
+            Ui::Full(app) => app.take_code_line(),
+            _ => None,
+        }
+    }
+
     /// A left press while the Code page is open: the tabs and the [Editor]
     /// button. Same one-dispatch rule as the keys.
     pub fn code_click(self: &Arc<Self>, col: u16, row: u16) -> bool {
@@ -1746,14 +1760,28 @@ impl Frame {
     /// screen is closed or the key is a chord/release, so the global layer
     /// keeps it.
     pub fn settings_key(&self, key: ratatui::crossterm::event::KeyEvent) -> bool {
-        let mut inner = self.lock();
-        let handled = if let Ui::Full(app) = &mut inner.ui {
-            app.settings_key(key)
-        } else {
-            false
+        let (handled, launch) = {
+            let mut inner = self.lock();
+            let out = if let Ui::Full(app) = &mut inner.ui {
+                (app.settings_key(key), app.take_settings_launch())
+            } else {
+                (false, None)
+            };
+            if out.0 {
+                synchronized(|| inner.paint());
+            }
+            out
         };
-        if handled {
-            synchronized(|| inner.paint());
+        // Outside the lock, deliberately: an editor can take a second to
+        // start, and a repaint must not wait on it. `App` spawns nothing for
+        // the same reason it holds no handles, which is that a key reaches it
+        // with the paint lock held.
+        if let Some(path) = launch {
+            let lines = match crate::usertools::open_file(&path) {
+                Ok(msg) => self.skin.note(&msg),
+                Err(err) => self.skin.warn(&err),
+            };
+            self.write_lines(lines);
         }
         handled
     }

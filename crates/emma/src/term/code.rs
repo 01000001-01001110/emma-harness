@@ -56,12 +56,23 @@
 //! read-only too. What survives both locks can be saved byte-for-byte, and
 //! [`super::code_git::save_file`] still refuses on a stale hash underneath.
 //!
+//! **The chat strip asks about the file, and says what it sent.** Three rows
+//! under the document: a rule, a pointer to the last question,
+//! and one input line. Submitting composes an attributed line
+//! ([`compose_ask`]) naming the file and — when the whole of it will not fit
+//! under [`MAX_ASK_BODY`] — the exact line range that did, and hands it out as
+//! [`CodeAction::Ask`]. The shell puts that on the same channel a typed line
+//! takes, so nothing here decides whether a goal is running: the steering
+//! queue answers that, and it is the same answer either way. The strip does
+//! **not** render the transcript. The answer streams into the main transcript
+//! like every other one, and a second renderer for one conversation is two
+//! views that can disagree.
+//!
 //! # What this stage does not do
 //!
-//! The page arrives in three stages, and this is the second. There is no chat
-//! strip (stage c) and no language-server decoration (the LSP half) here;
-//! both are named where their seam will go, so the next stage extends this
-//! file rather than reinterpreting it.
+//! The page arrives in three stages, and this is the third. There is no
+//! language-server decoration (the LSP half) here; its seam is named where it
+//! will go, so that stage extends this file rather than reinterpreting it.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -91,10 +102,11 @@ pub enum Mode {
 }
 
 /// Which region has the keyboard. The valid set depends on [`Mode`]: File has
-/// Tree and Body; History has Tree, Commits and Diff.
+/// Tree, Body and Chat; History has Tree, Commits, Diff and Chat.
 ///
-/// Stage c adds `Chat` for the strip under the file; [`CodeView::cycle_focus`]
-/// is where it joins the cycle.
+/// `Chat` is the strip's, and it is last in both cycles because it is the one
+/// region that is reachable in either mode — the strip asks about the open
+/// file whether the right pane is showing the file or its history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Focus {
     #[default]
@@ -102,6 +114,8 @@ pub enum Focus {
     Body,
     Commits,
     Diff,
+    /// The chat strip's input line.
+    Chat,
 }
 
 /// One entry in the flattened file tree — a directory or a file, at a depth.
@@ -524,6 +538,143 @@ pub struct SaveRequest {
     pub expect: u64,
 }
 
+/// The chat strip's one input line, and a pointer to where the last answer
+/// went.
+///
+/// It deliberately does **not** hold a transcript. The answer arrives in the
+/// main transcript like every other one, and a second copy of that renderer
+/// here would be two views of one conversation that can disagree; the strip
+/// says which question went out and where to read the answer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Strip {
+    pub input: String,
+    /// Cursor position in **chars** of [`Self::input`], `0..=len`. Chars for
+    /// the same reason [`OpenFile::col`] is: this indexes the string, and the
+    /// paint is the half that converts to display columns.
+    pub cursor: usize,
+    /// The last question submitted from here, for the pointer row. It is the
+    /// person's words and not the composed line, because the composed line is
+    /// mostly their own file read back at them.
+    pub sent: Option<String>,
+}
+
+impl Strip {
+    /// The input as chars, which is the unit the cursor is in.
+    fn chars(&self) -> Vec<char> {
+        self.input.chars().collect()
+    }
+
+    fn insert(&mut self, c: char) {
+        // The same door `OpenFile::insert_char` guards, for the same reason:
+        // this string is composed into a line that leaves the program, and a
+        // control byte in it is a control byte in somebody's transcript.
+        if c.is_control() {
+            return;
+        }
+        let mut cs = self.chars();
+        let at = self.cursor.min(cs.len());
+        cs.insert(at, c);
+        self.input = cs.into_iter().collect();
+        self.cursor = at + 1;
+    }
+
+    fn backspace(&mut self) {
+        let mut cs = self.chars();
+        if self.cursor == 0 || cs.is_empty() {
+            return;
+        }
+        let at = self.cursor.min(cs.len());
+        cs.remove(at - 1);
+        self.input = cs.into_iter().collect();
+        self.cursor = at - 1;
+    }
+
+    fn delete(&mut self) {
+        let mut cs = self.chars();
+        if self.cursor >= cs.len() {
+            return;
+        }
+        cs.remove(self.cursor);
+        self.input = cs.into_iter().collect();
+    }
+
+    /// The question, or `None` when there is nothing but whitespace in the
+    /// box. Empties the box only when it returns something, so a stray Enter
+    /// cannot throw away a line somebody typed.
+    fn take(&mut self) -> Option<String> {
+        let q = self.input.trim().to_string();
+        if q.is_empty() {
+            return None;
+        }
+        self.input.clear();
+        self.cursor = 0;
+        Some(q)
+    }
+}
+
+/// The most file body that rides along with a question from the chat strip.
+///
+/// The price of this feature is tokens and it is paid on every question: 16 KB
+/// is roughly four thousand tokens of context, a real cost but a bounded one.
+/// Past it the whole file is not sent — the visible window is, **named as a
+/// line range**, so the answer cannot quietly be about a part emma never saw.
+/// Past even that, only the path goes and the line says so.
+pub const MAX_ASK_BODY: usize = 16 * 1024;
+
+/// Compose the line the chat strip submits: an attribution naming exactly what
+/// is included, the text itself, then the person's question — one line a
+/// person could have typed.
+///
+/// **The attribution is not decoration.** An answer about a file emma was
+/// never shown is the failure this exists to prevent, so the header always
+/// says what went, including when that is nothing but a path, when it is only
+/// a line range, when it carries unsaved edits, and when the bytes are not the
+/// file's own ([`SANITISED_NOTE`] — the buffer is what the page could draw,
+/// and saying otherwise would be fabricating agreement with a file on disk).
+///
+/// `rows` is the height of the document pane, so the window is what the person
+/// can see. Pure: it reads the buffer the page already holds and never a file.
+pub fn compose_ask(open: &OpenFile, rows: usize, question: &str) -> String {
+    let n = open.lines.len();
+    let mut caveat = String::new();
+    if open.dirty {
+        // The unsaved edits *are* what goes, because the buffer is the file
+        // being asked about. Saying so beats a surprise in either direction.
+        caveat.push_str("; with unsaved edits");
+    }
+    if open.locked == Some(SANITISED_NOTE) {
+        caveat.push_str(
+            "; tabs and control bytes were replaced to draw it, so this is not \
+                         byte-for-byte the file",
+        );
+    }
+    let path = &open.path;
+    if n == 0 {
+        return format!("About `{path}` (the file is empty):\n\n{question}");
+    }
+    let whole = open.lines.join("\n");
+    if whole.len() <= MAX_ASK_BODY {
+        return format!(
+            "About `{path}` (the whole file, {n} lines{caveat}):\n\n```\n{whole}\n```\n\n{question}"
+        );
+    }
+    let top = open.scroll.min(n - 1);
+    let end = (top + rows).min(n);
+    let window = open.lines[top..end].join("\n");
+    if end > top && window.len() <= MAX_ASK_BODY {
+        return format!(
+            "About `{path}` (lines {a}-{b} of {n}; the rest is too large to include{caveat}):\
+             \n\n```\n{window}\n```\n\n{question}",
+            a = top + 1,
+            b = end,
+        );
+    }
+    format!(
+        "About `{path}` ({n} lines; too large to include any of it here, read it if you need \
+         it{caveat}):\n\n{question}"
+    )
+}
+
 /// A file's history and the selected commit's diff. `None` on the view until
 /// HISTORY is first entered for the open file; the shell fills it then, and
 /// the pane says "loading history…" in the meantime.
@@ -578,6 +729,18 @@ pub struct CodeView {
     /// knows it, so it is stored here for PageUp/PageDown and for keeping the
     /// cursor on screen.
     pub body_rows: usize,
+    /// The chat strip: what is typed into it, and what was last sent.
+    pub strip: Strip,
+    /// Whether the last paint had room to draw the strip at all — under twelve
+    /// inner rows the document keeps them. Only the paint knows the height, and
+    /// Tab must not reach a box nobody can see, so the shell stores the answer
+    /// here beside [`Self::body_rows`], from [`Regions::strip`].
+    ///
+    /// It starts **true**, which is the safe default in the one direction that
+    /// matters: an unwired shell leaves a reachable strip on every terminal
+    /// tall enough to draw it, where the alternative would be a feature that
+    /// silently does not exist.
+    pub strip_shown: bool,
 }
 
 /// The action an unsaved-changes warning is holding back.
@@ -616,6 +779,8 @@ impl CodeView {
             edit: false,
             armed: None,
             body_rows: 0,
+            strip: Strip::default(),
+            strip_shown: true,
         }
     }
 
@@ -679,6 +844,12 @@ impl CodeView {
         // A new file is a new document: the viewer, not the editor. Somebody
         // who wants to type says so again, on the file they are looking at.
         self.edit = false;
+        // The pointer row names a question about the file that was open when
+        // it was asked. Left standing over a different file it would be a
+        // sentence about the wrong thing, which is the whole class `History`
+        // is dropped here for. What is half-typed in the box is the person's
+        // and stays.
+        self.strip.sent = None;
     }
 
     /// The shell's answer to [`CodeAction::Save`].
@@ -888,7 +1059,7 @@ fn parent_of(path: &str) -> Option<String> {
 /// process crosses this enum; the handler below never touches disk, which is
 /// what makes it testable without a repository.
 ///
-/// Stage c adds `Ask(String)`; the LSP half adds `Hover` and `Definition`.
+/// The LSP half adds `Hover` and `Definition`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodeAction {
     /// Not this page's key (or a chord/release): let it fall through.
@@ -913,6 +1084,17 @@ pub enum CodeAction {
     /// second thing to get wrong on the terminals that already refuse the
     /// first.
     Copy(String),
+    /// A question about the open file, already composed into the line a person
+    /// could have typed ([`compose_ask`]).
+    ///
+    /// **Composed here and not by the shell**, which is the one judgement in
+    /// this variant: the buffer, its unsaved edits, the visible line range and
+    /// the reason a file is locked all live on this page, and a shell that
+    /// re-derived them would be the second answer to one question this module
+    /// has already paid for twice. The shell's whole job is to put the string
+    /// on the channel a typed line takes — so the steering queue decides what
+    /// happens to it mid-goal, exactly as it does for a typed line.
+    Ask(String),
     /// Close the page.
     Close,
 }
@@ -939,6 +1121,17 @@ pub enum CodeAction {
 /// every terminal delivers. `F2` does the same thing and is bound nowhere
 /// else, so a terminal that eats `Ctrl+s` for flow control still has a key —
 /// which is why the header names both rather than promising one.
+///
+/// **The chat strip did not widen this.** A second text box on the page is a
+/// reason somebody might reach for a second predicate; there is none, and
+/// there must not be. Every plain key was already the page's, so the strip
+/// needs nothing added — it is [`handle_key`]'s last layer that decides which
+/// box a letter lands in, and it can only be reached through here. The one
+/// Ctrl chord still answers on [`CodeView::editing`], which is false while the
+/// strip has the keyboard: `Ctrl+s` over the strip is the capture toggle it is
+/// over the tree, and `F2` is the save key that works from anywhere on the
+/// page. A test pins that pair, because the tempting change is to make the
+/// strip "also" take `Ctrl+s` and that is how the two predicates start.
 pub fn takes_key(v: &CodeView, key: KeyEvent) -> bool {
     if key.kind == KeyEventKind::Release || key.modifiers.contains(KeyModifiers::ALT) {
         return false;
@@ -963,7 +1156,10 @@ pub fn takes_key(v: &CodeView, key: KeyEvent) -> bool {
 /// 4. **The function keys**, which work from anywhere on the page — including
 ///    from inside the document, where every letter is text. That is the whole
 ///    reason they are function keys.
-/// 5. The editor, when the document is being edited, or the browser otherwise.
+/// 5. **The chat strip**, when it has the keyboard — and only then, which is
+///    the whole of "the strip must not eat a key the editor needs": the strip
+///    is one branch of one layer, not a rule beside the layers.
+/// 6. The editor, when the document is being edited, or the browser otherwise.
 pub fn handle_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
     if !takes_key(v, key) {
         return CodeAction::None;
@@ -996,10 +1192,65 @@ pub fn handle_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
         _ => {}
     }
     v.notice = None;
+    if v.focus == Focus::Chat {
+        return strip_key(v, key);
+    }
     if v.editing() {
         return edit_key(v, key);
     }
     browse_key(v, key)
+}
+
+/// The chat strip's keys: a one-line box that asks about the open file.
+///
+/// Every key here is the one a person expects from a one-line box, and the two
+/// that are not obvious are the ones worth the comment. `Esc` leaves the strip
+/// rather than the page — C2's argument about the editor, unchanged: the key
+/// that leaves a text box must not also be the key that throws away what is in
+/// it, and here what is in it is a half-typed question. `Enter` on an empty
+/// box does **nothing at all** rather than sending a question with no words:
+/// a fabricated question is a fabricated answer.
+fn strip_key(v: &mut CodeView, key: KeyEvent) -> CodeAction {
+    match key.code {
+        KeyCode::Esc => v.leave_strip(),
+        KeyCode::Tab => {
+            v.cycle_focus();
+            CodeAction::FocusChanged
+        }
+        KeyCode::Enter => match v.strip.take() {
+            Some(q) => v.ask(&q),
+            None => CodeAction::None,
+        },
+        KeyCode::Backspace => {
+            v.strip.backspace();
+            CodeAction::FocusChanged
+        }
+        KeyCode::Delete => {
+            v.strip.delete();
+            CodeAction::FocusChanged
+        }
+        KeyCode::Left => {
+            v.strip.cursor = v.strip.cursor.saturating_sub(1);
+            CodeAction::FocusChanged
+        }
+        KeyCode::Right => {
+            v.strip.cursor = (v.strip.cursor + 1).min(v.strip.input.chars().count());
+            CodeAction::FocusChanged
+        }
+        KeyCode::Home => {
+            v.strip.cursor = 0;
+            CodeAction::FocusChanged
+        }
+        KeyCode::End => {
+            v.strip.cursor = v.strip.input.chars().count();
+            CodeAction::FocusChanged
+        }
+        KeyCode::Char(c) => {
+            v.strip.insert(c);
+            CodeAction::FocusChanged
+        }
+        _ => CodeAction::None,
+    }
 }
 
 /// Whether this key confirms a pending discard. It is the key that asked for
@@ -1152,16 +1403,61 @@ impl CodeView {
         }
     }
 
-    /// Tab, round the regions the current mode has. Stage c inserts the chat
-    /// strip after the body and after the patch.
+    /// Tab, round the regions the current mode has, with the chat strip last
+    /// in both — it is what a person reaches after looking at the thing they
+    /// want to ask about.
+    ///
+    /// The strip is skipped when the paint had no room for it
+    /// ([`Self::strip_shown`]). A focus on a box that is not on screen is
+    /// typing into nothing, which is worse than not having the box.
     fn cycle_focus(&mut self) {
         self.focus = match (self.mode, self.focus) {
             (Mode::File, Focus::Tree) => Focus::Body,
+            (Mode::File, Focus::Body) if self.strip_shown => Focus::Chat,
             (Mode::File, _) => Focus::Tree,
             (Mode::History, Focus::Tree) => Focus::Commits,
             (Mode::History, Focus::Commits) => Focus::Diff,
+            (Mode::History, Focus::Diff) if self.strip_shown => Focus::Chat,
             (Mode::History, _) => Focus::Tree,
         };
+    }
+
+    /// `Esc` out of the strip, back to the region Tab arrived from. Not
+    /// [`Self::cycle_focus`], which would carry on to the tree: leaving a text
+    /// box should put the keyboard back where it was, not one step further on.
+    fn leave_strip(&mut self) -> CodeAction {
+        self.focus = match self.mode {
+            Mode::File => Focus::Body,
+            Mode::History => Focus::Diff,
+        };
+        CodeAction::FocusChanged
+    }
+
+    /// A submitted question: compose it against the open buffer, or say why
+    /// there is nothing to ask about.
+    ///
+    /// Both refusals are worded for the same reason every other refusal on
+    /// this page is: a box that takes a question, empties itself and sends
+    /// nothing is how somebody finds out ten minutes later.
+    pub fn ask(&mut self, question: &str) -> CodeAction {
+        let rows = self.body_rows;
+        let Some(open) = self.open.as_ref() else {
+            self.notice = Some("open a file to ask about it".to_string());
+            return CodeAction::FocusChanged;
+        };
+        if open.note.is_some() {
+            self.notice = Some("this file cannot be read, so it cannot be asked about".to_string());
+            return CodeAction::FocusChanged;
+        }
+        let line = compose_ask(open, rows, question);
+        let dirty = open.dirty;
+        self.strip.sent = Some(question.to_string());
+        self.notice = Some(if dirty {
+            "sent, with your unsaved edits included — the answer is in the transcript".to_string()
+        } else {
+            "sent: the answer is in the transcript".to_string()
+        });
+        CodeAction::Ask(line)
     }
 
     /// FILE ↔ HISTORY.
@@ -1229,6 +1525,12 @@ impl CodeView {
                 }
                 CodeAction::FocusChanged
             }
+            // Not reachable today: `strip_key` owns every arrow while the
+            // strip has the keyboard, and the wheel does not come through
+            // here. It answers rather than panicking because an exhaustive
+            // match that says `unreachable!()` is a promise about callers this
+            // module cannot keep — and one line has nothing to move in anyway.
+            Focus::Chat => CodeAction::None,
         }
     }
 
@@ -1556,6 +1858,15 @@ pub struct Regions {
     pub copy: Option<Rect>,
     /// The `[Save]` button.
     pub save: Option<Rect>,
+    /// The chat strip's **three rows**, or `None` when the pane was too short
+    /// to draw the strip at all. The shell stores `is_some()` on
+    /// [`CodeView::strip_shown`] so Tab does not reach a box nobody can see.
+    ///
+    /// The whole block and not just the input row, because this is also the
+    /// rect a test asks "did the document stop above the strip?" — and the
+    /// answer to that has to be about every row the strip owns, not the last
+    /// of them. The input row is `strip.bottom() - 1`.
+    pub strip: Option<Rect>,
     /// How many rows the content region has. The key handler stores it on the
     /// view so PageDown moves by a screen; only the paint can know it.
     pub rows: usize,
@@ -1670,6 +1981,22 @@ fn help_rows(inner_height: u16, y: u16) -> u16 {
     u16::from(inner_height.saturating_sub(y) >= 3)
 }
 
+/// How many rows the chat strip takes off the bottom of the body: a rule, the
+/// pointer row, and the input — or none at all.
+///
+/// **The floor is the file's, not the strip's.** Under twelve inner rows the
+/// document needs every line it has more than the strip does, and three rows
+/// of chat over nine rows of source is a page that has stopped being a code
+/// viewer. The alternative — drawing a squeezed one-row strip — would put a
+/// text box on screen with no room to show what was typed into it.
+fn strip_rows(inner_height: u16) -> u16 {
+    if inner_height >= 12 {
+        3
+    } else {
+        0
+    }
+}
+
 /// The rows the file or the patch is drawn into, derived from the page's own
 /// area and state.
 ///
@@ -1682,9 +2009,26 @@ fn content_rect(body: Rect, v: &CodeView) -> Rect {
         return Rect::new(inner.x, inner.y, 0, 0);
     }
     let y = 1 + u16::from(v.notice.is_some());
-    let help_h = help_rows(inner.height, y);
-    let h = inner.height.saturating_sub(y + help_h);
+    let strip_h = strip_rows(inner.height);
+    let help_h = help_rows(inner.height, y + strip_h);
+    let h = inner.height.saturating_sub(y + help_h + strip_h);
     Rect::new(inner.x, inner.y + y, inner.width, h)
+}
+
+/// Where the chat strip's three rows land, or `None` when the pane is too
+/// short for them. Pure and shared by the paint and the hit test, the reason
+/// [`content_rect`] is: a rect the paint records and the hit test re-derives is
+/// two answers to one question.
+fn strip_rect(body: Rect) -> Option<Rect> {
+    let inner = Block::bordered().inner(body);
+    if inner.width == 0 {
+        return None;
+    }
+    let h = strip_rows(inner.height);
+    if h == 0 {
+        return None;
+    }
+    Some(Rect::new(inner.x, inner.bottom() - h, inner.width, h))
 }
 
 /// Where a paint puts the document text, so a screen cell can be turned back
@@ -1794,6 +2138,10 @@ pub enum CodeClick {
     Save,
     /// A cell in the document: this `(line, char)`.
     Doc(usize, usize),
+    /// Anywhere in the chat strip. It takes the keyboard; the click does not
+    /// carry a column, because a one-line box a person has just pointed at
+    /// wants the cursor at the end of what is already typed.
+    Strip,
 }
 
 /// Hit-test a press against the page's controls, using the same geometry the
@@ -1821,7 +2169,20 @@ pub fn click(v: &CodeView, area: Rect, col: u16, row: u16) -> Option<CodeClick> 
     if on(bar.history_tab) {
         return Some(CodeClick::Tab(Mode::History));
     }
-    cell_to_pos(v, area, col, row).map(|(l, c)| CodeClick::Doc(l, c))
+    if let Some((l, c)) = cell_to_pos(v, area, col, row) {
+        return Some(CodeClick::Doc(l, c));
+    }
+    // The strip's rows, which `content_rect` has already taken off the
+    // document — the two rects are disjoint by construction, so this order is
+    // defensive rather than load-bearing. Swapping the two branches leaves
+    // every test green; what is *not* green is a `content_rect` that stops
+    // reserving the rows, which is where the guarantee actually lives.
+    if let Some(s) = strip_rect(r.body) {
+        if row >= s.y && row < s.bottom() && col >= s.x && col < s.right() {
+            return Some(CodeClick::Strip);
+        }
+    }
+    None
 }
 
 /// What a [`CodeClick`] asks the shell to do, so the click and the key it
@@ -1839,6 +2200,12 @@ pub fn act(v: &mut CodeView, hit: CodeClick) -> CodeAction {
         }
         CodeClick::Doc(line, c) => {
             v.press_doc(line, c);
+            CodeAction::FocusChanged
+        }
+        CodeClick::Strip => {
+            v.notice = None;
+            v.focus = Focus::Chat;
+            v.strip.cursor = v.strip.input.chars().count();
             CodeAction::FocusChanged
         }
         CodeClick::Tab(Mode::File) if v.mode == Mode::History => {
@@ -2073,13 +2440,102 @@ fn draw_body(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) -> Regions
             )),
         );
     }
+    // The same function the hit test calls, for the same reason `content_rect`
+    // is shared: a strip the paint puts somewhere the click does not look for
+    // is a box that swallows presses.
+    if let Some(strip) = strip_rect(area) {
+        out.strip = Some(strip);
+        draw_strip(strip, buf, v, skin);
+    }
     out
+}
+
+/// The chat strip: a rule, the pointer to the last question, and the input.
+///
+/// The cursor is drawn as a styled cell rather than parked with the terminal's
+/// own cursor, which is what the rest of this page does and what the frame
+/// expects — `app.rs` returns no cursor position for the Code page. It is
+/// listed as unverified in the report: a drawn cursor is a cell buffer's
+/// answer, and a cell buffer is not a console.
+fn draw_strip(area: Rect, buf: &mut Buffer, v: &CodeView, skin: &Skin) {
+    if area.height < 3 || area.width == 0 {
+        return;
+    }
+    put(
+        buf,
+        area,
+        0,
+        Line::from(Span::styled(
+            skin.glyphs.rule.repeat(area.width as usize),
+            skin.palette.dim(),
+        )),
+    );
+    // What the row says depends on what there is to say, and every branch is a
+    // true sentence about the current state rather than a label: a question
+    // that went out and where its answer is, the file a question would be
+    // about, or the reason there is nothing to ask.
+    let pointer = match (&v.strip.sent, v.open.as_ref()) {
+        (Some(q), _) => format!("asked: {q}   (the answer is in the transcript — Esc to read it)"),
+        (None, Some(o)) if o.note.is_some() => {
+            format!("{} cannot be read, so it cannot be asked about", o.path)
+        }
+        (None, Some(o)) => format!("ask emma about {}", o.path),
+        (None, None) => "open a file to ask emma about it".to_string(),
+    };
+    put(
+        buf,
+        area,
+        1,
+        Line::from(Span::styled(
+            fit(
+                &sanitise(&pointer),
+                area.width as usize,
+                skin.glyphs.ellipsis,
+            ),
+            skin.palette.dim(),
+        )),
+    );
+
+    let focused = v.focus == Focus::Chat;
+    let prompt_style = if focused {
+        skin.palette.bold(Role::Accent)
+    } else {
+        skin.palette.dim()
+    };
+    let text_w = (area.width as usize).saturating_sub(2);
+    let shown = fit(&v.strip.input, text_w, skin.glyphs.ellipsis);
+    let mut spans = vec![Span::styled("> ", prompt_style)];
+    if focused {
+        // Three spans so the cursor cell is the one the buffer's index names.
+        // `fit` may have ellipsised, so the cursor is clamped to what is drawn
+        // rather than pointing past the end of the row.
+        let at = v.strip.cursor.min(shown.chars().count());
+        let before: String = shown.chars().take(at).collect();
+        let under: String = shown.chars().skip(at).take(1).collect();
+        let after: String = shown.chars().skip(at + 1).collect();
+        let under = if under.is_empty() {
+            " ".to_string()
+        } else {
+            under
+        };
+        spans.push(Span::styled(before, skin.palette.style(Role::Text)));
+        spans.push(Span::styled(under, skin.palette.chip(Role::Accent)));
+        spans.push(Span::styled(after, skin.palette.style(Role::Text)));
+    } else {
+        spans.push(Span::styled(shown, skin.palette.style(Role::Text)));
+    }
+    put(buf, area, 2, Line::from(spans));
 }
 
 /// The page's keys, named where a reader will look for them. Four rows and not
 /// one, because the editor's keys and the browser's mean different things on
 /// the same keyboard and a row naming both would be a row naming neither.
 fn help_line(v: &CodeView) -> String {
+    if v.focus == Focus::Chat {
+        return "type a question about the open file · Enter sends it · Esc back to the file \
+                · F2 saves"
+            .to_string();
+    }
     if v.editing() {
         return "typing edits · Ctrl+s or F2 saves · Shift+arrows select · F4 copies \
                 · Esc read-only"
@@ -2093,8 +2549,8 @@ fn help_line(v: &CodeView) -> String {
             "↑/↓ pick a commit · Enter shows its patch · b back to the file · F3 or click FILE"
                 .to_string()
         }
-        Mode::File => "Tab pane · ↑/↓ move · Enter opens, then edits · F3 HISTORY · F4 copy \
-                       · F7 external editor"
+        Mode::File => "Tab pane, then the ask box · ↑/↓ move · Enter opens, then edits \
+                       · F3 HISTORY · F4 copy · F7 external editor"
             .to_string(),
     }
 }
@@ -2733,7 +3189,11 @@ mod tests {
         let mut v = sample();
         open_file(&mut v, "big.rs", &refs);
         let (buf, r) = painted(&v, Rect::new(0, 0, 100, 24));
-        assert!(r.rows >= 18, "the body reported {} rows", r.rows);
+        // Was 18 before stage c; the chat strip takes three of the body's
+        // rows on a pane this tall, which is the trade the strip's own doc
+        // argues for. The invariant under it is unchanged: every row the
+        // paint *reports* has a line of the file on it.
+        assert!(r.rows >= 17, "the body reported {} rows", r.rows);
         let painted_rows = dump(&buf)
             .iter()
             .filter(|row| row.contains("line "))
@@ -3568,5 +4028,531 @@ mod tests {
                 "{rect:?} escapes {inner:?}"
             );
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // Stage c — the chat strip
+    // ---------------------------------------------------------------------
+
+    /// The page with a file open and the strip focused, the way three keys
+    /// reach it: open, Tab to the body, Tab to the strip.
+    fn stripped(v: &mut CodeView, path: &str, lines: &[&str]) {
+        open_file(v, path, lines);
+        v.body_rows = 10;
+        v.focus = Focus::Tree;
+        assert_eq!(handle_key(v, key(KeyCode::Tab)), CodeAction::FocusChanged);
+        assert_eq!(v.focus, Focus::Body);
+        assert_eq!(handle_key(v, key(KeyCode::Tab)), CodeAction::FocusChanged);
+    }
+
+    fn type_into_strip(v: &mut CodeView, text: &str) {
+        for c in text.chars() {
+            assert_eq!(
+                handle_key(v, key(KeyCode::Char(c))),
+                CodeAction::FocusChanged
+            );
+        }
+    }
+
+    #[test]
+    fn tab_reaches_the_strip_and_esc_gives_the_keyboard_back() {
+        let mut v = sample();
+        stripped(&mut v, "src/main.rs", &["one", "two"]);
+        assert_eq!(v.focus, Focus::Chat, "Tab must reach the strip");
+        // Esc goes back to the document, not on round the cycle and not out
+        // of the page: leaving a text box puts the keyboard where it was.
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Esc)),
+            CodeAction::FocusChanged
+        );
+        assert_eq!(v.focus, Focus::Body);
+        // And the page is still open — an Esc that closed it would have thrown
+        // away the half-typed question with it.
+        assert!(v.open.is_some());
+    }
+
+    #[test]
+    fn the_strip_is_reachable_from_history_too_and_esc_returns_to_the_patch() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["one"]);
+        v.mode = Mode::History;
+        v.focus = Focus::Diff;
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Tab)),
+            CodeAction::FocusChanged
+        );
+        assert_eq!(v.focus, Focus::Chat);
+        handle_key(&mut v, key(KeyCode::Esc));
+        assert_eq!(v.focus, Focus::Diff);
+    }
+
+    #[test]
+    fn tab_skips_the_strip_when_the_paint_had_no_room_for_it() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["one"]);
+        // What a short pane reports.
+        let (_, r) = painted(&v, Rect::new(0, 0, 100, 10));
+        assert!(
+            r.strip.is_none(),
+            "a ten-row page has no room for the strip"
+        );
+        v.strip_shown = r.strip.is_some();
+        v.focus = Focus::Body;
+        handle_key(&mut v, key(KeyCode::Tab));
+        assert_eq!(
+            v.focus,
+            Focus::Tree,
+            "Tab must not focus a box that is not on screen"
+        );
+        // And on a pane that does have room, the same key reaches it.
+        let (_, tall) = painted(&v, Rect::new(0, 0, 100, 24));
+        assert!(tall.strip.is_some());
+        v.strip_shown = true;
+        v.focus = Focus::Body;
+        handle_key(&mut v, key(KeyCode::Tab));
+        assert_eq!(v.focus, Focus::Chat);
+    }
+
+    #[test]
+    fn a_submitted_question_leaves_the_page_as_ask_carrying_what_was_typed() {
+        let mut v = sample();
+        stripped(&mut v, "src/main.rs", &["fn main() {}", "// tail"]);
+        type_into_strip(&mut v, "what does this do?");
+        assert_eq!(v.strip.input, "what does this do?");
+        let action = handle_key(&mut v, key(KeyCode::Enter));
+        let CodeAction::Ask(line) = action else {
+            panic!("Enter in the strip must produce an Ask, got {action:?}");
+        };
+        assert!(
+            line.ends_with("what does this do?"),
+            "the question is the last thing on the line: {line}"
+        );
+        // The file is named and its text rides along, which is the whole
+        // point: an answer about a file emma was never shown is the failure.
+        assert!(line.contains("About `src/main.rs`"), "{line}");
+        assert!(line.contains("fn main() {}"), "{line}");
+        // The box empties, and the pointer row now names what went.
+        assert!(v.strip.input.is_empty());
+        assert_eq!(v.strip.cursor, 0);
+        assert_eq!(v.strip.sent.as_deref(), Some("what does this do?"));
+        assert!(v.notice.as_deref().unwrap().contains("transcript"));
+    }
+
+    #[test]
+    fn an_empty_line_submits_nothing_at_all() {
+        let mut v = sample();
+        stripped(&mut v, "src/main.rs", &["one"]);
+        assert_eq!(handle_key(&mut v, key(KeyCode::Enter)), CodeAction::None);
+        assert!(
+            v.strip.sent.is_none(),
+            "nothing was asked, so nothing was sent"
+        );
+        // Whitespace is not a question either, and the box keeps it rather
+        // than silently clearing what somebody typed.
+        type_into_strip(&mut v, "   ");
+        assert_eq!(handle_key(&mut v, key(KeyCode::Enter)), CodeAction::None);
+        assert!(v.strip.sent.is_none());
+        assert_eq!(v.strip.input, "   ");
+    }
+
+    #[test]
+    fn a_question_with_no_file_open_says_so_rather_than_asking_about_nothing() {
+        let mut v = sample();
+        v.strip_shown = true;
+        v.focus = Focus::Chat;
+        type_into_strip(&mut v, "why?");
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Enter)),
+            CodeAction::FocusChanged
+        );
+        assert!(v.strip.sent.is_none());
+        assert_eq!(v.notice.as_deref(), Some("open a file to ask about it"));
+    }
+
+    #[test]
+    fn a_question_about_an_unreadable_file_is_refused_in_words() {
+        let mut v = sample();
+        v.set_open(
+            "a.bin".to_string(),
+            FileRead::Refused("binary file".to_string()),
+            None,
+        );
+        v.focus = Focus::Chat;
+        type_into_strip(&mut v, "why?");
+        assert_eq!(
+            handle_key(&mut v, key(KeyCode::Enter)),
+            CodeAction::FocusChanged
+        );
+        assert!(v.strip.sent.is_none());
+        assert!(v.notice.as_deref().unwrap().contains("cannot be read"));
+    }
+
+    #[test]
+    fn a_key_the_editor_owns_is_not_eaten_while_the_editor_has_focus() {
+        let mut v = sample();
+        editing_at(&mut v, "src/main.rs", &["ab"]);
+        v.strip_shown = true;
+        // Every key the strip would have taken, aimed at the editor.
+        v.open.as_mut().unwrap().col = 2;
+        handle_key(&mut v, key(KeyCode::Char('x')));
+        handle_key(&mut v, key(KeyCode::Backspace));
+        handle_key(&mut v, key(KeyCode::Enter));
+        handle_key(&mut v, key(KeyCode::Home));
+        assert_eq!(
+            v.open.as_ref().unwrap().lines,
+            vec!["ab".to_string(), String::new()],
+            "the letters and the newline went into the document"
+        );
+        assert!(
+            v.strip.input.is_empty(),
+            "the strip must not see a key the editor has: {:?}",
+            v.strip.input
+        );
+        assert!(
+            v.strip.sent.is_none(),
+            "Enter in the editor is a newline, never a question"
+        );
+    }
+
+    #[test]
+    fn the_strip_did_not_widen_the_predicate_the_shell_shares() {
+        let mut v = sample();
+        let ctrl_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        editing_at(&mut v, "src/main.rs", &["one"]);
+        assert!(
+            takes_key(&v, ctrl_s),
+            "the editor still owns the save chord"
+        );
+        // With the strip focused the chord is *not* the page's: it goes back
+        // to the capture toggle, exactly as it does over the tree. F2 is the
+        // save key that works from anywhere, which is why there are two.
+        v.strip_shown = true;
+        v.focus = Focus::Chat;
+        assert!(
+            !takes_key(&v, ctrl_s),
+            "a second text box must not add a second Ctrl chord"
+        );
+        assert!(
+            takes_key(&v, key(KeyCode::Char('s'))),
+            "plain keys are the page's"
+        );
+        assert!(!takes_key(
+            &v,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT)
+        ));
+    }
+
+    #[test]
+    fn f2_still_saves_from_inside_the_strip() {
+        let mut v = sample();
+        editing_at(&mut v, "src/main.rs", &["one"]);
+        handle_key(&mut v, key(KeyCode::Char('Z')));
+        assert!(v.dirty());
+        v.strip_shown = true;
+        v.focus = Focus::Chat;
+        type_into_strip(&mut v, "hi");
+        let action = handle_key(&mut v, key(KeyCode::F(2)));
+        assert!(
+            matches!(action, CodeAction::Save(_)),
+            "F2 is the save key that reaches the buffer from anywhere: {action:?}"
+        );
+        assert_eq!(
+            v.strip.input, "hi",
+            "the save must not disturb the question"
+        );
+    }
+
+    #[test]
+    fn the_strip_edits_one_line_the_way_a_one_line_box_does() {
+        let mut v = sample();
+        stripped(&mut v, "src/main.rs", &["one"]);
+        type_into_strip(&mut v, "abc");
+        assert_eq!(v.strip.cursor, 3);
+        handle_key(&mut v, key(KeyCode::Left));
+        handle_key(&mut v, key(KeyCode::Left));
+        type_into_strip(&mut v, "X");
+        assert_eq!(v.strip.input, "aXbc");
+        handle_key(&mut v, key(KeyCode::Home));
+        assert_eq!(v.strip.cursor, 0);
+        handle_key(&mut v, key(KeyCode::Delete));
+        assert_eq!(v.strip.input, "Xbc");
+        handle_key(&mut v, key(KeyCode::End));
+        handle_key(&mut v, key(KeyCode::Backspace));
+        assert_eq!(v.strip.input, "Xb");
+        assert_eq!(v.strip.cursor, 2);
+    }
+
+    #[test]
+    fn a_control_character_never_reaches_the_question() {
+        let mut v = sample();
+        stripped(&mut v, "src/main.rs", &["one"]);
+        // Nothing on a keyboard produces one as a `Char`, but this is the one
+        // door into a string that leaves the program.
+        for c in ['\u{1b}', '\r', '\u{7}'] {
+            handle_key(&mut v, key(KeyCode::Char(c)));
+        }
+        type_into_strip(&mut v, "ok");
+        assert_eq!(v.strip.input, "ok");
+        let CodeAction::Ask(line) = handle_key(&mut v, key(KeyCode::Enter)) else {
+            panic!("expected an Ask");
+        };
+        assert!(
+            !line.contains('\u{1b}'),
+            "an escape byte must not ride out on a composed line"
+        );
+    }
+
+    #[test]
+    fn a_file_too_large_to_send_whole_names_the_lines_that_went() {
+        let big: Vec<String> = (0..4000)
+            .map(|i| format!("line {i} aaaaaaaaaaaaaaaaaaaa"))
+            .collect();
+        let refs: Vec<&str> = big.iter().map(String::as_str).collect();
+        let mut v = sample();
+        open_file(&mut v, "big.rs", &refs);
+        v.body_rows = 20;
+        v.open.as_mut().unwrap().scroll = 100;
+        v.strip_shown = true;
+        v.focus = Focus::Chat;
+        type_into_strip(&mut v, "why?");
+        let CodeAction::Ask(line) = handle_key(&mut v, key(KeyCode::Enter)) else {
+            panic!("expected an Ask");
+        };
+        assert!(
+            line.contains("lines 101-120 of 4000"),
+            "the window must name itself: {}",
+            &line[..line.len().min(160)]
+        );
+        assert!(
+            line.contains("line 100 "),
+            "the window is what is on screen"
+        );
+        assert!(!line.contains("line 3999 "), "the rest must not be in it");
+        assert!(
+            line.len() < MAX_ASK_BODY + 512,
+            "the cap must bound the line: {}",
+            line.len()
+        );
+    }
+
+    #[test]
+    fn a_question_about_an_edited_buffer_says_the_unsaved_edits_went_too() {
+        let mut v = sample();
+        editing_at(&mut v, "src/main.rs", &["one"]);
+        handle_key(&mut v, key(KeyCode::Char('Z')));
+        assert!(v.dirty());
+        v.strip_shown = true;
+        v.focus = Focus::Chat;
+        type_into_strip(&mut v, "why?");
+        let CodeAction::Ask(line) = handle_key(&mut v, key(KeyCode::Enter)) else {
+            panic!("expected an Ask");
+        };
+        assert!(line.contains("with unsaved edits"), "{line}");
+        assert!(
+            line.contains("Zone"),
+            "the buffer is what went, not the file: {line}"
+        );
+        assert!(v.notice.as_deref().unwrap().contains("unsaved edits"));
+    }
+
+    #[test]
+    fn a_sanitised_buffer_says_it_is_not_byte_for_byte_the_file() {
+        let mut v = sample();
+        // A tab is what the read had to change; the hash of the *unchanged*
+        // bytes is what the shell hands over, so the buffer locks.
+        let read = text(&["a\tb"]);
+        let hash = disk(&read);
+        v.set_open("t.rs".to_string(), read, hash);
+        assert_eq!(v.open.as_ref().unwrap().locked, Some(SANITISED_NOTE));
+        v.strip_shown = true;
+        v.focus = Focus::Chat;
+        type_into_strip(&mut v, "why?");
+        let CodeAction::Ask(line) = handle_key(&mut v, key(KeyCode::Enter)) else {
+            panic!("expected an Ask");
+        };
+        assert!(
+            line.contains("not byte-for-byte the file"),
+            "a buffer that is not the file must say so: {line}"
+        );
+    }
+
+    #[test]
+    fn opening_another_file_drops_the_pointer_to_the_last_files_question() {
+        let mut v = sample();
+        stripped(&mut v, "src/main.rs", &["one"]);
+        type_into_strip(&mut v, "why?");
+        handle_key(&mut v, key(KeyCode::Enter));
+        assert!(v.strip.sent.is_some());
+        open_file(&mut v, "README.md", &["other"]);
+        assert!(
+            v.strip.sent.is_none(),
+            "a pointer naming a question about another file is a sentence about the wrong thing"
+        );
+    }
+
+    #[test]
+    fn the_strip_draws_the_file_it_would_ask_about_and_then_what_was_asked() {
+        let mut v = sample();
+        let area = Rect::new(0, 0, 100, 24);
+        open_file(&mut v, "src/main.rs", &["one"]);
+        let (buf, r) = painted(&v, area);
+        let rect = r.strip.expect("a 24-row page has room for the strip");
+        let text = dump(&buf).join("\n");
+        assert!(text.contains("ask emma about src/main.rs"), "{text}");
+        // The input row is the one the hit test is told about.
+        assert_eq!(click(&v, area, rect.x + 3, rect.y), Some(CodeClick::Strip));
+        assert_eq!(act(&mut v, CodeClick::Strip), CodeAction::FocusChanged);
+        assert_eq!(v.focus, Focus::Chat);
+        v.strip.sent = Some("why?".to_string());
+        let (buf, _) = painted(&v, area);
+        assert!(dump(&buf).join("\n").contains("asked: why?"));
+    }
+
+    #[test]
+    fn the_strip_never_takes_a_cell_the_document_drew() {
+        let lines: Vec<String> = (0..200).map(|i| format!("line {i}")).collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let mut v = sample();
+        open_file(&mut v, "big.rs", &refs);
+        let area = Rect::new(0, 0, 100, 24);
+        let (_, r) = painted(&v, area);
+        let strip = r.strip.expect("room for the strip");
+        let g = doc_geom(area, &v).expect("a document on screen");
+        assert!(
+            g.area.bottom() <= strip.y,
+            "the document {g:?} must end above the strip {strip:?}"
+        );
+        // A press on the document's last row is the document's, and a press
+        // on every row of the strip is the strip's. The second half is what
+        // makes this test about the *cells* rather than about two rectangles
+        // that happen to agree.
+        let x = g.area.x + g.gutter;
+        assert!(matches!(
+            click(&v, area, x, g.area.bottom() - 1),
+            Some(CodeClick::Doc(_, _))
+        ));
+        for row in strip.y..strip.bottom() {
+            assert_eq!(
+                click(&v, area, x, row),
+                Some(CodeClick::Strip),
+                "row {row} is the strip's"
+            );
+        }
+    }
+
+    #[test]
+    fn the_strips_rows_stay_inside_the_pane_at_every_width() {
+        let mut v = sample();
+        open_file(&mut v, "src/main.rs", &["one"]);
+        v.focus = Focus::Chat;
+        v.strip.input = "x".repeat(400);
+        v.strip.cursor = 400;
+        for w in [24u16, 40, 61, 100, 200] {
+            let area = Rect::new(0, 0, w, 24);
+            let (buf, r) = painted(&v, area);
+            let Some(rect) = r.strip else { continue };
+            let inner = Block::bordered().inner(split(area).body);
+            assert!(
+                rect.x >= inner.x && rect.right() <= inner.right(),
+                "{rect:?}"
+            );
+            for y in rect.y..rect.bottom() {
+                let row = terminal_row(&buf, y);
+                assert!(
+                    cols(&row) <= w as usize,
+                    "row {y} is {} columns wide in a {w}-column terminal: {row:?}",
+                    cols(&row)
+                );
+            }
+        }
+    }
+
+    /// Certification, not a fixture: a real file of this repository, read
+    /// through the real `code_git::read_file`, asked about through the real
+    /// keys, and the composed line checked against the bytes on disk.
+    ///
+    /// A fixture agrees with its author. The one thing this feature can get
+    /// wrong that a fixture would never show is a line that *claims* to carry
+    /// a file and carries something else, so the assertion is against the file
+    /// itself: its first line, one line from the middle, and — because this
+    /// one is far over the cap — the exact range the attribution names.
+    #[test]
+    fn a_real_file_of_this_repository_is_quoted_by_the_line_range_the_strip_names() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("crates/emma sits two levels under the repository root")
+            .to_path_buf();
+        let candidates = [
+            "crates/emma/src/term/code.rs",
+            "crates/emma/src/term/code_git.rs",
+            "docs/architecture.html",
+            "CHANGELOG.md",
+        ];
+        let rel = candidates
+            .iter()
+            .find(|rel| repo.join(rel).is_file())
+            .expect("this repository must have at least one of its own files");
+        let on_disk = std::fs::read_to_string(repo.join(rel)).expect("a text file");
+        let disk_lines: Vec<&str> = on_disk.lines().collect();
+        assert!(
+            disk_lines.len() > 400,
+            "{rel} is too short to certify the windowing"
+        );
+
+        let mut v = CodeView::new(repo.clone(), Vec::new());
+        open_from_disk(&mut v, &repo, rel);
+        let o = v.open.as_ref().expect("the file must open");
+        assert!(o.note.is_none(), "{rel} was refused: {:?}", o.note);
+        assert_eq!(o.lines.len(), disk_lines.len(), "every line came through");
+
+        v.body_rows = 20;
+        v.open.as_mut().unwrap().scroll = 200;
+        v.strip_shown = true;
+        v.focus = Focus::Chat;
+        type_into_strip(&mut v, "what is this file for?");
+        let CodeAction::Ask(line) = handle_key(&mut v, key(KeyCode::Enter)) else {
+            panic!("expected an Ask");
+        };
+        assert!(
+            line.ends_with("what is this file for?"),
+            "the question is last"
+        );
+        assert!(
+            line.contains(&format!("About `{rel}`")),
+            "the file is named"
+        );
+        if on_disk.len() > MAX_ASK_BODY {
+            assert!(
+                line.contains("lines 201-220 of"),
+                "the window must name itself: {}",
+                &line[..line.len().min(200)]
+            );
+            // The rows the attribution claims are the rows a reader of the
+            // file would find there — this is the assertion the whole test
+            // exists for.
+            for (i, disk) in disk_lines.iter().enumerate().take(220).skip(200) {
+                let want = sanitise(disk);
+                if want.trim().is_empty() {
+                    continue;
+                }
+                assert!(
+                    line.contains(&want),
+                    "line {} of {rel} is missing from the window: {want:?}",
+                    i + 1
+                );
+            }
+            assert!(
+                !line.contains(&sanitise(disk_lines[0])) || disk_lines[0].trim().is_empty(),
+                "a line outside the named range must not be in it"
+            );
+        } else {
+            assert!(line.contains("the whole file"), "{line}");
+        }
+        assert!(
+            line.len() < MAX_ASK_BODY + 512,
+            "the cap must bound the line: {}",
+            line.len()
+        );
     }
 }
