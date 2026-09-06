@@ -1326,8 +1326,7 @@ mod tests {
         let budget = wrapped * 3;
         assert!(
             elapsed <= budget,
-            "re-wrapping {held} entries ({} rows) took {elapsed:?}, more than three times the              {wrapped:?} it cost to wrap them once. The eager design in this module assumes a              rewrap is the same work again, so this is an asymptotic regression rather than a              slow machine",
-            t.rows
+            "{held} entries re-wrapped in {elapsed:?}, over 3x the {wrapped:?} to wrap them",
         );
         // Printed so both numbers are on the record even when it passes.
         println!(
