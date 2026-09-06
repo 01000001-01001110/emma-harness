@@ -292,9 +292,9 @@ api key        NOT FOUND — no API key for anthropic. Set ANTHROPIC_API_KEY, or
   </p>
 
 <pre><code><span class="c">$ cat ~/.emma/settings.json</span>
-{"provider":"openai","models":{"openai":"gpt-5.5"}}
+{"provider":"bedrock","models":{"bedrock":"some-model"}}
 <span class="c">$ emma config check | tail -4</span>
-provider       NOT USABLE — unknown provider `openai`. This build supports: anthropic
+provider       NOT USABLE — unknown provider `bedrock`. This build supports: anthropic, ollama, openrouter, openai
                nothing will run until `emma set-provider &lt;name&gt;` names one this build supports
 
 no model was called.</code></pre>

@@ -1428,20 +1428,20 @@ mod tests {
     #[test]
     fn a_model_is_never_stored_for_a_provider_this_build_cannot_run() {
         // The silent failure this prevents: `emma set-model gpt-5.5 --provider
-        // openai` writing a setting that Anthropic then quietly answers.
+        // bedrock` writing a setting that Anthropic then quietly answers.
         let home = tempfile::tempdir().unwrap();
-        let err = set_model_at(home.path(), "gpt-5.5", Some("openai"), &mut Vec::new())
+        let err = set_model_at(home.path(), "some-model", Some("bedrock"), &mut Vec::new())
             .unwrap_err()
             .to_string();
-        assert!(err.contains("openai"), "{err}");
+        assert!(err.contains("bedrock"), "{err}");
         assert!(err.contains("anthropic"), "{err}");
         assert!(!settings::path(home.path()).exists());
         // The same refusal from the other door, and before a key is asked for:
         // this call supplies one and it must never be stored anywhere.
-        let err = set_provider("openai", Some("sk-should-never-be-read".into()), None)
+        let err = set_provider("bedrock", Some("sk-should-never-be-read".into()), None)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("openai"), "{err}");
+        assert!(err.contains("bedrock"), "{err}");
     }
 
     #[test]
@@ -1503,10 +1503,10 @@ mod tests {
     fn config_check_reports_an_unusable_provider_rather_than_hiding_it() {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(home.path().join(".emma")).unwrap();
-        std::fs::write(settings::path(home.path()), r#"{"provider":"openai"}"#).unwrap();
+        std::fs::write(settings::path(home.path()), r#"{"provider":"bedrock"}"#).unwrap();
         let lines = configured(Some(home.path()), &|_| None, None).join("\n");
         assert!(lines.contains("NOT USABLE"), "{lines}");
-        assert!(lines.contains("openai"), "{lines}");
+        assert!(lines.contains("bedrock"), "{lines}");
         // Nothing may claim a model or a key under a provider that cannot run.
         assert!(!lines.contains("api key        found"), "{lines}");
     }

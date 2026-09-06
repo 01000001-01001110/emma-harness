@@ -634,25 +634,27 @@ mod tests {
 
     #[test]
     fn a_provider_this_build_cannot_run_is_refused_rather_than_swapped() {
-        // The failure this prevents: `provider: "openai"` in settings.json,
-        // Anthropic answering anyway, and nothing saying so.
+        // The failure this prevents: `provider: "bedrock"` in settings.json,
+        // Anthropic answering anyway, and nothing saying so. The name used to
+        // be `openai`, which resolves since the OpenAI-compatible provider was
+        // ported on 2026-09-06; the test is about a name nobody implemented.
         let home = tempfile::tempdir().unwrap();
         let mut settings = Settings {
-            provider: Some("openai".into()),
+            provider: Some("bedrock".into()),
             ..Default::default()
         };
-        settings.models.insert("openai".into(), "gpt-5.5".into());
+        settings.models.insert("bedrock".into(), "some-model".into());
         save(home.path(), &settings).unwrap();
 
         let err = resolve_kind(None, None, Some(home.path()))
             .err()
             .expect("an unimplemented provider resolved to something")
             .to_string();
-        assert!(err.contains("openai"), "{err}");
+        assert!(err.contains("bedrock"), "{err}");
         assert!(err.contains("anthropic"), "{err}");
         // …and the same for a flag, which is the other door to the same
         // mistake.
-        assert!(resolve_kind(Some("openai"), None, Some(home.path())).is_err());
+        assert!(resolve_kind(Some("bedrock"), None, Some(home.path())).is_err());
     }
 
     #[test]
