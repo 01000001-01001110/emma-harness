@@ -871,6 +871,98 @@ fn lists(policy: Policy) -> (Vec<String>, Vec<String>) {
     }
 }
 
+/// What `file` says about this page's presets today, in words, writing nothing.
+///
+/// **The reader for [`write_policy`], and deliberately not its inverse.** A
+/// file can hold a mixture no preset would produce — a hand-written grant, half
+/// of `Safe`, a deny nobody on this page added — and answering "Safe" for it
+/// would be a summary that reads as a receipt. So it names the preset only when
+/// the file matches one exactly, and otherwise reports what is actually there
+/// and says the presets do not describe it.
+///
+/// Rules with a specifier (`WebFetch(domain:docs.rs)`) are counted apart for
+/// the same reason [`write_policy`] leaves them alone: they are the operator's,
+/// not this page's, and a page that swept them into its own total would be
+/// claiming authorship of somebody else's decision.
+pub fn policy_summary(file: &Path) -> String {
+    let raw = match std::fs::read_to_string(file) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return format!(
+                "{} does not exist yet, so nothing is pre-approved and every gated call asks.",
+                file.display()
+            )
+        }
+        Err(e) => return format!("{} could not be read ({e}).", file.display()),
+    };
+    let doc: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(doc) => doc,
+        Err(e) => {
+            return format!(
+                "{} is not valid JSON ({e}); nothing here can be trusted.",
+                file.display()
+            )
+        }
+    };
+    let read = |key: &str| -> (Vec<String>, usize) {
+        let mut bare = Vec::new();
+        let mut specific = 0usize;
+        if let Some(list) = doc
+            .pointer(&format!("/permissions/{key}"))
+            .and_then(|v| v.as_array())
+        {
+            for entry in list.iter().filter_map(|v| v.as_str()) {
+                if ALL_TOOLS.contains(&entry) {
+                    bare.push(entry.to_string());
+                } else {
+                    specific += 1;
+                }
+            }
+        }
+        bare.sort();
+        (bare, specific)
+    };
+    let (allow, allow_specific) = read("allow");
+    let (deny, deny_specific) = read("deny");
+    let matches = |policy: Policy| {
+        let (mut a, mut d) = lists(policy);
+        a.sort();
+        d.sort();
+        a == allow && d == deny
+    };
+    let mut lines = Vec::new();
+    match [Policy::Safe, Policy::Manual, Policy::DenyAll]
+        .into_iter()
+        .find(|p| matches(*p))
+    {
+        Some(policy) => lines.push(format!(
+            "{}: this file matches the preset exactly.",
+            policy.label()
+        )),
+        None => lines.push(
+            "No preset describes this file. It was edited by hand, or by an older build."
+                .to_string(),
+        ),
+    }
+    lines.push(match allow.as_slice() {
+        [] => "pre-approved: nothing".to_string(),
+        names => format!("pre-approved: {}", names.join(", ")),
+    });
+    lines.push(match deny.as_slice() {
+        [] => "denied: nothing".to_string(),
+        names => format!("denied: {}", names.join(", ")),
+    });
+    let specific = allow_specific + deny_specific;
+    if specific > 0 {
+        lines.push(format!(
+            "{specific} rule(s) name a specifier rather than a bare tool. Those are yours, and \
+             nothing on this page rewrites them."
+        ));
+    }
+    lines.push(format!("read from {}", file.display()));
+    lines.join("\n")
+}
+
 /// Write `policy` into `file`, keeping every other key the document holds.
 ///
 /// The merge rule is [`crate::permissions::remember`]'s, for the same reason:

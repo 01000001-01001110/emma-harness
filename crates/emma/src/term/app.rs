@@ -974,6 +974,117 @@ impl App {
                 self.harness = None;
                 self.harness_cwd.clear();
             }
+            HarnessAction::Signal(action, key) => {
+                let Some(row) = self.harness_row(&key) else {
+                    self.harness_notice("that run is no longer in the feed");
+                    return true;
+                };
+                let target = crate::runctl::Target::of(&row);
+                let cwd = self.harness_cwd.clone();
+                match crate::runctl::control(&crate::runctl::Os, &target, &cwd, action) {
+                    Ok(pid) => {
+                        // Best effort: the run's own transcript is the record,
+                        // and failing to write it must not undo the signal that
+                        // already went.
+                        if let Err(e) =
+                            crate::runctl::record(&self.harness_dir, &target.session, action, pid)
+                        {
+                            self.harness_notice(&format!("{e:#}"));
+                        } else {
+                            self.harness_notice(&format!(
+                                "{} sent to pid {pid}",
+                                action.signal_name()
+                            ));
+                        }
+                        self.refresh_harness();
+                    }
+                    // Every variant is already a sentence; do not re-word here.
+                    Err(refusal) => self.harness_notice(&refusal.to_string()),
+                }
+            }
+            HarnessAction::Archive(key) => {
+                let Some(row) = self.harness_row(&key) else {
+                    self.harness_notice("that run is no longer in the feed");
+                    return true;
+                };
+                let cwd = self.harness_cwd.clone();
+                match crate::runctl::archive(
+                    &crate::runctl::Os,
+                    &self.harness_dir,
+                    &crate::runctl::Target::of(&row),
+                    &cwd,
+                ) {
+                    Ok(to) => {
+                        self.harness_notice(&format!("archived to {}", to.display()));
+                        self.refresh_harness();
+                    }
+                    Err(e) => self.harness_notice(&format!("{e:#}")),
+                }
+            }
+            HarnessAction::Delete(key) => {
+                let Some(session) = self.harness_row(&key).map(|r| r.session) else {
+                    self.harness_notice("that run is no longer in the feed");
+                    return true;
+                };
+                match crate::runctl::delete(&self.harness_dir, &session) {
+                    Ok(()) => {
+                        self.harness_notice("deleted");
+                        self.refresh_harness();
+                    }
+                    Err(e) => self.harness_notice(&format!("{e:#}")),
+                }
+            }
+            HarnessAction::Launch(goal) => {
+                // `current_exe`, never the bare name: a bare name is resolved
+                // against the child's PATH, and the binary the owner runs is
+                // `~/.cargo/bin/emma`, which may not be the one running now.
+                let program = match std::env::current_exe() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        self.harness_notice(&format!("cannot find this binary to launch: {e}"));
+                        return true;
+                    }
+                };
+                let cwd = std::path::PathBuf::from(&self.harness_cwd);
+                match crate::runctl::spawn(&crate::runctl::launch_for(program, &goal, &cwd)) {
+                    Ok(pid) => self.harness_notice(&format!(
+                        "started pid {pid}; it will appear here when it writes its first record"
+                    )),
+                    Err(e) => self.harness_notice(&format!("{e:#}")),
+                }
+            }
+            HarnessAction::Policy(policy) => {
+                let file = crate::permissions::file_for(std::path::Path::new(&self.harness_cwd));
+                match crate::runctl::write_policy(&file, policy) {
+                    // "next run" is not decoration: a running process read its
+                    // rules at boot and this cannot reach them.
+                    Ok(()) => self
+                        .harness_notice(&format!("{} applies from the next run", policy.label())),
+                    Err(e) => self.harness_notice(&format!("{e:#}")),
+                }
+            }
+            HarnessAction::PolicyShow => {
+                let file = crate::permissions::file_for(std::path::Path::new(&self.harness_cwd));
+                self.harness_notice(&crate::runctl::policy_summary(&file));
+            }
+            HarnessAction::TaskNew(text) => self.harness_task_edit(move |doc| {
+                doc.create(&text, emma_tools_tasks::Status::Pending);
+                Ok(())
+            }),
+            HarnessAction::TaskClearDone => self.harness_task_edit(|doc| {
+                doc.remove_completed();
+                Ok(())
+            }),
+            HarnessAction::TaskMove(up) => {
+                let Some(id) = self.harness_selected_task_id() else {
+                    self.harness_notice(super::harness::NOTICE_NO_TASK);
+                    return true;
+                };
+                self.harness_task_edit(move |doc| {
+                    doc.move_task(&id, up);
+                    Ok(())
+                });
+            }
             HarnessAction::None | HarnessAction::FocusChanged | HarnessAction::Help => {}
         }
         // Every plain key belongs to the open page, acted on or not — the
@@ -1080,6 +1191,55 @@ impl App {
                     "run {id} is not in the session logs — [R] refreshes"
                 ));
             }
+        }
+    }
+    /// The `harness_state` row one of the page's runs was built from.
+    ///
+    /// `Run` carries a name, a key and a progress pair, not the `cwd` or the
+    /// `ending` that `runctl::verify` refuses on. Guessing either is how a
+    /// control reaches a process it was never entitled to, so the shell reads
+    /// the row back rather than rebuilding a `Target` from what is drawn.
+    fn harness_row(&self, key: &str) -> Option<crate::harness_state::RunRow> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let feed = crate::harness_state::runs(&self.harness_dir, now).ok()?;
+        feed.runs.into_iter().find(|r| r.id == key)
+    }
+
+    /// Say what happened, on the page, without repainting: the caller is inside
+    /// a key handler and the frame paints after it either way.
+    fn harness_notice(&mut self, text: &str) {
+        if let Some(v) = self.harness.as_mut() {
+            v.notice = Some(text.to_string());
+        }
+    }
+
+    /// The task file's own handle for the highlighted row, which is what a
+    /// mutation names. The drawn number is a position and cannot find the task
+    /// again after a reorder.
+    fn harness_selected_task_id(&self) -> Option<String> {
+        let v = self.harness.as_ref()?;
+        let at = v.selected_task?;
+        v.tasks.get(at).map(|t| t.id.clone())
+    }
+
+    /// One change to `.emma/tasks/tasks.md`, through the tool crate's own
+    /// read-modify-write, then a refresh so the page shows the file rather than
+    /// what this process believes about it.
+    ///
+    /// The store retries on a collision and gives up loudly; a failure is said
+    /// on the page rather than swallowed, because a reorder that silently did
+    /// nothing is the defect this whole card exists to avoid.
+    fn harness_task_edit(
+        &mut self,
+        change: impl FnMut(&mut emma_tools_tasks::Doc) -> Result<(), emma_tool_api::ToolError>,
+    ) {
+        let file = std::path::Path::new(&self.harness_cwd).join(emma_tools_tasks::RELATIVE_PATH);
+        match emma_tools_tasks::store::edit(&file, change) {
+            Ok(()) => self.refresh_harness(),
+            Err(e) => self.harness_notice(&format!("{e}")),
         }
     }
 
@@ -2254,6 +2414,43 @@ fn harness_view_from(
             newest.status,
             hs::RunStatus::Running | hs::RunStatus::Completed
         ));
+    }
+    // The gates card names whichever of gate and posture is deciding: plan
+    // mode resolves to `Gate::Ask` and then asks nothing, so a card drawing
+    // the gate alone would promise a question that never comes. See
+    // `harness::GATE_PLAN`.
+    v.mode_label = crate::approval::current_mode_label().to_string();
+    // The `Live` badge is a claim about the whole card, so the card decides
+    // rather than this function guessing on its behalf.
+    v.resources.live = v.resources.complete();
+    // The TASK QUEUE, read from the project's own file, which is what makes
+    // [n], [c] and the reorder chord act on something a reader can see. `id`
+    // is the file's handle, because a drawn position cannot find a task again
+    // after a reorder; finished rows stay visible, because [c] Clear Done
+    // acting on invisible data is the defect this card would otherwise ship.
+    if let Ok((doc, _)) = emma_tools_tasks::store::load(
+        &std::path::Path::new(cwd).join(emma_tools_tasks::RELATIVE_PATH),
+    ) {
+        let rows = doc.tasks();
+        v.queue_depth = rows.iter().filter(|t| t.status.is_open()).count() as u64;
+        v.tasks = rows
+            .iter()
+            .enumerate()
+            .map(|(i, t)| super::harness::Task {
+                n: i as u32 + 1,
+                id: t.id.clone(),
+                name: t.text.clone(),
+                state: match t.status {
+                    emma_tools_tasks::Status::InProgress => super::harness::TaskState::Running,
+                    s if s.is_open() => super::harness::TaskState::Pending,
+                    _ => super::harness::TaskState::Done,
+                },
+                progress_pct: None,
+            })
+            .collect();
+        if v.selected_task.is_none() && !v.tasks.is_empty() {
+            v.selected_task = Some(0);
+        }
     }
     v
 }

@@ -935,3 +935,76 @@ fn every_read_only_name_really_is_read_only() {
 }
 
 // endregion: Next-run policy
+
+/// The summary names a preset only when the file matches one exactly. Every
+/// other file gets what is actually in it, because a summary that answered
+/// "Safe" for a hand-edited file would read as a receipt for a write nobody
+/// made.
+#[test]
+fn the_summary_names_a_preset_only_when_the_file_is_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("settings.local.json");
+
+    // Absent: not an error, and the sentence says what that means.
+    let missing = policy_summary(&file);
+    assert!(missing.contains("does not exist"), "{missing}");
+    assert!(missing.contains("every gated call asks"), "{missing}");
+
+    write_policy(&file, Policy::Safe).unwrap();
+    let safe = policy_summary(&file);
+    assert!(safe.starts_with("Safe:"), "{safe}");
+    assert!(safe.contains("Read"), "{safe}");
+    assert!(safe.contains("denied: nothing"), "{safe}");
+
+    write_policy(&file, Policy::DenyAll).unwrap();
+    let deny = policy_summary(&file);
+    assert!(deny.starts_with("Deny All:"), "{deny}");
+    assert!(deny.contains("pre-approved: nothing"), "{deny}");
+
+    write_policy(&file, Policy::Manual).unwrap();
+    let manual = policy_summary(&file);
+    assert!(manual.starts_with("Manual:"), "{manual}");
+}
+
+/// A file somebody edited by hand is reported, not classified, and the rules
+/// carrying a specifier are counted apart: `write_policy` leaves those alone,
+/// so a summary that folded them into its own total would be claiming
+/// authorship of somebody else's decision.
+#[test]
+fn a_hand_edited_file_is_described_rather_than_given_a_presets_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("settings.local.json");
+    write_policy(&file, Policy::Safe).unwrap();
+    // One bare grant no preset produces, and one the operator wrote.
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let allow = doc
+        .pointer_mut("/permissions/allow")
+        .unwrap()
+        .as_array_mut()
+        .unwrap();
+    allow.push(serde_json::json!("Bash"));
+    allow.push(serde_json::json!("WebFetch(domain:docs.rs)"));
+    std::fs::write(&file, serde_json::to_string_pretty(&doc).unwrap()).unwrap();
+
+    let out = policy_summary(&file);
+    assert!(out.starts_with("No preset describes this file"), "{out}");
+    assert!(out.contains("Bash"), "{out}");
+    assert!(
+        out.contains("1 rule(s) name a specifier"),
+        "the operator's own rule is counted apart: {out}"
+    );
+    assert!(
+        !out.contains("WebFetch(domain:docs.rs)"),
+        "a specifier is counted, not listed as a tool: {out}"
+    );
+
+    // Damaged: said, and nothing is claimed about it.
+    std::fs::write(&file, "{not json").unwrap();
+    let broken = policy_summary(&file);
+    assert!(broken.contains("not valid JSON"), "{broken}");
+    assert!(
+        !broken.contains("pre-approved"),
+        "nothing may be claimed about a file that did not parse: {broken}"
+    );
+}

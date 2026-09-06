@@ -17,14 +17,31 @@
 //! empty states and real zeros. RUNTIME STATUS is the exception that proves
 //! the rule: binary, version and workspace are real today and render live.
 //!
-//! The page is live (harness-live, 2026-08-26). [`handle_key`] is the pure
-//! key seam (memory's M5 pattern): ↑/↓/Tab cycle the selection through the
-//! dashboard's visible three run boxes, [`PageMode`] mounts Inspect, Run
-//! Graph and ALL RUNS inside this one occupant, and every action-bar letter
-//! answers — with the real action where a backend exists, with an honest
-//! notice where none does. The action bar renders as clickable chips and
-//! the paint reports its control rects ([`Hits`]) for the shell's
-//! hit-test.
+//! The page is live (harness-live, 2026-08-26), and since the port of the
+//! macOS fork it is a **process manager** rather than a reader: `[p]`/`[r]`/
+//! `[x]` signal a run through [`crate::runctl`], `[a]`/`[+]` start one,
+//! `[A]` archives a transcript, `[D]` deletes one after a second press,
+//! `[n]`/`[c]`/⇧↑↓ edit the task file, and `[t]`/`[s]`/`[m]`/`[d]` write the
+//! next run's tool policy. [`handle_key`] is still the pure key seam
+//! (memory's M5 pattern): it names what to do and the shell
+//! ([`super::app::App::harness_key`]) is the only half that touches a
+//! process or a file. [`PageMode`] mounts Inspect, Run Graph and ALL RUNS
+//! inside this one occupant. The action bar renders as clickable chips and
+//! the paint reports its control rects ([`Hits`]) for the shell's hit-test —
+//! every card footer's chips as well as the bar's, so clicking `[A] Archive`
+//! is the same dispatch as pressing it.
+//!
+//! **Where a control does not exist on this platform, the page says so and
+//! the key still answers.** [`crate::runctl::supported`] is asked before the
+//! action bar is painted: an unavailable control's chip is dim rather than
+//! accent, the bar carries [`no_controls_note`] naming the platform in
+//! words, and pressing the key sets the refusal's own sentence as the notice
+//! without ever asking the shell for a signal. That is `bindings.rs`'s rule
+//! and `usertools.rs`'s `Tool::routed` precedent: a rendered key that does
+//! nothing is the defect, and a `cfg` that answers `true` where the platform
+//! answers nothing is the worse version of it. On Windows the three signals
+//! are the whole of what is missing — archive, delete, launch and the policy
+//! write all have real Windows implementations in `runctl`.
 //!
 //! Pure rendering and pure key handling, like [`super::memory`]: the shell
 //! ([`super::app::App::harness_key`]) owns the disk. All width arithmetic
@@ -96,6 +113,10 @@ pub struct Worker {
 pub enum TaskState {
     Running,
     Pending,
+    /// Not in the mock, whose sample queue had nothing finished in it. A real
+    /// task file does, and `[c] Clear Done` is a control over exactly these
+    /// rows: hiding them would make that key act on invisible data.
+    Done,
 }
 
 /// One TASK QUEUE row. `n` is caller-supplied, not the row index: the mock
@@ -105,6 +126,10 @@ pub enum TaskState {
 pub struct Task {
     pub n: u32,
     pub name: String,
+    /// The task file's own handle for this row (`#abc123`), which is what a
+    /// mutation names. The displayed `n` is a position and cannot find the
+    /// task again after a reorder, exactly as `Run::id` cannot find a run.
+    pub id: String,
     pub state: TaskState,
     /// Whole-percent progress; `None` renders the en-dash placeholder.
     pub progress_pct: Option<u8>,
@@ -178,6 +203,32 @@ pub struct ResourcesView {
     pub live: bool,
 }
 
+impl ResourcesView {
+    /// Whether every row of this card has a value behind it.
+    ///
+    /// The `Live` badge is a claim about the whole card, so a card with one
+    /// placeholder in it does not get to wear it. Callers set `live` from
+    /// this rather than deciding by hand, which is what stops the badge and
+    /// the rows from drifting apart.
+    pub fn complete(&self) -> bool {
+        self.cpu_pct.is_some()
+            && self.mem_pct.is_some()
+            && ![
+                &self.mem,
+                &self.disk_io,
+                &self.network,
+                &self.workers,
+                &self.queue_depth,
+                &self.avg_latency,
+                &self.p95_latency,
+                &self.retries,
+                &self.span_rate,
+            ]
+            .iter()
+            .any(|s| s.is_empty())
+    }
+}
+
 /// The TRACE / CONTEXT panel's values, all caller-formatted; empty renders
 /// the dash.
 #[derive(Debug, Clone, Default)]
@@ -244,8 +295,45 @@ pub struct HarnessView {
     /// the dashboard's visible three).
     pub all_selected: usize,
     /// A one-line notice, rendered above the input bar until dismissed.
-    /// The honesty channel: keys whose backend does not exist say so here.
+    /// The honesty channel: keys whose backend does not exist say so here,
+    /// and the ones that do report what they did.
     pub notice: Option<String>,
+    /// Which card the plain arrows belong to. Two cards on this page have a
+    /// selection and only one set of arrows, so the page says which is
+    /// listening rather than guessing.
+    pub focus: Focus,
+    /// A destructive key waiting for its second press. Settings Reset's
+    /// pattern: the first press arms and says what will happen, the second
+    /// does it, and any other key disarms.
+    pub armed: Option<Armed>,
+    /// The session's posture word — [`crate::approval::current_mode_label`],
+    /// empty when the caller published none.
+    ///
+    /// **The gates card needs it because a gate is not a posture.**
+    /// `approval::current_gate()` resolves plan mode to `Gate::Ask`, since
+    /// plan refuses before any gate is consulted, so a card drawing the gate
+    /// alone says `Auto-approve: ASK` — "anything that writes asks you first"
+    /// — over a session where nothing is asked and everything that writes is
+    /// refused outright. The card names whichever of the two is actually
+    /// deciding; see [`GATE_PLAN`].
+    pub mode_label: String,
+}
+
+/// Which card the arrow keys are steering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Focus {
+    #[default]
+    Runs,
+    Queue,
+}
+
+/// A destructive action that has been asked for once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Armed {
+    /// Delete the session log of this run key.
+    Delete(String),
+    /// Remove every completed task from the task file.
+    ClearDone,
 }
 
 /// The subtitle under the title, verbatim from the mock.
@@ -290,10 +378,26 @@ pub const ALL_RUNS_ACTIONS: [(&str, &str); 4] = [
     ("?", "Help"),
 ];
 
-/// The honest notices. The action-bar keys the mock promises control a
-/// harness that does not exist; each says so instead of going dead.
-pub const NOTICE_READ_ONLY: &str =
-    "runs are read-only today: this is session history, not a process manager";
+/// The notices. Every key on this page answers with one of these: what it
+/// did, or exactly why it could not.
+///
+/// `[a]`/`[+]` with an empty command bar. The bar is the goal, so there is
+/// nothing to run yet and saying so beats starting an empty run.
+pub const NOTICE_NO_GOAL: &str = "type a goal in the command bar, then [a] runs it here";
+/// `[n]` with an empty command bar. One bar serves both writers.
+pub const NOTICE_NO_TASK_TEXT: &str = "type the task in the command bar, then [n] adds it";
+/// `[w]`. The one control on this page whose backend genuinely does not
+/// exist, and the notice names the fact rather than the plan.
+pub const NOTICE_WORKERS: &str = "no worker pool exists: delegation is a single permit in \
+                                  delegate.rs, so there is nothing to scale";
+/// `[D]`, armed.
+pub const CONFIRM_DELETE: &str =
+    "[D] again deletes that run's session log for good; any other key cancels";
+/// `[c]`, armed.
+pub const CONFIRM_CLEAR: &str =
+    "[c] again drops every completed task from .emma/tasks/tasks.md; any other key cancels";
+/// The queue keys, with nothing selected.
+pub const NOTICE_NO_TASK: &str = "No task selected: Tab focuses the queue, ↑/↓ picks a row";
 pub const NOTICE_LOGS: &str = "no logs view yet — the EVENT LOG card is the tail (plan H4)";
 pub const NOTICE_NO_RUN: &str = "No run selected — ↑/↓ selects one";
 /// The session history could not be read at all.
@@ -309,12 +413,87 @@ pub const NOTICE_NO_RUN: &str = "No run selected — ↑/↓ selects one";
 pub const NOTICE_UNREADABLE: &str =
     "the session history could not be read — not the same as no runs";
 /// The `[?]` help notices, one per key scope, naming only keys that work.
-pub const HELP_DASH: &str =
-    "[i] inspect  [g] graph  [v] view all  [R] refresh  Tab/↑/↓ cycle runs  Esc clears";
+///
+/// **`HELP_DASH` has two spellings and the split is per platform, not per
+/// taste.** The three run controls are `runctl` signals and Windows has none
+/// of them ([`crate::runctl::supported`]), so a single string would either
+/// advertise three keys that answer with a refusal there, or hide three keys
+/// that work everywhere else. This is the `cfg` ruling 4 asks for — the one
+/// that makes the sentence true on each platform — and not the one it
+/// forbids, which is a predicate answering `true` where the platform answers
+/// nothing. A test asserts the text names pause exactly when the platform
+/// can pause, so the two cannot drift apart.
+#[cfg(unix)]
+pub const HELP_DASH: &str = "[a] run  [p]/[r]/[x] pause/resume/cancel  [A]rchive [D]elete  \
+[n]ew task [c]lear done  [t]/[s]/[m]/[d] next-run policy  [i]nspect [g]raph [v]iew all  \
+Tab switches which card ↑/↓ steers";
+#[cfg(not(unix))]
+pub const HELP_DASH: &str = "[a] run  [A]rchive [D]elete  [n]ew task [c]lear done  \
+[t]/[s]/[m]/[d] next-run policy  [i]nspect [g]raph [v]iew all  \
+Tab switches which card ↑/↓ steers  (pause/resume/cancel: press one for why)";
 pub const HELP_ALL: &str = "[i]/[Enter] inspect  [b] back  [R] refresh  ↑/↓ select";
 pub const HELP_INSPECT: &str = "[b] back  ↑/↓ select a tool call  [R] refresh";
 pub const HELP_GRAPH: &str =
     "[b] back  ↑/↓ select a node  j/k pan  PgUp/PgDn page  Home/End  [:] command bar  [R] refresh";
+
+/// What the TOOL GATES header says while the session is in plan mode.
+///
+/// **A gate and a posture are different questions and the card was answering
+/// the wrong one.** `approval::current_gate()` resolves plan to `Gate::Ask`,
+/// correctly — plan is not a gate, it refuses before a gate is reached — so
+/// the card drew `Auto-approve: ASK`, whose own sentence is "anything that
+/// writes or leaves the machine asks you first". In plan mode nothing asks:
+/// it is refused with the mode named, and the reader waiting for a prompt
+/// waits forever. The plan-mode package (S2) left this open; the card now
+/// names whichever of the two is deciding.
+pub const GATE_PLAN: &str = "PLAN (refused, not asked)";
+
+/// The three action-bar letters that are [`crate::runctl`] controls, paired
+/// with what they ask for, so the bar can ask whether this platform has them
+/// before it draws them.
+const CONTROL_KEYS: [(&str, crate::runctl::Action); 3] = [
+    ("p", crate::runctl::Action::Pause),
+    ("r", crate::runctl::Action::Resume),
+    ("x", crate::runctl::Action::Cancel),
+];
+
+/// The sentence the action bar carries when this platform cannot carry out
+/// the run controls, or `None` when it can.
+///
+/// **It names the platform, because "unavailable" without a reason reads as a
+/// bug.** `std::env::consts::OS` rather than a `cfg`-selected literal: the
+/// word and the answer then come from the same build, and a third platform
+/// gets a true sentence without an edit here. The chip itself goes dim and
+/// the key still answers with [`crate::runctl::Refusal::Unsupported`]'s own
+/// wording, which is the part that says *why*; this row exists so a reader
+/// does not have to press a key to find out that one is not on offer.
+pub fn no_controls_note() -> Option<String> {
+    let missing: Vec<&(&str, crate::runctl::Action)> = CONTROL_KEYS
+        .iter()
+        .filter(|(_, a)| !crate::runctl::supported(*a))
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    let keys: Vec<&str> = missing.iter().map(|(k, _)| *k).collect();
+    let names: Vec<&str> = missing.iter().map(|(_, a)| a.wire()).collect();
+    Some(format!(
+        // A hyphen, not an em dash: this string is built without a
+        // `Skin` and the page has an ASCII skin whose whole rule is that no
+        // multibyte glyph reaches the buffer.
+        "[{}] {} are not offered on {} - press one for the reason",
+        keys.join("/"),
+        names.join("/"),
+        std::env::consts::OS,
+    ))
+}
+
+/// Whether the action bar's pair at `key` is a control this platform lacks.
+fn control_unavailable(key: &str) -> bool {
+    CONTROL_KEYS
+        .iter()
+        .any(|(k, a)| *k == key && !crate::runctl::supported(*a))
+}
 
 // endregion: State
 
@@ -355,6 +534,30 @@ pub enum HarnessAction {
     Graph(String),
     /// `[?]` fired; the view's notice was already toggled.
     Help,
+    /// Signal one run's process: pause, resume or cancel, by full run id.
+    /// The verification and the signal are the shell's, through
+    /// [`crate::runctl`]; this enum only carries the ask.
+    ///
+    /// **Never emitted where [`crate::runctl::supported`] is `false`.** The
+    /// key answers with the refusal's own sentence instead, so a platform
+    /// with no such control has no path from a keystroke to a process.
+    Signal(crate::runctl::Action, String),
+    /// Start a new run: this goal, headless, in the page's repository.
+    Launch(String),
+    /// Move one run's session log into the archive subdirectory.
+    Archive(String),
+    /// Delete one run's session log. Only ever emitted by the second press.
+    Delete(String),
+    /// Add a task with this text to `.emma/tasks/tasks.md`.
+    TaskNew(String),
+    /// Drop every completed task. Only ever emitted by the second press.
+    TaskClearDone,
+    /// Move the selected task one place up (`true`) or down.
+    TaskMove(bool),
+    /// Write a next-run tool policy to the repository's `settings.local.json`.
+    Policy(crate::runctl::Policy),
+    /// Report what that file says today, writing nothing.
+    PolicyShow,
     /// Esc with nothing left to dismiss: the page itself should close, the
     /// way Esc closes Settings. Without this the only way off the screen is
     /// the Alt+h chord that opened it, which a reader who arrived by clicking
@@ -445,16 +648,130 @@ fn toggle_help(v: &mut HarnessView, text: &str) {
     }
 }
 
-/// The dashboard's keys. Every action-bar letter answers — with the real
+/// The run the dashboard's run keys act on: the selected box, else the
+/// newest. `[p]` from a page where nothing is selected still means "pause
+/// what is running", which is the reading `[g]` already takes.
+fn acting_run(v: &HarnessView) -> Option<&Run> {
+    v.selected_run
+        .filter(|&i| i < visible_runs(v))
+        .or(Some(0))
+        .and_then(|i| v.runs.get(i))
+}
+
+/// One run key, or the honest ask for a run when there is none.
+fn on_run(v: &mut HarnessView, make: impl FnOnce(&Run) -> HarnessAction) -> HarnessAction {
+    match acting_run(v) {
+        Some(run) => {
+            let action = make(run);
+            v.notice = None;
+            action
+        }
+        None => {
+            v.notice = Some(NOTICE_NO_RUN.to_string());
+            HarnessAction::FocusChanged
+        }
+    }
+}
+
+/// One of the three run controls, or the platform's reason for not having it.
+///
+/// **The platform question is asked before the selection question**, and the
+/// order is deliberate: "no run is selected" would be a true sentence and the
+/// wrong one, because selecting a run would not make the key work. Ruling 4's
+/// shape — the key stays bound, the answer is words, and no
+/// [`HarnessAction::Signal`] is ever produced, so nothing downstream can
+/// mistake this for a signal that went.
+fn control_key(v: &mut HarnessView, action: crate::runctl::Action) -> HarnessAction {
+    if !crate::runctl::supported(action) {
+        // The refusal writes its own sentence, naming the platform and what it
+        // cannot do; re-wording it here would be a second copy to keep true.
+        v.notice = Some(crate::runctl::Refusal::Unsupported(action).to_string());
+        return HarnessAction::FocusChanged;
+    }
+    on_run(v, |r| HarnessAction::Signal(action, r.key.clone()))
+}
+
+/// Move the TASK QUEUE selection by one row.
+fn cycle_task(v: &mut HarnessView, forward: bool) {
+    let n = v.tasks.len();
+    if n == 0 {
+        return;
+    }
+    let cur = v.selected_task.unwrap_or(0).min(n - 1);
+    v.selected_task = Some(if forward {
+        (cur + 1) % n
+    } else {
+        (cur + n - 1) % n
+    });
+}
+
+/// The dashboard's keys. Every advertised letter answers: with the real
 /// action where a backend exists, with the truth where none does.
+///
+/// **The two-press keys are checked first.** `[D]` and `[c]` arm on their
+/// first press and act on their second, and every other key disarms, so a
+/// destructive action cannot be reached by one keystroke and cannot be left
+/// armed behind the reader's back (Settings Reset's rule).
 fn dashboard_key(v: &mut HarnessView, key: KeyEvent) -> HarnessAction {
+    use crate::runctl::{Action, Policy};
+
+    if let Some(armed) = v.armed.take() {
+        match (&armed, key.code) {
+            (Armed::Delete(id), KeyCode::Char('D')) => {
+                let id = id.clone();
+                v.notice = None;
+                return HarnessAction::Delete(id);
+            }
+            (Armed::ClearDone, KeyCode::Char('c')) => {
+                v.notice = None;
+                return HarnessAction::TaskClearDone;
+            }
+            // Anything else cancels, and the key it was is not also acted on:
+            // the press that cancels a confirmation belongs to the
+            // confirmation.
+            _ => {
+                v.notice = None;
+                return HarnessAction::FocusChanged;
+            }
+        }
+    }
+
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match key.code {
-        KeyCode::Down | KeyCode::Tab => {
-            cycle(v, true);
+        // Shifted arrows reorder the queue; plain ones steer whichever card
+        // has focus. Terminals that cannot report shift on an arrow simply do
+        // not reorder, which is why the footer names the chord.
+        KeyCode::Up | KeyCode::Down if shift && v.focus == Focus::Queue => {
+            if v.tasks.is_empty() {
+                v.notice = Some(NOTICE_NO_TASK.to_string());
+                return HarnessAction::FocusChanged;
+            }
+            HarnessAction::TaskMove(key.code == KeyCode::Up)
+        }
+        KeyCode::Down => {
+            match v.focus {
+                Focus::Runs => cycle(v, true),
+                Focus::Queue => cycle_task(v, true),
+            }
             HarnessAction::FocusChanged
         }
         KeyCode::Up | KeyCode::BackTab => {
-            cycle(v, false);
+            match v.focus {
+                Focus::Runs => cycle(v, false),
+                Focus::Queue => cycle_task(v, false),
+            }
+            HarnessAction::FocusChanged
+        }
+        // Tab moves the arrows between the two cards that have a selection.
+        // It used to duplicate Down, which was a key spent on nothing.
+        KeyCode::Tab => {
+            v.focus = match v.focus {
+                Focus::Runs => Focus::Queue,
+                Focus::Queue => Focus::Runs,
+            };
+            if v.focus == Focus::Queue && v.selected_task.is_none() && !v.tasks.is_empty() {
+                v.selected_task = Some(0);
+            }
             HarnessAction::FocusChanged
         }
         KeyCode::Enter | KeyCode::Char('i') => {
@@ -476,8 +793,57 @@ fn dashboard_key(v: &mut HarnessView, key: KeyEvent) -> HarnessAction {
             HarnessAction::FocusChanged
         }
         KeyCode::Char('R') => HarnessAction::Refresh,
-        KeyCode::Char('a' | 'p' | 'r' | 'x') => {
-            v.notice = Some(NOTICE_READ_ONLY.to_string());
+        // The three signals. The shell verifies the process before sending
+        // one; this half only names the run, and only where the platform has
+        // the control at all.
+        KeyCode::Char('p') => control_key(v, Action::Pause),
+        KeyCode::Char('r') => control_key(v, Action::Resume),
+        KeyCode::Char('x') => control_key(v, Action::Cancel),
+        // The command bar is the goal. An empty bar is not a run.
+        KeyCode::Char('a') | KeyCode::Char('+') => {
+            let goal = v.command.trim().to_string();
+            if goal.is_empty() {
+                v.notice = Some(NOTICE_NO_GOAL.to_string());
+                return HarnessAction::FocusChanged;
+            }
+            HarnessAction::Launch(goal)
+        }
+        KeyCode::Char('A') => on_run(v, |r| HarnessAction::Archive(r.key.clone())),
+        KeyCode::Char('D') => match acting_run(v) {
+            Some(run) => {
+                let id = run.key.clone();
+                v.armed = Some(Armed::Delete(id));
+                v.notice = Some(CONFIRM_DELETE.to_string());
+                HarnessAction::FocusChanged
+            }
+            None => {
+                v.notice = Some(NOTICE_NO_RUN.to_string());
+                HarnessAction::FocusChanged
+            }
+        },
+        // The queue. `[n]` takes the command bar the same way `[a]` does, so
+        // one input bar serves both writers and there is nowhere else to type.
+        KeyCode::Char('n') => {
+            let text = v.command.trim().to_string();
+            if text.is_empty() {
+                v.notice = Some(NOTICE_NO_TASK_TEXT.to_string());
+                return HarnessAction::FocusChanged;
+            }
+            HarnessAction::TaskNew(text)
+        }
+        KeyCode::Char('c') => {
+            v.armed = Some(Armed::ClearDone);
+            v.notice = Some(CONFIRM_CLEAR.to_string());
+            HarnessAction::FocusChanged
+        }
+        // The next-run tool policy. `[t]` reports what the file says today
+        // and writes nothing; the other three are the setting.
+        KeyCode::Char('t') => HarnessAction::PolicyShow,
+        KeyCode::Char('s') => HarnessAction::Policy(Policy::Safe),
+        KeyCode::Char('m') => HarnessAction::Policy(Policy::Manual),
+        KeyCode::Char('d') => HarnessAction::Policy(Policy::DenyAll),
+        KeyCode::Char('w') => {
+            v.notice = Some(NOTICE_WORKERS.to_string());
             HarnessAction::FocusChanged
         }
         KeyCode::Char('?') => {
@@ -717,6 +1083,8 @@ struct PageGlyphs {
     endash: &'static str,
     dash: &'static str,
     updown: &'static str,
+    /// The shift prefix on a chord's arrows.
+    shift: &'static str,
 }
 
 fn page_glyphs(skin: &Skin) -> PageGlyphs {
@@ -735,6 +1103,7 @@ fn page_glyphs(skin: &Skin) -> PageGlyphs {
             endash: "-",
             dash: "-",
             updown: "^/v",
+            shift: "S-",
         }
     } else {
         PageGlyphs {
@@ -751,6 +1120,7 @@ fn page_glyphs(skin: &Skin) -> PageGlyphs {
             endash: "–",
             dash: "—",
             updown: "↑/↓",
+            shift: "⇧",
         }
     }
 }
@@ -1010,10 +1380,24 @@ fn render_grid(area: Rect, buf: &mut Buffer, v: &HarnessView, skin: &Skin, g: &P
             fit("Harness", w, skin.glyphs.ellipsis),
             skin.palette.bold(Role::Accent),
         )),
-        Line::from(Span::styled(
-            fit(SUBTITLE, w, skin.glyphs.ellipsis),
-            skin.palette.dim(),
-        )),
+        // The subtitle row carries the platform's refusal, flush right: it is
+        // the one full-width row with space to spare, it sits directly over
+        // the chips it is about, and a reader who has not pressed anything is
+        // the reader who needs it. Dropped rather than truncated when the
+        // window cannot hold it — half a sentence about what does not work
+        // is worse than the dim chip it was explaining.
+        match no_controls_note().filter(|n| cols(n) + 4 <= w) {
+            Some(note) => lr(
+                vec![Span::styled(SUBTITLE.to_string(), skin.palette.dim())],
+                vec![Span::styled(note, skin.palette.style(Role::Warn))],
+                w,
+                skin,
+            ),
+            None => Line::from(Span::styled(
+                fit(SUBTITLE, w, skin.glyphs.ellipsis),
+                skin.palette.dim(),
+            )),
+        },
         Line::from(Span::styled(skin.glyphs.rule.repeat(w), skin.palette.dim())),
     ];
     for line in head {
@@ -1073,14 +1457,42 @@ fn render_grid(area: Rect, buf: &mut Buffer, v: &HarnessView, skin: &Skin, g: &P
     );
 
     if h1 >= 3 {
-        hits.runs = render_runs(Rect::new(lc.x, y, lc.width, h1), buf, v, skin, g);
-        render_pool(Rect::new(mc.x, y, mc.width, h1), buf, v, skin, g);
+        hits.runs = render_runs(
+            Rect::new(lc.x, y, lc.width, h1),
+            buf,
+            v,
+            skin,
+            g,
+            &mut hits.chips,
+        );
+        render_pool(
+            Rect::new(mc.x, y, mc.width, h1),
+            buf,
+            v,
+            skin,
+            g,
+            &mut hits.chips,
+        );
         render_runtime(Rect::new(rc.x, y, rc.width, h1), buf, v, skin, g);
         y += h1;
     }
     if h2 >= 3 {
-        render_queue(Rect::new(lc.x, y, lc.width, h2), buf, v, skin, g);
-        render_gates(Rect::new(mc.x, y, mc.width, h2), buf, v, skin, g);
+        render_queue(
+            Rect::new(lc.x, y, lc.width, h2),
+            buf,
+            v,
+            skin,
+            g,
+            &mut hits.chips,
+        );
+        render_gates(
+            Rect::new(mc.x, y, mc.width, h2),
+            buf,
+            v,
+            skin,
+            g,
+            &mut hits.chips,
+        );
         render_resources(Rect::new(rc.x, y, rc.width, h2), buf, v, skin, g);
         y += h2;
     }
@@ -1156,7 +1568,18 @@ fn chip_bar(x: u16, y: u16, w: usize, buf: &mut Buffer, skin: &Skin) -> Vec<(Rec
             }
         }
         used += cols(&boxed) + 1 + cols(label);
-        spans.push(Span::styled(boxed, skin.palette.chip(Role::Accent)));
+        // A control this platform cannot carry out is drawn, and drawn as
+        // what it is: the chip loses the accent so it does not read as live.
+        // Its rect is still recorded, because clicking it must reach the same
+        // answer the key gives rather than being swallowed silently. The
+        // words are on the subtitle row above ([`no_controls_note`]), which
+        // has the room this one does not.
+        let chip = if control_unavailable(key) {
+            skin.palette.dim()
+        } else {
+            skin.palette.chip(Role::Accent)
+        };
+        spans.push(Span::styled(boxed, chip));
         spans.push(Span::styled(format!(" {label}"), skin.palette.dim()));
     }
     buf.set_line(x, y, &Line::from(spans), w as u16);
@@ -1218,6 +1641,44 @@ fn card_frame(
     Rect::new(inner.x, inner.y + 1, inner.width, inner.height - 1)
 }
 
+/// Paint a card's footer keybar and record where each chip landed, so a
+/// click on `[A] Archive` fires the same action as the letter does.
+///
+/// The rects come out of the same column arithmetic that painted the line,
+/// which is the action bar's rule: two independent measurements of one row are
+/// two things that can disagree. A pair whose key is not a single character
+/// (the reorder chord) is painted and not recorded, because there is no key
+/// for a click to stand in for.
+fn footer_bar(
+    content: Rect,
+    buf: &mut Buffer,
+    pairs: &[(&str, &str)],
+    sep: &str,
+    skin: &Skin,
+    chips: &mut Vec<(Rect, char)>,
+) {
+    let row = content.height - 1;
+    set_row(content, row, buf, keybar(pairs, sep, skin));
+    let y = content.y + row;
+    let mut x = content.x;
+    for (i, (key, label)) in pairs.iter().enumerate() {
+        if i > 0 {
+            x += cols(sep) as u16;
+        }
+        let text = format!("[{key}] {label}");
+        let width = cols(&text) as u16;
+        // A chip the card was too narrow to paint is not clickable.
+        if x + width > content.x + content.width {
+            return;
+        }
+        let mut chars = key.chars();
+        if let (Some(c), None) = (chars.next(), chars.next()) {
+            chips.push((Rect::new(x, y, width, 1), c));
+        }
+        x += width;
+    }
+}
+
 /// A `[key] Label` affordance bar: accent key, dim label, `sep` between pairs.
 fn keybar(pairs: &[(&str, &str)], sep: &str, skin: &Skin) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
@@ -1240,6 +1701,7 @@ fn render_runs(
     v: &HarnessView,
     skin: &Skin,
     g: &PageGlyphs,
+    chips: &mut Vec<(Rect, char)>,
 ) -> Vec<Rect> {
     let mut boxes = Vec::new();
     if area.width < 6 || area.height < 3 {
@@ -1341,21 +1803,26 @@ fn render_runs(
     }
     // The footer earns its row only when it is not the count's or a box's.
     if content.height > used {
-        set_row(
+        footer_bar(
             content,
-            content.height - 1,
             buf,
-            keybar(
-                &[("+", "New Run"), ("A", "Archive"), ("D", "Delete")],
-                "   ",
-                skin,
-            ),
+            &[("+", "New Run"), ("A", "Archive"), ("D", "Delete")],
+            "   ",
+            skin,
+            chips,
         );
     }
     boxes
 }
 
-fn render_pool(area: Rect, buf: &mut Buffer, v: &HarnessView, skin: &Skin, g: &PageGlyphs) {
+fn render_pool(
+    area: Rect,
+    buf: &mut Buffer,
+    v: &HarnessView,
+    skin: &Skin,
+    g: &PageGlyphs,
+    chips: &mut Vec<(Rect, char)>,
+) {
     if area.width < 6 || area.height < 3 {
         return;
     }
@@ -1404,16 +1871,11 @@ fn render_pool(area: Rect, buf: &mut Buffer, v: &HarnessView, skin: &Skin, g: &P
         set_row(content, i as u16, buf, line);
     }
     if footer {
-        set_row(
-            content,
-            content.height - 1,
-            buf,
-            keybar(
-                &[("w", "Scale"), ("r", "Restart"), ("c", "Config")],
-                "  ",
-                skin,
-            ),
-        );
+        // One key, not the mock's three. `[r]` is Resume and `[c]` is Clear
+        // Done on this page, and a footer advertising a letter that does
+        // something else is the lie this page exists not to tell. `[w]`
+        // answers with the fact: there is no pool.
+        footer_bar(content, buf, &[("w", "Scale")], "  ", skin, chips);
     }
 }
 
@@ -1475,7 +1937,14 @@ fn render_runtime(area: Rect, buf: &mut Buffer, v: &HarnessView, skin: &Skin, g:
 const STATE_COL: usize = 9;
 const PROGRESS_COL: usize = 12;
 
-fn render_queue(area: Rect, buf: &mut Buffer, v: &HarnessView, skin: &Skin, g: &PageGlyphs) {
+fn render_queue(
+    area: Rect,
+    buf: &mut Buffer,
+    v: &HarnessView,
+    skin: &Skin,
+    g: &PageGlyphs,
+    chips: &mut Vec<(Rect, char)>,
+) {
     if area.width < 8 || area.height < 3 {
         return;
     }
@@ -1531,6 +2000,7 @@ fn render_queue(area: Rect, buf: &mut Buffer, v: &HarnessView, skin: &Skin, g: &
                 skin.palette.style(Role::Ok),
             ),
             TaskState::Pending => Span::styled(pad("Pending", STATE_COL, skin), skin.palette.dim()),
+            TaskState::Done => Span::styled(pad("Done", STATE_COL, skin), skin.palette.dim()),
         };
         let mut right = vec![state];
         match task.progress_pct {
@@ -1562,24 +2032,39 @@ fn render_queue(area: Rect, buf: &mut Buffer, v: &HarnessView, skin: &Skin, g: &
         set_row(content, i as u16 + 1, buf, line);
     }
     if footer {
-        set_row(
+        // Shift on the arrows: the plain ones are the selection's, in
+        // whichever card has focus.
+        footer_bar(
             content,
-            content.height - 1,
             buf,
-            keybar(
-                &[("n", "New"), (g.updown, "Reorder"), ("c", "Clear Done")],
-                "  ",
-                skin,
-            ),
+            &[
+                ("n", "New"),
+                (&format!("{}{}", g.shift, g.updown), "Reorder"),
+                ("c", "Clear Done"),
+            ],
+            "  ",
+            skin,
+            chips,
         );
     }
 }
 
-fn render_gates(area: Rect, buf: &mut Buffer, v: &HarnessView, skin: &Skin, g: &PageGlyphs) {
+fn render_gates(
+    area: Rect,
+    buf: &mut Buffer,
+    v: &HarnessView,
+    skin: &Skin,
+    g: &PageGlyphs,
+    chips: &mut Vec<(Rect, char)>,
+) {
     if area.width < 8 || area.height < 3 {
         return;
     }
-    let posture = if v.auto_approve.is_empty() {
+    // Plan mode outranks the gate: see [`GATE_PLAN`]. `Mode::label`'s own
+    // spelling, so the two cannot come to disagree about the word.
+    let posture = if v.mode_label == crate::approval::Mode::Plan.label() {
+        GATE_PLAN.to_string()
+    } else if v.auto_approve.is_empty() {
         g.dash.to_string()
     } else {
         v.auto_approve.clone()
@@ -1647,20 +2132,20 @@ fn render_gates(area: Rect, buf: &mut Buffer, v: &HarnessView, skin: &Skin, g: &
         set_row(content, i as u16 + 1, buf, line);
     }
     if footer {
-        set_row(
+        // `[s]`, not the mock's `[a]`: `[a]` is Run in the action bar above,
+        // and one letter cannot mean two things on one page.
+        footer_bar(
             content,
-            content.height - 1,
             buf,
-            keybar(
-                &[
-                    ("t", "Set Policy"),
-                    ("a", "Safe"),
-                    ("m", "Manual"),
-                    ("d", "Deny All"),
-                ],
-                "  ",
-                skin,
-            ),
+            &[
+                ("t", "Show"),
+                ("s", "Safe"),
+                ("m", "Manual"),
+                ("d", "Deny All"),
+            ],
+            "  ",
+            skin,
+            chips,
         );
     }
 }
@@ -1978,7 +2463,7 @@ fn clip(text: &str, budget: usize, skin: &Skin) -> String {
 // endregion: Rendering
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::super::palette::{Level, Palette, Role};
     use super::super::render::{cols, ASCII, UNICODE};
     use super::*;
@@ -1986,6 +2471,30 @@ mod tests {
 
     fn skin() -> Skin {
         Skin::new(Palette::new(Level::Truecolor), UNICODE)
+    }
+
+    /// The mock's RESOURCES numbers, in one place.
+    ///
+    /// A function rather than a literal inside `populated` because a live
+    /// view must be able to be checked against it: a test elsewhere can assert
+    /// that not one of these values reaches a card built from a real session
+    /// directory, and a copy of them there would go stale the moment somebody
+    /// edited the mock.
+    pub(crate) fn mock_resources() -> ResourcesView {
+        ResourcesView {
+            cpu_pct: Some(24),
+            mem: "3.2 GB / 16 GB".into(),
+            mem_pct: Some(20),
+            disk_io: "12 MB/s / 8 MB/s".into(),
+            network: "1.2 Mb/s / 0.9 Mb/s".into(),
+            workers: "4/4".into(),
+            queue_depth: "5".into(),
+            avg_latency: "1.23s".into(),
+            p95_latency: "2.87s".into(),
+            retries: "3".into(),
+            span_rate: "20%".into(),
+            live: true,
+        }
     }
 
     /// The mock's sample data, in full. This is what the page looks like once
@@ -2066,36 +2575,42 @@ mod tests {
             tasks: vec![
                 Task {
                     n: 1,
+                    id: String::new(),
                     name: "Verify alert details".into(),
                     state: TaskState::Running,
                     progress_pct: Some(70),
                 },
                 Task {
                     n: 2,
+                    id: String::new(),
                     name: "Check service health".into(),
                     state: TaskState::Pending,
                     progress_pct: None,
                 },
                 Task {
                     n: 3,
+                    id: String::new(),
                     name: "Review error rate".into(),
                     state: TaskState::Pending,
                     progress_pct: None,
                 },
                 Task {
                     n: 4,
+                    id: String::new(),
                     name: "Identify customer impact".into(),
                     state: TaskState::Running,
                     progress_pct: Some(40),
                 },
                 Task {
                     n: 5,
+                    id: String::new(),
                     name: "Check dependencies".into(),
                     state: TaskState::Pending,
                     progress_pct: None,
                 },
                 Task {
                     n: 9,
+                    id: String::new(),
                     name: "Document findings".into(),
                     state: TaskState::Pending,
                     progress_pct: None,
@@ -2131,20 +2646,7 @@ mod tests {
                     status: GateStatus::Allowed,
                 },
             ],
-            resources: ResourcesView {
-                cpu_pct: Some(24),
-                mem: "3.2 GB / 16 GB".into(),
-                mem_pct: Some(20),
-                disk_io: "12 MB/s / 8 MB/s".into(),
-                network: "1.2 Mb/s / 0.9 Mb/s".into(),
-                workers: "4/4".into(),
-                queue_depth: "5".into(),
-                avg_latency: "1.23s".into(),
-                p95_latency: "2.87s".into(),
-                retries: "3".into(),
-                span_rate: "20%".into(),
-                live: true,
-            },
+            resources: mock_resources(),
             events: vec![
                 Event {
                     time: "12:46:21".into(),
@@ -2276,7 +2778,13 @@ mod tests {
             rows[0]
         );
         assert_eq!(rows[1], "Harness");
-        assert_eq!(rows[2], SUBTITLE);
+        // The subtitle row also carries the platform's refusal, flush right,
+        // where there is one to carry: see `no_controls_note`.
+        assert!(rows[2].starts_with(SUBTITLE), "subtitle: {:?}", rows[2]);
+        match no_controls_note() {
+            Some(note) => assert!(rows[2].ends_with(&note), "note: {:?}", rows[2]),
+            None => assert_eq!(rows[2], SUBTITLE),
+        }
         assert!(
             rows[3].chars().all(|c| c == '─') && !rows[3].is_empty(),
             "rule missing"
@@ -2445,10 +2953,16 @@ mod tests {
             assert!(row.contains(latency), "{latency:?} missing: {row:?}");
             flush_right_of(row, latency);
         }
+        // One key, not the mock's three: `[r]` and `[c]` already mean Resume
+        // and Clear Done on this page. See `render_pool`.
         let footer = row_with(&rows, "[w] Scale");
         assert!(
-            footer.contains("[w] Scale  [r] Restart  [c] Config"),
-            "pool footer wrong: {footer:?}"
+            !footer.contains("[r] Restart"),
+            "pool footer advertises a taken key: {footer:?}"
+        );
+        assert!(
+            !footer.contains("[c] Config"),
+            "pool footer advertises a taken key: {footer:?}"
         );
     }
 
@@ -2518,7 +3032,7 @@ mod tests {
         );
         let footer = row_with(&rows, "[n] New");
         assert!(
-            footer.contains("[n] New  [↑/↓] Reorder  [c] Clear Done"),
+            footer.contains("[n] New  [⇧↑/↓] Reorder  [c] Clear Done"),
             "queue footer wrong: {footer:?}"
         );
     }
@@ -2566,9 +3080,10 @@ mod tests {
         row_with(&rows, "GET https://status.payment-gateway.com");
         let mem = row_with(&rows, "store session summary");
         assert!(mem.contains("✓ Allowed"), "allowed mark missing: {mem:?}");
-        let footer = row_with(&rows, "[t] Set Policy");
+        let footer = row_with(&rows, "[t] Show");
         assert!(
-            footer.contains("[t] Set Policy  [a] Safe  [m] Manual  [d] Deny All"),
+            // `[s]`, not the mock's `[a]`: `[a]` is Run in the action bar.
+            footer.contains("[t] Show  [s] Safe  [m] Manual  [d] Deny All"),
             "gates footer wrong: {footer:?}"
         );
     }
@@ -2592,6 +3107,25 @@ mod tests {
     }
 
     // -- RESOURCES, per mock --------------------------------------------------
+
+    #[test]
+    fn the_live_badge_needs_every_row_and_a_partial_card_never_wears_it() {
+        assert!(mock_resources().complete(), "the mock fills every row");
+        let mut partial = mock_resources();
+        partial.disk_io.clear();
+        assert!(!partial.complete(), "one placeholder must sink the badge");
+        assert!(!ResourcesView::default().complete());
+
+        // And the paint follows the flag: a card with `live` off shows the
+        // dash where the badge would be.
+        let mut v = populated();
+        v.resources.live = false;
+        let rows = draw(&v, 220, 75);
+        assert!(
+            !row_with(&rows, "RESOURCES").contains("Live"),
+            "the badge outlived the claim"
+        );
+    }
 
     #[test]
     fn resources_rows_carry_the_mocks_labels_gauges_and_flush_values() {
@@ -2823,6 +3357,11 @@ mod tests {
         KeyEvent::from(code)
     }
 
+    /// The same key with shift held, which is the reorder chord.
+    fn shifted(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::SHIFT)
+    }
+
     /// Five runs: more than the dashboard shows, so the cap and the ALL RUNS
     /// door both have something to do.
     fn five_runs() -> HarnessView {
@@ -2841,7 +3380,7 @@ mod tests {
     }
 
     #[test]
-    fn arrows_and_tab_cycle_the_selection_through_the_visible_runs() {
+    fn arrows_cycle_the_selection_through_the_visible_runs() {
         let mut v = five_runs();
         assert_eq!(v.selected_run, Some(0));
         assert_eq!(
@@ -2849,7 +3388,7 @@ mod tests {
             HarnessAction::FocusChanged
         );
         assert_eq!(v.selected_run, Some(1));
-        handle_key(&mut v, press(KeyCode::Tab));
+        handle_key(&mut v, press(KeyCode::Down));
         assert_eq!(v.selected_run, Some(2));
         // Wraps within the visible three, not into the hidden tail.
         handle_key(&mut v, press(KeyCode::Down));
@@ -2894,18 +3433,379 @@ mod tests {
     }
 
     #[test]
-    fn the_process_manager_keys_answer_with_the_read_only_truth() {
-        for c in ['a', 'p', 'r', 'x'] {
+    fn the_process_keys_ask_for_a_real_signal_against_the_selected_run() {
+        use crate::runctl::{supported, Action};
+        for (c, want) in [
+            ('p', Action::Pause),
+            ('r', Action::Resume),
+            ('x', Action::Cancel),
+        ] {
             let mut v = populated();
+            v.selected_run = Some(1);
+            let got = handle_key(&mut v, press(KeyCode::Char(c)));
+            if supported(want) {
+                assert_eq!(
+                    got,
+                    HarnessAction::Signal(want, "sess-mock#2".into()),
+                    "[{c}] did not ask for its signal"
+                );
+                assert_eq!(v.notice, None, "[{c}] should act, not explain");
+            } else {
+                // The other half of the same guarantee, and the one this box
+                // runs: no signal is asked for at all, and the page says why.
+                assert_eq!(got, HarnessAction::FocusChanged, "[{c}] asked anyway");
+                assert_eq!(
+                    v.notice.as_deref(),
+                    Some(
+                        crate::runctl::Refusal::Unsupported(want)
+                            .to_string()
+                            .as_str()
+                    ),
+                    "[{c}] went quiet instead of answering"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_process_keys_with_no_run_ask_for_one_instead_of_going_dead() {
+        use crate::runctl::{supported, Action};
+        // Archive and Delete are run keys on every platform, so an empty page
+        // owes them the same sentence. The three signals owe it only where the
+        // platform has them: where it does not, "select a run" would be true
+        // and useless, because selecting one would not make the key work.
+        for c in ['A', 'D'] {
+            let mut v = empty();
             assert_eq!(
                 handle_key(&mut v, press(KeyCode::Char(c))),
                 HarnessAction::FocusChanged
             );
-            assert_eq!(v.notice.as_deref(), Some(NOTICE_READ_ONLY), "[{c}] lied");
+            assert_eq!(v.notice.as_deref(), Some(NOTICE_NO_RUN), "[{c}] lied");
         }
+        for (c, action) in [
+            ('p', Action::Pause),
+            ('r', Action::Resume),
+            ('x', Action::Cancel),
+        ] {
+            let mut v = empty();
+            assert_eq!(
+                handle_key(&mut v, press(KeyCode::Char(c))),
+                HarnessAction::FocusChanged
+            );
+            let want = if supported(action) {
+                NOTICE_NO_RUN.to_string()
+            } else {
+                crate::runctl::Refusal::Unsupported(action).to_string()
+            };
+            assert_eq!(v.notice.as_deref(), Some(want.as_str()), "[{c}] lied");
+        }
+    }
+
+    /// Ruling 4, on the box this is first tested on: the three controls this
+    /// platform does not have answer in words, name the platform and the
+    /// operation, and produce no [`HarnessAction::Signal`] for the shell to
+    /// carry out.
+    #[test]
+    #[cfg(not(unix))]
+    fn the_control_keys_refuse_in_words_here_and_ask_for_no_signal() {
+        use crate::runctl::Action;
+        // The verb each refusal must use. Spelled here rather than read off
+        // `Action`, so a reworded sentence that stopped naming its operation
+        // turns this red instead of agreeing with itself.
+        for (c, action, verb) in [
+            ('p', Action::Pause, "pausing"),
+            ('r', Action::Resume, "resuming"),
+            ('x', Action::Cancel, "cancelling"),
+        ] {
+            let mut v = populated();
+            v.selected_run = Some(1);
+            let got = handle_key(&mut v, press(KeyCode::Char(c)));
+            assert_eq!(
+                got,
+                HarnessAction::FocusChanged,
+                "[{c}] must not reach the shell at all"
+            );
+            assert!(
+                !matches!(got, HarnessAction::Signal(..)),
+                "[{c}] asked for a signal on a platform that cannot send one"
+            );
+            let notice = v.notice.clone().unwrap_or_default();
+            assert_eq!(
+                notice,
+                crate::runctl::Refusal::Unsupported(action).to_string(),
+                "[{c}] wrote its own words instead of the refusal's"
+            );
+            assert!(
+                notice.contains("Windows"),
+                "[{c}]'s refusal does not name the platform: {notice:?}"
+            );
+            assert!(
+                notice.contains(verb),
+                "[{c}]'s refusal does not name the operation ({verb}): {notice:?}"
+            );
+        }
+    }
+
+    /// The other half: what a reader sees before pressing anything.
+    #[test]
+    fn the_action_bar_marks_a_control_this_platform_does_not_have() {
+        use crate::runctl::{supported, Action};
+        // 161x40 is the shape the real page was certified at, not a width
+        // picked to make the sentence fit.
+        let rows = draw(&populated(), 161, 40);
+        let head = row_with(&rows, SUBTITLE);
+        let bar = row_with(&rows, "[i] Inspect");
+        match no_controls_note() {
+            None => {
+                assert!(supported(Action::Pause), "a note is owed but none is drawn");
+                assert!(
+                    !head.contains("not offered"),
+                    "the page disowns controls it has: {head:?}"
+                );
+            }
+            Some(note) => {
+                assert!(
+                    !supported(Action::Pause),
+                    "a note is drawn but none is owed"
+                );
+                assert!(
+                    note.contains(std::env::consts::OS),
+                    "the note does not name the platform: {note:?}"
+                );
+                for k in ["[p", "r", "x]"] {
+                    assert!(note.contains(k), "the note does not name {k}: {note:?}");
+                }
+                assert!(
+                    head.contains(&note),
+                    "the note never reached the page: {head:?}"
+                );
+                // And the chips it is about are drawn, but not as live
+                // controls: `[i] Inspect` keeps the accent, `[p] Pause` does
+                // not. Read off the buffer, because "drawn as if it worked"
+                // is a question about colour and not about text.
+                assert!(bar.contains("[p] Pause"), "the chip vanished: {bar:?}");
+                let buf = buffer(&populated(), 161, 40);
+                let rows = lines(&buf);
+                let (lx, ly) = locate(&rows, "[i] Inspect");
+                assert_eq!(
+                    buf[(lx, ly)].style().bg,
+                    Some(accent()),
+                    "a live chip lost its accent, so the comparison proves nothing"
+                );
+                for (key, _) in CONTROL_KEYS {
+                    let (x, y) = locate(&rows, &format!("[{key}]"));
+                    assert_ne!(
+                        buf[(x, y)].style().bg,
+                        Some(accent()),
+                        "[{key}] is drawn as a live control the platform refuses"
+                    );
+                }
+            }
+        }
+        // And `[?]` advertises the three chords exactly where they work. The
+        // Windows spelling still says the words, in a clause that says to
+        // press one for the reason, so the match is on the advertisement.
+        assert_eq!(
+            HELP_DASH.contains("[p]/[r]/[x] pause/resume/cancel"),
+            supported(Action::Pause),
+            "the help text and the platform disagree: {HELP_DASH:?}"
+        );
+    }
+
+    #[test]
+    fn logs_still_says_there_is_no_logs_view() {
         let mut v = populated();
         handle_key(&mut v, press(KeyCode::Char('l')));
         assert_eq!(v.notice.as_deref(), Some(NOTICE_LOGS));
+    }
+
+    #[test]
+    fn a_run_key_needs_a_goal_in_the_command_bar() {
+        let mut v = populated();
+        v.command.clear();
+        for c in ['a', '+'] {
+            assert_eq!(
+                handle_key(&mut v, press(KeyCode::Char(c))),
+                HarnessAction::FocusChanged
+            );
+            assert_eq!(v.notice.as_deref(), Some(NOTICE_NO_GOAL), "[{c}] lied");
+        }
+        v.command = "  fix the parser  ".into();
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Char('a'))),
+            HarnessAction::Launch("fix the parser".into())
+        );
+    }
+
+    #[test]
+    fn archive_names_the_selected_run_and_delete_asks_twice() {
+        let mut v = populated();
+        v.selected_run = Some(1);
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Char('A'))),
+            HarnessAction::Archive("sess-mock#2".into())
+        );
+
+        // Once is a question, not a deletion.
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Char('D'))),
+            HarnessAction::FocusChanged
+        );
+        assert_eq!(v.notice.as_deref(), Some(CONFIRM_DELETE));
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Char('D'))),
+            HarnessAction::Delete("sess-mock#2".into())
+        );
+        assert_eq!(v.armed, None, "the confirmation must not stay armed");
+    }
+
+    #[test]
+    fn any_other_key_cancels_an_armed_delete_and_is_not_also_acted_on() {
+        let mut v = populated();
+        handle_key(&mut v, press(KeyCode::Char('D')));
+        // `R` is Refresh everywhere else on this page. Here it only cancels.
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Char('R'))),
+            HarnessAction::FocusChanged
+        );
+        assert_eq!(v.armed, None);
+        assert_eq!(v.notice, None);
+        // And a second `D` after the cancel is a fresh first press.
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Char('D'))),
+            HarnessAction::FocusChanged
+        );
+        assert_eq!(v.notice.as_deref(), Some(CONFIRM_DELETE));
+    }
+
+    #[test]
+    fn clear_done_asks_twice_too() {
+        let mut v = populated();
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Char('c'))),
+            HarnessAction::FocusChanged
+        );
+        assert_eq!(v.notice.as_deref(), Some(CONFIRM_CLEAR));
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Char('c'))),
+            HarnessAction::TaskClearDone
+        );
+    }
+
+    #[test]
+    fn a_new_task_takes_the_command_bar_the_way_a_new_run_does() {
+        let mut v = populated();
+        v.command.clear();
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Char('n'))),
+            HarnessAction::FocusChanged
+        );
+        assert!(v
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("command bar")));
+        v.command = "write the migration".into();
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Char('n'))),
+            HarnessAction::TaskNew("write the migration".into())
+        );
+    }
+
+    #[test]
+    fn tab_moves_the_arrows_between_the_two_cards_that_have_a_selection() {
+        let mut v = populated();
+        assert_eq!(v.focus, Focus::Runs);
+        handle_key(&mut v, press(KeyCode::Down));
+        assert_eq!(v.selected_run, Some(1), "runs have the arrows first");
+
+        handle_key(&mut v, press(KeyCode::Tab));
+        assert_eq!(v.focus, Focus::Queue);
+        let before = v.selected_task;
+        handle_key(&mut v, press(KeyCode::Down));
+        assert_ne!(v.selected_task, before, "the queue now has the arrows");
+        assert_eq!(v.selected_run, Some(1), "and the run selection stayed put");
+
+        handle_key(&mut v, press(KeyCode::Tab));
+        assert_eq!(v.focus, Focus::Runs);
+    }
+
+    #[test]
+    fn shifted_arrows_reorder_only_the_focused_queue() {
+        let mut v = populated();
+        // Focus on the runs: a shifted arrow is just an arrow.
+        assert_eq!(
+            handle_key(&mut v, shifted(KeyCode::Down)),
+            HarnessAction::FocusChanged
+        );
+        handle_key(&mut v, press(KeyCode::Tab));
+        assert_eq!(
+            handle_key(&mut v, shifted(KeyCode::Up)),
+            HarnessAction::TaskMove(true)
+        );
+        assert_eq!(
+            handle_key(&mut v, shifted(KeyCode::Down)),
+            HarnessAction::TaskMove(false)
+        );
+    }
+
+    #[test]
+    fn the_policy_keys_ask_for_a_next_run_policy_and_t_only_reports() {
+        use crate::runctl::Policy;
+        let mut v = populated();
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Char('s'))),
+            HarnessAction::Policy(Policy::Safe)
+        );
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Char('m'))),
+            HarnessAction::Policy(Policy::Manual)
+        );
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Char('d'))),
+            HarnessAction::Policy(Policy::DenyAll)
+        );
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Char('t'))),
+            HarnessAction::PolicyShow
+        );
+    }
+
+    #[test]
+    fn the_worker_key_names_the_missing_backend_rather_than_inventing_one() {
+        // The one control on this page with nothing behind it, and the only
+        // honest notice left.
+        let mut v = populated();
+        assert_eq!(
+            handle_key(&mut v, press(KeyCode::Char('w'))),
+            HarnessAction::FocusChanged
+        );
+        assert_eq!(v.notice.as_deref(), Some(NOTICE_WORKERS));
+        assert!(
+            NOTICE_WORKERS.contains("delegate.rs"),
+            "the notice must name the fact"
+        );
+    }
+
+    /// The gates card names whichever of gate and posture is deciding.
+    #[test]
+    fn the_gates_card_names_plan_mode_rather_than_the_gate_it_started_in() {
+        let mut v = populated();
+        v.auto_approve = "ASK".into();
+        v.mode_label = crate::approval::Mode::Plan.label().to_string();
+        let rows = draw(&v, 220, 75);
+        let header = row_with(&rows, "TOOL GATES");
+        assert!(
+            header.contains(GATE_PLAN),
+            "the card kept the started gate under plan mode: {header:?}"
+        );
+        assert!(
+            !header.contains("Auto-approve: ASK"),
+            "the card still claims writes are asked about: {header:?}"
+        );
+        // And every other posture is left alone.
+        v.mode_label = crate::approval::Mode::Assist.label().to_string();
+        let rows = draw(&v, 220, 75);
+        assert!(row_with(&rows, "TOOL GATES").contains("Auto-approve: ASK"));
     }
 
     #[test]
@@ -3062,8 +3962,21 @@ mod tests {
     fn the_paint_reports_the_run_boxes_and_the_action_chips() {
         let (_, hits) = hits_at(&populated(), 161, 75);
         assert_eq!(hits.runs.len(), 3, "one rect per painted run box");
-        assert_eq!(hits.chips.len(), ACTIONS.len(), "one rect per action chip");
+        // The action bar's chips, then every card footer's: a footer key is a
+        // control like any other and clicking it fires the same dispatch.
+        assert!(
+            hits.chips.len() > ACTIONS.len(),
+            "the card footers report no chips"
+        );
         assert_eq!(hits.chips[0].1, 'a');
+        for key in ['+', 'A', 'D', 'n', 'c', 't', 's', 'm', 'd', 'w'] {
+            let (r, _) = hits
+                .chips
+                .iter()
+                .find(|(_, k)| *k == key)
+                .unwrap_or_else(|| panic!("no rect for the [{key}] footer chip"));
+            assert_eq!(hit(&hits, r.x, r.y), Some(Hit::Chip(key)));
+        }
         let r = hits.runs[1];
         assert_eq!(
             hit(&hits, r.x + 1, r.y + 1),
@@ -3162,9 +4075,9 @@ mod tests {
     #[test]
     fn the_notice_renders_above_the_input_bar_until_dismissed() {
         let mut v = populated();
-        v.notice = Some(NOTICE_READ_ONLY.to_string());
+        v.notice = Some(NOTICE_WORKERS.to_string());
         let rows = draw(&v, 161, 75);
-        let (_, ny) = locate(&rows, NOTICE_READ_ONLY);
+        let (_, ny) = locate(&rows, NOTICE_WORKERS);
         let (_, qy) = locate(&rows, PLACEHOLDER);
         assert!(
             ny < qy && qy - ny <= 3,
@@ -3200,7 +4113,14 @@ mod tests {
         // painted over the column header with residue left behind.
         let area = Rect::new(0, 0, 70, 4);
         let mut buf = Buffer::empty(area);
-        render_gates(area, &mut buf, &populated(), &skin(), &page_glyphs(&skin()));
+        render_gates(
+            area,
+            &mut buf,
+            &populated(),
+            &skin(),
+            &page_glyphs(&skin()),
+            &mut Vec::new(),
+        );
         let rows = lines(&buf);
         let content = &rows[2];
         assert!(
@@ -3208,13 +4128,20 @@ mod tests {
             "the hidden rows are uncounted: {content:?}"
         );
         assert!(
-            !content.contains("[t] Set Policy"),
+            !content.contains("[t] Show"),
             "the footer stole the one honest row: {content:?}"
         );
         // One row taller: the column header returns, the count stays.
         let area = Rect::new(0, 0, 70, 5);
         let mut buf = Buffer::empty(area);
-        render_gates(area, &mut buf, &populated(), &skin(), &page_glyphs(&skin()));
+        render_gates(
+            area,
+            &mut buf,
+            &populated(),
+            &skin(),
+            &page_glyphs(&skin()),
+            &mut Vec::new(),
+        );
         let rows = lines(&buf);
         assert!(
             rows[2].contains("TOOL"),
@@ -3417,6 +4344,84 @@ mod tests {
     #[ignore]
     fn the_live_shaped_harness_at_161x75_for_eyeballing() {
         for row in draw(&live_shaped(), 161, 75) {
+            println!("{row}");
+        }
+    }
+
+    /// Certification, not a guarantee: draw the page over the real session
+    /// directory on the machine running it.
+    ///
+    /// `#[ignore]`d because it reads a store this repository does not own and
+    /// a machine that has never run Emma has nothing to show — a test whose
+    /// result depends on somebody's home directory is not a test. It is here
+    /// because a cell buffer full of fixtures agrees with its author: the
+    /// mapping below is the one `app::harness_view_from` uses, aimed at the
+    /// real feed, and what it prints is what a reader would see. Nothing is
+    /// signalled, archived or deleted; `harness_state::runs` only reads.
+    #[test]
+    #[ignore]
+    fn the_real_session_directory_for_certification() {
+        use crate::harness_state as hs;
+        let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+        else {
+            println!("no home directory on this machine; nothing to certify against");
+            return;
+        };
+        let dir = std::path::Path::new(&home).join(".emma/sessions");
+        let cwd = std::env::current_dir().unwrap();
+        // `--lib` runs from the crate directory; the runs are recorded against
+        // the workspace root, which is two levels up.
+        let cwd = cwd.parent().and_then(|p| p.parent()).unwrap_or(&cwd);
+        let cwd = cwd.display().to_string();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let feed = hs::runs(&dir, now).expect("the real session directory could not be read");
+        let mine: Vec<&hs::RunRow> = feed
+            .runs
+            .iter()
+            .filter(|r| r.cwd.as_deref() == Some(cwd.as_str()))
+            .collect();
+        println!(
+            "{} session files, {} runs, {} in this repository",
+            std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0),
+            feed.runs.len(),
+            mine.len()
+        );
+        let mut v = HarnessView {
+            version: concat!("v", env!("CARGO_PKG_VERSION")).to_string(),
+            ..HarnessView::default()
+        };
+        v.runs = mine
+            .iter()
+            .map(|r| Run {
+                name: r.name.clone(),
+                key: r.id.clone(),
+                state: match r.status {
+                    hs::RunStatus::Running => RunState::Running,
+                    hs::RunStatus::Completed => RunState::Completed,
+                    hs::RunStatus::Failed => RunState::Failed,
+                    hs::RunStatus::Stalled => RunState::Paused,
+                },
+                id: r
+                    .id
+                    .chars()
+                    .rev()
+                    .take(8)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect(),
+                stamp: String::new(),
+                done: r.progress.as_ref().map(|p| p.done as u32).unwrap_or(0),
+                total: r.progress.as_ref().map(|p| p.total as u32).unwrap_or(0),
+            })
+            .collect();
+        if !v.runs.is_empty() {
+            v.selected_run = Some(0);
+        }
+        for row in draw(&v, 161, 40) {
             println!("{row}");
         }
     }

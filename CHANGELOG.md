@@ -28,6 +28,18 @@ out for themselves.
 
 ## Unreleased
 
+- **The Harness page (`Alt+h`) is a process manager, not a history view.** It
+  starts a run, archives one, deletes one, signals one, reorders the task
+  queue, adds and sweeps tasks, and writes the next run's permission preset.
+  Archive, delete and clear-done ask twice. Where an operation has no Windows
+  equivalent the key answers with a sentence naming the platform and the
+  operation, the chip is drawn dim, and the subtitle row says so: pause,
+  resume and cancel are the three, because Windows has no equivalent of the
+  signals they send. Everything else on the page works on both platforms.
+  `[t]` reports what the permission file says today and writes nothing, and
+  says plainly when no preset describes the file. The gates card names plan
+  mode instead of drawing the gate it resolves to, which asks nothing.
+
 - **A new tool, `Screenshot`.** It captures the primary display, bounds the
   image so a capture is not a megabyte of base64, and hands the bytes to the
   model on the wire the running provider actually has: an image block inside
