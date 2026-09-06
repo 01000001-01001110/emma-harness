@@ -132,16 +132,32 @@ impl Fake {
     }
 
     /// The URI a real server would send back for `uri`, on this platform.
+    ///
+    /// **It must differ from what it was given, and that is asserted here.** A
+    /// respelling that happens to be a no-op — a path with no upper case on
+    /// Windows, none of the encoded characters on unix — turns this fake back
+    /// into the echo it exists to stop being, and every test driven by it then
+    /// passes over a lookup nobody exercised. Measured on macOS 2026-09-06: the
+    /// unix arm encoded `-`, the sandbox path had none, and removing the
+    /// production key's translation left the suite green.
     fn respelled(uri: &str) -> String {
-        if cfg!(windows) {
+        let out = if cfg!(windows) {
             // The drive letter only. Lower-casing the rest would be a claim
             // about the file system that Windows happens to forgive and that
             // no server makes.
-            return uri.to_lowercase();
-        }
-        // Every `-` written as its escape, in lower-case hex. `doc::from_uri`
-        // decodes it; a lookup keyed on the raw string does not.
-        uri.replace('-', "%2d")
+            uri.to_lowercase()
+        } else {
+            // `.` and `-` written as their escapes, in lower-case hex.
+            // `doc::from_uri` decodes them; a lookup keyed on the raw string
+            // does not. Both are optional escapes of unreserved characters,
+            // which is exactly the freedom servers use differently.
+            uri.replace('.', "%2e").replace('-', "%2d")
+        };
+        assert_ne!(
+            out, uri,
+            "this fake respells a URI so the lookup is tested rather than              echoed, and it could not respell this one"
+        );
+        out
     }
 
     pub fn answers(mut self, method: &str, result: Value) -> Self {
