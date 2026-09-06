@@ -275,6 +275,30 @@ fn compose(width: u16, bar: &amp;Bar, skin: &amp;Skin) -&gt; Line&lt;'static&gt;
     does not.&rdquo;</em>
   </p>
 
+  <p>
+    MODE stopped being placeholder content on 2026-09-06. An idle bar draws
+    <code>approval::current_mode_label()</code>, which is
+    <code>ASSIST</code>, <code>AUTO</code> or <code>PLAN</code>: the posture the
+    session is in, read at draw time rather than at startup, so
+    <code>/mode plan</code> changes the word without a redraw of anything else.
+    A running goal still says <code>WORKING</code>, because a working state is
+    what the cell says while there is one. The word is the posture's and not the
+    gate's, and after <code>/mode</code> the two say different things: a run
+    started with <code>--dangerously-skip-permissions</code> says
+    <code>AUTO</code>, and the same run put into plan says <code>PLAN</code>
+    while the gate it started with has not moved.
+    <span class="chip test">tested</span>:
+    <code>the_status_label_is_assist_until_a_run_says_otherwise</code> goes red
+    when the label is computed from the gate instead of the mode.
+    <span class="chip unv">unverified</span> Nobody has read the cell off a real
+    console since the word changed, and the widths moved:
+    <code>ASK</code> (3) became <code>ASSIST</code> (6), and
+    <code>UNATTENDED</code> (10) became <code>AUTO</code> (4). The longest label
+    got shorter, so an overrun is unlikely rather than ruled out. An 80-column
+    and a 60-column terminal with a goal running settles it.
+  </p>
+  <span class="src">crates/emma/src/term/layout.rs &mdash; <code>bar_for</code>; crates/emma/src/approval.rs &mdash; <code>current_mode_label</code>, <code>Mode::label</code></span>
+
   <div class="note warn">
     <span class="h">Defect: one element of the empty-value loop cannot fail</span>
     <p>

@@ -122,7 +122,7 @@
 //! about it is yes.</code></pre>
   <span class="src">crates/emma/src/settings.rs — module doc</span>
 
-  <h2 id="keys">Six keys, and a seventh is silence</h2>
+  <h2 id="keys">The keys, and one of them is silence</h2>
 
   <div class="tw">
   <table>
@@ -159,6 +159,48 @@
         <td>string</td>
         <td>The theme file's name. Absent means the built-in. See
             <a href="config-themes.html">Themes</a>.</td>
+      </tr>
+      <tr>
+        <td><code>sampling</code></td>
+        <td>object</td>
+        <td>provider &rarr; <code>{temperature, max_output_tokens, stream}</code>,
+            each optional. <a href="#sampling">Below</a>, because absence means
+            two different things inside one block.</td>
+      </tr>
+      <tr>
+        <td><code>training_capture</code></td>
+        <td>bool</td>
+        <td>Whether a finished goal refreshes this session's training export.
+            Absent means on. Nothing leaves the machine either way. See
+            <a href="session-corpus.html#training">Training material</a>.</td>
+      </tr>
+      <tr>
+        <td><code>appearance</code></td>
+        <td>object</td>
+        <td>The look of the frame beyond the theme name: the accent, and the
+            font Emma asks the terminal for. See
+            <a href="terminal-colour.html">Colour</a> and
+            <a href="terminal-themes.html#font">Themes</a>.</td>
+      </tr>
+      <tr>
+        <td><code>memory</code>, <code>prune_history</code>,
+            <code>web_search</code></td>
+        <td>bool</td>
+        <td>Three switches that do not share an absent-means answer:
+            <code>memory</code> on, the other two off. The two that are off
+            change what the model is shown or what the run is billed, and a
+            build that starts doing either silently changes answers.</td>
+      </tr>
+      <tr>
+        <td><code>voice</code>, <code>lsp</code>, <code>memory_policy</code>,
+            <code>ui</code></td>
+        <td>object</td>
+        <td>Four more blocks from the same port. Each is skipped when empty, so
+            a file never grows one because this build knows the word.
+            <span class="chip unv">unverified</span> None of the four has a page
+            here yet, so this row is the whole of what the site says about them.
+            Reading the four types in <code>settings.rs</code> and writing them
+            up is what settles it.</td>
       </tr>
       <tr>
         <td><code>model</code></td>
@@ -427,6 +469,73 @@ pub struct ToolSettings {
     process.
   </p>
 
+  <h2 id="sampling">The <code>sampling</code> block, where absence is two answers</h2>
+
+  <p>
+    <code>sampling</code> is keyed by provider for the reason <code>models</code>
+    is: these are per-provider answers, and one global temperature would be
+    wrong for whichever provider it was not chosen on. Each entry has three
+    optional fields.
+  </p>
+
+<pre><code>"sampling": {
+  "ollama": { "temperature": 0.15 },
+  "anthropic": { "max_output_tokens": 16000, "stream": false }
+}</code></pre>
+  <span class="src">crates/emma/src/settings.rs &mdash; <code>SamplingSettings</code>, <code>Settings::sampling</code></span>
+
+  <p>
+    The reason the fields are <code>Option</code> rather than defaulted at load
+    is that an absent field does not mean the same thing in all three, and a
+    page saying "absent means the default" would be wrong about one of them.
+    An absent <code>temperature</code> means <em>no key reaches the provider and
+    the host decides</em>: Emma does not know what number that is and does not
+    guess one. An absent <code>max_output_tokens</code> means <em>Emma sends
+    32,000</em>, because the Messages API requires the cap and there is no
+    absent case to be honest about. An absent <code>stream</code> means on.
+    <span class="chip test">tested</span>:
+    <code>an_absent_temperature_resolves_to_the_host_default_on_every_provider</code>
+    asserts the first across all four providers, and
+    <code>an_absent_output_cap_resolves_to_the_emma_default_because_it_is_always_sent</code>
+    the second.
+  </p>
+
+  <div class="tw">
+  <table>
+    <thead><tr><th>where it came from</th><th>means</th></tr></thead>
+    <tbody>
+      <tr><td><code>manual</code></td><td>This file said so.</td></tr>
+      <tr><td><code>emma default</code></td><td>Nobody said, and Emma sends a number of its own.</td></tr>
+      <tr><td><code>host default</code></td><td>Nobody said, nothing is sent, and the host applies whatever it applies.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <span class="src">crates/emma/src/settings.rs &mdash; <code>Provenance</code>, <code>resolve_sampling</code>, <code>sampling_defaults</code></span>
+
+  <p>
+    The three answers exist because a row showing <code>0.7</code> should be
+    able to say whether a person chose it or whether it is what happens when
+    nobody does, and those are different facts about the same number.
+    <code>/config</code> prints the resolved line with each source named, and a
+    goal record carries the same six keys, so a run's knobs are reconstructable
+    from disk. A <code>temperature</code> of <code>0.0</code> written by hand is
+    <code>manual</code> and travels; it is not read as an absence.
+    <span class="chip test">tested</span>:
+    <code>all_three_manual_values_are_reported_as_manual</code> and
+    <code>set_sampling_drops_an_empty_entry_and_keeps_a_manual_zero</code> are
+    what go red if the resolver ever reaches for <code>unwrap_or_default</code>.
+  </p>
+
+  <p>
+    Setting one is a hand edit. There is no Settings-screen row for temperature
+    and no command that writes the block, so the file is edited and the process
+    restarted.
+    <span class="chip unv">unverified</span> Nothing here has read a
+    <code>sampling</code> entry back off a real run's goal record; the resolver
+    and the wire are each proven, and the join is what nobody has watched.
+    Settling it: set <code>sampling.ollama.temperature</code>, run one goal, and
+    read <code>"temperature_source": "manual"</code> out of the session file.
+  </p>
   <h2 id="credentials">Credentials</h2>
 
   <p>

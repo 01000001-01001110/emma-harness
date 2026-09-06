@@ -281,7 +281,9 @@ loop {
     refused. <code>a_line_typed_while_a_question_is_pending_never_reaches_the_queue</code>
     goes red when the pending-question guard in <code>mid_goal</code> is
     removed. The inline and plain paths have no reader thread and keep the
-    drain above.
+    drain above. <a href="steering.html">Steering</a> is the whole of that
+    mechanism: the second queue, which commands may run at a boundary and why,
+    and the register an interjection reaches the model in.
   </p>
   <span class="src">crates/emma/src/session_command.rs — mid_goal, boundary_of; crates/emma/src/steering.rs; crates/emma/src/agent.rs — drain_the_steering_queue</span>
 

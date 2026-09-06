@@ -2698,8 +2698,15 @@ mod steer_fold_tests {
         assert_eq!(results.len(), 2, "{out:?}");
         let (t1, t2) = (results[0], results[1]);
         assert_eq!(t1.images.len(), 1);
-        assert_eq!(t1.images[0].data.as_deref(), Some("aGk="), "the bytes came back");
-        assert!(t2.images.is_empty(), "a missing file is not sent as an image");
+        assert_eq!(
+            t1.images[0].data.as_deref(),
+            Some("aGk="),
+            "the bytes came back"
+        );
+        assert!(
+            t2.images.is_empty(),
+            "a missing file is not sent as an image"
+        );
         assert!(
             t2.content.contains("[image not replayed:"),
             "the loss is said: {}",

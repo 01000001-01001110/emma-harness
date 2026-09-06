@@ -91,8 +91,9 @@
     selection, still there and still whole-row. <code>/copy</code> puts the last
     answer on the clipboard with an escape sequence. <code>/export</code> writes
     the conversation to a file and is the only one of the three that works when
-    Emma is being piped. None of them replaces the plain drag that worked before
-    2026-08-12; this page explains why that route is gone.
+    Emma is being piped. Since 2026-09-06 there is a fourth: a plain drag inside
+    the chat pane is Emma's own selection, drawn by Emma and copied by Emma,
+    which is not the same thing as the one mouse capture took away.
   </p>
 
   <h2 id="capture">The wheel cost the drag</h2>
@@ -110,7 +111,7 @@
     // Mouse capture, for the wheel: on the alternate screen the wheel
     // does nothing at all without it — not &quot;less useful&quot;, nothing —
     // and the first instinct of anybody reading a long answer is the
-    // wheel (recorded in the full-screen TUI evaluation). The cost is
+    // wheel (the full-screen evaluation). The cost is
     // that plain drag-selection now needs Shift; the quick-help table
     // says so, because it is the one fact a user cannot guess. Only
     // on the full-screen path: inline, the terminal owns the wheel
@@ -146,42 +147,48 @@
     With capture on, the terminal still performs its own selection when the
     drag is Shift-modified. That is the one copy route on the alternate screen
     that involves no Emma code at all, so the input handler's job is to stay
-    out of its way. Exactly one click is routed, a plain left press with no
-    Shift; drags, releases and every other button fall through untouched.
+    out of its way. Every mouse arm in the reader thread carries the same guard:
+    a Shift-modified event is refused, whatever a terminal chooses to forward.
   </p>
 
   <p class="src">crates/emma/src/term/input.rs, the reader thread</p>
 
-  <pre><code>// The wheel, which mouse capture exists for: without capture,
-// on the alternate screen, it does nothing at all. Beyond the
-// wheel, exactly one click is routed: a plain left *press*,
-// to the frame&#x27;s single click target (the sidebar&#x27;s collapse
-// affordance — the route the owner actually tried when the
-// toggle &quot;did not work&quot;). Drags, releases and every other
-// button fall through untouched, and anything Shift-modified
-// is refused even where a terminal forwards it: Shift-drag is
-// the terminal&#x27;s own selection — the one copy route left on
-// the alternate screen — and this arm must never bid for it.
-// A click mutates view state through the frame and never
-// enters the line channel, same as the wheel.
-Ok(Event::Mouse(mouse)) =&gt; match mouse.kind {
-    MouseEventKind::ScrollUp =&gt; thread_frame.scroll_rows(true, WHEEL_ROWS),
-    MouseEventKind::ScrollDown =&gt; thread_frame.scroll_rows(false, WHEEL_ROWS),
-    MouseEventKind::Down(MouseButton::Left)
-        if !mouse.modifiers.contains(KeyModifiers::SHIFT) =&gt;
-    {
-        thread_frame.click(mouse.column, mouse.row);
-    }
-    _ =&gt; {}
-},</code></pre>
+<pre><code><span class="c">// **The Shift guard is this tree's and it stays.** The
+// imported reader had no such arm: it bid for every plain
+// left press. `CLAUDE.md` names Shift-drag as the one
+// native selection route left on the alternate screen, so a
+// Shift-modified press is refused here even where a
+// terminal forwards it, and the in-app selection below
+// takes only the unmodified one.</span>
+MouseEventKind::Down(MouseButton::Left)
+    if !mouse.modifiers.contains(KeyModifiers::SHIFT) =&gt;
+{</code></pre>
+
+  <p>
+    That guard is the whole of the arrangement. A Shift-modified press is
+    refused here even where a terminal forwards it, so the terminal's own
+    selection is never bid for; an unmodified one is Emma's, and what it reaches
+    is decided in order: an open page first, then the sidebar's affordance, then
+    the scrollbar, then the chat pane. The comment above the arm still says
+    <em>&ldquo;drags, releases and every other button fall through
+    untouched&rdquo;</em>, which stopped being true when the in-pane selection
+    landed: there are <code>Drag</code> and <code>Up</code> arms below it now.
+    <span class="chip cert">certified</span> Read
+    <code>input.rs</code> from that comment to the end of the
+    <code>Event::Mouse</code> match: four arms, not three.
+  </p>
 
   <p>
     <code>Shift+drag</code> appears in the QUICK HELP table for the reason the
     table's own doc comment gives: mouse capture taking plain drag away is the
     one fact a user cannot guess.
-    <span class="chip cert">certified</span>
-    <code>keymap()</code> in <code>crates/emma/src/term/app.rs</code> lists
-    eleven rows and <code>("Shift+drag", "select text")</code> is the last.
+    <span class="chip cert">certified</span> The table is
+    <code>bindings::CHAT</code> now rather than <code>app::keymap()</code>, it
+    holds twelve drawn bindings, and
+    <code>Trigger::Terminal("Shift+drag")</code> with <code>what: "select
+    text"</code> is the last of them. <code>Trigger::Terminal</code> is its own
+    variant because a mouse gesture has no <code>KeyCode</code> to derive a
+    label from, so that row's spelling is given rather than resolved.
   </p>
 
   <p>
@@ -194,6 +201,179 @@ Ok(Event::Mouse(mouse)) =&gt; match mouse.kind {
     sidebar open. Settling it takes a person, a console and a paste into an
     editor; the byte-capture harness cannot see it, because the terminal's
     selection never passes through Emma.
+  </p>
+
+  <h2 id="inpane">The in-pane selection, in content rows</h2>
+
+  <p>
+    A plain drag in the chat pane selects text, highlights it in reverse video,
+    and puts it on the clipboard on release. It exists only while mouse capture
+    is on, and that is not a rule this code writes: capture is what routes a
+    drag to the program at all. <code>Ctrl-S</code> hands the mouse back, no
+    mouse event arrives, and the terminal's own selection works as it does
+    everywhere else. So the two selections cannot both be live, no mode flag
+    decides between them, and the Shift+drag fallback above stays the fallback.
+  </p>
+
+<pre><code><span class="c">// -----------------------------------------------------------------------
+// Selecting text in the chat pane
+//
+// ⚠ THIS EXISTS ONLY WHILE MOUSE CAPTURE IS ON, and that is not a rule
+// written here — it is what the terminal does. Capture is what routes a
+// drag to this program at all; Ctrl-S hands the mouse back, no mouse
+// event arrives, and the terminal's own selection works exactly as it
+// does in every other program. So the two selections cannot both be
+// live, no mode flag decides between them, and the documented fallback
+// stays the fallback.
+//
+// The pane is the only surface that selects. The sidebar, the input box
+// and the bar are chrome, and a selection over them would copy furniture.
+// -----------------------------------------------------------------------</span></code></pre>
+  <span class="src">crates/emma/src/term/app.rs &mdash; the region header</span>
+
+  <p>
+    <strong>The anchor and the head are content rows, not screen rows.</strong>
+    <code>cell_at</code> adds the window's start to the row under the pointer,
+    so a selection means the same text after the view has moved under a held
+    button. Screen coordinates would have meant a drag that scrolls quietly
+    reselects whatever slid into the row the pointer is on, which is the failure
+    that makes edge auto-scroll useless.
+  </p>
+
+<pre><code><span class="c">/// The pointer moved with the button down. Clamped into the pane rather
+/// than dropped: a drag that runs off the edge is a normal drag, and
+/// losing it there would leave a selection that stops mid-word.
+///
+/// A pointer *on* the edge row scrolls the view instead of stopping
+/// there, which is what every editor does and what makes a selection
+/// longer than the pane possible at all. See [`Self::selection_scroll`].</span>
+pub fn selection_extend(&amp;mut self, col: u16, row: u16) {
+    let Some((anchor, _)) = self.selection else {
+        return;
+    };
+    let pane = self.chat_rect;
+    if pane.width == 0 || pane.height == 0 {
+        return;
+    }
+<span class="c">    // Scroll first, then read the head: the row the pointer is on now
+    // holds different text than it did a moment ago, and the head belongs
+    // to the text rather than to the cell.</span>
+    self.selection_scroll(pane, row);
+    let x = col.clamp(pane.x, pane.right() - 1) - pane.x;
+    let y = row.clamp(pane.y, pane.bottom() - 1) - pane.y;
+    let start = self.transcript.window_start(pane.height);
+    self.selection = Some((anchor, (start + usize::from(y), x)));
+}</code></pre>
+  <span class="src">crates/emma/src/term/app.rs &mdash; <code>selection_extend</code></span>
+
+  <p>
+    The order in that function is the argument: scroll first, then read the
+    head. The row the pointer is on holds different text after the scroll than
+    before it, and the head belongs to the text rather than to the cell. Reading
+    the head first would place it one screenful behind on every edge event.
+    <span class="chip test">tested</span>
+    <code>the_anchor_stays_on_its_row_while_the_drag_scrolls</code> and
+    <code>a_drag_at_the_top_edge_reveals_rows_and_copies_them</code>; the second
+    is what goes red when the rebase in <code>selection_text</code> is pinned to
+    zero.
+  </p>
+
+<pre><code><span class="c">/// One step of drag auto-scroll, or nothing when the pointer is inside
+/// the pane.
+///
+/// ⚠ A STEP PER EVENT, AND NO TIMER. A terminal mouse only reports on
+/// movement, so holding still at the edge reports nothing and this
+/// repeats only while the pointer keeps moving. That is the honest thing
+/// a cell grid can do without a repaint loop running off a clock, which
+/// is the same argument the copy notice's ⚠ makes about chrome that
+/// changes with no event behind it.
+///
+/// The far step is the wheel's, not a new number: a pointer well past the
+/// edge is asking for distance, and the reader already knows what three
+/// rows feels like.</span>
+fn selection_scroll(&amp;mut self, pane: Rect, row: u16) {
+    let last = pane.bottom() - 1;
+    let (up, past) = if row &lt;= pane.y {
+        (true, pane.y - row)
+    } else if row &gt;= last {
+        (false, row - last)
+    } else {
+        return;
+    };
+    let step = if past &gt; 1 { DRAG_FAR_ROWS } else { 1 };
+    if up {
+        self.transcript.scroll_up(step);
+<span class="c">        // The bar's clamp, for the bar's reason: offset past `max_offset`
+        // is travel the view cannot show, and a drag held at the top edge
+        // would bank a row of it per event and then spend the way back
+        // down undoing it.</span>
+        let top = transcript::max_offset(self.transcript.total_rows(), pane.height);
+        if self.transcript.scroll_offset() &gt; top {
+            self.transcript.scroll_to(top);
+        }
+    } else {
+        self.transcript.scroll_down(step);
+    }
+}</code></pre>
+  <span class="src">crates/emma/src/term/app.rs &mdash; <code>selection_scroll</code>, <code>DRAG_FAR_ROWS</code></span>
+
+  <p>
+    Three things in that function are worth stating rather than deducing. A
+    pointer <em>on</em> the pane's first or last row scrolls one row per event,
+    and a pointer more than one row past it takes <code>DRAG_FAR_ROWS</code>,
+    which is the wheel's <code>WHEEL_ROWS</code> rather than a second three: an
+    overshoot is asking for distance, and the reader already knows what the
+    wheel's step feels like. The upward case is clamped to
+    <code>max_offset</code> for the scrollbar's reason, because offset past it
+    is travel the view cannot show, and a drag held at the top edge would
+    otherwise bank a row of it per event and spend the way back down undoing it.
+    And there is no timer: a terminal mouse reports only on movement, so holding
+    still at the edge repeats nothing. That is what a cell grid can honestly do
+    without a repaint loop running off a clock.
+    <span class="chip test">tested</span>
+    <code>a_pointer_well_past_the_pane_scrolls_by_the_wheels_step</code>,
+    <code>the_top_edge_drag_stops_at_the_last_row_the_view_can_show</code>,
+    <code>the_bottom_edge_drag_stops_at_the_tail</code>,
+    <code>a_drag_inside_the_pane_scrolls_nothing</code> and
+    <code>a_stationary_pointer_neither_moves_the_view_nor_drops_the_drag</code>.
+    Making <code>selection_scroll</code> a no-op turns five of them red.
+  </p>
+
+  <p>
+    The paint keeps what the selection may still need.
+    <code>record_cells</code> stores the rows it drew together with the window's
+    origin, <code>chat_cells_start</code>. While nothing is selected the
+    snapshot is the pane and nothing more. While a drag is live it extends at
+    whichever end the scroll revealed, because those rows are inside the
+    selection and the pane no longer holds them; a window that has jumped clear
+    of what is kept starts over, since nothing between the two was ever painted.
+    <code>selection_text</code> then rebases a content row into the snapshot it
+    has, subtracting <code>chat_cells_start</code> with a saturating subtraction
+    so a row above the snapshot clamps rather than wraps.
+    <code>highlight</code> paints only the rows the window is showing, so a
+    selection running off either end shows the part that is on screen and no
+    more.
+  </p>
+
+  <p>
+    The pane is the only surface that selects. The sidebar, the input box and
+    the bar are chrome, and a selection over them would copy furniture. A press
+    in the scrollbar's column never starts one, and no other screen can be
+    selected over.
+    <span class="chip test">tested</span>
+    <code>a_press_in_the_bars_column_never_starts_a_selection</code>,
+    <code>no_other_screen_can_be_selected_over</code>,
+    <code>the_bar_and_the_text_drag_stay_distinct_under_auto_scroll</code>.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> A drag on a real console. Every
+    test above runs against a cell buffer, and a cell buffer is not a console:
+    this is the class of defect that has shipped from <code>term/</code> twice
+    while fully tested. What a real Windows Terminal and a real Terminal.app do
+    with a press, a drag past the pane's edge and a release is what the
+    terminal certification pass is for. Settling it: drag past the bottom of the
+    pane on both, release, and paste.
   </p>
 
   <h2 id="copy">/copy, and where INV-001 is enforced</h2>
@@ -391,13 +571,12 @@ if !lost.is_empty() {
   </p>
 
   <p>
-    In-app drag-selection with copy-on-release has not been built. The original
-    design named it as the eventual target, so building it would not revive a
-    rejected approach. Claude Code's own fullscreen renderer captures the mouse
-    exactly as Emma does and rebuilt selection in-app for the same reason.
-    <span class="chip unv">unverified</span> That reading of Claude Code's
-    renderer comes from the parity investigation recorded on <code>UI-006</code>
-    and has not been re-checked against a current build.
+    <strong>In-app drag-selection with copy-on-release landed on 2026-09-06</strong>
+    and this paragraph used to say it had not been built. The original design
+    named it as the eventual target, so it revived nothing that had been
+    rejected. <a href="#inpane">The section above</a> is what it does; what
+    stays gone is the terminal's own selection over the whole screen, which no
+    amount of in-app work reaches while capture is on.
   </p>
 
   <h2 id="coverage">Coverage</h2>
@@ -407,8 +586,15 @@ if !lost.is_empty() {
     <code>crates/emma/src/term.rs</code>, <code>copy_last_answer</code> and
     <code>export_conversation</code> in
     <code>crates/emma/src/session_command.rs</code>, the mouse-capture enable
-    and disable in <code>crates/emma/src/term/frame.rs</code>, and the mouse
-    arm of the reader thread in <code>crates/emma/src/term/input.rs</code>.
+    and disable in <code>crates/emma/src/term/frame.rs</code>, the mouse arms of
+    the reader thread in <code>crates/emma/src/term/input.rs</code>, and the
+    selection half of <code>crates/emma/src/term/app.rs</code>:
+    <code>selection_begin</code>, <code>selection_extend</code>,
+    <code>selection_scroll</code>, <code>cell_at</code>,
+    <code>record_cells</code>, <code>selection_text</code>,
+    <code>selection_clear</code>, <code>has_selection</code> and
+    <code>highlight</code>. <code>selected_text</code> and <code>order</code>,
+    the two free functions underneath them, are named and not quoted.
   </p>
 
   <p>

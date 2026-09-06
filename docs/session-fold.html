@@ -668,6 +668,35 @@ fn string(r: &amp;Value, key: &amp;str) -&gt; String {
   </p>
   <span class="src">crates/emma/src/session.rs — <code>blocks_of</code>, <code>string</code>, <code>str_of</code></span>
 
+  <h2 id="prefixes">A second consumer, and the reason it is not a second fold</h2>
+
+  <p>
+    <code>fold_prefixes</code> walks the same records and hands back, for each
+    assistant record, the conversation as that turn's request carried it. It is
+    <code>fold_records</code> stopped early rather than a re-derivation, so a
+    <code>compacted</code> record that had already been applied when a turn was
+    sent is applied here too and one that came later is not. The
+    <a href="session-corpus.html#training">training exporter</a> is the caller,
+    and its per-turn fidelity claim is therefore this fold's own answer rather
+    than a second opinion about it. Its <code>partial</code> value is the same
+    property from the other side: the fold reports what it refused, and an
+    exporter that dropped the report would be claiming a fidelity the fold had
+    already declined to give.
+  </p>
+
+  <p>
+    It clones the fold at each assistant record instead of re-walking the
+    prefix, which is linear in the records and quadratic only in the messages
+    copied &mdash; a few hundred small structs for a session file.
+    <span class="chip unv">unverified</span> The cost on a large <em>damaged</em>
+    file is unmeasured: an undamaged one is a single walk, and a damaged one
+    costs extra folds to find where the damage starts. No damaged file of real
+    size exists here to time it against. A <code>fold_prefixes</code> that
+    reported the damage from the one walk would remove the question rather than
+    answer it.
+  </p>
+  <span class="src">crates/emma/src/session.rs &mdash; <code>fold_prefixes</code>, <code>fold_records</code>; crates/emma/src/export.rs &mdash; <code>first_damaged_prefix</code></span>
+
   <h2 id="older">A file written by an older build</h2>
 
   <p>

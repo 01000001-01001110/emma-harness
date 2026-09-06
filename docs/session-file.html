@@ -89,11 +89,7 @@
 <span class="c">/// A session id that sorts by time and cannot collide between two `emma`
 /// processes started in the same millisecond.</span>
 pub fn new_id() -&gt; String {
-    let ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    format!("sess-{ms:013}-{}", std::process::id())
+    format!("sess-{:013}-{}", now_ms(), std::process::id())
 }</code></pre>
 
   <p>
@@ -152,9 +148,11 @@ pub fn open(dir: &amp;Path, id: impl Into&lt;String&gt;) -&gt; Result&lt;Self&gt
         .open(&amp;path)
         .with_context(|| format!("opening {}", path.display()))?;
     Ok(Self {
-        id,
-        path,
-        file: Arc::new(Mutex::new(Some(file))),
+        handle: Arc::new(Mutex::new(Handle {
+            id,
+            path,
+            file: Some(file),
+        })),
         prefix: None,
         stamp: Vec::new(),
         tap: None,
@@ -182,25 +180,28 @@ pub fn open(dir: &amp;Path, id: impl Into&lt;String&gt;) -&gt; Result&lt;Self&gt
 /// working tool for a diary.</span>
 pub fn none() -&gt; Self {
     Self {
-        id: "sess-none".into(),
-        path: PathBuf::new(),
-        file: Arc::new(Mutex::new(None)),
+        handle: Arc::new(Mutex::new(Handle {
+            id: "sess-none".into(),
+            path: PathBuf::new(),
+            file: None,
+        })),
         prefix: None,
         stamp: Vec::new(),
         tap: None,
         write_failed: Arc::new(AtomicBool::new(false)),
-    }
-}</code></pre>
+    }</code></pre>
 
   <p>
     <code>file</code> is <code>Option&lt;File&gt;</code> so that this variant
     needs no separate type and no trait: every append walks the same code and
-    returns at the <code>let Some(file) = guard.as_mut() else { return }</code>
-    line. The id is the literal <code>sess-none</code> and the path is empty, so
-    anything that prints the transcript location for a run in this state prints
-    nothing useful. <code>main.rs</code> reaches it two ways: no session
-    directory at all, and an <code>open</code> that failed, where it warns
-    <code>no session transcript: {e}</code> and carries on.
+    returns where the handle has no file. The id is the literal
+    <code>sess-none</code> and the path is empty, so anything that prints the
+    transcript location for a run in this state prints nothing useful.
+    <code>main.rs</code> reaches it two ways: no session directory at all, and
+    an <code>open</code> that failed, where it warns
+    <code>no session transcript: {e}</code> and carries on. A move on a log in
+    this state moves the identity and stays silent, because a move that opened a
+    file would make the one path promising to record nothing start recording.
     <span class="chip test">tested</span>
     <code>a_log_with_no_file_is_not_an_error</code> appends to one and asserts
     nothing by not panicking.
@@ -208,18 +209,68 @@ pub fn none() -&gt; Self {
   <span class="src">crates/emma/src/session.rs — <code>SessionLog::none</code>, <code>append</code>; crates/emma/src/main.rs</span>
 
   <p>
-    <code>id()</code> and <code>path()</code> are one-line accessors over those
-    two fields, and nothing else on the type is public that is not described on
-    this page or on <a href="session-records.html">Records</a>.
+    <code>read</code> is one line over <code>read_reporting</code>, and the
+    split is the argument. The loss used to reach an <code>eprintln!</code> and
+    nowhere else, so the test named
+    <code>a_torn_tail_is_silent_and_damage_in_the_middle_is_not</code> asserted
+    only that the readable records came back, which is true whether or not the
+    damage was noticed: an adversarial reviewer removed the counting entirely
+    and the test stayed green across the whole crate. Printing is a presentation
+    choice; knowing is not, so the damage is returned as well.
+    <code>torn_tail</code> is decided by <code>ends_with('\n')</code> rather
+    than by the last line's position, because a truncated record can be valid
+    JSON and only the trailing byte tells the two apart.
+    <span class="chip test">tested</span> That last rule was found by mutation,
+    in a pass that was not allowed to fix it.
+  </p>
+
+  <p>
+    <code>id()</code> and <code>path()</code> return owned values rather than
+    borrows, and that changed on 2026-09-06 when an in-place <code>/resume</code>
+    became possible. The identity now lives behind the same lock as the file,
+    because the two change together and must never disagree: an id left pointing
+    at the abandoned file would stamp the resumed session's records with the
+    wrong name, which is a transcript claiming to be a session it is not. A
+    borrow out of a <code>MutexGuard</code> cannot outlive the guard, so the
+    accessors clone. That is the whole cost of the move being possible at all.
+    See <a href="session-resume.html#inplace">Resume</a>.
+  </p>
+
+  <p>
+    <code>lock()</code> is the fourth thing that changed with it: the
+    poisoned-lock recovery used to sit inside <code>append</code> and now has
+    four callers, so it is one function. A panic on some other thread says
+    nothing about whether this file is still writable, and what is inside the
+    mutex is a <code>File</code> and two strings, which a panic elsewhere cannot
+    leave torn.
   </p>
 
   <h2 id="mutex">A blocking file in an async program</h2>
 
   <pre><code><span class="c">// crates/emma/src/session.rs — the SessionLog fields</span>
-pub struct SessionLog {
+<span class="c">/// The records one delegation wrote, in order — see [`SessionLog::subagent`].</span>
+pub type Records = Arc&lt;Mutex&lt;Vec&lt;Value&gt;&gt;&gt;;
+
+<span class="c">/// Which file this log is on, and the handle open on it.
+///
+/// **One struct rather than three fields because they change together and must
+/// never disagree.** An in-place `/resume` closes one session's file and opens
+/// another's, and an id left pointing at the abandoned file would stamp the
+/// resumed session's records with the wrong name — which is a transcript that
+/// says it is a session it is not. See [`SessionLog::move_to`].
+///
+/// The file stays `Option` for the reason it always was: [`SessionLog::none`]
+/// records nothing and has no handle to hold.</span>
+struct Handle {
     id: String,
     path: PathBuf,
-    <span class="c">/// A plain `std::fs::File` behind a `std::sync::Mutex`, in an async
+    file: Option&lt;File&gt;,
+}
+
+<span class="c">// ... a type alias and the module's constants elided ...</span>
+
+pub struct SessionLog {
+<span class="c">    /// A plain `std::fs::File` behind a `std::sync::Mutex`, in an async
     /// program, on purpose: a record is a few hundred bytes and is written
     /// between a model call and a subprocess. Making it async would buy
     /// nothing measurable and would make "append the record, *then* do the
@@ -227,10 +278,12 @@ pub struct SessionLog {
     /// a cancellation can land.
     ///
     /// `Arc` because [`SessionLog::subagent`] hands out a second view of the
-    /// *same* file rather than a second file. One process, one writer, one
-    /// mutex — the module doc's "a second writer" caveat is about a second
-    /// process, not a second logical run inside this one.</span>
-    file: Arc&lt;Mutex&lt;Option&lt;File&gt;&gt;&gt;,</code></pre>
+    /// *same* file rather than a second file, and because the process shares
+    /// the log as `&amp;SessionLog`: nothing anywhere holds a `&amp;mut`, so moving
+    /// the session onto another file has to happen through here. One process,
+    /// one writer, one mutex — the module doc's "a second writer" caveat is
+    /// about a second process, not a second logical run inside this one.</span>
+    handle: Arc&lt;Mutex&lt;Handle&gt;&gt;,</code></pre>
 
   <p>
     Record-before-action ordering is what the format requires. A record goes down
@@ -265,20 +318,19 @@ pub struct SessionLog {
 
   <h2 id="append">One append</h2>
 
-  <pre><code>pub fn append(&amp;self, kind: &amp;str, mut payload: Value) {
+  <pre><code><span class="c">/// Append one record.
+///
+/// Failures are swallowed after the first, deliberately: a full disk must
+/// not be the thing that kills a run halfway through editing someone's
+/// source tree. The caller has already been told once by `open`.</span>
+pub fn append(&amp;self, kind: &amp;str, mut payload: Value) {
     let kind = match self.prefix {
-        Some(prefix) =&gt; format!(&quot;{prefix}.{kind}&quot;),
+        Some(prefix) =&gt; format!("{prefix}.{kind}"),
         None =&gt; kind.to_string(),
     };
     if let Some(obj) = payload.as_object_mut() {
-        obj.insert(&quot;kind&quot;.into(), json!(kind));
-        obj.insert(
-            &quot;at_ms&quot;.into(),
-            json!(SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0)),
-        );
+        obj.insert("kind".into(), json!(kind));
+        obj.insert("at_ms".into(), json!(now_ms()));
         for (key, value) in &amp;self.stamp {
             obj.insert(key.clone(), value.clone());
         }
@@ -288,7 +340,7 @@ pub struct SessionLog {
             seen.push(payload.clone());
         }
     }
-    <span class="c">// **A poisoned lock is recovered, not treated as a reason to stop
+<span class="c">    // **A poisoned lock is recovered, not treated as a reason to stop
     // writing.** The lock is poisoned when some thread panicked while
     // holding it, which says nothing about whether the file is still
     // writable -- and this returned instead, silently dropping every record
@@ -300,14 +352,20 @@ pub struct SessionLog {
     // Recovering is what the rest of this tree does -- twenty-five
     // `unwrap_or_else(|e| e.into_inner())` sites across `term`, `agent` and
     // `input` -- and this file was the outlier. The data inside is a `File`
-    // handle, which a panic elsewhere cannot leave torn.</span>
-    let mut guard = self.file.lock().unwrap_or_else(|e| e.into_inner());
-    <span class="c">// `None` is the no-log constructor and is the one silence here that is
+    // handle, which a panic elsewhere cannot leave torn.
+    //
+    // The recovery is `Self::lock` now rather than an `unwrap_or_else`
+    // here, because `move_to` and the two accessors take the same lock and
+    // one of them writing `.unwrap()` would reintroduce exactly this.</span>
+    let mut guard = self.lock();
+<span class="c">    // `None` is the no-log constructor and is the one silence here that is
     // correct: a run with no session directory has nothing to append to.</span>
-    let Some(file) = guard.as_mut() else { return };
+    let Some(file) = guard.file.as_mut() else {
+        return;
+    };
     let mut line = payload.to_string();
-    line.push(&#x27;\n&#x27;);
-    <span class="c">// Not `let _ =`. This file is the only record of the run: resume folds
+    line.push('\n');
+<span class="c">    // Not `let _ =`. This file is the only record of the run: resume folds
     // it, `emma agents` reads it, and the exit line names it as the place
     // the conversation went. A full disk or a revoked handle used to lose
     // all of that in silence, for the whole rest of the session, because
@@ -320,8 +378,8 @@ pub struct SessionLog {
     if let Err(e) = file.write_all(line.as_bytes()).and_then(|()| file.flush()) {
         if !self.write_failed.swap(true, Ordering::SeqCst) {
             eprintln!(
-                &quot;emma: this session&#x27;s transcript can no longer be written: {e}. The run \
-                 continues, but it will not be resumable and `emma agents` will not see it.&quot;
+                "emma: this session's transcript can no longer be written: {e}. The run \
+                 continues, but it will not be resumable and `emma agents` will not see it."
             );
         }
     }
@@ -436,26 +494,59 @@ pub struct SessionLog {
 /// refusing outright would make a damaged session unresumable and that is
 /// worse; but it says how many records it lost and where.</span>
 pub fn read(path: &amp;Path) -&gt; Result&lt;Vec&lt;Value&gt;&gt; {
+    Self::read_reporting(path).map(|(records, _lost)| records)
+}
+
+<span class="c">// ... the doc on read_reporting, quoted below ...</span>
+
+<span class="c">/// The same read, with the damage handed back rather than only printed.
+///
+/// **A guarantee nothing can observe is not a guarantee.** The loss used to
+/// reach an `eprintln!` and nowhere else, so the test named
+/// `a_torn_tail_is_silent_and_damage_in_the_middle_is_not` asserted only
+/// that the readable records came back — which is true whether or not the
+/// damage was noticed. An adversarial reviewer removed the counting
+/// entirely and the test stayed green across the whole crate.
+///
+/// That is the false-receipt shape this repository is most often bitten by,
+/// and the fix is not a better assertion on stderr: it is that the caller
+/// should have been told. Printing is a presentation choice; knowing is not.</span>
+pub fn read_reporting(path: &amp;Path) -&gt; Result&lt;(Vec&lt;Value&gt;, Vec&lt;usize&gt;)&gt; {
     let raw =
         fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let lines: Vec&lt;&amp;str&gt; = raw.lines().collect();
-    let last = lines.len().saturating_sub(1);
+<span class="c">    // **A torn tail is a file that stops mid-line, and that is a fact about
+    // the trailing byte rather than about the line's position.** Until
+    // 2026-08-23 the last line was exempt from damage reporting whatever
+    // the file looked like, which is right after a crash — the writer was
+    // interrupted between the record and its newline — and wrong for a file
+    // that ends cleanly, where the last line is a whole record like any
+    // other. Corruption there was dropped in silence and the resume came
+    // back a turn short saying nothing, which is the silent-data-loss shape
+    // this file's own reporting exists to refuse. Found by mutation, in a
+    // pass that was not permitted to fix it.
+    //
+    // `ends_with('\n')` rather than a check on the last line's contents: a
+    // truncated record can be valid JSON, so nothing about the text
+    // distinguishes the two cases and only the byte does.</span>
+    let torn_tail = if raw.ends_with('\n') {
+        usize::MAX
+    } else {
+        lines.len().saturating_sub(1)
+    };
     let mut out = Vec::new();
     let mut lost = Vec::new();
     for (n, line) in lines.iter().enumerate() {
         match serde_json::from_str(line) {
             Ok(v) =&gt; out.push(v),
-            <span class="c">// A blank line is not damage, and neither is the torn tail.</span>
-            Err(_) if line.trim().is_empty() || n == last =&gt; {}
+<span class="c">            // A blank line is not damage, and neither is the torn tail.</span>
+            Err(_) if line.trim().is_empty() || n == torn_tail =&gt; {}
             Err(_) =&gt; lost.push(n + 1),
         }
     }
-    if !lost.is_empty() {
-        <span class="c">// … prints one stderr line naming the count, the file, and up to
-        // five of the lost line numbers. Quoted in full in the source.</span>
-    }
-    Ok(out)
-}</code></pre>
+
+<span class="c">// ... one eprintln! naming the count, the file and up to five
+// lost line numbers, then `Ok((out, lost))` ...</span></code></pre>
 
   <p>
     This used to be a one-line <code>filter_map(…ok())</code>, which dropped

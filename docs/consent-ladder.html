@@ -365,8 +365,28 @@
     before <code>if self.gate == Gate::SkipAll</code> is evaluated.
     <code>egress</code> has the same two statements in the same order for the
     network question. <code>--dangerously-skip-permissions</code> used to be the
-    first thing <code>decide</code> read and is now the third.
+    first thing <code>decide</code> read. It was the third until 2026-09-06 and
+    it is the fifth now, below the hook denial, the <code>deny</code> rule, plan
+    mode and the egress question.
   </p>
+
+  <p>
+    The bypass also stopped costing an interactive run its keyboard.
+    <code>posture</code> answers two questions that used to be one: which gate,
+    and whether answers come from a script rather than a keyboard. Passing the
+    bypass used to select a scripted asker for every run, and a scripted asker
+    with an empty queue answers <code>None</code>, which
+    <code>Approvals::read_line</code> reads as end of input. Since the goal
+    prompt goes through the same <code>read_line</code>, an interactive
+    <code>emma --dangerously-skip-permissions</code> ended before a word could
+    be typed. Skipping approvals says nothing about where the keyboard is, and
+    the two answers are separate now.
+    <span class="chip test">tested</span>:
+    <code>allow_all_skips_the_gate_without_taking_the_keyboard</code> goes red
+    when <code>posture</code> returns <code>true</code> for the scripted half
+    unconditionally.
+  </p>
+  <span class="src">crates/emma/src/approval.rs &mdash; <code>posture</code>, <code>Approvals::read_line</code></span>
 
   <p>
     The argument for moving it: a deny rule is something the operator wrote down
@@ -472,7 +492,13 @@
     <span class="chip cert">certified</span>: the sentence is one string literal
     in <code>crates/emma/src/term/help.rs</code>, and the ladder it is being
     compared against is the block quoted above from
-    <code>approval.rs</code>.
+    <code>approval.rs</code>. The literal names eight things and stops at
+    <em>then you</em>: hook denial, deny rule, bypass, <code>ask</code> rule,
+    <code>allow</code> rule, read-only, session grant, the human. Neither plan
+    mode nor the egress question is among them, and the count was re-read
+    against <code>help.rs</code> on 2026-09-06 rather than carried forward from
+    the binary below, which is the check this claim needed after the text moved
+    files.
   </p>
 
   <p>

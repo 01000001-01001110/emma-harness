@@ -554,7 +554,12 @@
   <span class="chip cert">certified</span>
   <code>cargo test -p emma-tools-tasks</code> at commit <code>a3eba74</code> on
   this box: 16 unit, 4 concurrency, 3 containment, 8 round-trip and 20 tool
-  tests, 51 in all, none failing.
+  tests, 51 in all, none failing. The unit figure is 21 since 2026-09-06: the
+  five tests behind <a href="#moving">the move and the sweep</a> are new and the
+  run above predates them.
+  <span class="chip unv">unverified</span> The whole-crate count has not been
+  re-run since; <code>cargo test -p emma-tools-tasks</code> settles it in a
+  second.
 </p>
 
 <p>
@@ -629,6 +634,77 @@
   shared-crate moment has arrived.
 </p>
 <span class="src">tools/tasks/src/args.rs — module doc, <code>deny_unknown</code>, <code>object</code></span>
+
+<h2 id="moving">Two operations on the document that no tool reaches</h2>
+
+<p>
+  <code>Doc</code> grew two public methods on 2026-09-06 and nothing calls
+  either of them. <code>move_task</code> moves a task past its neighbour, and
+  <code>remove_completed</code> drops every ticked task. They are here because
+  the Harness page is the caller they were written for, and that package has not
+  landed; a reader who greps for a <code>TaskMove</code> tool and finds nothing
+  has found the truth rather than a hole.
+  <span class="chip cert">certified</span>
+  <code>grep -rn "move_task\|remove_completed" --include=*.rs .</code> matches
+  only <code>tools/tasks/src/doc.rs</code>.
+</p>
+
+<p>
+  A move carries the block a task owns and nothing else, where "owns" is
+  <code>is_note_of</code>, the rule <code>view</code> and
+  <code>insertion_point</code> already use: the run of indented, non-blank,
+  non-task lines directly underneath. Headings, blank separators and the
+  preamble belong to nobody and stay at the offsets they are at. What makes the
+  move its own inverse is that it swaps two blocks and leaves whatever sits
+  between them in place: sliding the block up to the neighbour's first line
+  instead would drag a blank separator with it and reshape the file over a few
+  calls.
+  <span class="chip test">tested</span>:
+  <code>moving_a_task_down_and_back_up_reproduces_the_file</code> compares bytes,
+  <code>a_moved_task_takes_its_notes_with_it</code> pins the block, and
+  <code>moving_past_the_end_refuses_and_changes_nothing</code> pins the refusal.
+</p>
+
+<p>
+  <code>false</code> from a move means nothing moved: either no task carries
+  that id, or it is already the first or the last task in the document. There is
+  no partial case between the two. A move also marks nothing dirty, because
+  position is not part of a line's text, and stamping an id here would edit
+  lines the caller did not name.
+</p>
+
+<p>
+  <code>remove_completed</code> is the one operation in the crate that removes a
+  human's bytes, so it is scoped as tightly as it can be. A line goes only if it
+  is a checkbox reading <code>[x]</code> or a note that checkbox owns. A
+  <code>## Done</code> heading, a blank line between tasks and any prose that is
+  not indented under a completed task all stay where they are. It takes the
+  notes with the task, so somebody who wrote a paragraph under a task they then
+  completed loses it, which is why this is explicit and never something the
+  tools do on their own initiative: <code>TaskUpdate</code> still cleans up by
+  ticking a box.
+  <span class="chip test">tested</span>:
+  <code>removing_completed_tasks_leaves_everything_else_alone</code> keeps the
+  heading and the unowned prose.
+</p>
+
+<p>
+  <code>block_of</code> is the single definition of where a task ends, shared by
+  both, so a move and a removal cannot disagree about it. Neither re-renders a
+  line: every line involved is re-inserted, so a CRLF file comes back CRLF and a
+  displaced note keeps its own bytes.
+  <span class="chip test">tested</span>:
+  <code>a_crlf_document_survives_a_move_and_a_removal</code> is the fixture that
+  says so, and it is the shape of the defect this repository has already paid
+  for once in a frontmatter parser whose fixtures were all LF.
+</p>
+
+<p>
+  <span class="chip unv">unverified</span> Nobody has moved a task through a
+  running Emma, because nothing in the interface can. Settling it needs the
+  Harness page package and one press.
+</p>
+<span class="src">tools/tasks/src/doc.rs &mdash; <code>Doc::move_task</code>, <code>Doc::remove_completed</code>, <code>Doc::block_of</code>, <code>Doc::is_note_of</code></span>
 
 <h2 id="unverified">What is not verified here</h2>
 

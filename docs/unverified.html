@@ -184,6 +184,57 @@
         <td>Open the pages in a browser. A stranded label or an overlapping box
             is invisible to arithmetic.</td>
       </tr>
+      <tr>
+        <td><strong>That a temperature ever reaches Anthropic or an
+            OpenAI-compatible host.</strong> Both renderers are proven against a
+            loopback stub, and a stub agrees with whoever wrote it. Ollama is the
+            one host this box can reach, and there the two request bodies are
+            certified off a recording proxy. See
+            <a href="providers-boundary.html#temperature">the boundary</a>.</td>
+        <td>One Messages API call with <code>temperature: 0.2</code> and one
+            without, comparing the bodies off the socket; and one OpenAI call
+            with a temperature to a reasoning model, expecting the 400 that
+            <code>temperature_field: None</code> exists to avoid.</td>
+      </tr>
+      <tr>
+        <td><strong>That a <code>sampling</code> block reaches a goal record.</strong>
+            The resolver and the wire are each proven and the join is not: nobody
+            has set <code>sampling.ollama.temperature</code> and then read the
+            record back off disk.</td>
+        <td>Set it, run one goal, and read
+            <code>"temperature_source": "manual"</code> out of the session
+            file.</td>
+      </tr>
+      <tr>
+        <td><strong>That plan mode has ever stopped a real write.</strong> Six
+            mutations pin the rung's position and its refusal; nothing runs a
+            scripted goal in plan mode and reads the record back.</td>
+        <td>A test in <code>crates/emma/tests/loop.rs</code> asserting the goal
+            completes rather than aborts and the session log carries a
+            <code>denied</code> record with <code>"by": "mode"</code>.</td>
+      </tr>
+      <tr>
+        <td><strong>How many training records survive
+            <code>--min-ending finished</code>.</strong> The 250-record sweep ran
+            with the default filter.</td>
+        <td><code>emma export-training --min-ending finished</code>, and count.</td>
+      </tr>
+      <tr>
+        <td><strong>The whole-crate test count for
+            <code>emma-tools-tasks</code>.</strong> The certified 51 predates the
+            five tests behind the task move and sweep.</td>
+        <td><code>cargo test -p emma-tools-tasks</code>.</td>
+      </tr>
+      <tr>
+        <td><strong>What <code>voice</code>, <code>lsp</code>,
+            <code>memory_policy</code> and <code>ui</code> hold.</strong> Four
+            settings blocks from the same port, described nowhere on this site
+            beyond one table row. The same is true of the <code>web_search</code>
+            record kind and the three kinds only <code>engine/claude.rs</code>
+            writes.</td>
+        <td>Read the four types in <code>settings.rs</code> and the four call
+            sites, and write the rows.</td>
+      </tr>
     </tbody>
   </table>
   </div>
@@ -311,6 +362,34 @@
             attributable to Emma's code.</td>
         <td>A run from a normal desktop session rather than a sandboxed one.</td>
       </tr>
+      <tr>
+        <td><strong>Everything the font script does once it reaches
+            Terminal.app.</strong> <code>command</code> is certified as
+            <em>produced</em> and nothing has ever run it. The module's central
+            claim is that a font name Terminal does not have is accepted and
+            ignored, which is why the receipt may only say "asked".</td>
+        <td>On the Mac, in Terminal.app: ask for <code>Monaco</code>, then ask
+            for a name that does not exist and read the exit status. Non-zero
+            means the claim is wrong and <code>apply</code> should report the
+            error instead.</td>
+      </tr>
+      <tr>
+        <td><strong>That Windows Terminal really offers no in-band font
+            control.</strong> What is certified is what Emma does here, not what
+            the terminal would do if sent an <code>OSC 50</code>. Nothing was
+            written at the console, because this session's output is captured and
+            a negative result would be indistinguishable from the capture.</td>
+        <td>In a real Windows Terminal window, emit
+            <code>OSC 50</code> with a family and a size and watch whether the
+            cell size changes.</td>
+      </tr>
+      <tr>
+        <td><strong>A resume across a real directory change, on a console.</strong>
+            <code>Agent::resume_in_place</code> is driven directly against
+            temporary directories by every test it has.</td>
+        <td>Start a session in one tree, <code>/resume</code> a session recorded
+            in another, and read the four receipt lines on screen.</td>
+      </tr>
     </tbody>
   </table>
   </div>
@@ -354,6 +433,16 @@
           <td>The Harness package's wiring.</td></tr>
       <tr><td>Whether a run spawned from Emma outlives Emma on Windows. Removing the detached creation flags leaves the test green, because a child that inherits the console writes its marker too.</td>
           <td>Start a long run, close Emma's window rather than pressing Ctrl-C, and watch the child's session file keep growing.</td></tr>
+      <tr><td>A mouse drag in the chat pane on a real console. The in-pane selection, its edge auto-scroll and its far step are all tested against a cell buffer, which is the class of defect that has shipped from <code>term/</code> twice.</td>
+          <td>Drag past the bottom of the pane on Windows Terminal and on Terminal.app, release, and paste.</td></tr>
+      <tr><td>The MODE cell since it started naming the posture. <code>ASK</code> (3 columns) became <code>ASSIST</code> (6) and <code>UNATTENDED</code> (10) became <code>AUTO</code> (4); the longest label got shorter, so an overrun is unlikely rather than ruled out.</td>
+          <td>An 80-column and a 60-column terminal with a goal running.</td></tr>
+      <tr><td>The reader thread's steering seam on a console: the box emptying, the queued row appearing, and the answer changing. <code>submit_line</code> runs on the thread where every scrollback defect this crate has shipped was.</td>
+          <td>Type during a real goal on both terminals.</td></tr>
+      <tr><td>Whether a task has ever been moved or a completed one swept through a running Emma. <code>Doc::move_task</code> and <code>Doc::remove_completed</code> have no caller.</td>
+          <td>The Harness page package, and one press.</td></tr>
+      <tr><td>The Settings screen's Font Family and Font Size rows, which still say Emma cannot set a font and still store nothing. A font can only be set by hand in <code>settings.json</code>.</td>
+          <td>The rows' wiring, then a press on the Mac.</td></tr>
     </tbody>
   </table>
   </div>

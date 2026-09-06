@@ -467,17 +467,51 @@ pub(crate) fn rank(self) -&gt; u8 {
   <span class="src">crates/llm/src/anthropic.rs — <code>render</code>, <code>the_whole_request_body_is_pinned_byte_for_byte</code></span>
 
   <p>
-    Three things are absent from that body and each absence is a 400 avoided.
+    Two things are absent from that body and each absence is a 400 avoided.
     There is no <code>thinking</code> block: the fixed <code>budget_tokens</code>
     budget was removed on this model family and sending it returns 400, so
-    depth is controlled by <code>output_config.effort</code> alone. There are no
-    sampling parameters, for the same reason. And <code>output_config</code>
-    itself is omitted rather than defaulted when the model has no effort
-    parameter. The first two are asserted directly:
-    <code>assert!(sent.get("thinking").is_none())</code> and the same for
-    <code>temperature</code>. <span class="chip test">tested</span>
+    depth is controlled by <code>output_config.effort</code> alone. And
+    <code>output_config</code> itself is omitted rather than defaulted when the
+    model has no effort parameter. The first is asserted directly:
+    <code>assert!(sent.get("thinking").is_none())</code>.
+    <span class="chip test">tested</span>
   </p>
   <span class="src">crates/llm/src/anthropic.rs — module doc; <code>the_wire_order_is_instructions_then_tools_then_history_then_query</code></span>
+
+  <p>
+    <code>temperature</code> was a third absence on this page until 2026-09-06,
+    and it was described as a fixed one. It is conditional now.
+    <code>render</code> writes <code>body["temperature"]</code> only where
+    <code>req.temperature</code> is <code>Some</code>, at the top level of the
+    body beside <code>model</code> and <code>max_tokens</code>. A set value
+    travels under Anthropic's own spelling; an unset one leaves no key, which is
+    neither a <code>null</code> nor a <code>0.0</code>, and the difference
+    matters because the Messages API reads a present <code>0.0</code> as an
+    instruction. The wire-order test still asserts the absence on an ordinary
+    request, and it is now the weaker of three receipts:
+    <code>an_unset_temperature_is_absent_rather_than_null_or_zero</code> asserts
+    both halves of the absence, and
+    <code>a_set_temperature_travels_as_the_anthropic_spelling</code> reads
+    <code>0.2</code> back off the loopback stub.
+    <span class="chip test">tested</span>
+  </p>
+  <span class="src">crates/llm/src/anthropic.rs — <code>render</code>, <code>an_unset_temperature_is_absent_rather_than_null_or_zero</code>, <code>a_set_temperature_travels_as_the_anthropic_spelling</code></span>
+
+  <p>
+    The diagram above draws seven keys and <code>temperature</code> is not among
+    them, which is a limit of the generator rather than of the wire.
+    <code>render_body_keys</code> reads the <code>json!</code> object and then
+    adds back a conditional list it names in source, and that list is
+    <code>["output_config", "stream"]</code>. A key written through a later
+    <code>body["…"] =</code> assignment is invisible to it.
+    <span class="chip cert">certified</span> Grep
+    <code>crates/docsgen/src/pages/providers.rs</code> for
+    <code>let conditional</code> and read the two names. Nothing regenerates
+    into a wrong picture as a result, so the committed SVG is not stale; the
+    picture is simply short by one key until the generator learns the third
+    shape.
+  </p>
+  <span class="src">crates/docsgen/src/pages/providers.rs — <code>render_body_keys</code></span>
 
   <h2 id="construction">Constructing the provider</h2>
 
@@ -632,6 +666,29 @@ impl std::fmt::Debug for AnthropicProvider {
   </p>
   <span class="src">crates/llm/src/ollama.rs — module doc, <code>REQUEST_TIMEOUT</code>, <code>DEFAULT_NUM_CTX</code></span>
 
+  <p id="temperature">
+    A third ask crosses, and it crosses into a different place. Ollama takes
+    every sampling knob inside <code>options</code>, beside
+    <code>num_predict</code> and <code>num_ctx</code>, so
+    <code>body["options"]["temperature"]</code> is where a set value goes. A
+    top-level <code>temperature</code> is accepted by the server and ignored in
+    silence, which is the failure this nesting avoids: the request succeeds, the
+    model answers, and nothing anywhere says the knob was not applied. An unset
+    temperature leaves <code>options</code> as it was, because the value in
+    force is then the Modelfile's, it differs per model, and it belongs to
+    whoever pulled the model.
+    <span class="chip cert">certified</span> against a real
+    <code>gemma4:12b</code> on 2026-09-06, with a recording TCP pass-through
+    between the provider and <code>127.0.0.1:11434</code>, so the JSON asserted
+    on is the JSON the socket carried. Set:
+    <code>"options":{"num_ctx":32768,"num_predict":32000,"temperature":0.15}</code>,
+    answer <code>"Blue"</code>. Unset: the same body with no
+    <code>temperature</code> key anywhere, not a <code>0.0</code>. Repeat with
+    <code>cargo test -p emma-llm --lib reaches_a_real_ollama -- --ignored</code>,
+    which needs the server running and is skipped in CI for that reason.
+  </p>
+  <span class="src">crates/llm/src/ollama.rs — <code>OllamaProvider::body</code>, <code>a_set_temperature_reaches_a_real_ollama_inside_options</code>, <code>an_unset_temperature_reaches_a_real_ollama_as_no_key_at_all</code></span>
+
   <p>
     Three constants in the file encode decisions rather than measurements.
     <code>DEFAULT_HOST</code> is the literal <code>http://127.0.0.1:11434</code>
@@ -768,6 +825,24 @@ impl std::fmt::Debug for AnthropicProvider {
     <span class="chip test">tested</span> &mdash; the two hosts are asserted to
     differ only in the cap's spelling, against a loopback stub.
   </p>
+
+  <p>
+    <code>temperature_field: None</code> is one of two independent reasons
+    nothing reaches an OpenAI reasoning model, and it is worth knowing they are
+    two. The wire refuses to spell the field at all, so a value that arrives
+    here is dropped rather than sent. Upstream of that,
+    <code>settings::sampling_defaults</code> is the per-provider table of what
+    an absent field means, and all four of its rows leave
+    <code>temperature</code> unset, so on an ordinary run nothing arrives to be
+    dropped. Two mechanisms, not one described twice: remove either and the
+    other still holds for its own reason.
+    <span class="chip test">tested</span>:
+    <code>a_set_temperature_is_dropped_for_a_host_that_rejects_the_parameter</code>
+    covers the wire's half and
+    <code>an_absent_temperature_resolves_to_the_host_default_on_every_provider</code>
+    covers the table's.
+  </p>
+  <span class="src">crates/llm/src/openai_compat.rs — <code>Wire::temperature_field</code>, <code>OPENAI</code>; crates/emma/src/settings.rs — <code>sampling_defaults</code></span>
 
   <p>
     That stub is a real socket rather than an injectable transport, and it is
@@ -911,6 +986,16 @@ impl std::fmt::Debug for AnthropicProvider {
       high-effort batch call with the elapsed time recorded, or an argument
       from the model's published maximum thinking time, which nothing in this
       tree cites.
+    </p>
+    <p>
+      A temperature has never travelled to the real Messages API, nor to either
+      OpenAI-compatible host. Everything on this page about those three is what
+      the renderer emits against a loopback stub, and a stub agrees with whoever
+      wrote it. Ollama is the one host this box can reach, and the certified
+      paragraph above is its receipt.
+      <span class="chip unv">unverified</span> Settling it means one Messages
+      API call with <code>temperature: 0.2</code> and one without, comparing the
+      two request bodies off the socket the way the Ollama receipt does.
     </p>
   </div>
 

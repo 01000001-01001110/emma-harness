@@ -84,6 +84,29 @@
       <a href="consent-exempt.html">EXEMPT and the floor</a>.
     </p>
     <p>
+      <strong>Plan mode is a posture and not a sandbox either.</strong> Since
+      2026-09-06 a session has a <code>Mode</code>, set with <code>/mode</code>,
+      and <code>Mode::Plan</code> is the third rung of the ladder: a call whose
+      <code>ToolMeta</code> says it would write or would leave the machine is
+      refused outright rather than turned into a question. It reads the same two
+      declarations rules 2 and 3 already trust, for a different purpose, so a
+      tool that lies about <code>read_only</code> defeats plan mode exactly as
+      thoroughly as it defeats the prompt and no more. Anyone who needs the write
+      to be impossible needs a sandbox, and this is not one.
+      <span class="chip test">tested</span>
+      <code>plan_denies_a_writer_and_names_the_mode</code> goes red when
+      <code>Mode::refuse</code> returns <code>None</code>, and again when the
+      rung slides below the egress question;
+      <code>a_deny_rule_answers_before_the_mode_does</code> goes red when it
+      slides above the <code>deny</code> rule. Both were run in both
+      directions.
+      <span class="chip unv">unverified</span> Nothing here has watched plan mode
+      stop a real write from a real model. Settling it: a scripted-provider goal
+      in plan mode whose session log carries a <code>denied</code> record with
+      <code>"by": "mode"</code>, which no test in
+      <code>crates/emma/tests/loop.rs</code> writes yet.
+    </p>
+    <p>
       Other harnesses do enforce: <code>codex-rs</code> sandboxes with Seatbelt
       on macOS, Landlock on Linux and restricted tokens on Windows. I have not
       built an equivalent, and everything in this chapter describes what is
@@ -131,10 +154,12 @@
     <li>
       <a href="consent-ladder.html">The precedence ladder, in full</a>
       <span>
-        <code>Approvals::decide</code> quoted entire, the nine rungs it produces,
-        the three gates, and the two placements pinned by tests written in the
-        direction of their inversion. Includes what <code>emma --help</code>
-        actually prints, which omits a rung.
+        <code>Approvals::decide</code> quoted entire, the nine checks it makes
+        plus the hook denial the loop makes before it, the three gates, and the
+        two placements pinned by tests written in the direction of their
+        inversion. It was eight checks until 2026-09-06, when plan mode became
+        the third rung. Includes what <code>emma --help</code> actually prints,
+        which omits two of them.
       </span>
     </li>
     <li>
@@ -204,7 +229,7 @@
       <tr>
         <td><code>crates/emma/src/approval.rs</code></td>
         <td><code>EXEMPT</code>, <code>BRIEF_LINES</code>, four enums, <code>Offers</code>, <code>Approvals</code> and its seven fields, its eleven methods, <code>preview</code>, <code>network_preview</code>, 31 tests</td>
-        <td>the ladder, the egress question, the five answers, EXEMPT</td>
+        <td>the ladder, the egress question, plan mode, the five answers, EXEMPT</td>
       </tr>
       <tr>
         <td><code>crates/emma/src/permissions.rs</code></td>

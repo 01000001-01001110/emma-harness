@@ -169,6 +169,25 @@ emma -p "summarise what changed since the last tag"</code></pre>
     chords bound now rather than the ones somebody typed into a string.
   </p>
 
+  <p>
+    <code>/mode</code> says which of three postures the session is in and moves
+    it: <code>assist</code> asks before a write, a command or a network call;
+    <code>auto</code> grants everything for the session; <code>plan</code>
+    refuses writes, commands and network calls outright and says so, so the
+    model plans instead of acting. It lasts for the session and a new session
+    starts in <code>assist</code>. It is a posture and not a sandbox: it reads
+    what each tool declares about itself, which is what the prompt reads too.
+    <a href="consent.html">Consent</a> has the rest.
+  </p>
+
+  <p>
+    You can also type while a goal is running. Ordinary words are
+    <em>steering</em>: they reach the model as your words at the top of its next
+    step, rather than waiting for the goal to end.
+    <a href="steering.html">Steering</a> covers what happens to a command typed
+    there, and why a queued line can never answer an approval prompt.
+  </p>
+
   <div class="note">
     <span class="h">What it will ask you</span>
     <p>
@@ -226,6 +245,14 @@ emma --resume
 
 <span class="c"># or a specific one</span>
 emma --resume sess-1786385316950-34808</code></pre>
+
+  <p>
+    Inside a running session, <code>/resume &lt;id&gt;</code> does the same thing
+    without restarting the process: the conversation is swapped for the restored
+    one, this session's file ends with a record naming where it went, and the
+    resumed file is opened for append. Bare <code>/resume</code> lists what was
+    recorded from this directory.
+  </p>
 
   <p>
     When you resume, the conversation comes back. <strong>The tools do not

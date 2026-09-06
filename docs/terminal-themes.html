@@ -423,6 +423,133 @@ pub struct Theme {
     asserts the resulting pair is <code>((0, 170, 255), (25, 27, 30))</code>.
   </p>
 
+  <h2 id="font">Emma cannot draw a font, and on one terminal it can ask for one</h2>
+
+  <p>
+    A theme is colour and nothing else, because a terminal emulator draws the
+    cells and Emma writes into them. That is still true of drawing. Since
+    2026-09-06 it is no longer the whole answer: Terminal.app is scriptable, and
+    <code>term/termfont.rs</code> shells <code>osascript</code> to set the front
+    window's font, which is the same mechanism Emma already uses to reach
+    another application. Asked, not set, and the difference is what the rest of
+    this section is about.
+  </p>
+
+  <p>
+    What decides whether a font can be asked for is the terminal the process is
+    <em>running in</em>, never the operating system it was built for. There is
+    not one <code>#[cfg]</code> in the file. <code>detect</code> takes
+    <code>TERM_PROGRAM</code> and <code>WT_SESSION</code> as arguments and
+    returns a <code>Terminal</code>; every function downstream takes that value,
+    so a test drives a Mac's environment on this box and a Windows one on a Mac.
+    A <code>#[cfg(not(target_os = "macos"))]</code> gate would give the right
+    answer on Windows and the wrong one for a macOS build running under Ghostty.
+  </p>
+
+  <p>
+    <strong><code>TERM</code> is not the variable to gate on, and this box is
+    the proof.</strong> Under Git Bash inside Windows Terminal,
+    <code>TERM</code> reads <code>xterm-256color</code> while
+    <code>TERM_PROGRAM</code> is unset and <code>WT_SESSION</code> is set. A gate
+    reading <code>TERM</code> for the xterm family would have concluded that this
+    Windows Terminal honours xterm's <code>OSC 50</code> font sequence, which it
+    does not. <code>TERM</code> describes a capability set a shell library should
+    assume; the terminal's identity is in <code>TERM_PROGRAM</code>, and Windows
+    Terminal's is in <code>WT_SESSION</code>.
+    <span class="chip cert">certified</span> Measured on this box, 2026-09-06,
+    through the shell and again through the module compiled as a non-test
+    binary: <code>TERM_PROGRAM</code> unset, <code>WT_SESSION</code> set,
+    <code>TERM=xterm-256color</code>, and <code>detect_here()</code> answering
+    <code>Terminal { name: "Windows Terminal", control: None }</code>. Repeat by
+    printing those three variables in your own terminal.
+  </p>
+  <span class="src">crates/emma/src/term/termfont.rs &mdash; module doc, <code>detect</code>, <code>APPLE_TERMINAL</code>, <code>WT_SESSION</code></span>
+
+  <p>
+    Where there is no control, the row still stores the value and prints a
+    sentence rather than offering a chevron that does nothing. On this box that
+    sentence is, verbatim: <em>&ldquo;this terminal (Windows Terminal) offers no
+    font control Emma can use, so nothing is asked of it. The value is stored and
+    applies wherever Emma next runs in a terminal that has one&rdquo;</em>. The
+    value is kept because the setting is Emma's and outlives the terminal it was
+    typed into, and because the other reading of a row that drops the input is
+    the one that makes somebody type it again.
+    <span class="chip cert">certified</span> Same run as above:
+    <code>no_control_note</code> and <code>not_controllable_note</code> produced
+    those words with nothing spawned and nothing printed.
+  </p>
+
+  <p>
+    On Terminal.app, <code>command</code> returns an argument list and never a
+    shell string: <code>osascript</code>, <code>-e</code>, then
+    <code>tell application "Terminal" to set font name of current settings of
+    front window to "SF Mono"</code>. The name is interpolated because
+    AppleScript has no argv for a <code>-e</code> snippet, so quotes and
+    backslashes are escaped: a font name is a string somebody typed, and an
+    unescaped quote would end the literal and leave the rest of the name as
+    AppleScript source. <code>current settings of front window</code> is
+    Terminal's own model, so the change lands on every window sharing that
+    profile, which is what picking a font in the app itself also does.
+    <span class="chip test">tested</span> The escaping, the size clamp
+    (<code>step_size</code> clamps to 8&ndash;32 rather than wrapping, because a
+    font size is a magnitude and not a ring) and the guarantee that nothing
+    spawns under <code>cargo test</code> are
+    <code>a_quote_in_a_font_name_cannot_escape_the_literal</code>,
+    <code>a_size_step_clamps_at_both_ends_rather_than_wrapping</code> and
+    <code>apply_here_on_a_terminal_without_control_spawns_nothing_and_says_why</code>.
+    <code>a_refusal_reports_what_osascript_said_and_never_claims_success</code>
+    is the one that keeps the receipt honest.
+  </p>
+
+  <p>
+    <strong>What is claimed is &ldquo;asked&rdquo;, never
+    &ldquo;set&rdquo;.</strong> A font name Terminal does not have is not an
+    error there: AppleScript accepts the string and the window keeps the font it
+    had. Nothing on this side can tell that apart from success, so the receipt
+    says what was asked and repeats whatever <code>osascript</code> said back.
+    A denied Automation permission comes back as an error rather than a prompt
+    once somebody has said no, so the receipt appends the System Settings path
+    that fixes it.
+    <span class="chip unv">unverified</span> Everything the script does once it
+    reaches Terminal.app. No macOS machine has run it. Settling it, in
+    Terminal.app: ask for <code>Monaco</code>, then ask for a font name that does
+    not exist and read the exit status. If the second is non-zero, the module's
+    central claim is wrong and <code>apply</code> should report the error instead
+    of saying it asked.
+  </p>
+
+  <p>
+    The seed families are seeds and not an enumeration, and they differ per
+    platform: <code>Menlo</code>, <code>SF Mono</code> and <code>Monaco</code> on
+    macOS, <code>Cascadia Mono</code>, <code>Consolas</code> and
+    <code>Lucida Console</code> on Windows, <code>DejaVu Sans Mono</code>,
+    <code>Liberation Mono</code> and <code>monospace</code> elsewhere. Nothing
+    has looked at what is installed: reading the real list costs a
+    <code>system_profiler</code> run measured in seconds on macOS, which is not a
+    price a settings row may charge to draw itself. The terminal outranks the OS
+    string, because Terminal.app only ever runs on macOS whatever a
+    cross-compiled binary thinks it was built for. A reader who sees Menlo
+    offered on a Windows box has found a defect.
+  </p>
+
+  <p>
+    <strong>Nothing on screen drives any of this yet.</strong>
+    <code>main.rs</code> re-asks for <code>appearance.font_family</code> and
+    <code>appearance.font_size</code> at startup, silently, because there is no
+    screen to print a refusal onto at that point. The Settings screen's Font
+    Family and Font Size rows are still <code>Absent("n/a")</code> carrying
+    <code>NOTICE_FONT</code>, which reads <em>&ldquo;Fonts belong to your
+    terminal emulator; Emma cannot set one from inside it&rdquo;</em>, a sentence
+    this section has just made half wrong.
+    <span class="chip cert">certified</span> Grep
+    <code>crates/emma/src/term/settings.rs</code> for <code>NOTICE_FONT</code>:
+    two rows, both <code>Absent</code>, no cycler and no step handler. Until
+    those rows land, the only way to set a font is to write
+    <code>appearance.font_family</code> into <code>settings.json</code> by hand
+    and restart.
+  </p>
+  <span class="src">crates/emma/src/main.rs &mdash; the startup re-apply; crates/emma/src/term/settings.rs &mdash; <code>NOTICE_FONT</code>; crates/emma/src/term/termfont.rs &mdash; <code>restore</code>, <code>apply</code>, <code>seed_families</code></span>
+
   <h2 id="coverage">Coverage</h2>
 
   <p>
