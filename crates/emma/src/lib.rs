@@ -80,7 +80,7 @@ pub mod usertools;
 pub mod verify;
 
 pub use agent::{Agent, Budgets, Ending, Interrupt, Outcome, Resumed, Setup, Spend};
-pub use approval::{Answer, Approvals, Asker, Gate, Verdict};
+pub use approval::{Answer, Approvals, Asker, Gate, Mode, Verdict};
 pub use delegate::{Delegate, Nest};
 pub use goal::{Done, DoneCheck, Goal, MarkerClaim};
 pub use session::{Continuity, Restored, SessionLog};

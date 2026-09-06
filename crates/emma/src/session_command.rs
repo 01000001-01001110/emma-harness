@@ -46,7 +46,7 @@ use emma_llm::{Provider, ProviderKind};
 use emma_tool_api::Registry;
 
 use crate::agent::{Agent, Compacted};
-use crate::approval::Approvals;
+use crate::approval::{Approvals, Mode};
 use crate::term::Term;
 
 // region: The vocabulary
@@ -68,6 +68,10 @@ pub const BUILTINS: &[(&str, &str)] = &[
     (
         "model",
         "the model in force — /model <id> changes it for this session",
+    ),
+    (
+        "mode",
+        "the posture in force — /mode <assist|auto|plan> changes it for this session",
     ),
     (
         "compact",
@@ -155,6 +159,12 @@ pub enum SessionCommand {
     Theme {
         name: Option<String>,
     },
+    /// `/mode`, `/mode <name>`.
+    ///
+    /// Carried exactly as typed and unvalidated, for the reason [`Self::Theme`]
+    /// gives: this module is pure, and a name is checked where it can be
+    /// refused with the posture left alone.
+    Mode(Option<String>),
     /// A built-in name with arguments it does not take. Carried rather than
     /// dropped so the answer is a usage line instead of a model call.
     Misuse {
@@ -222,6 +232,17 @@ pub fn parse(line: &str) -> Option<SessionCommand> {
                 usage: THEME_USAGE,
             },
         }),
+        "mode" => match args.as_slice() {
+            [] => Some(SessionCommand::Mode(None)),
+            [name] => Some(SessionCommand::Mode(Some((*name).to_string()))),
+            // Same ruling as `/theme`: two words is somebody describing the
+            // posture they want rather than naming it, and the answer is the
+            // usage line, which lists the three that exist.
+            _ => Some(SessionCommand::Misuse {
+                name: "mode",
+                usage: MODE_USAGE,
+            }),
+        },
         "resume" => Some(SessionCommand::Resume(args.first().map(|s| s.to_string()))),
         "compact" => Some(match args.as_slice() {
             [] => SessionCommand::Compact {
@@ -263,6 +284,9 @@ const MODEL_USAGE: &str = "/model                     what is running, and what 
                            /model <id>                use <id> for the rest of this session\n\
                            /model <id> --save         …and remember it for the next one\n\
                            /model --save              remember what is already running";
+
+const MODE_USAGE: &str = "/mode                      the postures, with the one in force marked\n\
+                          /mode <name>               use it for the rest of this session";
 
 const THEME_USAGE: &str =
     "/theme                     what is available, and which one is selected\n\
@@ -369,6 +393,7 @@ pub async fn run(cmd: SessionCommand, s: &mut Session<'_, '_>) -> Flow {
         SessionCommand::Clear => clear(s).await,
         SessionCommand::Model { id, save } => model(s, id, save),
         SessionCommand::Theme { name } => theme(s, name),
+        SessionCommand::Mode(name) => mode(s, name),
     }
     Flow::Continue
 }
@@ -692,6 +717,114 @@ fn available(home: Option<&Path>, root: &Path) -> Vec<Found> {
         }
     }
     all
+}
+
+/// `/mode`, `/mode <name>`.
+///
+/// **When a switch bites.** Every session command runs between goals, which
+/// the header of this file says why, so there is no in-flight call for a
+/// switch to half-apply to. Tightening takes effect before the next tool call
+/// and loosening before the next question, which are the same moment.
+fn mode(s: &Session<'_, '_>, name: Option<String>) {
+    let Some(name) = name else {
+        say(s.term, &mode_listing(s.approvals.mode()));
+        return;
+    };
+    if let Some(refusal) = refuse_an_unknown_mode(&name) {
+        // Nothing touched, nothing changed: the ruling `/model` and `/theme`
+        // both make, and it matters most here, because a half-applied posture
+        // is a status bar promising a gate that is not running.
+        s.term.warn(&refusal);
+        return;
+    }
+    let chosen = Mode::parse(&name).expect("refuse_an_unknown_mode accepted it");
+    let was = s.approvals.set_mode(chosen);
+    if was == chosen {
+        s.term.note(&format!(
+            "{} is already the posture in force.",
+            chosen.name()
+        ));
+        return;
+    }
+    say(s.term, &mode_receipt(was, chosen));
+}
+
+/// The receipt for a switch that has already happened.
+///
+/// Pure and separate from [`mode`] for the reason the theme receipt is: what
+/// a command says is half of what it does, and the [`Mode::Auto`] line is the
+/// half somebody has to read before the next write happens unasked.
+fn mode_receipt(was: Mode, now: Mode) -> String {
+    let mut lines = vec![
+        format!("mode      {} {} {}", now.name(), MODE_SEP, now.about()),
+        format!("was       {}", was.name()),
+    ];
+    if now == Mode::Auto {
+        // One line, naming the three things by what they do rather than by
+        // tool name: the reader is being told what stops being asked, and
+        // `Bash`, `Write` and `WebFetch` are not the whole of that set.
+        lines.push(
+            concat!(
+                "warning   file writes, edits, shell commands and network calls now run ",
+                "without asking; /mode assist restores the questions"
+            )
+            .to_string(),
+        );
+    }
+    lines.push(
+        "applies   from the next tool call. Nothing is running while you type this.".to_string(),
+    );
+    lines.push(
+        concat!(
+            "settings  unchanged; the posture lasts this session only, and a new session ",
+            "starts in assist."
+        )
+        .to_string(),
+    );
+    lines.join("\n")
+}
+
+/// The separator between a mode's name and what it does in the receipt.
+const MODE_SEP: &str = "\u{2014}";
+
+/// The mark on the listing's row in force.
+const MODE_ACTIVE_MARK: &str = "*";
+
+/// Every posture, one line each, with the one in force marked.
+fn mode_listing(active: Mode) -> String {
+    let width = Mode::ALL.iter().map(|m| m.name().len()).max().unwrap_or(0);
+    let mut lines = vec!["the postures this session understands:".to_string()];
+    for m in Mode::ALL {
+        let mark = if *m == active { MODE_ACTIVE_MARK } else { " " };
+        lines.push(format!(
+            "  {mark} {:width$}  {}",
+            m.name(),
+            m.about(),
+            width = width
+        ));
+    }
+    lines.push(
+        "the row marked * is in force. /mode <name> changes it for this session; a new \
+         session starts in assist."
+            .to_string(),
+    );
+    lines.join("\n")
+}
+
+/// Why a string is not a posture, or `None`.
+///
+/// A membership check, like `/theme`'s and unlike `/model`'s: there are three
+/// of them and they are compiled in, so the refusal prints the whole valid set.
+fn refuse_an_unknown_mode(name: &str) -> Option<String> {
+    if Mode::parse(name).is_some() {
+        return None;
+    }
+    let names: Vec<&str> = Mode::ALL.iter().map(|m| m.name()).collect();
+    Some(format!(
+        "`{name}` is not a mode, so nothing was changed. This build has: {}. Names are \
+         matched exactly; /mode on its own lists them with what each one does.",
+        names.join(", ")
+    ))
 }
 
 /// What a theme file says about itself, and whether it can be read at all.
@@ -1746,5 +1879,65 @@ mod tests {
         // the person reading it.
         assert!(RESUME_ADVICE.contains("emma --resume"), "{RESUME_ADVICE}");
         assert!(RESUME_ADVICE.contains("/exit"), "{RESUME_ADVICE}");
+    }
+
+    #[test]
+    fn mode_parses_as_a_report_a_switch_or_a_misuse() {
+        assert_eq!(parse("/mode"), Some(SessionCommand::Mode(None)));
+        assert_eq!(
+            parse("/mode plan"),
+            Some(SessionCommand::Mode(Some("plan".into())))
+        );
+        // Carried exactly as typed, for the reason `/theme` gives: case-folding
+        // here would make `/mode PLAN` work while `Mode::parse("PLAN")` says it
+        // does not, and the two disagreeing is worse than either answer.
+        assert_eq!(
+            parse("/mode PLAN"),
+            Some(SessionCommand::Mode(Some("PLAN".into())))
+        );
+        // A mode name is one word. Two is somebody describing the posture they
+        // want rather than naming it, and guessing is what `/model` learned not
+        // to do.
+        assert!(matches!(
+            parse("/mode read only"),
+            Some(SessionCommand::Misuse { name: "mode", .. })
+        ));
+        // A near miss is not a hit.
+        assert_eq!(parse("/modes"), None);
+    }
+
+    #[test]
+    fn an_unknown_mode_is_refused_by_name_and_names_the_ones_that_exist() {
+        let refusal = refuse_an_unknown_mode("yolo").expect("an unknown mode was accepted");
+        assert!(refusal.contains("yolo"), "{refusal}");
+        assert!(refusal.contains("nothing was changed"), "{refusal}");
+        for m in Mode::ALL {
+            assert!(refusal.contains(m.name()), "{refusal} omits {}", m.name());
+        }
+        // Exact match only, the same ruling `/theme` makes.
+        assert!(refuse_an_unknown_mode("Plan").is_some());
+        assert!(refuse_an_unknown_mode("pl").is_some());
+        for m in Mode::ALL {
+            assert_eq!(refuse_an_unknown_mode(m.name()), None, "{}", m.name());
+        }
+    }
+
+    #[test]
+    fn the_listing_marks_exactly_one_mode_as_the_one_in_force() {
+        let listing = mode_listing(Mode::Plan);
+        for m in Mode::ALL {
+            assert!(listing.contains(m.name()), "{listing} omits {}", m.name());
+            assert!(
+                listing.contains(m.about()),
+                "{listing} omits what {} is",
+                m.name()
+            );
+        }
+        let marked: Vec<&str> = listing
+            .lines()
+            .filter(|l| l.trim_start().starts_with(MODE_ACTIVE_MARK))
+            .collect();
+        assert_eq!(marked.len(), 1, "{listing}");
+        assert!(marked[0].contains("plan"), "{listing}");
     }
 }

@@ -229,19 +229,20 @@ async fn run(cli: cli::Cli) -> Result<()> {
     let interrupt = Interrupt::new();
     interrupt.install();
 
-    let (gate, asker) = match (opts.skip_permissions, opts.print) {
-        (true, _) => (Gate::SkipAll, Asker::Scripted(Default::default())),
-        (false, true) => (Gate::Unattended, Asker::Scripted(Default::default())),
-        (false, false) => {
-            let signal = interrupt.clone();
-            // The `/` menu's vocabulary is this run's, taken from the harness
-            // that actually loaded. Nothing else may put a name in it.
-            let menu = emma::term::menu::Menu::for_project(&harness.command_names());
-            (
-                Gate::Ask,
-                Asker::Terminal(term.line_source(menu, move || signal.trip()).into()),
-            )
-        }
+    // The gate and the asker answer two different questions, and conflating
+    // them ended an interactive `--allow-all` run before its first goal: the
+    // bypass got a scripted asker with an empty queue, and the goal prompt was
+    // served from it. `approval::posture` is that decision, in the library,
+    // where it has a test.
+    let (gate, scripted) = emma::approval::posture(opts.skip_permissions, opts.print);
+    let asker = if scripted {
+        Asker::Scripted(Default::default())
+    } else {
+        let signal = interrupt.clone();
+        // The `/` menu's vocabulary is this run's, taken from the harness that
+        // actually loaded. Nothing else may put a name in it.
+        let menu = emma::term::menu::Menu::for_project(&harness.command_names());
+        Asker::Terminal(term.line_source(menu, move || signal.trip()).into())
     };
     // After the terminal exists, because this is the first thing a user needs
     // when a page read they expected does not happen: the tool is absent, and
@@ -355,6 +356,11 @@ async fn run(cli: cli::Cli) -> Result<()> {
         emma_llm::ApiKey::none()
     };
     let provider: Arc<dyn Provider> = kind.build(key.clone(), Some(resolved.model.clone()));
+    // The status bar's MODE cell reads the posture from here, because the frame
+    // builds its bar from the view and the view has no route to `Approvals`.
+    // The cell and not the value: a copy taken at startup would leave the bar
+    // showing the posture the run began in for the rest of the session.
+    emma::approval::publish_mode(approvals.mode_cell());
     // Said before the first call, not after it. A stale `OLLAMA_HOST` in a
     // shell profile sends the conversation — and every file the model has read
     // — to a machine the user has forgotten about; this is the line that names

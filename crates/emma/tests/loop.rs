@@ -2058,3 +2058,67 @@ async fn injected_context_reaches_the_model_in_front_of_the_users_words() {
 }
 
 // endregion: The guarantees nothing defended
+
+/// Plan mode is a posture the gate applies, and a refusal under it is an
+/// observation like any other denial: the goal goes on, the model is told in a
+/// block it can route on, and the session log names the mode as the decider.
+///
+/// The loop's arm is shared by every decider and branches on none of them, so
+/// this is the construction being tested rather than a new path: nothing else
+/// drives a goal in plan mode and reads `"by": "mode"` back out of the log.
+#[tokio::test]
+async fn a_plan_mode_refusal_is_an_observation_and_the_log_names_the_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let (writer, writer_calls) = TestTool::ok("Writer", false);
+    let fake = Fake::new(vec![
+        call("Writer", json!({ "path": "a.txt" })),
+        text(
+            "I will not write in plan mode.
+
+GOAL COMPLETE",
+        ),
+    ]);
+    let log = SessionLog::open(dir.path(), "plan").unwrap();
+    let approvals = Approvals::new(Gate::Ask, Asker::Scripted(Default::default()));
+    approvals.set_mode(emma::approval::Mode::Plan);
+
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![writer]),
+        &approvals,
+        &fake,
+        budgets(),
+        &goal(),
+        &log,
+    )
+    .await;
+
+    assert_eq!(out.ending, Ending::Done, "a refusal must not end the goal");
+    assert_eq!(
+        writer_calls.load(Ordering::SeqCst),
+        0,
+        "plan mode let a write run"
+    );
+    let seen = fake.transcript();
+    assert!(seen.contains("is_error"), "{seen}");
+    let records = std::fs::read_to_string(log.path()).unwrap();
+    let denied = records
+        .lines()
+        .find(|l| l.contains("\"kind\":\"denied\"") || l.contains("\"kind\": \"denied\""))
+        .unwrap_or_else(|| {
+            panic!(
+                "no denied record in the log:
+{records}"
+            )
+        });
+    assert!(
+        denied.contains("\"mode\""),
+        "the log does not name the mode as the decider: {denied}"
+    );
+    assert!(
+        denied.contains("/mode assist"),
+        "the refusal does not say how to lift it: {denied}"
+    );
+}

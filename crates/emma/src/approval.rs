@@ -13,29 +13,50 @@
 //! ```text
 //!   1. a PreToolUse hook denial          policy, checked in the loop
 //!   2. a `deny` rule                     policy, written in a file
-//!   3. the egress question                a destination, asked independently
-//!   4. --dangerously-skip-permissions    the bypass
-//!   5. an `ask` rule                     forces the question back
-//!   6. an `allow` rule                   the persisted grant
-//!   7. read-only, or EXEMPT              no question to ask
-//!   8. a session grant                   this process, from a `y`/`a`
-//!   9. ask the human
+//!   3. plan mode                         the posture the session is in
+//!   4. the egress question                a destination, asked independently
+//!   5. --dangerously-skip-permissions    the bypass
+//!   6. an `ask` rule                     forces the question back
+//!   7. an `allow` rule                   the persisted grant
+//!   8. read-only, or EXEMPT              no question to ask
+//!   9. a session grant                   this process, from a `y`/`a`
+//!  10. ask the human
 //! ```
 //!
-//! **Line 3 was missing from this block until 2026-09-01.** The egress check
+//! **The egress line was missing from this block until 2026-09-01.** The check
 //! sits above the bypass in `decide` and the list did not mention it, so a
 //! block whose own first sentence is "the first line that answers is the
 //! answer" was short one line that answers. It was found by generating
 //! `docs/consent-ladder.html` from `decide`'s guards rather than from this
 //! comment, and `the_ladder_is_the_order_decide_checks_in` now asserts the
-//! drawn order against the function.
+//! drawn order against the function. **Do not renumber this list by hand
+//! without re-reading `decide`** — that is the exact way it went wrong.
 //!
-//! Rules 2, 5 and 6 are new and live in [`crate::permissions`]; that file holds
+//! **Line 3 is [`Mode::Plan`], and it is a posture rather than a sandbox.** The
+//! rule this whole file is written under is that the gate is a consent
+//! interface: it enforces nothing a tool does not honestly declare, and `Bash`
+//! can do anything. Plan mode does not change that and must not be described as
+//! though it did. What it changes is what the *person* has said they are doing
+//! right now: while they are planning, a call that `ToolMeta` says would write
+//! or would leave the machine is refused outright instead of being turned into
+//! a question. It is the same two declarations rules 2 and 3 below already
+//! trust, read for a different purpose — so a tool that lies about `read_only`
+//! defeats plan mode exactly as thoroughly as it defeats the prompt, and no
+//! more. Anyone who needs the write to be *impossible* needs a sandbox, and
+//! this is not one.
+//!
+//! It sits above the bypass for the reason a `deny` rule does: the mode is
+//! something the person at the keyboard said out loud with `/mode`, and the
+//! bypass is a flag they typed once at startup. When they disagree, the later,
+//! narrower, explicit statement wins. It sits above the egress question because
+//! a refused call has no destination worth asking about.
+//!
+//! Rules 2, 6 and 7 are new and live in [`crate::permissions`]; that file holds
 //! the syntax and the matcher, this one holds where they are consulted. Two
 //! things about their placement are worth stating rather than deducing:
 //!
 //! - **`deny` sits above the bypass.** `--dangerously-skip-permissions` used to
-//!   be the first thing read here and is now the third. A deny rule is something
+//!   be the first thing read here and is now the fifth. A deny rule is something
 //!   the operator wrote down and can see; the bypass is a flag somebody typed to
 //!   get through a script. When they disagree, the written one wins — the same
 //!   ruling as rule 1, and the same one Claude Code makes ("if a tool is denied
@@ -130,6 +151,15 @@
 //! is still written to the session log. The short `--yes` spelling is accepted
 //! only alongside `-p`, so the interactive path cannot reach the bypass without
 //! typing the whole word.
+//!
+//! **[`Mode::Auto`] is that same bypass and not a copy of it.** It resolves to
+//! [`Gate::SkipAll`] in [`Approvals::gate`] rather than adding a fourth arm to
+//! `decide`, so there is exactly one implementation of "waved through" and
+//! `/mode auto` cannot drift into a weaker one. A run started with the flag
+//! reports itself as `auto` for the same reason: one state, spelled two ways on
+//! the way in, read one way from here on. The consequence worth stating is that
+//! `/mode assist` takes the bypass away mid-session — the flag is not a property
+//! of the process any more, it is the posture the process started in.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -266,6 +296,12 @@ pub enum Decider {
     /// about -- a network tool that named no host. The refusal is real and the
     /// decider is not a party.
     Unevaluable,
+    /// The session's [`Mode`]. Distinct from [`Decider::Human`] and from
+    /// [`Decider::Rule`], and it is neither: nobody was shown a prompt, and
+    /// nothing on disk forbids the call. What refused it is a posture the
+    /// person selected with `/mode` and can leave the same way, which is a
+    /// third kind of "no" and reads wrong as either of the others.
+    Posture,
 }
 
 impl Decider {
@@ -280,6 +316,10 @@ impl Decider {
             Decider::NoAnswer => "input ended before an answer arrived; the model was told",
             Decider::Unevaluable => {
                 "the call did not say what it would reach, so there was nothing to approve"
+            }
+            Decider::Posture => {
+                "this session is in plan mode; no prompt was shown, and `/mode assist` is what \
+                 puts the question back"
             }
         }
     }
@@ -296,6 +336,7 @@ impl Decider {
             Decider::NoOneToAsk => "unattended",
             Decider::NoAnswer => "end-of-input",
             Decider::Unevaluable => "unevaluable",
+            Decider::Posture => "mode",
         }
     }
 }
@@ -315,6 +356,28 @@ pub enum Gate {
     /// on a question nobody can see, which in a CI job is a timeout an hour
     /// later with no output explaining it.
     Unattended,
+}
+
+/// The posture a run starts in: which gate, and whether the keyboard is read.
+///
+/// **They are two questions, and treating them as one is a shipped defect.**
+/// `--allow-all` selected a scripted asker for every run, not just `-p` ones.
+/// [`Approvals::read_line`] serves the goal prompt as well as approval answers,
+/// and a scripted asker with an empty queue answers `None`, which reads as end
+/// of input: an interactive `emma --allow-all` ended before a word could be
+/// typed. Skipping approvals says nothing about where the keyboard is.
+///
+/// Here rather than in `main` for the reason [`Approvals::for_stdin`] is: the
+/// same decision lived inline in `main` as a `match` with no test on it, and
+/// the one thing that noticed when it was wrong was a user whose session ended
+/// instantly. The `bool` is "answers come from a script, not a keyboard".
+pub fn posture(skip_permissions: bool, print: bool) -> (Gate, bool) {
+    let gate = match (skip_permissions, print) {
+        (true, _) => Gate::SkipAll,
+        (false, true) => Gate::Unattended,
+        (false, false) => Gate::Ask,
+    };
+    (gate, print)
 }
 
 /// Which of the two questions is being asked, because the two grants a `y`
@@ -372,6 +435,181 @@ pub enum Asker {
 
 // endregion: Answers, verdicts and gates
 
+// region: The session posture
+// ---------------------------------------------------------------------------
+// The session posture
+//
+// [`Gate`] is what this process was *started* with; [`Mode`] is what the person
+// at the keyboard has said since. The status bar names it, so it has to be one
+// value and not two: a posture the bar reads from one place and the gate
+// enforces from another is a posture that can lie on screen.
+//
+// **This is a consent interface and plan mode does not change that.** The mode
+// is a statement about what the person is doing, applied to what the tools
+// themselves declare. It is not containment, it does not confine a process, and
+// it stops nothing that lies to `ToolMeta` — see the module header, which says
+// the same thing at greater length because it is the sentence most likely to be
+// paraphrased into a promise this file cannot keep.
+//
+// **`plan` is enforced in `decide` and nowhere else.** One check reading the two
+// declarations, above the bypass, above the prompt and above egress, so there is
+// no second list of "tools plan blocks" to fall out of step with the registry.
+// ---------------------------------------------------------------------------
+
+/// The posture a session is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Mode {
+    /// Ask before writing, running a command, or reaching the network. What
+    /// every session starts in, and what the module header describes.
+    Assist = 0,
+    /// Approvals granted for the rest of the session — the runtime spelling of
+    /// `--dangerously-skip-permissions`, resolved to the same [`Gate::SkipAll`].
+    Auto = 1,
+    /// Read-only. Anything that writes, runs or reaches out is refused with the
+    /// mode named, before any prompt exists to be pressed through.
+    Plan = 2,
+}
+
+impl Mode {
+    /// In the order `/mode` lists them: what a session is in, what it can be
+    /// loosened to, what it can be tightened to.
+    pub const ALL: &'static [Mode] = &[Mode::Assist, Mode::Auto, Mode::Plan];
+
+    /// What it is typed as, and matched exactly.
+    pub fn name(self) -> &'static str {
+        match self {
+            Mode::Assist => "assist",
+            Mode::Auto => "auto",
+            Mode::Plan => "plan",
+        }
+    }
+
+    /// What the status bar shows. Upper case, like the bar's other cells, and
+    /// separate from [`Mode::name`] so the cell cannot start naming a spelling
+    /// nobody can type.
+    pub fn label(self) -> &'static str {
+        match self {
+            Mode::Assist => "ASSIST",
+            Mode::Auto => "AUTO",
+            Mode::Plan => "PLAN",
+        }
+    }
+
+    /// One line, for the listing and for the menu row.
+    pub fn about(self) -> &'static str {
+        match self {
+            Mode::Assist => "asks before a write, a command or a network call",
+            Mode::Auto => "grants every approval for this session — nothing is asked",
+            Mode::Plan => "read-only: writes, commands and network calls are refused",
+        }
+    }
+
+    /// Exact match, or `None`.
+    ///
+    /// A *membership* check rather than a parse: three rows this build compiled,
+    /// short enough to print, so a refusal that only says no has no excuse. Case
+    /// is not folded — see `the_status_label_is_assist_until_a_run_says_otherwise`.
+    pub fn parse(name: &str) -> Option<Mode> {
+        Mode::ALL.iter().copied().find(|m| m.name() == name)
+    }
+
+    fn from_u8(v: u8) -> Mode {
+        match v {
+            1 => Mode::Auto,
+            2 => Mode::Plan,
+            // Anything else is a value nothing in this file can produce, and
+            // the safe reading of an impossible posture is the strict one.
+            _ => Mode::Assist,
+        }
+    }
+
+    /// Why this call cannot happen in this mode, or `None`.
+    ///
+    /// **The whole of plan mode.** It reads the two axes [`ToolMeta`] already
+    /// declares rather than naming tools, so a tool added next week is covered
+    /// by the mode without an edit here — the alternative, a list of blocked
+    /// names, is the scattered check this mode was asked not to be. It is also
+    /// the limit of what the mode is: those two axes are declarations, kept
+    /// honest by the tool crates' own tests, and a tool that misreports itself
+    /// walks through plan mode exactly as it walks through the prompt.
+    ///
+    /// [`EXEMPT`] does not apply. That list is about which writes are worth a
+    /// *prompt*; plan is about whether the write happens at all, and a mode
+    /// that quietly let two tools edit files would be the mode lying.
+    fn refuse(self, name: &str, meta: ToolMeta) -> Option<String> {
+        if self != Mode::Plan || (meta.read_only && !meta.reaches_network) {
+            return None;
+        }
+        let what = if meta.reaches_network {
+            "reaches the network"
+        } else {
+            "can change this machine"
+        };
+        Some(format!(
+            "plan mode: {name} is read-only-blocked; /mode assist to act. It {what}, and this \
+             session is in plan mode, so it was not run and no prompt was shown. Reading, \
+             searching and listing still work — plan the change and say what it would be."
+        ))
+    }
+}
+
+/// The one store for the posture, shared rather than copied.
+///
+/// An `Arc` and not a global, so a test — or a nested run — has its own and two
+/// of them cannot interfere. The status bar reads the one published by
+/// [`publish_mode`], which is a *view* of this cell and never a second copy of
+/// the value.
+#[derive(Debug, Clone)]
+pub struct ModeCell(std::sync::Arc<std::sync::atomic::AtomicU8>);
+
+impl ModeCell {
+    fn new(mode: Mode) -> Self {
+        Self(std::sync::Arc::new(std::sync::atomic::AtomicU8::new(
+            mode as u8,
+        )))
+    }
+
+    /// The posture right now.
+    pub fn get(&self) -> Mode {
+        Mode::from_u8(self.0.load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    /// Set it, and answer with what it was — the receipt names both.
+    pub fn set(&self, mode: Mode) -> Mode {
+        Mode::from_u8(self.0.swap(mode as u8, std::sync::atomic::Ordering::SeqCst))
+    }
+}
+
+/// The posture the status bar draws, for the one caller that has no
+/// [`Approvals`] to ask: the frame builds its bar from the view, and the view
+/// knows nothing about approvals.
+///
+/// Same argument as [`LIVE_GATE`], which it sits beside: a renderer holding the
+/// gate is a renderer that could answer a question, so what crosses this line is
+/// the label's input and nothing else.
+static ON_THE_BAR: std::sync::OnceLock<ModeCell> = std::sync::OnceLock::new();
+
+/// Publish this run's posture for the status bar. Called once, by `main`.
+///
+/// Later calls are ignored rather than replacing the cell: two published
+/// postures would be the drift this type exists to prevent, and the first
+/// `Approvals` a process builds is the one the session runs on.
+pub fn publish_mode(cell: ModeCell) {
+    let _ = ON_THE_BAR.set(cell);
+}
+
+/// The published posture, or [`Mode::Assist`] before anything has published one.
+///
+/// Assist is the answer for an unwired process because it is the strict one: a
+/// bar reading `AUTO` under a gate that is asking would tell somebody they are
+/// not being consulted when they are.
+fn current_mode() -> Mode {
+    ON_THE_BAR.get().map(ModeCell::get).unwrap_or(Mode::Assist)
+}
+
+// endregion: The session posture
+
 // region: The gate
 // ---------------------------------------------------------------------------
 // The gate
@@ -401,7 +639,17 @@ pub struct Approvals {
     /// process there would have silently disabled the drain in every test that
     /// covers it — which is exactly what it did, and what the suite caught.
     type_ahead_possible: bool,
-    gate: Gate,
+    /// What this process was started with. Read only through
+    /// [`Approvals::gate`], which resolves it against the live [`Mode`] — every
+    /// arm of `decide` and `egress` goes through that call rather than this
+    /// field, so `/mode assist` takes a bypass away on the very next tool call
+    /// instead of at the next restart.
+    started_as: Gate,
+    /// The live posture. An atomic rather than a `Mutex` because the status bar
+    /// reads it from the draw thread while a goal holds every lock in this file,
+    /// and a bar that blocks on the gate is a frame that stops painting whenever
+    /// somebody is being asked something.
+    mode: ModeCell,
     asker: Asker,
     session_allowed: Mutex<HashSet<String>>,
     /// Hosts a human has allowed for the rest of this process.
@@ -461,26 +709,66 @@ fn gate_code(gate: Gate) -> u8 {
 
 /// The gate in force, for a caller with no [`Approvals`] to ask. See
 /// [`LIVE_GATE`].
+///
+/// **Resolved against the published [`Mode`], the same way [`Approvals::gate`]
+/// resolves against the live one.** Without that, `/mode auto` would leave the
+/// Harness page's gates card saying `ASK` while nothing was being asked, and
+/// `/mode assist` after `--dangerously-skip-permissions` would leave it saying
+/// `SKIP-ALL` while every write was prompting. Both are the drift the single
+/// published cell exists to prevent, one screen further out.
 pub fn current_gate() -> Gate {
-    match LIVE_GATE.load(std::sync::atomic::Ordering::Relaxed) {
+    let started = match LIVE_GATE.load(std::sync::atomic::Ordering::Relaxed) {
         1 => Gate::SkipAll,
         2 => Gate::Unattended,
         _ => Gate::Ask,
+    };
+    match ON_THE_BAR.get().map(ModeCell::get) {
+        // Nothing published — a test, or a caller that never wired the bar. The
+        // started gate is then the whole truth, which is what this function
+        // answered before plan mode existed.
+        None => started,
+        Some(Mode::Auto) => Gate::SkipAll,
+        // The session is not in `auto`, so the bypass is gone whether it arrived
+        // from the flag or from `/mode`.
+        Some(_) => match started {
+            Gate::SkipAll => Gate::Ask,
+            g => g,
+        },
     }
 }
 
-/// What the status bar's MODE cell says. One spelling, shared with the Harness
-/// page, because two independently formatted copies of a posture is how a
-/// screen comes to contradict itself.
+/// What the status bar's MODE cell says — `ASSIST`, `AUTO` or `PLAN`.
+///
+/// One spelling, because two independently formatted copies of a posture is how
+/// a screen comes to contradict itself.
+///
+/// **These are [`Mode`]'s words and not [`Gate`]'s**, and the difference is not
+/// cosmetic: the cell names what the person chose, which has three values and
+/// includes a posture the gate enum cannot express. `harness_state::gate_label`
+/// still names the gate, in the gate's words, and its doc says why it did not
+/// take the fork's labels — that argument is now half true and the page owes
+/// plan mode a word of its own.
 pub fn current_mode_label() -> &'static str {
-    crate::harness_state::gate_label(current_gate())
+    current_mode().label()
 }
 
 impl Approvals {
     pub fn new(gate: Gate, asker: Asker) -> Self {
         LIVE_GATE.store(gate_code(gate), std::sync::atomic::Ordering::Relaxed);
         Self {
-            gate,
+            // The flag and the mode are the same state, so it is stored once. A
+            // run started with the bypass says `AUTO` on the status bar and
+            // reports `auto` to `/mode`, which is the truth about what it is
+            // doing; the alternative is a bar saying `ASSIST` while nothing is
+            // being asked.
+            started_as: match gate {
+                Gate::SkipAll => Gate::Ask,
+                g => g,
+            },
+            mode: ModeCell::new(match gate {
+                Gate::SkipAll => Mode::Auto,
+                _ => Mode::Assist,
+            }),
             asker,
             session_allowed: Mutex::new(HashSet::new()),
             hosts_allowed: Mutex::new(HashSet::new()),
@@ -547,8 +835,40 @@ impl Approvals {
         Self::new(Gate::Unattended, Asker::Scripted(Mutex::new(Vec::new())))
     }
 
+    /// The gate in force *now*: the posture resolved against what the process
+    /// was started with.
+    ///
+    /// Every arm of `decide` and `egress` reads this rather than the field, so a
+    /// switch bites at the next decision. There is no other moment it could:
+    /// `main` awaits a goal to completion and nothing reads the keyboard while
+    /// it runs, so `/mode` executes *between* goals and there is no call in
+    /// flight to half-apply to.
     pub fn gate(&self) -> Gate {
-        self.gate
+        match self.mode.get() {
+            Mode::Auto => Gate::SkipAll,
+            _ => self.started_as,
+        }
+    }
+
+    /// The posture this session is in.
+    pub fn mode(&self) -> Mode {
+        self.mode.get()
+    }
+
+    /// Switch it, and answer with what it was.
+    ///
+    /// Tightening (`auto` → `assist`, or into `plan`) applies before the next
+    /// tool call; loosening applies to the next approval that would have been
+    /// asked. Those are the same instant — see [`Approvals::gate`].
+    pub fn set_mode(&self, mode: Mode) -> Mode {
+        self.mode.set(mode)
+    }
+
+    /// The cell itself, for [`publish_mode`]. Handing out the cell rather than
+    /// the value is what keeps the status bar reading the live posture instead
+    /// of a copy of it taken at startup.
+    pub fn mode_cell(&self) -> ModeCell {
+        self.mode.clone()
     }
 
     pub async fn decisions(&self) -> Vec<(String, Verdict)> {
@@ -625,6 +945,14 @@ impl Approvals {
                 ),
             );
         }
+        // Plan mode, above the bypass and above the prompt. One check reading
+        // `ToolMeta`, so there is no list of blocked tool names to fall out of
+        // step with the registry, and no arm below can undo it: a posture a `y`
+        // could get through is a posture, not a mode. It refuses rather than
+        // asks — the person already answered, when they typed `/mode plan`.
+        if let Some(why) = self.mode.get().refuse(name, meta) {
+            return Verdict::Deny(Decider::Posture, why);
+        }
         // Egress before the local question, and independent of it: a tool can
         // be read-only — genuinely, honestly read-only — and still be the way
         // something leaves this machine. Every arm below this line assumes the
@@ -632,7 +960,7 @@ impl Approvals {
         if let deny @ Verdict::Deny(..) = self.egress(name, meta, target, term).await {
             return deny;
         }
-        if self.gate == Gate::SkipAll {
+        if self.gate() == Gate::SkipAll {
             return Verdict::Allow;
         }
         // An `ask` rule puts the question back, over an `allow` rule, over
@@ -656,7 +984,7 @@ impl Approvals {
                 return Verdict::Allow;
             }
         }
-        if self.gate == Gate::Unattended {
+        if self.gate() == Gate::Unattended {
             return Verdict::Deny(
                 Decider::NoOneToAsk,
                 format!(
@@ -801,7 +1129,7 @@ impl Approvals {
         }
         // The bypass, here as well as in `decide`. Both questions are waved
         // through by one flag; a `deny` rule is what neither of them waves.
-        if self.gate == Gate::SkipAll {
+        if self.gate() == Gate::SkipAll {
             return Verdict::Allow;
         }
         let forced = rule == Some(Decision::Ask);
@@ -813,7 +1141,7 @@ impl Approvals {
                 return Verdict::Allow;
             }
         }
-        if self.gate == Gate::Unattended {
+        if self.gate() == Gate::Unattended {
             return Verdict::Deny(
                 Decider::NoOneToAsk,
                 format!(
@@ -1200,7 +1528,7 @@ mod tests {
 
         // The screen. Only one of these may claim a person did anything.
         assert!(Human.because().contains("you declined"));
-        for d in [Rule, NoOneToAsk, NoAnswer, Unevaluable] {
+        for d in [Rule, NoOneToAsk, NoAnswer, Unevaluable, Posture] {
             assert!(
                 !d.because().contains("you declined"),
                 "{d:?} tells the reader they declined something they never saw: {}",
@@ -1225,16 +1553,30 @@ mod tests {
             "{}",
             Unevaluable.because()
         );
+        // The mode says which mode and how to leave it. A refusal that named
+        // neither is the "tool mysteriously did nothing" this enum is against.
+        assert!(
+            Posture.because().contains("plan mode") && Posture.because().contains("/mode assist"),
+            "{}",
+            Posture.because()
+        );
 
         // The log. Distinct keys, because whoever reads the file back is
         // reconstructing a run they did not watch.
-        let keys: Vec<&str> = [Human, Rule, NoOneToAsk, NoAnswer, Unevaluable]
+        let keys: Vec<&str> = [Human, Rule, NoOneToAsk, NoAnswer, Unevaluable, Posture]
             .iter()
             .map(|d| d.logged())
             .collect();
         assert_eq!(
             keys,
-            ["user", "rule", "unattended", "end-of-input", "unevaluable"]
+            [
+                "user",
+                "rule",
+                "unattended",
+                "end-of-input",
+                "unevaluable",
+                "mode"
+            ]
         );
         let mut sorted = keys.clone();
         sorted.sort_unstable();
@@ -1295,6 +1637,250 @@ mod tests {
 
     fn target(host: &str) -> Option<NetworkTarget> {
         Some(NetworkTarget::new(host, format!("read https://{host}/x")))
+    }
+
+    // -----------------------------------------------------------------------
+    // The session posture
+    // -----------------------------------------------------------------------
+
+    /// `--allow-all` must not take the keyboard away.
+    ///
+    /// Skipping approvals and having nobody to type are different facts about a
+    /// run, and conflating them ended an interactive session before its first
+    /// goal: [`Approvals::read_line`] serves the goal prompt too, and a scripted
+    /// asker with an empty queue answers `None`, which reads as end of input.
+    /// This is the whole reason [`posture`] is a function rather than a `match`
+    /// in `main`.
+    #[test]
+    fn allow_all_skips_the_gate_without_taking_the_keyboard() {
+        assert_eq!(
+            posture(true, false),
+            (Gate::SkipAll, false),
+            "interactive allow-all"
+        );
+        assert_eq!(
+            posture(true, true),
+            (Gate::SkipAll, true),
+            "print allow-all"
+        );
+        assert_eq!(
+            posture(false, true),
+            (Gate::Unattended, true),
+            "print alone"
+        );
+        assert_eq!(posture(false, false), (Gate::Ask, false), "the default");
+    }
+
+    /// Assist is what a session starts in, and it is today's behaviour: the
+    /// writer is asked about, the reader is not.
+    #[tokio::test]
+    async fn assist_is_the_posture_a_session_starts_in() {
+        let a = Approvals::new(Gate::Ask, Asker::Scripted(Mutex::new(vec![Answer::Yes])));
+        assert_eq!(a.mode(), Mode::Assist);
+        assert_eq!(
+            a.decide("Write", WRITES, None, &Value::Null, &Term::silent())
+                .await,
+            Verdict::Allow
+        );
+    }
+
+    /// `/mode auto` is the bypass, not a second implementation of it: the same
+    /// `Gate::SkipAll` arm answers, and a run started with the flag reports
+    /// itself as `auto` rather than as something the status bar cannot name.
+    #[tokio::test]
+    async fn auto_is_the_runtime_spelling_of_the_bypass() {
+        let a = Approvals::new(Gate::Ask, Asker::Scripted(Mutex::new(Vec::new())));
+        assert_eq!(a.set_mode(Mode::Auto), Mode::Assist);
+        assert_eq!(a.gate(), Gate::SkipAll);
+        // Nothing is queued to answer with, so an allow here is the bypass and
+        // not a prompt somebody scripted.
+        assert_eq!(
+            a.decide("Bash", WRITES, None, &Value::Null, &Term::silent())
+                .await,
+            Verdict::Allow
+        );
+        // …and switching back applies immediately, on the very next call.
+        assert_eq!(a.set_mode(Mode::Assist), Mode::Auto);
+        assert!(matches!(
+            a.decide("Bash", WRITES, None, &Value::Null, &Term::silent())
+                .await,
+            Verdict::Deny(..)
+        ));
+
+        // A run started with --dangerously-skip-permissions is already in it,
+        // and giving it up is a thing that can be done from the keyboard.
+        let flagged = Approvals::new(Gate::SkipAll, Asker::Scripted(Mutex::new(Vec::new())));
+        assert_eq!(flagged.mode(), Mode::Auto);
+        assert_eq!(flagged.gate(), Gate::SkipAll);
+        flagged.set_mode(Mode::Assist);
+        assert_eq!(
+            flagged.gate(),
+            Gate::Ask,
+            "`/mode assist` left the bypass running"
+        );
+    }
+
+    /// Plan refuses everything that writes, runs or reaches out, and the
+    /// refusal names the mode and the way out of it — a denial the model cannot
+    /// attribute is a tool that mysteriously does nothing.
+    ///
+    /// **The unconsumed queue is what pins the rung's position.** One
+    /// `Answer::Yes` is loaded and never used: plan refuses above egress and
+    /// above the prompt, so there is no question for a stale keystroke to
+    /// answer and nothing to train anybody through. The final assertion spends
+    /// that `Yes` on an `Edit` once the mode is gone, so if the rung ever slides
+    /// below `egress` the `WebFetch` case eats it and this goes red —
+    /// `Deny(NoAnswer, …)` where `Allow` was expected, which is the mutation
+    /// receipt in `DONE-S2.md`.
+    #[tokio::test]
+    async fn plan_denies_a_writer_and_names_the_mode() {
+        let a = Approvals::new(Gate::Ask, Asker::Scripted(Mutex::new(vec![Answer::Yes])));
+        a.set_mode(Mode::Plan);
+        for (name, meta) in [("Edit", WRITES), ("Bash", WRITES), ("WebFetch", REACHES)] {
+            match a
+                .decide(name, meta, target("docs.rs"), &Value::Null, &Term::silent())
+                .await
+            {
+                Verdict::Deny(who, why) => {
+                    assert_eq!(who, Decider::Posture, "{name} was refused by {who:?}");
+                    assert_eq!(who.logged(), "mode");
+                    assert!(why.contains("plan mode"), "{why}");
+                    assert!(why.contains(name), "{why}");
+                    assert!(why.contains("/mode assist"), "{why}");
+                }
+                Verdict::Allow => panic!("plan mode allowed {name}"),
+            }
+        }
+        // The task writers are exempt from the *prompt*, which is not the same
+        // as being exempt from the mode: they write a file.
+        for exempt in EXEMPT {
+            assert!(
+                matches!(
+                    a.decide(exempt, WRITES, None, &Value::Null, &Term::silent())
+                        .await,
+                    Verdict::Deny(Decider::Posture, _)
+                ),
+                "plan mode allowed {exempt}, which writes"
+            );
+        }
+        // Reading, searching and listing are the whole point of the mode.
+        assert_eq!(
+            a.decide("Read", LOCAL_READ, None, &Value::Null, &Term::silent())
+                .await,
+            Verdict::Allow
+        );
+        // Nothing was consumed from the answer queue, so the `Yes` is still
+        // there to allow the write once the mode is gone.
+        assert_eq!(a.set_mode(Mode::Assist), Mode::Plan);
+        assert_eq!(
+            a.decide("Edit", WRITES, None, &Value::Null, &Term::silent())
+                .await,
+            Verdict::Allow
+        );
+    }
+
+    /// A run started with `--dangerously-skip-permissions` can still be put
+    /// into plan, and the flag does not survive it.
+    ///
+    /// **What this does not pin, and the distinction cost a mutation to find.**
+    /// The obvious claim — "the mode check sits above the `Gate::SkipAll` arm,
+    /// so it outranks the bypass" — is not observable from here and the test
+    /// that asserted it was a false receipt. Moving the rung below that arm left
+    /// this green, because [`Approvals::gate`] has already resolved the bypass
+    /// away: `SkipAll` is what [`Mode::Auto`] means, and a session in plan is
+    /// not in auto, so the arm cannot fire. The rung's placement is observable
+    /// against the `deny` rule above it and against egress below it, and those
+    /// are pinned by their own tests.
+    ///
+    /// What it does pin is the state machine underneath: the flag is stored as
+    /// a mode, so typing `/mode plan` after starting with the bypass leaves a
+    /// session that refuses rather than one that runs everything.
+    #[tokio::test]
+    async fn a_run_started_with_the_bypass_can_still_be_put_into_plan() {
+        let a = Approvals::new(Gate::SkipAll, Asker::Scripted(Mutex::new(Vec::new())));
+        a.set_mode(Mode::Plan);
+        assert!(matches!(
+            a.decide("Bash", WRITES, None, &Value::Null, &Term::silent())
+                .await,
+            Verdict::Deny(Decider::Posture, _)
+        ));
+    }
+
+    /// A `deny` rule still outranks plan mode, and the reader is told which.
+    ///
+    /// Both refuse the same call; which one answers decides what the sentence
+    /// says and what the session log records. A rule is written down and cannot
+    /// be typed away; a mode can. Telling somebody to `/mode assist` when a
+    /// `deny` rule is in the way sends them to fix the wrong thing.
+    #[tokio::test]
+    async fn a_deny_rule_answers_before_the_mode_does() {
+        let a = ruled(Gate::Ask, &["Bash"], &[], &[]);
+        a.set_mode(Mode::Plan);
+        match a
+            .decide("Bash", WRITES, None, &Value::Null, &Term::silent())
+            .await
+        {
+            Verdict::Deny(who, why) => {
+                assert_eq!(who, Decider::Rule, "the mode answered over the rule");
+                assert!(why.contains("deny"), "{why}");
+            }
+            other => panic!("a deny rule let Bash through: {other:?}"),
+        }
+    }
+
+    /// The one line the status bar reads.
+    ///
+    /// It answers before any run has published a posture, because the bar draws
+    /// on the first frame; and once a run has published, it follows that run's
+    /// live cell rather than a copy taken at startup.
+    ///
+    /// **This is the only test in the file that touches [`ON_THE_BAR`]**, which
+    /// is a `OnceLock` and therefore process-wide: publishing from a second test
+    /// would make both order-dependent. The assertions before the publish must
+    /// stay ahead of it in this one function.
+    #[test]
+    fn the_status_label_is_assist_until_a_run_says_otherwise() {
+        assert_eq!(Mode::Assist.label(), "ASSIST");
+        assert_eq!(current_mode_label(), "ASSIST");
+        for m in Mode::ALL {
+            assert_eq!(Mode::parse(m.name()), Some(*m));
+            assert!(m.label().chars().all(|c| c.is_ascii_uppercase()));
+            assert!(!m.about().is_empty());
+        }
+        // Matched exactly. A folded match would accept a spelling the listing
+        // never showed, and `/mode` prints the whole set on a miss anyway.
+        assert_eq!(Mode::parse("ASSIST"), None);
+        assert_eq!(Mode::parse("planning"), None);
+
+        // Published: the bar now reads the session's own cell.
+        let a = Approvals::new(Gate::Ask, Asker::Scripted(Mutex::new(Vec::new())));
+        publish_mode(a.mode_cell());
+        for (mode, label) in [
+            (Mode::Plan, "PLAN"),
+            (Mode::Auto, "AUTO"),
+            (Mode::Assist, "ASSIST"),
+        ] {
+            a.set_mode(mode);
+            assert_eq!(current_mode_label(), label, "the bar lags {mode:?}");
+        }
+        // And the gate the Harness page draws follows the same cell. Asserted
+        // only where the answer does not depend on `LIVE_GATE`: that static is
+        // written by every `Approvals::new` in the process, so a sibling test
+        // building a `Gate::SkipAll` gate on another thread can move it under
+        // this one. `Auto` resolves to `SkipAll` whatever it holds, and any
+        // other mode resolves to something that is not `SkipAll` whatever it
+        // holds — which is the property that matters, since the failure being
+        // guarded is a bypass outliving the mode that granted it.
+        a.set_mode(Mode::Auto);
+        assert_eq!(current_gate(), Gate::SkipAll);
+        a.set_mode(Mode::Plan);
+        assert_ne!(
+            current_gate(),
+            Gate::SkipAll,
+            "the bypass survived leaving auto"
+        );
+        // Left as it was found, for anything that reads the bar afterwards.
+        a.set_mode(Mode::Assist);
     }
 
     /// The goal prompt drains, and now says so.

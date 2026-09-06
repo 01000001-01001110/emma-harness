@@ -432,9 +432,9 @@ pub struct Denial {
     /// Who refused, verbatim from the record.
     ///
     /// **The fork's doc said "`hook` or `user`" and that is false here.** This
-    /// tree writes six: `hook` from the `PreToolUse` denial in `agent.rs`, and
-    /// `Decider::logged`'s five — `user`, `rule`, `unattended`, `end-of-input`,
-    /// `unevaluable`. That enum's own doc gives the reason they are distinct
+    /// tree writes seven: `hook` from the `PreToolUse` denial in `agent.rs`, and
+    /// `Decider::logged`'s six — `user`, `rule`, `unattended`, `end-of-input`,
+    /// `unevaluable`, and `mode` since plan mode was ported on 2026-09-06. That enum's own doc gives the reason they are distinct
     /// strings rather than a bool: "the user said no" and "there was no user"
     /// are different runs. So this is carried through as written rather than
     /// mapped onto a two-valued enum here, which would throw away exactly the
@@ -478,11 +478,13 @@ pub struct PendingApproval {
 
 /// The posture as a word.
 ///
-/// **The fork's three labels are not these.** It said `ASSIST`, `AUTO` and
-/// `PLAN`, which were the labels of an approval `Mode` enum that does not exist
-/// in this tree — the live gate has [`Gate`]'s three variants and no plan mode.
-/// Porting the fork's words would have meant a card naming a posture Emma
-/// cannot be in, so the words here are this tree's.
+/// **These are the gate's words, not the posture's.** The status bar's MODE
+/// cell says `ASSIST`, `AUTO` or `PLAN` from `approval::current_mode_label`,
+/// the posture ported on 2026-09-06. This card draws the gate the run started
+/// with, and under `/mode plan` that gate still reads `ASK`, which is the
+/// started gate and not the refusal in force. The Harness page package that
+/// makes the card live should draw the posture beside the gate word; until it
+/// does, this label understates a plan-mode session.
 ///
 /// Exhaustive on purpose: a fourth [`Gate`] variant should stop the build here
 /// rather than reach a page as a blank.
