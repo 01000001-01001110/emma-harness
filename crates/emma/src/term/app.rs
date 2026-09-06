@@ -238,6 +238,11 @@ pub enum CodeJob {
     Editor {
         root: std::path::PathBuf,
     },
+    /// Text the page wants on the system clipboard. It is a job rather than a
+    /// call because the one mechanism that does this lives on the frame, and a
+    /// second one written from here would be a second thing to get wrong on
+    /// the terminals that already refuse the first.
+    Copy(String),
 }
 
 impl App {
@@ -763,7 +768,11 @@ impl App {
         &mut self,
         key: ratatui::crossterm::event::KeyEvent,
     ) -> (bool, Option<CodeJob>) {
-        if self.code.is_none() || !super::code::takes_key(key) {
+        let takes = self
+            .code
+            .as_ref()
+            .is_some_and(|v| super::code::takes_key(v, key));
+        if !takes {
             return (false, None);
         }
         let action = {
@@ -788,6 +797,46 @@ impl App {
         (true, self.code_act(action))
     }
 
+    /// A bracketed paste while the Code page is open. `false` when the page is
+    /// closed, so the input box keeps every paste it used to get.
+    pub fn code_paste(&mut self, text: &str) -> (bool, Option<CodeJob>) {
+        let Some(v) = self.code.as_mut() else {
+            return (false, None);
+        };
+        let action = v.paste_text(text);
+        (true, self.code_act(action))
+    }
+
+    /// A drag with the button down over the Code page's document: the
+    /// selection extends to the cell under the pointer. `false` when the page
+    /// is closed or the pointer is off the document, which hands the drag back
+    /// to whatever the press went to.
+    pub fn code_drag(&mut self, col: u16, row: u16) -> bool {
+        let area = self.code_area;
+        let Some(v) = self.code.as_mut() else {
+            return false;
+        };
+        let Some((line, c)) = super::code::cell_to_pos(v, area, col, row) else {
+            return false;
+        };
+        v.drag_doc(line, c);
+        true
+    }
+
+    /// The button coming up over the Code page: whatever the drag selected
+    /// goes to the clipboard, through the same job `F4` uses. `false` when the
+    /// page is closed or nothing was selected.
+    pub fn code_release(&mut self) -> (bool, Option<CodeJob>) {
+        let Some(v) = self.code.as_mut() else {
+            return (false, None);
+        };
+        let action = v.copy_selection();
+        if action == super::code::CodeAction::None {
+            return (false, None);
+        }
+        (true, self.code_act(action))
+    }
+
     /// The wheel while the Code page is open: the body scrolls, the tree does
     /// not. `false` gives the notch back to the transcript.
     pub fn code_scroll(&mut self, up: bool) -> (bool, Option<CodeJob>) {
@@ -799,6 +848,14 @@ impl App {
             return (false, None);
         }
         (true, self.code_act(action))
+    }
+
+    /// What the Code page just sent to the clipboard, for its notice row.
+    /// Sent, not arrived: OSC 52 has no acknowledgement.
+    pub fn code_notice_sent(&mut self, chars: usize) {
+        if let Some(v) = self.code.as_mut() {
+            v.notice_sent(chars);
+        }
     }
 
     /// The worker's answer to `CodeJob::History`, and the hash whose patch to
@@ -823,8 +880,14 @@ impl App {
             // Measured at 195 to 677 microseconds on real files, capped by
             // `read_file` itself. Cheap enough for the input thread.
             CodeAction::Open(rel) => {
-                let read = super::code_git::read_file(&super::code_git::abs(&root, &rel));
-                self.code.as_mut()?.set_open(rel, read);
+                let path = super::code_git::abs(&root, &rel);
+                let read = super::code_git::read_file(&path);
+                // Two reads, deliberately. The page compares this hash against
+                // the bytes it would write back unedited and locks the buffer
+                // when they disagree: a mixed-terminator file, or one rewritten
+                // between the two reads. See `code::OpenFile::from_read`.
+                let hash = super::code_git::file_hash(&path);
+                self.code.as_mut()?.set_open(rel, read, hash);
                 None
             }
             CodeAction::LoadHistory => {
@@ -841,6 +904,24 @@ impl App {
                 })
             }
             CodeAction::LaunchEditor => Some(CodeJob::Editor { root }),
+            // A write of at most `code_git::MAX_FILE` bytes to a temp file and
+            // a rename, in the same band as the read that opened the file, so
+            // it stays on the input thread with that read. The answer goes
+            // straight back to the page, which is the only half that knows
+            // whether the buffer is still dirty.
+            CodeAction::Save(req) => {
+                let saved = super::code_git::save_file(
+                    &root,
+                    &req.rel,
+                    &req.lines,
+                    req.ending,
+                    req.trailing_newline,
+                    req.expect,
+                );
+                self.code.as_mut()?.set_saved(saved);
+                None
+            }
+            CodeAction::Copy(text) => Some(CodeJob::Copy(text)),
             CodeAction::Close => {
                 self.code = None;
                 None
@@ -5886,5 +5967,36 @@ mod tests {
             app.selection_begin(pane.x + 1, pane.y + 2),
             "text no longer selects"
         );
+    }
+
+    /// The paste and the mouse reach the Code page through the shell, which is
+    /// the seam C1's keys were missing for a whole stage: every page-level
+    /// paste test passed while nothing in a running program could reach it.
+    /// Closed page: the input box keeps the paste. Open page: the page takes
+    /// it, and with no file open says so rather than dropping it.
+    #[test]
+    fn a_paste_and_a_drag_reach_the_open_code_page_and_only_the_open_one() {
+        let td = tempfile::tempdir().unwrap();
+        let mut app = App::new((120, 40));
+        assert!(matches!(app.code_paste("hello"), (false, None)));
+        assert!(!app.code_drag(5, 5));
+        assert!(matches!(app.code_release(), (false, None)));
+        app.toggle_code(&td.path().display().to_string());
+        let (taken, job) = app.code_paste("hello");
+        assert!(taken, "an open page takes the paste");
+        assert!(job.is_none());
+        let notice = app
+            .code
+            .as_ref()
+            .unwrap()
+            .notice
+            .clone()
+            .unwrap_or_default();
+        assert!(
+            notice.contains("paste"),
+            "the page said what happened: {notice}"
+        );
+        // Nothing selected, so a release copies nothing and says nothing.
+        assert!(matches!(app.code_release(), (false, None)));
     }
 }

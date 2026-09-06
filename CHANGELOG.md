@@ -28,6 +28,16 @@ out for themselves.
 
 ## Unreleased
 
+- The Code page (`Alt+c`) can edit and save the file it is showing. `Enter`
+  on the body starts editing and the header says `EDIT`; `Ctrl+s` or `F2`
+  saves, keeping the file's own line endings and its trailing-newline habit;
+  `F4` copies the selection or the whole file; a paste lands in the editor;
+  the mouse selects text in the document and a release copies it; `Esc`
+  leaves the editor and a second `Esc` leaves the page, with one warning if
+  the buffer is unsaved. A file whose bytes the page cannot reproduce exactly
+  (a TAB or a control byte in the source, mixed line terminators, or a file
+  rewritten underneath the read) opens read-only and says why in its header.
+
 - Up and Down in the input box walk the lines this session submitted, newest
   first, and Down past the newest brings back what was being typed. Blank
   lines and an immediate repeat are not kept, the ring holds the last 200,

@@ -1262,6 +1262,10 @@ impl LineSource {
                     MouseEventKind::Drag(MouseButton::Left)
                         if !mouse.modifiers.contains(KeyModifiers::SHIFT) =>
                     {
+                        // The page first, as the press was.
+                        if thread_frame.code_drag(mouse.column, mouse.row) {
+                            continue;
+                        }
                         if !thread_frame.bar_drag(mouse.row) {
                             thread_frame.select_extend(mouse.column, mouse.row);
                         }
@@ -1273,6 +1277,9 @@ impl LineSource {
                     // a reader does not expect one.
                     #[allow(clippy::collapsible_match)]
                     MouseEventKind::Up(MouseButton::Left) => {
+                        if thread_frame.code_release() {
+                            continue;
+                        }
                         if !thread_frame.bar_release() {
                             thread_frame.select_finish();
                         }
@@ -1285,6 +1292,12 @@ impl LineSource {
                 // afterwards for the same reason typing syncs it — a paste
                 // beginning `/` is a typed `/` as far as the menu is concerned.
                 Ok(Event::Paste(text)) => {
+                    // The open page first, for the same reason `run_page_key`
+                    // is first: with a page over the transcript the one-line
+                    // input box is not what the paste was aimed at.
+                    if thread_frame.code_paste(&text) {
+                        continue;
+                    }
                     let mut ed = thread_editor.lock().unwrap_or_else(|e| e.into_inner());
                     let mut m = thread_menu.lock().unwrap_or_else(|e| e.into_inner());
                     on_paste(&mut ed, &mut m, thread_frame.as_ref(), &text);

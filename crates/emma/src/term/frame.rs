@@ -1505,6 +1505,61 @@ impl Frame {
         handled
     }
 
+    /// Bracketed-paste text offered to the open Code page. `false` when the
+    /// page is closed, so the input box keeps every paste it used to get.
+    pub fn code_paste(self: &Arc<Self>, text: &str) -> bool {
+        let (handled, job) = {
+            let mut inner = self.lock();
+            let out = if let Ui::Full(app) = &mut inner.ui {
+                app.code_paste(text)
+            } else {
+                (false, None)
+            };
+            if out.0 {
+                synchronized(|| inner.paint());
+            }
+            out
+        };
+        if let Some(job) = job {
+            self.run_code_job(job);
+        }
+        handled
+    }
+
+    /// A drag with the button down over the Code page's document.
+    pub fn code_drag(&self, col: u16, row: u16) -> bool {
+        let mut inner = self.lock();
+        let handled = match &mut inner.ui {
+            Ui::Full(app) => app.code_drag(col, row),
+            _ => false,
+        };
+        if handled {
+            synchronized(|| inner.paint());
+        }
+        handled
+    }
+
+    /// The button coming up over the Code page: the selection goes to the
+    /// clipboard. `false` when the page is closed or nothing was selected.
+    pub fn code_release(self: &Arc<Self>) -> bool {
+        let (handled, job) = {
+            let mut inner = self.lock();
+            let out = if let Ui::Full(app) = &mut inner.ui {
+                app.code_release()
+            } else {
+                (false, None)
+            };
+            if out.0 {
+                synchronized(|| inner.paint());
+            }
+            out
+        };
+        if let Some(job) = job {
+            self.run_code_job(job);
+        }
+        handled
+    }
+
     /// A left press while the Code page is open: the tabs and the [Editor]
     /// button. Same one-dispatch rule as the keys.
     pub fn code_click(self: &Arc<Self>, col: u16, row: u16) -> bool {
