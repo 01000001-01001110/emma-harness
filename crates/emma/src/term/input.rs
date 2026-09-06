@@ -30,8 +30,9 @@
 //! # What raw mode costs, and what it buys
 //!
 //! It costs the line discipline: backspace, `Ctrl-U` and the rest are
-//! implemented here rather than by the terminal, and there is no history and no
-//! completion. It buys the only thing that made the viewport possible — the
+//! implemented here rather than by the terminal. History is the arrows over
+//! the lines this process submitted (see [`HISTORY`]), and completion is the
+//! `/` menu's Tab. It buys the only thing that made the viewport possible — the
 //! terminal no longer echoes anything, so nothing lands on rows ratatui thinks
 //! it owns. It also means **Ctrl-C is a keystroke rather than a signal**, and
 //! delivering it is this file's job: see [`Action::Interrupt`].
@@ -211,11 +212,29 @@ pub fn on_paste(ed: &mut Editor, menu: &mut super::menu::Menu, surface: &dyn Sur
     surface.draw();
 }
 
-/// The line being typed.
+/// How many submitted lines the arrows can reach.
+///
+/// A ring rather than a session-length log: the arrows are for the line you
+/// typed a minute ago, and a buffer that grows without a bound is a buffer
+/// that eventually holds a pasted file.
+pub const HISTORY: usize = 200;
+
+/// The line being typed, and the lines that were.
 #[derive(Debug, Default, Clone)]
 pub struct Editor {
     chars: Vec<char>,
     cursor: usize,
+    /// Submitted lines, oldest first. Written by [`Self::key`] on Enter and
+    /// by nothing else, so what the arrows walk is exactly what was sent.
+    history: Vec<String>,
+    /// How far back the arrows have walked: `None` is the line being typed,
+    /// `Some(i)` is `history[i]`. Reset by every submit and by every edit
+    /// that is not an arrow.
+    recall: Option<usize>,
+    /// What was in the box when the walk started, so Down can put it back. A
+    /// draft that Up threw away would be the same theft the drain is careful
+    /// not to commit.
+    draft: String,
 }
 
 impl Editor {
@@ -270,6 +289,70 @@ impl Editor {
     pub fn clear(&mut self) {
         self.chars.clear();
         self.cursor = 0;
+    }
+    /// File a submitted line under the arrows.
+    ///
+    /// Blank lines and an immediate repeat are dropped: pressing Enter twice
+    /// on the same goal should not cost two presses of Up to walk past.
+    fn remember(&mut self, line: &str) {
+        self.recall = None;
+        self.draft.clear();
+        if line.trim().is_empty() || self.history.last().map(String::as_str) == Some(line) {
+            return;
+        }
+        self.history.push(line.to_string());
+        if self.history.len() > HISTORY {
+            self.history.remove(0);
+        }
+    }
+
+    /// Put `text` in the box without touching the history walk.
+    fn show(&mut self, text: &str) {
+        self.chars = text.chars().collect();
+        self.cursor = self.chars.len();
+    }
+
+    /// Up: one line further back, stopping at the oldest.
+    fn recall_back(&mut self) -> Action {
+        if self.history.is_empty() {
+            return Action::Ignore;
+        }
+        let next = match self.recall {
+            None => {
+                self.draft = self.text();
+                self.history.len() - 1
+            }
+            Some(0) => return Action::Ignore,
+            Some(i) => i - 1,
+        };
+        self.recall = Some(next);
+        let line = self.history[next].clone();
+        self.show(&line);
+        Action::Edit
+    }
+
+    /// Down: back towards the draft, and then to the draft itself.
+    fn recall_forward(&mut self) -> Action {
+        let Some(i) = self.recall else {
+            return Action::Ignore;
+        };
+        if i + 1 < self.history.len() {
+            self.recall = Some(i + 1);
+            let line = self.history[i + 1].clone();
+            self.show(&line);
+        } else {
+            self.recall = None;
+            let draft = std::mem::take(&mut self.draft);
+            self.show(&draft);
+        }
+        Action::Edit
+    }
+
+    /// What the arrows can reach, oldest first. For tests and for nothing
+    /// else: the box is the only thing the rest of Emma reads.
+    #[cfg(test)]
+    pub fn history(&self) -> &[String] {
+        &self.history
     }
 
     /// Text arriving as one lump from the terminal's clipboard.
@@ -357,6 +440,7 @@ impl Editor {
             }
             KeyCode::Char('u') if ctrl => {
                 self.clear();
+                self.recall = None;
                 Action::Edit
             }
             KeyCode::Char('w') if ctrl => {
@@ -383,6 +467,7 @@ impl Editor {
             KeyCode::Char(c) => {
                 self.chars.insert(self.cursor, c);
                 self.cursor += 1;
+                self.recall = None;
                 Action::Edit
             }
             // **Word motion, and the reason all four arms are here rather than
@@ -451,9 +536,16 @@ impl Editor {
                 self.cursor = self.chars.len();
                 Action::Edit
             }
+            // History. The `/` menu takes the arrows while it is open, ahead
+            // of this function in the reader, so the precedence rule is
+            // structural rather than a check written twice: menu, then
+            // history.
+            KeyCode::Up => self.recall_back(),
+            KeyCode::Down => self.recall_forward(),
             KeyCode::Enter => {
                 let line = self.text();
                 self.clear();
+                self.remember(&line);
                 Action::Submit(line)
             }
             _ => Action::Ignore,
@@ -2183,5 +2275,79 @@ mod tests {
             call < pane,
             "the pages must be offered the key before the pane layer"
         );
+    }
+
+    /// There was no history at all: the module doc said so in as many words,
+    /// and the arrows returned `Ignore`.
+    #[test]
+    fn the_arrows_walk_submitted_lines_and_come_back_to_the_draft() {
+        let mut ed = Editor::default();
+        typed(&mut ed, "first goal");
+        assert_eq!(
+            ed.key(press(KeyCode::Enter)),
+            Action::Submit("first goal".into())
+        );
+        typed(&mut ed, "second goal");
+        assert_eq!(
+            ed.key(press(KeyCode::Enter)),
+            Action::Submit("second goal".into())
+        );
+        // A draft in the box when the walk starts.
+        typed(&mut ed, "dr");
+        assert_eq!(ed.key(press(KeyCode::Up)), Action::Edit);
+        assert_eq!(ed.text(), "second goal");
+        assert_eq!(ed.key(press(KeyCode::Up)), Action::Edit);
+        assert_eq!(ed.text(), "first goal");
+        // The oldest line is a floor, not a wrap.
+        assert_eq!(ed.key(press(KeyCode::Up)), Action::Ignore);
+        assert_eq!(ed.text(), "first goal");
+        assert_eq!(ed.key(press(KeyCode::Down)), Action::Edit);
+        assert_eq!(ed.text(), "second goal");
+        assert_eq!(ed.key(press(KeyCode::Down)), Action::Edit);
+        assert_eq!(ed.text(), "dr", "the draft came back");
+        assert_eq!(ed.key(press(KeyCode::Down)), Action::Ignore);
+    }
+
+    /// Blank lines and immediate repeats are not history: pressing Enter
+    /// twice on one goal must not cost two presses of Up to walk past.
+    #[test]
+    fn the_history_drops_blanks_and_immediate_repeats() {
+        let mut ed = Editor::default();
+        for line in ["a goal", "a goal", "   ", "another"] {
+            typed(&mut ed, line);
+            ed.key(press(KeyCode::Enter));
+        }
+        assert_eq!(ed.history(), ["a goal".to_string(), "another".to_string()]);
+    }
+
+    /// With no history the arrows are still nothing, so a fresh session's
+    /// box behaves exactly as it always did.
+    #[test]
+    fn the_arrows_are_inert_before_anything_has_been_submitted() {
+        let mut ed = Editor::default();
+        typed(&mut ed, "typing");
+        assert_eq!(ed.key(press(KeyCode::Up)), Action::Ignore);
+        assert_eq!(ed.key(press(KeyCode::Down)), Action::Ignore);
+        assert_eq!(ed.text(), "typing");
+    }
+
+    /// Typing after a recall ends the walk: the next Up starts again from the
+    /// newest line rather than continuing from where the walk was, and the
+    /// edited line is the draft it comes back to.
+    #[test]
+    fn an_edit_ends_the_walk() {
+        let mut ed = Editor::default();
+        for line in ["one", "two"] {
+            typed(&mut ed, line);
+            ed.key(press(KeyCode::Enter));
+        }
+        ed.key(press(KeyCode::Up));
+        ed.key(press(KeyCode::Up));
+        assert_eq!(ed.text(), "one");
+        typed(&mut ed, "!");
+        assert_eq!(ed.key(press(KeyCode::Up)), Action::Edit);
+        assert_eq!(ed.text(), "two", "the walk restarted from the newest line");
+        ed.key(press(KeyCode::Down));
+        assert_eq!(ed.text(), "one!", "the edited line is the draft");
     }
 }

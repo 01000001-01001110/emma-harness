@@ -203,7 +203,7 @@ pub const SECTIONS: &[Section] = &[
             fixed("Ctrl-Left, Ctrl-Right", "move the cursor a word at a time."),
             fixed("Ctrl-a, Ctrl-e", "start and end of the line."),
             fixed("Tab", "accept the highlighted command, and only while the command menu is open. With the menu shut it does nothing."),
-            fixed("Up, Down", "move the selection while the command menu is open. There is no history recall: the arrows belong to whatever list is showing."),
+            fixed("Up, Down", "move the selection while the command menu is open; otherwise walk the lines this session submitted, newest first, and Down past the newest brings back what was being typed."),
             fixed("Esc", "cancel the thing in front of you, one layer at a time: the command menu first, then an open page. The text in the box is left alone: Esc is for the popup, not for the sentence behind it."),
             fixed("Ctrl-D", "end the session, on an empty box only. With text in it, nothing."),
         ],

@@ -28,6 +28,11 @@ out for themselves.
 
 ## Unreleased
 
+- Up and Down in the input box walk the lines this session submitted, newest
+  first, and Down past the newest brings back what was being typed. Blank
+  lines and an immediate repeat are not kept, the ring holds the last 200,
+  and the `/` menu still owns the arrows while it is open.
+
 - Typing while a goal runs now steers it. Ordinary words typed in the frame
   with a goal up are queued, the transcript says so at once, and the loop
   hands them to the model as your own mid-task instruction at its next turn.
