@@ -904,6 +904,10 @@ impl LineSource {
                     }
                     // A release that ends a scrollbar drag is not a selection
                     // being finished, so nothing goes to the clipboard for it.
+                    // Clippy (1.98) wants `bar_release` folded into the arm's
+                    // guard; it has a side effect, and a guard is the one place
+                    // a reader does not expect one.
+                    #[allow(clippy::collapsible_match)]
                     MouseEventKind::Up(MouseButton::Left) => {
                         if !thread_frame.bar_release() {
                             thread_frame.select_finish();
