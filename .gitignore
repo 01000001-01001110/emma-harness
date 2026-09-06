@@ -84,17 +84,21 @@ blog/
 # meant every one of those citations pointed at nothing a cloner could open.
 docs/AUTHORITY.md
 
-# No images in the repository, by the owner's decision on 2026-09-01. The
-# history was rewritten to remove every one that had ever been committed --
-# four TUI mockups, a blog screenshot, an accidental PowerShell binary cache --
-# along with `notes/`, `verification/` and `blog/`. Re-adding one puts it back
-# in a history that was cleaned to be publishable.
+# No images in the repository, by the owner's decision on 2026-09-01, with one
+# exception he made on 2026-09-05. The history was rewritten to remove every
+# image that had ever been committed -- four TUI mockups, a blog screenshot,
+# an accidental PowerShell binary cache -- along with `notes/`, `verification/`
+# and `blog/`. Adding one puts it in a history that was cleaned to be
+# publishable, so the rule stays and the exception is named.
 #
-# `docs/img/emma-session.png` is kept on disk and ignored; it is the session
-# screenshot the README used to open with.
+# The exception: `docs/img/emma-session.png`, the screenshot the README opens
+# with. Captured 2026-09-05 from a real Windows Terminal window, Emma running
+# in a scratch directory against a local Ollama model, with nothing personal in
+# frame. Replace it by recapturing; do not add a second image without a ruling.
 *.png
 *.jpg
 *.jpeg
+!docs/img/emma-session.png
 *.gif
 *.webp
 docs/img/

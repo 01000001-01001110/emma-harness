@@ -9,6 +9,8 @@ $ emma
 > port the auth middleware to the new session API and make the tests pass
 ```
 
+![Emma in a terminal: a goal, one Read call, the answer, and the goal marked complete](docs/img/emma-session.png)
+
 ## What it is
 
 **A loop.** Send the conversation to a model, run whatever tools it asks for,
