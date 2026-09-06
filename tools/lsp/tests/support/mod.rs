@@ -84,7 +84,7 @@ pub enum Publishes {
 pub struct Fake {
     indexing: Indexing,
     publishes: Publishes,
-    lowercase_uris: bool,
+    respell_uris: bool,
     responses: HashMap<String, Value>,
     /// Everything the client sent, for the tests that care that a `didOpen`
     /// happened, or that it happened exactly once.
@@ -96,7 +96,7 @@ impl Fake {
         Self {
             indexing,
             publishes: Publishes::Nothing,
-            lowercase_uris: false,
+            respell_uris: false,
             responses: HashMap::new(),
             sent: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
@@ -111,14 +111,37 @@ impl Fake {
     /// than echoing back the one it was handed.
     ///
     /// **The one thing a fake gets wrong for free.** rust-analyzer lower-cases
-    /// the Windows drive letter in everything it sends — `file:///c:/…` for the
-    /// `file:///C:/…` it was given — and a fake that replies with the client's
+    /// the Windows drive letter in everything it sends, `file:///c:/…` for the
+    /// `file:///C:/…` it was given, and a fake that replies with the client's
     /// own string makes the two spellings identical inside the suite. Measured
     /// 2026-09-06: the real server published four times and the tool reported
     /// silence, over a map lookup that every fake test agreed worked.
+    ///
+    /// **The respelling is the platform's own, and that is load-bearing.** This
+    /// helper lower-cased the whole URI until 2026-09-06, which is right on
+    /// Windows and wrong everywhere else: a unix path is case-sensitive, so a
+    /// lower-cased one names a different file and `published_key` is correct to
+    /// refuse it. On unix the respelling is percent-encoding instead, which is
+    /// the thing servers there actually vary: the escape is optional, the hex
+    /// case is unspecified, and a client that compares URI strings breaks on
+    /// both. Either way the test asks the same question, which is that the
+    /// comparison is not a string comparison.
     pub fn spelling_uris_as_a_real_server_does(mut self) -> Self {
-        self.lowercase_uris = true;
+        self.respell_uris = true;
         self
+    }
+
+    /// The URI a real server would send back for `uri`, on this platform.
+    fn respelled(uri: &str) -> String {
+        if cfg!(windows) {
+            // The drive letter only. Lower-casing the rest would be a claim
+            // about the file system that Windows happens to forgive and that
+            // no server makes.
+            return uri.to_lowercase();
+        }
+        // Every `-` written as its escape, in lower-case hex. `doc::from_uri`
+        // decodes it; a lookup keyed on the raw string does not.
+        uri.replace('-', "%2d")
     }
 
     pub fn answers(mut self, method: &str, result: Value) -> Self {
@@ -144,7 +167,7 @@ impl Fake {
         let sent = self.sent.clone();
         let indexing = self.indexing;
         let publishes = self.publishes;
-        let lowercase_uris = self.lowercase_uris;
+        let respell_uris = self.respell_uris;
         let responses = self.responses;
         tokio::spawn(async move {
             let mut reader = BufReader::new(server_read);
@@ -235,8 +258,8 @@ impl Fake {
                         .as_str()
                         .unwrap_or_default()
                         .to_string();
-                    if lowercase_uris {
-                        uri = uri.to_lowercase();
+                    if respell_uris {
+                        uri = Self::respelled(&uri);
                     }
                     let items = match &publishes {
                         Publishes::Nothing => None,
