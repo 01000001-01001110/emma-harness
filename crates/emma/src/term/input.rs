@@ -532,6 +532,63 @@ pub enum PaneKey {
     Sidebar,
 }
 
+/// The pages that take keys while they are open, in the order the reader
+/// offers a key to them.
+///
+/// **A seam, and the reason it exists is that the three methods behind it had
+/// no caller.** `Frame::{harness_key, memory_key, settings_key}` were public,
+/// tested at the `App` level, and nothing in the reader thread called any of
+/// them, so at runtime every page was read-only: `Alt+h` opened the Harness
+/// page and `j` did nothing on it. A whole-tree search for the three names
+/// found only their definitions and their tests. The fork found the identical
+/// defect on its side and wrote the same block; this is that block, behind a
+/// trait so the *order* can be tested without a terminal, which `Frame`
+/// cannot be built without.
+///
+/// Order is part of the contract. Help sits on top because it is the one page
+/// that can be opened over any other. A page that is not open answers `false`
+/// and costs nothing; chords and releases fall through every page to the
+/// global layer below, which is what keeps `Alt+,` able to close the page it
+/// opened.
+pub trait PageKeys {
+    /// The Help page, once it exists. `false` until then.
+    fn help_key(&self, key: KeyEvent) -> bool;
+    fn harness_key(&self, key: KeyEvent) -> bool;
+    fn memory_key(&self, key: KeyEvent) -> bool;
+    /// The Code page, once it exists. `false` until then.
+    fn code_key(&self, key: KeyEvent) -> bool;
+    fn settings_key(&self, key: KeyEvent) -> bool;
+}
+
+impl PageKeys for Arc<Frame> {
+    fn help_key(&self, _key: KeyEvent) -> bool {
+        false
+    }
+    fn harness_key(&self, key: KeyEvent) -> bool {
+        Frame::harness_key(self, key)
+    }
+    fn memory_key(&self, key: KeyEvent) -> bool {
+        Frame::memory_key(self, key)
+    }
+    fn code_key(&self, _key: KeyEvent) -> bool {
+        false
+    }
+    fn settings_key(&self, key: KeyEvent) -> bool {
+        Frame::settings_key(self, key)
+    }
+}
+
+/// Offer one key to the open pages, top page first. `true` when a page took
+/// it, in which case the reader is done with the key; `false` hands it to the
+/// pane layer.
+pub fn run_page_key<P: PageKeys>(pages: &P, key: KeyEvent) -> bool {
+    pages.help_key(key)
+        || pages.harness_key(key)
+        || pages.memory_key(key)
+        || pages.code_key(key)
+        || pages.settings_key(key)
+}
+
 /// Which keys the panes take, and which fall through to the editor.
 ///
 /// - `PgUp`/`PgDn` and `Ctrl-↑`/`Ctrl-↓` are unconditionally the
@@ -679,6 +736,14 @@ impl LineSource {
             match event::read() {
                 Err(_) => break,
                 Ok(Event::Key(key)) => {
+                    // The open page's keys, before the pane layer. Reader-local
+                    // like the pane keys: a page mutates through the frame and
+                    // nothing here enters the line channel, so the drain
+                    // guarantee is untouched. See [`run_page_key`] for why this
+                    // line was missing and what it cost.
+                    if run_page_key(&thread_frame, key) {
+                        continue;
+                    }
                     // The pane keys act first and locally — they mutate view
                     // state through the frame and never enter the line
                     // channel, so the drain guarantee cannot be touched by
@@ -1832,5 +1897,84 @@ mod tests {
         menu.dismiss(&ed.text());
         assert!(!menu.is_open());
         assert_eq!(ed.text(), "/re", "Esc took the line with the menu");
+    }
+
+    /// A page double that records which pages were offered the key, in order,
+    /// and answers `true` from one of them.
+    struct Pages {
+        answers_from: Option<&'static str>,
+        offered: std::cell::RefCell<Vec<&'static str>>,
+    }
+
+    impl Pages {
+        fn answering(page: Option<&'static str>) -> Self {
+            Self {
+                answers_from: page,
+                offered: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+        fn offer(&self, page: &'static str) -> bool {
+            self.offered.borrow_mut().push(page);
+            self.answers_from == Some(page)
+        }
+    }
+
+    impl PageKeys for Pages {
+        fn help_key(&self, _: KeyEvent) -> bool {
+            self.offer("help")
+        }
+        fn harness_key(&self, _: KeyEvent) -> bool {
+            self.offer("harness")
+        }
+        fn memory_key(&self, _: KeyEvent) -> bool {
+            self.offer("memory")
+        }
+        fn code_key(&self, _: KeyEvent) -> bool {
+            self.offer("code")
+        }
+        fn settings_key(&self, _: KeyEvent) -> bool {
+            self.offer("settings")
+        }
+    }
+
+    /// Every page is offered the key, in the documented order, when none of
+    /// them is open. Removing any arm from `run_page_key` fails this.
+    #[test]
+    fn a_key_is_offered_to_every_page_in_order_when_none_is_open() {
+        let pages = Pages::answering(None);
+        assert!(!run_page_key(&pages, KeyEvent::from(KeyCode::Char('j'))));
+        assert_eq!(
+            *pages.offered.borrow(),
+            vec!["help", "harness", "memory", "code", "settings"]
+        );
+    }
+
+    /// The first page to take the key ends the offer: the pages below it never
+    /// see the key, and the reader is told it was handled.
+    #[test]
+    fn the_page_that_takes_the_key_stops_the_offer() {
+        let pages = Pages::answering(Some("memory"));
+        assert!(run_page_key(&pages, KeyEvent::from(KeyCode::Char('j'))));
+        assert_eq!(*pages.offered.borrow(), vec!["help", "harness", "memory"]);
+    }
+
+    /// The reader thread calls the dispatcher. This is the half a double cannot
+    /// prove: `Frame` needs a terminal to exist, so the call site is checked in
+    /// the source. Delete the call and this fails, which is the whole defect
+    /// this seam was written to make impossible to reintroduce silently.
+    #[test]
+    fn the_raw_reader_offers_keys_to_the_pages() {
+        let src = include_str!("input.rs");
+        let raw = src.find("pub fn raw(").expect("the raw reader");
+        let call = src[raw..]
+            .find("if run_page_key(&thread_frame, key)")
+            .expect("the raw reader does not offer keys to the pages");
+        let pane = src[raw..]
+            .find("pane_key(key, ed.is_empty()")
+            .expect("the pane layer");
+        assert!(
+            call < pane,
+            "the pages must be offered the key before the pane layer"
+        );
     }
 }
