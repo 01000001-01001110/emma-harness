@@ -47,6 +47,19 @@ USAGE
   emma config check            load .emma/ (or .claude/) and report; no model call
   emma agents                  what each subagent type has cost and produced,
                                across every recorded session; no model call
+  emma export-training [<id>] [--out <PATH>] [--min-ending <any|finished>]
+                               organise the recorded sessions into training
+                               material: one JSONL record per assistant turn
+                               carrying the context that turn was sent, its
+                               thinking as its own field, its visible answer
+                               and its tool round-trips. The transcripts are
+                               read and never written. Writes local files only,
+                               nothing is uploaded anywhere, and re-running it
+                               rewrites the same bytes rather than appending.
+                               Default output ~/.emma/training. Capture also
+                               happens by itself at the end of every goal
+                               unless training_capture is false in
+                               ~/.emma/settings.json; no model call
   emma verify [--rows <ids>] [--limit <n>] [--dry-run]
                                send an independent reviewer at each outstanding
                                row of verification/parity/ledger.json, briefed
@@ -82,6 +95,11 @@ OPTIONS
                                120000). Per session, not per goal.
       --no-cache               do not send cache breakpoints.
       --session-dir <PATH>     where the JSONL transcript is written.
+      --out <PATH>             with export-training: where the records go.
+      --min-ending <WHICH>     with export-training: `any` (the default, and
+                               failed trajectories are training material too)
+                               or `finished`, which keeps only goals that
+                               ended done or answered.
       --dangerously-skip-permissions
                                run every tool without asking. Loud, flag-only,
                                and never settable from configuration.
@@ -158,6 +176,13 @@ pub enum Command {
         goal: Option<String>,
     },
     ConfigCheck,
+    /// Organise the recorded sessions into training records. Reads the
+    /// transcripts and writes local files; calls no model, exactly as
+    /// `config check` does not. `session` is an id when one was named, and
+    /// every session in the store otherwise.
+    ExportTraining {
+        session: Option<String>,
+    },
     /// Dispatch independent reviewers at the parity ledger's outstanding rows.
     ///
     /// **The one command here that spends money on purpose**, which is why
@@ -199,6 +224,11 @@ pub struct Opts {
     pub key: Option<String>,
     pub caching: Caching,
     pub session_dir: Option<PathBuf>,
+    /// Only `export-training` reads these two. They live here rather than in
+    /// the command for the reason `key` does: one flag, parsed in one place,
+    /// whatever the command in front of it turns out to be.
+    pub out: Option<PathBuf>,
+    pub min_ending: Option<String>,
     pub budgets: Budgets,
 }
 
@@ -212,6 +242,8 @@ impl Default for Opts {
             key: None,
             caching: Caching::On,
             session_dir: None,
+            out: None,
+            min_ending: None,
             budgets: Budgets::default(),
         }
     }
@@ -376,6 +408,8 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
             // lands, rather than failing on an unknown option.
             "--no-verify" | "--force" => {}
             "--session-dir" => opts.session_dir = Some(PathBuf::from(value("--session-dir")?)),
+            "--out" => opts.out = Some(PathBuf::from(value("--out")?)),
+            "--min-ending" => opts.min_ending = Some(value("--min-ending")?),
             "--max-iterations" => {
                 opts.budgets.max_iterations = number(&value("--max-iterations")?)?
             }
@@ -420,6 +454,14 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
                 command = Some(Command::SetModel(String::new()))
             }
             "agents" if fresh(&command, &words) => command = Some(Command::Agents),
+            // The same `sess-` prefix rule `--resume` uses, and for the same
+            // reason: a second flag for the id would make the common spelling
+            // the one that needs explaining.
+            "export-training" if fresh(&command, &words) => {
+                let named = it.peek().is_some_and(|a| a.starts_with("sess-"));
+                let session = if named { it.next() } else { None };
+                command = Some(Command::ExportTraining { session });
+            }
             "verify" if fresh(&command, &words) => {
                 command = Some(Command::Verify {
                     rows: Vec::new(),
@@ -699,6 +741,9 @@ pub fn typed_at_the_prompt(line: &str) -> Typed {
         // name is. No English sentence starts with `set-provider`.
         (Some("set-provider"), _) => "set-provider",
         (Some("set-model"), _) => "set-model",
+        // No English sentence starts with `export-training`, so the hyphenated
+        // name is what keeps a goal safe here rather than the argument count.
+        (Some("export-training"), _) => "export-training",
         (Some("config"), 2) if words[1].eq_ignore_ascii_case("check") => "config check",
         (Some("agents"), 1) => "agents",
         // Everything else is a goal, including `init the database`, `model the
@@ -1170,6 +1215,47 @@ mod tests {
         // this also pins that `--help` still carries it.
         assert!(help.contains(&session), "help and session_help diverged");
         assert!(session.contains("/exit"));
+    }
+
+    /// The export subcommand's whole surface: the bare form, a named session,
+    /// the two flags, and the rule that a sentence starting with the word is
+    /// still a goal.
+    #[test]
+    fn export_training_takes_a_session_an_out_dir_and_an_ending_filter() {
+        assert_eq!(
+            p(&["export-training"]).unwrap().command,
+            Command::ExportTraining { session: None }
+        );
+        let cli = p(&[
+            "export-training",
+            "sess-1787791338091-15534",
+            "--out",
+            "/tmp/t",
+            "--min-ending",
+            "finished",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.command,
+            Command::ExportTraining {
+                session: Some("sess-1787791338091-15534".into())
+            }
+        );
+        assert_eq!(
+            cli.opts.out.as_deref(),
+            Some(std::path::Path::new("/tmp/t"))
+        );
+        assert_eq!(cli.opts.min_ending.as_deref(), Some("finished"));
+
+        // Only in first position, the rule every subcommand here follows.
+        assert_eq!(
+            p(&["explain", "export-training"]).unwrap().command,
+            Command::Run(Some("explain export-training".into()))
+        );
+        // And the help says it, including that it writes local files only.
+        assert!(help().contains("emma export-training"));
+        assert!(help().contains("--min-ending"));
+        assert!(help().contains("nothing is uploaded"));
     }
 
     #[test]

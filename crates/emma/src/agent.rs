@@ -1556,6 +1556,13 @@ impl<'a> Agent<'a> {
         // goal's own message list — the opening, the turns, the tool results —
         // rather than a summary of it. The summary is what compaction makes
         // later, out of exactly these two fields, and only if it has to.
+        // The standing toggle's seam, and the reason it is one call here: the
+        // transcript for this goal is complete exactly now, and every other
+        // place that knows a goal ended is a caller that would have to be told
+        // twice. The loop says the event happened; another module decides
+        // what to do about it, and nothing about training material is decided
+        // in this file.
+        self.keep_training_material();
         self.last_ending = Some(outcome.ending.as_str());
         self.chapters.push(Chapter {
             goal: goal.text.clone(),
@@ -2877,6 +2884,29 @@ const COMPACTED_NOTE: &str = "[Summarised to save context. The tool calls from t
      Read anything you need again rather than recalling it.]";
 
 impl Agent<'_> {
+    /// Refresh this session's training export, if the toggle allows it.
+    ///
+    /// Absent means on (see `Settings::training_capture`), so the check is
+    /// what turns it off rather than what turns it on. Nothing leaves the
+    /// machine and nothing is written into the sessions directory: the
+    /// exporter reads the transcript and writes under `~/.emma/training`, or
+    /// beside a session that lives elsewhere, which is what keeps a test's
+    /// temporary session from writing into a real home.
+    ///
+    /// Failure is silent on purpose. The goal has already finished and its
+    /// answer is already in the conversation; an unwritable export directory
+    /// is not a reason to interrupt the person who was asking about something
+    /// else.
+    fn keep_training_material(&self) {
+        let Some(home) = emma_llm::auth::home_dir() else {
+            return;
+        };
+        if !crate::settings::load(&home).capture_training() {
+            return;
+        }
+        crate::export::capture(&self.s.log.path(), Some(&home));
+    }
+
     /// Sample the project's task list after a tool ran, and record it if it
     /// moved.
     ///

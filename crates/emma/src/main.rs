@@ -67,6 +67,33 @@ fn main() -> Result<()> {
                 .or_else(|| SessionLog::default_dir(auth::home_dir().as_deref()));
             return emma::commands::agents(dir.as_deref(), &mut std::io::stdout());
         }
+        // Reads the transcripts and writes local files. No harness, no key, no
+        // model, no network: the same class as `agents` above, and the
+        // backfill half of the standing `training_capture` toggle.
+        Command::ExportTraining { session } => {
+            let home = auth::home_dir();
+            let dir = cli
+                .opts
+                .session_dir
+                .clone()
+                .or_else(|| SessionLog::default_dir(home.as_deref()));
+            let out = cli
+                .opts
+                .out
+                .clone()
+                .or_else(|| emma::export::default_out_dir(home.as_deref()));
+            let filter = match cli.opts.min_ending.as_deref() {
+                Some(which) => emma::export::Filter::parse(which)?,
+                None => emma::export::Filter::default(),
+            };
+            return emma::export::export(
+                dir.as_deref(),
+                out.as_deref(),
+                session.as_deref(),
+                filter,
+                &mut std::io::stdout(),
+            );
+        }
         _ => {}
     }
 
