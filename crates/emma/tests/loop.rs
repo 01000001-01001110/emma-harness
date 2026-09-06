@@ -104,6 +104,7 @@ async fn drive_goals(
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
     let mut out = Vec::new();
     for goal in goals {
@@ -357,6 +358,7 @@ async fn a_turn_cut_off_at_the_output_limit_is_reported() {
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
     agent.run_goal(&goal()).await;
 
@@ -419,6 +421,7 @@ async fn an_interrupt_reaches_a_tool_that_is_already_running() {
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
 
     let started = std::time::Instant::now();
@@ -605,7 +608,7 @@ async fn the_token_budget_stops_the_loop_and_the_run_is_charged_for_what_it_spen
     // The scar this is guarding: in tustle-agent a token count only reached the
     // log on a *completed* turn, so every abort was recorded at zero and
     // aborting became the cheapest way to spend money.
-    let records = SessionLog::read(log.path()).unwrap();
+    let records = SessionLog::read(&log.path()).unwrap();
     let spent: i64 = records
         .iter()
         .filter(|r| r["kind"] == "model_call")
@@ -942,7 +945,7 @@ async fn the_kick_fires_when_the_model_stops_without_claiming_completion() {
         seen.contains("make it work"),
         "the kick did not restate the goal: {seen}"
     );
-    let records = SessionLog::read(log.path()).unwrap();
+    let records = SessionLog::read(&log.path()).unwrap();
     assert!(records.iter().any(|r| r["kind"] == "kick"));
 }
 
@@ -1218,7 +1221,7 @@ async fn the_log_folds_back_to_the_conversation_that_was_held() {
 
     assert_eq!(out[0].ending, Ending::Done);
     assert_eq!(out[0].kicks, 1);
-    let folded = emma::session::fold(log.path()).unwrap();
+    let folded = emma::session::fold(&log.path()).unwrap();
     // Stated as a number as well as compared, so a fold that returned nothing
     // against a provider that was sent nothing could not pass.
     assert_eq!(folded.len(), 10, "{folded:#?}");
@@ -1258,7 +1261,7 @@ async fn the_fold_carries_a_finished_goal_forward_the_way_the_loop_does() {
 
     assert_eq!(out[0].ending, Ending::Done);
     assert_eq!(out[1].ending, Ending::Done);
-    let folded = emma::session::fold(log.path()).unwrap();
+    let folded = emma::session::fold(&log.path()).unwrap();
     // The first goal in full — opening and answer — then the second goal's
     // opening, its tool round-trip, and its answer.
     assert_eq!(folded.len(), 6, "{folded:#?}");
@@ -1487,6 +1490,7 @@ async fn a_ctrl_c_during_a_model_call_ends_the_goal_rather_than_hanging() {
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
 
     let out = tokio::time::timeout(Duration::from_secs(5), agent.run_goal(&goal()))
@@ -1539,6 +1543,7 @@ async fn a_ctrl_c_during_a_model_call_ends_the_goal_rather_than_hanging() {
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
     assert!(
         tokio::time::timeout(Duration::from_millis(400), agent.run_goal(&goal()))
@@ -1608,9 +1613,10 @@ async fn a_cancelled_tool_is_recorded_as_cancelled_and_a_finished_one_is_not() {
             caching: Caching::On,
             mode: Mode::Batch,
             web_search: false,
+            sampling: Default::default(),
         });
         let out = agent.run_goal(&goal()).await;
-        let kinds = SessionLog::read(log.path())
+        let kinds = SessionLog::read(&log.path())
             .unwrap()
             .iter()
             .map(|r| r["kind"].as_str().unwrap_or_default().to_string())
@@ -1894,6 +1900,7 @@ async fn compaction_fires_on_the_measured_request_rather_than_the_estimate() {
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
     agent.run_goal(&Goal::new("first goal")).await;
     // Nothing has been compacted yet: within the first goal there is no
@@ -1972,6 +1979,7 @@ async fn a_context_cap_of_zero_is_off_rather_than_a_cap_of_zero() {
             caching: Caching::On,
             mode: Mode::Batch,
             web_search: false,
+            sampling: Default::default(),
         });
         agent.run_goal(&Goal::new("first goal")).await;
         agent.run_goal(&Goal::new("second goal")).await;
@@ -2058,3 +2066,67 @@ async fn injected_context_reaches_the_model_in_front_of_the_users_words() {
 }
 
 // endregion: The guarantees nothing defended
+
+/// Plan mode is a posture the gate applies, and a refusal under it is an
+/// observation like any other denial: the goal goes on, the model is told in a
+/// block it can route on, and the session log names the mode as the decider.
+///
+/// The loop's arm is shared by every decider and branches on none of them, so
+/// this is the construction being tested rather than a new path: nothing else
+/// drives a goal in plan mode and reads `"by": "mode"` back out of the log.
+#[tokio::test]
+async fn a_plan_mode_refusal_is_an_observation_and_the_log_names_the_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = empty_harness(dir.path());
+    let (writer, writer_calls) = TestTool::ok("Writer", false);
+    let fake = Fake::new(vec![
+        call("Writer", json!({ "path": "a.txt" })),
+        text(
+            "I will not write in plan mode.
+
+GOAL COMPLETE",
+        ),
+    ]);
+    let log = SessionLog::open(dir.path(), "plan").unwrap();
+    let approvals = Approvals::new(Gate::Ask, Asker::Scripted(Default::default()));
+    approvals.set_mode(emma::approval::Mode::Plan);
+
+    let out = drive(
+        &root,
+        dir.path(),
+        registry(vec![writer]),
+        &approvals,
+        &fake,
+        budgets(),
+        &goal(),
+        &log,
+    )
+    .await;
+
+    assert_eq!(out.ending, Ending::Done, "a refusal must not end the goal");
+    assert_eq!(
+        writer_calls.load(Ordering::SeqCst),
+        0,
+        "plan mode let a write run"
+    );
+    let seen = fake.transcript();
+    assert!(seen.contains("is_error"), "{seen}");
+    let records = std::fs::read_to_string(log.path()).unwrap();
+    let denied = records
+        .lines()
+        .find(|l| l.contains("\"kind\":\"denied\"") || l.contains("\"kind\": \"denied\""))
+        .unwrap_or_else(|| {
+            panic!(
+                "no denied record in the log:
+{records}"
+            )
+        });
+    assert!(
+        denied.contains("\"mode\""),
+        "the log does not name the mode as the decider: {denied}"
+    );
+    assert!(
+        denied.contains("/mode assist"),
+        "the refusal does not say how to lift it: {denied}"
+    );
+}

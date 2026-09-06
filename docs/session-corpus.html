@@ -72,9 +72,12 @@
     data that exists in it on the owner's machine, counted rather than
     remembered, with the script attached so the count can be redone rather than
     believed. One backlog item turns on these numbers, and it spent its first
-    write-up blocked on the wrong one.
+    write-up blocked on the wrong one. It also covers the one thing that reads
+    the store for a purpose other than continuing a session: the training
+    exporter, which projects the same files into
+    <a href="#training">records a fine-tuning pipeline can read</a>.
   </p>
-  <span class="src">~/.emma/sessions/</span>
+  <span class="src">~/.emma/sessions/ &middot; crates/emma/src/export.rs</span>
 
   <div class="key">
     <div><span class="chip cert">certified</span> proven, and repeatable: a file, a command, a count you can redo</div>
@@ -264,6 +267,131 @@ max(r['input_tokens'] + r['cache_read_input_tokens'] + r['cache_creation_input_t
     change any of them.
   </p>
 
+  <h2 id="training">Training material, read out of the same files</h2>
+
+  <p>
+    <code>emma export-training [&lt;id&gt;] [--out &lt;PATH&gt;]
+    [--min-ending &lt;any|finished&gt;]</code> turns the store above into one JSONL
+    record per assistant turn, under the schema <code>emma.training.v1</code>.
+    With no id it sweeps every session; the output is
+    <code>~/.emma/training/&lt;id&gt;.training.jsonl</code>, or
+    <code>EMMA_TRAINING_DIR</code>, or whatever <code>--out</code> names. There
+    is also a standing half: a finished goal refreshes its own session's export,
+    unless <code>training_capture</code> is <code>false</code> in
+    <code>settings.json</code>. Absent means on, and nothing leaves the machine
+    either way &mdash; a local file built from a local transcript.
+  </p>
+
+  <p>
+    <strong>The session log is read and never written.</strong> The request was
+    to organise what is already recorded rather than to move it, so the
+    transcript stays the audit trail it was and this is a projection of it. Each
+    export is truncated and rewritten whole rather than appended to, so running
+    it twice cannot double anything, and a filter that keeps nothing removes an
+    earlier export rather than leaving two answers on disk.
+    <span class="chip cert">certified</span> 159 sessions on this box, 2026-09-06:
+    76 files written, 250 records, and
+    <code>sha256sum *.jsonl | sha256sum</code> over
+    <code>~/.emma/sessions</code> identical before and after
+    (<code>c88a6df279dd19ec…</code> both times). Repeat by taking that digest,
+    running the command, and taking it again.
+  </p>
+
+  <p>
+    <code>messages</code> is the ordinary chat format, so a supervised
+    fine-tuning pipeline reads it with no transformation: <code>messages</code>
+    is the prompt, and <code>thinking</code> plus <code>output</code> plus
+    <code>tool_calls</code> is the completion. Tool results travel inside a user
+    message as <code>tool_result</code> blocks, which is the shape the run
+    actually sent.
+  </p>
+
+  <p>
+    <code>context</code> is the field that keeps the rest honest, and it has
+    three values. <code>per_turn</code> means the message list is the one that
+    turn's request carried, rebuilt by <code>session::fold_prefixes</code>, the
+    same fold <code>--resume</code> spends. <code>per_turn_shed</code> is that
+    same guarantee over a conversation a shed had already emptied: faithful to
+    what was sent, and what was sent no longer holds the file contents and
+    command outputs it names, which a trainer wants to know before learning from
+    the turn. <code>partial</code> means the fold refused a damaged record
+    somewhere in the turn's prefix, so the list may not be what was sent and
+    nothing here can say how far off it is. An exporter that dropped the fold's
+    own damage report would be claiming <code>per_turn</code> over a fold that
+    had already said it could not.
+    <span class="chip test">tested</span> Both new values are proven against
+    records constructed to the shape <code>agent.rs</code> writes, with the
+    mutations run.
+    <span class="chip unv">unverified</span> Neither has been seen on a real
+    transcript: all 250 records in the sweep above say <code>per_turn</code>,
+    because this corpus holds no <code>shed</code> record and no damaged
+    <code>compacted</code> one. Settling it: drive a run past
+    <code>max_context</code> on a small local model until it sheds, export it,
+    and read the field; and truncate a session file mid-<code>compacted</code>
+    and export that.
+  </p>
+
+  <p>
+    <code>thinking</code> is its own field, and <code>null</code> is not
+    <code>""</code>. <code>thinking_recorded</code> separates "the model produced
+    no thinking" from "this log does not carry it": a turn whose
+    <code>raw_content</code> holds a thinking block is <code>true</code> even
+    when the block is empty, and a turn from a build written before
+    <code>raw_content</code> existed is <code>false</code> with
+    <code>thinking</code> null. An empty string is never invented for either.
+    <code>thinking_signed</code> says the block carried a provider signature; the
+    signature itself is not exported, because it validates a replay and is worth
+    nothing to a trainer.
+    <span class="chip cert">certified</span> A real Anthropic turn in this store
+    exports <code>thinking_recorded=true</code>,
+    <code>thinking_signed=true</code> and a <code>thinking</code> of length 0,
+    which is the distinction arriving in the wild rather than in a fixture. The
+    same sweep also shows <code>web_search_requests</code> as
+    <code>null</code> on an August session and <code>0</code> on a September one,
+    because the field did not exist when the older log was written; a
+    <code>0</code> there would have been a measurement nobody made.
+  </p>
+
+  <p>
+    A shed tool result exports as the text that was sent, not the text the
+    <code>tool_result</code> record holds. A shed that landed before the next
+    request means the model never saw the original, so exporting the original
+    would teach it from a message nobody sent; a shed after that request rewrites
+    nothing here, because by then the full output had gone out. The
+    <code>shed</code> boolean on each result says which of the two a consumer
+    has.
+    <span class="chip test">tested</span>
+    <span class="chip unv">unverified</span> Which of the two windows is the
+    right one is a judgement, not a fact: somebody building a corpus for
+    context-management training would want the final state instead. Only the
+    owner saying what the corpus is for settles it.
+  </p>
+
+  <p>
+    A record is one turn of one trajectory, and nothing in the file scores a
+    turn. <code>goal_ending</code> is the only outcome signal and it labels the
+    whole goal rather than the turn. <code>--min-ending finished</code> selects
+    on that recorded ending and on nothing else; the default is
+    <code>any</code>, because a trajectory that failed is training material too
+    and a corpus of nothing but successes cannot teach recovery.
+    <span class="chip unv">unverified</span> How many of the 250 records survive
+    <code>--min-ending finished</code> is unmeasured: the sweep above ran with
+    the default. One command settles it.
+  </p>
+  <span class="src">crates/emma/src/export.rs &mdash; module doc, <code>SCHEMA</code>, <code>Filter</code>, <code>export</code>, <code>export_session</code>, <code>capture</code>, <code>capture_out_dir</code>, <code>default_out_dir</code>; crates/emma/src/agent.rs &mdash; <code>keep_training_material</code>; crates/emma/src/cli.rs &mdash; <code>Command::ExportTraining</code></span>
+
+  <p>
+    One hazard the module carries in its own comment, because it has already
+    happened: the standing capture used to resolve its destination from the
+    process's home while reading a session log that was somewhere else, so an
+    integration test driving an <code>Agent</code> over a fixture log in a
+    temporary directory wrote into the developer's real
+    <code>~/.emma/training</code>. Twenty-one files named after test fixtures
+    were found in a real corpus on 2026-08-27. <code>capture_out_dir</code>
+    derives the destination from the session file's own store instead, which
+    removes the class rather than teaching each test to clean up after itself.
+  </p>
+
   <h2 id="reading">What these numbers are good for, and what they are not</h2>
 
   <p>
@@ -287,9 +415,14 @@ max(r['input_tokens'] + r['cache_read_input_tokens'] + r['cache_creation_input_t
   <p>
     The whole of <code>~/.emma/sessions/</code> as it stood at 2026-08-16 20:39
     EDT: file count, empty count, largest file, record count, per-kind
-    histogram, and the four queries the rest of the chapter cites. It covers no
-    source code. Everything here is a reading of data produced by the code the
-    other pages describe.
+    histogram, and the four queries the rest of the chapter cites. Since
+    2026-09-06 it also covers <code>crates/emma/src/export.rs</code>, the
+    training exporter, which is a projection of the same store: the schema, the
+    three <code>context</code> values, the thinking fields, the shed rule, the
+    filter, and both destinations. What it does not cover is the exporter's
+    internals below <code>export_session</code> &mdash;
+    <code>first_damaged_prefix</code> and the per-turn assembly are read only
+    through what they put in a record.
   </p>
 
   <h2 id="unverified">What is not verified here</h2>

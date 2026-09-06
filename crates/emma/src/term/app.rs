@@ -114,6 +114,28 @@ pub struct App {
     memory: Option<super::memory::MemoryView>,
     /// The Harness dashboard. Same law as memory: read fresh on open.
     harness: Option<super::harness::HarnessView>,
+    /// The Help page. `Some` while open, and it holds a scroll offset and
+    /// nothing else: the text is `term::help::SECTIONS` and is read at paint
+    /// time, so the page cannot show a stale copy of it.
+    help: Option<super::help::HelpView>,
+    /// The Code page, when it is the main-region occupant.
+    code: Option<super::code::CodeView>,
+    /// A line the Code page's chat strip composed, taken once by the reader
+    /// thread. Deliberately **not** a [`CodeJob`]: a job runs on the frame, and
+    /// this has to reach the thread that owns the line channel and the mid-goal
+    /// dispatch, because that is what makes a question from the strip the same
+    /// thing as a question somebody typed.
+    code_line: Option<String>,
+    /// The Code page's language-server bridge, once `main` has a runtime and a
+    /// pool to give it. `None` in every test and in the plain fallback, which
+    /// is why every path below is a `let ... else { return; }` rather than an
+    /// `expect`: no bridge means no decorations, never a panic.
+    code_lsp: Option<super::code_lsp::Handle>,
+    /// The buffer the bridge was last told about, so an unchanged buffer is not
+    /// re-sent on every keystroke that moved the cursor.
+    code_sent: Option<(String, u64)>,
+    /// The region the last paint gave the Code page, for `code::click`.
+    code_area: Rect,
     /// What SESSIONS is a list of, kept from `set_identity` so the list can be
     /// rebuilt later without the shell handing the same three facts in again.
     scope: Option<SessionScope>,
@@ -126,6 +148,31 @@ pub struct App {
     /// [`Regions::sidebar`] rather than a rectangle `sidebar.rs` hands back —
     /// that module renders and does not answer questions about itself.
     sessions_add: Option<Rect>,
+    /// Where the sidebar's clickable rows were on the last paint, straight off
+    /// [`sidebar::hits`] — the same arithmetic that drew them, not a second
+    /// copy of it. The `sessions_add` rule, one field per surface.
+    sidebar_hits: sidebar::Hits,
+    /// The session id behind each SESSIONS row, by the same index. Kept beside
+    /// the rows rather than inside [`sidebar::Row`] because the sidebar draws
+    /// text and must not carry an identifier it would be tempted to print: the
+    /// id is the shell's business, and a row that showed one would be showing
+    /// the private path this whole feature refuses to expose.
+    session_ids: Vec<String>,
+    /// Which SESSIONS row has the arrows, when the list has them at all.
+    /// `None` is the ordinary state: the arrows belong to the input box.
+    sessions_focus: Option<usize>,
+    /// Whether interface hints are on — `ui.hints`, resolved.
+    ///
+    /// Two fields hold this fact and they are two different things.
+    /// `settings.hints_on` is the Settings *row's* value, refreshed from disk
+    /// when the screen opens; this is what the interface actually obeys, and
+    /// it is what the shell hands in at startup with [`App::set_hints`]. They
+    /// are written together in [`App::settings_hints`], which is the one place
+    /// they could drift.
+    hints: bool,
+    /// The provider this session's client is really bound to, when the shell
+    /// has said so. See [`App::set_running_provider`].
+    provider_running: Option<String>,
     /// Where the chat pane was on the last paint — the message column, with
     /// the scrollbar's own column already taken out of it. The mouse hit-tests
     /// against this, so a click lands where the reader saw the text.
@@ -135,7 +182,12 @@ pub struct App {
     /// A live scrollbar drag: how many rows below the thumb's top the button
     /// went down, held for the length of the drag so the thumb stays under
     /// the pointer that picked it up. `None` when no drag is running.
-    bar_grab: Option<u16>,
+    /// The thumb press that started a drag: the scroll offset at the press
+    /// and the track row it landed on. Both, because the drag is anchored:
+    /// each move is a delta from the press rather than an absolute mapping of
+    /// the pointer onto the track, which is what made the first drag event
+    /// lurch the view by hundreds of rows.
+    bar_grab: Option<(usize, u16)>,
     /// The bottom-right notice: what a mouse selection just put on the
     /// clipboard, standing in the same slot as `↓ N rows below`.
     ///
@@ -159,6 +211,10 @@ pub struct App {
     /// `chat.rs` refuses for the label column, arriving here from the
     /// clipboard's direction.
     chat_cells: Vec<Vec<String>>,
+    /// The content row `chat_cells[0]` was painted from. A selection
+    /// names content rows, so reading it back out of the snapshot needs
+    /// the snapshot's own origin; see [`Self::record_cells`].
+    chat_cells_start: usize,
     /// The wiki root the open page reads from — the cwd `toggle_memory` was
     /// handed, kept so every action can re-open the same store.
     memory_cwd: String,
@@ -180,12 +236,69 @@ pub struct App {
     /// Where the Settings screen's controls were on the last paint — the
     /// harness's rule, one field per page.
     settings_hits: super::settings::Hits,
+    /// A file the Settings screen asked the shell to open in an editor.
+    ///
+    /// A field rather than a direct spawn because this half of the seam owns
+    /// no process: `App` is under the frame lock when a key reaches it, and
+    /// launching an editor there would block every repaint until it exited.
+    /// `Frame::settings_key` drains it with [`App::take_settings_launch`]
+    /// after the lock is released; nothing else may.
+    settings_launch: Option<std::path::PathBuf>,
     /// The home directory settings.json lives under. Resolved once; a test
     /// points it at a tempdir so no test touches the real file.
     home: Option<std::path::PathBuf>,
+    /// Test seam for the tool-permission card: `Some` overrides the harness
+    /// discovery so a test writes a rule into a tempdir rather than into
+    /// whatever project the test binary was launched from.
+    ///
+    /// The `set_harness_dir` precedent, and for the same reason it exists: a
+    /// test that wrote a real `settings.local.json` would be a test that
+    /// changes what the developer's own Emma is allowed to do, and one that
+    /// only read would be a fact about their checkout.
+    policy_file_override: Option<std::path::PathBuf>,
     /// Test seam for the Ollama ping: `Some` overrides the `OLLAMA_HOST`
     /// resolution so a test can aim at a listener it owns.
     ollama_host_override: Option<String>,
+}
+
+/// Today's civil date in the machine's local zone, for the sidebar calendar.
+/// Computed at paint time rather than stored, so a session that runs past
+/// midnight moves its mark without a timer.
+fn today_local() -> sidebar::Today {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    sidebar::civil_from_secs(secs + crate::harness_state::local_offset_secs())
+}
+
+/// Git work the Code page asked for that must not run on the input thread.
+///
+/// `code_git::history` and `code_git::diff_at` were measured at 17 to 475 ms
+/// on this 289-commit repository (2026-09-06, Windows); the frame runs these
+/// on a worker and hands the answer back through the two setters. Launching
+/// the editor is here for the older reason `launch_tool` already spawns a
+/// thread: a keystroke handler that waits on a process is an event loop that
+/// has stopped.
+#[derive(Debug, Clone)]
+pub enum CodeJob {
+    History {
+        root: std::path::PathBuf,
+        rel: String,
+    },
+    Diff {
+        root: std::path::PathBuf,
+        rel: String,
+        hash: String,
+    },
+    Editor {
+        root: std::path::PathBuf,
+    },
+    /// Text the page wants on the system clipboard. It is a job rather than a
+    /// call because the one mechanism that does this lives on the frame, and a
+    /// second one written from here would be a second thing to get wrong on
+    /// the terminals that already refuse the first.
+    Copy(String),
 }
 
 impl App {
@@ -208,6 +321,7 @@ impl App {
                 // paint time because the glyph set is the skin's to know.
                 commands: Vec::new(),
                 help: Vec::new(),
+                today: None,
                 collapsed: false,
             },
             wrap_width: chat::message_width(r.chat.width.max(1)),
@@ -215,20 +329,34 @@ impl App {
             settings_open: false,
             memory: None,
             harness: None,
+            help: None,
+            code: None,
+            code_line: None,
+            code_lsp: None,
+            code_sent: None,
+            code_area: Rect::new(0, 0, 0, 0),
             scope: None,
             sessions_add: None,
+            sidebar_hits: sidebar::Hits::default(),
+            session_ids: Vec::new(),
+            sessions_focus: None,
+            hints: crate::settings::HINTS_DEFAULT,
+            provider_running: None,
             chat_rect: r.chat,
             scrollbar: None,
             bar_grab: None,
             notice: None,
             selection: None,
             chat_cells: Vec::new(),
+            chat_cells_start: 0,
             memory_cwd: String::new(),
             harness_cwd: String::new(),
             harness_hits: super::harness::Hits::default(),
             settings: super::settings::SettingsView::default(),
             settings_hits: super::settings::Hits::default(),
+            settings_launch: None,
             home: emma_llm::auth::home_dir(),
+            policy_file_override: None,
             ollama_host_override: None,
             harness_dir: std::env::var_os("HOME")
                 .map(|h| std::path::Path::new(&h).join(".emma/sessions"))
@@ -282,6 +410,8 @@ impl App {
         if self.settings_open {
             self.memory = None;
             self.harness = None;
+            self.help = None;
+            self.code = None;
             // The live rows read disk truth on every open — memory's law.
             // model/cwd/version stay paint-time: the `View` owns them.
             let stored = self
@@ -289,10 +419,21 @@ impl App {
                 .as_deref()
                 .map(crate::settings::load)
                 .unwrap_or_default();
-            self.settings.provider = stored
+            // Two provider facts, not one. `provider` is what this session is
+            // bound to and cannot be changed from here; `provider_saved` is
+            // what the file says and is what the row's chevrons write. They
+            // are equal until somebody presses one, and the row shows both
+            // whenever they differ — see `settings::provider_value`.
+            let bound = stored
                 .provider
                 .clone()
                 .unwrap_or_else(|| emma_llm::DEFAULT_PROVIDER.to_string());
+            self.settings.provider_saved = bound.clone();
+            // The running half prefers what the shell said it built. The file
+            // is only a guess at it, and a `--provider` flag makes the guess
+            // wrong in exactly the case the row exists to show.
+            self.settings.provider = self.provider_running.clone().unwrap_or(bound);
+            self.settings.provider_keys = provider_keys(self.home.as_deref());
             // The *selection*, read where it is written. This tree has no
             // ambient "active theme": `theme::load` resolves the name once at
             // startup and `Palette` is `Copy`, so what is live on screen is
@@ -313,6 +454,82 @@ impl App {
             // deliberately so — `crate::settings::Settings::prune_history`
             // carries the argument.
             self.settings.prune_on = stored.prune_history.unwrap_or(false);
+            self.settings.training_on = stored.capture_training();
+            self.settings.hints_on = stored.hints();
+            // The memory policy block, defaults resolved here rather than in
+            // the page: the page draws what it is handed, and "absent means
+            // keep forever" is a fact about `crate::settings`, not about a
+            // row.
+            self.settings.memory_retention = stored
+                .memory_policy
+                .retention_days
+                .unwrap_or(crate::settings::RETENTION_KEEP_FOREVER);
+            self.settings.auto_recall = stored
+                .memory_policy
+                .auto_recall
+                .unwrap_or(crate::settings::AUTO_RECALL_DEFAULT);
+            self.settings.memory_scope = stored
+                .memory_policy
+                .scope
+                .clone()
+                .unwrap_or_else(|| crate::settings::MEMORY_SCOPE_DEFAULT.to_string());
+            // Raw, not resolved. Absence is what the three sampling rows have
+            // to show: `None` is "the host decides" and `Some(0.0)` is a
+            // chosen zero, and a resolved value could not tell them apart.
+            let sampling = stored
+                .sampling
+                .get(self.settings.provider_saved.as_str())
+                .cloned()
+                .unwrap_or_default();
+            self.settings.sampling_temperature = sampling.temperature;
+            self.settings.sampling_max_output_tokens = sampling.max_output_tokens;
+            self.settings.sampling_stream = sampling.stream;
+            self.settings.accent = stored
+                .appearance
+                .accent
+                .clone()
+                .unwrap_or_else(|| crate::settings::ACCENT_THEME_DEFAULT.to_string());
+            self.settings.glyphs = stored
+                .appearance
+                .glyphs
+                .clone()
+                .unwrap_or_else(|| crate::settings::GLYPHS_AUTO.to_string());
+            self.settings.status_bar = stored
+                .appearance
+                .status_bar
+                .clone()
+                .unwrap_or_else(|| crate::settings::STATUS_BAR_DEFAULT.to_string());
+            // The terminal, read once here rather than at every draw: the
+            // environment does not change under a running process.
+            let terminal = super::termfont::detect_here();
+            self.settings.font_families = font_families(&stored.appearance, &terminal);
+            self.settings.font_family = stored
+                .appearance
+                .font_family
+                .clone()
+                .unwrap_or_else(|| self.settings.font_families[0].clone());
+            self.settings.font_size = stored
+                .appearance
+                .font_size
+                .unwrap_or(super::termfont::DEFAULT_SIZE);
+            self.settings.terminal = Some(terminal);
+            // The keymap as this process is holding it, and every preset the
+            // file offered. Not a fresh read: what the preset row switches
+            // between is what `main.rs` installed at startup, and a row
+            // offering a preset added to the file since would be offering one
+            // this process cannot select.
+            let map = super::keymap::active();
+            self.settings.key_preset = map.preset.clone();
+            self.settings.key_presets = map.presets.clone();
+            self.settings.key_notes = map.notes.clone();
+            self.settings.keys_file = self
+                .home
+                .as_deref()
+                .map(|home| super::keymap::path(home).display().to_string());
+            // The per-tool rules, read from the same file a row would write.
+            let policy = self.policy_file();
+            self.settings.tools = tool_states(policy.as_deref());
+            self.settings.tools_file = policy.as_ref().map(|p| p.display().to_string());
             // The project's permission rules, read where they are written.
             // Same law as the rest of this block: on every open, never cached
             // across one, so a grant made at a prompt since the last look is
@@ -355,6 +572,23 @@ impl App {
             SettingsAction::Theme(name) => self.settings_theme(name),
             SettingsAction::MemoryCapture(on) => self.settings_memory(on),
             SettingsAction::PruneHistory(on) => self.settings_prune(on),
+            SettingsAction::TrainingCapture(on) => self.settings_training(on),
+            SettingsAction::Hints(on) => self.settings_hints(on),
+            SettingsAction::Provider(name) => self.settings_provider(name),
+            SettingsAction::ToolPolicy(tool, state) => self.settings_tool(tool, state),
+            SettingsAction::Retention(days) => self.settings_memory_block(Some(days), None, None),
+            SettingsAction::AutoRecall(on) => self.settings_memory_block(None, Some(on), None),
+            SettingsAction::MemoryScope(s) => self.settings_memory_block(None, None, Some(s)),
+            SettingsAction::Temperature(t) => self.settings_sampling(Some(t), None, None),
+            SettingsAction::MaxOutputTokens(n) => self.settings_sampling(None, Some(n), None),
+            SettingsAction::Streaming(on) => self.settings_sampling(None, None, Some(on)),
+            SettingsAction::Accent(name) => self.settings_accent(&name),
+            SettingsAction::Glyphs(name) => self.settings_glyphs(name),
+            SettingsAction::StatusBar(name) => self.settings_status_bar(name),
+            SettingsAction::FontFamily(name) => self.settings_font_family(&name),
+            SettingsAction::FontSize(pt) => self.settings_font_size(pt),
+            SettingsAction::KeyPreset(name) => self.settings_key_preset(&name),
+            SettingsAction::OpenKeybindings => self.settings_open_keybindings(),
             SettingsAction::Save => self.settings_save(),
             SettingsAction::Export => self.settings_export(),
             SettingsAction::Reset => self.settings_reset(),
@@ -490,6 +724,649 @@ impl App {
         }
     }
 
+    /// Take the file the Settings screen asked to open, if it asked.
+    /// `Frame::settings_key` drains this; nothing else may.
+    pub fn take_settings_launch(&mut self) -> Option<std::path::PathBuf> {
+        self.settings_launch.take()
+    }
+
+    /// Store the Capture Training Data toggle, the same additive default-on
+    /// semantics [`Self::settings_memory`] has: On removes the key (absent
+    /// means on), Off writes `false`.
+    ///
+    /// Its own method rather than folded into that one because the two
+    /// toggles own different keys, and a shared setter taking a field name is
+    /// how a click on one starts writing the other.
+    fn settings_training(&mut self, on: bool) {
+        let Some(home) = self.home.clone() else {
+            self.settings.notice = Some(NO_HOME.to_string());
+            return;
+        };
+        let mut stored = crate::settings::load(&home);
+        stored.training_capture = if on { None } else { Some(false) };
+        match crate::settings::save(&home, &stored) {
+            Ok(path) => {
+                self.settings.training_on = on;
+                // The claim that had to change: `emma export-training`
+                // shipped, so the row no longer says the command is coming.
+                self.settings.notice = Some(if on {
+                    format!(
+                        "training capture on, the default; the key is removed from {}. \
+                         Transcripts are kept locally and `emma export-training` reads them",
+                        path.display()
+                    )
+                } else {
+                    format!(
+                        "training capture off, written to {}. Sessions already captured are \
+                         left where they are; nothing is deleted by this row",
+                        path.display()
+                    )
+                });
+            }
+            Err(e) => self.settings.notice = Some(format!("settings could not be written: {e}")),
+        }
+    }
+
+    /// Store the Interface Hints toggle.
+    ///
+    /// [`Self::settings_training`]'s shape and its additive default-on
+    /// semantics.
+    ///
+    /// **The receipt used to end "nothing in this build reads the key yet",
+    /// and that stopped being true.** The `[+]` control's hint is the first
+    /// caller: [`clicked_new_session`] takes `hints` and drops
+    /// [`NEW_SESSION_NOTICE`] when it is off. So the wording names what is
+    /// governed and what is not — a receipt, a warning and a refusal are never
+    /// hints and are printed either way — and the toggle takes effect in this
+    /// session rather than at the next start, which is why [`Self::hints`] is
+    /// written here beside the row's own copy. Those two fields are one fact
+    /// and this is the only place both are set.
+    fn settings_hints(&mut self, on: bool) {
+        let Some(home) = self.home.clone() else {
+            self.settings.notice = Some(NO_HOME.to_string());
+            return;
+        };
+        let mut stored = crate::settings::load(&home);
+        stored.ui.hints = if on { None } else { Some(false) };
+        match crate::settings::save(&home, &stored) {
+            Ok(path) => {
+                self.settings.hints_on = on;
+                self.hints = on;
+                self.settings.notice = Some(format!(
+                    "interface hints {}, {} {}. It takes effect now: the informational \
+                     one-liners this interface prints of its own accord are governed by it, \
+                     and receipts, warnings and refusals never are",
+                    if on { "on, the default" } else { "off" },
+                    if on {
+                        "the key is removed from"
+                    } else {
+                        "written to"
+                    },
+                    path.display()
+                ));
+            }
+            Err(e) => self.settings.notice = Some(format!("settings could not be written: {e}")),
+        }
+    }
+
+    /// Store the provider for the next run.
+    ///
+    /// **The write is real and immediate, and the binding is not.** Rebinding
+    /// a live client mid-session means rebuilding the provider, its key, its
+    /// model and the agent around them, which is `main.rs` machinery; a
+    /// settings screen that did half of it would leave a session whose
+    /// answers came from one provider and whose status row named another. So
+    /// the file moves now, the session does not, and the row shows both names
+    /// until they agree.
+    ///
+    /// A provider with no key still gets written. The owner may be about to
+    /// add one, and refusing the write would mean the screen deciding the
+    /// order somebody does two things in; the receipt names the command
+    /// instead. The key itself never reaches this layer, so there is nothing
+    /// here that could be echoed.
+    fn settings_provider(&mut self, name: &'static str) {
+        let Some(home) = self.home.clone() else {
+            self.settings.notice = Some(NO_HOME.to_string());
+            return;
+        };
+        let mut stored = crate::settings::load(&home);
+        stored.provider = Some(name.to_string());
+        match crate::settings::save(&home, &stored) {
+            Ok(path) => {
+                self.settings.provider_saved = name.to_string();
+                // Reread the sampling block: the three rows on this card are
+                // keyed per provider, so the numbers beside them belong to
+                // whichever provider was just named and not to the last one.
+                let sampling = stored.sampling.get(name).cloned().unwrap_or_default();
+                self.settings.sampling_temperature = sampling.temperature;
+                self.settings.sampling_max_output_tokens = sampling.max_output_tokens;
+                self.settings.sampling_stream = sampling.stream;
+                let keyless = self
+                    .settings
+                    .provider_keys
+                    .iter()
+                    .any(|(p, k)| p == name && *k == super::settings::KeyPresence::Missing);
+                let mut notice = if name == self.settings.provider {
+                    format!(
+                        "provider {name}, written to {}; this session was already bound to it",
+                        path.display()
+                    )
+                } else {
+                    format!(
+                        "provider {name}, written to {}; this session keeps the {} client it \
+                         booted with, so {name} starts at the next run",
+                        path.display(),
+                        self.settings.provider
+                    )
+                };
+                if keyless {
+                    notice.push_str(&format!(
+                        ". No key is stored for {name}: `emma set-provider {name}` stores one, \
+                         and `emma set-provider {name} --key -` reads it from stdin"
+                    ));
+                }
+                self.settings.notice = Some(notice);
+            }
+            Err(e) => self.settings.notice = Some(format!("settings could not be written: {e}")),
+        }
+    }
+
+    /// Store one tool's bare-name permission rule in this project's
+    /// settings.local.json.
+    ///
+    /// The merge discipline is [`crate::permissions::set_bare_rule`]'s, which
+    /// is `permissions::remember`'s: a file that is not JSON is not written to
+    /// at all, and a hand-written specifier grant is never touched. The
+    /// wording is the harness gate's, because the mechanism is the harness
+    /// gate's: rules are parsed at boot, so a run already going keeps what it
+    /// booted with.
+    fn settings_tool(&mut self, tool: &'static str, state: super::settings::ToolState) {
+        use super::settings::ToolState;
+        let Some(file) = self.policy_file() else {
+            self.settings.notice = Some(
+                "no harness root here, so there is no settings.local.json to write a rule to. \
+                 Start Emma inside a project with a .emma or .claude directory"
+                    .to_string(),
+            );
+            return;
+        };
+        let decision = match state {
+            ToolState::Ask => None,
+            ToolState::Allow => Some(crate::permissions::Decision::Allow),
+            ToolState::Deny => Some(crate::permissions::Decision::Deny),
+        };
+        match crate::permissions::set_bare_rule(&file, tool, decision) {
+            Ok(()) => {
+                // Reread rather than assume: the write may have removed a
+                // rule that another list also held, and the row must show the
+                // file rather than the press.
+                self.settings.tools = tool_states(Some(&file));
+                let (perms, perms_file, perms_read) = permission_rows();
+                self.settings.perms = perms;
+                self.settings.perms_file = perms_file;
+                self.settings.perms_read = perms_read;
+                self.settings.notice = Some(match state {
+                    ToolState::Ask => format!(
+                        "{tool} back to asking: the rule is removed from {}. Rules are read at \
+                         boot, so this binds the next run; this run keeps the gate it booted \
+                         with",
+                        file.display()
+                    ),
+                    _ => format!(
+                        "{tool} {}, written to {}. Rules are read at boot, so this binds the \
+                         next run; this run keeps the gate it booted with",
+                        state.word().to_lowercase(),
+                        file.display()
+                    ),
+                });
+            }
+            // `set_bare_rule`'s refusals already name the file and say that
+            // nothing was written; repeating that here would say it twice.
+            Err(e) => self.settings.notice = Some(format!("{e:#}")),
+        }
+    }
+
+    /// Store one of the three memory-policy keys.
+    ///
+    /// **One method for three rows because the three are one block on disk**:
+    /// a per-key writer would read settings.json three times and each write
+    /// would race the other two. The absent-means rules are kept by writing
+    /// `None` for the value that *is* the default, so a settings file never
+    /// grows a key restating what this build already does.
+    ///
+    /// **All three are read by nothing today**, and the receipt says so. The
+    /// write is real either way; what is bounded is the effect, and stating
+    /// the bound is the difference between a forward setting and a fake
+    /// control.
+    fn settings_memory_block(
+        &mut self,
+        retention: Option<u64>,
+        recall: Option<bool>,
+        scope: Option<&'static str>,
+    ) {
+        let Some(home) = self.home.clone() else {
+            self.settings.notice = Some(NO_HOME.to_string());
+            return;
+        };
+        let mut stored = crate::settings::load(&home);
+        if let Some(days) = retention {
+            stored.memory_policy.retention_days =
+                (days != crate::settings::RETENTION_KEEP_FOREVER).then_some(days);
+        }
+        if let Some(on) = recall {
+            stored.memory_policy.auto_recall =
+                (on != crate::settings::AUTO_RECALL_DEFAULT).then_some(on);
+        }
+        if let Some(s) = scope {
+            stored.memory_policy.scope =
+                (s != crate::settings::MEMORY_SCOPE_DEFAULT).then(|| s.to_string());
+        }
+        let days = stored
+            .memory_policy
+            .retention_days
+            .unwrap_or(crate::settings::RETENTION_KEEP_FOREVER);
+        let recall_on = stored
+            .memory_policy
+            .auto_recall
+            .unwrap_or(crate::settings::AUTO_RECALL_DEFAULT);
+        let scope_now = stored
+            .memory_policy
+            .scope
+            .clone()
+            .unwrap_or_else(|| crate::settings::MEMORY_SCOPE_DEFAULT.to_string());
+        match crate::settings::save(&home, &stored) {
+            Ok(path) => {
+                self.settings.memory_retention = days;
+                self.settings.auto_recall = recall_on;
+                self.settings.memory_scope = scope_now.clone();
+                let kept = if days == crate::settings::RETENTION_KEEP_FOREVER {
+                    "kept forever".to_string()
+                } else {
+                    format!("kept {days} days")
+                };
+                self.settings.notice = Some(format!(
+                    "memory {kept}, auto-recall {}, scope {scope_now}; written to {}. Capture \
+                     is in force now; these three are stored and read by nothing in this \
+                     build, so nothing prunes and nothing recalls differently yet",
+                    if recall_on { "on" } else { "off" },
+                    path.display()
+                ));
+            }
+            Err(e) => self.settings.notice = Some(format!("settings could not be written: {e}")),
+        }
+    }
+
+    /// Store one of the three sampling knobs for the **saved** provider.
+    ///
+    /// [`Self::settings_memory_block`]'s shape: one method for one block on
+    /// disk, so three rows cannot race each other through three loads.
+    ///
+    /// **Absence is a value here, which it is not on the other blocks.**
+    /// `Some(None)` for the temperature means Host Default and removes the
+    /// key, and `Some(Some(0))` means a chosen zero and writes `0.0`; a
+    /// writer that collapsed the two would pin every provider to greedy
+    /// decoding while the row said the host was deciding. `None` for an
+    /// argument means the caller is not editing that knob at all, which is
+    /// the third state and the reason for the nesting.
+    ///
+    /// The saved provider, not the running one, because sampling resolves
+    /// once in `main.rs` when a provider is built: the run these knobs
+    /// configure is the next one.
+    fn settings_sampling(
+        &mut self,
+        temperature: Option<Option<u32>>,
+        max_output: Option<Option<u32>>,
+        stream: Option<bool>,
+    ) {
+        let Some(home) = self.home.clone() else {
+            self.settings.notice = Some(NO_HOME.to_string());
+            return;
+        };
+        let provider = super::settings::sampling_provider(&self.settings).to_string();
+        let mut stored = crate::settings::load(&home);
+        let mut set = stored.sampling.get(&provider).cloned().unwrap_or_default();
+        if let Some(t) = temperature {
+            set.temperature = t.map(super::settings::temperature_value);
+        }
+        if let Some(n) = max_output {
+            set.max_output_tokens = n;
+        }
+        if let Some(on) = stream {
+            // The `memory` rule: on is the default, so on is the absence of
+            // the key rather than a `true` restating it.
+            set.stream = (!on).then_some(false);
+        }
+        stored.set_sampling(&provider, set.clone());
+        match crate::settings::save(&home, &stored) {
+            Ok(path) => {
+                self.settings.sampling_temperature = set.temperature;
+                self.settings.sampling_max_output_tokens = set.max_output_tokens;
+                self.settings.sampling_stream = set.stream;
+                let bind = format!(
+                    "written to {}; sampling resolves once when the provider is built, so this \
+                     binds the next run",
+                    path.display()
+                );
+                let mut notice = if temperature.is_some() {
+                    let what = match set.temperature {
+                        None => "host default (no temperature is sent)".to_string(),
+                        Some(t) => format!("{t:.2}"),
+                    };
+                    format!("temperature for {provider}: {what}, {bind}")
+                } else if max_output.is_some() {
+                    let what = match set.max_output_tokens {
+                        None => format!("default ({})", crate::settings::EMMA_MAX_OUTPUT_TOKENS),
+                        Some(n) => n.to_string(),
+                    };
+                    format!(
+                        "max output tokens for {provider}: {what}, {bind}. A cap above what \
+                         the model takes is clamped down to the model's own maximum"
+                    )
+                } else {
+                    let on = set.stream.unwrap_or(true);
+                    format!(
+                        "streaming for {provider}: {}, {bind}. A --print run is always batch, \
+                         because there is no terminal to stream into",
+                        if on { "on" } else { "off" }
+                    )
+                };
+                // The caveat the wire forced. A fact about the transport, not
+                // about the setting, so the key is still written and the
+                // receipt says what will happen to it.
+                if stream.is_some() && provider == "ollama" {
+                    notice.push_str(
+                        ". The setting is stored, but the ollama transport does not stream \
+                         yet: that provider answers in one batch either way",
+                    );
+                }
+                self.settings.notice = Some(notice);
+            }
+            Err(e) => self.settings.notice = Some(format!("settings could not be written: {e}")),
+        }
+    }
+
+    /// Apply and persist an accent override, the Theme row's pattern exactly:
+    /// `palette::activate_accent_choice` for the switch, settings.json for the
+    /// memory of it, and the receipt names the file.
+    ///
+    /// **A name the palette does not know changes nothing, anywhere.** The
+    /// parse happens before the activation and before the load, so a refused
+    /// value leaves the ambient accent, the view and the file exactly as they
+    /// were, and the notice says which name was refused. A half-applied accent
+    /// — repainted but not stored, or stored but not repainted — is the shape
+    /// `/theme` was ruled against.
+    fn settings_accent(&mut self, name: &str) {
+        // One parse for both shapes. A role name and a `cube:N` value are the
+        // same setting, and both commit through this one path, so a cube
+        // accent cannot end up on a code path the role accents were never
+        // tested on.
+        let Some(choice) = super::palette::parse_accent(name) else {
+            self.settings.notice = Some(format!(
+                "no accent named {name}: the roles are {}, or cube:N for an xterm index \
+                 between 16 and 231",
+                super::palette::ACCENTS
+                    .iter()
+                    .map(|a| a.name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            return;
+        };
+        super::palette::activate_accent_choice(choice);
+        let stored_name = choice.name();
+        self.settings.accent = stored_name.clone();
+        // A cube accent below the xterm cube is not renderable. The row can
+        // still hold one — it is a value somebody hand-edited in, or carried
+        // to a poorer terminal — and saying so is better than drawing the
+        // theme's accent under a row that names a cube.
+        let cube_note = match choice {
+            super::palette::AccentChoice::Cube(_) if self.settings.no_cube => {
+                ". This terminal reports fewer than 256 colours, so the cube index cannot be \
+                 drawn here and the theme's own accent is showing instead"
+            }
+            _ => "",
+        };
+        self.settings.notice = Some(match self.home.clone() {
+            Some(home) => {
+                let mut stored = crate::settings::load(&home);
+                stored.appearance.accent = (stored_name != crate::settings::ACCENT_THEME_DEFAULT)
+                    .then(|| stored_name.clone());
+                match crate::settings::save(&home, &stored) {
+                    Ok(path) => format!(
+                        "accent {stored_name}, written to {}{cube_note}",
+                        path.display()
+                    ),
+                    Err(e) => {
+                        format!("accent {stored_name}, not written ({e}), so it lasts until /exit")
+                    }
+                }
+            }
+            None => format!("accent {stored_name}, no home directory, so this lasts until /exit"),
+        });
+    }
+
+    /// Store the glyph set for the next run.
+    ///
+    /// **Not live, and the receipt says so.** A `Skin` is `Copy` and its
+    /// glyphs are a field, not an ambient read: by the time a frame is drawn
+    /// there are copies of it in the viewport, in every view and in `Term`.
+    /// The theme could be made live because a palette resolves its colours at
+    /// draw time; this cannot, without threading a new seam through every one
+    /// of those copies. The LSP card's wording, for the same mechanism: read
+    /// once at startup, applies to the next run.
+    fn settings_glyphs(&mut self, name: &'static str) {
+        let Some(home) = self.home.clone() else {
+            self.settings.notice = Some(NO_HOME.to_string());
+            return;
+        };
+        let mut stored = crate::settings::load(&home);
+        stored.appearance.glyphs = (name != crate::settings::GLYPHS_AUTO).then(|| name.to_string());
+        match crate::settings::save(&home, &stored) {
+            Ok(path) => {
+                self.settings.glyphs = name.to_string();
+                let caveat = if name == "unicode" {
+                    ". A console that cannot prove UTF-8 still gets ASCII: this is a \
+                     preference, not an override of the detection"
+                } else {
+                    ""
+                };
+                self.settings.notice = Some(format!(
+                    "glyphs {name}, written to {}. Nothing in this build reads the key yet — \
+                     the skin is built from the console's own UTF-8 answer — so it applies \
+                     from the run after one does{caveat}",
+                    path.display()
+                ));
+            }
+            Err(e) => self.settings.notice = Some(format!("settings could not be written: {e}")),
+        }
+    }
+
+    /// Store the status bar density.
+    ///
+    /// **Stored and read by nothing, and the receipt says so.** Mainline's
+    /// status bar has no density switch: there is no `statusbar::Density` to
+    /// set, so a row claiming the next frame would be thinner would be a
+    /// control that does nothing. The key is still written, because it is a
+    /// choice a person made and the alternative is losing it.
+    fn settings_status_bar(&mut self, name: &'static str) {
+        let Some(home) = self.home.clone() else {
+            self.settings.notice = Some(NO_HOME.to_string());
+            return;
+        };
+        let mut stored = crate::settings::load(&home);
+        stored.appearance.status_bar =
+            (name != crate::settings::STATUS_BAR_DEFAULT).then(|| name.to_string());
+        match crate::settings::save(&home, &stored) {
+            Ok(path) => {
+                self.settings.status_bar = name.to_string();
+                self.settings.notice = Some(format!(
+                    "status bar {name}, written to {}. This build's status bar has one \
+                     density, so nothing on screen changes: the key is stored for the build \
+                     that reads it",
+                    path.display()
+                ));
+            }
+            Err(e) => self.settings.notice = Some(format!("settings could not be written: {e}")),
+        }
+    }
+
+    /// Ask the terminal for a font family, and store it.
+    ///
+    /// The ask comes first and its answer is the receipt, so the sentence a
+    /// person reads is `termfont`'s own — including, on a terminal with no
+    /// font control, the sentence saying nothing was asked. The value is
+    /// stored either way: a family chosen under Windows Terminal is what
+    /// `main.rs` re-applies the next time Emma runs under Terminal.app.
+    fn settings_font_family(&mut self, name: &str) {
+        let terminal = self.settings_terminal();
+        let asked = super::termfont::apply_here(
+            &super::termfont::TerminalFont::Family(name.to_string()),
+            &terminal,
+        );
+        self.settings.font_family = name.to_string();
+        let families = self.settings.font_families.clone();
+        self.settings.notice = Some(match self.home.clone() {
+            Some(home) => {
+                let mut stored = crate::settings::load(&home);
+                stored.appearance.font_family = Some(name.to_string());
+                stored.appearance.font_families = families;
+                match crate::settings::save(&home, &stored) {
+                    Ok(path) => format!("{asked}. Written to {}", path.display()),
+                    Err(e) => format!("{asked}. Not written ({e}), so it lasts until /exit"),
+                }
+            }
+            None => format!("{asked}. No home directory, so this lasts until /exit"),
+        });
+    }
+
+    /// Ask the terminal for a font size, and store it.
+    ///
+    /// **A size outside `termfont`'s clamp never reaches disk.** The step
+    /// function clamps, so the arrows cannot produce one; this guards the
+    /// other door — an Enter on a view built by hand, or a value carried in
+    /// from a settings file — and refuses with the range rather than storing
+    /// a number the terminal would reject.
+    fn settings_font_size(&mut self, pt: u32) {
+        if !(super::termfont::MIN_SIZE..=super::termfont::MAX_SIZE).contains(&pt) {
+            self.settings.notice = Some(format!(
+                "font size {pt} is outside {}-{} pt, so nothing was asked and nothing was \
+                 written",
+                super::termfont::MIN_SIZE,
+                super::termfont::MAX_SIZE
+            ));
+            return;
+        }
+        let terminal = self.settings_terminal();
+        let asked =
+            super::termfont::apply_here(&super::termfont::TerminalFont::Size(pt), &terminal);
+        self.settings.font_size = pt;
+        self.settings.notice = Some(match self.home.clone() {
+            Some(home) => {
+                let mut stored = crate::settings::load(&home);
+                stored.appearance.font_size = Some(pt);
+                match crate::settings::save(&home, &stored) {
+                    Ok(path) => format!("{asked}. Written to {}", path.display()),
+                    Err(e) => format!("{asked}. Not written ({e}), so it lasts until /exit"),
+                }
+            }
+            None => format!("{asked}. No home directory, so this lasts until /exit"),
+        });
+    }
+
+    /// The terminal the font rows drive. Read when the screen opened; a view
+    /// nobody opened falls back to a fresh detection rather than to a claim.
+    fn settings_terminal(&self) -> super::termfont::Terminal {
+        self.settings
+            .terminal
+            .clone()
+            .unwrap_or_else(super::termfont::detect_here)
+    }
+
+    /// Switch the active keybinding preset.
+    ///
+    /// **Live, and the receipt says which half is.** The file was read once at
+    /// startup, so an edit to it still waits for a restart; every preset in
+    /// that one read is already in memory, and switching between them swaps a
+    /// table this process is holding. Making the switch wait as well would be
+    /// a control that does nothing on a screen whose point is that its
+    /// controls do something.
+    ///
+    /// A name the file does not offer changes nothing: `with_preset` answers
+    /// `None`, the installed map is untouched, and the row says which name
+    /// was refused.
+    fn settings_key_preset(&mut self, name: &str) {
+        let map = super::keymap::active();
+        let Some(next) = map.with_preset(name) else {
+            self.settings.notice = Some(format!(
+                "~/.emma/keybindings.json defines no preset named {name}; this file offers {}",
+                if map.presets.is_empty() {
+                    super::keymap::DEFAULT_PRESET.to_string()
+                } else {
+                    map.presets.join(", ")
+                }
+            ));
+            return;
+        };
+        let notes = next.notes.clone();
+        let chords: Vec<String> = super::keymap::REBINDABLE
+            .iter()
+            .filter_map(|a| next.chord_for(*a).map(|c| format!("{} {c}", a.name())))
+            .collect();
+        self.settings.key_preset = name.to_string();
+        self.settings.key_notes = notes.clone();
+        super::keymap::install(next);
+        let refused = if notes.is_empty() {
+            String::new()
+        } else {
+            format!(". {}", notes.join(" | "))
+        };
+        self.settings.notice = Some(format!(
+            "keybinding preset {name} is in force now: {}. The file itself is read once at \
+             startup, so an edit there still applies to the next run{refused}",
+            chords.join(", ")
+        ));
+    }
+
+    /// Open `~/.emma/keybindings.json` in the editor, writing a commented
+    /// starter first if there is none.
+    ///
+    /// The starter is written rather than an empty file, because the schema
+    /// has no other home: JSON has no comments, so the documentation is
+    /// `_comment` keys inside the file a person is about to edit.
+    fn settings_open_keybindings(&mut self) {
+        let Some(home) = self.home.clone() else {
+            self.settings.notice =
+                Some("no home directory, so there is no ~/.emma/keybindings.json to open".into());
+            return;
+        };
+        let path = super::keymap::path(&home);
+        let mut wrote = false;
+        if !path.exists() {
+            if let Some(dir) = path.parent() {
+                if let Err(e) = std::fs::create_dir_all(dir) {
+                    self.settings.notice =
+                        Some(format!("{} could not be created: {e}", dir.display()));
+                    return;
+                }
+            }
+            if let Err(e) = std::fs::write(&path, super::keymap::starter()) {
+                self.settings.notice =
+                    Some(format!("{} could not be written: {e}", path.display()));
+                return;
+            }
+            wrote = true;
+        }
+        self.settings.keys_file = Some(path.display().to_string());
+        self.settings.notice =
+            Some(format!(
+            "{} {} in your editor; it documents its own schema in _comment keys. Emma reads it \
+             once at startup, so an edit there applies to the next run",
+            path.display(),
+            if wrote { "written and opening" } else { "opening" }
+        ));
+        self.settings_launch = Some(path);
+    }
+
     /// `[ Save Now ]`: write settings.json as it stands, with a receipt. The
     /// live controls each persist on use, so this is a re-assertion — the
     /// receipt names the file so the choice is visible and removable.
@@ -532,33 +1409,69 @@ impl App {
         });
     }
 
-    /// The confirmed Reset: clear the additive keys this screen owns — theme
-    /// and memory_capture — and say exactly that. Provider, models, tools and
-    /// voice belong to other surfaces and are left alone.
+    /// The confirmed Reset: clear the additive keys this screen owns, and say
+    /// exactly that.
+    ///
+    /// **A key this screen can set is a key its Reset has to clear, or Reset
+    /// quietly means "most of it".** The write-back package added eleven of
+    /// them, so the list below grew with it. What is *not* cleared is
+    /// deliberate and named in the receipt: the provider and the models belong
+    /// to `emma set-provider` and `/model`, and the tool rules live in
+    /// settings.local.json, which is a different document that another program
+    /// also reads.
     fn settings_reset(&mut self) {
         let Some(home) = self.home.clone() else {
-            self.settings.notice =
-                Some("no home directory — settings.json cannot be written here".to_string());
+            self.settings.notice = Some(NO_HOME.to_string());
             return;
         };
         let mut stored = crate::settings::load(&home);
         stored.theme = None;
         stored.memory = None;
-        // Added with the row: a key this screen can set is a key its Reset
-        // has to clear, or Reset quietly means "most of it".
         stored.prune_history = None;
+        stored.training_capture = None;
+        stored.memory_policy = crate::settings::MemoryPolicy::default();
+        stored.appearance = crate::settings::AppearanceSettings::default();
+        stored.ui = crate::settings::UiSettings::default();
+        // The whole sampling block, every provider's entry. It is entirely
+        // this screen's to write: nothing else in Emma sets a key in it, and
+        // an entry left behind after a reset would be three knobs nobody can
+        // see from any other screen.
+        stored.sampling = std::collections::BTreeMap::new();
         match crate::settings::save(&home, &stored) {
             Ok(path) => {
-                // Nothing to activate: the theme in force is the one this
-                // process started with — see `settings_theme`. Clearing the key
-                // is the whole of the reset, and the notice below already says
-                // "cleared to defaults" rather than claiming a repaint.
+                // The theme is not activated: the one in force is the one this
+                // process started with — see `settings_theme`. The accent is,
+                // because it is ambient and a `Palette` resolves it at draw
+                // time, so leaving it would mean the file and the screen
+                // disagreeing about a colour that is on screen right now.
                 self.settings.theme = super::theme::BUILT_IN.to_string();
+                super::palette::activate_accent(&super::palette::ACCENTS[0]);
+                let terminal = self.settings_terminal();
                 self.settings.memory_on = true;
                 self.settings.prune_on = false;
+                self.settings.training_on = crate::settings::TRAINING_CAPTURE_DEFAULT;
+                self.settings.hints_on = crate::settings::HINTS_DEFAULT;
+                self.settings.memory_retention = crate::settings::RETENTION_KEEP_FOREVER;
+                self.settings.auto_recall = crate::settings::AUTO_RECALL_DEFAULT;
+                self.settings.memory_scope = crate::settings::MEMORY_SCOPE_DEFAULT.to_string();
+                self.settings.accent = crate::settings::ACCENT_THEME_DEFAULT.to_string();
+                self.settings.glyphs = crate::settings::GLYPHS_AUTO.to_string();
+                self.settings.status_bar = crate::settings::STATUS_BAR_DEFAULT.to_string();
+                // The font rows go back to the seeds. Nothing is asked of the
+                // terminal: reset clears what Emma stores, and a terminal
+                // whose font somebody set by hand is not Emma's to undo.
+                self.settings.font_families = font_families(&stored.appearance, &terminal);
+                self.settings.font_family = self.settings.font_families[0].clone();
+                self.settings.font_size = super::termfont::DEFAULT_SIZE;
+                self.settings.sampling_temperature = None;
+                self.settings.sampling_max_output_tokens = None;
+                self.settings.sampling_stream = None;
                 self.settings.notice = Some(format!(
-                    "reset: theme, memory capture and prune history cleared to defaults — \
-                     written to {}",
+                    "reset: theme, accent, glyphs, status bar, fonts, hints, memory capture, \
+                     training capture, prune history, the memory policy block and the \
+                     per-provider sampling block cleared to defaults — written to {}. The \
+                     provider, the models and the tool rules in settings.local.json were not \
+                     touched, and the terminal's own font is left exactly as it is",
                     path.display()
                 ));
             }
@@ -603,6 +1516,20 @@ impl App {
         self.home = Some(home);
     }
 
+    /// Aim the tool-permission rows at a settings.local.json a test owns.
+    #[cfg(test)]
+    pub(crate) fn set_policy_file(&mut self, file: std::path::PathBuf) {
+        self.policy_file_override = Some(file);
+    }
+
+    /// Where a tool rule is written and read: the seam a test overrides, and
+    /// otherwise this project's own file.
+    fn policy_file(&self) -> Option<std::path::PathBuf> {
+        self.policy_file_override
+            .clone()
+            .or_else(settings_policy_file)
+    }
+
     /// Aim the Test Connection ping at a listener a test owns.
     #[cfg(test)]
     pub(crate) fn set_ollama_host(&mut self, host: String) {
@@ -631,11 +1558,459 @@ impl App {
             self.memory_cwd = cwd.to_string();
             self.settings_open = false;
             self.harness = None;
+            self.help = None;
+            self.code = None;
         }
     }
 
     pub fn memory_open(&self) -> bool {
         self.memory.is_some()
+    }
+
+    /// Open or close the Help page.
+    ///
+    /// One main-region occupant at a time, the rule the other three obey: it
+    /// closes them and they close it. Opening resets the scroll, because a
+    /// page reopened halfway down is a page that looks empty.
+    pub fn toggle_help(&mut self) {
+        if self.help.take().is_none() {
+            self.help = Some(super::help::HelpView::default());
+            self.settings_open = false;
+            self.memory = None;
+            self.harness = None;
+            self.code = None;
+        }
+    }
+
+    pub fn help_open(&self) -> bool {
+        self.help.is_some()
+    }
+
+    /// One key, while the Help page is open. `false` lets the global layer
+    /// (Ctrl+/, Ctrl-C, the Alt layer) keep it, which is what makes the chord
+    /// that opened the page the chord that closes it.
+    pub fn help_key(&mut self, key: ratatui::crossterm::event::KeyEvent) -> bool {
+        use super::help::HelpAction;
+        let Some(view) = self.help.as_mut() else {
+            return false;
+        };
+        match super::help::handle_key(view, key) {
+            HelpAction::None => false,
+            HelpAction::Close => {
+                self.help = None;
+                true
+            }
+            HelpAction::Held | HelpAction::Scrolled => true,
+        }
+    }
+
+    /// Alt+c. The repository root is the run's working directory.
+    ///
+    /// `code_git::paths` shells `git ls-files` (16 to 46 ms measured) once,
+    /// here, on the same footing as the Harness page's read, not per key.
+    pub fn toggle_code(&mut self, cwd: &str) {
+        if self.code.take().is_none() {
+            let root = std::path::PathBuf::from(cwd);
+            let nodes = super::code::build_nodes(&super::code_git::paths(&root));
+            self.code = Some(super::code::CodeView::new(root, nodes));
+            self.settings_open = false;
+            self.memory = None;
+            self.harness = None;
+            self.help = None;
+        }
+    }
+
+    pub fn code_open(&self) -> bool {
+        self.code.is_some()
+    }
+
+    /// One key for the open Code page. The bool is whether the page kept it;
+    /// the predicate is [`super::code::takes_key`], so the shell and the page
+    /// cannot disagree about which keys belong to it.
+    pub fn code_key(
+        &mut self,
+        key: ratatui::crossterm::event::KeyEvent,
+    ) -> (bool, Option<CodeJob>) {
+        let takes = self
+            .code
+            .as_ref()
+            .is_some_and(|v| super::code::takes_key(v, key));
+        if !takes {
+            return (false, None);
+        }
+        let action = {
+            let v = self.code.as_mut().expect("checked just above");
+            super::code::handle_key(v, key)
+        };
+        let job = self.code_act(action);
+        // One hash per key, click or paste. `code_lsp_changed` returns
+        // without posting when the buffer is the one already sent, so a
+        // cursor key costs a hash and nothing else.
+        self.code_lsp_changed();
+        (true, job)
+    }
+
+    /// A left press while the Code page is open. `false` lets the press fall
+    /// through: two controls work on this page, and a page must not swallow
+    /// the rest of the surface (the sidebar's rule).
+    pub fn code_click(&mut self, col: u16, row: u16) -> (bool, Option<CodeJob>) {
+        let area = self.code_area;
+        let Some(v) = self.code.as_mut() else {
+            return (false, None);
+        };
+        let Some(hit) = super::code::click(v, area, col, row) else {
+            return (false, None);
+        };
+        let action = super::code::act(v, hit);
+        let job = self.code_act(action);
+        // One hash per key, click or paste. `code_lsp_changed` returns
+        // without posting when the buffer is the one already sent, so a
+        // cursor key costs a hash and nothing else.
+        self.code_lsp_changed();
+        (true, job)
+    }
+
+    /// A bracketed paste while the Code page is open. `false` when the page is
+    /// closed, so the input box keeps every paste it used to get.
+    pub fn code_paste(&mut self, text: &str) -> (bool, Option<CodeJob>) {
+        let Some(v) = self.code.as_mut() else {
+            return (false, None);
+        };
+        let action = v.paste_text(text);
+        let job = self.code_act(action);
+        // One hash per key, click or paste. `code_lsp_changed` returns
+        // without posting when the buffer is the one already sent, so a
+        // cursor key costs a hash and nothing else.
+        self.code_lsp_changed();
+        (true, job)
+    }
+
+    /// A drag with the button down over the Code page's document: the
+    /// selection extends to the cell under the pointer. `false` when the page
+    /// is closed or the pointer is off the document, which hands the drag back
+    /// to whatever the press went to.
+    pub fn code_drag(&mut self, col: u16, row: u16) -> bool {
+        let area = self.code_area;
+        let Some(v) = self.code.as_mut() else {
+            return false;
+        };
+        let Some((line, c)) = super::code::cell_to_pos(v, area, col, row) else {
+            return false;
+        };
+        v.drag_doc(line, c);
+        true
+    }
+
+    /// The button coming up over the Code page: whatever the drag selected
+    /// goes to the clipboard, through the same job `F4` uses. `false` when the
+    /// page is closed or nothing was selected.
+    pub fn code_release(&mut self) -> (bool, Option<CodeJob>) {
+        let Some(v) = self.code.as_mut() else {
+            return (false, None);
+        };
+        let action = v.copy_selection();
+        if action == super::code::CodeAction::None {
+            return (false, None);
+        }
+        let job = self.code_act(action);
+        // One hash per key, click or paste. `code_lsp_changed` returns
+        // without posting when the buffer is the one already sent, so a
+        // cursor key costs a hash and nothing else.
+        self.code_lsp_changed();
+        (true, job)
+    }
+
+    /// The wheel while the Code page is open: the body scrolls, the tree does
+    /// not. `false` gives the notch back to the transcript.
+    pub fn code_scroll(&mut self, up: bool) -> (bool, Option<CodeJob>) {
+        let Some(v) = self.code.as_mut() else {
+            return (false, None);
+        };
+        let action = v.wheel(up);
+        if action == super::code::CodeAction::None {
+            return (false, None);
+        }
+        (true, self.code_act(action))
+    }
+
+    // region: The language-server bridge
+    // -----------------------------------------------------------------------
+    // Six small methods, and not one of them waits for anything. Each ends in a
+    // `code_lsp::Handle::post`, which is a `try_send` on a bounded channel: a
+    // full queue or a dead task drops the request and the page simply lacks
+    // decorations. See `super::code_lsp` for the law this obeys and why.
+    // -----------------------------------------------------------------------
+
+    /// Wire the page to a bridge. Called once, from `main`.
+    pub fn set_code_lsp(&mut self, handle: super::code_lsp::Handle) {
+        self.code_lsp = Some(handle);
+    }
+
+    /// Tell the server about the file that was just opened.
+    fn code_lsp_open(&mut self) {
+        let Some(handle) = self.code_lsp.as_ref() else {
+            return;
+        };
+        let Some(open) = self
+            .code
+            .as_ref()
+            .and_then(|v| v.open.as_ref())
+            .filter(|o| o.note.is_none())
+        else {
+            self.code_sent = None;
+            return;
+        };
+        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
+        self.code_sent = Some((
+            open.path.clone(),
+            super::code_git::hash_bytes(text.as_bytes()),
+        ));
+        handle.post(super::code_lsp::Request::Open {
+            rel: open.path.clone(),
+            text,
+        });
+    }
+
+    /// Send the buffer if, and only if, it is not the one already sent. A key
+    /// that moved the cursor changed nothing the server needs to hear about.
+    fn code_lsp_changed(&mut self) {
+        let Some(handle) = self.code_lsp.as_ref() else {
+            return;
+        };
+        let Some(open) = self.code.as_ref().and_then(|v| v.open.as_ref()) else {
+            return;
+        };
+        if open.note.is_some() {
+            return;
+        }
+        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
+        let hash = super::code_git::hash_bytes(text.as_bytes());
+        let rel = open.path.clone();
+        if self.code_sent.as_ref() == Some(&(rel.clone(), hash)) {
+            return;
+        }
+        self.code_sent = Some((rel.clone(), hash));
+        handle.post(super::code_lsp::Request::Change { rel, text });
+    }
+
+    /// Tell the server the buffer was written.
+    fn code_lsp_saved(&mut self) {
+        let Some(handle) = self.code_lsp.as_ref() else {
+            return;
+        };
+        let Some(open) = self.code.as_ref().and_then(|v| v.open.as_ref()) else {
+            return;
+        };
+        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
+        self.code_sent = Some((
+            open.path.clone(),
+            super::code_git::hash_bytes(text.as_bytes()),
+        ));
+        handle.post(super::code_lsp::Request::Save {
+            rel: open.path.clone(),
+            text,
+        });
+    }
+
+    /// Tell the server the buffer is gone, so a document nobody is looking at
+    /// does not sit in an index the model will later ask about.
+    fn code_lsp_close(&mut self) {
+        let Some(handle) = self.code_lsp.as_ref() else {
+            return;
+        };
+        if let Some(rel) = self
+            .code
+            .as_ref()
+            .and_then(|v| v.open.as_ref())
+            .map(|o| o.path.clone())
+        {
+            handle.post(super::code_lsp::Request::Close { rel });
+        }
+        self.code_sent = None;
+    }
+
+    /// Ask for hover, or for a definition, at the cursor.
+    fn code_lsp_ask(&mut self, definition: bool) {
+        let Some(handle) = self.code_lsp.as_ref() else {
+            // The honest refusal: "no bridge in this run" is not "no definition
+            // found", and the page must not show the second when the first is
+            // true.
+            if let Some(view) = self.code.as_mut() {
+                view.lsp.note = Some("code intelligence is not wired in this run".to_string());
+            }
+            return;
+        };
+        let Some(view) = self.code.as_ref() else {
+            return;
+        };
+        let Some(open) = view.open.as_ref().filter(|o| o.note.is_none()) else {
+            return;
+        };
+        let (rel, line, col) = (open.path.clone(), open.line, open.col);
+        let text = super::code_git::joined(&open.lines, open.ending, open.trailing_newline);
+        handle.post(if definition {
+            super::code_lsp::Request::Definition {
+                rel,
+                text,
+                line,
+                col,
+            }
+        } else {
+            super::code_lsp::Request::Hover {
+                rel,
+                text,
+                line,
+                col,
+            }
+        });
+    }
+
+    /// Fold one answer from the bridge into the page, and follow a definition
+    /// that landed in another file.
+    ///
+    /// Runs on the frame's task side under the paint lock, which is why it does
+    /// no IO beyond the one file read a cross-file jump needs, and that read is
+    /// `code_git::read_file`, the same one `CodeAction::Open` was measured at
+    /// 195 to 677 microseconds.
+    pub fn code_lsp_update(&mut self, update: super::code::LspUpdate) {
+        let Some(view) = self.code.as_mut() else {
+            return;
+        };
+        let Some((rel, line, col)) = view.apply_lsp(update) else {
+            return;
+        };
+        // A cross-file jump, and the one place the shell still converts a
+        // column: `col` is a UTF-16 offset into a file nothing had read. The
+        // bridge converts the same-file case itself, where it holds the buffer.
+        let action = super::code::CodeAction::Open(rel.clone());
+        let _ = self.code_act(action);
+        if let Some(view) = self.code.as_mut() {
+            let converted = view
+                .open
+                .as_ref()
+                .and_then(|o| o.lines.get(line))
+                .map(|l| {
+                    let bytes = emma_tools_lsp::doc::byte_offset(l, col as u32);
+                    l[..bytes.min(l.len())].chars().count()
+                })
+                .unwrap_or(col);
+            view.jump_to(line, converted);
+            view.lsp.note = Some(format!("{rel}:{}", line + 1));
+        }
+    }
+
+    // endregion: The language-server bridge
+
+    /// The line the chat strip composed, taken once. `None` on every other
+    /// key, so a reader that asks after each one costs nothing.
+    pub fn take_code_line(&mut self) -> Option<String> {
+        self.code_line.take()
+    }
+
+    /// What the Code page just sent to the clipboard, for its notice row.
+    /// Sent, not arrived: OSC 52 has no acknowledgement.
+    pub fn code_notice_sent(&mut self, chars: usize) {
+        if let Some(v) = self.code.as_mut() {
+            v.notice_sent(chars);
+        }
+    }
+
+    /// The worker's answer to `CodeJob::History`, and the hash whose patch to
+    /// fetch next.
+    pub fn code_set_history(&mut self, commits: Vec<super::code_git::Commit>) -> Option<String> {
+        self.code.as_mut()?.set_history(commits, None)
+    }
+
+    /// The worker's answer to `CodeJob::Diff`. `false` when it was for a
+    /// commit that is no longer selected, which is dropped rather than drawn.
+    pub fn code_set_diff(&mut self, hash: &str, rows: Vec<super::code_git::DiffRow>) -> bool {
+        self.code.as_mut().is_some_and(|v| v.set_diff(hash, rows))
+    }
+
+    /// One dispatch for every `CodeAction`, whether a key or a click produced
+    /// it. The reads that are cheap happen here; the ones that are not become
+    /// a `CodeJob`.
+    fn code_act(&mut self, action: super::code::CodeAction) -> Option<CodeJob> {
+        use super::code::CodeAction;
+        let root = self.code.as_ref()?.root.clone();
+        match action {
+            // Measured at 195 to 677 microseconds on real files, capped by
+            // `read_file` itself. Cheap enough for the input thread.
+            CodeAction::Open(rel) => {
+                let path = super::code_git::abs(&root, &rel);
+                let read = super::code_git::read_file(&path);
+                // Two reads, deliberately. The page compares this hash against
+                // the bytes it would write back unedited and locks the buffer
+                // when they disagree: a mixed-terminator file, or one rewritten
+                // between the two reads. See `code::OpenFile::from_read`.
+                let hash = super::code_git::file_hash(&path);
+                self.code.as_mut()?.set_open(rel, read, hash);
+                // The server hears about the file the moment the page does.
+                self.code_lsp_open();
+                None
+            }
+            CodeAction::LoadHistory => {
+                self.code.as_ref()?.open.as_ref().map(|o| CodeJob::History {
+                    root,
+                    rel: o.path.clone(),
+                })
+            }
+            CodeAction::LoadDiff(hash) => {
+                self.code.as_ref()?.open.as_ref().map(|o| CodeJob::Diff {
+                    root,
+                    rel: o.path.clone(),
+                    hash,
+                })
+            }
+            CodeAction::LaunchEditor => Some(CodeJob::Editor { root }),
+            // A write of at most `code_git::MAX_FILE` bytes to a temp file and
+            // a rename, in the same band as the read that opened the file, so
+            // it stays on the input thread with that read. The answer goes
+            // straight back to the page, which is the only half that knows
+            // whether the buffer is still dirty.
+            CodeAction::Save(req) => {
+                let saved = super::code_git::save_file(
+                    &root,
+                    &req.rel,
+                    &req.lines,
+                    req.ending,
+                    req.trailing_newline,
+                    req.expect,
+                );
+                self.code.as_mut()?.set_saved(saved);
+                self.code_lsp_saved();
+                None
+            }
+            CodeAction::Copy(text) => Some(CodeJob::Copy(text)),
+            // Composed by the page, because the page is the half that holds the
+            // buffer, its unsaved edits, the visible line range and the reason a
+            // read had to be changed. This side only carries it.
+            CodeAction::Ask(line) => {
+                self.code_line = Some(line);
+                None
+            }
+            // The page decided *whether* to ask (`ask_lsp` refuses in words
+            // when there is no readable file); this side decides *what to send*,
+            // because the cursor and the buffer live on the page and the
+            // channel lives here. Neither waits: `post` is a `try_send`.
+            CodeAction::Hover => {
+                self.code_lsp_ask(false);
+                None
+            }
+            CodeAction::Definition => {
+                self.code_lsp_ask(true);
+                None
+            }
+            CodeAction::Close => {
+                // Before the page goes: it reads the open file's name, and a
+                // document nobody is looking at must not sit in an index the
+                // model will later ask about.
+                self.code_lsp_close();
+                self.code = None;
+                None
+            }
+            CodeAction::None | CodeAction::FocusChanged => None,
+        }
     }
 
     /// Alt+h. Reads real session history on every open — the dashboard shows
@@ -650,6 +2025,8 @@ impl App {
             self.harness_cwd = cwd.to_string();
             self.settings_open = false;
             self.memory = None;
+            self.help = None;
+            self.code = None;
         }
     }
 
@@ -679,6 +2056,117 @@ impl App {
             HarnessAction::Close => {
                 self.harness = None;
                 self.harness_cwd.clear();
+            }
+            HarnessAction::Signal(action, key) => {
+                let Some(row) = self.harness_row(&key) else {
+                    self.harness_notice("that run is no longer in the feed");
+                    return true;
+                };
+                let target = crate::runctl::Target::of(&row);
+                let cwd = self.harness_cwd.clone();
+                match crate::runctl::control(&crate::runctl::Os, &target, &cwd, action) {
+                    Ok(pid) => {
+                        // Best effort: the run's own transcript is the record,
+                        // and failing to write it must not undo the signal that
+                        // already went.
+                        if let Err(e) =
+                            crate::runctl::record(&self.harness_dir, &target.session, action, pid)
+                        {
+                            self.harness_notice(&format!("{e:#}"));
+                        } else {
+                            self.harness_notice(&format!(
+                                "{} sent to pid {pid}",
+                                action.signal_name()
+                            ));
+                        }
+                        self.refresh_harness();
+                    }
+                    // Every variant is already a sentence; do not re-word here.
+                    Err(refusal) => self.harness_notice(&refusal.to_string()),
+                }
+            }
+            HarnessAction::Archive(key) => {
+                let Some(row) = self.harness_row(&key) else {
+                    self.harness_notice("that run is no longer in the feed");
+                    return true;
+                };
+                let cwd = self.harness_cwd.clone();
+                match crate::runctl::archive(
+                    &crate::runctl::Os,
+                    &self.harness_dir,
+                    &crate::runctl::Target::of(&row),
+                    &cwd,
+                ) {
+                    Ok(to) => {
+                        self.harness_notice(&format!("archived to {}", to.display()));
+                        self.refresh_harness();
+                    }
+                    Err(e) => self.harness_notice(&format!("{e:#}")),
+                }
+            }
+            HarnessAction::Delete(key) => {
+                let Some(session) = self.harness_row(&key).map(|r| r.session) else {
+                    self.harness_notice("that run is no longer in the feed");
+                    return true;
+                };
+                match crate::runctl::delete(&self.harness_dir, &session) {
+                    Ok(()) => {
+                        self.harness_notice("deleted");
+                        self.refresh_harness();
+                    }
+                    Err(e) => self.harness_notice(&format!("{e:#}")),
+                }
+            }
+            HarnessAction::Launch(goal) => {
+                // `current_exe`, never the bare name: a bare name is resolved
+                // against the child's PATH, and the binary the owner runs is
+                // `~/.cargo/bin/emma`, which may not be the one running now.
+                let program = match std::env::current_exe() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        self.harness_notice(&format!("cannot find this binary to launch: {e}"));
+                        return true;
+                    }
+                };
+                let cwd = std::path::PathBuf::from(&self.harness_cwd);
+                match crate::runctl::spawn(&crate::runctl::launch_for(program, &goal, &cwd)) {
+                    Ok(pid) => self.harness_notice(&format!(
+                        "started pid {pid}; it will appear here when it writes its first record"
+                    )),
+                    Err(e) => self.harness_notice(&format!("{e:#}")),
+                }
+            }
+            HarnessAction::Policy(policy) => {
+                let file = crate::permissions::file_for(std::path::Path::new(&self.harness_cwd));
+                match crate::runctl::write_policy(&file, policy) {
+                    // "next run" is not decoration: a running process read its
+                    // rules at boot and this cannot reach them.
+                    Ok(()) => self
+                        .harness_notice(&format!("{} applies from the next run", policy.label())),
+                    Err(e) => self.harness_notice(&format!("{e:#}")),
+                }
+            }
+            HarnessAction::PolicyShow => {
+                let file = crate::permissions::file_for(std::path::Path::new(&self.harness_cwd));
+                self.harness_notice(&crate::runctl::policy_summary(&file));
+            }
+            HarnessAction::TaskNew(text) => self.harness_task_edit(move |doc| {
+                doc.create(&text, emma_tools_tasks::Status::Pending);
+                Ok(())
+            }),
+            HarnessAction::TaskClearDone => self.harness_task_edit(|doc| {
+                doc.remove_completed();
+                Ok(())
+            }),
+            HarnessAction::TaskMove(up) => {
+                let Some(id) = self.harness_selected_task_id() else {
+                    self.harness_notice(super::harness::NOTICE_NO_TASK);
+                    return true;
+                };
+                self.harness_task_edit(move |doc| {
+                    doc.move_task(&id, up);
+                    Ok(())
+                });
             }
             HarnessAction::None | HarnessAction::FocusChanged | HarnessAction::Help => {}
         }
@@ -786,6 +2274,55 @@ impl App {
                     "run {id} is not in the session logs — [R] refreshes"
                 ));
             }
+        }
+    }
+    /// The `harness_state` row one of the page's runs was built from.
+    ///
+    /// `Run` carries a name, a key and a progress pair, not the `cwd` or the
+    /// `ending` that `runctl::verify` refuses on. Guessing either is how a
+    /// control reaches a process it was never entitled to, so the shell reads
+    /// the row back rather than rebuilding a `Target` from what is drawn.
+    fn harness_row(&self, key: &str) -> Option<crate::harness_state::RunRow> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let feed = crate::harness_state::runs(&self.harness_dir, now).ok()?;
+        feed.runs.into_iter().find(|r| r.id == key)
+    }
+
+    /// Say what happened, on the page, without repainting: the caller is inside
+    /// a key handler and the frame paints after it either way.
+    fn harness_notice(&mut self, text: &str) {
+        if let Some(v) = self.harness.as_mut() {
+            v.notice = Some(text.to_string());
+        }
+    }
+
+    /// The task file's own handle for the highlighted row, which is what a
+    /// mutation names. The drawn number is a position and cannot find the task
+    /// again after a reorder.
+    fn harness_selected_task_id(&self) -> Option<String> {
+        let v = self.harness.as_ref()?;
+        let at = v.selected_task?;
+        v.tasks.get(at).map(|t| t.id.clone())
+    }
+
+    /// One change to `.emma/tasks/tasks.md`, through the tool crate's own
+    /// read-modify-write, then a refresh so the page shows the file rather than
+    /// what this process believes about it.
+    ///
+    /// The store retries on a collision and gives up loudly; a failure is said
+    /// on the page rather than swallowed, because a reorder that silently did
+    /// nothing is the defect this whole card exists to avoid.
+    fn harness_task_edit(
+        &mut self,
+        change: impl FnMut(&mut emma_tools_tasks::Doc) -> Result<(), emma_tool_api::ToolError>,
+    ) {
+        let file = std::path::Path::new(&self.harness_cwd).join(emma_tools_tasks::RELATIVE_PATH);
+        match emma_tools_tasks::store::edit(&file, change) {
+            Ok(()) => self.refresh_harness(),
+            Err(e) => self.harness_notice(&format!("{e}")),
         }
     }
 
@@ -934,6 +2471,13 @@ impl App {
             collapsed: !hidden(total_cols, self.latch),
             by_user: true,
         };
+        // A hidden list must not keep the arrows. Otherwise Ctrl-B closes the
+        // pane and Up goes on moving a selection nobody can see, which is the
+        // same hole `focus_sessions` opens a collapsed sidebar to avoid,
+        // reached from the other side.
+        if hidden(total_cols, self.latch) {
+            self.blur_sessions();
+        }
     }
 
     /// The run's identity arrived: SESSIONS fills with the sessions that ran
@@ -984,6 +2528,11 @@ impl App {
             trailing: relative_time(now_ms, now_ms, offset),
             selected: true,
         }];
+        // The ids move with the rows, index for index. A row that lost its id
+        // would be a row whose click resumes whatever happens to be at that
+        // position, which is the failure `SidebarAction::Resume` carries a
+        // `String` to avoid.
+        let mut ids = vec![scope.current.clone()];
         let feed = scope
             .dir
             .as_deref()
@@ -1003,13 +2552,130 @@ impl App {
                 rows[0].trailing = relative_time(s.last_event_ms, now_ms, offset);
                 continue;
             }
+            ids.push(s.id);
             rows.push(sidebar::Row {
                 name: s.name,
                 trailing: relative_time(s.last_event_ms, now_ms, offset),
                 selected: false,
             });
         }
+        // A focus that outlived the list it was on lands on the last row rather
+        // than on nothing: the list only ever changes while somebody is looking
+        // at it, and a selection that silently disappeared would be a keystroke
+        // that did nothing.
+        if let Some(i) = self.sessions_focus {
+            self.sessions_focus = Some(i.min(rows.len().saturating_sub(1)));
+        }
+        self.session_ids = ids;
         self.side.sessions = rows;
+        self.paint_session_selection();
+    }
+
+    /// Put the highlight band where the keyboard is, or back on the running
+    /// session when the keyboard is not on the list.
+    ///
+    /// One function rather than a `selected` flag written at each of the places
+    /// a row is built: the band means "this is the row your keys act on" while
+    /// the list has focus and "this is the session you are in" otherwise, and
+    /// those are different rows.
+    fn paint_session_selection(&mut self) {
+        for (i, row) in self.side.sessions.iter_mut().enumerate() {
+            row.selected = match self.sessions_focus {
+                Some(focus) => i == focus,
+                None => i == 0,
+            };
+        }
+    }
+
+    /// Give the SESSIONS list the arrows. `false` when there is nothing to
+    /// select, which is what `/resume` reports rather than leaving the user
+    /// pressing keys at a list that is not there.
+    pub fn focus_sessions(&mut self) -> bool {
+        if self.side.sessions.is_empty() {
+            return false;
+        }
+        // A collapsed sidebar is opened rather than worked around. `/resume`
+        // with no argument is a person asking to be shown the list, and the
+        // alternative is either an invisible selection eating the arrows or a
+        // second picker overlay listing the same files — a second answer to
+        // "where was I" that can disagree with this one. The latch is set as a
+        // user toggle because that is what it is: the user asked for the pane.
+        self.latch = Latch {
+            collapsed: false,
+            by_user: true,
+        };
+        self.sessions_focus = Some(0);
+        self.paint_session_selection();
+        true
+    }
+
+    pub fn sessions_focused(&self) -> bool {
+        self.sessions_focus.is_some()
+    }
+
+    /// Take the arrows back. Idempotent, because Esc is pressed at things that
+    /// are already gone.
+    pub fn blur_sessions(&mut self) {
+        if self.sessions_focus.take().is_some() {
+            self.paint_session_selection();
+        }
+    }
+
+    /// Move the selection, clamped rather than wrapped: a list that wraps makes
+    /// "hold Down" a way to arrive somewhere unintended, and the running
+    /// session is at the top where a resume is a no-op.
+    pub fn move_session_selection(&mut self, down: bool) {
+        let Some(i) = self.sessions_focus else { return };
+        let last = self.side.sessions.len().saturating_sub(1);
+        self.sessions_focus = Some(if down {
+            (i + 1).min(last)
+        } else {
+            i.saturating_sub(1)
+        });
+        self.paint_session_selection();
+    }
+
+    /// The id the highlighted row names, when the keyboard is on the list.
+    pub fn selected_session(&self) -> Option<String> {
+        self.session_ids.get(self.sessions_focus?).cloned()
+    }
+
+    /// The id a SESSIONS row names, by the index the paint reported.
+    pub fn session_id_at(&self, i: usize) -> Option<String> {
+        self.session_ids.get(i).cloned()
+    }
+
+    /// Whether interface hints are on. See the [`App::hints`] field.
+    pub fn hints(&self) -> bool {
+        self.hints
+    }
+
+    /// Hand the shell's resolved `ui.hints` in, once, at startup.
+    ///
+    /// A seam rather than a read, for the reason `policy_file_override` exists:
+    /// `App::new` runs in every test in this module, and a constructor that
+    /// read `settings.json` would make each of them a fact about whoever's
+    /// machine ran it. The shell has already loaded the file by the time it
+    /// builds a frame, so it says.
+    pub fn set_hints(&mut self, on: bool) {
+        self.hints = on;
+    }
+
+    /// Hand this screen the provider the session's client is really bound to.
+    ///
+    /// **The gap it closes.** `toggle_settings` resolves the bound provider
+    /// from `settings.json`, because that is the only source it has. A run
+    /// started with `--provider ollama` against a file that says `anthropic` is
+    /// then described by its own Settings screen as bound to something it is
+    /// not — and the Provider row exists precisely to show the two facts when
+    /// they disagree. The shell knows which client it built; this is where it
+    /// says so, and the screen prefers it over the file.
+    pub fn set_running_provider(&mut self, name: String) {
+        self.provider_running = Some(name.clone());
+        // A screen already open shows it without waiting for a reopen.
+        if self.settings_open {
+            self.settings.provider = name;
+        }
     }
 
     /// Whether a left-button press landed on the SESSIONS header's `[+]`.
@@ -1018,6 +2684,27 @@ impl App {
     /// looked up, which is what keeps the decision a pure function.
     pub fn new_session_clicked(&self, col: u16, row: u16, prompt_pending: bool) -> bool {
         !prompt_pending && self.sessions_add.is_some_and(|rect| within(rect, col, row))
+    }
+
+    /// Which sidebar row a left-button press landed on, if any.
+    ///
+    /// `prompt_pending` is the shell's to know and is passed in rather than
+    /// looked up, exactly as [`Self::new_session_clicked`] takes it: while a
+    /// question is on screen the pointer belongs to it.
+    ///
+    /// The rectangles are the last paint's, not a fresh computation — the A6
+    /// arrangement, which is what stops the hit test agreeing with itself and
+    /// disagreeing with the screen.
+    pub fn sidebar_row_click(
+        &self,
+        col: u16,
+        row: u16,
+        prompt_pending: bool,
+    ) -> Option<sidebar::Hit> {
+        if prompt_pending {
+            return None;
+        }
+        sidebar::hit(&self.sidebar_hits, col, row)
     }
 
     /// The TOOLS catalogue, as rows — mapped by [`tool_rows`] and handed in so
@@ -1071,6 +2758,8 @@ impl App {
                         Some(sidebar::Tool::Memory)
                     } else if self.harness.is_some() {
                         Some(sidebar::Tool::Harness)
+                    } else if self.code.is_some() {
+                        Some(sidebar::Tool::Code)
                     } else {
                         None
                     },
@@ -1078,6 +2767,7 @@ impl App {
                 &self.tools,
             ),
             help: sidebar::quick_help(ascii),
+            today: Some(today_local()),
             collapsed,
         };
 
@@ -1087,17 +2777,20 @@ impl App {
         // paint, and anything highlighted goes with it. Settings and Memory
         // are out of scope by the owner's decision, and "out of scope" has to
         // mean the mouse cannot reach them, not that nobody has tried.
-        if self.settings_open || self.memory.is_some() {
+        if self.settings_open || self.memory.is_some() || self.help.is_some() || self.code.is_some()
+        {
             self.chat_rect = Rect::new(0, 0, 0, 0);
             self.scrollbar = None;
             self.bar_grab = None;
             self.notice = None;
             self.selection = None;
             self.chat_cells.clear();
+            self.chat_cells_start = 0;
         }
         // Stale control rects must not keep catching clicks after the page
         // closes or a sub-page takes over; the pages' paints refill them.
         self.harness_hits = super::harness::Hits::default();
+        self.code_area = Rect::new(0, 0, 0, 0);
         self.settings_hits = super::settings::Hits::default();
 
         // The main region's width is what the input box wraps to, so the
@@ -1115,12 +2808,30 @@ impl App {
             // itself: there is no control on screen and no cell that acts
             // like one.
             self.sessions_add = new_session_hit(r.sidebar);
+            // The clickable rows, from the paint's own arithmetic rather than
+            // from a second pass over the same state: `sidebar::hits` and
+            // `sidebar::render` both go through `painted`, so a row cannot be
+            // drawn in one place and hit-tested in another. A collapsed or
+            // too-small pane reports nothing, which is the truth about it.
+            self.sidebar_hits = sidebar::hits(r.sidebar, &side, skin);
             if self.settings_open {
                 self.settings_screen(r, buf, view);
                 // The cursor is parked because there is nothing to type into.
                 None
             } else if let Some(mv) = &self.memory {
                 super::memory::render(r.main, buf, mv, &view.skin);
+                None
+            } else if let Some(hv) = &self.help {
+                // The paint is what knows how tall the window is, so it hands
+                // back the page size and the scroll ceiling, and the view is
+                // clamped to what a smaller terminal has just made
+                // unreachable: the Run Graph's `canvas_rows` rule.
+                let m = super::help::render(r.main, buf, hv, &view.skin);
+                if let Some(hv) = self.help.as_mut() {
+                    hv.page_rows = m.page_rows;
+                    hv.max_scroll = m.max_scroll;
+                    hv.scroll = hv.scroll.min(m.max_scroll);
+                }
                 None
             } else if let Some(hv) = &self.harness {
                 // The paint reports where the clickable controls landed;
@@ -1137,6 +2848,24 @@ impl App {
                     gv.canvas_rows = rows;
                     gv.scroll = gv.scroll.min(super::rungraph::max_scroll(gv));
                 }
+                None
+            } else if let Some(cv) = &self.code {
+                let regions = super::code::render(r.main, buf, cv, &view.skin);
+                // Only the paint knows how many rows the body had; the key
+                // handler needs it for PageUp and PageDown.
+                self.code_area = r.main;
+                let rows = regions.rows;
+                let strip = regions.strip.is_some();
+                if let Some(cv) = self.code.as_mut() {
+                    cv.body_rows = rows;
+                    // And only the paint knows whether the pane had room for
+                    // the chat strip. Tab must not reach a box nobody can see.
+                    cv.strip_shown = strip;
+                }
+                // The terminal cursor stays parked. The chat strip *is* typed
+                // into, but it draws its own cursor cell, like every other
+                // cursor on this page; this line used to say nothing on this
+                // page is typed into, and that stopped being true here.
                 None
             } else {
                 self.chat_screen(r, buf, view)
@@ -1229,7 +2958,8 @@ impl App {
             );
         }
         self.highlight(pane, buf);
-        self.chat_cells = snapshot(pane, buf);
+        let start = self.transcript.window_start(pane.height);
+        self.record_cells(start, snapshot(pane, buf));
 
         let cursor = match &view.prompt {
             Some(prompt) => view.render_prompt(prompt, r.dock, buf),
@@ -1274,6 +3004,13 @@ impl App {
         if col != x || row < pane.y || row >= pane.bottom() {
             return false;
         }
+        // Dead travel first: an offset past the last useful row draws the
+        // same screen as the last useful row, and a drag measured from it
+        // would spend its first pixels moving nothing.
+        let top = transcript::max_offset(self.transcript.total_rows(), pane.height);
+        if self.transcript.scroll_offset() > top {
+            self.transcript.scroll_to(top);
+        }
         let hit = transcript::grab(
             self.transcript.total_rows(),
             pane.height,
@@ -1281,8 +3018,15 @@ impl App {
             row - pane.y,
         );
         match hit {
-            Some(transcript::Grab::Thumb(held)) => self.bar_grab = Some(held),
-            Some(transcript::Grab::PageUp) => self.transcript.scroll_up(self.page()),
+            Some(transcript::Grab::Thumb(_)) => {
+                self.bar_grab = Some((self.transcript.scroll_offset(), row - pane.y));
+            }
+            Some(transcript::Grab::PageUp) => {
+                self.transcript.scroll_up(self.page());
+                if self.transcript.scroll_offset() > top {
+                    self.transcript.scroll_to(top);
+                }
+            }
             Some(transcript::Grab::PageDown) => self.transcript.scroll_down(self.page()),
             None => return false,
         }
@@ -1297,7 +3041,7 @@ impl App {
     /// The pointer moved with the thumb held. `true` when the view moved,
     /// which is the answer the caller repaints on.
     pub fn bar_drag(&mut self, row: u16) -> bool {
-        let Some(held) = self.bar_grab else {
+        let Some(press) = self.bar_grab else {
             return false;
         };
         let pane = self.chat_rect;
@@ -1308,7 +3052,7 @@ impl App {
         // ordinary drag, and the two clamps are the two ends of the track.
         let track_row = row.clamp(pane.y, pane.bottom() - 1) - pane.y;
         let offset =
-            transcript::drag_offset(self.transcript.total_rows(), pane.height, held, track_row);
+            transcript::drag_offset(self.transcript.total_rows(), pane.height, press, track_row);
         let moved = offset != self.transcript.scroll_offset();
         self.transcript.scroll_to(offset);
         moved
@@ -1360,6 +3104,10 @@ impl App {
     /// The pointer moved with the button down. Clamped into the pane rather
     /// than dropped: a drag that runs off the edge is a normal drag, and
     /// losing it there would leave a selection that stops mid-word.
+    ///
+    /// A pointer *on* the edge row scrolls the view instead of stopping
+    /// there, which is what every editor does and what makes a selection
+    /// longer than the pane possible at all. See [`Self::selection_scroll`].
     pub fn selection_extend(&mut self, col: u16, row: u16) {
         let Some((anchor, _)) = self.selection else {
             return;
@@ -1368,9 +3116,84 @@ impl App {
         if pane.width == 0 || pane.height == 0 {
             return;
         }
+        // Scroll first, then read the head: the row the pointer is on now
+        // holds different text than it did a moment ago, and the head belongs
+        // to the text rather than to the cell.
+        self.selection_scroll(pane, row);
         let x = col.clamp(pane.x, pane.right() - 1) - pane.x;
         let y = row.clamp(pane.y, pane.bottom() - 1) - pane.y;
-        self.selection = Some((anchor, (y, x)));
+        let start = self.transcript.window_start(pane.height);
+        self.selection = Some((anchor, (start + usize::from(y), x)));
+    }
+
+    /// One step of drag auto-scroll, or nothing when the pointer is inside
+    /// the pane.
+    ///
+    /// ⚠ A STEP PER EVENT, AND NO TIMER. A terminal mouse only reports on
+    /// movement, so holding still at the edge reports nothing and this
+    /// repeats only while the pointer keeps moving. That is the honest thing
+    /// a cell grid can do without a repaint loop running off a clock, which
+    /// is the same argument the copy notice's ⚠ makes about chrome that
+    /// changes with no event behind it.
+    ///
+    /// The far step is the wheel's, not a new number: a pointer well past the
+    /// edge is asking for distance, and the reader already knows what three
+    /// rows feels like.
+    fn selection_scroll(&mut self, pane: Rect, row: u16) {
+        let last = pane.bottom() - 1;
+        let (up, past) = if row <= pane.y {
+            (true, pane.y - row)
+        } else if row >= last {
+            (false, row - last)
+        } else {
+            return;
+        };
+        let step = if past > 1 { DRAG_FAR_ROWS } else { 1 };
+        if up {
+            self.transcript.scroll_up(step);
+            // The bar's clamp, for the bar's reason: offset past `max_offset`
+            // is travel the view cannot show, and a drag held at the top edge
+            // would bank a row of it per event and then spend the way back
+            // down undoing it.
+            let top = transcript::max_offset(self.transcript.total_rows(), pane.height);
+            if self.transcript.scroll_offset() > top {
+                self.transcript.scroll_to(top);
+            }
+        } else {
+            self.transcript.scroll_down(step);
+        }
+    }
+
+    /// Keep the painted rows a selection may still need.
+    ///
+    /// While nothing is selected this is the old behaviour exactly: the
+    /// snapshot is the pane. While a drag is live it extends at whichever end
+    /// the scroll revealed, because those rows are inside the selection and
+    /// the pane no longer holds them. A window that has jumped clear of what
+    /// is kept starts over, since nothing between the two was ever painted.
+    fn record_cells(&mut self, start: usize, rows: Vec<Vec<String>>) {
+        let have_end = self.chat_cells_start + self.chat_cells.len();
+        let end = start + rows.len();
+        if self.selection.is_none()
+            || self.chat_cells.is_empty()
+            || start > have_end
+            || end < self.chat_cells_start
+        {
+            self.chat_cells = rows;
+            self.chat_cells_start = start;
+            return;
+        }
+        if start < self.chat_cells_start {
+            let take = self.chat_cells_start - start;
+            let mut head = rows[..take].to_vec();
+            head.append(&mut self.chat_cells);
+            self.chat_cells = head;
+            self.chat_cells_start = start;
+        }
+        if end > have_end {
+            let from = have_end - start;
+            self.chat_cells.extend_from_slice(&rows[from..]);
+        }
     }
 
     /// What a mouse selection just sent to the clipboard, for the indicator
@@ -1401,16 +3224,24 @@ impl App {
     /// included, styling gone. Empty when nothing is selected.
     pub fn selection_text(&self) -> String {
         match self.selection {
-            Some((a, b)) => selected_text(&self.chat_cells, a, b),
+            Some((a, b)) => {
+                let start = self.chat_cells_start;
+                let rebase = |c: Cell| (c.0.saturating_sub(start), c.1);
+                selected_text(&self.chat_cells, rebase(a), rebase(b))
+            }
             None => String::new(),
         }
     }
 
-    /// A buffer cell inside the chat pane, in pane coordinates.
+    /// A buffer cell inside the chat pane, in content coordinates: the row is
+    /// the transcript row under the pointer, not the screen row it happens to
+    /// be sitting on right now.
     fn cell_at(&self, col: u16, row: u16) -> Option<Cell> {
         let pane = self.chat_rect;
-        pane.contains(Position::new(col, row))
-            .then(|| (row - pane.y, col - pane.x))
+        pane.contains(Position::new(col, row)).then(|| {
+            let start = self.transcript.window_start(pane.height);
+            (start + usize::from(row - pane.y), col - pane.x)
+        })
     }
 
     /// Reverse the cells under the selection.
@@ -1424,12 +3255,19 @@ impl App {
             return;
         };
         let (first, last) = order(a, b);
-        for y in first.0..=last.0 {
+        // The window the pane is showing, so a selection that runs off either
+        // end of it highlights the part that is on screen and no more.
+        let start = self.transcript.window_start(pane.height);
+        for cy in first.0..=last.0 {
+            let Some(y) = cy.checked_sub(start) else {
+                continue;
+            };
+            let Ok(y) = u16::try_from(y) else { break };
             if y >= pane.height {
                 break;
             }
-            let from = if y == first.0 { first.1 } else { 0 };
-            let to = if y == last.0 { last.1 } else { pane.width - 1 };
+            let from = if cy == first.0 { first.1 } else { 0 };
+            let to = if cy == last.0 { last.1 } else { pane.width - 1 };
             for x in from..=to.min(pane.width - 1) {
                 buf[(pane.x + x, pane.y + y)].modifier |= Modifier::REVERSED;
             }
@@ -1505,8 +3343,16 @@ impl App {
 // not by a terminal, a mouse and a person watching.
 // ---------------------------------------------------------------------------
 
-/// A cell of the chat pane: `(row, column)`, pane-relative.
-pub type Cell = (u16, u16);
+/// A cell as the selection names one: a row and a column. The row is a
+/// content row in [`App::selection`] and an index into a painted snapshot in
+/// [`selected_text`], which is why the conversion between them is spelled out
+/// at the one call site that crosses it.
+pub type Cell = (usize, u16);
+
+/// How far a pointer well past the pane's edge scrolls per event: the
+/// wheel's step, because an overshoot is asking for distance and the reader
+/// already knows what three rows feels like.
+const DRAG_FAR_ROWS: usize = super::input::WHEEL_ROWS;
 
 /// The anchor and head in reading order.
 fn order(a: Cell, b: Cell) -> (Cell, Cell) {
@@ -1533,7 +3379,7 @@ pub fn selected_text(cells: &[Vec<String>], a: Cell, b: Cell) -> String {
     let (first, last) = order(a, b);
     let mut out: Vec<String> = Vec::new();
     for y in first.0..=last.0 {
-        let Some(row) = cells.get(usize::from(y)) else {
+        let Some(row) = cells.get(y) else {
             break;
         };
         let from = usize::from(if y == first.0 { first.1 } else { 0 });
@@ -1814,6 +3660,43 @@ fn harness_view_from(
             newest.status,
             hs::RunStatus::Running | hs::RunStatus::Completed
         ));
+    }
+    // The gates card names whichever of gate and posture is deciding: plan
+    // mode resolves to `Gate::Ask` and then asks nothing, so a card drawing
+    // the gate alone would promise a question that never comes. See
+    // `harness::GATE_PLAN`.
+    v.mode_label = crate::approval::current_mode_label().to_string();
+    // The `Live` badge is a claim about the whole card, so the card decides
+    // rather than this function guessing on its behalf.
+    v.resources.live = v.resources.complete();
+    // The TASK QUEUE, read from the project's own file, which is what makes
+    // [n], [c] and the reorder chord act on something a reader can see. `id`
+    // is the file's handle, because a drawn position cannot find a task again
+    // after a reorder; finished rows stay visible, because [c] Clear Done
+    // acting on invisible data is the defect this card would otherwise ship.
+    if let Ok((doc, _)) = emma_tools_tasks::store::load(
+        &std::path::Path::new(cwd).join(emma_tools_tasks::RELATIVE_PATH),
+    ) {
+        let rows = doc.tasks();
+        v.queue_depth = rows.iter().filter(|t| t.status.is_open()).count() as u64;
+        v.tasks = rows
+            .iter()
+            .enumerate()
+            .map(|(i, t)| super::harness::Task {
+                n: i as u32 + 1,
+                id: t.id.clone(),
+                name: t.text.clone(),
+                state: match t.status {
+                    emma_tools_tasks::Status::InProgress => super::harness::TaskState::Running,
+                    s if s.is_open() => super::harness::TaskState::Pending,
+                    _ => super::harness::TaskState::Done,
+                },
+                progress_pct: None,
+            })
+            .collect();
+        if v.selected_task.is_none() && !v.tasks.is_empty() {
+            v.selected_task = Some(0);
+        }
     }
     v
 }
@@ -2375,35 +4258,48 @@ fn one_line_name(name: &str) -> String {
 /// this is called from `toggle_settings` on the input thread and a spawn there
 /// is a freeze with no way out. What that costs is honesty about the word: the
 /// row says `found`, and `NOTICE_LSP_FOUND` says found means on disk.
-fn lsp_rows(_stored: &crate::settings::Settings) -> (Vec<super::settings::LspRow>, Vec<String>) {
+fn lsp_rows(stored: &crate::settings::Settings) -> (Vec<super::settings::LspRow>, Vec<String>) {
     use super::settings::{LspFound, LspRow};
+    use emma_tools_lsp::lang;
+    use emma_tools_lsp::server::{self, Presence};
 
-    // **One row, because this build has one language server.** The screen
-    // arrived expecting `emma_tools_lsp::lang` — a registry of languages, a
-    // `Presence` probe per language, and an `lsp.enabled` block in
-    // `settings.json` to switch them with. None of the three is in this tree:
-    // `emma_tools_lsp` resolves exactly one server (`server::resolve`, Rust,
-    // `EMMA_LSP_SERVER` to override) and `crate::settings::Settings` has no
-    // `lsp` key. Rendering a table of languages this build cannot start would
-    // be the screen inventing a capability, so it renders the one that exists.
-    //
-    // `found` is still a claim about *resolution* and never about a server that
-    // starts, which is the distinction `LspFound` was drawn for. `network` is
-    // false: rust-analyzer indexes a local crate graph.
-    let (found, enabled) = match emma_tools_lsp::server::resolve() {
-        Ok(_) => (LspFound::Found, true),
-        Err(_) => (LspFound::Absent, false),
-    };
-    let rows = vec![LspRow {
-        label: "Rust".to_string(),
-        key: emma_tools_lsp::server::LANGUAGE_ID.to_string(),
-        enabled,
-        found,
-        network: false,
-    }];
-    // Nothing can be unknown while nothing can be enabled by name: the
-    // `lsp.enabled` block this reported typos in does not exist here.
-    (rows, Vec::new())
+    // One row per language in the table. `found` is a claim about a file on
+    // disk and never about a server that starts: `server::presence` spawns
+    // nothing, because this runs on the input thread from `toggle_settings`
+    // and a spawn there is a freeze with no way out. `server::resolve` is the
+    // truth and costs a process per candidate.
+    let enabled: Vec<String> = stored.lsp.enabled.clone().unwrap_or_else(|| {
+        lang::DEFAULT_ENABLED
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    });
+
+    let rows = lang::LANGUAGES
+        .iter()
+        .map(|l| LspRow {
+            label: l.label.to_string(),
+            key: l.key.to_string(),
+            enabled: enabled.iter().any(|k| k.trim().eq_ignore_ascii_case(l.key)),
+            found: match server::presence(l) {
+                Presence::Found { .. } => LspFound::Found,
+                Presence::NeedsLauncher { needs, .. } => LspFound::Needs(needs.to_string()),
+                Presence::Absent => LspFound::Absent,
+            },
+            network: l.network,
+        })
+        .collect();
+
+    // Keys in `lsp.enabled` that name no language here. Kept and reported
+    // rather than rejected, so a settings file written by a newer build does
+    // not disable the languages this one does know.
+    let unknown = enabled
+        .iter()
+        .filter(|k| lang::by_key(k).is_none())
+        .cloned()
+        .collect();
+
+    (rows, unknown)
 }
 
 /// The TOOL PERMISSIONS card's rows: the rules really in force for this
@@ -2425,6 +4321,108 @@ fn lsp_rows(_stored: &crate::settings::Settings) -> (Vec<super::settings::LspRow
 ///
 /// **Nothing here writes.** See `settings::perm_rows` for why that is the
 /// design and not an unfinished half.
+/// What every settings write says when there is no home directory to write
+/// to. One constant so eleven methods cannot spell the same refusal eleven
+/// ways, and so a test can assert it without copying a sentence.
+const NO_HOME: &str = "no home directory — settings.json cannot be written here";
+
+/// What an absent `memory_policy.auto_recall` means.
+///
+/// The families the Font Family row cycles: what settings.json holds, or the
+/// seed list for this terminal when it holds none.
+///
+/// Never empty, so the row's `[0]` fallback cannot panic:
+/// `termfont::seed_families_here` answers with at least one name on every
+/// platform.
+fn font_families(
+    appearance: &crate::settings::AppearanceSettings,
+    terminal: &super::termfont::Terminal,
+) -> Vec<String> {
+    if !appearance.font_families.is_empty() {
+        return appearance.font_families.clone();
+    }
+    super::termfont::seed_families_here(terminal)
+        .iter()
+        .map(|f| (*f).to_string())
+        .collect()
+}
+
+/// Where a tool rule is written: this project's `settings.local.json`.
+///
+/// The same discovery [`permission_rows`] does, and deliberately the same
+/// function call rather than a second answer — a card whose read and whose
+/// write disagreed about which file they meant would be worse than one that
+/// could do neither. `None` when there is no harness root, which the row says
+/// in words rather than by writing somewhere it guessed.
+fn settings_policy_file() -> Option<std::path::PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    let root = emma_harness::discover_from(
+        &cwd,
+        std::env::var_os(emma_harness::ROOT_ENV).map(std::path::PathBuf::from),
+    )
+    .ok()?;
+    Some(crate::permissions::file_for(&root))
+}
+
+/// Every tool this build can register, and what `file` says about it.
+///
+/// Derived from [`crate::runctl::ALL_TOOLS`] rather than from the file's keys:
+/// a tool with no rule is `Ask`, and a card built from the file alone would
+/// simply not show it. `None` for the file — no harness root — answers the
+/// same way, because "no project rules" and "every tool asks" are the same
+/// fact.
+fn tool_states(file: Option<&std::path::Path>) -> Vec<(String, super::settings::ToolState)> {
+    use super::settings::ToolState;
+    let rules = file.map(crate::permissions::bare_rules).unwrap_or_default();
+    crate::runctl::ALL_TOOLS
+        .iter()
+        .map(|name| {
+            let state = match rules.get(*name) {
+                Some(crate::permissions::Decision::Allow) => ToolState::Allow,
+                Some(crate::permissions::Decision::Deny) => ToolState::Deny,
+                // A `permissions.ask` entry and no entry at all both read as
+                // Ask on the row, and they are not the same thing on disk —
+                // see `set_bare_rule`, which writes the absence rather than an
+                // ask rule. The row cannot show the difference in one word,
+                // and the word it shows is the one the gate will act on.
+                Some(crate::permissions::Decision::Ask) | None => ToolState::Ask,
+            };
+            ((*name).to_string(), state)
+        })
+        .collect()
+}
+
+/// Every provider this build can run, and whether a key for it is on this
+/// machine.
+///
+/// Presence only. The key never reaches this layer, so there is nothing here
+/// that could be echoed into a notice or a screen dump by accident.
+fn provider_keys(home: Option<&std::path::Path>) -> Vec<(String, super::settings::KeyPresence)> {
+    use super::settings::KeyPresence;
+    let stored = home
+        .map(emma_llm::auth::stored_providers)
+        .unwrap_or_default();
+    emma_llm::kind::known()
+        .into_iter()
+        .map(|name| {
+            let presence = match emma_llm::kind(name) {
+                Ok(kind) if !kind.requires_key() => KeyPresence::NotNeeded,
+                Ok(kind)
+                    if std::env::var(kind.env_var()).is_ok_and(|v| !v.trim().is_empty())
+                        || stored.iter().any(|p| p == name) =>
+                {
+                    KeyPresence::Stored
+                }
+                // The unreachable arm is the registry disagreeing with itself
+                // — `known()` just produced this name. Missing rather than a
+                // panic: a settings screen is not the place to abort a run.
+                _ => KeyPresence::Missing,
+            };
+            (name.to_string(), presence)
+        })
+        .collect()
+}
+
 fn permission_rows() -> (Vec<super::settings::PermRow>, Option<String>, bool) {
     use super::settings::PermRow;
 
@@ -2563,15 +4561,34 @@ fn fmt_elapsed(ms: u64) -> String {
     }
 }
 
-/// The last path component, for the status bar's ENV cell. Local rather than
-/// borrowed from `render.rs`, whose copy is private and whose signature may
-/// move with the cell renderers.
-/// What a click on the sidebar asks for. One variant today; an enum rather
-/// than a bool so the second control does not have to rewrite the routing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What a click on the sidebar asks for.
+///
+/// **No longer `Copy`, and that is the point of the variant that made it so.**
+/// A SESSIONS row answers with the session it *names*. Carrying the row index
+/// instead would make the shell look it up again against a list
+/// [`App::refresh_sessions`] rebuilds at the end of every goal, which is how a
+/// click resumes the wrong session.
+///
+/// The stray doc paragraph that used to sit above this enum — "the last path
+/// component, for the status bar's ENV cell" — described `render.rs`'s
+/// `last_component` and arrived here with the TUI import, so rustdoc printed
+/// it as this type's summary. It is gone rather than moved: this tree's copy
+/// of that function lives in `render.rs` and nothing in `app.rs` calls it.
+/// The fork's caller is its "sessions from elsewhere" block, which needs
+/// `harness_state::sessions_elsewhere` and is not in this tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SidebarAction {
     /// The `[+]` on the SESSIONS header: start a fresh conversation.
     NewSession,
+    /// A SESSIONS row: continue that session in this process. The shell
+    /// submits [`RESUME_COMMAND`] with the id, down the same channel a typed
+    /// line uses, so a click and `/resume <id>` are one code path.
+    Resume(String),
+    /// A TOOLS row: do exactly what that row's chord does. The shell turns it
+    /// into the same `char` the Alt layer produces and hands it to the same
+    /// `Frame::launch_tool`, so there is one dispatch and not two. See
+    /// [`super::input::tool_row_chord`].
+    Tool(sidebar::Tool),
 }
 
 /// The command the `[+]` submits, and the notice that says it happened.
@@ -2584,6 +4601,110 @@ pub enum SidebarAction {
 /// the SESSIONS list does not gain a row, because no new session was made.
 pub const NEW_SESSION_COMMAND: &str = "/clear";
 pub const NEW_SESSION_NOTICE: &str = "new conversation — grants kept";
+
+/// What a press on the `[+]` does, decided from the one fact the shell holds.
+///
+/// **The defect this exists for, and it was live in this tree.** The click
+/// printed [`NEW_SESSION_NOTICE`] and handed `/clear` to the line channel
+/// unconditionally. Mid-goal nothing reads that channel, and the next prompt's
+/// own drain throws the line away before anybody sees it — so the control did
+/// nothing at all while a notice on screen said a fresh conversation had
+/// started. A dead control is bad; a dead control with a receipt is worse.
+///
+/// A function rather than a branch at the call site, for [`picked_session`]'s
+/// reason: the rule has one home. The ruling itself is not invented here, it is
+/// asked of [`crate::session_command::mid_goal`], which is the table that says
+/// what every built-in does while a goal runs. `/clear` is a `Wait` there, so
+/// the click waits.
+///
+/// `prompt_pending` is not a parameter: [`App::new_session_clicked`] has
+/// already refused the press while a question is on screen, so this is only
+/// ever reached with no prompt up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NewSession {
+    /// Submit this line down the channel a typed line uses, after saying
+    /// `notice` if there is one to say.
+    Submit {
+        line: &'static str,
+        /// [`NEW_SESSION_NOTICE`], or `None` when hints are off. It is a hint
+        /// and not a receipt: `/clear` prints its own receipt naming what it
+        /// cleared and which grants it kept, seconds later and from the loop
+        /// that actually did it. This line only says the click registered.
+        notice: Option<&'static str>,
+    },
+    /// Say this, submit nothing.
+    Wait(&'static str),
+}
+
+/// The one rule for the `[+]`, read by both the pointer and any future chord.
+pub fn clicked_new_session(goal_active: bool, hints: bool) -> NewSession {
+    use crate::session_command::MidGoal;
+    match crate::session_command::mid_goal(NEW_SESSION_COMMAND, goal_active, false) {
+        MidGoal::Send => NewSession::Submit {
+            line: NEW_SESSION_COMMAND,
+            notice: hints.then_some(NEW_SESSION_NOTICE),
+        },
+        _ => NewSession::Wait(NEW_SESSION_BUSY_NOTICE),
+    }
+}
+
+/// Why this is not [`crate::session_command::wait_notice`], which is the line a
+/// *typed* `/clear` gets mid-goal: that line ends "it is back in the box: press
+/// Enter once this goal finishes", and a click has no box to be back in. The
+/// remedy a person has here is the one [`RESUME_BUSY_NOTICE`] names, so this is
+/// worded as its sibling. Same ruling, honest remedy.
+pub const NEW_SESSION_BUSY_NOTICE: &str =
+    "a goal is running, so no new conversation was started: /clear applies between goals. Let \
+     the goal finish, or press Esc to interrupt it, then press [+] again.";
+
+/// What a SESSIONS row submits, with the row's id after it.
+///
+/// The row is not a second implementation of resume: it composes the command a
+/// person could have typed and sends it down the channel typed lines use, so
+/// the mid-goal refusal, the same-session no-op and the receipt are decided in
+/// one place. See `session_command::resume`.
+pub const RESUME_COMMAND: &str = "/resume";
+
+/// The line a row click or Enter submits.
+pub fn resume_line(id: &str) -> String {
+    format!("{RESUME_COMMAND} {id}")
+}
+
+/// What a picked SESSIONS row does, decided from the one fact the shell holds.
+///
+/// A function rather than a branch at each of the two call sites — the pointer
+/// and Enter on the focused list — for [`clicked_new_session`]'s reason: the
+/// two must not be able to disagree about what picking a row does, and a rule
+/// written twice is a rule that will.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Picked {
+    /// Submit this line, down the channel a typed line uses.
+    Submit(String),
+    /// Say this, submit nothing.
+    Refused(&'static str),
+}
+
+pub fn picked_session(id: &str, goal_active: bool) -> Picked {
+    if goal_active {
+        return Picked::Refused(RESUME_BUSY_NOTICE);
+    }
+    Picked::Submit(resume_line(id))
+}
+
+/// What a row click or Enter says while a goal is running.
+///
+/// **Refused rather than queued**, which is the difference from a typed
+/// `/resume`: a typed line goes back in the box and the person presses Enter
+/// again when they are ready, and a click has no box to go back to. Queuing it
+/// would resume a session minutes later, at whatever moment the goal happened
+/// to end, which is the click landing somewhere nobody was looking.
+///
+/// It cannot simply be done anyway. Resuming replaces the conversation the
+/// running loop is holding and moves the file it is appending to, underneath a
+/// goal that is mid-turn.
+pub const RESUME_BUSY_NOTICE: &str =
+    "a goal is running, so this session was not resumed: switching now would cut the goal off \
+     mid-turn. Let it finish, or press Esc to interrupt it, then pick the session again.";
 
 fn within(rect: Rect, col: u16, row: u16) -> bool {
     col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
@@ -3147,6 +5268,394 @@ mod tests {
         let (_, _) = draw(&mut app, &view(), 100, 30);
         assert_eq!(app.sessions_add, None);
         assert!(!app.new_session_clicked(27, 1, false));
+    }
+
+    // -----------------------------------------------------------------------
+    // The rows the paint reports, and the click that lands on one
+    // -----------------------------------------------------------------------
+
+    /// A collapsed sidebar has no rows on screen, so it has none to click.
+    ///
+    /// **Drawn expanded first, on purpose.** Asserting only that a
+    /// never-expanded app records nothing would pass with the recording deleted
+    /// outright — the field starts empty. The rows have to be there and then
+    /// go, which is the stale-rectangle failure: a control that works where
+    /// nothing is drawn.
+    #[test]
+    fn a_collapsed_sidebar_records_no_rows() {
+        let mut app = App::new((100, 40));
+        app.set_identity("sess-1787712345678-48282", "", "/repo", &skin());
+        let _ = draw(&mut app, &view(), 100, 40);
+        assert!(
+            !app.sidebar_hits.rows.is_empty(),
+            "precondition: an expanded sidebar recorded no rows at all"
+        );
+        let (rect, _) = app.sidebar_hits.rows[0];
+
+        app.toggle_sidebar(100);
+        let _ = draw(&mut app, &view(), 100, 40);
+        assert!(
+            app.sidebar_hits.rows.is_empty(),
+            "a collapsed sidebar kept the rows of the paint before it"
+        );
+        assert_eq!(app.sidebar_row_click(rect.x, rect.y, false), None);
+    }
+
+    /// The session rows are reported by index into the list the paint drew, and
+    /// the index resolves to the id the row names — the two facts a click needs
+    /// and the paint is the only thing that knows.
+    #[test]
+    fn a_session_row_is_reported_by_index_and_the_index_names_a_session() {
+        let mut app = App::new((100, 40));
+        app.set_identity("sess-1787712345678-48282", "", "/repo", &skin());
+        let (rows, _) = draw(&mut app, &view(), 100, 40);
+        let (rect, _) = app
+            .sidebar_hits
+            .rows
+            .iter()
+            .find(|(_, h)| *h == sidebar::Hit::Session(0))
+            .expect("no session row recorded");
+        assert!(
+            rows[usize::from(rect.y)].contains("345678-48282"),
+            "the recorded rectangle is not on the row the reader saw:\n{}",
+            rows[usize::from(rect.y)]
+        );
+        assert_eq!(
+            app.sidebar_row_click(rect.x, rect.y, false),
+            Some(sidebar::Hit::Session(0))
+        );
+        assert_eq!(
+            app.session_id_at(0).as_deref(),
+            Some("sess-1787712345678-48282"),
+            "the row reports an index that names no session"
+        );
+    }
+
+    /// While a question is on screen the pointer belongs to it — the rule the
+    /// `[+]` already follows, asserted through the row hit-test because a
+    /// `prompt_pending` this one ignored would resume a session from under an
+    /// unanswered approval.
+    #[test]
+    fn a_pending_prompt_suppresses_every_sidebar_row() {
+        let mut app = App::new((100, 40));
+        app.set_identity("sess-1787712345678-48282", "", "/repo", &skin());
+        let _ = draw(&mut app, &view(), 100, 40);
+        let (rect, hit) = app.sidebar_hits.rows[0];
+        assert_eq!(app.sidebar_row_click(rect.x, rect.y, false), Some(hit));
+        assert_eq!(app.sidebar_row_click(rect.x, rect.y, true), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Picking a session
+    //
+    // The keyboard half of the same control, and the one rule that is not
+    // about geometry: a goal in flight refuses the pick rather than queuing it.
+    // -----------------------------------------------------------------------
+
+    /// A list to select in: this run, plus two older rows from this repository.
+    fn app_with_sessions(dir: &std::path::Path) -> App {
+        session_file(dir, "sess-1700000000000-1", "/repo", T0, "the older one");
+        session_file(
+            dir,
+            "sess-1700000000000-3",
+            "/repo",
+            T0 + 172_800_000,
+            "the newer one",
+        );
+        let mine = session_file(
+            dir,
+            "sess-1700000000000-9",
+            "/repo",
+            T0 + 259_200_000,
+            "what I am doing now",
+        );
+        let mut app = App::new((100, 40));
+        app.set_identity("sess-1700000000000-9", &mine, "/repo", &skin());
+        app
+    }
+
+    #[test]
+    fn the_arrows_move_the_selection_and_enter_names_a_session() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let mut app = app_with_sessions(dir.path());
+
+        // Before `/resume` asks for it, the band means "the session you are
+        // in" and the arrows are the input box's.
+        assert!(!app.sessions_focused());
+        assert_eq!(app.selected_session(), None);
+
+        assert!(app.focus_sessions());
+        assert_eq!(
+            app.selected_session().as_deref(),
+            Some("sess-1700000000000-9")
+        );
+        app.move_session_selection(true);
+        assert_eq!(
+            app.selected_session().as_deref(),
+            Some("sess-1700000000000-3"),
+            "Down did not move to the next row"
+        );
+        assert!(app.side.sessions[1].selected, "the band did not follow");
+        assert!(
+            !app.side.sessions[0].selected,
+            "two rows are selected at once"
+        );
+
+        // Clamped rather than wrapped, in both directions: holding a key must
+        // not walk off one end of the list and arrive at the other.
+        for _ in 0..5 {
+            app.move_session_selection(true);
+        }
+        assert_eq!(
+            app.selected_session().as_deref(),
+            Some("sess-1700000000000-1")
+        );
+        for _ in 0..5 {
+            app.move_session_selection(false);
+        }
+        assert_eq!(
+            app.selected_session().as_deref(),
+            Some("sess-1700000000000-9")
+        );
+
+        // Esc gives the keyboard back, and the band goes back to meaning the
+        // running session.
+        app.blur_sessions();
+        assert!(!app.sessions_focused());
+        assert!(app.side.sessions[0].selected);
+    }
+    /// **A clicked row names the session that was drawn on it**, checked
+    /// against the painted text rather than against the id table twice.
+    ///
+    /// The version this replaces asked the id table for row 1 and compared it
+    /// with the id table for row 1: `session_ids[1] == session_ids[1]`, true
+    /// however the rows and the ids are paired. Nothing tied a drawn row to
+    /// its id, so a one-line reorder in `refresh_sessions` would make every
+    /// click resume the wrong session with the suite green. This walks every
+    /// row, reads the name off the buffer, and asserts the id at that index
+    /// belongs to the session with that name.
+    #[test]
+    fn a_clicked_row_and_the_highlighted_row_name_the_same_session() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let mut app = app_with_sessions(dir.path());
+        let (painted, _) = draw(&mut app, &view(), 100, 40);
+
+        // The names the fixture wrote, against the ids they were written under.
+        // Prefixes, because the sidebar truncates a name to its column and
+        // these three are distinct well before the ellipsis.
+        let by_name = [
+            ("what I am", "sess-1700000000000-9"),
+            ("the newer", "sess-1700000000000-3"),
+            ("the older", "sess-1700000000000-1"),
+        ];
+        let rows: Vec<(Rect, usize)> = app
+            .sidebar_hits
+            .rows
+            .iter()
+            .filter_map(|(r, h)| match h {
+                sidebar::Hit::Session(i) => Some((*r, *i)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rows.len(), 3, "the fixture drew three sessions: {rows:?}");
+
+        for (rect, i) in rows {
+            // What the row actually says on screen.
+            let drawn = painted
+                .get(usize::from(rect.y))
+                .cloned()
+                .unwrap_or_default();
+            let (_, expected) = by_name
+                .iter()
+                .find(|(name, _)| drawn.contains(name))
+                .unwrap_or_else(|| panic!("row {i} drew none of the fixture's names: {drawn:?}"));
+            assert_eq!(
+                app.session_id_at(i).as_deref(),
+                Some(*expected),
+                "the row drawing {drawn:?} resolves to the wrong session"
+            );
+            // And a click on it resolves to that same row.
+            let Some(sidebar::Hit::Session(clicked)) = app.sidebar_row_click(rect.x, rect.y, false)
+            else {
+                panic!("the row drawing {drawn:?} took no click");
+            };
+            assert_eq!(clicked, i, "the click resolved to a different row");
+        }
+    }
+
+    /// The same hole from the other side, and the one Ctrl-B could open: the
+    /// list has the arrows, the pane is hidden, and Up now moves a selection
+    /// nobody can see. Closing the sidebar hands the keyboard back.
+    #[test]
+    fn collapsing_the_sidebar_gives_the_arrows_back() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let mut app = app_with_sessions(dir.path());
+        assert!(app.focus_sessions());
+        assert!(app.sessions_focused());
+        app.toggle_sidebar(100);
+        assert!(hidden(100, app.latch), "Ctrl-B did not close it");
+        assert!(!app.sessions_focused(), "a hidden list kept the arrows");
+        // And Ctrl-B still opens it again: the toggle latches both ways.
+        app.toggle_sidebar(100);
+        assert!(!hidden(100, app.latch));
+    }
+
+    /// Otherwise the arrows are captured by a pane nobody can see.
+    #[test]
+    fn focusing_the_list_opens_a_collapsed_sidebar() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let mut app = app_with_sessions(dir.path());
+        app.toggle_sidebar(100);
+        assert!(hidden(100, app.latch), "precondition: it is not collapsed");
+        assert!(app.focus_sessions());
+        assert!(
+            !hidden(100, app.latch),
+            "the list took the arrows behind a pane nobody can see"
+        );
+    }
+
+    /// A list that is not there takes no arrows, and says so rather than
+    /// leaving somebody pressing keys at nothing.
+    #[test]
+    fn an_empty_list_refuses_the_arrows() {
+        let mut app = App::new((100, 40));
+        assert!(!app.focus_sessions());
+        assert!(!app.sessions_focused());
+        assert_eq!(app.selected_session(), None);
+    }
+
+    /// The list is rebuilt at the end of every goal. A focus that outlived the
+    /// row it was on lands on the last row rather than on nothing.
+    #[test]
+    fn a_rebuilt_list_keeps_the_selection_inside_it() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let mut app = app_with_sessions(dir.path());
+        app.focus_sessions();
+        app.move_session_selection(true);
+        app.move_session_selection(true);
+        assert_eq!(
+            app.selected_session().as_deref(),
+            Some("sess-1700000000000-1")
+        );
+        // The two older files go; only this run's remains.
+        std::fs::remove_file(dir.path().join("sess-1700000000000-1.jsonl")).expect("remove");
+        std::fs::remove_file(dir.path().join("sess-1700000000000-3.jsonl")).expect("remove");
+        app.refresh_sessions();
+        assert_eq!(
+            app.selected_session().as_deref(),
+            Some("sess-1700000000000-9"),
+            "the selection outlived the list and named nothing"
+        );
+        assert!(
+            app.side.sessions[0].selected,
+            "the band is on no row at all"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The `[+]`, and what it does when a goal is running
+    //
+    // The defect this is for. The click sent `/clear` down the line channel
+    // whatever the session was doing and printed its notice either way.
+    // Mid-goal nothing reads that channel, and the next prompt drains it before
+    // waiting, so the conversation was never cleared and the transcript said it
+    // had been.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn the_plus_between_goals_submits_the_command_a_person_could_have_typed() {
+        assert_eq!(
+            clicked_new_session(false, true),
+            NewSession::Submit {
+                line: NEW_SESSION_COMMAND,
+                notice: Some(NEW_SESSION_NOTICE)
+            }
+        );
+        // And the line it submits is one the dispatcher actually knows, which
+        // is the half a spelling mistake would otherwise reach a person with.
+        assert!(crate::session_command::parse(NEW_SESSION_COMMAND).is_some());
+    }
+
+    #[test]
+    fn a_goal_in_flight_makes_the_plus_say_so_rather_than_swallowing_the_click() {
+        let ruled = clicked_new_session(true, true);
+        let NewSession::Wait(notice) = ruled else {
+            panic!("the click was submitted into a channel nobody drains: {ruled:?}");
+        };
+        assert!(
+            notice.contains("no new conversation was started"),
+            "{notice}"
+        );
+        assert!(notice.contains("Esc"), "{notice}");
+        // The ruling is `mid_goal`'s and not a second opinion held here.
+        assert!(matches!(
+            crate::session_command::mid_goal(NEW_SESSION_COMMAND, true, false),
+            crate::session_command::MidGoal::Wait(_)
+        ));
+    }
+
+    /// The refusal is never a hint: hints off must not turn a control that
+    /// refused into a silent one.
+    #[test]
+    fn hints_off_silences_the_notice_and_nothing_else() {
+        assert_eq!(
+            clicked_new_session(false, false),
+            NewSession::Submit {
+                line: NEW_SESSION_COMMAND,
+                notice: None
+            }
+        );
+        assert!(matches!(
+            clicked_new_session(true, false),
+            NewSession::Wait(_)
+        ));
+    }
+
+    #[test]
+    fn a_pick_is_the_command_a_person_could_have_typed() {
+        assert_eq!(
+            picked_session("sess-1700000000000-3", false),
+            Picked::Submit("/resume sess-1700000000000-3".into()),
+            "a picked row must go through the same command a typed line does"
+        );
+        // And that command is one the dispatcher knows, with an id after it.
+        assert!(crate::session_command::parse(&resume_line("sess-1700000000000-3")).is_some());
+    }
+
+    #[test]
+    fn a_goal_in_flight_refuses_the_pick_rather_than_queuing_it() {
+        // The alternative is worse than doing nothing: a line handed to the
+        // queue is applied when the goal ends, which is a session switch at a
+        // moment nobody chose and possibly minutes after the click.
+        let refused = picked_session("sess-1700000000000-3", true);
+        let Picked::Refused(notice) = refused else {
+            panic!("a pick during a goal was not refused: {refused:?}");
+        };
+        assert!(notice.contains("not resumed"), "{notice}");
+        assert!(notice.contains("Esc"), "{notice}");
+    }
+
+    /// The Settings screen's Provider row shows what the session is really
+    /// bound to, which the file cannot say when `--provider` was passed.
+    #[test]
+    fn the_running_provider_beats_the_stored_one_on_the_provider_row() {
+        let home = tempfile::TempDir::new().expect("tempdir");
+        let mut app = App::new((100, 40));
+        app.set_home(home.path().to_path_buf());
+        let mut stored = crate::settings::Settings::default();
+        stored.provider = Some("anthropic".into());
+        crate::settings::save(home.path(), &stored).expect("write settings");
+
+        app.set_running_provider("ollama".into());
+        app.toggle_settings();
+        assert_eq!(
+            app.settings.provider, "ollama",
+            "the screen named the file's provider, not the one this session booted with"
+        );
+        assert_eq!(
+            app.settings.provider_saved, "anthropic",
+            "the stored half stopped being the file's"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -4959,6 +7468,38 @@ mod tests {
         app.render(area, &mut buf, &view(), &settings_bar());
     }
 
+    /// The Settings screen over a tempdir home *and* a tempdir rules file, so
+    /// no test here reads or writes anything the developer owns.
+    fn open_settings_with_policy(home: &std::path::Path, policy: &std::path::Path) -> App {
+        let mut app = App::new((161, 75));
+        app.set_home(home.to_path_buf());
+        app.set_policy_file(policy.to_path_buf());
+        app.toggle_settings();
+        assert!(app.settings_open());
+        app
+    }
+
+    /// Focus the row of `card` carrying `kind`, by asking the page where it
+    /// is rather than by counting rows here — the slot numbers moved once
+    /// already, and a literal in a test is what goes stale when they move
+    /// again.
+    fn focus_kind(app: &mut App, card: usize, kind: super::super::settings::RowKind) {
+        let slot = super::super::settings::row_slot(&app.settings, card, kind)
+            .unwrap_or_else(|| panic!("card {card} has no {kind:?} row"));
+        app.settings.focus = Some((card, slot));
+    }
+
+    /// Focus a row and press `→`, which is every cycler's and every toggle's
+    /// verb.
+    fn step(app: &mut App, card: usize, kind: super::super::settings::RowKind) {
+        focus_kind(app, card, kind);
+        assert!(skey(app, KeyCode::Right));
+    }
+
+    fn stored(home: &std::path::Path) -> crate::settings::Settings {
+        crate::settings::load(home)
+    }
+
     /// Class A: the Theme row cycles the names this run can actually select
     /// and persists exactly as /theme does — the name lands in this home's
     /// settings.json and the receipt names the file.
@@ -5016,38 +7557,30 @@ mod tests {
         assert!(app.settings.memory_on);
     }
 
-    /// Class B: opening the screen reports the one language server this build
-    /// has, and reports it against what `emma_tools_lsp` actually resolves.
+    /// Class B: opening the screen reports every language in the table,
+    /// against what `emma_tools_lsp` actually finds on disk.
     ///
-    /// **Rewritten, and the pair it replaces is a finding.** What stood here
-    /// were two tests over `emma_tools_lsp::lang` — a registry of four
-    /// languages, `DEFAULT_ENABLED`, a network flag per language and an
-    /// `lsp.enabled` block in `settings.json` that reported unknown keys. None
-    /// of that exists in this tree: `emma_tools_lsp` resolves exactly one
-    /// server and `Settings` has no `lsp` key. The tests could not be adapted
-    /// because there is nothing for them to be about.
-    ///
-    /// `found` is deliberately not asserted: whether rust-analyzer is on the
-    /// machine running the test is a fact about that machine.
+    /// `found` is deliberately not asserted: whether any given server is on
+    /// the machine running the test is a fact about that machine. What is
+    /// asserted is the table, the default enabled set, and the network flags,
+    /// which are facts about this build.
     #[test]
-    fn opening_settings_reports_the_one_language_server_this_build_has() {
+    fn opening_settings_reports_every_language_in_the_table() {
         let home = tempfile::tempdir().unwrap();
         let app = open_settings_at(home.path());
         let keys: Vec<&str> = app.settings.lsp.iter().map(|r| r.key.as_str()).collect();
-        assert_eq!(keys, vec![emma_tools_lsp::server::LANGUAGE_ID]);
-        assert!(
-            !app.settings.lsp[0].network,
-            "rust-analyzer indexes a local crate graph; a network claim here              would be the row inventing a hazard"
-        );
-        let resolves = emma_tools_lsp::server::resolve().is_ok();
-        assert_eq!(
-            app.settings.lsp[0].enabled, resolves,
-            "the row must follow what the resolver actually said"
-        );
-        assert!(
-            app.settings.lsp_unknown.is_empty(),
-            "nothing can be unknown while nothing is enabled by name"
-        );
+        assert_eq!(keys, emma_tools_lsp::lang::keys());
+        for row in &app.settings.lsp {
+            let l = emma_tools_lsp::lang::by_key(&row.key).expect("in the table");
+            assert_eq!(row.network, l.network, "{}", row.key);
+            assert_eq!(
+                row.enabled,
+                emma_tools_lsp::lang::DEFAULT_ENABLED.contains(&l.key),
+                "with no lsp.enabled written, the row must follow the default set: {}",
+                row.key
+            );
+        }
+        assert!(app.settings.lsp_unknown.is_empty());
     }
 
     /// Class A: Save Now writes the file and the receipt names it.
@@ -5165,26 +7698,407 @@ mod tests {
             "the click must land the key's own write"
         );
         assert_eq!(app.settings.focus, Some((2, 0)), "the click focuses too");
-        // A static row answers with the honest notice. Font Family rather
+        // A static row answers with the honest notice. The Model row rather
         // than a permission row: card 6's rows are a function of whichever
         // project the test binary happens to be run from, and a test that is
         // silently a fact about the developer's checkout is the shape
-        // `guarantees.rs` refuses for the Harness page.
+        // `guarantees.rs` refuses for the Harness page. Font Family used to
+        // be this row and is a live cycler now, which is the whole of the
+        // write-back package.
         paint_settings(&mut app);
-        let font = app
+        let model = app
             .settings_hits
             .controls
             .iter()
-            .find(|(_, h)| *h == super::super::settings::Hit::Act(2, 2))
+            .find(|(_, h)| *h == super::super::settings::Hit::Act(0, 1))
             .map(|(r, _)| *r)
-            .expect("the Font Family value was painted");
-        assert!(app.settings_click(font.x, font.y));
+            .expect("the Model value was painted");
+        assert!(app.settings_click(model.x, model.y));
         assert_eq!(
             app.settings.notice.as_deref(),
-            Some(super::super::settings::NOTICE_FONT)
+            Some(super::super::settings::NOTICE_MODEL)
         );
         // Empty ground falls through — the sidebar's rule.
         assert!(!app.settings_click(0, 0));
+    }
+
+    // -- the write-back, card by card (settings-wiring) ----------------------
+
+    /// **Every write-back row reaches `settings.json` and reads back.**
+    ///
+    /// One test rather than eleven because the guarantee is one: a key
+    /// pressed on this screen ends up in a file `crate::settings::load` can
+    /// read, under the name the rest of Emma looks for. Eleven near-identical
+    /// tests would each be a copy of the same three lines with a different
+    /// field name, and the one that got the field name wrong would still pass.
+    ///
+    /// Read back with the real `load`, never by parsing the JSON here: the
+    /// question is whether the value survives the round trip through serde's
+    /// `skip_serializing_if` rules, and a hand-written assertion on the raw
+    /// text answers a different question.
+    #[test]
+    fn every_write_back_row_reaches_settings_json_and_reads_back() {
+        use super::super::settings::RowKind as K;
+        let home = tempfile::tempdir().unwrap();
+        let policy = tempfile::tempdir()
+            .unwrap()
+            .path()
+            .join("settings.local.json");
+        let mut app = open_settings_with_policy(home.path(), &policy);
+
+        // Card 5, the toggles. Each is additive: the *default* is the absence
+        // of the key, so pressing once has to produce the non-default value or
+        // the write cannot be seen at all.
+        step(&mut app, 4, K::MemoryToggle);
+        assert_eq!(stored(home.path()).memory, Some(false));
+        step(&mut app, 4, K::TrainingToggle);
+        assert_eq!(stored(home.path()).training_capture, Some(false));
+        assert!(!stored(home.path()).capture_training());
+        step(&mut app, 4, K::PruneToggle);
+        assert_eq!(stored(home.path()).prune_history, Some(true));
+        step(&mut app, 4, K::MemoryRetention);
+        assert_eq!(stored(home.path()).memory_policy.retention_days, Some(7));
+        step(&mut app, 4, K::AutoRecall);
+        assert_eq!(stored(home.path()).memory_policy.auto_recall, Some(false));
+        step(&mut app, 4, K::MemoryScope);
+        assert_eq!(
+            stored(home.path()).memory_policy.scope.as_deref(),
+            Some("global")
+        );
+
+        // Card 3, appearance. Accent and Glyphs and Status Bar are names;
+        // Font Family and Font Size are the terminal's vocabulary.
+        step(&mut app, 2, K::AccentCycle);
+        let accent = stored(home.path()).appearance.accent;
+        assert_eq!(
+            accent.as_deref(),
+            Some(super::super::palette::ACCENTS[1].name)
+        );
+        step(&mut app, 2, K::GlyphsCycle);
+        assert_eq!(
+            stored(home.path()).appearance.glyphs.as_deref(),
+            Some("unicode")
+        );
+        step(&mut app, 2, K::StatusBarCycle);
+        assert_eq!(
+            stored(home.path()).appearance.status_bar.as_deref(),
+            Some("compact")
+        );
+        step(&mut app, 2, K::HintsToggle);
+        assert_eq!(stored(home.path()).ui.hints, Some(false));
+        assert!(!stored(home.path()).hints());
+        let before = app.settings.font_size;
+        step(&mut app, 2, K::FontSizeStep);
+        assert_eq!(
+            stored(home.path()).appearance.font_size,
+            Some(before + 1),
+            "the size row must store the point it just asked for"
+        );
+        step(&mut app, 2, K::FontFamilyCycle);
+        let families = stored(home.path()).appearance.font_families;
+        assert!(
+            !families.is_empty(),
+            "the family list must be stored with the choice, or the next run \
+             cycles a different ladder"
+        );
+        assert_eq!(
+            stored(home.path()).appearance.font_family.as_deref(),
+            Some(app.settings.font_family.as_str())
+        );
+
+        // Card 1, sampling — keyed per provider, and the key is the *saved*
+        // provider's name.
+        let saved = app.settings.provider_saved.clone();
+        step(&mut app, 0, K::TemperatureCycle);
+        assert_eq!(
+            stored(home.path())
+                .sampling
+                .get(&saved)
+                .and_then(|s| s.temperature),
+            Some(0.0),
+            "the first rung off Host default is a chosen zero, and it is written"
+        );
+        step(&mut app, 0, K::MaxOutputCycle);
+        assert_eq!(
+            stored(home.path())
+                .sampling
+                .get(&saved)
+                .and_then(|s| s.max_output_tokens),
+            Some(4096)
+        );
+        step(&mut app, 0, K::StreamingCycle);
+        assert_eq!(
+            stored(home.path())
+                .sampling
+                .get(&saved)
+                .and_then(|s| s.stream),
+            Some(false)
+        );
+
+        // Card 1, the provider itself. Written for the next run; the bound
+        // session does not move, and the row says both.
+        let bound = app.settings.provider.clone();
+        step(&mut app, 0, K::ProviderCycle);
+        let next = stored(home.path())
+            .provider
+            .expect("a provider was written");
+        assert_ne!(next, bound, "the chevron must have stepped somewhere");
+        assert_eq!(app.settings.provider, bound, "the session must not rebind");
+        assert!(
+            app.settings
+                .notice
+                .as_deref()
+                .is_some_and(|n| n.contains("next run")),
+            "the receipt must say when it takes effect: {:?}",
+            app.settings.notice
+        );
+    }
+
+    /// **A refused value leaves the file and the screen agreeing.**
+    ///
+    /// The one that matters most, and the reason it is its own test: a
+    /// half-applied setting — stored but not shown, or shown but not stored —
+    /// is worse than a refusal, because nothing on screen says which of the
+    /// two the reader is looking at. Three doors that are not the arrows: a
+    /// name the palette does not know, a size outside `termfont`'s clamp, and
+    /// a preset the keybindings file does not define.
+    #[test]
+    fn a_refused_value_changes_nothing_on_disk_and_says_so_on_screen() {
+        let home = tempfile::tempdir().unwrap();
+        let policy = tempfile::tempdir()
+            .unwrap()
+            .path()
+            .join("settings.local.json");
+        let mut app = open_settings_with_policy(home.path(), &policy);
+        // Something real on disk first, so "nothing changed" is a claim about
+        // a file that exists rather than about one that never did.
+        app.settings_theme("emma".to_string());
+        let before = std::fs::read(crate::settings::path(home.path())).unwrap();
+        let accent_before = app.settings.accent.clone();
+        let size_before = app.settings.font_size;
+        let preset_before = app.settings.key_preset.clone();
+
+        app.settings_accent("chartreuse");
+        assert_eq!(app.settings.accent, accent_before, "the screen moved");
+        assert!(
+            app.settings
+                .notice
+                .as_deref()
+                .is_some_and(|n| n.contains("no accent named chartreuse")),
+            "the refusal must name what was refused: {:?}",
+            app.settings.notice
+        );
+
+        app.settings_font_size(super::super::termfont::MAX_SIZE + 1);
+        assert_eq!(app.settings.font_size, size_before, "the screen moved");
+        assert!(
+            app.settings
+                .notice
+                .as_deref()
+                .is_some_and(|n| n.contains("nothing was written")),
+            "{:?}",
+            app.settings.notice
+        );
+
+        app.settings_key_preset("dvorak-in-a-hat");
+        assert_eq!(app.settings.key_preset, preset_before, "the screen moved");
+        assert!(
+            app.settings
+                .notice
+                .as_deref()
+                .is_some_and(|n| n.contains("no preset named dvorak-in-a-hat")),
+            "{:?}",
+            app.settings.notice
+        );
+
+        assert_eq!(
+            std::fs::read(crate::settings::path(home.path())).unwrap(),
+            before,
+            "a refused value reached settings.json"
+        );
+    }
+
+    /// **A tool row writes the bare rule and leaves a hand-written specifier
+    /// grant exactly where it is.**
+    ///
+    /// The permissions card's write side, and the coexistence rule is the
+    /// half worth a test: the two kinds of rule answer different questions,
+    /// so they stack. A row that rewrote the tool's whole list would silently
+    /// drop a `Bash(cargo *)` somebody granted at a prompt weeks ago, and
+    /// nothing on this screen would ever have shown it going.
+    #[test]
+    fn a_tool_row_writes_the_bare_rule_and_never_a_hand_written_grant() {
+        use super::super::settings::{RowKind as K, ToolState};
+        let dir = tempfile::tempdir().unwrap();
+        let policy = dir.path().join("settings.local.json");
+        std::fs::write(
+            &policy,
+            r#"{"permissions":{"allow":["Bash(cargo *)"]},"hooks":{"keep":"me"}}"#,
+        )
+        .unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let mut app = open_settings_with_policy(home.path(), &policy);
+        assert_eq!(
+            app.settings.tools.len(),
+            crate::runctl::ALL_TOOLS.len(),
+            "the card must show one row per registered tool"
+        );
+
+        // Ask -> Allow, and read it back through the same function the gate's
+        // own screen reads.
+        step(&mut app, 5, K::ToolPermission("Bash"));
+        let rules = crate::permissions::bare_rules(&policy);
+        assert_eq!(
+            rules.get("Bash"),
+            Some(&crate::permissions::Decision::Allow)
+        );
+        assert_eq!(
+            app.settings
+                .tools
+                .iter()
+                .find(|(t, _)| t == "Bash")
+                .map(|(_, s)| *s),
+            Some(ToolState::Allow),
+            "the row must show the file rather than the press"
+        );
+
+        // Allow -> Deny.
+        step(&mut app, 5, K::ToolPermission("Bash"));
+        assert_eq!(
+            crate::permissions::bare_rules(&policy).get("Bash"),
+            Some(&crate::permissions::Decision::Deny)
+        );
+
+        // Deny -> Ask, which is the absence of a rule rather than a fourth
+        // word: `permissions.ask` stays empty.
+        step(&mut app, 5, K::ToolPermission("Bash"));
+        assert_eq!(crate::permissions::bare_rules(&policy).get("Bash"), None);
+
+        // And nothing else in the document moved.
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&policy).unwrap()).unwrap();
+        assert_eq!(doc["hooks"]["keep"], "me", "a foreign block was dropped");
+        let allow = doc["permissions"]["allow"].as_array().unwrap();
+        assert!(
+            allow.iter().any(|v| v == "Bash(cargo *)"),
+            "the hand-written specifier grant was touched: {doc}"
+        );
+        assert!(
+            app.settings
+                .notice
+                .as_deref()
+                .is_some_and(|n| n.contains("binds the next run")),
+            "the receipt must say when the rule takes effect: {:?}",
+            app.settings.notice
+        );
+    }
+
+    /// Reset clears every key this screen can set, and says which it did not
+    /// touch. A key a control can write and Reset cannot clear is a key that
+    /// makes Reset mean "most of it".
+    #[test]
+    fn reset_clears_every_key_this_screen_can_write() {
+        use super::super::settings::RowKind as K;
+        let home = tempfile::tempdir().unwrap();
+        let policy = tempfile::tempdir()
+            .unwrap()
+            .path()
+            .join("settings.local.json");
+        let mut app = open_settings_with_policy(home.path(), &policy);
+        for (card, kind) in [
+            (4, K::MemoryToggle),
+            (4, K::TrainingToggle),
+            (4, K::PruneToggle),
+            (4, K::MemoryRetention),
+            (4, K::AutoRecall),
+            (4, K::MemoryScope),
+            (2, K::AccentCycle),
+            (2, K::GlyphsCycle),
+            (2, K::StatusBarCycle),
+            (2, K::HintsToggle),
+            (2, K::FontSizeStep),
+            (0, K::TemperatureCycle),
+        ] {
+            step(&mut app, card, kind);
+        }
+        // A key that is *not* this screen's, to prove the receipt's second
+        // half rather than assume it.
+        let mut kept = crate::settings::load(home.path());
+        kept.models
+            .insert("anthropic".to_string(), "claude-x".to_string());
+        crate::settings::save(home.path(), &kept).unwrap();
+
+        focus_kind(&mut app, 7, K::Reset);
+        assert!(skey(&mut app, KeyCode::Enter), "the first Enter arms");
+        assert!(skey(&mut app, KeyCode::Enter), "the second fires");
+
+        let after = crate::settings::load(home.path());
+        assert_eq!(after.memory, None);
+        assert_eq!(after.training_capture, None);
+        assert_eq!(after.prune_history, None);
+        assert_eq!(after.ui, crate::settings::UiSettings::default());
+        assert_eq!(
+            after.memory_policy,
+            crate::settings::MemoryPolicy::default()
+        );
+        assert_eq!(
+            after.appearance,
+            crate::settings::AppearanceSettings::default()
+        );
+        assert!(after.sampling.is_empty());
+        assert_eq!(
+            after.models.get("anthropic").map(String::as_str),
+            Some("claude-x"),
+            "Reset touched a key belonging to another surface"
+        );
+        // And the screen agrees with the file it just wrote.
+        assert!(app.settings.training_on);
+        assert!(app.settings.hints_on);
+        assert_eq!(app.settings.sampling_temperature, None);
+    }
+
+    /// `Open Keybindings` writes the commented starter on first use and hands
+    /// the path to the shell, rather than launching anything from under the
+    /// frame lock.
+    #[test]
+    fn open_keybindings_writes_a_starter_and_hands_the_path_to_the_shell() {
+        use super::super::settings::RowKind as K;
+        let home = tempfile::tempdir().unwrap();
+        let policy = tempfile::tempdir()
+            .unwrap()
+            .path()
+            .join("settings.local.json");
+        let mut app = open_settings_with_policy(home.path(), &policy);
+        let path = super::super::keymap::path(home.path());
+        assert!(!path.exists());
+
+        focus_kind(&mut app, 3, K::OpenKeybindings);
+        assert!(skey(&mut app, KeyCode::Enter));
+        assert!(path.exists(), "the starter was not written");
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            body.contains("_comment"),
+            "the starter must document its own schema"
+        );
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&body).is_ok(),
+            "the starter must be the JSON it asks somebody to edit"
+        );
+        assert_eq!(app.take_settings_launch().as_deref(), Some(path.as_path()));
+        assert!(
+            app.take_settings_launch().is_none(),
+            "the launch must drain exactly once, or the editor opens twice"
+        );
+
+        // A second press finds the file and does not overwrite what is in it.
+        std::fs::write(&path, "{\"preset\":\"mine\"}").unwrap();
+        focus_kind(&mut app, 3, K::OpenKeybindings);
+        assert!(skey(&mut app, KeyCode::Enter));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\"preset\":\"mine\"}",
+            "the starter overwrote an edited file"
+        );
     }
 
     /// Test Connection is real against a local Ollama: a listener answers
@@ -5196,7 +8110,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let mut app = open_settings_at(home.path());
         app.settings.provider = "ollama".to_string();
-        app.settings.focus = Some((0, 5));
+        focus_kind(&mut app, 0, super::super::settings::RowKind::TestConnection);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let alive = listener.local_addr().unwrap();
         app.set_ollama_host(format!("127.0.0.1:{}", alive.port()));
@@ -5235,5 +8149,367 @@ mod tests {
             !skey(&mut app, KeyCode::Esc),
             "a closed screen consumes nothing"
         );
+    }
+
+    /// A stationary pointer changes nothing, and the drag stays the bar's.
+    ///
+    /// ⚠ THE RETURN VALUE IS A REPAINT, NOT A CLAIM ON THE GESTURE. The two
+    /// were one answer once, and the cost was that every drag cell which
+    /// happened to land on the same offset fell through to `select_extend`:
+    /// a scroll drag flickering into a text selection, which is the fidget
+    /// the reader sees. [`super::frame::Frame::bar_drag`] asks
+    /// [`Self::bar_dragging`] first for exactly that reason.
+    #[test]
+    fn a_stationary_pointer_neither_moves_the_view_nor_drops_the_drag() {
+        let mut app = App::new((120, 40));
+        let v = view();
+        fill(&mut app, 400);
+        let _ = painted(&mut app, &v, 120, 40);
+        let x = app.scrollbar.unwrap();
+        let pane = app.chat_rect;
+
+        app.transcript.scroll_to(app.transcript.total_rows() / 2);
+        let (top, _) = transcript::thumb(
+            app.transcript.total_rows(),
+            pane.height,
+            app.transcript.scroll_offset(),
+        )
+        .unwrap();
+        assert!(app.bar_press(x, pane.y + top));
+        let parked = app.transcript.scroll_offset();
+
+        for _ in 0..4 {
+            assert!(
+                !app.bar_drag(pane.y + top),
+                "a motionless pointer moved the view"
+            );
+            assert!(app.bar_dragging(), "the drag was dropped mid-gesture");
+            assert_eq!(app.transcript.scroll_offset(), parked);
+            assert!(!app.has_selection(), "the drag became a selection");
+        }
+    }
+
+    /// Paging the track cannot walk the view above its own top.
+    ///
+    /// The offset's bound is `total - 1` while the view's is `total - height`,
+    /// so up to a pane-height of offset buys no movement at all. Paged into,
+    /// that reads as a scrollbar that stops responding at the top and then
+    /// needs two clicks to come back. That is the dead zone, and it is the bar that
+    /// has to refuse it because the bar is what has a height to hand.
+    #[test]
+    fn paging_the_track_never_parks_the_view_above_its_top() {
+        let mut app = App::new((120, 40));
+        let v = view();
+        fill(&mut app, 400);
+        let _ = painted(&mut app, &v, 120, 40);
+        let x = app.scrollbar.unwrap();
+        let pane = app.chat_rect;
+        let top_of_buffer = app.transcript.total_rows() - usize::from(pane.height);
+
+        // Page up off the top of the track, well past the buffer's own top.
+        app.transcript.to_top();
+        for _ in 0..4 {
+            app.bar_press(x, pane.y);
+            app.bar_release();
+        }
+        assert_eq!(
+            app.transcript.scroll_offset(),
+            top_of_buffer,
+            "the bar parked the offset in the dead zone above the top"
+        );
+
+        // So the very next page back down moves the view, rather than
+        // spending itself on offset the reader could never see.
+        let before = app.transcript.scroll_offset();
+        app.bar_press(x, pane.bottom() - 1);
+        assert!(
+            app.transcript.scroll_offset() < before,
+            "the first page back down moved nothing"
+        );
+        assert_eq!(app.transcript.scroll_offset(), before - app.page());
+    }
+
+    // -- the drag that scrolls -------------------------------------------
+
+    /// A scrolled pane with room to move in both directions, and the pane it
+    /// painted into. Two hundred blocks is well past any pane this suite
+    /// draws, so both edges have somewhere to go.
+    fn scrolled_rig(back: usize) -> (App, View, Rect) {
+        let mut app = App::new((120, 40));
+        let v = view();
+        fill(&mut app, 200);
+        let _ = painted(&mut app, &v, 120, 40);
+        app.transcript.scroll_up(back);
+        let _ = painted(&mut app, &v, 120, 40);
+        let pane = app.chat_rect;
+        (app, v, pane)
+    }
+
+    /// The whole point: a drag that reaches the bottom row moves the view
+    /// under it, and the row that comes up is inside the selection. Without
+    /// this a selection can never be longer than the pane.
+    #[test]
+    fn a_drag_held_at_the_bottom_edge_scrolls_and_takes_the_revealed_row() {
+        let (mut app, _v, pane) = scrolled_rig(20);
+        let before = app.transcript.scroll_offset();
+        assert!(app.selection_begin(pane.x + 1, pane.y + 2));
+        let head_before = app.selection.expect("selected").1 .0;
+
+        app.selection_extend(pane.x + 1, pane.bottom() - 1);
+
+        assert_eq!(
+            app.transcript.scroll_offset(),
+            before - 1,
+            "the bottom edge did not scroll one row towards the tail"
+        );
+        let (anchor, head) = app.selection.expect("selected");
+        assert_eq!(
+            head.0,
+            app.transcript.window_start(pane.height) + usize::from(pane.height) - 1,
+            "the head is not on the row the scroll revealed"
+        );
+        assert!(head.0 > head_before, "the head did not reach new rows");
+        assert!(head.0 > anchor.0);
+    }
+
+    /// The anchor is content, not screen: scrolling during the drag must
+    /// leave it on the row the button came down on, however far the view
+    /// travels afterwards.
+    #[test]
+    fn the_anchor_stays_on_its_row_while_the_drag_scrolls() {
+        let (mut app, v, pane) = scrolled_rig(20);
+        assert!(app.selection_begin(pane.x + 1, pane.y + 2));
+        let anchor = app.selection.expect("selected").0;
+
+        for _ in 0..5 {
+            app.selection_extend(pane.x + 1, pane.bottom() - 1);
+            let _ = painted(&mut app, &v, 120, 40);
+        }
+
+        assert_eq!(
+            app.selection.expect("selected").0,
+            anchor,
+            "the anchor moved with the view"
+        );
+    }
+
+    /// The top edge scrolls back, and what it reveals is text the reader can
+    /// copy: the rows a drag passed over are kept even after they leave the
+    /// pane, which is the other half of a selection longer than the window.
+    #[test]
+    fn a_drag_at_the_top_edge_reveals_rows_and_copies_them() {
+        let (mut app, v, pane) = scrolled_rig(20);
+        let before = app.transcript.scroll_offset();
+        assert!(app.selection_begin(pane.x + 1, pane.y + 2));
+
+        app.selection_extend(pane.x + 1, pane.y);
+        assert_eq!(
+            app.transcript.scroll_offset(),
+            before + 1,
+            "the top edge did not scroll one row back"
+        );
+        let buf = painted(&mut app, &v, 120, 40);
+        let top: String = (pane.x..pane.right())
+            .map(|x| buf[(x, pane.y)].symbol().to_string())
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        assert!(!top.is_empty(), "the revealed row painted nothing");
+        // The press was a column into the pane, so the first copied line
+        // starts a column into that row; the row is what is being asserted,
+        // not the indent.
+        let text = app.selection_text();
+        assert_eq!(
+            text.lines().next().map(str::trim),
+            Some(top.trim()),
+            "the revealed row is not in the copy: {text:?}"
+        );
+        assert!(
+            text.lines().count() >= 3,
+            "the selection did not cover the rows it was dragged over: {text:?}"
+        );
+    }
+
+    /// The dead zone the scrollbar work closed stays closed: an edge drag
+    /// held at the top banks no offset the view cannot show.
+    #[test]
+    fn the_top_edge_drag_stops_at_the_last_row_the_view_can_show() {
+        let (mut app, v, pane) = scrolled_rig(20);
+        assert!(app.selection_begin(pane.x + 1, pane.y + 2));
+        let top = transcript::max_offset(app.transcript.total_rows(), pane.height);
+
+        for _ in 0..(app.transcript.total_rows() + 10) {
+            app.selection_extend(pane.x + 1, pane.y);
+        }
+
+        assert_eq!(
+            app.transcript.scroll_offset(),
+            top,
+            "the drag parked offset above what the pane can show"
+        );
+        let _ = painted(&mut app, &v, 120, 40);
+    }
+
+    /// And the other end: the tail is the tail, and a drag that keeps asking
+    /// for more gets no travel and no negative arithmetic.
+    #[test]
+    fn the_bottom_edge_drag_stops_at_the_tail() {
+        let (mut app, _v, pane) = scrolled_rig(20);
+        assert!(app.selection_begin(pane.x + 1, pane.y + 2));
+
+        for _ in 0..50 {
+            app.selection_extend(pane.x + 1, pane.bottom() - 1);
+        }
+
+        assert_eq!(
+            app.transcript.scroll_offset(),
+            0,
+            "the drag ran past the tail"
+        );
+        assert!(app.transcript.is_following());
+    }
+
+    /// Overshoot asks for distance, and gets the wheel's step rather than a
+    /// number invented here.
+    #[test]
+    fn a_pointer_well_past_the_pane_scrolls_by_the_wheels_step() {
+        let (mut app, _v, pane) = scrolled_rig(20);
+        assert!(app.selection_begin(pane.x + 1, pane.y + 2));
+        let before = app.transcript.scroll_offset();
+
+        // One row past the bottom is still one row a step; two is the far
+        // step, which is what an overshoot means.
+        app.selection_extend(pane.x + 1, pane.bottom());
+        assert_eq!(app.transcript.scroll_offset(), before - 1);
+        app.selection_extend(pane.x + 1, pane.bottom() + 1);
+        assert_eq!(
+            app.transcript.scroll_offset(),
+            before - 1 - DRAG_FAR_ROWS,
+            "a pointer past the pane did not take the far step"
+        );
+    }
+
+    /// A pointer inside the pane moves nothing. The auto-scroll is an edge
+    /// behaviour, and a drag across the middle of the transcript must not
+    /// creep.
+    #[test]
+    fn a_drag_inside_the_pane_scrolls_nothing() {
+        let (mut app, _v, pane) = scrolled_rig(20);
+        assert!(app.selection_begin(pane.x + 1, pane.y + 2));
+        let before = app.transcript.scroll_offset();
+        app.selection_extend(pane.x + 9, pane.y + 3);
+        app.selection_extend(pane.x + 2, pane.bottom() - 2);
+        assert_eq!(app.transcript.scroll_offset(), before);
+    }
+
+    /// The latch still tells the two gestures apart: a press on the bar's
+    /// column is the bar, and it never becomes a selection that could then
+    /// auto-scroll on top of the drag the bar is already doing.
+    #[test]
+    fn the_bar_and_the_text_drag_stay_distinct_under_auto_scroll() {
+        let (mut app, _v, pane) = scrolled_rig(20);
+        let x = app.scrollbar.expect("a 200 block transcript drew no bar");
+        // On the thumb, so the press is a grab and not a page: a page moves
+        // the view and lets go, and the latch is what is under test.
+        let (top, _) = transcript::thumb(
+            app.transcript.total_rows(),
+            pane.height,
+            app.transcript.scroll_offset(),
+        )
+        .expect("no thumb");
+        assert!(
+            app.bar_press(x, pane.y + top),
+            "the bar refused its own column"
+        );
+        assert!(app.bar_dragging());
+        assert!(
+            !app.has_selection(),
+            "a press on the bar started a selection"
+        );
+
+        // The bar's own drag at the bottom edge row is the bar's, and the
+        // selection path is not even reachable while it is live.
+        app.bar_drag(pane.bottom() - 1);
+        assert!(!app.has_selection());
+        assert!(app.bar_release());
+        assert!(
+            app.selection_begin(pane.x + 1, pane.y + 2),
+            "text no longer selects"
+        );
+    }
+
+    /// The paste and the mouse reach the Code page through the shell, which is
+    /// the seam C1's keys were missing for a whole stage: every page-level
+    /// paste test passed while nothing in a running program could reach it.
+    /// Closed page: the input box keeps the paste. Open page: the page takes
+    /// it, and with no file open says so rather than dropping it.
+    #[test]
+    fn a_paste_and_a_drag_reach_the_open_code_page_and_only_the_open_one() {
+        let td = tempfile::tempdir().unwrap();
+        let mut app = App::new((120, 40));
+        assert!(matches!(app.code_paste("hello"), (false, None)));
+        assert!(!app.code_drag(5, 5));
+        assert!(matches!(app.code_release(), (false, None)));
+        app.toggle_code(&td.path().display().to_string());
+        let (taken, job) = app.code_paste("hello");
+        assert!(taken, "an open page takes the paste");
+        assert!(job.is_none());
+        let notice = app
+            .code
+            .as_ref()
+            .unwrap()
+            .notice
+            .clone()
+            .unwrap_or_default();
+        assert!(
+            notice.contains("paste"),
+            "the page said what happened: {notice}"
+        );
+        // Nothing selected, so a release copies nothing and says nothing.
+        assert!(matches!(app.code_release(), (false, None)));
+    }
+
+    /// A question the Code page composed reaches the shell, which is the seam
+    /// both earlier stages of this page were missing for a whole round: every
+    /// page-level test passed while nothing in a running program could reach
+    /// the thing they tested. Taken once, and gone afterwards, because a line
+    /// left in the slot would be sent twice.
+    #[test]
+    fn a_question_from_the_code_page_is_taken_once_by_the_shell() {
+        let td = tempfile::tempdir().unwrap();
+        std::fs::write(
+            td.path().join("a.txt"),
+            "hello
+world
+",
+        )
+        .unwrap();
+        let mut app = App::new((120, 40));
+        assert_eq!(
+            app.take_code_line(),
+            None,
+            "nothing is waiting before a page opens"
+        );
+        app.toggle_code(&td.path().display().to_string());
+        let action = {
+            let v = app.code.as_mut().expect("the page opened");
+            v.set_open(
+                "a.txt".to_string(),
+                crate::term::code_git::read_file(&td.path().join("a.txt")),
+                None,
+            );
+            v.body_rows = 8;
+            v.ask("what does this do?")
+        };
+        assert!(app.code_act(action).is_none(), "a question is not a job");
+        let line = app
+            .take_code_line()
+            .expect("the question reached the shell");
+        assert!(line.contains("what does this do?"), "{line}");
+        assert!(
+            line.contains("a.txt"),
+            "the question says which file: {line}"
+        );
+        assert_eq!(app.take_code_line(), None, "a taken line is gone");
     }
 }

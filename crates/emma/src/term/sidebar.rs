@@ -149,6 +149,10 @@ pub struct State {
     pub commands: Vec<Row>,
     /// `(key, description)` pairs for the QUICK HELP table.
     pub help: Vec<(String, String)>,
+    /// Which day the calendar highlights, and therefore which month it
+    /// draws. `None` draws no calendar at all: the shell owns the clock, and
+    /// a sidebar that invented a date would be a sidebar with a clock in it.
+    pub today: Option<Today>,
     pub collapsed: bool,
 }
 
@@ -191,6 +195,39 @@ pub enum Tool {
     Memory,
     Harness,
     Settings,
+}
+
+/// What a left-button press on the sidebar landed on, given where the last
+/// paint put the rows.
+///
+/// A TOOLS row is its chord: the shell turns [`Hit::Tool`] into exactly the
+/// `PaneKey` the Alt layer produces, so the pointer and the keyboard cannot
+/// disagree about what a row does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hit {
+    /// A TOOLS row: fire that tool's chord.
+    Tool(Tool),
+    /// A SESSIONS row, by index into [`State::sessions`]. Reported because
+    /// the paint knows it; what the shell does with it is the shell's.
+    Session(usize),
+}
+
+/// Where the clickable rows were on the last paint. Recorded by [`hits`] from
+/// the same arithmetic that painted them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Hits {
+    /// One entry per drawn clickable row, in paint order.
+    pub rows: Vec<(Rect, Hit)>,
+}
+
+/// The pure hit test. `None` for every other cell of the pane, deliberately:
+/// a sidebar where one control works and the rest of the surface swallows
+/// clicks is worse than one where the pointer passes through.
+pub fn hit(hits: &Hits, col: u16, row: u16) -> Option<Hit> {
+    hits.rows
+        .iter()
+        .find(|(r, _)| col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height)
+        .map(|(_, h)| *h)
 }
 
 /// The glyph, name and chord of each tool row, in the mock's order. The glyph
@@ -360,6 +397,201 @@ fn civil(days: i64) -> (i64, i64, i64) {
 
 // endregion: The session clock
 
+// region: The calendar
+// ---------------------------------------------------------------------------
+// The calendar
+//
+// A month grid at the foot of the sidebar, under QUICK HELP. Glanceable and
+// nothing else: no day selection, no month navigation, no controls. The whole
+// section is arithmetic over one injected date, so a test never waits for
+// midnight and never depends on the machine's clock.
+//
+// No clock crate. The repository bans them, and the civil-from-days pair below
+// is Howard Hinnant's algorithm, the same one `app.rs`'s export `timestamp`
+// already carries. One name is not worth a dependency; two are not either.
+// ---------------------------------------------------------------------------
+
+/// The day the calendar highlights. A civil date, not an instant: whoever
+/// builds it has already decided which wall clock it belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Today {
+    pub year: i32,
+    /// 1..=12.
+    pub month: u32,
+    /// 1..=31.
+    pub day: u32,
+}
+
+/// Month names for the section header, which reads `AUGUST 2026` in the
+/// sidebar's existing header style. Upper case here rather than at the call
+/// site so the header is one string and not a formatting rule.
+const CALENDAR_MONTHS: [&str; 12] = [
+    "JANUARY",
+    "FEBRUARY",
+    "MARCH",
+    "APRIL",
+    "MAY",
+    "JUNE",
+    "JULY",
+    "AUGUST",
+    "SEPTEMBER",
+    "OCTOBER",
+    "NOVEMBER",
+    "DECEMBER",
+];
+
+/// The weekday header, Sunday first, two columns each. ASCII on purpose, like
+/// the empty states: this row must survive a legacy code page.
+const WEEKDAYS: [&str; 7] = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+
+/// Two columns a day, one space between: `Su Mo Tu We Th Fr Sa` is exactly
+/// this wide, and so is every week row under it.
+const GRID_WIDTH: usize = 7 * 2 + 6;
+
+/// The proleptic Gregorian leap rule, spelled out rather than approximated:
+/// 2024 is a leap year, 2100 is not, 2000 was.
+pub fn is_leap(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+/// How many days `month` (1..=12) has in `year`. A month outside the range
+/// answers 0, which the grid renders as an empty month rather than panicking
+/// on a caller's arithmetic slip.
+pub fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if is_leap(year) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 0,
+    }
+}
+
+/// Days since 1970-01-01 for a civil date. Hinnant's `days_from_civil`.
+fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
+    let y = i64::from(year) - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let m = i64::from(month);
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + i64::from(day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// The civil date `secs` seconds after the epoch. The caller decides what
+/// `secs` means: hand it UTC and the answer is UTC, hand it UTC plus a local
+/// offset and the answer is local. `app.rs` does the latter, because a
+/// calendar that flips a day early in the evening is worse than none.
+pub fn civil_from_secs(secs: i64) -> Today {
+    let days = secs.div_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    Today {
+        year: (if month <= 2 { y + 1 } else { y }) as i32,
+        month: month as u32,
+        day: day as u32,
+    }
+}
+
+/// Which column a date sits in: 0 is Sunday. 1970-01-01 was a Thursday, which
+/// is the `+ 4` here and the only magic number in the file's date arithmetic.
+pub fn weekday(year: i32, month: u32, day: u32) -> u32 {
+    (days_from_civil(year, month, day) + 4).rem_euclid(7) as u32
+}
+
+/// The month of `today` as week rows, Sunday first. `None` is a cell before
+/// the first or after the last of the month; the rows are exactly as many as
+/// the month needs, which is four for a 28-day February that starts on a
+/// Sunday and six for a 31-day month that starts on a Friday.
+pub fn month_grid(today: Today) -> Vec<[Option<u32>; 7]> {
+    let len = days_in_month(today.year, today.month);
+    if len == 0 {
+        return Vec::new();
+    }
+    let lead = weekday(today.year, today.month, 1) as usize;
+    let mut weeks: Vec<[Option<u32>; 7]> = Vec::new();
+    let mut week = [None; 7];
+    let mut col = lead;
+    for day in 1..=len {
+        week[col] = Some(day);
+        col += 1;
+        if col == 7 {
+            weeks.push(std::mem::take(&mut week));
+            week = [None; 7];
+            col = 0;
+        }
+    }
+    if col != 0 {
+        weeks.push(week);
+    }
+    weeks
+}
+
+/// The calendar section as lines: a rule, the `AUGUST 2026` header, the
+/// weekday row, and one line per week. Everything is centred in the pane the
+/// way the TOOLS and QUICK HELP pairs are, so the three sections share one
+/// axis rather than three.
+fn calendar_rows(today: Today, w: usize, skin: &Skin) -> Vec<Line<'static>> {
+    // A pane too narrow for the grid gets no calendar at all. Half a week is
+    // not a calendar, and a grid that wrapped would be a different widget.
+    let weeks = month_grid(today);
+    if weeks.is_empty() || w < GRID_WIDTH {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    section_break(&mut out, w, skin);
+    let name = CALENDAR_MONTHS
+        .get((today.month as usize).saturating_sub(1))
+        .copied()
+        .unwrap_or("");
+    out.push(header(&format!("{name} {}", today.year), None, w, skin));
+    let pad = w.saturating_sub(GRID_WIDTH) / 2;
+    out.push(Line::from(vec![
+        Span::raw(" ".repeat(pad)),
+        Span::styled(WEEKDAYS.join(" "), skin.palette.dim()),
+    ]));
+    for week in weeks {
+        let mut spans = vec![Span::raw(" ".repeat(pad))];
+        for (i, cell) in week.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw(" "));
+            }
+            match cell {
+                None => spans.push(Span::raw("  ")),
+                Some(d) => {
+                    let text = format!("{d:>2}");
+                    // Today wears the sidebar's one sanctioned highlight, the
+                    // same `chip` the selected row uses, so it survives a
+                    // colourless terminal as reversed video.
+                    let style = if *d == today.day {
+                        skin.palette.chip(Role::Accent)
+                    } else {
+                        skin.palette.style(Role::Text)
+                    };
+                    spans.push(Span::styled(text, style));
+                }
+            }
+        }
+        out.push(Line::from(spans));
+    }
+    out
+}
+
+// endregion: The calendar
+
 // region: The empty states
 // ---------------------------------------------------------------------------
 // The empty states
@@ -415,29 +647,85 @@ pub fn render(area: Rect, buf: &mut Buffer, s: &State, skin: &Skin) {
         .border_style(skin.palette.dim());
     let inner = block.inner(area);
     block.render(area, buf);
-    let lines = fitted(content(s, skin, inner.width), inner.height, skin);
+    let (lines, _) = painted(s, skin, inner);
     for (i, line) in lines.iter().enumerate() {
         buf.set_line(inner.x, inner.y + i as u16, line, inner.width);
     }
 }
 
+/// Where every clickable row of the sidebar landed, for the same `area`
+/// [`render`] was handed.
+///
+/// It is the paint's own arithmetic and not a copy of it: both this and
+/// [`render`] go through [`painted`], so a row cannot be drawn in one place
+/// and hit-tested in another. A collapsed or too-small pane reports nothing,
+/// which is the truth about it: there are no rows on screen.
+pub fn hits(area: Rect, s: &State, skin: &Skin) -> Hits {
+    if s.collapsed || area.width < 3 || area.height < 3 {
+        return Hits::default();
+    }
+    let inner = Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2);
+    painted(s, skin, inner).1
+}
+
+/// The lines that go on screen and where the clickable ones landed.
+///
+/// [`fitted`] truncates from the top down and adds its own overflow row, so a
+/// slot survives exactly when its index is still a drawn row and that row is
+/// not the overflow line: a row nobody can see is a row nobody can click.
+fn painted(s: &State, skin: &Skin, inner: Rect) -> (Vec<Line<'static>>, Hits) {
+    let (rows, slots) = content(s, skin, inner.width, inner.height);
+    let full = rows.len();
+    let lines = fitted(rows, inner.height, skin);
+    let limit = if full > lines.len() {
+        lines.len().saturating_sub(1)
+    } else {
+        lines.len()
+    };
+    let hits = Hits {
+        rows: slots
+            .into_iter()
+            .filter(|(i, _)| *i < limit)
+            .map(|(i, h)| (Rect::new(inner.x, inner.y + i as u16, inner.width, 1), h))
+            .collect(),
+    };
+    (lines, hits)
+}
+
 /// The whole sidebar as lines, unbounded by height. [`fitted`] cuts it.
-fn content(s: &State, skin: &Skin, width: u16) -> Vec<Line<'static>> {
+fn content(
+    s: &State,
+    skin: &Skin,
+    width: u16,
+    height: u16,
+) -> (Vec<Line<'static>>, Vec<(usize, Hit)>) {
     let w = usize::from(width);
     let mut out = Vec::new();
+    let mut slots: Vec<(usize, Hit)> = Vec::new();
     out.push(header("SESSIONS", Some(COLLAPSE_HINT), w, skin));
     if s.sessions.is_empty() {
         out.extend(note_rows(EMPTY_SESSIONS, w, skin));
         out.extend(note_rows(EMPTY_SESSIONS_HINT, w, skin));
     } else {
-        out.extend(s.sessions.iter().map(|r| list_row(r, w, skin)));
+        for (i, r) in s.sessions.iter().enumerate() {
+            slots.push((out.len(), Hit::Session(i)));
+            out.push(list_row(r, w, skin));
+        }
     }
     section_break(&mut out, w, skin);
     out.push(header("TOOLS", None, w, skin));
     if s.commands.is_empty() {
         out.extend(note_rows(EMPTY_COMMANDS, w, skin));
     } else {
-        out.extend(s.commands.iter().map(|r| list_row(r, w, skin)));
+        // The commands list is `tool_rows`' output in `TOOLS` order, which is
+        // what lets a row index name a tool. A shell that fills `commands`
+        // with something else gets no tool hits rather than the wrong ones.
+        for (i, r) in s.commands.iter().enumerate() {
+            if let Some((tool, ..)) = TOOLS.get(i) {
+                slots.push((out.len(), Hit::Tool(*tool)));
+            }
+            out.push(list_row(r, w, skin));
+        }
     }
     section_break(&mut out, w, skin);
     out.push(header("QUICK HELP", None, w, skin));
@@ -455,7 +743,20 @@ fn content(s: &State, skin: &Skin, width: u16) -> Vec<Line<'static>> {
             .min(w / 2);
         out.extend(s.help.iter().map(|(k, d)| help_row(k, d, key_w, w, skin)));
     }
-    out
+    // The calendar degrades whole. `fitted` counts dropped rows out loud for
+    // a list, which is right for a list: three of seven tools is still a tool
+    // list. Three of five week rows is a wrong calendar, so the section is
+    // either drawn entire or not drawn at all, and the same goes for a pane
+    // too narrow to hold the grid.
+    if let Some(today) = s.today {
+        let cal = calendar_rows(today, w, skin);
+        // One row of headroom for `fitted`'s own overflow line, so appending
+        // the calendar can never be what pushes the pane into truncation.
+        if !cal.is_empty() && out.len() + cal.len() <= usize::from(height) {
+            out.extend(cal);
+        }
+    }
+    (out, slots)
 }
 
 /// A blank row, a thin rule inset one column, a blank row. These blank rows
@@ -752,6 +1053,7 @@ mod tests {
                 ("Ctrl+b".into(), "toggle sidebar".into()),
                 ("PgUp/PgDn".into(), "scroll".into()),
             ],
+            today: None,
             collapsed: false,
         }
     }
@@ -1295,6 +1597,388 @@ mod tests {
         );
         assert_eq!(session_label(None), UNTITLED_SESSION);
         assert_eq!(session_label(Some("   ")), UNTITLED_SESSION);
+    }
+
+    // -----------------------------------------------------------------------
+    // The calendar
+    //
+    // Every date here is injected. Nothing in this section reads a clock, so
+    // none of it changes meaning at midnight or in another time zone.
+    // -----------------------------------------------------------------------
+
+    /// The century rule is the one a naive `% 4` gets wrong, so 2100 is pinned
+    /// beside 2024 rather than left to a comment.
+    #[test]
+    fn the_leap_rule_is_the_gregorian_one_including_the_century_exceptions() {
+        assert!(is_leap(2024), "2024 is a leap year");
+        assert!(
+            !is_leap(2100),
+            "2100 is divisible by 4 and is not a leap year"
+        );
+        assert!(is_leap(2000), "2000 is divisible by 400 and is");
+        assert!(!is_leap(2026));
+        assert_eq!(days_in_month(2024, 2), 29);
+        assert_eq!(days_in_month(2100, 2), 28);
+        assert_eq!(days_in_month(2026, 2), 28);
+    }
+
+    /// Every month length, so a mis-typed match arm cannot hide behind
+    /// February. The total is the year, which is the check that catches a
+    /// duplicated or missing arm.
+    #[test]
+    fn every_month_has_its_own_length_and_they_sum_to_the_year() {
+        let lengths: Vec<u32> = (1..=12).map(|m| days_in_month(2026, m)).collect();
+        assert_eq!(
+            lengths,
+            vec![31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        );
+        assert_eq!(lengths.iter().sum::<u32>(), 365);
+        assert_eq!((1..=12).map(|m| days_in_month(2024, m)).sum::<u32>(), 366);
+        // A month outside 1..=12 is an empty month, not a panic.
+        assert_eq!(days_in_month(2026, 0), 0);
+        assert_eq!(days_in_month(2026, 13), 0);
+    }
+
+    /// The weekday zero point, and a round trip through the epoch. 1970-01-01
+    /// was a Thursday; 2026-08-27 is a Thursday too, which is the date this
+    /// section was written on and the one the render tests use.
+    #[test]
+    fn the_weekday_column_is_sunday_first_and_anchored_on_the_epoch() {
+        assert_eq!(weekday(1970, 1, 1), 4, "the epoch was a Thursday");
+        assert_eq!(weekday(2026, 8, 27), 4);
+        assert_eq!(weekday(2026, 8, 23), 0, "a Sunday");
+        assert_eq!(weekday(2026, 8, 29), 6, "a Saturday");
+        assert_eq!(weekday(2000, 1, 1), 6);
+        // Across the leap day, which is where an off-by-one in the civil
+        // arithmetic shows up: 2024-02-28 and 2024-03-01 are two days apart.
+        assert_eq!((weekday(2024, 3, 1) + 7 - weekday(2024, 2, 28)) % 7, 2);
+    }
+
+    /// `civil_from_secs` is the inverse of the weekday's own day count, so the
+    /// two cannot drift. Pinned on named instants rather than on a loop alone.
+    #[test]
+    fn civil_from_secs_round_trips_and_pins_known_instants() {
+        assert_eq!(
+            civil_from_secs(0),
+            Today {
+                year: 1970,
+                month: 1,
+                day: 1
+            }
+        );
+        // 2024-02-29T12:00:00Z: the leap day, and mid-day, so a truncation
+        // bug in the seconds-to-days division would move it.
+        assert_eq!(
+            civil_from_secs(1_709_208_000),
+            Today {
+                year: 2024,
+                month: 2,
+                day: 29
+            }
+        );
+        // Before the epoch: the division has to floor, not truncate toward
+        // zero, or 1969-12-31 comes back as 1970-01-01.
+        assert_eq!(
+            civil_from_secs(-1),
+            Today {
+                year: 1969,
+                month: 12,
+                day: 31
+            }
+        );
+        // Every day of a decade, round tripped through the day count.
+        for day in 18_000..21_500i64 {
+            let t = civil_from_secs(day * 86_400);
+            assert_eq!(days_from_civil(t.year, t.month, t.day), day, "{t:?}");
+        }
+    }
+
+    /// The grid's alignment: the first of the month lands in its own weekday
+    /// column, the last day is the last cell, and nothing is lost or repeated.
+    #[test]
+    fn the_month_grid_aligns_the_first_day_and_holds_every_day_once() {
+        for year in [2024, 2026, 2100] {
+            for month in 1..=12u32 {
+                let today = Today {
+                    year,
+                    month,
+                    day: 1,
+                };
+                let weeks = month_grid(today);
+                let days: Vec<u32> = weeks.iter().flatten().flatten().copied().collect();
+                let len = days_in_month(year, month);
+                assert_eq!(days, (1..=len).collect::<Vec<_>>(), "{year}-{month}");
+                // The first day sits under its weekday, and every other cell
+                // of that first week before it is empty.
+                let lead = weekday(year, month, 1) as usize;
+                assert_eq!(weeks[0][lead], Some(1), "{year}-{month}");
+                assert!(weeks[0][..lead].iter().all(|c| c.is_none()));
+                // Every day is under the right column, not just the first.
+                for (w, week) in weeks.iter().enumerate() {
+                    for (c, cell) in week.iter().enumerate() {
+                        if let Some(d) = cell {
+                            assert_eq!(weekday(year, month, *d) as usize, c, "{year}-{month}-{d}");
+                            assert_eq!(w, (lead + *d as usize - 1) / 7);
+                        }
+                    }
+                }
+            }
+        }
+        // A February of exactly four weeks starting on a Sunday is the
+        // shortest grid there is, and a 31-day month starting on a Saturday
+        // the longest. Both are real months, and both must be exact.
+        assert_eq!(
+            month_grid(Today {
+                year: 2026,
+                month: 2,
+                day: 1
+            })
+            .len(),
+            4
+        );
+        assert_eq!(
+            month_grid(Today {
+                year: 2025,
+                month: 3,
+                day: 1
+            })
+            .len(),
+            6
+        );
+        assert!(month_grid(Today {
+            year: 2026,
+            month: 13,
+            day: 1
+        })
+        .is_empty());
+    }
+
+    /// Drawn: the month and year head the section in the sidebar's header
+    /// style, the weekday row is Sunday first, and the grid sits under
+    /// QUICK HELP rather than anywhere else.
+    #[test]
+    fn the_calendar_draws_its_month_under_quick_help() {
+        let mut s = state();
+        s.commands = tool_rows(false, None);
+        // Derived help from bindings is longer than the fork's six rows; this
+        // test is about calendar placement, not the help table's length.
+        s.today = Some(Today {
+            year: 2026,
+            month: 8,
+            day: 27,
+        });
+        let rows = draw(&s, &skin(Level::Truecolor), 30, 40);
+        let all = rows.join("\n");
+        assert!(all.contains("AUGUST 2026"), "{all}");
+        assert!(all.contains("Su Mo Tu We Th Fr Sa"), "{all}");
+        assert!(
+            all.find("QUICK HELP") < all.find("AUGUST 2026"),
+            "the calendar is not at the bottom:\n{all}"
+        );
+        // August 2026 starts on a Saturday, so the first week row is six
+        // blank cells and a lone 1, and the last row carries 30 and 31.
+        let first = rows.iter().find(|r| r.contains(" 1 ")).unwrap();
+        assert!(first.trim_matches(['│', ' ']) == "1", "{first:?}");
+        assert!(all.contains("30 31"), "{all}");
+    }
+
+    /// Today wears the sidebar's one sanctioned highlight, on its own two
+    /// cells and nowhere else, and it survives a colourless terminal as
+    /// reversed video, like the selected row.
+    #[test]
+    fn today_is_highlighted_in_the_grid_and_nothing_else_is() {
+        let s = State {
+            today: Some(Today {
+                year: 2026,
+                month: 8,
+                day: 27,
+            }),
+            ..State::default()
+        };
+        let area = Rect::new(0, 0, 30, 40);
+        let mut buf = Buffer::empty(area);
+        render(area, &mut buf, &s, &skin(Level::None));
+        let banded: Vec<(u16, u16)> = (0..40)
+            .flat_map(|y| (0..30).map(move |x| (x, y)))
+            .filter(|p| buf[*p].style().add_modifier.contains(Modifier::REVERSED))
+            .collect();
+        // Exactly `27`, two cells. Nothing else in an empty-state sidebar is
+        // banded, so any extra cell here is a highlight that leaked.
+        assert_eq!(banded.len(), 2, "{banded:?}");
+        let y = banded[0].1;
+        let text: String = (0..30).map(|x| buf[(x, y)].symbol().to_string()).collect();
+        assert!(text.contains("27"), "{text:?}");
+        assert_eq!(
+            (0..2)
+                .map(|i| buf[(banded[0].0 + i, y)].symbol().to_string())
+                .collect::<String>(),
+            "27"
+        );
+    }
+
+    /// The calendar degrades whole. A pane one row too short for the grid
+    /// drops the section entirely rather than painting three weeks of five,
+    /// and a pane too narrow for the grid does the same.
+    #[test]
+    fn a_short_or_narrow_pane_drops_the_calendar_rather_than_half_of_it() {
+        let mut s = state();
+        s.commands = tool_rows(false, None);
+        s.today = Some(Today {
+            year: 2026,
+            month: 8,
+            day: 27,
+        });
+        // Tall enough to show it, then every height below that: the section
+        // is present or absent, never partial.
+        for h in 4..=44u16 {
+            let rows = draw(&s, &skin(Level::Truecolor), 30, h);
+            let all = rows.join("\n");
+            let weeks = rows.iter().filter(|r| r.contains("30 31")).count();
+            if all.contains("AUGUST 2026") {
+                assert!(all.contains("Su Mo Tu We Th Fr Sa"), "at {h}:\n{all}");
+                assert_eq!(weeks, 1, "a week row was cut at {h}:\n{all}");
+                assert!(all.contains("1"), "at {h}");
+            } else {
+                assert_eq!(weeks, 0, "a headless week row survived at {h}:\n{all}");
+                assert!(!all.contains("Su Mo Tu"), "at {h}:\n{all}");
+            }
+        }
+        // Too narrow for the 20-column grid: no calendar at any height.
+        for w in 3..GRID_WIDTH as u16 + 2 {
+            let rows = draw(&s, &skin(Level::Truecolor), w, 44);
+            let all = rows.join("\n");
+            assert!(!all.contains("Su Mo Tu"), "{w} columns:\n{all}");
+        }
+    }
+
+    /// No calendar row ever overruns the pane, at any width and any month:
+    /// the same standing ruling every other row in this file is held to.
+    #[test]
+    fn no_calendar_row_is_ever_wider_than_the_pane() {
+        let sk = skin(Level::Truecolor);
+        for w in 0..=44usize {
+            for month in 1..=12u32 {
+                for line in calendar_rows(
+                    Today {
+                        year: 2024,
+                        month,
+                        day: 15,
+                    },
+                    w,
+                    &sk,
+                ) {
+                    assert!(line.width() <= w, "{:?} at {w}", plain(&line));
+                }
+            }
+        }
+    }
+
+    /// The weekday header is ASCII, for the reason the empty states are: it
+    /// has to reach a legacy console intact, and there is no fallback glyph
+    /// set for a day name.
+    #[test]
+    fn the_calendar_labels_are_ascii() {
+        for day in WEEKDAYS {
+            assert!(day.is_ascii(), "{day:?}");
+        }
+        for month in CALENDAR_MONTHS {
+            assert!(month.is_ascii(), "{month:?}");
+        }
+        let rows = draw(
+            &State {
+                today: Some(Today {
+                    year: 2026,
+                    month: 8,
+                    day: 27,
+                }),
+                ..State::default()
+            },
+            &ascii_skin(),
+            30,
+            40,
+        );
+        assert!(rows.join("\n").is_ascii());
+    }
+
+    // -----------------------------------------------------------------------
+    // Hit-testing
+    // -----------------------------------------------------------------------
+
+    /// The paint reports one rect per TOOLS row, and [`hit`] returns that tool
+    /// at both ends of the row.
+    #[test]
+    fn a_click_on_a_drawn_tools_row_returns_that_tool() {
+        let mut st = state();
+        st.commands = tool_rows(false, None);
+        let area = Rect::new(4, 2, 28, 40);
+        let skin = skin(Level::Truecolor);
+        for (tool, _) in [
+            (Tool::Shell, "Shell"),
+            (Tool::Code, "Code"),
+            (Tool::Memory, "Memory"),
+            (Tool::Settings, "Settings"),
+        ] {
+            let recorded = hits(area, &st, &skin);
+            let (rect, _) = recorded
+                .rows
+                .iter()
+                .find(|(_, h)| *h == Hit::Tool(tool))
+                .unwrap_or_else(|| panic!("no rect recorded for {tool:?}"));
+            assert_eq!(hit(&recorded, rect.x, rect.y), Some(Hit::Tool(tool)));
+            assert_eq!(
+                hit(&recorded, rect.x + rect.width - 1, rect.y),
+                Some(Hit::Tool(tool))
+            );
+        }
+    }
+
+    /// A row nobody can see is a row nobody can click: at every height, the
+    /// reported rects sit inside the pane and never on the overflow line the
+    /// truncation adds.
+    #[test]
+    fn no_reported_row_lands_outside_the_pane_or_on_the_overflow_line() {
+        let skin = skin(Level::Truecolor);
+        let mut st = state();
+        st.commands = tool_rows(false, None);
+        for h in 3u16..40 {
+            let area = Rect::new(4, 2, 28, h);
+            let mut buf = Buffer::empty(Rect::new(0, 0, 40, h + 4));
+            render(area, &mut buf, &st, &skin);
+            let inner = Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2);
+            let text: Vec<String> = fitted(
+                content(&st, &skin, inner.width, inner.height).0,
+                inner.height,
+                &skin,
+            )
+            .iter()
+            .map(plain)
+            .collect();
+            for (rect, hit) in hits(area, &st, &skin).rows {
+                assert!(
+                    rect.y >= inner.y && rect.y < inner.y + inner.height,
+                    "h={h}"
+                );
+                assert_eq!(rect.x, inner.x);
+                assert_eq!(rect.width, inner.width);
+                let line = &text[usize::from(rect.y - inner.y)];
+                assert!(
+                    !line.contains("more rows"),
+                    "h={h} {hit:?} on the overflow row"
+                );
+            }
+        }
+    }
+
+    /// A collapsed pane reports nothing, because there is nothing on screen.
+    #[test]
+    fn a_collapsed_pane_reports_no_rows() {
+        let skin = skin(Level::Truecolor);
+        let mut st = state();
+        st.commands = tool_rows(false, None);
+        st.collapsed = true;
+        assert!(hits(Rect::new(0, 0, 28, 40), &st, &skin).rows.is_empty());
+        st.collapsed = false;
+        assert!(hits(Rect::new(0, 0, 2, 40), &st, &skin).rows.is_empty());
     }
 
     // -----------------------------------------------------------------------

@@ -131,6 +131,20 @@
   </div>
   <span class="src">crates/emma/src/permissions.rs — Rule::parse, Spec, check_tool; tests::the_shapes_a_rule_can_have</span>
 
+  <p>
+    The consequence of that last row is worth spelling out, because something
+    now depends on it: <strong>&ldquo;deny everything&rdquo; has to be written
+    out, one tool at a time.</strong> There is no rule that denies every tool,
+    so a preset meaning that has to name all of them, and a list that silently
+    missed one would be a protection somebody believed they had. Emma's own
+    <code>Deny All</code> preset carries a list of 26 tool names for exactly
+    this reason, and it is kept in step with what the binary registers by a test
+    rather than by memory. That list was wrong on arrival, missing the two
+    background-execution tools, so the test is not a formality;
+    <a href="terminal-runctl.html#policy">the run-control page</a> has the
+    account.
+  </p>
+
   <h2 id="parse">Parsing one rule</h2>
 
   <pre><code>pub fn parse(raw: &amp;str) -&gt; Result&lt;Self&gt; {

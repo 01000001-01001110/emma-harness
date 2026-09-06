@@ -111,6 +111,7 @@ async fn delegating(
             session_id: "sess-test".into(),
             caching: Caching::On,
             web_search: false,
+            sampling: Default::default(),
             budgets,
             running: Running::new(base.clone()),
         },
@@ -143,6 +144,7 @@ async fn delegating(
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
     let outcome = agent
         .run_goal(&Goal::new("find out where the retry policy lives"))
@@ -503,14 +505,14 @@ async fn folding_a_session_containing_a_delegation_returns_the_parents_conversat
     .await;
     assert_eq!(run.outcome.ending, Ending::Done);
 
-    let folded = emma::session::fold(log.path()).unwrap();
+    let folded = emma::session::fold(&log.path()).unwrap();
     assert_eq!(
         folded, run.conversation,
         "folding a session with a delegation in it did not reproduce the parent's conversation"
     );
     // The sub's traffic really is in the same file — the audit trail is not the
     // thing being protected here, the parent's fold is.
-    let records = SessionLog::read(log.path()).unwrap();
+    let records = SessionLog::read(&log.path()).unwrap();
     let kinds: Vec<&str> = records.iter().filter_map(|r| r["kind"].as_str()).collect();
     assert!(kinds.contains(&"sub.goal"), "{kinds:?}");
     assert!(kinds.contains(&"sub.tool_call"), "{kinds:?}");
@@ -609,6 +611,7 @@ async fn two_delegations_never_overlap() {
             session_id: "sess-test".into(),
             caching: Caching::On,
             web_search: false,
+            sampling: Default::default(),
             budgets: budgets(),
             running: Running::new(base.clone()),
         },
@@ -678,6 +681,7 @@ async fn constructing_an_agent_never_moves_the_status_meters() {
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
     assert!(
         term.recorded().is_empty(),
@@ -1126,6 +1130,7 @@ fn an_agent_type_cannot_reach_a_tool_the_persona_excluded() {
                 session_id: "sess-test".into(),
                 caching: Caching::On,
                 web_search: false,
+                sampling: Default::default(),
                 budgets: budgets(),
                 running: Running::new(base),
             },
@@ -1187,6 +1192,7 @@ fn an_unknown_agent_name_is_refused_by_the_argument_check_and_not_only_by_the_sc
             session_id: "sess-test".into(),
             caching: Caching::On,
             web_search: false,
+            sampling: Default::default(),
             budgets: budgets(),
             running: Running::new(base),
         },
@@ -1258,7 +1264,7 @@ async fn a_delegation_is_lent_half_of_what_is_left_and_the_files_own_iteration_c
     .await;
     assert_eq!(run.outcome.ending, Ending::Done);
 
-    let records = SessionLog::read(log.path()).unwrap();
+    let records = SessionLog::read(&log.path()).unwrap();
     let record = records
         .iter()
         .find(|r| r["kind"] == "delegation")
@@ -1324,7 +1330,7 @@ async fn a_sub_run_gets_its_own_wall_clock_and_a_single_nudge() {
     .await;
     assert_eq!(run.outcome.ending, Ending::Done);
 
-    let records = SessionLog::read(log.path()).unwrap();
+    let records = SessionLog::read(&log.path()).unwrap();
     let record = records
         .iter()
         .find(|r| r["kind"] == "delegation")
@@ -1386,7 +1392,7 @@ async fn the_ending_recorded_for_each_delegation_is_the_one_that_happened() {
     .await;
     assert_eq!(run.outcome.ending, Ending::Done);
 
-    let records = SessionLog::read(log.path()).unwrap();
+    let records = SessionLog::read(&log.path()).unwrap();
     let endings: Vec<(String, String)> = records
         .iter()
         .filter(|r| r["kind"] == "delegation")
@@ -1553,6 +1559,7 @@ async fn a_subagent_inherits_the_projects_instructions_and_is_told_who_it_works_
             session_id: "sess-test".into(),
             caching: Caching::On,
             web_search: false,
+            sampling: Default::default(),
             budgets: budgets(),
             running: Running::new(base),
         },

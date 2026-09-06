@@ -68,12 +68,28 @@
   </nav>
 
   <p class="lede">
-    Seventeen kinds, written from four files, plus the same kinds again under a
-    <code>sub.</code> prefix when a delegation is running. This page is meant to
-    be enough on its own: what writes each one, every field on it, who reads it
-    back, and the two pairing rules a parser gets wrong if nobody says them.
+    Twenty-nine kinds, written from six files, plus the same kinds again under
+    a <code>sub.</code> prefix when a delegation is running. This page is meant
+    to be enough on its own: what writes each one, every field on it, who reads
+    it back, and the two pairing rules a parser gets wrong if nobody says them.
   </p>
-  <span class="src">crates/emma/src/agent.rs · delegate.rs · main.rs · session.rs</span>
+  <span class="src">crates/emma/src/agent.rs · delegate.rs · main.rs · session.rs · runctl.rs · runfacts.rs</span>
+
+  <p class="faint">
+    The count is every distinct kind appended outside the test modules and
+    outside <code>engine/</code>. It said eighteen until 2026-09-06 and the
+    number had been drifting for a while: <code>shed</code>, <code>steer</code>,
+    <code>session_moved</code> and <code>resumed</code> all arrived that day, and
+    <code>web_search</code> plus the three kinds only
+    <code>engine/claude.rs</code> writes (<code>engine</code>,
+    <code>engine_unknown</code>, <code>tool_blocked</code>) are counted here and
+    described nowhere on this site.
+    <span class="chip cert">certified</span> Recount with
+    <code>grep -rn "\.append(" crates/emma/src</code> and drop the test modules.
+    <span class="chip unv">unverified</span> That those four undescribed kinds
+    have the fields their writers say they do; reading the four call sites and
+    adding four rows is what settles it.
+  </p>
 
   <div class="key">
     <div><span class="chip cert">certified</span> proven, and repeatable: a file, a command, a count you can redo</div>
@@ -90,8 +106,10 @@
     <code>at_ms</code> is unix milliseconds at the moment of the append, which
     for a <code>tool_result</code> is after the tool ran and for a
     <code>tool_call</code> is before it started. Nothing else appears on every
-    record. <code>turn_id</code> comes close and is missing from the eight
-    session-level kinds below.
+    record. <code>turn_id</code> comes close and is missing from the thirteen
+    session-level kinds below. <code>steer</code> is the near miss: it carries a
+    <code>turn</code>, which is the loop's iteration counter and not a
+    <code>turn-&lt;n&gt;</code> id.
   </p>
   <span class="src">crates/emma/src/session.rs — <code>SessionLog::append</code></span>
 
@@ -116,7 +134,9 @@
             <code>opening</code> (the composed user turn, including anything a
             <code>UserPromptSubmit</code> hook injected), <code>cwd</code>,
             <code>instructions_hash</code>, <code>tool_schema_hash</code>,
-            <code>model</code>, <code>done_check</code></td>
+            <code>model</code>, <code>done_check</code>,
+            <code>sampling</code> (six keys: the three knobs and where each came
+            from)</td>
         <td>fold (opens a goal, and <code>opening</code> becomes the first user
             message), restore (resets every counter), continuity, and both
             directory scans</td>
@@ -147,6 +167,16 @@
         <td>fold, which empties both its lists</td>
       </tr>
       <tr>
+        <td><code>harness_control</code></td>
+        <td><code>runctl::record</code>, after a control action was carried out</td>
+        <td><code>action</code> (<code>pause</code>, <code>resume</code> or
+            <code>cancel</code>), <code>signal</code> (<code>SIGSTOP</code>,
+            <code>SIGCONT</code> or <code>SIGINT</code>), <code>pid</code></td>
+        <td>nobody yet. It is written into the controlled run's <em>own</em>
+            session file, so the transcript of that run carries the fact that a
+            person stopped it</td>
+      </tr>
+      <tr>
         <td><code>model_changed</code></td>
         <td><code>Agent::set_provider</code>, which is <code>/model &lt;id&gt;</code></td>
         <td><code>from</code>, <code>to</code></td>
@@ -166,6 +196,50 @@
         <td><code>run</code> (the serialised <code>HookRun</code>), plus
             <code>turn_id</code> on the tool ones</td>
         <td>nobody</td>
+      </tr>
+      <tr>
+        <td><code>shed</code></td>
+        <td><code>Agent::shed_the_running_goal</code>, when a single goal outgrows the
+            context on its own</td>
+        <td><code>why</code>, <code>results</code>, <code>results_shed</code>
+            (the replacement text, verbatim), <code>request_tokens</code>,
+            <code>max_context</code>, <code>needed</code>,
+            <code>estimated_freed</code>, <code>estimated_before</code>,
+            <code>estimated_after</code></td>
+        <td>fold, which rewrites the named blocks rather than dropping
+            anything; and the training exporter, which exports the replacement
+            as the text that was sent</td>
+      </tr>
+      <tr>
+        <td><code>steer</code></td>
+        <td><code>Agent::drain_the_steering_queue</code>, at the top of a loop
+            iteration</td>
+        <td><code>text</code> (the composed, attributed string),
+            <code>lines</code> (what was typed, one entry per line),
+            <code>turn</code></td>
+        <td>fold, which appends the composed string to the query as a user
+            turn. See <a href="steering.html">Steering</a></td>
+      </tr>
+      <tr>
+        <td><code>session_moved</code></td>
+        <td><code>SessionLog::move_to</code>, as the last line of the file being
+            left</td>
+        <td><code>to</code>, <code>to_path</code></td>
+        <td>nobody, and the fold has no arm for it by decision: everything above
+            it in that file is still that session's conversation, and a later
+            <code>--resume</code> of it must get all of it back</td>
+      </tr>
+      <tr>
+        <td><code>resumed</code></td>
+        <td><code>Agent::resume_in_place</code>, as the first line the picked-up
+            session gets</td>
+        <td><code>messages</code>, <code>dropped_goals</code>,
+            <code>dropped_messages</code>, <code>cwd</code>,
+            <code>recorded_cwd</code>, <code>directory_note</code></td>
+        <td>nobody, and the fold ignoring it is the sharper of the two
+            omissions: the messages it counts are already in this file, above
+            this line, so an arm that replayed them would hand back the
+            conversation twice</td>
       </tr>
       <tr>
         <td><code>delegation</code></td>
@@ -209,6 +283,12 @@ self.s.log.append(
         "tool_schema_hash": self.s.tools.schema_hash(),
         "model": self.s.provider.model_id(),
         "done_check": self.s.done.name(),
+        <span class="c">// The knobs this goal ran under, and where each one came from.
+        // Beside `model` because they are the same kind of fact: two
+        // runs of the same model at different temperatures are not the
+        // same run, and until this was recorded the difference was
+        // invisible from disk. Additive; no stored run has to re-run.</span>
+        "sampling": self.s.sampling.to_json(),
     }),
 );</code></pre>
 
@@ -336,11 +416,22 @@ self.s.log.append(
 self.s.log.append(
     "tool_result",
     json!({ "turn_id": turn_id, "id": call.id, "tool": call.name,
-            <span class="c">// Written as the content block it becomes, `type` tag and
+<span class="c">            // Written as the content block it becomes, `type` tag and
             // all, because that is the shape the fold reads back and the
-            // shape `restore_records` tests `is_error` on.</span>
-            "block": ContentBlock::ToolResult(block.clone()),
-            "truncated": truncated }),
+            // shape `restore_records` tests `is_error` on.
+            // Images are written as their path and size rather than
+            // their bytes: a bounded screenshot is still several
+            // hundred kilobytes of base64, and a log line that size per
+            // capture makes the transcript unreadable and the fold slow
+            // for no gain. `session::fold` reads the file back, and says
+            // so in the result when it cannot. See `ToolImage`.</span>
+            "block": ContentBlock::ToolResult(block.for_log()),
+            "truncated": truncated,
+<span class="c">            // Beside the block rather than inside it: the block is the
+            // wire shape and the API has no field for this. The
+            // delegation footer reads it here instead of parsing the
+            // prose, which it could never do correctly.</span>
+            "exit_code": exit_code }),
 );</code></pre>
 
   <p>
@@ -418,7 +509,7 @@ self.s.log.append(
 /// records also land in.
 ///
 /// **Why the `kind`s are namespaced.** [`fold_records`] and
-/// [`restore_records`] match on `kind` and both have a `_ => {}` arm, so
+/// [`restore_records`] match on `kind` and both have a `_ =&gt; {}` arm, so
 /// `sub.assistant` and `sub.model_call` are ignored for free — which is the
 /// whole mechanism. Written under the parent's own names the damage would
 /// not be subtle: a sub `assistant` record arriving between the parent's
@@ -436,9 +527,10 @@ pub fn subagent(&amp;self, sub_id: &amp;str, parent_turn_id: &amp;str, agent: &a
     let tap: Records = Arc::new(Mutex::new(Vec::new()));
     (
         Self {
-            id: self.id.clone(),
-            path: self.path.clone(),
-            file: self.file.clone(),
+<span class="c">            // The same handle, not a copy of it: a delegation writes into
+            // the file its parent is on *now*, including after a move.</span>
+            handle: self.handle.clone(),
+            write_failed: self.write_failed.clone(),
             prefix: Some("sub"),
             stamp: vec![
                 ("sub_id".into(), json!(sub_id)),
@@ -600,7 +692,11 @@ tap: Option&lt;Records&gt;,</code></pre>
     records was not checked here. The two terminal views that would draw them,
     <code>term/inspect.rs</code> and <code>term/rungraph.rs</code>, render from
     their own view types and say the harness behind them does not exist yet.
-    Grepping for the record kinds outside this module would settle it.
+    Grepping for the record kinds outside this module would settle it. Part of
+    the same amber is settled in the affirmative now: the acting half exists as
+    <code>runctl</code>, which reads a run's id for its pid and appends to that
+    run's file. What is not settled is whether anything <em>draws</em> any of
+    it, and that stays open until the Harness page's keys are wired.
   </p>
   <span class="src">crates/emma/src/runfacts.rs — the addressing scheme; crates/emma/src/session.rs — <code>SessionLog::new_id</code>, <code>SessionLog::subagent</code></span>
 
@@ -611,10 +707,18 @@ tap: Option&lt;Records&gt;,</code></pre>
     derivation over the records described on this page. It adds no record and
     decides nothing: nothing in it starts a run, ends one, or asks the model
     anything, and every number comes off the same session JSONL that
-    <code>emma agents</code> counts and <code>--resume</code> folds. The harness
-    its fork's mocks draw does not exist here. There is no worker pool, no task
-    queue and no DAG, so <code>runs</code> returns goals in a session and the
-    delegations inside them, and a card the log cannot feed stays empty. Nearly
+    <code>emma agents</code> counts and <code>--resume</code> folds. That is
+    still true of <em>this</em> module, and the sentence that used to follow it
+    is not. It said the harness the fork's mocks draw does not exist here.
+    <a href="terminal-runctl.html"><code>runctl</code></a> landed on 2026-09-06
+    and is exactly the acting half: pause, resume, cancel, archive, delete and
+    starting a run, over the pid a session id already carries. What is still
+    absent is the <em>scheduler</em>, and that distinction is the whole of the
+    module's argument: there is no worker pool, no task queue and no DAG, so
+    <code>runs</code> returns goals in a session and the delegations inside
+    them, and a card the log cannot feed stays empty. No key reaches
+    <code>runctl</code> yet either, so nothing has written a
+    <code>harness_control</code> record outside a test. Nearly
     every field is an <code>Option</code> carrying the reason it is optional.
     <span class="chip cert">certified</span>:
     <code>grep -c "Option&lt;" crates/emma/src/harness_state/mod.rs</code>

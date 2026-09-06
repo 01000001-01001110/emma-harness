@@ -83,6 +83,7 @@
       <a href="terminal-dock.html">Dock</a>
       <a href="terminal-usertools.html">User tools</a>
       <a href="terminal-pages.html">Pages</a>
+      <a href="terminal-runctl.html">Run control</a>
       <a href="terminal-copying.html">Copying out</a>
     </nav>
 
@@ -255,6 +256,91 @@ pub enum EntryKind {
     <code>follow_tail</code> is the End key and every submit;
     <code>to_top</code> is Home. <code>max_scroll</code> is one row short of
     everything, so <code>behind</code> cannot claim rows nobody can scroll past.
+  </p>
+
+  <h3>The scrollbar, and the lurch anchoring removes</h3>
+
+  <p>
+    <code>thumb</code> answers where the thumb sits in a track of a given
+    height, as <code>(top, len)</code>, or <code>None</code> when everything
+    fits. The subtlety is the inversion: the offset counts rows scrolled up
+    <em>from the tail</em>, so a following view puts the thumb at the bottom of
+    the track and Home puts it at the top, and a bar drawn as though the offset
+    counted downwards runs backwards convincingly enough that only a test asking
+    where the thumb is at <em>both</em> ends notices.
+  </p>
+
+  <p>
+    The length is a ceiling division first, so a proportional thumb on a
+    fifty-thousand-row buffer is one row rather than none, then raised to
+    <code>THUMB_MIN</code>, which is 2. One row is grabbable only by a steady
+    hand and quantises the drag twice as coarsely, and every native scrollbar
+    carries a floor for the first of those reasons. The floor costs a row of
+    travel, which on a long transcript was already quantised in the thousands of
+    rows per cell, so the row buys more than it spends. The
+    <code>.min(track)</code> comes last, because <code>clamp(THUMB_MIN,
+    track)</code> panics outright on a one-row track.
+    <span class="chip test">tested</span> &mdash;
+    <code>a_long_transcript_still_gets_a_thumb_worth_grabbing</code> asserts the
+    length is exactly 2 at 100,000 rows in a 20-row pane, and goes red at
+    <code>left: 1</code> when the floor is lowered to one.
+  </p>
+
+  <p>
+    <code>drag_offset</code> is the inverse, and it is <strong>anchored rather
+    than absolute</strong>. Mapping the pointer's row straight onto the track's
+    grid looks equivalent and is not: the offset a wheel or a page leaves behind
+    sits <em>between</em> two rows of that grid, so the first drag event snaps it
+    onto the nearest one and the view lurches before the pointer has moved at
+    all. On a long transcript one row of track is hundreds of rows of
+    transcript, which is how far it lurches. Anchoring takes the offset and the
+    track row at the moment of the press, so a motionless pointer is
+    arithmetically incapable of moving the view: at <code>row == press.1</code>
+    the delta is zero and the answer is the offset it came in with. Both ends are
+    clamped, because a pointer dragged off the pane is an ordinary drag and
+    refusing it would strand the thumb mid-track.
+    <span class="chip test">tested</span> &mdash;
+    <code>a_motionless_pointer_does_not_move_the_view_on_the_first_drag_event</code>,
+    which goes red at <code>left: 0, right: 17</code> under the absolute
+    mapping.
+  </p>
+
+  <p>
+    That test had to be written, and the reason is worth more than the test.
+    <code>a_drag_down_the_track_never_scrolls_the_view_backwards</code> sweeps
+    the whole track and stays <em>green</em> under the absolute mapping, because
+    a sweep starting at the top has nothing between the grid rows to snap. A
+    test that passes over the bug it was assumed to cover is the false-receipt
+    shape this project keeps paying for.
+  </p>
+
+  <p>
+    <code>max_offset</code> is the third piece. <code>scroll_up</code> stops at
+    <code>total - 1</code> because that is the bound the indicator's arithmetic
+    wants, and <code>window</code> then clamps the view a whole pane-height
+    short of it, so the gap between the two is dead travel: offset that has been
+    spent and buys no movement, which a page back down has to spend itself
+    undoing while the reader clicks a bar that does nothing. Only whoever holds a
+    height can refuse it, and the bar holds one, so <code>bar_press</code>
+    clamps there.
+    <span class="chip unv">unverified</span> as a guarantee. The clamp is called
+    in <code>App::bar_press</code>, and no test in this repository fails when it
+    is removed; the fork's <code>paging_the_track_never_parks_the_view_above_its_top</code>
+    was not ported. Writing that test, and watching it go red with the clamp
+    deleted, is what would settle it.
+  </p>
+  <span class="src">crates/emma/src/term/transcript.rs &mdash; <code>THUMB_MIN</code>, <code>thumb</code>, <code>drag_offset</code>, <code>max_offset</code>; crates/emma/src/term/app.rs &mdash; <code>bar_press</code>, <code>bar_drag</code></span>
+
+  <p>
+    <code>window_start</code> is the one number that converts a screen row to a
+    content row, which is what a selection anchor is. It is
+    <code>window</code>'s start and nothing else, because two derivations of the
+    same index would drift the first time the top clamp changed.
+    <span class="chip unv">unverified</span>, and honestly so: nothing in the
+    crate calls it yet. Anchoring selection to content rows is a later package,
+    and until it lands this method is exercised only by the type checker. The
+    first call site, plus a test that scrolls between a press and a release,
+    settles it.
   </p>
 
   <h2 id="cap">The cap, and how it names what it dropped</h2>
@@ -519,17 +605,21 @@ pub fn gutter(width: u16) -&gt; u16 {
   <h2 id="coverage">Coverage</h2>
 
   <p>
-    Both files were read in full. <code>transcript.rs</code> is 1,117 lines and
-    declares 30 function items above the test boundary:
+    Both files were read in full. <code>transcript.rs</code> is 1,604 lines,
+    up from the 1,117 this paragraph counted before the scrollbar geometry
+    landed on 2026-09-06. Above the test boundary it declares
     <code>EntryKind::voice</code>, <code>Entry::render</code>,
-    <code>is_blank</code>, <code>Cap::default</code>, and 26
-    <code>Transcript</code> methods. All 30 are named on this page: 30 of 30.
-    <code>chat.rs</code> is 544 lines and 5 functions, <code>gutter</code>,
+    <code>is_blank</code>, <code>Cap::default</code>, the
+    <code>Transcript</code> methods, and the four free items the bar is built
+    from: <code>THUMB_MIN</code>, <code>thumb</code>, <code>drag_offset</code>
+    and <code>max_offset</code>. All of them are named on this page.
+    <code>chat.rs</code> is 704 lines and 5 functions, <code>gutter</code>,
     <code>message_width</code>, <code>render</code>, <code>label</code>,
-    <code>indicator</code>: 5 of 5. Eleven of the transcript's twenty tests and
-    six of the pane's eleven are cited by name; the rest are the wrapping cases
-    (three), the streaming cases (three) and the pane's colour and ASCII
-    degradation checks.
+    <code>indicator</code>: 5 of 5. The transcript's filtered suite is 45 tests
+    and this page cites twelve of them by name; the rest are the wrapping
+    cases, the streaming cases, the round-trip sweeps between
+    <code>thumb</code> and <code>drag_offset</code>, and the pane's colour and
+    ASCII degradation checks.
   </p>
 
   <p>
@@ -539,7 +629,14 @@ pub fn gutter(width: u16) -&gt; u16 {
     the right speed, and whether a scrolled reader can find their place again
     are questions no test in this repository asks.
     <span class="chip unv">unverified</span>: a long real session, scrolled by
-    every bound key and by the wheel, in each target terminal.
+    every bound key and by the wheel, in each target terminal. The scrollbar
+    adds two of its own. Whether a two-row thumb is actually grabbable with a
+    mouse, rather than merely visible, has been reasoned about and not tried;
+    and the anchored drag has never been driven by a real pointer after a wheel
+    scroll left the offset between two track rows, which is the exact state the
+    anchoring exists for.
+    <span class="chip unv">unverified</span>: drag the live thumb without moving
+    the pointer, on a long session, and watch whether the view stays still.
   </p>
 
   <footer class="pg">

@@ -96,6 +96,26 @@ impl Fixture {
     /// *automatic* compaction path, which only runs when a request exceeds
     /// `max_context`.
     fn agent_with<'a>(&'a self, provider: Arc<dyn Provider>, budgets: Budgets) -> Agent<'a> {
+        self.agent_on(
+            provider,
+            &self.log,
+            self.dir.path(),
+            "sess-commands",
+            budgets,
+        )
+    }
+
+    /// An `Agent` on a named session file and a named working directory, which
+    /// is what recording *another* session to resume needs. `agent` above is
+    /// this one on the fixture's own log.
+    fn agent_on<'a>(
+        &'a self,
+        provider: Arc<dyn Provider>,
+        log: &'a SessionLog,
+        cwd: &Path,
+        session_id: &str,
+        budgets: Budgets,
+    ) -> Agent<'a> {
         Agent::new(Setup {
             background: Default::default(),
             provider,
@@ -103,17 +123,18 @@ impl Fixture {
             instructions: &self.harness.instructions,
             tools: &self.tools,
             approvals: &self.approvals,
-            log: &self.log,
+            log,
             term: &self.term,
             interrupt: Interrupt::new(),
             spend: Spend::new(),
             done: &MarkerClaim,
-            cwd: self.dir.path().to_path_buf(),
-            session_id: "sess-commands".into(),
+            cwd: cwd.to_path_buf(),
+            session_id: session_id.into(),
             budgets,
             caching: Caching::On,
             mode: Mode::Batch,
             web_search: false,
+            sampling: Default::default(),
         })
     }
 
@@ -162,7 +183,7 @@ fn working_goal() -> Vec<support::Say> {
 }
 
 fn folded(log: &SessionLog) -> Vec<Message> {
-    emma::session::fold(log.path()).unwrap()
+    emma::session::fold(&log.path()).unwrap()
 }
 
 // endregion: The fixture
@@ -311,6 +332,300 @@ async fn clear_before_the_first_goal_of_a_resumed_session_drops_the_restored_tur
     );
 }
 
+// region: /resume, in place
+// ---------------------------------------------------------------------------
+// /resume, in place
+//
+// `/clear` with a fold put in the hole. The properties worth asserting are the
+// two `/clear`'s are, turned around: the conversation that was here goes, and
+// a `--resume` of the file this process is now writing has to rebuild exactly
+// what the process is holding — otherwise every later resume of that file is a
+// guess.
+//
+// **These drive `Agent::resume_in_place` rather than `session_command::run`,
+// and that is a gap rather than a preference.** The `/resume` arm of the
+// dispatcher is not wired yet — it still prints advice — so the receipt lines,
+// the "already here" no-op and the "no session" refusal have no test here. The
+// port report names the exact wiring and the tests that become possible with
+// it; what is below is everything the agent and the session log own.
+// ---------------------------------------------------------------------------
+
+/// One finished session on disk, recorded as having run in `cwd`. The `Agent`
+/// that writes it is dropped before the file is handed back, so nothing is
+/// still holding the conversation it recorded.
+async fn recorded_session(f: &Fixture, id: &str, cwd: &Path, goal: &str) -> SessionLog {
+    let log = SessionLog::open(f.dir.path(), id).expect("session file");
+    {
+        let provider = Fake::new(working_goal());
+        let mut agent = f.agent_on(provider, &log, cwd, id, Budgets::default());
+        agent.run_goal(&Goal::new(goal)).await;
+    }
+    log
+}
+
+/// The opening every `goal` record in a file carried, in order. The opening is
+/// the turn the model was actually given, so this is where an injected sentence
+/// has to show up if it is to survive a fold.
+fn openings(log: &SessionLog) -> Vec<String> {
+    SessionLog::read(&log.path())
+        .unwrap()
+        .into_iter()
+        .filter(|r| r["kind"] == "goal")
+        .map(|r| r["opening"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+/// What the dispatcher does between the typed id and `resume_in_place`: find
+/// the file, read it. Kept to those two calls deliberately — every decision
+/// beyond them belongs to `session_command`, and a helper that made them here
+/// would be a second implementation of a command this file cannot yet reach.
+fn restore_named(dir: &Path, id: &str, cwd: &Path) -> emma::session::Restored {
+    let path = emma::session::locate(dir, Some(id), cwd).expect("no such session");
+    emma::session::restore(&path).expect("unreadable session")
+}
+
+#[tokio::test]
+async fn resume_in_place_swaps_the_conversation_and_the_fold_still_matches_it() {
+    let f = fixture();
+    // Recorded from the same directory, so the directory contract has nothing
+    // to say and this test is about the swap alone.
+    let other = recorded_session(&f, "sess-other", f.dir.path(), "the other work").await;
+
+    let mut script = working_goal();
+    script.extend(working_goal());
+    let provider = Fake::new(script);
+    let mut agent = f.agent(provider.clone());
+    agent.run_goal(&Goal::new("what I was doing")).await;
+    assert!(!agent.conversation().is_empty());
+
+    let restored = restore_named(f.dir.path(), "sess-other", f.dir.path());
+    let out = agent
+        .resume_in_place(f.dir.path(), restored)
+        .expect("the resume refused");
+
+    // The conversation that was here is gone, exactly as `/clear` leaves it,
+    // and the restored one is not in `chapters` yet: it is the pending resume,
+    // which the next goal spends. That is `--resume`'s own shape, not a second
+    // one.
+    assert!(
+        agent.conversation().is_empty(),
+        "the conversation that was here survived the resume"
+    );
+    // The log moved, which is what makes this a resume rather than a copy.
+    assert_eq!(f.log.id(), "sess-other");
+    assert_eq!(f.log.path(), other.path());
+    // And the agent agrees with it, which is what the status row and the next
+    // `goal` record are both written from.
+    assert_eq!(agent.session_id(), "sess-other");
+    assert_eq!(agent.session_path(), other.path());
+    // The receipt is counted, not claimed: one goal and its traffic were here.
+    assert_eq!(out.id, "sess-other");
+    assert_eq!(out.dropped_goals, 1, "{out:?}");
+    assert!(out.dropped_messages >= 2, "{out:?}");
+    assert!(out.messages >= 2, "{out:?}");
+    assert_eq!(out.directory_note, None);
+    assert_eq!(out.damage_note, None);
+
+    agent.run_goal(&Goal::new("carry on")).await;
+
+    // The property. A `--resume` of the continued file has to rebuild what this
+    // process is holding, or every later resume of it is a guess.
+    assert_eq!(
+        emma::session::fold(&f.log.path()).unwrap(),
+        agent.conversation(),
+        "the fold of the continued file is not the live conversation"
+    );
+    let text = format!("{:?}", agent.conversation());
+    assert!(
+        text.contains("the other work"),
+        "the resumed conversation did not come back: {text}"
+    );
+    assert!(
+        !text.contains("what I was doing"),
+        "the abandoned conversation came back with it: {text}"
+    );
+    assert!(
+        !text.contains("Context added by Emma"),
+        "a session resumed from this very directory was given a directory sentence: {text}"
+    );
+
+    // The file that was left ends with the record that says where it went, and
+    // keeps everything it had: `emma --resume` on it still works.
+    let left = SessionLog::read(&f.dir.path().join("sess-commands.jsonl")).unwrap();
+    assert_eq!(left.last().unwrap()["kind"], emma::session::MOVED);
+    assert_eq!(left.last().unwrap()["to"], "sess-other");
+    assert!(
+        left.iter().any(|r| r["kind"] == "goal"),
+        "the abandoned transcript lost its conversation"
+    );
+    // And it is still resumable from a shell, which is the sentence the receipt
+    // is going to make to the user.
+    assert!(emma::session::restore(&f.dir.path().join("sess-commands.jsonl")).is_ok());
+}
+
+#[tokio::test]
+async fn a_session_from_another_directory_carries_the_directory_contract() {
+    let f = fixture();
+    let elsewhere = tempfile::tempdir().unwrap();
+    recorded_session(&f, "sess-elsewhere", elsewhere.path(), "the work next door").await;
+
+    let mut script = working_goal();
+    script.extend(working_goal());
+    let provider = Fake::new(script);
+    let mut agent = f.agent(provider.clone());
+
+    let restored = restore_named(f.dir.path(), "sess-elsewhere", f.dir.path());
+    let out = agent.resume_in_place(f.dir.path(), restored).unwrap();
+    assert!(
+        out.directory_note.is_some(),
+        "a session from another tree was resumed with nothing said about it"
+    );
+    agent.run_goal(&Goal::new("carry on")).await;
+
+    let recorded = openings(&f.log);
+    let opening = recorded.last().expect("no goal was recorded");
+    // Attributed, so the model cannot read it as something the user typed.
+    assert!(
+        opening.contains("Context added by Emma, not typed by the user"),
+        "{opening}"
+    );
+    // Both directories, because which one a relative path would hit is the
+    // thing the model has to be able to work out.
+    assert!(
+        opening.contains(&elsewhere.path().display().to_string()),
+        "{opening}"
+    );
+    assert!(
+        opening.contains(&f.dir.path().display().to_string()),
+        "{opening}"
+    );
+    // What it asks for is the thing that can actually be done. Emma cannot
+    // change the process working directory mid-run and the sentence says so
+    // rather than pretending.
+    assert!(opening.contains("absolute paths"), "{opening}");
+    assert!(
+        opening.contains("cannot change its own working directory"),
+        "{opening}"
+    );
+    // And it is the *recorded* opening, so a fold rebuilds the same turn.
+    assert!(opening.contains("carry on"), "{opening}");
+    assert_eq!(
+        emma::session::fold(&f.log.path()).unwrap(),
+        agent.conversation()
+    );
+
+    // Once. The goal after the resume is an ordinary goal, and repeating the
+    // sentence every turn would spend context saying what the model has been
+    // told.
+    agent.run_goal(&Goal::new("and again")).await;
+    let after = openings(&f.log);
+    let last = after.last().unwrap();
+    assert!(last.contains("and again"), "{last}");
+    assert!(
+        !last.contains("Context added by Emma"),
+        "the directory sentence was repeated: {last}"
+    );
+}
+
+/// Resuming the session you are already in is a no-op, and the dispatcher can
+/// see that it is one before it does anything.
+///
+/// **The tempting wrong answer is to do it anyway**: move the log onto its own
+/// file, clear the conversation, fold it back. That is a no-op with a window in
+/// the middle of it where the conversation is gone — and it writes a `MOVED`
+/// record into a file the session has not left. The comparison the dispatcher
+/// makes is `locate` against the path the log is on, so that is what is
+/// asserted here; the sentence it says is `session_command`'s and is named in
+/// the port report.
+#[tokio::test]
+async fn the_session_you_are_in_resolves_to_the_file_you_are_writing() {
+    let f = fixture();
+    let provider = Fake::new(working_goal());
+    let mut agent = f.agent(provider.clone());
+    agent.run_goal(&Goal::new("what I was doing")).await;
+
+    let path = emma::session::locate(f.dir.path(), Some("sess-commands"), f.dir.path()).unwrap();
+    assert_eq!(path, agent.session_path());
+    assert_eq!(path, f.log.path());
+    let records = SessionLog::read(&f.log.path()).unwrap();
+    assert!(
+        !records.iter().any(|r| r["kind"] == emma::session::MOVED),
+        "a session that never moved wrote a moved record"
+    );
+}
+
+/// A resume that cannot open its destination leaves everything alone.
+///
+/// The whole ordering argument in one assertion: the log is moved before
+/// anything is dropped, so the failure the user sees is an error message rather
+/// than an error message *and* a conversation that is gone.
+#[tokio::test]
+async fn a_resume_that_cannot_move_the_log_keeps_the_session_it_had() {
+    let f = fixture();
+    let provider = Fake::new(working_goal());
+    let mut agent = f.agent(provider.clone());
+    agent.run_goal(&Goal::new("what I was doing")).await;
+    let before = agent.conversation();
+    assert!(!before.is_empty());
+
+    // A file where the session directory would be: nothing can be created in
+    // it, on any platform.
+    let blocked = f.dir.path().join("not-a-dir");
+    std::fs::write(&blocked, "").unwrap();
+    let restored = emma::session::Restored {
+        id: "sess-somewhere".into(),
+        ..Default::default()
+    };
+    assert!(agent.resume_in_place(&blocked, restored).is_err());
+
+    assert_eq!(
+        agent.conversation(),
+        before,
+        "a failed resume took the conversation with it"
+    );
+    assert_eq!(agent.session_id(), "sess-commands");
+    assert_eq!(f.log.id(), "sess-commands");
+    // Still recording, into the file it never left.
+    agent.run_goal(&Goal::new("carry on")).await;
+    assert_eq!(
+        emma::session::fold(&f.log.path()).unwrap(),
+        agent.conversation()
+    );
+}
+
+/// A session that comes back damaged says so at the moment it is picked up.
+///
+/// **The process-boundary resume paid for this sentence already.** The damage
+/// was on the value, the value went into the loop, and nothing printed it — so
+/// a resumed run that was quietly missing turns looked entirely normal. An
+/// in-place resume has the same hole and one fewer excuse, because the person
+/// is watching it happen.
+#[tokio::test]
+async fn a_damaged_session_picked_up_in_place_says_it_came_back_short() {
+    let f = fixture();
+    recorded_session(&f, "sess-damaged", f.dir.path(), "the damaged work").await;
+    // Corruption in the middle of the file, which is what the read reports and
+    // a torn last line deliberately is not.
+    let path = f.dir.path().join("sess-damaged.jsonl");
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let mut lines: Vec<String> = raw.lines().map(str::to_string).collect();
+    lines.insert(1, "{\"kind\":\"assis".into());
+    std::fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+
+    let provider = Fake::new(working_goal());
+    let mut agent = f.agent(provider.clone());
+    let restored = restore_named(f.dir.path(), "sess-damaged", f.dir.path());
+    let out = agent.resume_in_place(f.dir.path(), restored).unwrap();
+
+    let note = out
+        .damage_note
+        .expect("a damaged session was picked up in silence");
+    assert!(note.contains("could not be read"), "{note}");
+    assert!(note.contains("known not to match"), "{note}");
+}
+
+// endregion: /resume, in place
+
 // endregion: /clear
 
 // region: /compact
@@ -400,7 +715,7 @@ async fn compact_with_an_instruction_says_it_cannot_follow_one() {
     // Quoted back, so the user can see which words were not acted on. Ignoring
     // them silently is the failure this is written against.
     assert!(said.contains("keep the API details"), "{said}");
-    assert!(said.contains("does not call a model"), "{said}");
+    assert!(said.contains("no seam for an instruction"), "{said}");
     // …and nothing happened, because a half-honoured instruction is worse than
     // a refused one.
     assert_eq!(agent.conversation(), before);
@@ -656,14 +971,14 @@ async fn no_session_command_changes_what_the_model_is_told() {
     let running = Running::new(provider.clone());
 
     agent.run_goal(&Goal::new("first")).await;
-    let before = goal_hashes(f.log.path());
+    let before = goal_hashes(&f.log.path());
 
     for line in ["/help", "/config", "/agents", "/model", "/resume"] {
         f.command(&mut agent, &mut current, &running, line).await;
     }
     agent.run_goal(&Goal::new("second")).await;
 
-    let after = goal_hashes(f.log.path());
+    let after = goal_hashes(&f.log.path());
     assert_eq!(after.len(), 2, "{after:?}");
     assert_eq!(
         before[0], after[1],

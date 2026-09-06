@@ -59,6 +59,8 @@
 //! [`Role::Text`] with `BOLD`, which is brighter than the surrounding grey on
 //! every terminal and on every theme, which a hex is not.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use ratatui::style::{Color, Modifier, Style};
 
 use super::theme::{Pair, Theme};
@@ -232,6 +234,166 @@ pub enum Role {
 //   rather than as the theme being wrong.
 // ---------------------------------------------------------------------------
 
+// region: Accent override
+// ---------------------------------------------------------------------------
+// Accent override
+//
+// The theme supplies a default accent; settings may borrow another role's
+// swatch from whatever theme is in force, or pin a literal xterm cube index.
+// Both shapes share one ambient cell read at draw time — the same seam the
+// fork's live palette used, without reintroducing that registry here.
+// ---------------------------------------------------------------------------
+
+/// One accent choice: the theme's own accent, or another of its roles.
+///
+/// **A name and a role, never a colour.** The whole point of borrowing a role
+/// is that the swatch still comes out of the theme in force, so an accent
+/// override survives a theme switch, degrades through `Level` exactly as
+/// every other colour does, and cannot introduce a hex that no theme approved.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Accent {
+    /// What the settings file stores and the Settings row shows.
+    pub name: &'static str,
+    /// Which role's swatch the accent borrows. `None` is the theme's own.
+    borrowed: Option<Role>,
+}
+
+/// Every accent this build offers, in the order the Settings row cycles them.
+///
+/// `theme` is first because an unset preference resolves to index 0.
+pub const ACCENTS: &[Accent] = &[
+    Accent {
+        name: "theme",
+        borrowed: None,
+    },
+    Accent {
+        name: "ok",
+        borrowed: Some(Role::Ok),
+    },
+    Accent {
+        name: "info",
+        borrowed: Some(Role::Info),
+    },
+    Accent {
+        name: "warn",
+        borrowed: Some(Role::Warn),
+    },
+    Accent {
+        name: "err",
+        borrowed: Some(Role::Err),
+    },
+];
+
+impl Accent {
+    /// Which role this accent draws from. `Role::Accent` for the theme's own.
+    pub fn role(&self) -> Role {
+        self.borrowed.unwrap_or(Role::Accent)
+    }
+}
+
+/// The accent named exactly `name`, or `None`. Exact match, no case folding.
+pub fn accent(name: &str) -> Option<&'static Accent> {
+    ACCENTS.iter().find(|a| a.name == name)
+}
+
+/// The accent override in force, as an index into [`ACCENTS`].
+static ACTIVE_ACCENT: AtomicUsize = AtomicUsize::new(0);
+
+/// The accent last chosen, or the theme's own.
+pub fn active_accent() -> &'static Accent {
+    let i = ACTIVE_ACCENT.load(Ordering::Relaxed);
+    ACCENTS.get(i).unwrap_or(&ACCENTS[0])
+}
+
+/// Make `a` the accent every live palette draws with, from the next redraw on.
+pub fn activate_accent(a: &'static Accent) {
+    if let Some(i) = ACCENTS.iter().position(|c| c.name == a.name) {
+        ACTIVE_ACCENT.store(i, Ordering::Relaxed);
+        // A role accent and a cube accent are the same setting wearing two
+        // shapes, so picking one has to put the other down.
+        ACTIVE_ACCENT_CUBE.store(0, Ordering::Relaxed);
+    }
+}
+
+/// The prefix a cube accent wears in settings.json: `cube:81`.
+pub const ACCENT_CUBE_PREFIX: &str = "cube:";
+
+/// The picker's curated cube, six to a row.
+pub const ACCENT_CUBE: [u8; 36] = [
+    // Reds through to yellow.
+    196, 202, 208, 214, 220, 226, //
+    // Greens.
+    46, 82, 118, 154, 190, 156, //
+    // Cyan down into blue.
+    51, 45, 39, 33, 27, 21, //
+    // Magenta through violet.
+    201, 207, 213, 177, 141, 105, //
+    // The mid slice: the same hues, one step quieter.
+    167, 173, 179, 143, 108, 110, //
+    // The deep slice, for a light terminal.
+    88, 94, 100, 22, 24, 54,
+];
+
+/// How wide the picker draws the cube.
+pub const ACCENT_CUBE_COLS: usize = 6;
+
+/// What `appearance.accent` can hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccentChoice {
+    /// One of [`ACCENTS`], borrowing a role's swatch from the live theme.
+    Role(&'static Accent),
+    /// An xterm cube index, 16..=231.
+    Cube(u8),
+}
+
+impl AccentChoice {
+    /// What settings.json stores, and what the Settings row shows.
+    pub fn name(&self) -> String {
+        match self {
+            Self::Role(a) => a.name.to_string(),
+            Self::Cube(i) => format!("{ACCENT_CUBE_PREFIX}{i}"),
+        }
+    }
+}
+
+/// Read a stored `appearance.accent` value.
+pub fn parse_accent(s: &str) -> Option<AccentChoice> {
+    if let Some(rest) = s.strip_prefix(ACCENT_CUBE_PREFIX) {
+        let i: u8 = rest.trim().parse().ok()?;
+        return (16..=231).contains(&i).then_some(AccentChoice::Cube(i));
+    }
+    accent(s).map(AccentChoice::Role)
+}
+
+/// `0` is the sentinel for "no cube accent" — safe because index 0 is not in the cube.
+static ACTIVE_ACCENT_CUBE: AtomicUsize = AtomicUsize::new(0);
+
+/// The cube index the accent is pinned to, if any.
+pub fn active_accent_cube() -> Option<u8> {
+    match ACTIVE_ACCENT_CUBE.load(Ordering::Relaxed) {
+        0 => None,
+        i => u8::try_from(i).ok(),
+    }
+}
+
+/// Make `choice` the accent every live palette draws with.
+pub fn activate_accent_choice(choice: AccentChoice) {
+    match choice {
+        AccentChoice::Role(a) => activate_accent(a),
+        AccentChoice::Cube(i) => ACTIVE_ACCENT_CUBE.store(usize::from(i), Ordering::Relaxed),
+    }
+}
+
+/// Whether this terminal can show a cube swatch at all.
+pub fn cube_renderable(level: Level) -> bool {
+    level >= Level::Ansi256
+}
+
+// endregion: Accent override
+
+// region: The palette
+// ---------------------------------------------------------------------------
+
 /// The palette in force for this run: how much colour, and which colours.
 ///
 /// **`Copy`, and that is load-bearing.** Roughly thirty call sites pass a
@@ -243,6 +405,10 @@ pub enum Role {
 pub struct Palette {
     pub level: Level,
     pub theme: Theme,
+    /// Whether [`active_accent`] and [`active_accent_cube`] apply. Pinned
+    /// palettes — [`Palette::new`] and [`Palette::with_theme`] — ignore them
+    /// so tests stay deterministic.
+    live: bool,
 }
 
 impl Palette {
@@ -251,6 +417,7 @@ impl Palette {
         Self {
             level,
             theme: super::theme::BUILTIN,
+            live: false,
         }
     }
 
@@ -262,7 +429,32 @@ impl Palette {
     /// cannot overturn `NO_COLOR`. A theme says *which* colours; only the
     /// terminal says *how many*.
     pub fn with_theme(level: Level, theme: Theme) -> Self {
-        Self { level, theme }
+        Self {
+            level,
+            theme,
+            live: false,
+        }
+    }
+
+    /// A resolved theme that reads accent overrides at draw time.
+    ///
+    /// `Term` is the only caller — the same seam the fork's ambient theme
+    /// registry used, except the theme itself is already resolved into this
+    /// struct and only the accent borrows stay ambient.
+    pub fn live(level: Level, theme: Theme) -> Self {
+        Self {
+            level,
+            theme,
+            live: true,
+        }
+    }
+
+    fn resolve_role(&self, role: Role) -> Role {
+        if self.live && role == Role::Accent {
+            active_accent().borrowed.unwrap_or(Role::Accent)
+        } else {
+            role
+        }
     }
 
     /// The colour for a role, at whatever fidelity this terminal has.
@@ -277,6 +469,14 @@ impl Palette {
         if self.level == Level::None || role == Role::Text {
             return Color::Reset;
         }
+        if self.live && role == Role::Accent {
+            if let Some(i) = active_accent_cube() {
+                if cube_renderable(self.level) {
+                    return Color::Indexed(i);
+                }
+            }
+        }
+        let role = self.resolve_role(role);
         match self.level {
             Level::Truecolor => {
                 let (r, g, b) = self.theme.rgb(role);
@@ -427,7 +627,112 @@ fn nearest_index(rgb: (u8, u8, u8)) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::theme::{load, BUILTIN};
     use super::*;
+
+    /// The accent is process-global on purpose (see `activate_accent_choice`),
+    /// and the test harness runs tests on parallel threads, so every test
+    /// that sets it takes this guard first and starts from the theme's own.
+    /// Without it these three tests fail each other in whichever order the
+    /// scheduler picks, which is how the first run of them read green and
+    /// the second red.
+    static AMBIENT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn ambient_reset() -> std::sync::MutexGuard<'static, ()> {
+        let guard = AMBIENT.lock().unwrap_or_else(|e| e.into_inner());
+        activate_accent(&ACCENTS[0]);
+        guard
+    }
+
+    /// The accent override borrows another role's swatch **from the theme in
+    /// force**, so it survives a theme switch and never introduces a colour
+    /// no theme approved.
+    #[test]
+    fn an_accent_override_borrows_a_role_from_whatever_theme_is_active() {
+        let _ambient = ambient_reset();
+        let live = Palette::live(Level::Truecolor, BUILTIN);
+        activate_accent(&ACCENTS[0]);
+        assert_eq!(
+            live.color(Role::Accent),
+            Palette::with_theme(Level::Truecolor, BUILTIN).color(Role::Accent),
+            "the default accent is the theme's own"
+        );
+        activate_accent(accent("ok").unwrap());
+        assert_eq!(
+            live.color(Role::Accent),
+            live.color(Role::Ok),
+            "the override must be the theme's Ok swatch, not a new hex"
+        );
+        // Switch theme: the accent follows, because it is a role and not a
+        // colour.
+        let home = tempfile::tempdir().unwrap();
+        let themes = home.path().join(".emma").join("themes");
+        std::fs::create_dir_all(&themes).unwrap();
+        std::fs::write(
+            themes.join("oxide.json"),
+            r##"{ "name": "oxide", "roles": { "ok": "#00ff00" } }"##,
+        )
+        .unwrap();
+        let (other, notices) = load(Some(home.path()), None, Some("oxide"));
+        assert!(notices.is_empty(), "{notices:?}");
+        let live_other = Palette::live(Level::Truecolor, other);
+        assert_eq!(
+            live_other.color(Role::Accent),
+            live_other.color(Role::Ok),
+            "the borrowed role must follow the new theme"
+        );
+        assert_ne!(
+            live_other.color(Role::Accent),
+            live.color(Role::Accent),
+            "a different theme's Ok swatch must not match the built-in's"
+        );
+        // A pinned palette is never at the mercy of the override.
+        assert_eq!(
+            Palette::with_theme(Level::Truecolor, BUILTIN).color(Role::Accent),
+            Palette::with_theme(Level::Truecolor, BUILTIN).color(Role::Accent)
+        );
+        assert_ne!(
+            Palette::with_theme(Level::Truecolor, BUILTIN).color(Role::Accent),
+            Palette::with_theme(Level::Truecolor, BUILTIN).color(Role::Ok),
+            "a pinned palette must not have moved"
+        );
+        activate_accent(&ACCENTS[0]);
+    }
+
+    #[test]
+    fn parse_accent_reads_role_names_and_cube_indices() {
+        assert_eq!(parse_accent("ok"), Some(AccentChoice::Role(&ACCENTS[1])));
+        assert_eq!(parse_accent("cube:81"), Some(AccentChoice::Cube(81)));
+        assert_eq!(parse_accent("cube:0"), None);
+        assert_eq!(parse_accent("cube:999"), None);
+        assert_eq!(parse_accent("magenta"), None);
+        assert_eq!(AccentChoice::Cube(81).name(), "cube:81");
+    }
+
+    #[test]
+    fn a_cube_accent_is_an_index_on_a_256_colour_terminal() {
+        let _ambient = ambient_reset();
+        let live = Palette::live(Level::Ansi256, BUILTIN);
+        activate_accent_choice(AccentChoice::Cube(81));
+        assert_eq!(live.color(Role::Accent), Color::Indexed(81));
+        // Below the cube, the theme's own accent is what comes out.
+        let low = Palette::live(Level::Ansi16, BUILTIN);
+        assert_eq!(
+            low.color(Role::Accent),
+            BUILTIN.ansi16(Role::Accent),
+            "a sixteen-colour terminal gets the theme accent, not a cube index"
+        );
+        activate_accent(&ACCENTS[0]);
+    }
+
+    #[test]
+    fn choosing_a_role_clears_a_cube_accent() {
+        let _ambient = ambient_reset();
+        activate_accent_choice(AccentChoice::Cube(81));
+        assert_eq!(active_accent_cube(), Some(81));
+        activate_accent(accent("warn").unwrap());
+        assert_eq!(active_accent_cube(), None);
+        activate_accent(&ACCENTS[0]);
+    }
 
     #[test]
     fn a_terminal_that_says_it_does_truecolor_is_believed() {

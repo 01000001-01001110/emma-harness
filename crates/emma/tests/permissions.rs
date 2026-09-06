@@ -125,6 +125,7 @@ async fn run(
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
     agent.run_goal(&Goal::new("find out about the news")).await
 }
@@ -371,6 +372,7 @@ async fn a_hook_denial_outranks_an_allow_rule_that_covers_the_call() {
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
     let out = agent.run_goal(&Goal::new("run it")).await;
     assert_eq!(out.ending, Ending::Done);

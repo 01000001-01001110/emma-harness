@@ -71,7 +71,9 @@
     <code>emma --resume</code> answers three questions the fold refuses:
     which file, what the interrupted goal had already spent, and which calls it
     had already been told not to repeat. It answers a fourth by not answering
-    it. Nothing in this path runs a tool.
+    it. Nothing in this path runs a tool. Since 2026-09-06 the same thing
+    happens without restarting the process, under <code>/resume</code>, and
+    <a href="#inplace">the last section</a> is what that costs.
   </p>
   <span class="src">crates/emma/src/session.rs — <code>restore</code>, <code>restore_records</code>, <code>locate</code>; crates/emma/src/cli.rs; crates/emma/src/main.rs</span>
 
@@ -571,6 +573,108 @@ term.note(&amp;format!(
     <a href="session-continuity.html">Continuity</a>.
   </p>
 
+  <h2 id="inplace">Resuming without leaving the process</h2>
+
+  <p>
+    <code>/resume &lt;id&gt;</code> continues a different session in the running
+    program. It is the inverse of <code>/clear</code> and its sibling in the
+    code: <code>/clear</code> replaces the conversation with nothing, this
+    replaces it with a fold of another session file, and everything
+    <code>/clear</code> had to decide this decides the same way. The chapters
+    go, the pending resume goes, and <code>last_ending</code> and
+    <code>last_input</code> go because they describe a conversation that is no
+    longer here.
+  </p>
+
+  <p>
+    <strong>What survives is the approval grants, and they are not this method's
+    to touch.</strong> They live in <code>Approvals</code>, which belongs to the
+    process. A grant is a person saying yes to this tool in this working tree
+    for this sitting, and the person is still sitting there; dropping the grants
+    would re-ask questions they answered ten minutes ago and teach them to
+    answer without reading. <code>turn_seq</code> survives too, for
+    <code>/clear</code>'s reason turned around: turn ids have to be unique inside
+    one file, and this process is now writing into a file that already has turns
+    in it. What does not survive is the goal budget, which comes back from the
+    restored file rather than from the conversation being left, exactly as
+    <code>--resume</code> restores it.
+  </p>
+
+  <p>
+    <strong>Nothing is renamed.</strong> The obvious implementation of "move
+    this session onto that file" is a rename, and on Windows a rename of a file
+    this process still holds open fails with
+    <code>ERROR_SHARING_VIOLATION</code> unless every handle was opened sharing
+    delete, which <code>OpenOptions</code> does not do. So
+    <code>SessionLog::move_to</code> opens the destination, writes a
+    <code>session_moved</code> record into the file being left, and then drops
+    the old handle. Two files, both kept, one writer moving between them. The
+    new handle is opened before the old one is given up, so a destination that
+    cannot be opened leaves the log where it was rather than in a session with
+    nowhere to write.
+    <span class="chip test">tested</span>:
+    <code>both_files_are_still_there_afterwards_and_neither_was_renamed</code>,
+    <code>moving_ends_one_file_and_appends_to_the_other</code>, and
+    <code>a_move_that_cannot_open_its_destination_keeps_the_session_it_had</code>.
+    The move is also the only step of a resume that can fail, and it is taken
+    before anything is dropped, which
+    <code>a_resume_that_cannot_move_the_log_keeps_the_session_it_had</code>
+    pins from the caller's side.
+  </p>
+
+  <p>
+    The abandoned file gets the last word. Its <code>session_moved</code> record
+    names the destination and is the last line it will ever have, so a human
+    reading it later, or an <code>emma --resume</code> of it, finds a session
+    that stops rather than one that was truncated. The fold needs no arm for
+    that record, because everything above it is still that session's
+    conversation and a later resume must get all of it back; and it needs no arm
+    for the <code>resumed</code> record either, which is the sharper of the two:
+    the messages that record counts are already in the file, above the line, so
+    an arm that replayed them would hand back the conversation twice.
+    <span class="chip test">tested</span>:
+    <code>a_moved_record_costs_the_fold_nothing</code> exists to stop somebody
+    adding an arm later on the reasonable-sounding grounds that every other
+    record has one, and
+    <code>a_resumed_record_does_not_double_the_conversation</code> is the other
+    half.
+  </p>
+
+  <p>
+    The receipt names both sessions: what was resumed and how many messages came
+    back, what was left and how much of it, the recorded working directory and
+    the directory sentence when it differs from this one, what was kept, and
+    every continuity difference (instructions, tools, model) as a warning. A
+    damaged session says it came back short, from the fold's own damage list
+    rather than from a second opinion. That last part is a lesson taken from the
+    process-boundary resume, which computed the same note and for a while printed
+    nothing: the damage was on the value, the value went into the loop, and a
+    resumed run quietly missing turns looked entirely normal.
+    <span class="chip test">tested</span>:
+    <code>resume_in_place_swaps_the_conversation_and_the_fold_still_matches_it</code>,
+    <code>a_damaged_session_picked_up_in_place_says_it_came_back_short</code>,
+    <code>a_session_from_another_directory_carries_the_directory_contract</code>.
+    Bare <code>/resume</code> lists what was recorded from this directory, and
+    resuming the session you are already in is refused with a sentence and no
+    change.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> A resume across a real directory
+    change on a live console. Every test above drives
+    <code>Agent::resume_in_place</code> directly against a temporary directory,
+    which is a cell buffer's distance from what a person sees. Settling it:
+    start a session in one tree, <code>/resume</code> a session recorded in
+    another, and read the four receipt lines on screen.
+    <span class="chip unv">unverified</span> The fork's remaining mutations for
+    this package were never run. The worker that ported it was cut off by a
+    session limit mid-run and left no report; one mutation was re-run afterwards
+    (a move that writes a record of another kind turns
+    <code>moving_ends_one_file_and_appends_to_the_other</code> red) and the rest
+    are unrepeated. Settling it: run them.
+  </p>
+  <span class="src">crates/emma/src/agent.rs &mdash; <code>Agent::resume_in_place</code>, <code>ResumedInPlace</code>; crates/emma/src/session.rs &mdash; <code>SessionLog::move_to</code>, <code>MOVED</code>, <code>RESUMED</code>; crates/emma/src/session_command.rs &mdash; <code>resume</code></span>
+
   <h2 id="coverage">What this page covers</h2>
 
   <p>
@@ -581,7 +685,13 @@ term.note(&amp;format!(
     <code>continuity_of</code> and the <code>Continuity</code> type are the next
     page's. The <code>--resume</code> arm of <code>cli.rs</code> and the resume
     block of <code>main.rs</code> are quoted here because the file-selection
-    rule is split across all three.
+    rule is split across all three. From the 2026-09-06 port:
+    <code>SessionLog::move_to</code>, the <code>MOVED</code> and
+    <code>RESUMED</code> records, <code>Agent::resume_in_place</code>,
+    <code>ResumedInPlace</code> and the <code>/resume</code> dispatcher in
+    <code>session_command.rs</code>. What this page has not read is
+    <code>list_sessions</code>, the bare-<code>/resume</code> listing, beyond the
+    one sentence above.
   </p>
 
   <h2 id="unverified">What is not verified here</h2>

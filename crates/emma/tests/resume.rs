@@ -79,6 +79,7 @@ async fn drive(
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
     if let Some(resumed) = resumed {
         agent = agent.resuming(resumed);
@@ -121,7 +122,7 @@ async fn a_resumed_run_inherits_the_model_calls_the_first_one_made() {
     .await;
     assert_eq!(out.ending, Ending::Iterations);
 
-    let restored = session::restore(log.path()).unwrap();
+    let restored = session::restore(&log.path()).unwrap();
     assert_eq!(restored.resumed.iterations, 2);
 
     let (fine2, _) = TestTool::ok("Fine", true);
@@ -177,7 +178,7 @@ async fn a_resumed_run_inherits_the_tokens_the_first_one_spent() {
     assert_eq!(out.ending, Ending::Tokens);
     assert_eq!(out.tokens, 20);
 
-    let restored = session::restore(log.path()).unwrap();
+    let restored = session::restore(&log.path()).unwrap();
     assert_eq!(restored.resumed.tokens, 20);
 
     let (fine2, _) = TestTool::ok("Fine", true);
@@ -237,7 +238,7 @@ async fn a_resumed_run_inherits_the_nudges_the_first_one_used() {
     assert_eq!(out.ending, Ending::KicksExhausted);
     assert_eq!(out.kicks, 1);
 
-    let restored = session::restore(log.path()).unwrap();
+    let restored = session::restore(&log.path()).unwrap();
     assert_eq!(restored.resumed.kicks, 1);
 
     let (fine2, _) = TestTool::ok("Fine", true);
@@ -284,7 +285,7 @@ async fn a_resumed_run_inherits_the_call_that_already_failed() {
     )
     .await;
 
-    let restored = session::restore(log.path()).unwrap();
+    let restored = session::restore(&log.path()).unwrap();
     assert_eq!(restored.resumed.failed_now.len(), 1, "{restored:?}");
 
     let (boom2, boom_calls) = TestTool::failing("Boom", true);
@@ -345,7 +346,7 @@ async fn the_conversation_comes_back_and_the_new_goal_joins_the_last_turn() {
     )
     .await;
 
-    let restored = session::restore(log.path()).unwrap();
+    let restored = session::restore(&log.path()).unwrap();
     let folded = restored.resumed.messages.clone();
     assert!(!folded.is_empty());
     assert_eq!(folded.last().unwrap().role, Role::User);
@@ -415,7 +416,7 @@ async fn a_resumed_run_replays_no_tools() {
     )
     .await;
 
-    let restored = session::restore(log.path()).unwrap();
+    let restored = session::restore(&log.path()).unwrap();
     let (fine2, replayed) = TestTool::ok("Fine", true);
     let second = Fake::new(vec![text("GOAL COMPLETE")]);
     drive(
@@ -806,7 +807,7 @@ async fn a_question_after_a_finished_goal_is_answered_and_not_nudged() {
     );
 
     // Run two: resume that file and ask a question needing no tool.
-    let resumed = session::restore(log.path()).unwrap();
+    let resumed = session::restore(&log.path()).unwrap();
     let second = Fake::new(vec![text("it is four.")]);
     let out = drive(
         &root,

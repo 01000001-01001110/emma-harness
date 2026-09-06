@@ -34,7 +34,7 @@ fn main() -> Result<()> {
     // start in this directory" must not need Emma to start.
     match cli.command {
         Command::Help => {
-            print!("{}", cli::HELP);
+            print!("{}", cli::help());
             return Ok(());
         }
         Command::Version => {
@@ -66,6 +66,33 @@ fn main() -> Result<()> {
                 .clone()
                 .or_else(|| SessionLog::default_dir(auth::home_dir().as_deref()));
             return emma::commands::agents(dir.as_deref(), &mut std::io::stdout());
+        }
+        // Reads the transcripts and writes local files. No harness, no key, no
+        // model, no network: the same class as `agents` above, and the
+        // backfill half of the standing `training_capture` toggle.
+        Command::ExportTraining { session } => {
+            let home = auth::home_dir();
+            let dir = cli
+                .opts
+                .session_dir
+                .clone()
+                .or_else(|| SessionLog::default_dir(home.as_deref()));
+            let out = cli
+                .opts
+                .out
+                .clone()
+                .or_else(|| emma::export::default_out_dir(home.as_deref()));
+            let filter = match cli.opts.min_ending.as_deref() {
+                Some(which) => emma::export::Filter::parse(which)?,
+                None => emma::export::Filter::default(),
+            };
+            return emma::export::export(
+                dir.as_deref(),
+                out.as_deref(),
+                session.as_deref(),
+                filter,
+                &mut std::io::stdout(),
+            );
         }
         _ => {}
     }
@@ -106,7 +133,18 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // dropped on purpose, as `_tracker` above is — the four tools hold clones of
     // the one shared instance, so the language server outlives this binding and
     // dies with them at exit.
-    let (lsp, _lsp_pool) = emma_tools_lsp::lsp_tools();
+    // `lsp.enabled` from settings.json, falling back to the default set. Three
+    // of the seven languages are off by default because their servers may
+    // reach the network and these tools declare `reaches_network: false`;
+    // turning one on is the user's call, and the pool reports a key this build
+    // does not know rather than rejecting the file.
+    let lsp_enabled = auth::home_dir()
+        .map(|h| emma::settings::load(&h))
+        .and_then(|s| s.lsp.enabled);
+    let (lsp, lsp_pool) = match lsp_enabled {
+        Some(keys) => emma_tools_lsp::lsp_tools_with(keys),
+        None => emma_tools_lsp::lsp_tools(),
+    };
     for tool in lsp {
         registry.register(tool);
     }
@@ -186,6 +224,37 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // one if it were ever wanted.
     let (theme, theme_notices) =
         emma::term::theme::load(auth::home_dir().as_deref(), Some(&harness.root), None);
+    // The stored accent, activated before the first palette is built so a
+    // saved choice applies from the first frame. Ambient rather than a field
+    // on the skin: a `Skin` is `Copy` and the viewport holds copies, so the
+    // picker that changes it later must not have to find them all.
+    if let Some(choice) = auth::home_dir()
+        .map(|h| emma::settings::load(&h))
+        .and_then(|s| s.appearance.accent)
+        .as_deref()
+        .and_then(emma::term::palette::parse_accent)
+    {
+        emma::term::palette::activate_accent_choice(choice);
+    }
+    // The terminal's own font, re-asked for from settings.json. Silent by
+    // design: this runs before there is a screen to print a refusal onto, and
+    // where the terminal offers no font control it asks nothing at all. The
+    // Settings rows are where a failure is worth reading, because that is
+    // where somebody just pressed something.
+    if let Some(home) = auth::home_dir() {
+        let appearance = emma::settings::load(&home).appearance;
+        emma::term::termfont::restore(
+            appearance.font_family.as_deref(),
+            appearance.font_size,
+            &emma::term::termfont::detect_here(),
+        );
+    }
+    // The keybindings file, read once, here: the input layer resolves a chord
+    // on every keystroke and must not touch the filesystem to do it. An edit
+    // to the file applies to the next run.
+    if let Some(home) = auth::home_dir() {
+        emma::term::keymap::install(emma::term::keymap::load(&home));
+    }
     let term = Arc::new(if opts.print {
         Term::printing(theme)
     } else {
@@ -200,19 +269,20 @@ async fn run(cli: cli::Cli) -> Result<()> {
     let interrupt = Interrupt::new();
     interrupt.install();
 
-    let (gate, asker) = match (opts.skip_permissions, opts.print) {
-        (true, _) => (Gate::SkipAll, Asker::Scripted(Default::default())),
-        (false, true) => (Gate::Unattended, Asker::Scripted(Default::default())),
-        (false, false) => {
-            let signal = interrupt.clone();
-            // The `/` menu's vocabulary is this run's, taken from the harness
-            // that actually loaded. Nothing else may put a name in it.
-            let menu = emma::term::menu::Menu::for_project(&harness.command_names());
-            (
-                Gate::Ask,
-                Asker::Terminal(term.line_source(menu, move || signal.trip()).into()),
-            )
-        }
+    // The gate and the asker answer two different questions, and conflating
+    // them ended an interactive `--allow-all` run before its first goal: the
+    // bypass got a scripted asker with an empty queue, and the goal prompt was
+    // served from it. `approval::posture` is that decision, in the library,
+    // where it has a test.
+    let (gate, scripted) = emma::approval::posture(opts.skip_permissions, opts.print);
+    let asker = if scripted {
+        Asker::Scripted(Default::default())
+    } else {
+        let signal = interrupt.clone();
+        // The `/` menu's vocabulary is this run's, taken from the harness that
+        // actually loaded. Nothing else may put a name in it.
+        let menu = emma::term::menu::Menu::for_project(&harness.command_names());
+        Asker::Terminal(term.line_source(menu, move || signal.trip()).into())
     };
     // After the terminal exists, because this is the first thing a user needs
     // when a page read they expected does not happen: the tool is absent, and
@@ -326,6 +396,20 @@ async fn run(cli: cli::Cli) -> Result<()> {
         emma_llm::ApiKey::none()
     };
     let provider: Arc<dyn Provider> = kind.build(key.clone(), Some(resolved.model.clone()));
+    // The one place sampling is resolved, next to the one place a provider is
+    // chosen, because the defaults are per provider and the loop is not allowed
+    // to know which provider it is on. Everything downstream carries the answer
+    // and its provenance, never the table.
+    let sampling = home
+        .as_deref()
+        .map(emma::settings::load)
+        .unwrap_or_default()
+        .resolved_sampling(kind.name());
+    // The status bar's MODE cell reads the posture from here, because the frame
+    // builds its bar from the view and the view has no route to `Approvals`.
+    // The cell and not the value: a copy taken at startup would leave the bar
+    // showing the posture the run began in for the rest of the session.
+    emma::approval::publish_mode(approvals.mode_cell());
     // Said before the first call, not after it. A stale `OLLAMA_HOST` in a
     // shell profile sends the conversation — and every file the model has read
     // — to a machine the user has forgotten about; this is the line that names
@@ -355,6 +439,12 @@ async fn run(cli: cli::Cli) -> Result<()> {
             "and each search is billed apart from tokens. `\"web_search\": false` in ",
             "~/.emma/settings.json turns it off."
         ));
+    } else if wanted && kind.name() == emma::engine::claude::NAME {
+        term.note(
+            "web search is on. Under the claude engine the search is the child CLI's, on its \
+             own account and under its own rules: not a provider-side search on Emma's key, and \
+             not something `\"web_search\": false` here turns off.",
+        );
     } else if wanted {
         term.note(&format!(
             concat!(
@@ -488,6 +578,7 @@ async fn run(cli: cli::Cli) -> Result<()> {
             budgets,
             running: running.clone(),
             web_search,
+            sampling,
         },
         harness.agent_types(),
         &available,
@@ -530,6 +621,32 @@ async fn run(cli: cli::Cli) -> Result<()> {
     if let Some(delegate) = delegate {
         registry.register(Arc::new(delegate) as Arc<dyn Tool>);
     }
+    // Registered here rather than with the other tools at the top of this
+    // function because it needs the resolved provider: whether a picture
+    // attached to a tool result reaches the model is a fact about the wire, and
+    // the tool must not guess it. An unrecognised provider is told to the tool
+    // as "no", so a provider added later gets an honest refusal in the result
+    // rather than a picture dropped on the floor. On a platform with no
+    // backend the tool still registers and refuses in words at call time.
+    let delivery = match kind.name() {
+        "anthropic" => emma_tools_screenshot::ImageDelivery::Blocks {
+            provider: "anthropic",
+        },
+        // Three providers share this shape for the same reason: their wire
+        // format has no way to put a picture inside a tool result, so it rides
+        // on a message beside it. On Ollama that is an `images` array; on the
+        // two chat-completions hosts it is an `image_url` content part on a
+        // following user message. Whether the model looks at it depends on the
+        // model, which is what `Attached` says out loud.
+        "ollama" | "openrouter" | "openai" => emma_tools_screenshot::ImageDelivery::Attached {
+            provider: kind.name(),
+            model: provider.model_id().to_string(),
+        },
+        other => emma_tools_screenshot::ImageDelivery::Unsupported {
+            reason: format!("the {other} provider has no image path wired up in this build"),
+        },
+    };
+    registry.register(Arc::new(emma_tools_screenshot::Screenshot::new(delivery)) as Arc<dyn Tool>);
     // Consumes the registry: the unfiltered one must not survive the call.
     let tools = harness.select_tools(registry)?;
 
@@ -570,7 +687,46 @@ async fn run(cli: cli::Cli) -> Result<()> {
         // There is no pinned status row and this is not one pretending. A fixed
         // row costs a scroll region, a scroll region costs scrollback, and the
         // owner's first complaint was that he could not scroll.
-        term.set_status(provider.model_id(), &cwd, log.path());
+        term.set_status(provider.model_id(), &cwd, &log.path());
+        // The provider this run actually booted with, which the settings file
+        // cannot say when `--provider` was passed, and the hints preference,
+        // which nothing in the frame can read for itself.
+        term.set_running_provider(&resolved.provider);
+        term.set_hints(
+            home.as_deref()
+                .map(emma::settings::load)
+                .unwrap_or_default()
+                .hints(),
+        );
+        // **The same pool the LSP tools hold**, which is a decision with
+        // evidence rather than a convenience: one server per language serves
+        // both the model and the person editing. A second rust-analyzer is
+        // about a gigabyte of memory and, more usefully, the editor's own
+        // change notifications keep the server's view current for the model's
+        // next call.
+        //
+        // Spawned here because this is where a runtime and a frame both exist.
+        // The task holds a weak handle on the frame, so it cannot keep the
+        // terminal alive past the run, and the input thread never touches
+        // anything but the channel's `try_send`.
+        if let Some(frame) = term.frame_handle() {
+            let (handle, requests) = emma::term::code_lsp::channel();
+            if let Some(f) = frame.upgrade() {
+                f.set_code_lsp(handle);
+            }
+            let weak = frame.clone();
+            let root = cwd.clone();
+            tokio::spawn(emma::term::code_lsp::run(
+                root,
+                lsp_pool.clone(),
+                requests,
+                Arc::new(move |update| {
+                    if let Some(f) = weak.upgrade() {
+                        f.code_lsp_update(update);
+                    }
+                }),
+            ));
+        }
         // A `statusLine` in the harness's settings replaces the line above for
         // the rest of the run. Resolution, containment and the timeout are the
         // harness's; `set_status_source` is the whole of the wiring. A note
@@ -642,6 +798,53 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // running is a leak, and one that kills them silently is a surprise.
     let background = emma_tool_api::background::Registry::new();
 
+    // The claude engine's whole run, as one value, built once. `--model` is
+    // passed through only when a model was actually chosen, flag or settings,
+    // because passing the built-in default would override whatever the user's
+    // own `claude` is configured to run with a value Emma invented on their
+    // behalf. The CLI is resolved here, so a missing one is a sentence at
+    // startup rather than a failed spawn in the middle of a goal.
+    let claude_handoff = kind
+        .name()
+        .eq(emma::engine::claude::NAME)
+        .then(|| {
+            emma::engine::claude::resolve(emma::engine::claude::NAME).map(|cli| {
+                emma::engine::claude::Handoff {
+                    cwd: cwd.clone(),
+                    model: match resolved.model_source {
+                        "built-in default" => None,
+                        _ => Some(resolved.model.clone()),
+                    },
+                    // **The escalation rule.** The same bit that puts Emma's own
+                    // gate in `Gate::SkipAll` is the only thing that may unlock
+                    // the child's bypass. Emma hands the child the posture the
+                    // user handed Emma, never more.
+                    allow_all: opts.skip_permissions,
+                    timeout: opts.budgets.wall_clock,
+                    interrupt: interrupt.clone(),
+                    log: log.clone(),
+                    term: term.clone(),
+                    session_id: session_id.clone(),
+                    spend: spend.clone(),
+                    cli,
+                }
+            })
+        })
+        .flatten();
+    if kind.name() == emma::engine::claude::NAME {
+        if let Some(missing) = emma::engine::claude::missing_cli(&cwd) {
+            term.warn(&missing);
+        }
+        // The claude engine hands a whole goal to a `claude -p` child whose
+        // stdin is closed, so there is no turn boundary inside it a steer could
+        // land on. Typing during one is not dead: the queue still takes it and
+        // the between-goals drain turns it into the next goal. But the queued
+        // row has to say *that* rather than promise a turn that will not come.
+        if let Some(frame) = term.frame_handle().and_then(|f| f.upgrade()) {
+            frame.set_steerable(emma::engine::claude::STEERABLE);
+        }
+    }
+
     let agent = Agent::new(Setup {
         // One registry for the whole interactive session, so a task started in
         // one goal is still findable in the next. Scoping it per goal would make
@@ -668,12 +871,13 @@ async fn run(cli: cli::Cli) -> Result<()> {
             Mode::Stream
         },
         web_search,
+        sampling,
     });
 
     // The restored conversation and counters go in here, and the loop below is
     // unchanged by the resume: a resumed run is a run with something behind it,
     // not a different mode.
-    let mut agent = match restored {
+    let agent = match restored {
         Some(restored) => agent.resuming(restored.resumed),
         None => agent,
     };
@@ -696,13 +900,65 @@ async fn run(cli: cli::Cli) -> Result<()> {
     // `/theme` writes that same key and the two are then deliberately
     // different facts.
     let theme_at_start = home.as_deref().and_then(|h| emma::settings::load(h).theme);
-    loop {
+    // The one steering queue this process has: filled by the reader thread when
+    // somebody types while a goal is running, drained by the loop at every turn
+    // boundary. See `emma::steering`.
+    let steering = emma::steering::global();
+    let mut agent = agent.steered_by(steering.clone(), theme_at_start.clone());
+    'session: loop {
         // Whether this line came from a person at the prompt or from the
         // command line. Only the first is second-guessed: `emma goal "init"` is
         // somebody stating a goal in the one place goals are unambiguous, and
         // intercepting it would be overruling them.
         let mut from_the_prompt = false;
-        let raw = match next.take() {
+        // Anything the loop never reached: what was typed during the last
+        // model call of a goal, after its final drain. It opens the next goal
+        // rather than meeting the prompt's own drain, which is the whole point:
+        // typing while a goal runs must never be silently dead.
+        //
+        // Here rather than at the prompt because at this point it *is* between
+        // goals, so a queued command gets the full dispatcher rather than the
+        // boundary subset: `/model` and `/clear`, refused mid-goal, are
+        // ordinary commands again.
+        let mut queued = None;
+        if next.is_none() && !steering.is_empty() {
+            let mut said: Vec<String> = Vec::new();
+            for steer in steering.take() {
+                match steer {
+                    emma::steering::Steer::Text(line) => said.push(line),
+                    emma::steering::Steer::Command(cmd) => {
+                        let mut session = emma::session_command::Session {
+                            agent: &mut agent,
+                            term: &term,
+                            approvals: &approvals,
+                            harness: &harness,
+                            tools: &tools,
+                            cwd: &cwd,
+                            session_dir: session_dir_for_welcome.as_deref(),
+                            unavailable: &web.skipped,
+                            provider: &mut provider,
+                            running: &running,
+                            kind,
+                            key: key.clone(),
+                            log_path: log.path().to_path_buf(),
+                            home: home.clone(),
+                            theme_at_start: theme_at_start.clone(),
+                        };
+                        if emma::session_command::run(*cmd, &mut session).await
+                            == emma::session_command::Flow::Exit
+                        {
+                            break 'session;
+                        }
+                    }
+                }
+            }
+            if !said.is_empty() {
+                let goal = said.join("\n");
+                term.note(&format!("queued while the last goal ran: {goal}"));
+                queued = Some(goal);
+            }
+        }
+        let raw = match next.take().or(queued) {
             Some(text) => text,
             None => {
                 from_the_prompt = true;
@@ -816,9 +1072,20 @@ async fn run(cli: cli::Cli) -> Result<()> {
         // library, where a test can reach both halves of it; it used to be the
         // `if` here, and the `-p` half was asserted nowhere.
         interrupt.starting_goal(opts.print);
-        let outcome = agent
-            .run_goal(&Goal::new(text).with_injected(submitted.context))
-            .await;
+        // The one branch between engines, and it is deliberately this shallow.
+        // Everything the claude engine does (the command line, the stream, the
+        // transcript, the records, the signals) belongs to its module, so
+        // adding it changes the loop by a handful of lines and changes
+        // `agent.rs` by none. The two arms agree on exactly one thing: a goal
+        // in, an `Outcome` out. See `engine::claude`.
+        let outcome = match &claude_handoff {
+            Some(h) => emma::engine::claude::run_goal(h, &text).await,
+            None => {
+                agent
+                    .run_goal(&Goal::new(text).with_injected(submitted.context))
+                    .await
+            }
+        };
         // "cache-weighted" rather than "tokens", because it is not the number
         // the provider reports and a person comparing this line with a bill
         // should know which one it is: a cached read counts here at the tenth
@@ -1040,6 +1307,7 @@ async fn run_verification(
             mode: Mode::Batch,
             // A review reads the repository and never the web.
             web_search: false,
+            sampling: Default::default(),
         });
         let outcome = agent.run_goal(&Goal::new(emma::verify::brief(row))).await;
         let report = outcome.text.clone();

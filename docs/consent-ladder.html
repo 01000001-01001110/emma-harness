@@ -213,7 +213,7 @@
   <figure>
     <div class="figwrap">
       <!-- diagram:consent-ladder -->
-      <svg viewBox="0 0 182 784" role="img" aria-label="The 8 checks Approvals::decide makes, in the order it makes them; the first that answers is the answer and nothing below it gets a say. A PreToolUse hook denial is checked earlier still, in the loop, and is not one of these. An `ask` rule is not a rung either: it sets a flag that skips the three rungs below it rather than returning.">
+      <svg viewBox="0 0 182 886" role="img" aria-label="The 9 checks Approvals::decide makes, in the order it makes them; the first that answers is the answer and nothing below it gets a say. A PreToolUse hook denial is checked earlier still, in the loop, and is not one of these. An `ask` rule is not a rung either: it sets a flag that skips the three rungs below it rather than returning.">
         <style>
           :root {
             --ladder-ground: #12101a;
@@ -255,7 +255,7 @@
             <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ladder-dim)"/>
           </marker>
         </defs>
-        <rect class="ladder-ground" x="0" y="0" width="182" height="784"/>
+        <rect class="ladder-ground" x="0" y="0" width="182" height="886"/>
 
         <path class="ladder-edge" marker-end="url(#ladder-tip)" d="M 91 54 L 91 118"/>
         <path class="ladder-edge" marker-end="url(#ladder-tip)" d="M 91 156 L 91 220"/>
@@ -264,40 +264,46 @@
         <path class="ladder-edge" marker-end="url(#ladder-tip)" d="M 91 462 L 91 526"/>
         <path class="ladder-edge" marker-end="url(#ladder-tip)" d="M 91 564 L 91 628"/>
         <path class="ladder-edge" marker-end="url(#ladder-tip)" d="M 91 666 L 91 730"/>
+        <path class="ladder-edge" marker-end="url(#ladder-tip)" d="M 91 768 L 91 832"/>
         <rect class="ladder-box" x="16" y="16" width="150" height="38" rx="3"/>
         <text class="ladder-lbl" x="91" y="40" text-anchor="middle">rule == Some(Decision::Deny)</text>
 
-        <rect class="ladder-box-hl" x="16" y="118" width="150" height="38" rx="3"/>
-        <text class="ladder-lbl" x="91" y="142" text-anchor="middle">egress(): deny</text>
+        <rect class="ladder-box" x="16" y="118" width="150" height="38" rx="3"/>
+        <text class="ladder-lbl" x="91" y="142" text-anchor="middle">mode.get().refuse()</text>
 
-        <rect class="ladder-box" x="16" y="220" width="150" height="38" rx="3"/>
-        <text class="ladder-lbl" x="91" y="244" text-anchor="middle">gate == Gate::SkipAll</text>
+        <rect class="ladder-box-hl" x="16" y="220" width="150" height="38" rx="3"/>
+        <text class="ladder-lbl" x="91" y="244" text-anchor="middle">egress(): deny</text>
 
         <rect class="ladder-box" x="16" y="322" width="150" height="38" rx="3"/>
-        <text class="ladder-lbl" x="91" y="346" text-anchor="middle">rule == Some(Decision::Allow)</text>
+        <text class="ladder-lbl" x="91" y="346" text-anchor="middle">gate() == Gate::SkipAll</text>
 
         <rect class="ladder-box" x="16" y="424" width="150" height="38" rx="3"/>
-        <text class="ladder-lbl" x="91" y="448" text-anchor="middle">read_only: Allow</text>
+        <text class="ladder-lbl" x="91" y="448" text-anchor="middle">rule == Some(Decision::Allow)</text>
 
         <rect class="ladder-box" x="16" y="526" width="150" height="38" rx="3"/>
-        <text class="ladder-lbl" x="91" y="550" text-anchor="middle">EXEMPT.contains()</text>
+        <text class="ladder-lbl" x="91" y="550" text-anchor="middle">read_only: Allow</text>
 
         <rect class="ladder-box" x="16" y="628" width="150" height="38" rx="3"/>
-        <text class="ladder-lbl" x="91" y="652" text-anchor="middle">session_allowed.lock().contains()</text>
+        <text class="ladder-lbl" x="91" y="652" text-anchor="middle">EXEMPT.contains()</text>
 
         <rect class="ladder-box" x="16" y="730" width="150" height="38" rx="3"/>
-        <text class="ladder-lbl" x="91" y="754" text-anchor="middle">gate == Gate::Unattended</text>
+        <text class="ladder-lbl" x="91" y="754" text-anchor="middle">session_allowed.lock().contains()</text>
+
+        <rect class="ladder-box" x="16" y="832" width="150" height="38" rx="3"/>
+        <text class="ladder-lbl" x="91" y="856" text-anchor="middle">gate() == Gate::Unattended</text>
 
       </svg>
       <!-- /diagram -->
     </div>
     <figcaption>
       Drawn from the function above and from
-      <code>Approvals::egress</code>. Two things differ from the eight-line
-      summary in the module doc: the egress question runs between the
-      <code>deny</code> rule and the bypass rather than beside them, and the
-      <code>Gate::Unattended</code> denial is a rung of its own, which the summary
-      does not list.
+      <code>Approvals::egress</code>. Two things differ from the summary in the
+      module doc: the egress question runs between the <code>deny</code> rule
+      and the bypass rather than beside them, and the
+      <code>Gate::Unattended</code> denial is a rung of its own, which the
+      summary does not list. The diagram is generated from
+      <code>Approvals::decide</code> at build time, so it is the count to trust
+      when the prose below and it disagree.
     </figcaption>
   </figure>
 
@@ -315,17 +321,17 @@
       <tr>
         <td><code>Ask</code></td>
         <td>the default, reachable with no flag</td>
-        <td>rungs 1 to 7 answer, or the human does</td>
+        <td>the rungs above the prompt answer, or the human does</td>
       </tr>
       <tr>
         <td><code>SkipAll</code></td>
         <td><code>--dangerously-skip-permissions</code>, or <code>--yes</code> alongside <code>-p</code></td>
-        <td>rung 3 allows everything rungs 1 and 2 did not refuse</td>
+        <td>the bypass rung allows everything the refusals above it did not stop</td>
       </tr>
       <tr>
         <td><code>Unattended</code></td>
         <td><code>-p</code> with no bypass</td>
-        <td>rung 8 denies anything rungs 1 to 7 did not settle, with a sentence the model reads</td>
+        <td>the last rung denies anything nothing above it settled, with a sentence the model reads</td>
       </tr>
     </tbody>
   </table>
@@ -359,8 +365,28 @@
     before <code>if self.gate == Gate::SkipAll</code> is evaluated.
     <code>egress</code> has the same two statements in the same order for the
     network question. <code>--dangerously-skip-permissions</code> used to be the
-    first thing <code>decide</code> read and is now the third.
+    first thing <code>decide</code> read. It was the third until 2026-09-06 and
+    it is the fifth now, below the hook denial, the <code>deny</code> rule, plan
+    mode and the egress question.
   </p>
+
+  <p>
+    The bypass also stopped costing an interactive run its keyboard.
+    <code>posture</code> answers two questions that used to be one: which gate,
+    and whether answers come from a script rather than a keyboard. Passing the
+    bypass used to select a scripted asker for every run, and a scripted asker
+    with an empty queue answers <code>None</code>, which
+    <code>Approvals::read_line</code> reads as end of input. Since the goal
+    prompt goes through the same <code>read_line</code>, an interactive
+    <code>emma --dangerously-skip-permissions</code> ended before a word could
+    be typed. Skipping approvals says nothing about where the keyboard is, and
+    the two answers are separate now.
+    <span class="chip test">tested</span>:
+    <code>allow_all_skips_the_gate_without_taking_the_keyboard</code> goes red
+    when <code>posture</code> returns <code>true</code> for the scripted half
+    unconditionally.
+  </p>
+  <span class="src">crates/emma/src/approval.rs &mdash; <code>posture</code>, <code>Approvals::read_line</code></span>
 
   <p>
     The argument for moving it: a deny rule is something the operator wrote down
@@ -446,17 +472,38 @@
   <h2 id="omissions">Where the rung is missing from the prose</h2>
 
   <p>
-    The module doc at the top of <code>approval.rs</code> prints an eight-line
-    ladder. It lists the hook denial, the <code>deny</code> rule, the bypass, the
-    <code>ask</code> rule, the <code>allow</code> rule, read-only or
-    <code>EXEMPT</code>, a session grant, and the human. The
-    <code>Gate::Unattended</code> denial is not one of the eight, and the egress
-    question is not either, although both are in the code the doc sits above.
+    <strong>Half of this section has closed, and the half that remains has
+    moved.</strong> It used to say that the module doc at the top of
+    <code>approval.rs</code> printed an eight-line ladder omitting both the
+    egress question and the <code>Gate::Unattended</code> denial. The doc lists
+    ten lines now: the hook denial, the <code>deny</code> rule, plan mode, the
+    egress question, the bypass, the <code>ask</code> rule, the
+    <code>allow</code> rule, read-only or <code>EXEMPT</code>, a session grant,
+    and the human. Egress is there, and so is the posture check the session's
+    mode makes. <code>Gate::Unattended</code> is still not one of them, which is
+    the omission that survives.
   </p>
 
   <p>
-    <code>emma --help</code> prints its own ladder, and it has the same shape and
-    the same gap. Two lines of the shipped 0.1.0 binary, read on this machine:
+    The gap moved to the help text. The session help still prints the
+    eight-item version, with neither plan mode nor egress on it, so the ladder a
+    user reads is two rungs shorter than the one the gate walks. That is the
+    same defect this section was written about, one file over.
+    <span class="chip cert">certified</span>: the sentence is one string literal
+    in <code>crates/emma/src/term/help.rs</code>, and the ladder it is being
+    compared against is the block quoted above from
+    <code>approval.rs</code>. The literal names eight things and stops at
+    <em>then you</em>: hook denial, deny rule, bypass, <code>ask</code> rule,
+    <code>allow</code> rule, read-only, session grant, the human. Neither plan
+    mode nor the egress question is among them, and the count was re-read
+    against <code>help.rs</code> on 2026-09-06 rather than carried forward from
+    the binary below, which is the check this claim needed after the text moved
+    files.
+  </p>
+
+  <p>
+    What the shipped 0.1.0 binary printed, read on this machine, and what the
+    help text still says:
   </p>
 
   <pre><code>  The order, and the first line that answers wins: a PreToolUse hook denial, a
@@ -470,12 +517,20 @@
     <code>./target/release/emma.exe --help | grep -A3 "The order, and the first
     line"</code> prints exactly the four lines above, and
     <code>./target/release/emma.exe --version</code> answers
-    <code>emma 0.1.0</code>. The ladder there omits both the unattended denial
-    and the egress question, and it does not name <code>EXEMPT</code> in the
-    sequence, although a later paragraph of the same help text names the two
-    exempt tools outright.
+    <code>emma 0.1.0</code>. The ladder there omits the unattended denial, the
+    egress question and, since 2026-09-06, plan mode, and it does not name
+    <code>EXEMPT</code> in the sequence, although a later paragraph of the same
+    help text names the two exempt tools outright.
   </p>
-  <span class="src">crates/emma/src/cli.rs — session_help! macro; target/release/emma.exe --help</span>
+
+  <p>
+    The text itself moved on 2026-09-06. It is no longer built in
+    <code>cli.rs</code>: <code>emma --help</code> and the in-app Help page are
+    now rendered from one constant, so the two cannot drift from each other.
+    They can still both drift from <code>approval.rs</code>, and on this rung
+    they do.
+  </p>
+  <span class="src">crates/emma/src/term/help.rs — <code>SECTIONS</code>, the consent section; crates/emma/src/cli.rs — <code>session_help</code>; target/release/emma.exe --help</span>
 
   <p>
     The one place <code>-p</code>'s denial is stated in <code>--help</code> is the

@@ -511,6 +511,16 @@ impl Transcript {
         (end.saturating_sub(height), end)
     }
 
+    /// The first content row a pane of this height is showing.
+    ///
+    /// Selection anchors are content rows, not screen rows, so the pane needs
+    /// the one number that converts between them. It is [`Self::window`]'s
+    /// start and nothing else: two derivations of the same index would drift
+    /// the first time the top clamp changed.
+    pub fn window_start(&self, height: u16) -> usize {
+        self.window(self.total(), height).0
+    }
+
     /// What the cap ate, said out loud.
     ///
     /// **The number and the remedy, never just an ellipsis.** A transcript that
@@ -672,6 +682,20 @@ impl Transcript {
 // is the second scroll position this module exists to not have.
 // ---------------------------------------------------------------------------
 
+/// The shortest thumb the bar will draw, in rows.
+///
+/// Proportion alone gives a one-row thumb on anything long, and a one-row
+/// thumb is two defects at once: the hardest target a pointer can be asked to
+/// hit, and the most coarsely quantised, because every row of track it gives
+/// back to the travel is another jump the view makes per cell of drag. Every
+/// native scrollbar carries a floor for the first reason. Two rows is the
+/// smallest one that is still visibly a thumb and not a tick.
+///
+/// It costs a row of travel, which is a row of resolution the drag no longer
+/// has. On a long transcript the drag was already quantised in the thousands
+/// of rows per cell, so the row buys more than it spends.
+pub const THUMB_MIN: u16 = 2;
+
 /// Where the thumb sits in a track `viewport` rows tall, as `(top, len)` rows
 /// from the top of the pane, or `None` when everything fits.
 ///
@@ -686,15 +710,18 @@ pub fn thumb(content: usize, viewport: u16, offset: usize) -> Option<(u16, u16)>
     if track == 0 || content <= track {
         return None;
     }
-    // Ceiling, so a proportional thumb on a fifty-thousand-row buffer is one
-    // row rather than none: a scrollbar with no thumb on it has stopped
+    // Ceiling first, so a proportional thumb on a fifty-thousand-row buffer
+    // is a row rather than none: a scrollbar with no thumb on it has stopped
     // reporting the position it exists to report.
     //
-    // ⚠ THE `1` IS ALREADY REDUNDANT and is kept anyway. Mutation-tested
-    // 2026-08-26: replacing `clamp(1, track)` with `min(track)` left every
-    // test green, because `div_ceil` cannot return zero for a non-zero
-    // numerator. It stands as the floor for whoever changes the rounding.
-    let len = (track * track).div_ceil(content).clamp(1, track);
+    // Then [`THUMB_MIN`], which is about the pointer rather than the drawing.
+    // The `.min(track)` after it is what keeps the floor inside a track
+    // shorter than the floor, and it has to come last: `clamp(THUMB_MIN,
+    // track)` panics outright when the track is one row tall.
+    let len = (track * track)
+        .div_ceil(content)
+        .max(usize::from(THUMB_MIN))
+        .min(track);
     // The first visible content row, by the same clamp [`Transcript::window`]
     // applies: the offset alone over-reports at the top of the buffer, and a
     // thumb that leaves the track is that over-report made visible.
@@ -748,15 +775,25 @@ pub fn grab(content: usize, viewport: u16, offset: usize, row: u16) -> Option<Gr
     }
 }
 
-/// The offset a drag to `row` asks for, holding the thumb `held` rows below
-/// the pointer — [`Grab::Thumb`]'s number, kept from the press.
+/// The offset a drag to `row` asks for, anchored at the press: `press` is the
+/// scroll offset the view had and the track row the button came down on.
 ///
-/// The inverse of [`thumb`], and it has to be exactly that: a drag maps a
-/// track row to an offset, the paint maps that offset back to a track row,
-/// and if the two disagree the thumb creeps away from the pointer over a long
-/// drag. Both ends are clamped, because a pointer dragged off the pane is an
-/// ordinary drag and refusing it would strand the thumb mid-track.
-pub fn drag_offset(content: usize, viewport: u16, held: u16, row: u16) -> usize {
+/// ⚠ ANCHORED, NOT ABSOLUTE. Mapping the pointer's row straight onto the
+/// track's grid looks equivalent and is not: the offset a wheel or a page
+/// leaves behind sits *between* two rows of that grid, so the first drag
+/// event snaps it onto the nearest one and the view lurches before the
+/// pointer has moved at all. On a long transcript one row of track is
+/// hundreds of rows of transcript, which is how far it lurches. Anchoring
+/// makes a motionless pointer arithmetically incapable of moving the view: at
+/// `row == press.1` the delta is zero and the answer is the offset it came in
+/// with.
+///
+/// It is still the inverse of [`thumb`] to within the rounding: from an
+/// on-grid press the two agree at every row of the track, which is what
+/// `every_row_of_the_track_round_trips_through_the_thumb` walks. Both ends
+/// are clamped, because a pointer dragged off the pane is an ordinary drag
+/// and refusing it would strand the thumb mid-track.
+pub fn drag_offset(content: usize, viewport: u16, press: (usize, u16), row: u16) -> usize {
     let track = usize::from(viewport);
     let Some((_, len)) = thumb(content, viewport, 0) else {
         return 0;
@@ -766,12 +803,33 @@ pub fn drag_offset(content: usize, viewport: u16, held: u16, row: u16) -> usize 
         // A thumb that fills its track has one position, and the tail is it.
         return 0;
     }
-    let top = usize::from(row.saturating_sub(held)).min(travel);
     let span = content - track;
-    // Rounded, matching [`thumb`]'s rounding, so the round trip is exact at
-    // every row of the track and not merely at the two ends.
-    let first = (top * span + travel / 2) / travel;
-    span - first.min(span)
+    let (offset, press_row) = press;
+    // The press offset can be past the span: `max_scroll` bounds the offset at
+    // `total - 1` while the view stops at `total - height`, so an offset above
+    // the top of the buffer is reachable and means the same view as the top.
+    let offset = offset.min(span) as i128;
+    let dy = i128::from(row) - i128::from(press_row);
+    let span_i = span as i128;
+    let travel_i = travel as i128;
+    // Rounded away from zero on the half, symmetrically, so a drag up and the
+    // drag back down it undoes are the same number of rows.
+    let delta = (dy * span_i + dy.signum() * travel_i / 2) / travel_i;
+    // Down the track is towards the tail, and the offset counts up from it.
+    (offset - delta).clamp(0, span_i) as usize
+}
+
+/// The deepest offset that shows a different view in a pane `viewport` rows
+/// tall. Everything above the top of the buffer looks the same.
+///
+/// [`Transcript::scroll_up`] stops at `total - 1` because that is the bound
+/// the indicator's arithmetic wants, and [`Transcript::window`] then clamps
+/// the view a whole pane-height short of it. The gap is dead travel: offset
+/// that has been spent and buys no movement, so a page back down spends
+/// itself undoing it and the reader clicks a bar that does nothing. Whoever
+/// has a height to hand is who can refuse it, and the bar has one.
+pub fn max_offset(content: usize, viewport: u16) -> usize {
+    content.saturating_sub(usize::from(viewport))
 }
 
 // endregion: The scrollbar
@@ -1215,43 +1273,39 @@ mod tests {
     // -----------------------------------------------------------------------
     // The claim the plan made and did not measure
     // -----------------------------------------------------------------------
-
-    /// **"Cheap at transcript scale" was an assertion; this is the number.**
+    /// **A ratio, not a stopwatch, and that is the point.** The guarantee is
+    /// about the algorithm: re-wrapping a full buffer at a new width costs no
+    /// more than wrapping it did in the first place, so the eager design in
+    /// this module stays far below a frame. Stated as a wall-clock ceiling it
+    /// was a claim about the machine instead, and it went red on a shared CI
+    /// runner in a debug build while the algorithm was exactly as fast as it
+    /// had ever been. A red that means "the runner was busy" teaches people to
+    /// ignore red.
     ///
-    /// The evaluation flagged re-running markdown over every entry on resize as
-    /// unmeasured optimism, and a recorded lesson on measuring an adopted
-    /// idea before building says what to do about that. A full buffer re-wrapped has to beat a frame
-    /// at 60Hz by a wide margin or the eager design in this module is wrong and
-    /// the laziness the plan wanted has to be built after all.
-    ///
-    /// **The measurement, 2026-08-11, Windows 11 / Ryzen:** 1 000 entries and
-    /// 5 000 rendered rows re-wrapped from 120 columns to 80 in **3.5 ms in
-    /// release** and **21 ms in a debug build**. So the eager design is right at
-    /// this size and the plan's "cheap at transcript scale" is true — with a
-    /// caveat it did not have: the cost is linear, so at [`Cap::default`]'s full
-    /// 50 000 rows it is roughly 35 ms in release, which is *two frames*, not
-    /// none. A resize is a rare, user-initiated event and a two-frame hitch on
-    /// one is acceptable where a two-frame hitch per keystroke would not be —
-    /// but if the cap is ever raised, this is the number that has to be
-    /// re-measured before it is.
-    ///
-    /// The assertion's bound is deliberately loose — a hundred milliseconds, not
-    /// sixteen — because this runs on whatever machine CI has and a flaky timing
-    /// test gets deleted, which would lose the measurement entirely. The real
-    /// number is printed on every run.
+    /// Both halves are measured on the same machine in the same run, so the
+    /// comparison survives any hardware. It fails the moment a rewrap becomes
+    /// asymptotically worse than the original wrap, which is the regression
+    /// worth catching.
     #[test]
-    fn a_full_buffer_rewraps_faster_than_a_frame() {
+    fn a_full_buffer_rewraps_for_no_more_than_it_cost_to_wrap() {
         let skin = skin();
         let mut t = Transcript::new(Cap::default());
         // A realistic mix: prose with a code block, a tool line, a goal.
+        let build = std::time::Instant::now();
         for i in 0..500 {
             t.push(EntryKind::User(format!("goal {i}")), &skin, 120);
             t.push(
                 EntryKind::Assistant {
                     source: format!(
-                        "Here is what {i} does, at some length so that the wrap has real \
-                         work to do on a narrow window.\n\n- a bullet\n- another\n\n```rust\n\
-                         fn main() {{ println!(\"{i}\"); }}\n```\n"
+                        "Here is what {i} does, at some length so that the wrap has real                          work to do on a narrow window.
+
+- a bullet
+- another
+
+```rust
+                         fn main() {{ println!(\"{i}\"); }}
+```
+"
                     ),
                     done: true,
                 },
@@ -1259,18 +1313,26 @@ mod tests {
                 120,
             );
         }
+        let wrapped = build.elapsed();
         let held = t.entries.len();
         let start = std::time::Instant::now();
         t.set_width(&skin, 80);
         let elapsed = start.elapsed();
+        // Three times, not once. The two measurements are the same work and
+        // land within a few percent of each other on a quiet machine, so
+        // `elapsed <= wrapped` would be a coin toss under load. A rewrap that
+        // has gone quadratic in the entry count is slower by a factor of
+        // hundreds at this size, which no amount of scheduler noise reaches.
+        let budget = wrapped * 3;
         assert!(
-            elapsed < std::time::Duration::from_millis(100),
-            "re-wrapping {held} entries ({} rows) at a new width took {elapsed:?}; the eager \
-             design in this module assumes it is far below a frame",
+            elapsed <= budget,
+            "{held} entries re-wrapped in {elapsed:?}, over 3x the {wrapped:?} to wrap them",
+        );
+        // Printed so both numbers are on the record even when it passes.
+        println!(
+            "rewrap: {held} entries, {} rows, {elapsed:?} against {wrapped:?} to build",
             t.rows
         );
-        // Printed so the number is on the record even when it passes.
-        println!("rewrap: {held} entries, {} rows, {elapsed:?}", t.rows);
     }
 
     // -----------------------------------------------------------------------
@@ -1307,11 +1369,11 @@ mod tests {
     /// Proportional, and never nothing: a thumb rounded to zero rows on a
     /// long transcript is a scrollbar with no position on it.
     #[test]
-    fn the_thumb_is_proportional_and_never_shorter_than_one_row() {
+    fn the_thumb_is_proportional_and_never_shorter_than_the_floor() {
         let (_, len) = thumb(40, 20, 0).unwrap();
         assert_eq!(len, 10, "half the content shown is half the track");
         let (_, len) = thumb(100_000, 20, 0).unwrap();
-        assert_eq!(len, 1, "a huge transcript keeps one row of thumb");
+        assert_eq!(len, THUMB_MIN, "a huge transcript keeps a grabbable thumb");
         // And the thumb never leaves the track, at any offset.
         for offset in 0..200 {
             let (top, len) = thumb(200, 12, offset).unwrap();
@@ -1319,7 +1381,91 @@ mod tests {
                 top + len <= 12,
                 "offset {offset}: {top}+{len} past the track"
             );
-            assert!(len >= 1);
+            assert!(len >= THUMB_MIN);
+        }
+        // A track shorter than the floor is still all thumb rather than a
+        // length that overruns it.
+        let (top, len) = thumb(50, 1, 0).unwrap();
+        assert_eq!((top, len), (0, 1), "the floor overran a one-row track");
+    }
+
+    /// The floor is about the pointer, not about the drawing: a one-row thumb
+    /// on a long transcript is the hardest possible target and the most
+    /// coarsely quantised one, which is what the reader feels as fidget.
+    #[test]
+    fn a_long_transcript_still_gets_a_thumb_worth_grabbing() {
+        for content in [500usize, 5_000, 100_000, 10_000_000] {
+            for viewport in [8u16, 20, 40, 60] {
+                let (top, len) = thumb(content, viewport, 0).unwrap();
+                assert!(
+                    len >= THUMB_MIN.min(viewport),
+                    "content {content} track {viewport}: {len}-row thumb"
+                );
+                assert!(top + len <= viewport);
+            }
+        }
+        // Proportional alone is one row here; the floor lifts it to two.
+        let (_, len) = thumb(100_000, 20, 0).unwrap();
+        assert_eq!(len, 2, "the floor must beat proportional rounding");
+    }
+
+    /// Dragging down never scrolls up. The sweep is the test the round trip
+    /// cannot be: rounding that agrees at both ends can still reverse across
+    /// one cell in the middle, and a view that goes backwards under a forward
+    /// finger is the fidget by another name.
+    #[test]
+    fn a_drag_down_the_track_never_scrolls_the_view_backwards() {
+        for (content, viewport) in [
+            (12usize, 10u16),
+            (25, 20),
+            (31, 20),
+            (200, 12),
+            (1000, 10),
+            (100_000, 20),
+            (1_000_000, 40),
+        ] {
+            let (_, len) = thumb(content, viewport, 0).unwrap();
+            for held in 0..len {
+                let mut prev: Option<usize> = None;
+                for row in 0..viewport {
+                    // Pressed with the thumb at the top of the track, which
+                    // is the anchor the grid inverse is written around.
+                    let press = (content - usize::from(viewport), held);
+                    let offset = drag_offset(content, viewport, press, row);
+                    if let Some(prev) = prev {
+                        assert!(
+                            offset <= prev,
+                            "content {content} track {viewport} held {held}: \
+                             row {row} scrolled back from {prev} to {offset}"
+                        );
+                    }
+                    prev = Some(offset);
+                }
+            }
+        }
+    }
+
+    /// A drag event at the row the button came down on leaves the offset
+    /// exactly where it was — the property the absolute mapping violates on
+    /// the first event when the view sits between two grid rows.
+    #[test]
+    fn a_motionless_pointer_does_not_move_the_view_on_the_first_drag_event() {
+        for (content, viewport) in [(1000usize, 10u16), (100_000, 20), (1_000_000, 40)] {
+            for offset in [0usize, 17, 333, content - usize::from(viewport)] {
+                let Some((top, len)) = thumb(content, viewport, offset) else {
+                    continue;
+                };
+                for held in 0..len {
+                    let press_row = top + held;
+                    let press = (offset, press_row);
+                    assert_eq!(
+                        drag_offset(content, viewport, press, press_row),
+                        offset.min(content - usize::from(viewport)),
+                        "content {content} track {viewport} offset {offset}: \
+                         motionless at row {press_row} moved the view"
+                    );
+                }
+            }
         }
     }
 
@@ -1361,10 +1507,11 @@ mod tests {
     fn a_press_hits_the_thumb_it_can_see_and_the_track_either_side_of_it() {
         // Following: the thumb is at the bottom of a ten-row track.
         let (top, len) = thumb(100, 10, 0).unwrap();
-        assert_eq!((top, len), (9, 1));
-        assert_eq!(grab(100, 10, 0, 9), Some(Grab::Thumb(0)));
+        assert_eq!((top, len), (8, 2), "the floor is two rows of thumb");
+        assert_eq!(grab(100, 10, 0, 8), Some(Grab::Thumb(0)));
+        assert_eq!(grab(100, 10, 0, 9), Some(Grab::Thumb(1)));
         assert_eq!(grab(100, 10, 0, 0), Some(Grab::PageUp));
-        assert_eq!(grab(100, 10, 0, 8), Some(Grab::PageUp));
+        assert_eq!(grab(100, 10, 0, 7), Some(Grab::PageUp));
         // At the top of the buffer the track below the thumb is a page on.
         assert_eq!(grab(100, 10, 99, 0), Some(Grab::Thumb(0)));
         assert_eq!(grab(100, 10, 99, 5), Some(Grab::PageDown));
@@ -1385,7 +1532,7 @@ mod tests {
         assert_eq!((top, len), (10, 10));
         assert_eq!(grab(40, 20, 0, 12), Some(Grab::Thumb(2)));
         // Dragged to row 5 still holding row 2 of the thumb: top 3.
-        let offset = drag_offset(40, 20, 2, 5);
+        let offset = drag_offset(40, 20, (0, 12), 5);
         assert_eq!(thumb(40, 20, offset).unwrap().0, 3);
     }
 
@@ -1395,18 +1542,15 @@ mod tests {
     fn a_drag_to_either_end_of_the_track_reaches_that_end() {
         // Up to the first row: the topmost view there is, and the thumb rides
         // the top of the track with it.
-        let top_of_buffer = drag_offset(100, 10, 0, 0);
+        let (grabbed, _) = thumb(100, 10, 0).unwrap();
+        let top_of_buffer = drag_offset(100, 10, (0, grabbed), 0);
         assert_eq!(
             top_of_buffer, 90,
             "the first row of the buffer is on screen"
         );
         assert_eq!(thumb(100, 10, top_of_buffer).unwrap().0, 0);
-        // Down to the last: offset zero, which is the following view — the
-        // same state End puts the transcript in.
-        assert_eq!(drag_offset(100, 10, 0, 9), 0);
-        // And past the end of the track, because a pointer dragged off the
-        // pane is an ordinary drag and clamping is the only honest answer.
-        assert_eq!(drag_offset(100, 10, 0, 200), 0);
+        assert_eq!(drag_offset(100, 10, (0, grabbed), 9), 0);
+        assert_eq!(drag_offset(100, 10, (0, grabbed), 200), 0);
     }
 
     /// The offset a drag lands on draws the thumb the drag asked for. The two
@@ -1430,7 +1574,8 @@ mod tests {
             let travel = viewport - len;
             for row in 0..viewport {
                 let want = row.min(travel);
-                let offset = drag_offset(content, viewport, 0, row);
+                let offset =
+                    drag_offset(content, viewport, (content - usize::from(viewport), 0), row);
                 let got = thumb(content, viewport, offset).unwrap().0;
                 assert_eq!(
                     got, want,

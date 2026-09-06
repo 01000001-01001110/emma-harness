@@ -83,6 +83,7 @@
       <span class="now">Dock</span>
       <a href="terminal-usertools.html">User tools</a>
       <a href="terminal-pages.html">Pages</a>
+      <a href="terminal-runctl.html">Run control</a>
       <a href="terminal-copying.html">Copying out</a>
     </nav>
 
@@ -332,14 +333,22 @@
       Separately, inside
       <code>the_pane_keys_route_to_the_transcript_and_nothing_else_does</code>,
       a comment reads that Ctrl turns the arrows into row scrolling and plain
-      arrows stay with history and the menu. There is no history: the module doc
-      says there is no history and no completion, and <code>Editor::key</code>
-      has no <code>Up</code>/<code>Down</code> arm at all, so bare arrows fall
-      to <code>Action::Ignore</code>. A reader would conclude <code>Up</code>
-      recalls the previous goal.
-      <span class="chip cert">certified</span> for both: read the two lines
-      against the code immediately below them. The second is in a test comment
-      rather than in <code>pane_key</code>'s own doc, which is accurate.
+      arrows stay with history and the menu. Until the port of 2026-09-06 that
+      was false: the module doc said there was no history and no completion,
+      and <code>Editor::key</code> had no <code>Up</code>/<code>Down</code> arm
+      at all. It is true now. <code>Editor</code> keeps a ring of the last
+      <code>HISTORY</code> (200) submitted lines, <code>Up</code> walks back
+      through them, <code>Down</code> walks forward and then restores the draft
+      that was in the box when the walk began, and any other edit ends the
+      walk. Blank lines and an immediate repeat are not recorded. The menu
+      still takes the arrows while it is open, ahead of the editor in the
+      reader.
+      <span class="chip test">tested</span>
+      <code>the_arrows_walk_submitted_lines_and_come_back_to_the_draft</code>,
+      <code>the_history_drops_blanks_and_immediate_repeats</code>,
+      <code>the_arrows_are_inert_before_anything_has_been_submitted</code> and
+      <code>an_edit_ends_the_walk</code>; with the <code>history.push</code>
+      removed from <code>remember</code>, three of the four go red.
     </p>
     <span class="src">crates/emma/src/term/input.rs — <code>LineSource::raw</code>, <code>the_pane_keys_route_to_the_transcript_and_nothing_else_does</code>, <code>Editor::key</code></span>
   </div>

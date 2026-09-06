@@ -13,7 +13,7 @@
 //! lines, then ask the compiler which of them is real.
 //!
 //! **What every one of them does before asking.** Resolve the path through
-//! `tools/fs`'s containment, refuse anything that is not Rust, read the file
+//! `tools/fs`'s containment, find the language for the file, read it
 //! from disk, and push the current bytes to the server. That last step is not
 //! optional: an agent's rhythm is `Edit` then ask, and a server answering from
 //! the version it opened before the edit returns positions into a file that no
@@ -29,9 +29,9 @@ use serde_json::{json, Value};
 use crate::args;
 use crate::client::{Answer, Client};
 use crate::doc::{self, Position};
+use crate::lang;
 use crate::pool::Pool;
 use crate::render;
-use crate::server::SUPPORTED_EXTENSION;
 
 // region: The shared preamble
 // ---------------------------------------------------------------------------
@@ -49,12 +49,15 @@ struct Prepared {
     text: String,
 }
 
-/// Contain the path, refuse a non-Rust file, read it, and get a server that
+/// Contain the path, find the language, read the file, and get a server that
 /// knows about it.
 ///
 /// Note the order. Containment first, before the file is read and before a
-/// server is started — a path outside the root must not so much as cause a
-/// process to spawn.
+/// server is started: a path outside the root must not so much as cause a
+/// process to spawn. The language gate is second, and it is three refusals
+/// rather than one, because "no server for this" and "there is one and it is
+/// switched off" and "this is YAML that is not Ansible" have three different
+/// fixes.
 async fn prepare(
     pool: &Pool,
     ctx: &ToolCtx,
@@ -69,20 +72,19 @@ async fn prepare(
     }
 
     // The language gate, and the promise never to answer with something else.
-    let extension = file
-        .extension()
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    if extension != SUPPORTED_EXTENSION {
-        return Err(crate::server::unsupported_language(&path::display(
-            &root, &file,
-        )));
-    }
+    let shown = path::display(&root, &file);
+    let language = match lang::for_path(&root, &file) {
+        Some(l) => l,
+        None if is_yaml(&file) => {
+            return Err(ToolError::Unavailable(lang::yaml_not_ansible(&shown)))
+        }
+        None => return Err(crate::server::unsupported_language(&shown)),
+    };
 
     let text = std::fs::read_to_string(&file)
         .map_err(|e| ToolError::Failed(format!("{raw} could not be read: {e}")))?;
 
-    let client = pool.client(&root).await?;
+    let client = pool.client(&root, language).await?;
     client.sync_document(&file, &text);
     Ok(Prepared {
         client,
@@ -112,6 +114,13 @@ async fn prepare_at(
     Ok((prepared, position))
 }
 
+/// Whether a path is YAML, so the Ansible refusal can be the specific one.
+fn is_yaml(file: &std::path::Path) -> bool {
+    file.extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .is_some_and(|e| e == "yml" || e == "yaml")
+}
+
 fn text_document_position(file: &std::path::Path, position: Position) -> Value {
     json!({
         "textDocument": { "uri": doc::to_uri(file) },
@@ -124,7 +133,7 @@ const POSITION_KEYS: &[&str] = &["file_path", "line", "symbol", "occurrence"];
 
 fn position_schema(extra: Option<(&str, Value)>) -> Value {
     let mut properties = json!({
-        "file_path": { "type": "string", "description": "A Rust file inside the working directory." },
+        "file_path": { "type": "string", "description": "A source file inside the working directory. Emma picks the language server from the extension." },
         "line": { "type": "integer", "minimum": 1, "description": "1-based line number the symbol appears on." },
         "symbol": { "type": "string", "description": "The symbol's name as it is written on that line. Emma finds the column; it refuses rather than guessing if the name appears more than once." },
         "occurrence": { "type": "integer", "minimum": 1, "description": "Which occurrence on the line, 1-based. Only needed when the name appears more than once." }
@@ -486,7 +495,7 @@ impl Tool for DocumentSymbols {
         json!({
             "type": "object",
             "properties": {
-                "file_path": { "type": "string", "description": "A Rust file inside the working directory." }
+                "file_path": { "type": "string", "description": "A source file inside the working directory. Emma picks the language server from the extension." }
             },
             "required": ["file_path"],
             "additionalProperties": false,
@@ -537,3 +546,96 @@ impl DocumentSymbols {
 }
 
 // endregion: DocumentSymbols
+
+// region: Diagnostics
+// ---------------------------------------------------------------------------
+// Diagnostics
+//
+// The fifth tool, and the one the crate previously refused to ship. The refusal
+// was right at the time and for a reason recorded in `lib.rs`: diagnostics are
+// pushed rather than requested, so "get the diagnostics" means waiting an
+// unknowable time for a notification that may never come, and for rust the
+// diagnostics worth having are `cargo check`'s, which this crate turns off.
+//
+// Both halves of that changed. Several of the seven languages here publish on
+// `didOpen` within a second and it is the only thing some of them are for, and
+// the unknowable wait is solved rather than ignored: `Client::diagnostics`
+// returns an `Option`, `None` is not an empty list, and `render::diagnostics`
+// gives them sentences that cannot be mistaken for each other. An empty result
+// means the server said clean. Silence says silence.
+// ---------------------------------------------------------------------------
+
+pub struct Diagnostics {
+    pool: Arc<Pool>,
+}
+
+impl Diagnostics {
+    pub fn new(pool: Arc<Pool>) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait::async_trait]
+impl Tool for Diagnostics {
+    fn name(&self) -> &'static str {
+        "Diagnostics"
+    }
+
+    fn description(&self) -> &str {
+        include_str!("descriptions/diagnostics.md")
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "file_path": { "type": "string", "description": "A source file inside the working directory. Emma picks the language server from the extension." }
+            },
+            "required": ["file_path"],
+            "additionalProperties": false,
+        })
+    }
+
+    fn meta(&self) -> ToolMeta {
+        READ_ONLY
+    }
+
+    fn validate_args(&self, args_v: &Value) -> Result<(), ToolError> {
+        args::deny_unknown(args_v, "Diagnostics", &["file_path"])?;
+        args::req_str(args_v, "Diagnostics", "file_path")?;
+        Ok(())
+    }
+
+    async fn invoke(
+        &self,
+        ctx: &ToolCtx,
+        args_v: Value,
+    ) -> anyhow::Result<Result<ToolOutcome, ToolError>> {
+        Ok(self.run(ctx, args_v).await)
+    }
+}
+
+impl Diagnostics {
+    async fn run(&self, ctx: &ToolCtx, args_v: Value) -> Result<ToolOutcome, ToolError> {
+        self.validate_args(&args_v)?;
+        // `prepare` is what sends `didOpen` or `didChange`, and that is the
+        // event a server publishes in response to. Asking before syncing would
+        // wait for a notification nothing had asked for.
+        let prepared = prepare(&self.pool, ctx, "Diagnostics", &args_v).await?;
+        let diagnosis = prepared
+            .client
+            .diagnostics(&doc::to_uri(&prepared.file))
+            .await?;
+        Ok(render::diagnostics(
+            &prepared.root,
+            &prepared.file,
+            prepared.client.server(),
+            diagnosis.readiness,
+            diagnosis.health.as_deref(),
+            diagnosis.waited,
+            diagnosis.items,
+        ))
+    }
+}
+
+// endregion: Diagnostics

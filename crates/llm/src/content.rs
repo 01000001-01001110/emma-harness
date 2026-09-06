@@ -186,11 +186,160 @@ pub struct ToolResult {
     pub content: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_error: bool,
+    /// Pictures this result carries alongside its prose.
+    ///
+    /// Empty for every tool that returns text, which is all of them but one,
+    /// and a result with no images renders exactly the two keys it always
+    /// rendered. See [`ToolImage`] for the two states one of these can be in
+    /// and why the difference is what keeps a session log replayable.
+    ///
+    /// Skipped by serde because the rendering is hand-written in
+    /// [`ContentBlock::to_value`]: an image cannot be a sibling key of
+    /// `content` on the wire, it has to be an element *inside* it.
+    #[serde(skip)]
+    pub images: Vec<ToolImage>,
     /// Keys the provider put on this block that Emma does not model, echoed
     /// back untouched. See the module doc for what may live here and for the
     /// live call that made it necessary.
     #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra: serde_json::Map<String, Value>,
+}
+
+/// One picture attached to a tool result, in one of exactly two states.
+///
+/// **Carrying the bytes, `data: Some`.** This is what goes to a provider. It is
+/// what the capturing tool builds and what the loop hands to the wire.
+///
+/// **Naming the file, `data: None`.** This is what goes into the session log.
+/// A bounded screenshot is still hundreds of kilobytes of base64, and a log
+/// line per capture at that size makes the transcript unreadable by anything,
+/// including the fold that has to walk it. So the log records the media type,
+/// the byte count and the path the bytes are sitting at, and
+/// [`ToolImage::for_log`] is the one place the demotion happens.
+///
+/// The cost is stated rather than hidden: replay depends on a file outside the
+/// log. `session::fold` reads it back when it is there and, when it is not,
+/// says in the result text that an image was elided instead of pretending the
+/// turn was always prose. Neither half is silent.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ToolImage {
+    /// `image/png`, `image/jpeg`. Sent verbatim as the source `media_type`.
+    pub media_type: String,
+    /// The bytes, base64. `None` is the log form: see the type doc.
+    pub data: Option<String>,
+    /// Where the full-resolution capture is on disk, when the tool kept one.
+    pub path: Option<String>,
+    /// How large the payload is, counted as base64 characters rather than as
+    /// decoded bytes, because that is the number both directions can agree on:
+    /// a log line that has dropped `data` still says how big it was, and a
+    /// block read back off the wire can recompute it without decoding.
+    pub bytes: u64,
+}
+
+impl ToolImage {
+    /// The wire form: a media type and the payload that travels.
+    pub fn base64(media_type: impl Into<String>, data: impl Into<String>) -> Self {
+        let data = data.into();
+        Self {
+            media_type: media_type.into(),
+            bytes: data.len() as u64,
+            data: Some(data),
+            path: None,
+        }
+    }
+
+    /// Where the full-resolution original is, for the log form to name.
+    pub fn at_path(mut self, path: impl Into<String>) -> Self {
+        self.path = Some(path.into());
+        self
+    }
+
+    /// The same image with the bytes taken out. See the type doc.
+    pub fn for_log(&self) -> Self {
+        Self {
+            data: None,
+            ..self.clone()
+        }
+    }
+
+    /// The base64 payload, when this image is carrying one. `None` is the log
+    /// form, which has nothing to send.
+    pub fn wire_data(&self) -> Option<&str> {
+        self.data.as_deref()
+    }
+
+    /// The wire block.
+    ///
+    /// The log form renders too, and deliberately as a source type no provider
+    /// has heard of: `emma_file` is what `session::fold` reads back, and it is
+    /// a 400 rather than a silently missing picture if one ever reaches a
+    /// provider. Nothing sends a log-form result — [`ToolResult::for_log`] is
+    /// the only thing that makes one — and this is the second gate on that.
+    fn to_value(&self) -> Value {
+        match &self.data {
+            Some(data) => json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": self.media_type,
+                    "data": data,
+                }
+            }),
+            None => json!({
+                "type": "image",
+                "source": {
+                    "type": "emma_file",
+                    "media_type": self.media_type,
+                    "path": self.path,
+                    "bytes": self.bytes,
+                }
+            }),
+        }
+    }
+
+    /// Read one back. `None` when the block is not an image this models, which
+    /// keeps the caller's fallback to `Passthrough` honest.
+    ///
+    /// **`media_type` is required, and the fork this was ported from defaulted
+    /// it to `""`.** That difference is the module's own rule applied: a source
+    /// object with no media type is a shape this client cannot render back
+    /// byte-for-byte, so reading it would turn a round trip into a rewrite —
+    /// the block would come out carrying `"media_type": ""` that the provider
+    /// never sent. `a_tool_result_whose_content_is_a_block_array_is_kept_whole`
+    /// is the test that caught it, and it caught it because it asserts the
+    /// bytes rather than the fields.
+    fn from_value(v: &Value) -> Option<Self> {
+        if v.get("type").and_then(Value::as_str)? != "image" {
+            return None;
+        }
+        let source = v.get("source")?;
+        let media_type = source
+            .get("media_type")
+            .and_then(Value::as_str)?
+            .to_string();
+        match source.get("type").and_then(Value::as_str)? {
+            "base64" => {
+                let data = source.get("data").and_then(Value::as_str)?.to_string();
+                let bytes = data.len() as u64;
+                Some(Self {
+                    media_type,
+                    data: Some(data),
+                    path: None,
+                    bytes,
+                })
+            }
+            "emma_file" => Some(Self {
+                media_type,
+                data: None,
+                path: source
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                bytes: source.get("bytes").and_then(Value::as_u64).unwrap_or(0),
+            }),
+            _ => None,
+        }
+    }
 }
 
 fn is_false(b: &bool) -> bool {
@@ -215,6 +364,15 @@ impl ToolResult {
             ..Self::default()
         }
     }
+
+    /// The same result with every image demoted to its path. What a session
+    /// log stores; never what a provider is sent. See [`ToolImage`].
+    pub fn for_log(&self) -> Self {
+        Self {
+            images: self.images.iter().map(ToolImage::for_log).collect(),
+            ..self.clone()
+        }
+    }
 }
 
 /// Put the unmodelled keys back on a rendered block.
@@ -233,6 +391,42 @@ fn with_extra(mut v: Value, extra: &serde_json::Map<String, Value>) -> Value {
         }
     }
     v
+}
+
+/// Rebuild the array form of a `tool_result` block.
+///
+/// Exactly the inverse of what [`ContentBlock::to_value`] writes, and no more
+/// tolerant than that: at most one leading text block, then images. A result
+/// whose content array holds anything else came from somewhere this client did
+/// not write it, so it returns `None` and travels whole as `Passthrough`
+/// instead of being half-read.
+fn tool_result_from_array(rest: &Value) -> Option<ToolResult> {
+    let mut obj = rest.as_object()?.clone();
+    let items = obj.remove("content")?;
+    let items = items.as_array()?;
+    let mut content = String::new();
+    let mut images = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        match item.get("type").and_then(Value::as_str)? {
+            "text" if i == 0 && images.is_empty() => {
+                content = item.get("text").and_then(Value::as_str)?.to_string();
+            }
+            "image" => images.push(ToolImage::from_value(item)?),
+            _ => return None,
+        }
+    }
+    let is_error = obj
+        .remove("is_error")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let tool_use_id = obj.remove("tool_use_id")?.as_str()?.to_string();
+    Some(ToolResult {
+        tool_use_id,
+        content,
+        is_error,
+        images,
+        extra: obj,
+    })
 }
 
 /// One block of content, in either direction.
@@ -300,10 +494,26 @@ impl ContentBlock {
                 &c.extra,
             ),
             Self::ToolResult(r) => {
+                // Two renderings, and which one is used is decided by the
+                // result rather than by a flag: a result with no images renders
+                // the string form it has always rendered, so no existing tool
+                // moves a byte. Only a result carrying a picture becomes the
+                // array form, which is the only shape the API accepts an image
+                // in.
+                let content = if r.images.is_empty() {
+                    json!(r.content)
+                } else {
+                    let mut blocks = Vec::new();
+                    if !r.content.is_empty() {
+                        blocks.push(json!({ "type": "text", "text": r.content }));
+                    }
+                    blocks.extend(r.images.iter().map(ToolImage::to_value));
+                    Value::Array(blocks)
+                };
                 let mut v = json!({
                     "type": "tool_result",
                     "tool_use_id": r.tool_use_id,
-                    "content": r.content,
+                    "content": content,
                 });
                 if r.is_error {
                     v["is_error"] = json!(true);
@@ -343,6 +553,15 @@ impl ContentBlock {
                 .map(Self::RedactedThinking)
                 .ok(),
             "tool_use" => serde_json::from_value(rest).map(Self::ToolUse).ok(),
+            // Hand-parsed rather than derived, because `content` is a string in
+            // one form and an array of blocks in the other, and serde cannot be
+            // told that without giving up `deny_unknown_fields` on the rest of
+            // the struct. `tool_result_from_array` returns `None` for anything
+            // it cannot rebuild exactly, which drops the block to `Passthrough`
+            // under the same rule as every other unmodelled shape.
+            "tool_result" if rest.get("content").is_some_and(Value::is_array) => {
+                tool_result_from_array(&rest).map(Self::ToolResult)
+            }
             "tool_result" => serde_json::from_value(rest).map(Self::ToolResult).ok(),
             _ => None,
         };
@@ -616,6 +835,101 @@ mod tests {
                 "a known block type was demoted rather than carrying its extra key: {block:?}"
             );
         }
+    }
+
+    /// `ToolResult::content` is a `String`, and a picture is not a string, so
+    /// a result carrying one renders `content` as an array instead. Both forms
+    /// have to survive a round trip or a resumed conversation loses either its
+    /// prose or its picture.
+    #[test]
+    fn a_tool_result_carrying_an_image_round_trips_in_both_of_its_two_forms() {
+        let wire = json!({
+            "type": "tool_result",
+            "tool_use_id": "t1",
+            "content": [
+                { "type": "text", "text": "Captured display 1." },
+                { "type": "image", "source": {
+                    "type": "base64", "media_type": "image/jpeg", "data": "aGk=" }}
+            ]
+        });
+        let ContentBlock::ToolResult(r) = ContentBlock::from_value(wire.clone()) else {
+            panic!("the array form was demoted to a passthrough");
+        };
+        assert_eq!(r.content, "Captured display 1.");
+        assert_eq!(r.images.len(), 1);
+        assert_eq!(r.images[0].media_type, "image/jpeg");
+        assert_eq!(r.images[0].data.as_deref(), Some("aGk="));
+        assert_eq!(r.images[0].bytes, 4);
+        assert_eq!(ContentBlock::ToolResult(r).to_value(), wire);
+
+        // The log form, which is what a session file holds. `emma_file` is a
+        // source type no provider has heard of, on purpose.
+        let logged = json!({
+            "type": "tool_result",
+            "tool_use_id": "t1",
+            "content": [
+                { "type": "text", "text": "Captured display 1." },
+                { "type": "image", "source": {
+                    "type": "emma_file",
+                    "media_type": "image/jpeg",
+                    "path": "C:/src/emma/shot.png",
+                    "bytes": 4 }}
+            ]
+        });
+        let ContentBlock::ToolResult(r) = ContentBlock::from_value(logged.clone()) else {
+            panic!("the log form was demoted to a passthrough");
+        };
+        assert_eq!(r.images[0].data, None);
+        assert_eq!(r.images[0].path.as_deref(), Some("C:/src/emma/shot.png"));
+        assert_eq!(r.images[0].bytes, 4);
+        assert_eq!(ContentBlock::ToolResult(r).to_value(), logged);
+    }
+
+    /// The demotion the session log depends on: the bytes go, the size stays.
+    /// Without the size a log line cannot say how big the picture it dropped
+    /// was, and a reader of the transcript cannot tell an elided screenshot
+    /// from a tool that returned nothing.
+    #[test]
+    fn the_log_form_drops_the_bytes_and_keeps_everything_else() {
+        let mut r = ToolResult::ok("t1", "Captured display 1.");
+        r.images = vec![ToolImage::base64("image/jpeg", "aGk=").at_path("C:/src/emma/shot.png")];
+        let logged = r.for_log();
+
+        assert_eq!(logged.images[0].data, None, "the bytes must not be logged");
+        assert_eq!(logged.images[0].bytes, 4, "the size survives the elision");
+        assert_eq!(
+            logged.images[0].path.as_deref(),
+            Some("C:/src/emma/shot.png")
+        );
+        assert_eq!(logged.images[0].media_type, "image/jpeg");
+        assert_eq!(logged.content, r.content);
+        // The original is untouched: the loop still has the bytes to send after
+        // it has written the log line.
+        assert_eq!(r.images[0].data.as_deref(), Some("aGk="));
+    }
+
+    /// The half of the two-form rendering that no test would otherwise notice
+    /// breaking: every tool but one returns prose, and a result with no images
+    /// must render the exact two keys it rendered before images existed.
+    #[test]
+    fn a_result_with_no_images_still_renders_the_string_form() {
+        let ok = ContentBlock::ToolResult(ToolResult::ok("t1", "fine")).to_value();
+        assert_eq!(
+            ok,
+            json!({ "type": "tool_result", "tool_use_id": "t1", "content": "fine" })
+        );
+        let failed = ContentBlock::ToolResult(ToolResult::failed("t1", "no")).to_value();
+        assert_eq!(
+            failed,
+            json!({
+                "type": "tool_result", "tool_use_id": "t1",
+                "content": "no", "is_error": true
+            })
+        );
+        // Byte-identical, not merely equal as JSON: `content` must still be a
+        // string and not a one-element array holding the same text.
+        assert!(ok["content"].is_string(), "{ok}");
+        assert!(failed["content"].is_string(), "{failed}");
     }
 
     #[test]

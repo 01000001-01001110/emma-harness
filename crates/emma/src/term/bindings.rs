@@ -252,6 +252,9 @@ pub enum Trigger {
     /// that into two rows would be a change to the screen rather than to its
     /// honesty.
     Keys(&'static [(Chord, Expect)]),
+    /// Resolves from the active keymap at [`Binding::label`] time, so a
+    /// rebound chord cannot leave a stale spelling on the QUICK HELP panel.
+    Bound(super::keymap::Action),
     /// `Alt+<any letter>`: the whole family, because the letters belong to the
     /// user-tool catalogue and change with it.
     AltAny,
@@ -279,6 +282,24 @@ impl Binding {
         match self.trigger {
             Trigger::Terminal(text) => text.to_string(),
             Trigger::AltAny => "Alt+key".to_string(),
+            Trigger::Bound(action) => super::keymap::active()
+                .chord_for(action)
+                .and_then(|s| super::keymap::parse_chord(&s))
+                .map(|kc| {
+                    let mut mods = KeyModifiers::NONE;
+                    if kc.ctrl {
+                        mods |= KeyModifiers::CONTROL;
+                    }
+                    if kc.alt {
+                        mods |= KeyModifiers::ALT;
+                    }
+                    Chord {
+                        code: KeyCode::Char(kc.key),
+                        mods,
+                    }
+                    .label()
+                })
+                .unwrap_or_else(|| "?".to_string()),
             Trigger::Keys(keys) => {
                 let shared = keys
                     .first()
@@ -347,9 +368,24 @@ const ENDS: &[(Chord, Expect)] = &[
     (Chord::plain(KeyCode::Home), Expect::Pane(PaneKey::Top)),
     (Chord::plain(KeyCode::End), Expect::Pane(PaneKey::Tail)),
 ];
-const SIDEBAR: &[(Chord, Expect)] = &[(Chord::ctrl('b'), Expect::Pane(PaneKey::Sidebar))];
 const INTERRUPT: &[(Chord, Expect)] = &[(Chord::ctrl('c'), Expect::Interrupt)];
 const QUIT: &[(Chord, Expect)] = &[(Chord::ctrl('d'), Expect::Eof)];
+
+/// Alt+q, and it is a row of its own rather than a second chord on [`QUIT`].
+///
+/// `Binding::label` factors out a shared modifier, and `Ctrl+D` and `Alt+q`
+/// share none, so one row holding both would print `D/q` and name neither.
+/// It is drawn at all because `input::interrupt_notice` puts the chord in a
+/// line Emma prints, and a key named in Emma's own output that is absent from
+/// the panel claiming to list the keys is the drawn-control problem read
+/// backwards.
+const ALT_QUIT: &[(Chord, Expect)] = &[(
+    Chord {
+        code: KeyCode::Char('q'),
+        mods: KeyModifiers::ALT,
+    },
+    Expect::Pane(PaneKey::Quit),
+)];
 
 /// The chat pane's advertised keys — the `QUICK HELP` table, and the Settings
 /// page's copy of it.
@@ -396,8 +432,13 @@ pub static CHAT: Table = Table {
             ctx: Ctx::IDLE,
         },
         Binding {
-            trigger: Trigger::Keys(SIDEBAR),
+            trigger: Trigger::Bound(super::keymap::Action::Sidebar),
             what: "toggle sidebar",
+            ctx: Ctx::IDLE,
+        },
+        Binding {
+            trigger: Trigger::Bound(super::keymap::Action::Help),
+            what: "help",
             ctx: Ctx::IDLE,
         },
         Binding {
@@ -413,6 +454,11 @@ pub static CHAT: Table = Table {
         Binding {
             trigger: Trigger::Keys(QUIT),
             what: "quit",
+            ctx: Ctx::IDLE,
+        },
+        Binding {
+            trigger: Trigger::Keys(ALT_QUIT),
+            what: "quit, or interrupt a running goal",
             ctx: Ctx::IDLE,
         },
         Binding {
@@ -435,6 +481,26 @@ pub static CHAT: Table = Table {
 /// not here fails `every_handled_key_is_drawn_or_deliberately_hidden`; a row
 /// here whose key stopped working fails `nothing_hidden_is_already_dead`.
 pub static UNDRAWN: &[(Chord, Ctx, &str)] = &[
+    (
+        Chord::plain(KeyCode::Char('?')),
+        Ctx::IDLE,
+ "open the Help page from an empty box. The drawn chord is Ctrl+/, which works with text in the box too; `?` is the fork's second door for people who reach for it, and the Help page's own text names both.",
+    ),
+    (
+        Chord::plain(KeyCode::Char('?')),
+        Ctx::IDLE.with_page(),
+        "the same key over an open page, where Ctrl+/ also answers.",
+    ),
+    (
+        Chord::ctrl('7'),
+        Ctx::IDLE,
+ "Ctrl+/ as some terminals report it. The 0x1F byte a terminal sends for Ctrl+/ reaches crossterm as `/`, `_` or `7` depending on keyboard and terminal, and `pane_key` folds all three to `/` before any lookup, so this is the drawn Ctrl+/ under another name rather than a key.",
+    ),
+    (
+        Chord::ctrl('_'),
+        Ctx::IDLE,
+        "Ctrl+/ as other terminals report it; see Ctrl+7.",
+    ),
     (
         Chord::ctrl('u'),
         Ctx::IDLE.typing(),
@@ -574,7 +640,42 @@ pub fn resolve(editor: &mut Editor, key: KeyEvent, ctx: Ctx) -> Answer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::term::keymap::{self, Action as KeyAction};
     use crate::term::menu::Menu;
+
+    /// The keymap is process-wide state; serialise around tests that install one.
+    /// Callers hold `keymap::test_lock()` already; the lock is not reentrant.
+    fn restore_keymap() {
+        keymap::install(keymap::Keymap::compiled());
+    }
+
+    fn with_keymap(json: &str, f: impl FnOnce()) {
+        let _lock = keymap::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        keymap::install(keymap::parse(json));
+        f();
+        // Not `restore_keymap()`: the lock above is held and is not reentrant.
+        keymap::install(keymap::Keymap::compiled());
+    }
+
+    fn chord_for_action(action: KeyAction) -> Chord {
+        let spell = keymap::active()
+            .chord_for(action)
+            .expect("action has a chord");
+        let kc = keymap::parse_chord(&spell).expect("parses");
+        let mut mods = KeyModifiers::NONE;
+        if kc.ctrl {
+            mods |= KeyModifiers::CONTROL;
+        }
+        if kc.alt {
+            mods |= KeyModifiers::ALT;
+        }
+        Chord {
+            code: KeyCode::Char(kc.key),
+            mods,
+        }
+    }
 
     /// Resolve a chord against a freshly-built editor whose emptiness matches the
     /// context, which is what nearly every check below wants.
@@ -686,6 +787,13 @@ mod tests {
     /// table should have had — four of its six rows would fail it.
     #[test]
     fn every_drawn_key_is_answered() {
+        // Reads the active keymap through `Trigger::Bound`, so it holds the
+        // lock every installing test holds, and starts from the compiled map.
+        let _lock = keymap::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        keymap::install(keymap::Keymap::compiled());
+        restore_keymap();
         for binding in CHAT.drawn {
             match binding.trigger {
                 Trigger::Terminal(_) => {}
@@ -702,6 +810,27 @@ mod tests {
                     assert!(
                         matches(&got, Expect::Tool),
                         "the panel advertises Alt+key and the decoder answers {got:?}"
+                    );
+                }
+                Trigger::Bound(action) => {
+                    let chord = chord_for_action(action);
+                    let got = answer(chord, binding.ctx);
+                    assert!(
+                        got.is_live(),
+                        "{} is drawn in QUICK HELP and nothing answers it \
+                         (a dead key on screen is the whole defect this \
+                         table exists to make impossible)",
+                        chord.label()
+                    );
+                    let expected = match action {
+                        KeyAction::Sidebar => PaneKey::Sidebar,
+                        KeyAction::Help => PaneKey::Help,
+                        other => panic!("{other:?} is drawn as a bound row and has no pane key"),
+                    };
+                    assert!(
+                        matches(&got, Expect::Pane(expected)),
+                        "{} is drawn as {action:?} and reaches {got:?} instead",
+                        chord.label()
                     );
                 }
                 Trigger::Keys(keys) => {
@@ -726,6 +855,26 @@ mod tests {
         }
     }
 
+    /// A rebound chord must change the derived label, or QUICK HELP lies.
+    ///
+    /// The decoder half waits on `input::pane_key` consulting the keymap;
+    /// this test pins the label half, which is what [`Trigger::Bound`] exists
+    /// for.
+    #[test]
+    fn a_rebound_action_updates_the_drawn_label() {
+        // `with_keymap` below takes the lock; taking it here too would deadlock.
+        let sidebar = CHAT
+            .drawn
+            .iter()
+            .find(|b| matches!(b.trigger, Trigger::Bound(KeyAction::Sidebar)))
+            .expect("sidebar is keymap-bound");
+        restore_keymap();
+        assert_eq!(sidebar.label(), "Ctrl+B");
+        with_keymap(r#"{ "bindings": { "sidebar": "ctrl+x" } }"#, || {
+            assert_eq!(sidebar.label(), "Ctrl+X");
+        });
+    }
+
     /// Half one, backwards, and the half people skip: nothing that works is a
     /// secret.
     ///
@@ -735,6 +884,12 @@ mod tests {
     /// is what stops the next `Ctrl-U` from happening.
     #[test]
     fn every_handled_key_is_drawn_or_deliberately_hidden() {
+        // Reads the active keymap through `Trigger::Bound`, so it holds the
+        // lock every installing test holds, and starts from the compiled map.
+        let _lock = keymap::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        keymap::install(keymap::Keymap::compiled());
         let mut orphans: Vec<String> = Vec::new();
         for key in every_keystroke() {
             for ctx in every_context() {
@@ -804,6 +959,28 @@ mod tests {
     /// A terminal may eat `Ctrl+Shift+PgUp` before Emma sees it; that is on
     /// the human certification list, not here.
     fn is_a_tolerated_spelling(key: KeyEvent, ctx: Ctx, got: &(Answer, String, usize)) -> bool {
+        // A capital with a modifier is Shift held on the same key, spelled by
+        // the terminal in the character rather than in the modifier bits
+        // (Ctrl+Shift+B arrives as `Char('B')` with CONTROL). The keymap
+        // lookup folds case, so the chord answers; it is the Shift tolerance
+        // above in another spelling, and is tolerated on the same terms: the
+        // lower-case chord must answer identically and be accounted for.
+        if let KeyCode::Char(c) = key.code {
+            if c.is_ascii_uppercase() && !key.modifiers.is_empty() {
+                let lowered = Chord {
+                    code: KeyCode::Char(c.to_ascii_lowercase()),
+                    mods: key.modifiers,
+                };
+                let theirs = outcome(lowered.press(), ctx);
+                // The lowered chord may itself carry a spare Shift bit (some
+                // terminals send both), so it gets the modifier tolerance too.
+                if theirs == *got
+                    && (accounted(lowered) || is_a_tolerated_spelling(lowered.press(), ctx, got))
+                {
+                    return true;
+                }
+            }
+        }
         let held = [
             KeyModifiers::CONTROL,
             KeyModifiers::ALT,
@@ -844,6 +1021,15 @@ mod tests {
                 .iter()
                 .any(|b| matches!(b.trigger, Trigger::AltAny))
         {
+            return true;
+        }
+        let bound = CHAT.drawn.iter().any(|b| {
+            let Trigger::Bound(action) = b.trigger else {
+                return false;
+            };
+            chord_for_action(action) == chord
+        });
+        if bound {
             return true;
         }
         let drawn = CHAT.drawn.iter().any(|b| match b.trigger {
@@ -932,6 +1118,12 @@ mod tests {
     /// and should be argued rather than slipped in.
     #[test]
     fn the_printed_label_comes_from_the_chord() {
+        // Reads the active keymap through `Trigger::Bound`, so it holds the
+        // lock every installing test holds, and starts from the compiled map.
+        let _lock = keymap::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        keymap::install(keymap::Keymap::compiled());
         assert_eq!(Chord::ctrl('b').label(), "Ctrl+B");
         assert_eq!(Chord::plain(KeyCode::Char('/')).label(), "/");
         assert_eq!(Chord::plain(KeyCode::PageUp).label(), "PgUp");
@@ -941,7 +1133,7 @@ mod tests {
                 .map(|b| b.label())
                 .collect::<Vec<_>>()
                 .join(" "),
-            "/ Enter Esc PgUp/PgDn Ctrl+Up/Dn Home/End Ctrl+B Alt+key Ctrl+C Ctrl+D Shift+drag",
+            "/ Enter Esc PgUp/PgDn Ctrl+Up/Dn Home/End Ctrl+B Ctrl+/ Alt+key Ctrl+C Ctrl+D Alt+Q Shift+drag",
             "the derived labels no longer match what the panel has always said"
         );
     }
@@ -952,6 +1144,11 @@ mod tests {
     /// aspirational.
     #[test]
     fn the_panel_renders_this_table_and_nothing_else() {
+        let _lock = keymap::test_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        keymap::install(keymap::Keymap::compiled());
+        restore_keymap();
         let hints = CHAT.hints();
         assert_eq!(hints.len(), CHAT.drawn.len());
         assert_eq!(

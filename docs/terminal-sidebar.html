@@ -83,6 +83,7 @@
       <a href="terminal-dock.html">Dock</a>
       <a href="terminal-usertools.html">User tools</a>
       <a href="terminal-pages.html">Pages</a>
+      <a href="terminal-runctl.html">Run control</a>
       <a href="terminal-copying.html">Copying out</a>
     </nav>
 
@@ -371,9 +372,17 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
       <code>App::click</code> hit-tests the SESSIONS header row and toggles the
       sidebar, and <code>a_click_on_the_sessions_header_toggles_the_sidebar_and_latches</code>
       asserts it end to end. A reader of this file alone would conclude the
-      <code>[+]</code> is decorative.
-      <span class="chip cert">certified</span>: the two are in the tree together
-      at <code>62ab9c3</code> and the click test passes in the 477-test suite.
+      <code>[+]</code> is decorative, and until 2026-09-06 the second half of
+      that was true as well: <a href="#hits"><code>hits</code></a> reported a
+      rectangle for every clickable row and nothing consulted it. Both halves
+      are now wired. <code>App::sidebar_row_click</code> reads those rectangles,
+      a click on a session row resolves to that session's id, and a click on a
+      TOOLS row produces the chord that row advertises, so the click and the key
+      cannot drift apart.
+      <span class="chip test">tested</span> every drawn session row is matched
+      against the name painted on it and the id it resolves to; reversing the id
+      table turns it red, which the version of this test written first could not
+      do, because it compared the id table with itself.
     </p>
     <span class="src">crates/emma/src/term/sidebar.rs — <code>COLLAPSE_HINT</code>; crates/emma/src/term/app.rs — <code>App::click</code></span>
   </div>
@@ -447,6 +456,91 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
     <span class="chip test">tested</span>
   </p>
 
+  <h2 id="calendar">The calendar, which degrades whole</h2>
+
+  <p>
+    A month grid sits under QUICK HELP, added on 2026-09-06. It has no
+    navigation and no state: it shows the month <code>State::today</code> names,
+    with that day marked in the accent colour, and nothing else.
+    <code>today</code> is an <code>Option</code> and <code>None</code> draws no
+    calendar at all, because the shell owns the clock and the widget should not
+    reach for one. <code>app.rs</code> fills it at paint time rather than
+    storing it, so a session that runs past midnight moves its mark without a
+    timer, and it adds the machine's local offset before converting, because a
+    calendar that flips a day early in the evening is worse than no calendar.
+  </p>
+
+  <p>
+    The date arithmetic is Howard Hinnant's civil-from-days algorithm, written
+    out rather than approximated, with the proleptic Gregorian leap rule spelled
+    in full: 2024 is a leap year, 2100 is not, 2000 was. <code>weekday</code>
+    carries the file's only magic number, the <code>+ 4</code> for 1970-01-01
+    having been a Thursday. A month outside 1&ndash;12 answers zero days and
+    renders as an empty month rather than panicking on a caller's arithmetic
+    slip. <code>month_grid</code> returns as many week rows as the month needs,
+    which is four for a 28-day February beginning on a Sunday and six for a
+    31-day month beginning on a Friday.
+    <span class="chip test">tested</span> against known anchors and a full decade
+    round-trip; deleting the <code>% 100</code> and <code>% 400</code> clauses
+    fails with <code>2100 is divisible by 4 and is not a leap year</code>.
+  </p>
+
+  <p>
+    The weekday row is <code>Su Mo Tu We Th Fr Sa</code> in ASCII, like the empty
+    states, because this row has to survive a legacy code page.
+    <code>GRID_WIDTH</code> is exactly that string's width and every week row
+    under it is the same, so the three centred sections share one visual centre.
+  </p>
+
+  <p>
+    The section is drawn entire or not at all, and that is the difference between
+    a calendar and a list. <code>fitted</code> truncates a list from the top and
+    counts what it dropped out loud, which is right for a list: three of seven
+    tools is still a tool list. Three of five week rows is a wrong calendar. So a
+    pane too short, or too narrow to hold the grid, gets no calendar rather than
+    part of one, and the append leaves one row of headroom for
+    <code>fitted</code>'s own overflow line so that adding the calendar can never
+    be the thing that pushes the pane into truncation.
+    <span class="chip test">tested</span> &mdash;
+    <code>the_calendar_draws_its_month_under_quick_help</code> and
+    <code>a_short_or_narrow_pane_drops_the_calendar_rather_than_half_of_it</code>;
+    replacing the append with <code>if false</code> loses
+    <code>AUGUST 2026</code> from the pane.
+  </p>
+  <span class="src">crates/emma/src/term/sidebar.rs &mdash; <code>Today</code>, <code>is_leap</code>, <code>days_in_month</code>, <code>days_from_civil</code>, <code>civil_from_secs</code>, <code>weekday</code>, <code>month_grid</code>, <code>calendar_rows</code>, <code>WEEKDAYS</code>, <code>GRID_WIDTH</code>, <code>CALENDAR_MONTHS</code>; crates/emma/src/term/app.rs &mdash; <code>today_local</code></span>
+
+  <h2 id="hits">Where a clickable row landed</h2>
+
+  <p>
+    <code>hits</code> answers where every clickable row of the sidebar landed,
+    for the same <code>area</code> <code>render</code> was handed, as a
+    <code>Hit::Session(i)</code> or a <code>Hit::Tool</code> per rectangle. It is
+    the paint's own arithmetic rather than a copy of it: both <code>hits</code>
+    and <code>render</code> go through <code>painted</code>, so a row cannot be
+    drawn in one place and hit-tested in another. A row the truncation removed,
+    and the overflow line itself, report nothing, because a row nobody can see is
+    a row nobody can click. A collapsed or too-small pane reports nothing at all,
+    which is the truth about it.
+    <span class="chip test">tested</span> &mdash;
+    <code>no_reported_row_lands_outside_the_pane_or_on_the_overflow_line</code>
+    and <code>a_click_on_a_drawn_tools_row_returns_that_tool</code>; commenting
+    out the <code>Hit::Tool</code> slot fails with
+    <code>no rect recorded for Shell</code>.
+  </p>
+
+  <p>
+    <span class="chip unv">unverified</span> as a behaviour anybody can see,
+    because nothing calls it. <code>App::click</code> does not consult
+    <code>hits</code> yet, so a pointer on a TOOLS row still does nothing and the
+    intended guarantee &mdash; that clicking a TOOLS row fires exactly the chord
+    its <code>Alt</code> key fires &mdash; has no test that could fail. That
+    dispatch is a later package. What would settle it: the call site in
+    <code>App::click</code>, plus a test that drives a click and an
+    <code>Alt</code> chord through the same path and asserts they land on the
+    same action.
+  </p>
+  <span class="src">crates/emma/src/term/sidebar.rs &mdash; <code>Hit</code>, <code>Hits</code>, <code>hits</code>, <code>painted</code></span>
+
   <h2 id="assembly">Assembly, and the ASCII fallback</h2>
 
   <p>
@@ -457,8 +551,8 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
   </p>
 
   <p>
-    <code>content</code> is three sections with <code>section_break</code>
-    between them: a blank row, a thin rule inset one column, a blank row. Those
+    <code>content</code> is four sections now with <code>section_break</code>
+    between them, the calendar being the fourth: a blank row, a thin rule inset one column, a blank row. Those
     blanks are the sidebar's <em>internal</em> layout, which is the exception
     <a href="terminal-skin.html">the spacing rule</a> already holds for
     <code>welcome.rs</code>. A pane too narrow for an inset rule gets a blank
@@ -488,16 +582,21 @@ fn clipped(text: &amp;str, budget: usize, skin: &amp;Skin) -&gt; String {
   <h2 id="coverage">Coverage</h2>
 
   <p>
-    <code>sidebar.rs</code> is 1,250 lines and was read in full for this page.
-    It declares 14 function items above the test boundary: <code>width</code>,
-    <code>session_label</code>, <code>session_time_ms</code>,
-    <code>when</code>, <code>civil</code>, <code>render</code>,
-    <code>content</code>, <code>section_break</code>, <code>header</code>,
-    <code>list_row</code>, <code>help_row</code>, <code>note_rows</code>,
-    <code>clipped</code>, <code>fitted</code>. All 14 are named here: 14 of 14,
-    along with all sixteen constants and both types
-    (<code>Row</code>, <code>State</code>). Sixteen of its twenty-four tests are
-    cited by name.
+    <code>sidebar.rs</code> is 2,038 lines and was read in full for this page,
+    up from the 1,250 this paragraph counted before the calendar and the
+    hit-testing landed on 2026-09-06. The fourteen functions the page already
+    named are still here: <code>width</code>, <code>session_label</code>,
+    <code>session_time_ms</code>, <code>when</code>, <code>civil</code>,
+    <code>render</code>, <code>content</code>, <code>section_break</code>,
+    <code>header</code>, <code>list_row</code>, <code>help_row</code>,
+    <code>note_rows</code>, <code>clipped</code>, <code>fitted</code>. The new
+    ones are <code>is_leap</code>, <code>days_in_month</code>,
+    <code>days_from_civil</code>, <code>civil_from_secs</code>,
+    <code>weekday</code>, <code>month_grid</code>, <code>calendar_rows</code>,
+    <code>hits</code> and <code>painted</code>, all named above, along with the
+    types <code>Row</code>, <code>State</code>, <code>Today</code>,
+    <code>Hit</code> and <code>Hits</code>. The filtered suite is 37 tests and
+    this page cites the ones each guarantee turns on.
   </p>
 
   <p>

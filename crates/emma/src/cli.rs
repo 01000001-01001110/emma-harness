@@ -47,6 +47,19 @@ USAGE
   emma config check            load .emma/ (or .claude/) and report; no model call
   emma agents                  what each subagent type has cost and produced,
                                across every recorded session; no model call
+  emma export-training [<id>] [--out <PATH>] [--min-ending <any|finished>]
+                               organise the recorded sessions into training
+                               material: one JSONL record per assistant turn
+                               carrying the context that turn was sent, its
+                               thinking as its own field, its visible answer
+                               and its tool round-trips. The transcripts are
+                               read and never written. Writes local files only,
+                               nothing is uploaded anywhere, and re-running it
+                               rewrites the same bytes rather than appending.
+                               Default output ~/.emma/training. Capture also
+                               happens by itself at the end of every goal
+                               unless training_capture is false in
+                               ~/.emma/settings.json; no model call
   emma verify [--rows <ids>] [--limit <n>] [--dry-run]
                                send an independent reviewer at each outstanding
                                row of verification/parity/ledger.json, briefed
@@ -82,148 +95,17 @@ OPTIONS
                                120000). Per session, not per goal.
       --no-cache               do not send cache breakpoints.
       --session-dir <PATH>     where the JSONL transcript is written.
+      --out <PATH>             with export-training: where the records go.
+      --min-ending <WHICH>     with export-training: `any` (the default, and
+                               failed trajectories are training material too)
+                               or `finished`, which keeps only goals that
+                               ended done or answered.
       --dangerously-skip-permissions
                                run every tool without asking. Loud, flag-only,
                                and never settable from configuration.
       --yes                    the same thing, accepted only with -p.
   -h, --help                   this.
   -V, --version                version.
-"
-    };
-}
-
-/// The session half. See [`SESSION_HELP`].
-macro_rules! session_help {
-    () => {
-        "\
-THE INTERACTIVE SESSION
-  A goal at the prompt runs until it is done or a budget stops it, then the
-  prompt comes back.
-
-  A session is one conversation. The next thing you type continues the last
-  one — what was read, run and answered is still there, so a follow-up question
-  does not re-read the file the answer came from. Budgets are still per goal;
-  the conversation is not. When it grows past --max-context the oldest goals
-  are compacted to their goal and their answer, and their tool results — file
-  contents, command output — leave the conversation. Emma says so when it
-  happens, and the transcript records exactly what was replaced.
-
-  Emma's own commands, at the goal prompt. Press / for the same list with the
-  project's commands on the end of it. Every one of these runs *between* goals:
-  nothing reads the keyboard while a goal is in flight, so a command typed then
-  is dropped at the next prompt rather than queued. Ctrl-C is what stops a goal.
-
-    /help                      this section.
-    /model                     the model in force, where it came from, and what
-                               it accepts — the max_tokens and effort ceiling
-                               Emma silently clamps to.
-    /model <id>                use <id> for the rest of this session. The
-                               conversation is kept and re-sent to the new
-                               model; the cached prefix is not, so the next
-                               call re-reads it at full price. Nothing on disk
-                               changes unless you add --save.
-    /compact                   summarise every finished goal but the last, now,
-                               instead of waiting for --max-context. It does
-                               not call a model, so it cannot take an
-                               instruction — it says so rather than ignoring
-                               the words. /compact all includes the last goal.
-    /clear                     start a fresh conversation without leaving. The
-                               transcript is kept and --resume will not replay
-                               what was cleared. This session's approval grants
-                               are kept too, and /clear names them: they are
-                               consent about the process, and /exit is what
-                               drops them.
-    /export                    write this conversation to a file, in markdown.
-                               /export <path> chooses where; with no argument it
-                               lands beside the session log. Works on -p, on a
-                               pipe and with no console — everywhere /copy is
-                               refused, which is where the text is hardest to get
-                               out by hand. If any record of the session could
-                               not be read, the file says so at the top rather
-                               than reading as complete.
-
-    /copy                      put the last answer on the clipboard. The text is
-                               the markdown the model wrote, taken from the
-                               session log — not what is on screen, which has
-                               been wrapped to a column and sits beside the
-                               sidebar, so a mouse selection of it arrives with
-                               borders and gutters in every line. Uses OSC 52,
-                               which the terminal either honours or ignores
-                               silently; Emma says what it sent, never that it
-                               arrived. Refused on -p and on a pipe, where no
-                               escape byte may be written.
-    /theme                     the colours: which theme is selected, which
-                               ones this machine and this project have, and
-                               where a theme file goes. A fresh machine has
-                               none, which is why the empty list says so.
-    /theme <name>              select it. A theme is read once, when Emma
-                               starts, so the name is written to
-                               ~/.emma/settings.json and the next start is what
-                               shows it — there is no --save, and nothing
-                               repaints. A name that is not there, or a file
-                               that will not parse, is refused and nothing is
-                               written. NO_COLOR outranks every theme, and
-                               /theme says so rather than letting you restart
-                               into the same screen.
-    /config                    what this run resolved — harness, tools,
-                               permission rules, agent types, and the model
-                               actually running rather than the one on disk.
-    /agents                    what each subagent type has cost and produced,
-                               including this session's delegations so far.
-    /resume                    says how to continue an earlier session, which
-                               has to happen before one starts.
-    /exit, /quit               end the session.
-    Ctrl-C                     interrupt the goal that is running.
-    /<name>                    expand a command from commands/ in .emma/ (or
-                               .claude/). `emma config check` lists the ones
-                               this directory has; the session lists them at
-                               startup. An unknown /word is just text. A name
-                               above wins over a project command that shares it,
-                               and `emma config check` says when one does.
-
-  On a terminal that supports it, Emma frames the window: a status row on top,
-  the transcript scrolling between, and the prompt pinned to the bottom row so
-  an approval question cannot scroll away under the output that follows it.
-  Anything else — a pipe, a redirect, a console without VT processing, or
-  EMMA_NO_FRAME set — gets plain lines instead, with nothing else different.
-
-APPROVAL
-  Read, Glob and Grep run silently. Write, Edit and Bash ask, showing the
-  command, the diff, or the path and size. A tool that reaches the network asks
-  separately about the host, showing the URL or the query.
-
-    y   allow this call. On the network question it also allows that host for
-        the rest of the process.
-    n   refuse. Empty is 'n' — hitting return is not consent.
-    a   allow that tool for the rest of the process, and no longer.
-    r   allow, and write the rule down: the host on the network question, the
-        tool on the others. The exact rule is shown before you press the key.
-    t   network question only: allow, and write down the whole tool — every
-        call it makes, to any host. Bigger than 'r' on purpose, which is why
-        it is a different key.
-
-  What 'r' and 't' write is a Claude Code permission rule, in
-  <harness>/settings.local.json — WebFetch(domain:apnews.com), or WebFetch for
-  every host.
-  `emma config check` lists every rule and the file it came from; delete a line
-  to revoke it. Rules already in .claude/settings.json are honoured, and a deny
-  rule in your ~/.claude/settings.json applies here too (allow rules there do
-  not — they were written for a different program).
-
-  The order, and the first line that answers wins: a PreToolUse hook denial, a
-  deny rule, --dangerously-skip-permissions, an ask rule, an allow rule,
-  read-only, a session grant, then you. A hook denial and a deny rule cannot be
-  approved away, and neither is waved through by the bypass flag.
-
-  Delegate asks like any other writer, showing which agent type and the first
-  lines of the brief. A subagent inherits this gate: its prompts are the same
-  prompts, on the same keyboard, which is why only one delegation runs at a
-  time.
-
-  One exemption, by name: TaskCreate and TaskUpdate write, and never ask. They
-  write only to the agent's own task file under .emma/, and a prompt every time
-  the agent ticks off a task is a prompt that gets answered without being read —
-  which costs the prompts on Write, Edit and Bash as well.
 "
     };
 }
@@ -237,19 +119,23 @@ APPROVAL
 /// which is the question a first run is really asking.
 pub const DEFAULT_VERIFY_LIMIT: usize = 5;
 
-pub const HELP: &str = concat!(usage_and_options!(), "\n", session_help!());
+/// The whole of `emma --help`.
+pub fn help() -> String {
+    format!("{}\n{}", usage_and_options!(), session_help())
+}
 
-/// What a running session understands, and what the gate does — the bytes
-/// `/help` prints, and the tail of [`HELP`].
+/// What a running session understands, and what the gate does: the bytes
+/// `/help` prints, and the tail of [`help`].
 ///
-/// **The menu cannot say this.** It is a vocabulary: a name and one line,
-/// filtered as you type, drawn on a row of a viewport that is often sixty
-/// columns wide. "What does /clear keep?" does not fit there. So the menu
-/// answers *what can I type* and this answers *what does it do*, and a test
-/// pins that every name in `session_command::BUILTINS` appears here — the
-/// `menu.rs` rule that a command nobody can discover is not a command, applied
-/// one level up.
-pub const SESSION_HELP: &str = session_help!();
+/// **It was a string literal, and the page is why it is not.** The full-screen
+/// Help page needs section headers, an entry column and a scroll offset, so
+/// the text moved to [`crate::term::help::SECTIONS`] and both renderings read
+/// it from there. The chords in it are resolved against the keymap in force at
+/// the moment it is built, which a `const` cannot do, so `emma --help` prints
+/// the chord this user actually has.
+pub fn session_help() -> String {
+    crate::term::help::plain()
+}
 
 // endregion: The help text
 
@@ -290,6 +176,13 @@ pub enum Command {
         goal: Option<String>,
     },
     ConfigCheck,
+    /// Organise the recorded sessions into training records. Reads the
+    /// transcripts and writes local files; calls no model, exactly as
+    /// `config check` does not. `session` is an id when one was named, and
+    /// every session in the store otherwise.
+    ExportTraining {
+        session: Option<String>,
+    },
     /// Dispatch independent reviewers at the parity ledger's outstanding rows.
     ///
     /// **The one command here that spends money on purpose**, which is why
@@ -331,6 +224,11 @@ pub struct Opts {
     pub key: Option<String>,
     pub caching: Caching,
     pub session_dir: Option<PathBuf>,
+    /// Only `export-training` reads these two. They live here rather than in
+    /// the command for the reason `key` does: one flag, parsed in one place,
+    /// whatever the command in front of it turns out to be.
+    pub out: Option<PathBuf>,
+    pub min_ending: Option<String>,
     pub budgets: Budgets,
 }
 
@@ -344,6 +242,8 @@ impl Default for Opts {
             key: None,
             caching: Caching::On,
             session_dir: None,
+            out: None,
+            min_ending: None,
             budgets: Budgets::default(),
         }
     }
@@ -508,6 +408,8 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
             // lands, rather than failing on an unknown option.
             "--no-verify" | "--force" => {}
             "--session-dir" => opts.session_dir = Some(PathBuf::from(value("--session-dir")?)),
+            "--out" => opts.out = Some(PathBuf::from(value("--out")?)),
+            "--min-ending" => opts.min_ending = Some(value("--min-ending")?),
             "--max-iterations" => {
                 opts.budgets.max_iterations = number(&value("--max-iterations")?)?
             }
@@ -552,6 +454,14 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Cli, String> {
                 command = Some(Command::SetModel(String::new()))
             }
             "agents" if fresh(&command, &words) => command = Some(Command::Agents),
+            // The same `sess-` prefix rule `--resume` uses, and for the same
+            // reason: a second flag for the id would make the common spelling
+            // the one that needs explaining.
+            "export-training" if fresh(&command, &words) => {
+                let named = it.peek().is_some_and(|a| a.starts_with("sess-"));
+                let session = if named { it.next() } else { None };
+                command = Some(Command::ExportTraining { session });
+            }
             "verify" if fresh(&command, &words) => {
                 command = Some(Command::Verify {
                     rows: Vec::new(),
@@ -809,7 +719,7 @@ pub fn typed_at_the_prompt(line: &str) -> Typed {
     // spelling the real parser rejects would be inventing a command, and the
     // instruction here is to document what exists.
     match (words.first().copied(), words.len()) {
-        (Some("-h" | "--help"), 1) => return Typed::Answer(HELP.to_string()),
+        (Some("-h" | "--help"), 1) => return Typed::Answer(help()),
         (Some("-V" | "--version"), 1) => {
             return Typed::Answer(format!("emma {}", env!("CARGO_PKG_VERSION")))
         }
@@ -831,6 +741,9 @@ pub fn typed_at_the_prompt(line: &str) -> Typed {
         // name is. No English sentence starts with `set-provider`.
         (Some("set-provider"), _) => "set-provider",
         (Some("set-model"), _) => "set-model",
+        // No English sentence starts with `export-training`, so the hyphenated
+        // name is what keeps a goal safe here rather than the argument count.
+        (Some("export-training"), _) => "export-training",
         (Some("config"), 2) if words[1].eq_ignore_ascii_case("check") => "config check",
         (Some("agents"), 1) => "agents",
         // Everything else is a goal, including `init the database`, `model the
@@ -1292,40 +1205,57 @@ mod tests {
         // The defect: `/exit` and `/quit` have worked since the loop was
         // written and were documented nowhere a user looks, so the owner went
         // looking for the exit command and could not find one.
-        assert!(HELP.contains("/exit"), "the help does not say how to leave");
-        assert!(HELP.contains("/quit"));
-        assert!(HELP.contains("Ctrl-C"));
+        let help = help();
+        let session = session_help();
+        assert!(help.contains("/exit"), "the help does not say how to leave");
+        assert!(help.contains("/quit"));
+        assert!(help.contains("Ctrl-C"));
         // …and it is the *same bytes* as `/help` prints, rather than a second
         // text that agrees today. The exit lines live in the session half, so
         // this also pins that `--help` still carries it.
-        assert!(
-            HELP.contains(SESSION_HELP),
-            "HELP and SESSION_HELP diverged"
-        );
-        assert!(SESSION_HELP.contains("/exit"));
+        assert!(help.contains(&session), "help and session_help diverged");
+        assert!(session.contains("/exit"));
     }
 
-    /// Every command the menu offers has a paragraph here saying what it does.
-    ///
-    /// The menu row is one line on a sixty-column viewport and cannot answer
-    /// "what does /clear keep?". This is `menu.rs`'s rule — a command nobody can
-    /// discover is not a command — applied one level up, and it is the assertion
-    /// that stops the tenth command shipping undocumented.
+    /// The export subcommand's whole surface: the bare form, a named session,
+    /// the two flags, and the rule that a sentence starting with the word is
+    /// still a goal.
     #[test]
-    fn every_session_command_is_documented_where_help_can_be_read() {
-        // Whole words. A substring test would let `/clear` be satisfied by a
-        // paragraph about `/clearance`, which is the shape of false receipt
-        // this repository has already paid for once.
-        let words: Vec<&str> = SESSION_HELP
-            .split(|c: char| c.is_whitespace() || c == ',')
-            .collect();
-        for (name, _) in crate::session_command::BUILTINS {
-            let spelled = format!("/{name}");
-            assert!(
-                words.contains(&spelled.as_str()),
-                "/{name} is offered by the menu and is not documented in SESSION_HELP"
-            );
-        }
+    fn export_training_takes_a_session_an_out_dir_and_an_ending_filter() {
+        assert_eq!(
+            p(&["export-training"]).unwrap().command,
+            Command::ExportTraining { session: None }
+        );
+        let cli = p(&[
+            "export-training",
+            "sess-1787791338091-15534",
+            "--out",
+            "/tmp/t",
+            "--min-ending",
+            "finished",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.command,
+            Command::ExportTraining {
+                session: Some("sess-1787791338091-15534".into())
+            }
+        );
+        assert_eq!(
+            cli.opts.out.as_deref(),
+            Some(std::path::Path::new("/tmp/t"))
+        );
+        assert_eq!(cli.opts.min_ending.as_deref(), Some("finished"));
+
+        // Only in first position, the rule every subcommand here follows.
+        assert_eq!(
+            p(&["explain", "export-training"]).unwrap().command,
+            Command::Run(Some("explain export-training".into()))
+        );
+        // And the help says it, including that it writes local files only.
+        assert!(help().contains("emma export-training"));
+        assert!(help().contains("--min-ending"));
+        assert!(help().contains("nothing is uploaded"));
     }
 
     #[test]

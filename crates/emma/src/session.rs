@@ -82,7 +82,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
-use emma_llm::{ContentBlock, Message, Role, ToolResult};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
+use emma_llm::{Content, ContentBlock, Message, Role, ToolImage, ToolResult};
 use serde_json::{json, Value};
 
 use crate::agent::{label_of, memo_key_of, Resumed};
@@ -90,9 +92,23 @@ use crate::agent::{label_of, memo_key_of, Resumed};
 /// The records one delegation wrote, in order — see [`SessionLog::subagent`].
 pub type Records = Arc<Mutex<Vec<Value>>>;
 
-pub struct SessionLog {
+/// Which file this log is on, and the handle open on it.
+///
+/// **One struct rather than three fields because they change together and must
+/// never disagree.** An in-place `/resume` closes one session's file and opens
+/// another's, and an id left pointing at the abandoned file would stamp the
+/// resumed session's records with the wrong name — which is a transcript that
+/// says it is a session it is not. See [`SessionLog::move_to`].
+///
+/// The file stays `Option` for the reason it always was: [`SessionLog::none`]
+/// records nothing and has no handle to hold.
+struct Handle {
     id: String,
     path: PathBuf,
+    file: Option<File>,
+}
+
+pub struct SessionLog {
     /// A plain `std::fs::File` behind a `std::sync::Mutex`, in an async
     /// program, on purpose: a record is a few hundred bytes and is written
     /// between a model call and a subprocess. Making it async would buy
@@ -101,10 +117,12 @@ pub struct SessionLog {
     /// a cancellation can land.
     ///
     /// `Arc` because [`SessionLog::subagent`] hands out a second view of the
-    /// *same* file rather than a second file. One process, one writer, one
-    /// mutex — the module doc's "a second writer" caveat is about a second
-    /// process, not a second logical run inside this one.
-    file: Arc<Mutex<Option<File>>>,
+    /// *same* file rather than a second file, and because the process shares
+    /// the log as `&SessionLog`: nothing anywhere holds a `&mut`, so moving
+    /// the session onto another file has to happen through here. One process,
+    /// one writer, one mutex — the module doc's "a second writer" caveat is
+    /// about a second process, not a second logical run inside this one.
+    handle: Arc<Mutex<Handle>>,
     /// Prefixed onto every `kind` this view writes. `None` for the session's own
     /// records; `Some("sub")` for a delegation's — see [`SessionLog::subagent`].
     prefix: Option<&'static str>,
@@ -132,15 +150,33 @@ pub struct SessionLog {
     write_failed: Arc<AtomicBool>,
 }
 
+/// The last record an abandoned session file gets: this session moved to
+/// another file, in this process, and nothing after this line belongs to it.
+///
+/// **The fold needs no arm for it, and that is a decision rather than an
+/// omission.** Everything before it in that file is still that session's
+/// conversation and a later `--resume` of it must get all of it back;
+/// everything after it is in another file. [`Fold::record`] ignores a kind it
+/// does not know, so an old build folds a moved session correctly too — and
+/// `a_moved_record_costs_the_fold_nothing` is what stops somebody adding an
+/// arm for it later on the reasonable-sounding grounds that every other record
+/// has one.
+pub const MOVED: &str = "session_moved";
+
+/// The first record a session gets when it is picked back up inside a running
+/// process: how many messages came back, and what was dropped to make room.
+///
+/// Ignored by the fold for the same reason [`MOVED`] is, and it is the sharper
+/// of the two: the messages it counts are already in this file, *above* this
+/// line, so an arm that replayed them would hand back the conversation twice.
+/// `a_resumed_record_does_not_double_the_conversation` is that assertion.
+pub const RESUMED: &str = "resumed";
+
 impl SessionLog {
     /// A session id that sorts by time and cannot collide between two `emma`
     /// processes started in the same millisecond.
     pub fn new_id() -> String {
-        let ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        format!("sess-{ms:013}-{}", std::process::id())
+        format!("sess-{:013}-{}", now_ms(), std::process::id())
     }
 
     /// `~/.emma/sessions/`, or `EMMA_SESSION_DIR` when set — which is how a
@@ -162,9 +198,11 @@ impl SessionLog {
             .open(&path)
             .with_context(|| format!("opening {}", path.display()))?;
         Ok(Self {
-            id,
-            path,
-            file: Arc::new(Mutex::new(Some(file))),
+            handle: Arc::new(Mutex::new(Handle {
+                id,
+                path,
+                file: Some(file),
+            })),
             prefix: None,
             stamp: Vec::new(),
             tap: None,
@@ -178,9 +216,11 @@ impl SessionLog {
     /// working tool for a diary.
     pub fn none() -> Self {
         Self {
-            id: "sess-none".into(),
-            path: PathBuf::new(),
-            file: Arc::new(Mutex::new(None)),
+            handle: Arc::new(Mutex::new(Handle {
+                id: "sess-none".into(),
+                path: PathBuf::new(),
+                file: None,
+            })),
             prefix: None,
             stamp: Vec::new(),
             tap: None,
@@ -188,12 +228,100 @@ impl SessionLog {
         }
     }
 
-    pub fn id(&self) -> &str {
-        &self.id
+    /// The session this log is writing *now*, which is not always the one it
+    /// opened: an in-place `/resume` moves it — see [`SessionLog::move_to`].
+    ///
+    /// Owned rather than borrowed for that reason, and it is the whole cost of
+    /// the move being possible at all: the identity lives behind the same lock
+    /// as the handle, and a borrow out of a `MutexGuard` cannot outlive it.
+    pub fn id(&self) -> String {
+        self.lock().id.clone()
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
+    /// The file this log is appending to now. See [`Self::id`] for why it is
+    /// owned.
+    pub fn path(&self) -> PathBuf {
+        self.lock().path.clone()
+    }
+
+    /// The handle, with a poisoned lock recovered rather than propagated.
+    ///
+    /// Same ruling as [`SessionLog::append`]'s, and now in one place because
+    /// four callers need it: a panic in some other thread says nothing about
+    /// whether this file is still writable, and the data inside is a `File`
+    /// plus two strings, which a panic elsewhere cannot leave torn.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Handle> {
+        self.handle.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Continue a *different* session in this same process: stop writing to
+    /// the file this log is on, and append to `id`'s file from here on.
+    ///
+    /// **The abandoned file gets the last word.** A [`MOVED`] record is written
+    /// into it before the handle is swapped, so a human reading it later, or a
+    /// `--resume` of it, finds a session that stops rather than a session that
+    /// was truncated. The record is deliberately the last line of that file:
+    /// nothing this process does afterwards belongs to that session.
+    ///
+    /// **The resumed file is opened in append mode**, which is exactly what
+    /// `emma --resume` does to it, so an in-place resume and a process-boundary
+    /// one leave the same file on disk. Nothing is rewritten and nothing is
+    /// replayed; the records already in it are the conversation, and [`fold`]
+    /// is what reads them back.
+    ///
+    /// **Nothing is renamed, and that is deliberate rather than incidental.**
+    /// The obvious implementation of "move this session onto that file" is a
+    /// rename, and on Windows a rename of a file this process still holds open
+    /// fails with `ERROR_SHARING_VIOLATION` unless every handle was opened
+    /// sharing delete — which `OpenOptions` does not do. Opening the
+    /// destination and dropping the old handle needs no such favour from the
+    /// filesystem and is what the operation actually means: two files, both
+    /// kept, one writer moving between them.
+    ///
+    /// The new handle is opened **before** the old one is given up, so a
+    /// destination that cannot be opened leaves the log exactly where it was
+    /// rather than in a session with nowhere to write.
+    ///
+    /// **A log with no file at all ([`SessionLog::none`]) moves its identity
+    /// and stays silent.** It is the constructor for "there is nowhere to write
+    /// a transcript", and a move that opened one would make the one path in
+    /// this file that promises to record nothing start recording — for the sake
+    /// of a file nothing would ever read. The id still moves, so whoever asks
+    /// this log what session it is gets the right answer.
+    pub fn move_to(&self, dir: &Path, id: &str) -> Result<PathBuf> {
+        // Bound rather than tested inline: a `MutexGuard` in an `if`
+        // condition is alive for the whole `if`, and the arm below re-locks.
+        let silent = {
+            let handle = self.lock();
+            handle.file.is_none()
+        };
+        if silent {
+            let path = dir.join(format!("{id}.jsonl"));
+            let mut handle = self.lock();
+            handle.id = id.to_string();
+            handle.path = path.clone();
+            return Ok(path);
+        }
+        fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        let path = dir.join(format!("{id}.jsonl"));
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        // Before the swap, and outside the lock, because `append` takes it.
+        self.append(
+            MOVED,
+            json!({ "to": id, "to_path": path.display().to_string() }),
+        );
+        let mut handle = self.lock();
+        handle.id = id.to_string();
+        handle.path = path.clone();
+        // The old handle is dropped here, by the assignment. On a log that
+        // never had one this is the whole operation: the identity moves and
+        // there is nothing to close.
+        handle.file = Some(file);
+        Ok(path)
     }
 
     /// Append one record.
@@ -208,13 +336,7 @@ impl SessionLog {
         };
         if let Some(obj) = payload.as_object_mut() {
             obj.insert("kind".into(), json!(kind));
-            obj.insert(
-                "at_ms".into(),
-                json!(SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0)),
-            );
+            obj.insert("at_ms".into(), json!(now_ms()));
             for (key, value) in &self.stamp {
                 obj.insert(key.clone(), value.clone());
             }
@@ -237,10 +359,16 @@ impl SessionLog {
         // `unwrap_or_else(|e| e.into_inner())` sites across `term`, `agent` and
         // `input` -- and this file was the outlier. The data inside is a `File`
         // handle, which a panic elsewhere cannot leave torn.
-        let mut guard = self.file.lock().unwrap_or_else(|e| e.into_inner());
+        //
+        // The recovery is `Self::lock` now rather than an `unwrap_or_else`
+        // here, because `move_to` and the two accessors take the same lock and
+        // one of them writing `.unwrap()` would reintroduce exactly this.
+        let mut guard = self.lock();
         // `None` is the no-log constructor and is the one silence here that is
         // correct: a run with no session directory has nothing to append to.
-        let Some(file) = guard.as_mut() else { return };
+        let Some(file) = guard.file.as_mut() else {
+            return;
+        };
         let mut line = payload.to_string();
         line.push('\n');
         // Not `let _ =`. This file is the only record of the run: resume folds
@@ -330,9 +458,9 @@ impl SessionLog {
         let tap: Records = Arc::new(Mutex::new(Vec::new()));
         (
             Self {
-                id: self.id.clone(),
-                path: self.path.clone(),
-                file: self.file.clone(),
+                // The same handle, not a copy of it: a delegation writes into
+                // the file its parent is on *now*, including after a move.
+                handle: self.handle.clone(),
                 write_failed: self.write_failed.clone(),
                 prefix: Some("sub"),
                 stamp: vec![
@@ -456,6 +584,22 @@ pub fn fold(path: &Path) -> Result<Vec<Message>> {
     Ok(fold_records(&SessionLog::read(path)?))
 }
 
+/// Milliseconds since the Unix epoch, which is what every `at_ms` in this file
+/// and in `runfacts` means.
+///
+/// One function rather than several copies of the same `duration_since`,
+/// because two records whose timestamps come from differently-written clocks
+/// cannot be ordered against each other, and ordering them is the whole point
+/// of a run graph. A clock before the epoch reads as zero rather than
+/// panicking: a record with a wrong timestamp is a blemish, a crash is a lost
+/// session.
+pub fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// [`fold`] over records already read — the testable half, and the one a caller
 /// that has the records for another reason should use.
 pub fn fold_records(records: &[Value]) -> Vec<Message> {
@@ -487,7 +631,7 @@ pub fn fold_records_reporting(records: &[Value]) -> (Vec<Message>, Vec<String>) 
 /// in the conversation in full, and the *only* thing that shortens it is
 /// compaction — which writes what it replaced the messages with into the
 /// record, so this reads it rather than re-deriving it.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Fold {
     /// Records this fold refused to act on because they were damaged.
     ///
@@ -547,9 +691,10 @@ impl Fold {
                 // `answered` rather than half-restored. A record this cannot
                 // read is a gap, and a gap is the one thing the API will not
                 // take: an unanswered `tool_use` is a 400.
-                if let Some(ContentBlock::ToolResult(result)) =
+                if let Some(ContentBlock::ToolResult(mut result)) =
                     r.get("block").cloned().map(ContentBlock::from_value)
                 {
+                    rehydrate_images(&mut result);
                     self.results.push(result);
                 }
             }
@@ -628,6 +773,55 @@ impl Fold {
                 self.pending = None;
                 self.results.clear();
             }
+            // Shedding rewrites named blocks wherever they sit, where `compacted`
+            // replaces messages off the front by an index. Replayed rather than
+            // re-decided, for the same reason: the record carries the replacement
+            // text verbatim, so a resumed conversation is the one that was sent.
+            "shed" => {
+                let shed: Vec<(String, String)> = r["results_shed"]
+                    .as_array()
+                    .map(|rows| {
+                        rows.iter()
+                            .map(|row| (string(row, "tool_use_id"), string(row, "content")))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                for (id, content) in shed {
+                    for message in self.history.iter_mut().chain(self.query.iter_mut()) {
+                        if let Content::Blocks(blocks) = &mut message.content {
+                            for block in blocks.iter_mut() {
+                                if let ContentBlock::ToolResult(result) = block {
+                                    if result.tool_use_id == id {
+                                        result.content = content.clone();
+                                        // Mirrors `Agent::shed_the_running_goal`.
+                                        // Shedding takes the pictures out with
+                                        // the prose, so a fold that rewrote only
+                                        // the text would rebuild a conversation
+                                        // carrying images the run had already
+                                        // dropped.
+                                        result.images.clear();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    for result in self.results.iter_mut() {
+                        if result.tool_use_id == id {
+                            result.content = content.clone();
+                            result.images.clear();
+                        }
+                    }
+                }
+            }
+            // A line typed while the goal ran, taken up at the next turn. The
+            // text is the *composed* string, attribution and all, for the reason
+            // the `goal` record stores `opening` rather than the user's words: a
+            // fold that recomposed it would replay a conversation the model
+            // never had the moment the wording changed.
+            "steer" => {
+                self.close_turn();
+                append_user_text(&mut self.query, string(r, "text"));
+            }
             "goal_finished" => self.finished = Some(string(r, "ending")),
             _ => {}
         }
@@ -676,6 +870,60 @@ impl Fold {
         }
         self.history.extend(messages);
         self.in_goal = false;
+    }
+}
+
+/// The conversation as it stood immediately *before* each `assistant` record,
+/// paired with that record's index.
+///
+/// The training exporter's per-turn context, and it is the same fold rather
+/// than a second one: the walk is [`fold_records`] stopped early, so a
+/// `compacted` record that had already been applied when a turn was sent is
+/// applied here too, and one that came later is not. That is the property the
+/// exporter claims, and claiming it from a re-derivation would be a second
+/// implementation of one decision.
+///
+/// Cloning the fold at each assistant record rather than re-walking the prefix
+/// keeps it linear in the records and quadratic only in the messages that are
+/// copied, which for a session file is a few hundred small structs.
+pub fn fold_prefixes(records: &[Value]) -> Vec<(usize, Vec<Message>)> {
+    let mut fold = Fold::default();
+    let mut out = Vec::new();
+    for (i, record) in records.iter().enumerate() {
+        if record["kind"] == "assistant" {
+            // `finish` places the turn that is still pending, which is the
+            // previous one, with the results that answered it. That list is
+            // exactly what the request carrying turn `i` sent.
+            out.push((i, fold.clone().finish()));
+        }
+        fold.record(record);
+    }
+    out
+}
+
+/// Append user text to the turn already at the end, or open a new one.
+///
+/// **Two user turns in a row is a 400, not a conversation**, and this is the
+/// one rule that keeps steering from producing one. At the top of a loop
+/// iteration the last message is always a user turn (the goal's opening, the
+/// tool results of the round-trip just placed, or a kick), so almost every
+/// call appends. The push arm is for the case that does not arise in the loop
+/// and does in the fold: a record stream whose last placed message was an
+/// assistant turn.
+///
+/// Shared between the loop's steering drain and the fold's `steer` arm,
+/// because a fold that composed the turn differently from the run is a
+/// resumed session that is not the one that was sent.
+pub(crate) fn append_user_text(out: &mut Vec<Message>, text: String) {
+    match out.last_mut() {
+        Some(last) if last.role == Role::User => match &mut last.content {
+            Content::Text(existing) => {
+                existing.push_str("\n\n");
+                existing.push_str(&text);
+            }
+            Content::Blocks(blocks) => blocks.push(ContentBlock::text(text)),
+        },
+        _ => out.push(Message::user(text)),
     }
 }
 
@@ -1313,6 +1561,52 @@ fn str_of(r: &Value, key: &str) -> Option<String> {
 
 // endregion: Resume
 
+/// Put the bytes back on an image the log recorded as a path.
+///
+/// The log stores a picture as `{path, media_type, bytes}` rather than as
+/// several hundred kilobytes of base64 (see `ToolImage`), so a fold that did
+/// nothing here would hand `--resume` a result carrying an image block no
+/// provider can read. Two outcomes, and neither is silent:
+///
+/// - The file is where the log said. The bytes are read and re-encoded, and the
+///   resumed conversation is byte-identical to the one that ran.
+/// - The file is gone, or the log never named one. The image is dropped and a
+///   line saying so is appended to the result's text, because a resumed model
+///   that is told a screenshot exists and shown nothing will reason about a
+///   picture it never saw. The turn is still valid: a `tool_result` may carry
+///   prose alone.
+///
+/// This is the honest half of the trade the log makes. Replay depends on a file
+/// outside the log, and when that dependency is not met the transcript says it
+/// rather than quietly becoming a text-only conversation.
+fn rehydrate_images(result: &mut ToolResult) {
+    if result.images.is_empty() {
+        return;
+    }
+    let mut kept = Vec::new();
+    let mut lost = Vec::new();
+    for image in std::mem::take(&mut result.images) {
+        if image.data.is_some() {
+            kept.push(image);
+            continue;
+        }
+        match image.path.as_deref().map(|p| (p, fs::read(p))) {
+            Some((path, Ok(bytes))) => {
+                let data = BASE64.encode(bytes);
+                kept.push(ToolImage::base64(&image.media_type, data).at_path(path));
+            }
+            Some((path, Err(e))) => lost.push(format!("{path} could not be read ({e})")),
+            None => lost.push("the capture was not kept on disk".to_string()),
+        }
+    }
+    result.images = kept;
+    for reason in lost {
+        result
+            .content
+            .push_str(&format!("\n\n[image not replayed: {reason}]"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1324,7 +1618,7 @@ mod tests {
         log.append("goal", json!({ "text": "do the thing" }));
         log.append("assistant", json!({ "text": "done" }));
 
-        let records = SessionLog::read(log.path()).unwrap();
+        let records = SessionLog::read(&log.path()).unwrap();
         assert_eq!(records.len(), 2);
         assert_eq!(records[0]["kind"], "goal");
         assert_eq!(records[0]["text"], "do the thing");
@@ -1405,6 +1699,148 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // Moving a running process onto another session's file
+    //
+    // What an in-place `/resume` does to the log. Two files and one handle:
+    // the one being left has to stop cleanly and say where the session went,
+    // and the one being picked up has to be appended to rather than rewritten.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn moving_ends_one_file_and_appends_to_the_other() {
+        let dir = tempfile::tempdir().unwrap();
+        // The session being picked up already has a conversation in it, written
+        // by an earlier run. Nothing here may touch those bytes.
+        let old = SessionLog::open(dir.path(), "sess-old").unwrap();
+        old.append("goal", json!({ "text": "the earlier work" }));
+        drop(old);
+
+        let log = SessionLog::open(dir.path(), "sess-here").unwrap();
+        log.append("goal", json!({ "text": "what I was doing" }));
+        let moved = log.move_to(dir.path(), "sess-old").unwrap();
+
+        // The identity moved with the handle, which is the point: every record
+        // written from here on, and every reader asking this log what session
+        // it is, gets the resumed one.
+        assert_eq!(log.id(), "sess-old");
+        assert_eq!(log.path(), moved);
+
+        log.append("goal", json!({ "text": "what I am doing now" }));
+
+        let left = SessionLog::read(&dir.path().join("sess-here.jsonl")).unwrap();
+        assert_eq!(left.len(), 2, "{left:?}");
+        assert_eq!(left[0]["text"], "what I was doing");
+        // The last word, and it is the last line: nothing this process does
+        // after the move belongs to the session it left.
+        assert_eq!(left[1]["kind"], MOVED);
+        assert_eq!(left[1]["to"], "sess-old");
+
+        let picked = SessionLog::read(&moved).unwrap();
+        assert_eq!(picked.len(), 2, "the earlier conversation was not kept");
+        assert_eq!(picked[0]["text"], "the earlier work");
+        assert_eq!(picked[1]["text"], "what I am doing now");
+    }
+
+    /// The move is not a rename, and this is the assertion that says so.
+    ///
+    /// **Windows is why.** A rename of a file this process still holds open
+    /// fails with a sharing violation unless every handle on it was opened
+    /// sharing delete, which `OpenOptions` does not do — so the obvious
+    /// implementation of "move the session onto that file" is one that works on
+    /// the developer's Mac and fails on the owner's box. Both files exist
+    /// afterwards, both keep their own history, and the only thing that moved
+    /// is which of them this process is writing to.
+    #[test]
+    fn both_files_are_still_there_afterwards_and_neither_was_renamed() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SessionLog::open(dir.path(), "sess-here").unwrap();
+        log.append("goal", json!({ "text": "here" }));
+        let moved = log.move_to(dir.path(), "sess-there").unwrap();
+        log.append("goal", json!({ "text": "there" }));
+
+        let left = dir.path().join("sess-here.jsonl");
+        assert!(left.is_file(), "the abandoned file was renamed away");
+        assert!(moved.is_file());
+        // And a third session can still be opened on the abandoned file, which
+        // a rename or a still-exclusive handle would refuse.
+        let again = SessionLog::open(dir.path(), "sess-here").unwrap();
+        again.append("goal", json!({ "text": "picked up again" }));
+        let records = SessionLog::read(&left).unwrap();
+        assert_eq!(records.len(), 3, "{records:?}");
+        assert_eq!(records[2]["text"], "picked up again");
+    }
+
+    /// A move onto a directory that cannot be opened leaves the log where it
+    /// was, rather than in a session with nowhere to write.
+    ///
+    /// The destination handle is taken before the old one is given up for this
+    /// reason alone: the failure mode being refused is a `/resume` that reports
+    /// an error *and* silently stops recording the session the user is still
+    /// sitting in.
+    #[test]
+    fn a_move_that_cannot_open_its_destination_keeps_the_session_it_had() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SessionLog::open(dir.path(), "sess-here").unwrap();
+        // A file where the destination directory would be: `create_dir_all`
+        // fails on it on every platform.
+        let blocked = dir.path().join("not-a-dir");
+        fs::write(&blocked, "").unwrap();
+
+        assert!(log.move_to(&blocked, "sess-there").is_err());
+        assert_eq!(log.id(), "sess-here");
+        log.append("goal", json!({ "text": "still recording" }));
+        let records = SessionLog::read(&log.path()).unwrap();
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0]["text"], "still recording");
+    }
+
+    /// The no-log constructor moves its identity and stays silent.
+    ///
+    /// `none()` is "there is nowhere to write a transcript". A move that opened
+    /// a file for it would make the one path that promises to record nothing
+    /// start recording, for a file nothing would ever read.
+    #[test]
+    fn moving_a_log_that_records_nothing_moves_only_its_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SessionLog::none();
+        let path = log.move_to(dir.path(), "sess-elsewhere").unwrap();
+        assert_eq!(log.id(), "sess-elsewhere");
+        assert_eq!(log.path(), path);
+        log.append("goal", json!({ "text": "x" }));
+        assert!(!path.exists(), "a silent log started writing a file");
+    }
+
+    #[test]
+    fn a_moved_record_costs_the_fold_nothing() {
+        // The arm that is deliberately absent. Everything before the move is
+        // still that session's conversation, so a `--resume` of the file that
+        // was left has to get all of it back.
+        let msgs = fold_records(&[
+            opened(),
+            assistant_with(&["tu_1"]),
+            result_for("tu_1"),
+            json!({ "kind": MOVED, "to": "sess-elsewhere" }),
+        ]);
+        assert_eq!(msgs.len(), 3, "{msgs:?}");
+        assert_eq!(msgs[0], Message::user("work on g"));
+    }
+
+    #[test]
+    fn a_resumed_record_does_not_double_the_conversation() {
+        // The other half: the record lands in the file whose messages it
+        // counts, above them in the file it describes. An arm that replayed it
+        // would put the conversation in twice.
+        let with = fold_records(&[
+            opened(),
+            assistant_with(&["tu_1"]),
+            result_for("tu_1"),
+            json!({ "kind": RESUMED, "messages": 3 }),
+        ]);
+        let without = fold_records(&[opened(), assistant_with(&["tu_1"]), result_for("tu_1")]);
+        assert_eq!(with, without);
+    }
+
+    // -----------------------------------------------------------------------
     // The fold, on records a crash or an interrupt left half-written.
     //
     // The end-to-end round trip lives in `tests/loop.rs`, driven by the real
@@ -1459,9 +1895,11 @@ mod tests {
         let handle = OpenOptions::new().read(true).open(&path).unwrap();
 
         let log = SessionLog {
-            id: "s".into(),
-            path: path.clone(),
-            file: Arc::new(Mutex::new(Some(handle))),
+            handle: Arc::new(Mutex::new(Handle {
+                id: "s".into(),
+                path: path.clone(),
+                file: Some(handle),
+            })),
             prefix: None,
             stamp: Vec::new(),
             tap: None,
@@ -1626,9 +2064,11 @@ mod tests {
             .unwrap();
 
         let log = SessionLog {
-            id: "s".into(),
-            path: path.clone(),
-            file: Arc::new(Mutex::new(Some(handle))),
+            handle: Arc::new(Mutex::new(Handle {
+                id: "s".into(),
+                path: path.clone(),
+                file: Some(handle),
+            })),
             prefix: None,
             stamp: Vec::new(),
             tap: None,
@@ -1638,7 +2078,7 @@ mod tests {
         log.append("goal", json!({ "text": "before" }));
 
         // Poison it for real.
-        let file = log.file.clone();
+        let file = log.handle.clone();
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
         let panicked = std::thread::spawn(move || {
@@ -1649,7 +2089,7 @@ mod tests {
         std::panic::set_hook(hook);
         assert!(panicked.is_err(), "the fixture thread did not panic");
         assert!(
-            log.file.lock().is_err(),
+            log.handle.lock().is_err(),
             "the lock is not poisoned, so this test would pass without testing anything"
         );
 
@@ -1847,7 +2287,7 @@ mod tests {
         let log = SessionLog::open(dir.path(), "sess-keys").unwrap();
         log.append("goal", json!({ "text": "g", "cwd": "/work" }));
 
-        let records = SessionLog::read(log.path()).unwrap();
+        let records = SessionLog::read(&log.path()).unwrap();
         let mut keys: Vec<&str> = records[0]
             .as_object()
             .unwrap()
@@ -1867,7 +2307,7 @@ mod tests {
         // greppable back apart, and still nothing else.
         let (sub, _tap) = log.subagent("sub-1", "turn-1", "Explore");
         sub.append("goal", json!({ "text": "g" }));
-        let records = SessionLog::read(log.path()).unwrap();
+        let records = SessionLog::read(&log.path()).unwrap();
         let mut keys: Vec<&str> = records[1]
             .as_object()
             .unwrap()
@@ -1921,7 +2361,7 @@ mod tests {
             json!({ "long": long, "forgery": forgery, "crlf": crlf, "odd": odd }),
         );
 
-        let records = SessionLog::read(log.path()).unwrap();
+        let records = SessionLog::read(&log.path()).unwrap();
         assert_eq!(
             records.len(),
             1,
@@ -2206,5 +2646,123 @@ mod tests {
         // The control: a name that is simply wrong is still refused, so the
         // stripping above is not an accident of accepting anything at all.
         assert!(locate(dir.path(), Some("sess-nope.jsonl"), here.path()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod steer_fold_tests {
+    use super::*;
+
+    /// The log holds a picture as a path, so the fold has to put the bytes
+    /// back or hand `--resume` an image block no provider can read. A file
+    /// that is there comes back as base64; one that is gone is dropped and
+    /// the result says so, because a model told a screenshot exists and shown
+    /// nothing reasons about a picture it never saw.
+    #[test]
+    fn a_logged_image_is_read_back_from_its_file_or_said_to_be_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let kept = dir.path().join("shot.png");
+        std::fs::write(&kept, b"hi").unwrap();
+        let gone = dir.path().join("gone.png");
+        let block = |path: &std::path::Path, id: &str| {
+            json!({ "kind": "tool_result", "id": id, "block": {
+                "type": "tool_result", "tool_use_id": id,
+                "content": [
+                    { "type": "text", "text": "captured" },
+                    { "type": "image", "source": { "type": "emma_file",
+                        "media_type": "image/png", "path": path.display().to_string(), "bytes": 2 } }
+                ] } })
+        };
+        let records = vec![
+            json!({"kind": "goal", "goal_id": "g1", "opening": "look"}),
+            json!({"kind": "assistant", "raw_content": [
+                {"type": "tool_use", "id": "t1", "name": "Screenshot", "input": {}},
+                {"type": "tool_use", "id": "t2", "name": "Screenshot", "input": {}}
+            ]}),
+            block(&kept, "t1"),
+            block(&gone, "t2"),
+        ];
+        let out = fold_records(&records);
+        let results: Vec<&ToolResult> = out
+            .iter()
+            .filter_map(|m| match &m.content {
+                Content::Blocks(b) => Some(b),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult(r) => Some(r),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results.len(), 2, "{out:?}");
+        let (t1, t2) = (results[0], results[1]);
+        assert_eq!(t1.images.len(), 1);
+        assert_eq!(
+            t1.images[0].data.as_deref(),
+            Some("aGk="),
+            "the bytes came back"
+        );
+        assert!(
+            t2.images.is_empty(),
+            "a missing file is not sent as an image"
+        );
+        assert!(
+            t2.content.contains("[image not replayed:"),
+            "the loss is said: {}",
+            t2.content
+        );
+    }
+
+    fn text_of(m: &Message) -> String {
+        match &m.content {
+            Content::Text(t) => t.clone(),
+            Content::Blocks(b) => panic!("these tests build text turns only: {b:?}"),
+        }
+    }
+
+    /// A `steer` record joins the user turn already at the end rather than
+    /// opening a second one: two user turns in a row is a 400.
+    #[test]
+    fn a_steer_record_folds_into_the_open_user_turn() {
+        let records = vec![
+            json!({"kind": "goal", "goal_id": "g1", "opening": "do the thing"}),
+            json!({"kind": "steer", "text": "and also this"}),
+        ];
+        let out = fold_records(&records);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].role, Role::User);
+        assert_eq!(text_of(&out[0]), "do the thing\n\nand also this");
+    }
+
+    /// `append_user_text` opens a new turn only when the last one is not the
+    /// user's. Removing the role check makes this push twice and fails.
+    #[test]
+    fn append_user_text_opens_a_turn_only_after_an_assistant() {
+        let mut out = vec![Message::assistant_text("done")];
+        append_user_text(&mut out, "more".into());
+        append_user_text(&mut out, "and more".into());
+        assert_eq!(out.len(), 2);
+        assert_eq!(text_of(&out[1]), "more\n\nand more");
+    }
+
+    /// Each prefix is the conversation as sent with that assistant turn: the
+    /// first turn sees only the opening, the second sees the first turn too.
+    #[test]
+    fn fold_prefixes_is_the_fold_stopped_before_each_assistant_record() {
+        let records = vec![
+            json!({"kind": "goal", "goal_id": "g1", "opening": "q"}),
+            json!({"kind": "assistant", "raw_content": [{"type": "text", "text": "a1"}]}),
+            json!({"kind": "kick", "text": "go on"}),
+            json!({"kind": "assistant", "raw_content": [{"type": "text", "text": "a2"}]}),
+        ];
+        let prefixes = fold_prefixes(&records);
+        assert_eq!(prefixes.iter().map(|p| p.0).collect::<Vec<_>>(), vec![1, 3]);
+        assert_eq!(prefixes[0].1.len(), 1);
+        assert!(
+            prefixes[1].1.len() > prefixes[0].1.len(),
+            "{:?}",
+            prefixes[1].1
+        );
     }
 }

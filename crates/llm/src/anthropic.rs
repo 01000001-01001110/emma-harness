@@ -387,6 +387,13 @@ impl AnthropicProvider {
         if let Some(effort) = limits.clamp_effort(req.effort) {
             body["output_config"] = json!({ "effort": effort.as_str() });
         }
+        // Absent unless asked for, the same rule as `output_config` above: the
+        // Messages API applies its own default when the field is missing, and
+        // sending a number nobody chose would retune every request here for no
+        // stated reason. `None` is the instruction to omit, never a `0.0`.
+        if let Some(temperature) = req.temperature {
+            body["temperature"] = json!(temperature);
+        }
         if mode == Mode::Stream {
             body["stream"] = json!(true);
         }
@@ -404,7 +411,13 @@ impl AnthropicProvider {
         let message = self.scrub(trim_body(&api_message(&body)));
 
         match status.as_u16() {
-            401 => LlmError::Unauthorized { message },
+            401 => LlmError::Unauthorized {
+                fix: format!(
+                    "Check {}, or run `emma api` to store a working one.",
+                    crate::auth::ENV_VAR
+                ),
+                message,
+            },
             403 => LlmError::Forbidden { message },
             400 | 404 | 413 | 422 => LlmError::BadRequest { message },
             429 => LlmError::RateLimited {
@@ -2007,6 +2020,29 @@ mod tests {
             .with_base_url(s.url.clone());
         let _ = p.send(request(), Mode::Batch, None).await;
         s.last()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_set_temperature_travels_as_the_anthropic_spelling() {
+        // The Messages API spells it at the top level of the body; a nested
+        // one would be accepted and ignored, which is the failure this pins.
+        let s = stub(vec![Reply::json(batch_body())]).await;
+        let mut req = request();
+        req.temperature = Some(0.2);
+        let _ = run(&s, req, Mode::Batch).await;
+        assert_eq!(s.last()["temperature"], 0.2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unset_temperature_is_absent_rather_than_null_or_zero() {
+        let s = stub(vec![Reply::json(batch_body())]).await;
+        let _ = run(&s, request(), Mode::Batch).await;
+        let sent = s.last();
+        // Two claims, because a `null` and a `0.0` are both wrong in ways a
+        // bare "not 0.7" assertion would let through, and a sent `0.0` is a
+        // different model from the one the host applies by itself.
+        assert!(sent.get("temperature").is_none(), "{sent}");
+        assert_ne!(sent["temperature"], 0.0, "{sent}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

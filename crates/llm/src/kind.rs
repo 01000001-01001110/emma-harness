@@ -95,7 +95,13 @@ impl ProviderKind for Anthropic {
 /// Every provider this build can actually run. One entry, and the list is the
 /// point: it is what an unknown name is measured against and what the error
 /// message quotes, so a second provider becomes reachable by appending to it.
-static KINDS: &[&'static dyn ProviderKind] = &[&Anthropic, &crate::ollama::Ollama];
+static KINDS: &[&'static dyn ProviderKind] = &[
+    &Anthropic,
+    &crate::ollama::Ollama,
+    &crate::openai_compat::OPENROUTER_KIND,
+    &crate::openai_compat::OPENAI_KIND,
+    &crate::claude_cli::ClaudeCli,
+];
 
 #[derive(Debug, thiserror::Error)]
 #[error("unknown provider `{name}`. This build supports: {}", known().join(", "))]
@@ -145,7 +151,11 @@ mod tests {
         assert!(err.contains("antropic"), "{err}");
         assert!(err.contains("anthropic"), "{err}");
         assert!(
-            kind("openai").is_err(),
+            kind("openai").is_ok(),
+            "the OpenAI-compatible provider is registered and did not resolve"
+        );
+        assert!(
+            kind("bedrock").is_err(),
             "a provider nobody implemented resolved"
         );
     }
@@ -171,5 +181,16 @@ mod tests {
         // than an empty string reaching the wire.
         let p = k.build(ApiKey::new("sk-ant-x"), None);
         assert_eq!(p.model_id(), k.default_model());
+    }
+
+    /// **If this breaks:** the startup line tells a claude-engine user the model
+    /// cannot look anything up, while the child CLI has `WebSearch` and will use
+    /// it. `web_search()` is about *provider-side* search on Emma's key, and for
+    /// this kind there is no such thing, which is not the same claim as "no
+    /// search". See the claude branch in `main.rs`.
+    #[test]
+    fn the_claude_kind_sells_no_provider_side_search_and_that_is_not_a_capability_claim() {
+        assert!(!kind("claude").unwrap().web_search());
+        assert!(!kind("claude").unwrap().requires_key());
     }
 }

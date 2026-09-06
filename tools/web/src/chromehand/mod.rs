@@ -30,7 +30,7 @@ use std::path::PathBuf;
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use futures::StreamExt;
 
-pub use digest::{DEFAULT_MAX_TEXT_CHARS, DEFAULT_TIMEOUT_MS};
+pub use digest::{TextWindow, DEFAULT_MAX_TEXT_CHARS, DEFAULT_TIMEOUT_MS};
 pub use policy::Policy;
 
 // region: Failure as a value
@@ -121,6 +121,10 @@ pub fn classify(err: String) -> MinerError {
 pub struct DigestOptions {
     pub timeout_ms: u64,
     pub max_text_chars: usize,
+    /// Characters of page text to skip before the returned window starts.
+    /// Zero is the head. See [`TextWindow`] for why this is a character index
+    /// and what continuing actually costs.
+    pub text_offset: usize,
     pub user_agent: Option<String>,
     /// Path to a `{"domains": [...]}` allowlist, or `None` to leave reading
     /// unrestricted. **Never resolved relative to a project directory by this
@@ -136,6 +140,7 @@ impl Default for DigestOptions {
         Self {
             timeout_ms: DEFAULT_TIMEOUT_MS,
             max_text_chars: DEFAULT_MAX_TEXT_CHARS,
+            text_offset: 0,
             user_agent: None,
             allowlist: None,
             allow_local: false,
@@ -182,7 +187,10 @@ pub async fn digest_url(url: &str, opts: &DigestOptions) -> Result<serde_json::V
         url,
         probe,
         true,
-        opts.max_text_chars,
+        digest::TextWindow {
+            offset: opts.text_offset,
+            max_chars: opts.max_text_chars,
+        },
     ))
 }
 
@@ -203,7 +211,7 @@ pub async fn verify_url(url: &str, opts: &DigestOptions) -> Result<serde_json::V
         url,
         probe,
         false,
-        opts.max_text_chars,
+        digest::TextWindow::head(opts.max_text_chars),
     ))
 }
 

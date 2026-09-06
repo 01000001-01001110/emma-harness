@@ -71,6 +71,34 @@
     is one I stop reading.
   </p>
 
+  <h3>&ldquo;No tools were needed&rdquo; is a claim about need, read off an absence</h3>
+
+  <p>
+    A model that writes its tool call as prose instead of as a structured call
+    gets this ending: <em>answered &mdash; no tools were needed, so there was no
+    goal to hold</em>. The turn contained nothing but a tool call, written as
+    JSON in the answer text, so the one thing that is certainly false is that no
+    tool was needed.
+    <span class="chip cert">certified</span> on Windows against a real local
+    Ollama, 2026-09-06: <code>qwen2.5-coder:32b</code> answered a
+    read-this-file goal with <code>{"name": "Read", "arguments": {"file_path":
+    "main.rs"}}</code> as text, Emma executed nothing and reported the ending
+    above. The same goal against <code>gpt-oss:20b</code> on the same box read
+    the file and finished, so this is the model's format and not the client's
+    decoding.
+  </p>
+
+  <p>
+    <strong>Not a decoder bug, and the fix is not to parse prose.</strong>
+    Reading a tool call out of an answer is how a client starts executing text
+    the model never committed to as a call, which is a larger hazard than the
+    misleading sentence. What is wrong is the sentence: the loop knows only that
+    no structured call arrived, and it reports that as a fact about what the
+    goal required. Settled by making the ending say what was observed, and by
+    saying out loud when an answer looks like an undecoded call, so somebody on
+    a model that cannot emit them is told which half is missing.
+  </p>
+
   <h3>Emma says things that are not true</h3>
 
   <p>

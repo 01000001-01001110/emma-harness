@@ -162,6 +162,15 @@ pub fn header(server: &Server, readiness: Readiness, health: Option<&str>) -> St
         out.push('\n');
         out.push_str(caveat);
     }
+    // The language's own known hole, from the table. Rust's is proc macros;
+    // terraform's is an uninitialised directory; ansible's is a missing
+    // `ansible-lint`. Each of them is a way for a short answer to be wrong in
+    // the confident direction, which is the only direction this crate is
+    // dangerous in.
+    if !server.language.caveat.is_empty() {
+        out.push('\n');
+        out.push_str(server.language.caveat);
+    }
     out
 }
 
@@ -448,6 +457,112 @@ fn symbol_kind(kind: u64) -> &'static str {
     }
 }
 
+// region: Diagnostics
+// ---------------------------------------------------------------------------
+// Diagnostics
+//
+// Three outcomes and three sentences. The third one is why the tool exists in a
+// crate that refused to ship it before.
+// ---------------------------------------------------------------------------
+
+/// How many diagnostics to print before saying how many were left out.
+///
+/// A generated file or a broken `terraform init` produces hundreds, and a tool
+/// result that is four thousand lines of the same warning has spent the
+/// context window to say one thing.
+pub const MAX_DIAGNOSTICS: usize = 100;
+
+fn severity(value: &Value) -> &'static str {
+    match value.as_u64() {
+        Some(1) => "error",
+        Some(2) => "warning",
+        Some(3) => "info",
+        Some(4) => "hint",
+        // Absent is legal and means the server did not say. Reported as such
+        // rather than defaulted to "error", which would invent a severity.
+        _ => "unspecified",
+    }
+}
+
+/// One publication, rendered.
+///
+/// `items` is `None` when the server published nothing inside the wait, and
+/// that is the case this whole function is arranged around: it gets a sentence
+/// that cannot be read as "the file is clean", and it says how long the wait
+/// was and which variable changes it.
+pub fn diagnostics(
+    root: &Path,
+    file: &Path,
+    server: &Server,
+    readiness: Readiness,
+    health: Option<&str>,
+    waited: std::time::Duration,
+    items: Option<Vec<Value>>,
+) -> ToolOutcome {
+    let head = header(server, readiness, health);
+    let shown = path::display(root, file);
+
+    let Some(items) = items else {
+        return ToolOutcome::new(format!(
+            "{head}\nThe language server published no diagnostics for {shown} within \
+             {:.1}s. That is not a clean result: it means the server did not answer, not \
+             that the file has no problems. Wait and ask again, or raise the wait with \
+             {}.",
+            waited.as_secs_f64(),
+            crate::client::DIAGNOSTICS_WAIT_ENV
+        ));
+    };
+
+    if items.is_empty() {
+        return ToolOutcome::new(format!(
+            "{head}\nThe language server reported no problems in {shown}. This one is an \
+             answer: it published an empty diagnostic set for this file."
+        ));
+    }
+
+    let total = items.len();
+    let mut out = format!("{head}\n{total} diagnostic(s) in {shown}:");
+    for item in items.iter().take(MAX_DIAGNOSTICS) {
+        // 0-based on the wire, 1-based everywhere a human or a model reads it,
+        // which is the same conversion `doc` does in the other direction.
+        let line = item["range"]["start"]["line"].as_u64().unwrap_or(0) + 1;
+        let column = item["range"]["start"]["character"].as_u64().unwrap_or(0) + 1;
+        let source = item["source"].as_str().unwrap_or("");
+        let code = match &item["code"] {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            _ => String::new(),
+        };
+        let tag = match (source.is_empty(), code.is_empty()) {
+            (true, true) => String::new(),
+            (false, true) => format!(" [{source}]"),
+            (true, false) => format!(" [{code}]"),
+            (false, false) => format!(" [{source}:{code}]"),
+        };
+        let message = item["message"].as_str().unwrap_or("").trim();
+        out.push_str(&format!(
+            "\n  {line}:{column} {}{tag}: {}",
+            severity(&item["severity"]),
+            clip(message)
+        ));
+    }
+    // A cut that names the cap, the loss and the remedy, in the same shape the
+    // two renderers above use. `truncated_because` and not the bare
+    // `truncated()`: `tool-api` calls that the weaker form, and a flag with no
+    // reason makes `agent.rs` apologise on the tool's behalf for a limit the
+    // tool knew all along.
+    if total > MAX_DIAGNOSTICS {
+        return ToolOutcome::new(out).truncated_because(format!(
+            "{MAX_DIAGNOSTICS} of {total} diagnostics shown; the rest are not here. No \
+             argument raises that — fix these and ask again, since a server usually \
+             reports far fewer once the first errors are gone"
+        ));
+    }
+    ToolOutcome::new(out)
+}
+
+// endregion: Diagnostics
+
 // endregion: Rendering
 
 // region: Tests
@@ -466,10 +581,19 @@ mod tests {
     use std::path::PathBuf;
 
     fn server() -> Server {
+        server_for("rust")
+    }
+
+    /// The fixture wearing one language's identity, because the table now
+    /// decides the banner's label and the caveat every result carries.
+    fn server_for(key: &str) -> Server {
         Server {
-            path: PathBuf::from("/usr/bin/rust-analyzer"),
-            version: "rust-analyzer 0.3.0".into(),
+            program: PathBuf::from("/usr/bin/a-language-server"),
+            args: Vec::new(),
+            entry: PathBuf::from("/usr/bin/a-language-server"),
+            version: "0.3.0".into(),
             source: crate::server::Source::Path,
+            language: crate::lang::by_key(key).expect("a language in the table"),
         }
     }
 
@@ -731,9 +855,12 @@ mod truncation_honesty {
         // public, because a fixture escaping its test module is a wider change
         // than this test is worth.
         let server = Server {
-            path: std::path::PathBuf::from("/usr/bin/rust-analyzer"),
-            version: "rust-analyzer 0.3.0".into(),
+            program: std::path::PathBuf::from("/usr/bin/a-language-server"),
+            args: Vec::new(),
+            entry: std::path::PathBuf::from("/usr/bin/a-language-server"),
+            version: "0.3.0".into(),
             source: crate::server::Source::Path,
+            language: crate::lang::by_key("rust").expect("rust is in the table"),
         };
         let readiness = Readiness::Ready;
 

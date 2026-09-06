@@ -28,11 +28,20 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # One gate for the whole release, run once rather than per-platform. The suite
-  # is platform-independent; running it three times would triple the wall clock
-  # to re-learn the same answer.
+  # One gate for the whole release, on both platforms the owner runs.
+  #
+  # **The comment here said the suite is platform-independent, and that was
+  # false.** Whole features exist only on unix, and a macOS run of the fork port
+  # found two failures a green Windows run had not. Saying it out loud rather
+  # than deleting it: a claim that a suite is platform-independent is a claim
+  # nobody had measured, and it is the kind that survives for months because
+  # every run agrees with it.
   test:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -40,10 +49,14 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
 
+      # Once: formatting and lints are a property of the source, not of the
+      # platform reading it.
       - name: fmt
+        if: matrix.os == 'windows-latest'
         run: cargo fmt --all -- --check
 
       - name: clippy
+        if: matrix.os == 'windows-latest'
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       # --no-fail-fast because cargo stops at the first failing target, and a

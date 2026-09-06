@@ -66,7 +66,7 @@
   <figure>
     <div class="figwrap">
       <!-- diagram:architecture -->
-      <svg viewBox="0 0 526 376" role="img" aria-label="8 workspace crates in dependency layers. An arrow points from a crate to something it depends on; nothing points upward. Dashed edges are dev-dependencies, which exist only when the tests are built.">
+      <svg viewBox="0 0 698 376" role="img" aria-label="9 workspace crates in dependency layers. An arrow points from a crate to something it depends on; nothing points upward. Dashed edges are dev-dependencies, which exist only when the tests are built.">
         <style>
           :root {
             --arch-ground: #12101a;
@@ -108,33 +108,35 @@
             <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--arch-dim)"/>
           </marker>
         </defs>
-        <rect class="arch-ground" x="0" y="0" width="526" height="376"/>
+        <rect class="arch-ground" x="0" y="0" width="698" height="376"/>
 
-        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 91 258 L 177 322"/>
-        <path class="arch-edge-dim" marker-end="url(#arch-tip-dim)" d="M 274 341 L 252 341"/>
-        <text class="arch-note" x="263" y="337" text-anchor="middle">dev</text>
-        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 54 L 91 220"/>
-        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 54 L 349 322"/>
-        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 54 L 177 322"/>
-        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 54 L 263 220"/>
-        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 54 L 349 118"/>
-        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 54 L 177 118"/>
-        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 54 L 435 220"/>
-        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 258 L 177 322"/>
-        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 177 156 L 177 322"/>
-        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 177 156 L 263 220"/>
-        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 435 258 L 177 322"/>
-        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 435 258 L 349 322"/>
-        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 349 156 L 177 322"/>
-        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 349 156 L 263 220"/>
-        <rect class="arch-box-hl" x="188" y="16" width="150" height="38" rx="3"/>
-        <text class="arch-lbl" x="263" y="40" text-anchor="middle">crates/emma</text>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 91 258 L 263 322"/>
+        <path class="arch-edge-dim" marker-end="url(#arch-tip-dim)" d="M 360 341 L 338 341"/>
+        <text class="arch-note" x="349" y="337" text-anchor="middle">dev</text>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 349 54 L 91 220"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 349 54 L 435 322"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 349 54 L 263 322"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 349 54 L 263 220"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 349 54 L 435 118"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 349 54 L 607 220"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 349 54 L 263 118"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 349 54 L 435 220"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 258 L 263 322"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 156 L 263 322"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 263 156 L 263 220"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 435 258 L 263 322"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 435 258 L 435 322"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 435 156 L 263 322"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 435 156 L 263 220"/>
+        <path class="arch-edge" marker-end="url(#arch-tip)" d="M 607 258 L 263 322"/>
+        <rect class="arch-box-hl" x="274" y="16" width="150" height="38" rx="3"/>
+        <text class="arch-lbl" x="349" y="40" text-anchor="middle">crates/emma</text>
 
-        <rect class="arch-box" x="102" y="118" width="150" height="38" rx="3"/>
-        <text class="arch-lbl" x="177" y="142" text-anchor="middle">tools/lsp</text>
+        <rect class="arch-box" x="188" y="118" width="150" height="38" rx="3"/>
+        <text class="arch-lbl" x="263" y="142" text-anchor="middle">tools/lsp</text>
 
-        <rect class="arch-box" x="274" y="118" width="150" height="38" rx="3"/>
-        <text class="arch-lbl" x="349" y="142" text-anchor="middle">tools/tasks</text>
+        <rect class="arch-box" x="360" y="118" width="150" height="38" rx="3"/>
+        <text class="arch-lbl" x="435" y="142" text-anchor="middle">tools/tasks</text>
 
         <rect class="arch-box" x="16" y="220" width="150" height="38" rx="3"/>
         <text class="arch-lbl" x="91" y="244" text-anchor="middle">crates/harness</text>
@@ -145,11 +147,14 @@
         <rect class="arch-box" x="360" y="220" width="150" height="38" rx="3"/>
         <text class="arch-lbl" x="435" y="244" text-anchor="middle">tools/web</text>
 
-        <rect class="arch-box" x="102" y="322" width="150" height="38" rx="3"/>
-        <text class="arch-lbl" x="177" y="346" text-anchor="middle">crates/tool-api</text>
+        <rect class="arch-box" x="532" y="220" width="150" height="38" rx="3"/>
+        <text class="arch-lbl" x="607" y="244" text-anchor="middle">tools/screenshot</text>
 
-        <rect class="arch-box" x="274" y="322" width="150" height="38" rx="3"/>
-        <text class="arch-lbl" x="349" y="346" text-anchor="middle">crates/llm</text>
+        <rect class="arch-box" x="188" y="322" width="150" height="38" rx="3"/>
+        <text class="arch-lbl" x="263" y="346" text-anchor="middle">crates/tool-api</text>
+
+        <rect class="arch-box" x="360" y="322" width="150" height="38" rx="3"/>
+        <text class="arch-lbl" x="435" y="346" text-anchor="middle">crates/llm</text>
 
       </svg>
       <!-- /diagram -->

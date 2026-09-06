@@ -125,12 +125,115 @@
             against the estimate.</td>
       </tr>
       <tr>
+        <td><strong>The Ollama window estimator against a real tokeniser.</strong>
+            <code>estimate_prompt_tokens</code> counts at four characters per
+            token and a quarter is added as headroom. On the one certified run
+            it over-estimated, which is the safe direction, but that was one
+            prompt of repeated ASCII filler and English prose, CJK or dense JSON
+            would each land differently. See
+            <a href="providers-boundary.html#numctx">the boundary page</a>.</td>
+        <td>Run a corpus of real session prompts through
+            <code>estimate_prompt_tokens</code> and compare each against the
+            server's <code>prompt_eval_count</code>; the ratio must never exceed
+            1.25 in the unsafe direction.</td>
+      </tr>
+      <tr>
+        <td><strong>Anything at all about OpenAI.</strong> Nothing in
+            <code>openai_compat.rs</code> has reached
+            <code>api.openai.com</code>. Both values that distinguish the OpenAI
+            wire from OpenRouter's &mdash;
+            <code>max_completion_tokens</code> and a refused
+            <code>temperature</code> &mdash; are the fork's claims restated, and
+            a loopback stub can only prove Emma sends what the constant says.</td>
+        <td>One call with an OpenAI key to a cheap model sending
+            <code>max_tokens</code>, expecting a 400 that names
+            <code>max_completion_tokens</code>, then
+            <code>temperature: 0.9</code> on a reasoning model. Ten minutes with
+            a key.</td>
+      </tr>
+      <tr>
+        <td><strong>Six of the seven language servers.</strong> Bash, terraform,
+            ansible and python are installed on neither machine; bicep resolves
+            here and has never been started; the PowerShell command line has
+            never been executed because there is no <code>pwsh</code>. Their
+            <code>caveat</code> and <code>install</code> strings are the fork's
+            claims with the platform wording rewritten. See
+            <a href="tools-lsp.html#languages">Code intelligence</a>.</td>
+        <td>Install the server named in that page's table and run
+            <code>Diagnostics</code> on a file of that kind with a deliberate
+            error in it. One language at a time.</td>
+      </tr>
+      <tr>
+        <td><strong>Whether the two model measurements behind
+            <code>Edit</code>'s label tolerance are reproducible.</strong>
+            &ldquo;nemotron-3.5-lightning:30b-mlx sent eight labelled anchors in
+            one run&rdquo; and &ldquo;ornith:35b lost a run emitting
+            <code>1088#f011</code> as replacement text&rdquo; are the fork's
+            comments, dated 2026-08-24, and neither was reproduced here. The same
+            goes for the 14 firings that justified accepting both addressing
+            forms at once.</td>
+        <td>A keyless local run against Ollama with a model of that class,
+            driving <code>Read</code> then <code>Edit</code>; and the owner's
+            session store, if those runs survive.</td>
+      </tr>
+      <tr>
         <td><strong>Whether the two SVG figures on each page render correctly.</strong>
             Every diagram in this site was validated by parsing the XML and
             checking coordinates against the <code>viewBox</code>. None was
             looked at.</td>
         <td>Open the pages in a browser. A stranded label or an overlapping box
             is invisible to arithmetic.</td>
+      </tr>
+      <tr>
+        <td><strong>That a temperature ever reaches Anthropic or an
+            OpenAI-compatible host.</strong> Both renderers are proven against a
+            loopback stub, and a stub agrees with whoever wrote it. Ollama is the
+            one host this box can reach, and there the two request bodies are
+            certified off a recording proxy. See
+            <a href="providers-boundary.html#temperature">the boundary</a>.</td>
+        <td>One Messages API call with <code>temperature: 0.2</code> and one
+            without, comparing the bodies off the socket; and one OpenAI call
+            with a temperature to a reasoning model, expecting the 400 that
+            <code>temperature_field: None</code> exists to avoid.</td>
+      </tr>
+      <tr>
+        <td><strong>That a <code>sampling</code> block reaches a goal record.</strong>
+            The resolver and the wire are each proven and the join is not: nobody
+            has set <code>sampling.ollama.temperature</code> and then read the
+            record back off disk.</td>
+        <td>Set it, run one goal, and read
+            <code>"temperature_source": "manual"</code> out of the session
+            file.</td>
+      </tr>
+      <tr>
+        <td><strong>That plan mode has ever stopped a real write.</strong> Six
+            mutations pin the rung's position and its refusal; nothing runs a
+            scripted goal in plan mode and reads the record back.</td>
+        <td>A test in <code>crates/emma/tests/loop.rs</code> asserting the goal
+            completes rather than aborts and the session log carries a
+            <code>denied</code> record with <code>"by": "mode"</code>.</td>
+      </tr>
+      <tr>
+        <td><strong>How many training records survive
+            <code>--min-ending finished</code>.</strong> The 250-record sweep ran
+            with the default filter.</td>
+        <td><code>emma export-training --min-ending finished</code>, and count.</td>
+      </tr>
+      <tr>
+        <td><strong>The whole-crate test count for
+            <code>emma-tools-tasks</code>.</strong> The certified 51 predates the
+            five tests behind the task move and sweep.</td>
+        <td><code>cargo test -p emma-tools-tasks</code>.</td>
+      </tr>
+      <tr>
+        <td><strong>What <code>voice</code>, <code>lsp</code>,
+            <code>memory_policy</code> and <code>ui</code> hold.</strong> Four
+            settings blocks from the same port, described nowhere on this site
+            beyond one table row. The same is true of the <code>web_search</code>
+            record kind and the three kinds only <code>engine/claude.rs</code>
+            writes.</td>
+        <td>Read the four types in <code>settings.rs</code> and the four call
+            sites, and write the rows.</td>
       </tr>
     </tbody>
   </table>
@@ -162,13 +265,17 @@
             daemon's post-abandonment <code>SIGPIPE</code> result.</td>
       </tr>
       <tr>
-        <td><strong>Chrome is never reaped on unix.</strong> The child is
-            dropped without waiting, so every killed browser should leave a
-            zombie. Found by reading; never observed. Note that
-            <code>kill -0</code> succeeds against a zombie, so the obvious check
-            reports the opposite of the truth.</td>
-        <td>Open and close a session on Linux or macOS, then check
-            <code>ps -o state=</code> for the pid.</td>
+        <td><strong>Whether Chrome is reaped on unix now.</strong> It was not,
+            and every killed browser left a zombie;
+            <code>reap_when_it_exits</code> fixed that on 2026-09-06 by moving
+            the handle onto a thread that waits. The fix is
+            <code>#[cfg(unix)]</code> and this is a Windows box, so the arm is
+            not even compiled here. Note that <code>kill -0</code> succeeds
+            against a zombie, so the obvious check reports the opposite of the
+            truth.</td>
+        <td>On Linux or macOS, kill a session's Chrome and check
+            <code>ps -o stat= -p &lt;pid&gt;</code>; and run
+            <code>reaping_collects_a_child_exit_status</code> there.</td>
       </tr>
       <tr>
         <td><strong>Whether <code>/copy</code> reaches the clipboard.</strong>
@@ -220,11 +327,68 @@
             warning fires and whether the directories it names are on disk.</td>
       </tr>
       <tr>
+        <td><strong>Every unix path in <code>runctl</code>.</strong>
+            <code>libc::kill</code>, <code>setsid</code>,
+            <code>/proc/&lt;pid&gt;/comm</code> and the <code>ps -o comm=</code>
+            fallback are the fork's code, unchanged, and this box has no unix to
+            run them on. On Windows all three signals refuse outright, so the
+            only platform where pause, resume and cancel do anything is the one
+            that has never run them. See
+            <a href="terminal-runctl.html">Acting on a run</a>.</td>
+        <td>The macOS leg of the port's certification order.</td>
+      </tr>
+      <tr>
+        <td><strong>The symlink containment guarantee under
+            <code>include_ignored</code>.</strong>
+            <code>a_symlink_out_of_the_tree_is_never_followed</code> is
+            <code>#[cfg(unix)]</code> and did not run here, and
+            <code>include_ignored</code> is a new argument that widens what the
+            walk reaches.</td>
+        <td>Run the suite on macOS, or enable Developer Mode here and add a
+            <code>#[cfg(windows)]</code> twin.</td>
+      </tr>
+      <tr>
+        <td><strong>That archiving a live run on Windows really would split a
+            transcript.</strong> The guard is tested against a fake process
+            table; what it defends against is read out of the standard library's
+            documented open flags rather than watched.</td>
+        <td>Two processes and a <code>std::fs::rename</code> under a live
+            appender. Twenty lines, on this box.</td>
+      </tr>
+      <tr>
         <td><strong>Whether a daemonized hook outlives Emma's own process.</strong>
             The environment it was tested in confounds the result: a plain
             unrelated parent behaved the same way, so nothing there is
             attributable to Emma's code.</td>
         <td>A run from a normal desktop session rather than a sandboxed one.</td>
+      </tr>
+      <tr>
+        <td><strong>Everything the font script does once it reaches
+            Terminal.app.</strong> <code>command</code> is certified as
+            <em>produced</em> and nothing has ever run it. The module's central
+            claim is that a font name Terminal does not have is accepted and
+            ignored, which is why the receipt may only say "asked".</td>
+        <td>On the Mac, in Terminal.app: ask for <code>Monaco</code>, then ask
+            for a name that does not exist and read the exit status. Non-zero
+            means the claim is wrong and <code>apply</code> should report the
+            error instead.</td>
+      </tr>
+      <tr>
+        <td><strong>That Windows Terminal really offers no in-band font
+            control.</strong> What is certified is what Emma does here, not what
+            the terminal would do if sent an <code>OSC 50</code>. Nothing was
+            written at the console, because this session's output is captured and
+            a negative result would be indistinguishable from the capture.</td>
+        <td>In a real Windows Terminal window, emit
+            <code>OSC 50</code> with a family and a size and watch whether the
+            cell size changes.</td>
+      </tr>
+      <tr>
+        <td><strong>A resume across a real directory change, on a console.</strong>
+            <code>Agent::resume_in_place</code> is driven directly against
+            temporary directories by every test it has.</td>
+        <td>Start a session in one tree, <code>/resume</code> a session recorded
+            in another, and read the four receipt lines on screen.</td>
       </tr>
     </tbody>
   </table>
@@ -251,6 +415,62 @@
           <td>Press Ctrl-C in a real session and confirm the terminal is intact.</td></tr>
       <tr><td>Whether a <code>#[cfg(unix)]</code> arm added for the platform sweep even compiles.</td>
           <td>Build on the Mac. It could not be compiled on this machine.</td></tr>
+      <tr><td>The Help page and the Code page, drawn on a console. Both landed 2026-09-06 and what exists for each is a <code>Buffer</code>.</td>
+          <td>Open a framed session, press <code>Ctrl+/</code> and <code>Alt+c</code>, at a few widths and at 40 columns.</td></tr>
+      <tr><td>Whether <code>Ctrl+/</code> arrives as <code>Ctrl+/</code>. Some terminals send <code>0x1F</code>, <code>Ctrl+_</code> or <code>Ctrl+7</code>; the folding is copied from the fork and believed rather than measured.</td>
+          <td>A keystroke dump on macOS Terminal.app, iTerm2 and Windows Terminal.</td></tr>
+      <tr><td>Whether a rebound chord in <code>~/.emma/keybindings.json</code> actually takes. The parse, the load and the printed label are tested; no key has been pressed.</td>
+          <td>Write the file, start Emma, press the new chord.</td></tr>
+      <tr><td>Whether a two-row scrollbar thumb is grabbable with a mouse, and whether an anchored drag after a wheel scroll really leaves the view still.</td>
+          <td>On a long session, grab the thumb without moving the pointer and watch.</td></tr>
+      <tr><td>The sidebar calendar on a real console, with the machine's real local offset, and whether it survives a short pane once QUICK HELP has taken its rows.</td>
+          <td>Run it and look at a few pane heights.</td></tr>
+      <tr><td>Whether a click on a sidebar row does anything <em>on a real console</em>. The rectangles are consulted since 2026-09-06 and the routing is tested against a painted buffer, but no mouse has been used on either box.</td>
+          <td>Click a session row and a TOOLS row on each box.</td></tr>
+      <tr><td>The accent override end to end. There is no way to pick one from inside Emma; <code>appearance.accent</code> has to be written into <code>settings.json</code> by hand.</td>
+          <td>The Settings row and its write-back, then choose a role and a cube swatch and watch the goal line re-hue.</td></tr>
+      <tr><td>Every control on the Harness page. The nine action-bar keys are inert: <a href="terminal-runctl.html"><code>runctl</code></a> exists and no key reaches it.</td>
+          <td>The Harness package's wiring.</td></tr>
+      <tr><td>Whether a run spawned from Emma outlives Emma on Windows. Removing the detached creation flags leaves the test green, because a child that inherits the console writes its marker too.</td>
+          <td>Start a long run, close Emma's window rather than pressing Ctrl-C, and watch the child's session file keep growing.</td></tr>
+      <tr><td>A mouse drag in the chat pane on a real console. The in-pane selection, its edge auto-scroll and its far step are all tested against a cell buffer, which is the class of defect that has shipped from <code>term/</code> twice.</td>
+          <td>Drag past the bottom of the pane on Windows Terminal and on Terminal.app, release, and paste.</td></tr>
+      <tr><td>The MODE cell since it started naming the posture. <code>ASK</code> (3 columns) became <code>ASSIST</code> (6) and <code>UNATTENDED</code> (10) became <code>AUTO</code> (4); the longest label got shorter, so an overrun is unlikely rather than ruled out.</td>
+          <td>An 80-column and a 60-column terminal with a goal running.</td></tr>
+      <tr><td>The reader thread's steering seam on a console: the box emptying, the queued row appearing, and the answer changing. <code>submit_line</code> runs on the thread where every scrollback defect this crate has shipped was.</td>
+          <td>Type during a real goal on both terminals.</td></tr>
+      <tr><td>The Code page's pane-gap constant and the test named for it on the layout page, which do not exist in the tree. The three layout facts the page states are visible in the drawn output; nothing asserts them.</td>
+          <td>Find what the carve does with the gap, name it, and pin it at the mockup's own grid including the collapsed case.</td></tr>
+      <tr><td>Whether asking a language server about an unsaved buffer is what a reader expects. The page and the model's tools share one server, so a tool call about an open file answers about the text on screen rather than the text on disk.</td>
+          <td>Use it for an hour with a file open and edited, and see whether an answer about unsaved text ever surprises.</td></tr>
+      <tr><td>Everything the frame draws, on both platforms. The port was certified end to end in <code>-p</code> mode, which never opens the alternate screen: a goal, a real tool call and a real answer on Windows and macOS, against local Ollama and a free hosted model. Nothing interactive was driven.</td>
+          <td>An interactive session on each box, with the pages opened and the keys pressed.</td></tr>
+      <tr><td>Whether a task has ever been moved or a completed one swept through a running Emma. <code>Doc::move_task</code> and <code>Doc::remove_completed</code> have no caller.</td>
+          <td>The Harness page package, and one press.</td></tr>
+      <tr><td>Whether asking a terminal to change its own font does anything. The Settings screen's Font Family and Font Size rows write their keys since 2026-09-06, and the notice beside them names the terminal actually in front of you, but no font has been changed by a press on any terminal here.</td>
+          <td>Press the rows on Terminal.app, and on Windows Terminal, and look at the window.</td></tr>
+      <tr><td>The claude engine's stream shape. The fixture its decoder is tested against is synthetic, written from the documented event shapes, so a shape transcribed wrongly is one every test agrees with. This is the strict-decoder failure in a new place.</td>
+          <td>One real run with the streaming output format, diffing event keys against the fixture.</td></tr>
+      <tr><td>The claude engine on macOS. Nothing in it has run there; the unix liveness check reads a zombie as alive, mitigated by racing the stop against the child's own wait, and that race is untested.</td>
+          <td>The filtered engine suite on the Mac.</td></tr>
+      <tr><td>The <code>.cmd</code> resolver against a real npm shim, which re-execs a runtime and may not carry the exit code and output through the extra hop. It has met only a shim the port wrote.</td>
+          <td>A global npm install on a Windows box with no native binary, then the same certification.</td></tr>
+      <tr><td>The macOS screenshot backend. Not one line has run; its argument lists are asserted against a scripted runner that agrees with the fork's spelling.</td>
+          <td><code>cargo test -p emma-tools-screenshot</code> and one real capture on the Mac.</td></tr>
+      <tr><td>Any image on a live provider, on any of the four wires. Whether Anthropic takes a tool result whose content is text then image, whether OpenRouter passes the data URL to every upstream, and whether an Ollama vision model reads the array off a following user message.</td>
+          <td>One call each.</td></tr>
+      <tr><td>A screen captured with no windows showing, or from a locked session. Both return a rectangle of the right size and report success, and no return value distinguishes either from a plain screen.</td>
+          <td>Nothing detects it. Opening the file is the only check, which is why the test carries a size floor.</td></tr>
+      <tr><td>Every unix path through the Harness page's controls. The platform predicate is a compile-time flag and the tests branch on the same predicate they test, which is honest but is not coverage.</td>
+          <td>The filtered harness suite on the Mac.</td></tr>
+      <tr><td>A click reaching archive through a real mouse event on a real console. The chip's rectangle and the key it produces are tested at the page level; the round trip is not.</td>
+          <td>A press on the built binary.</td></tr>
+      <tr><td>Anything the Code page's editor draws on a real console. The cursor cell, the selection band and the shift across wide glyphs are the three most likely to look wrong; every assertion here is against a cell buffer.</td>
+          <td>Open a file with a wide-glyph line, put the cursor past it, drag across it, and look.</td></tr>
+      <tr><td>That a copied selection reaches a clipboard. The write has no acknowledgement on either path this uses.</td>
+          <td>Copy from the page in the built binary and paste elsewhere. It cannot be a test.</td></tr>
+      <tr><td>The Code page's per-glyph column budget. Deleting the check leaves the suite green, because the gutter and the text width happen to sum to the pane width and the renderer truncates on its own.</td>
+          <td>A diagnostic mark in the gutter and a wide glyph at the right edge, which the LSP half brings.</td></tr>
     </tbody>
   </table>
   </div>

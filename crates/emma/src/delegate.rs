@@ -64,6 +64,7 @@ use tokio::sync::Semaphore;
 use crate::agent::{Agent, Budgets, Ending, Interrupt, Outcome, Running, Setup, Spend};
 use crate::approval::Approvals;
 use crate::goal::{Done, DoneCheck, Goal, MarkerClaim};
+use crate::runfacts;
 use crate::session::SessionLog;
 use crate::term::Term;
 
@@ -179,6 +180,9 @@ pub struct Nest {
     /// Whether the parent's requests ask the provider to search. A subagent
     /// inherits it unchanged; see the `Setup` it builds.
     pub web_search: bool,
+    /// The parent's resolved sampling, inherited by every nested run: a
+    /// subagent on the same provider samples the way its parent does.
+    pub sampling: crate::settings::ResolvedSampling,
     /// The *parent's* budgets, which is what a sub-budget is derived from.
     pub budgets: Budgets,
     /// The provider in force right now, for an agent type that named no model
@@ -627,12 +631,26 @@ impl Tool for Delegate {
         };
         let brief = brief(&args);
 
-        // Held for the whole nested run. See the module doc: this is what makes
-        // a second delegation wait rather than race the first for the keyboard.
-        let _permit = self.permit.acquire().await;
-
+        // The id is minted before the permit is taken, so the numbering is
+        // request order, which is the order a queue display draws.
         let n = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
         let sub_id = format!("sub-{}-{n}", ctx.turn_id);
+
+        // Held for the whole nested run. See the module doc: this is what makes
+        // a second delegation wait rather than race the first for the keyboard.
+        // The two timestamps around it are the only honest record of the queue:
+        // see `runfacts`, where depth is the reader's arithmetic over these
+        // intervals rather than a counter that could disagree with them.
+        let requested_at_ms = runfacts::stamp();
+        let _permit = self.permit.acquire().await;
+        runfacts::QueueWait {
+            node_id: &sub_id,
+            agent,
+            requested_at_ms,
+            acquired_at_ms: runfacts::stamp(),
+        }
+        .write(&self.nest.log);
+
         let (log, records) = self.nest.log.subagent(&sub_id, &ctx.turn_id, agent);
         let term = self.nest.term.subordinate();
         self.nest.term.note(&format!(
@@ -648,6 +666,23 @@ impl Tool for Delegate {
                 .and_then(Value::as_str)
                 .map(str::to_string),
         };
+        // The model this node runs on: the agent file's, or the parent's, and
+        // after a `/model` the parent's is a fact that changes mid-session. A
+        // spawn record naming the agent file's answer instead would be naming a
+        // model that did not run.
+        let provider = ty
+            .provider
+            .clone()
+            .unwrap_or_else(|| self.nest.running.get());
+        runfacts::NodeSpawn {
+            node_id: &sub_id,
+            parent_node_id: &self.nest.session_id,
+            parent_turn_id: &ctx.turn_id,
+            agent,
+            model: provider.model_id(),
+        }
+        .write(&self.nest.log);
+
         let outcome: Outcome = {
             let mut sub = Agent::new(Setup {
                 // **A subagent gets its own registry, not the parent's.** Its
@@ -684,6 +719,7 @@ impl Tool for Delegate {
                 // a subagent can look something up exactly when its parent
                 // could have. Charged to the same meter either way.
                 web_search: self.nest.web_search,
+                sampling: self.nest.sampling,
             });
             sub.run_goal(&Goal::new(brief)).await
         };
@@ -692,6 +728,23 @@ impl Tool for Delegate {
         let facts = Facts::from(&seen);
         let footer = facts.footer();
         self.nest.term.note(&format!("{agent} {}", facts.summary()));
+        // The other half of the node, and written whatever the ending: a run
+        // that stopped on its token budget is a node that stopped, and a graph
+        // that only closed the nodes that succeeded would leave the failures
+        // drawn as still running forever.
+        runfacts::NodeDone {
+            node_id: &sub_id,
+            parent_node_id: &self.nest.session_id,
+            agent,
+            ending: outcome.ending.as_str(),
+            tokens: outcome.tokens,
+            iterations: outcome.iterations,
+            // `Facts` reads this from the nested run's own `goal_finished` and
+            // leaves zero when that record never came; zero is "unknown" here,
+            // not "instant", and the record leaves the key out for it.
+            elapsed_ms: (facts.elapsed_ms != 0).then_some(facts.elapsed_ms),
+        }
+        .write(&self.nest.log);
         // The parent-level record: one line per delegation carrying everything
         // "is this agent type worth using?" needs, and the `cost_tokens` a
         // resumed parent adds back to its meter. `emma agents` reads these.

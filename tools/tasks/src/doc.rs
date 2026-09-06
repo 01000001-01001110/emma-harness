@@ -467,6 +467,120 @@ impl Doc {
         }
     }
 
+    /// Move a task, with the notes underneath it, past the neighbouring task.
+    ///
+    /// Ordering is the one thing in this file a person expresses by position
+    /// rather than by a glyph, so a move has to carry the block a task owns and
+    /// nothing else. "Owns" is `is_note_of`, the same rule `view` and
+    /// `insertion_point` already use: the run of indented, non-blank,
+    /// non-task lines directly underneath. Headings, blank separators and the
+    /// preamble are not owned by anybody and stay at the offsets they are at.
+    ///
+    /// The move is a swap of two blocks with whatever sits between them left in
+    /// place, which is what makes it reversible: moving a task down and then up
+    /// again reproduces the input byte for byte. Sliding the block to the
+    /// neighbour's first line instead would drag a blank separator along with
+    /// it and quietly reshape the file over a few calls.
+    ///
+    /// Every line involved is re-inserted, never re-rendered, so a moved task
+    /// and a displaced note keep their own bytes including their line endings.
+    /// A move deliberately marks nothing dirty: position is not part of a
+    /// line's text, and stamping an id here would edit lines the caller did not
+    /// name.
+    ///
+    /// False means nothing moved: either no task carries that id, or it is
+    /// already the first (or last) task in the document. There is no partial
+    /// case in between.
+    pub fn move_task(&mut self, id: &str, up: bool) -> bool {
+        let Some(i) = self.index_of(id) else {
+            return false;
+        };
+        let (s, e) = self.block_of(i);
+
+        let new_lines = if up {
+            let Some(j) = self.lines[..s]
+                .iter()
+                .rposition(|l| matches!(l, Line::Task(_)))
+            else {
+                return false;
+            };
+            let (p, q) = self.block_of(j);
+            // Neighbour, gap, mover becomes mover, gap, neighbour.
+            [
+                &self.lines[..p],
+                &self.lines[s..e],
+                &self.lines[q..s],
+                &self.lines[p..q],
+                &self.lines[e..],
+            ]
+            .concat()
+        } else {
+            let Some(j) = self.lines[e..]
+                .iter()
+                .position(|l| matches!(l, Line::Task(_)))
+                .map(|off| e + off)
+            else {
+                return false;
+            };
+            let (_, k) = self.block_of(j);
+            [
+                &self.lines[..s],
+                &self.lines[j..k],
+                &self.lines[e..j],
+                &self.lines[s..e],
+                &self.lines[k..],
+            ]
+            .concat()
+        };
+
+        self.lines = new_lines;
+        true
+    }
+
+    /// Drop every completed task and the notes underneath it, returning how
+    /// many tasks went.
+    ///
+    /// This is the one operation in the module that removes a human's bytes, so
+    /// it is scoped as tightly as it can be: a line goes only if it is a
+    /// checkbox reading `[x]`, or a note that checkbox owns by `is_note_of`.
+    /// A heading called `## Done`, a blank line between tasks and any prose
+    /// that is not indented under a completed task all stay exactly where they
+    /// are, because none of them belongs to a task.
+    ///
+    /// It is not called by the tools on their own initiative. `TaskUpdate`
+    /// cleans up by ticking a box rather than deleting a line
+    /// (`descriptions/task_update.md` says why), and this exists for the case
+    /// where somebody asks for the archive to be swept. Note that it takes the
+    /// notes with the task: a person who wrote a paragraph under a task they
+    /// then completed loses it here, which is the reason this is explicit and
+    /// never automatic.
+    pub fn remove_completed(&mut self) -> usize {
+        let mut doomed = vec![false; self.lines.len()];
+        let mut removed = 0;
+        for i in 0..self.lines.len() {
+            if matches!(&self.lines[i], Line::Task(t) if t.status == Status::Completed) {
+                let (s, e) = self.block_of(i);
+                doomed[s..e].fill(true);
+                removed += 1;
+            }
+        }
+        let mut keep = doomed.iter();
+        self.lines
+            .retain(|_| !keep.next().copied().unwrap_or(false));
+        removed
+    }
+
+    /// A task line plus the notes it owns, as a half-open range. The single
+    /// definition of "this task's block", so a move and a removal can never
+    /// disagree about where a task ends.
+    fn block_of(&self, task: usize) -> (usize, usize) {
+        let mut end = task + 1;
+        while end < self.lines.len() && self.is_note_of(task, end) {
+            end += 1;
+        }
+        (task, end)
+    }
+
     fn is_blank(&self) -> bool {
         self.lines.iter().all(|l| match l {
             Line::Raw(s) => s.trim().is_empty(),
@@ -986,6 +1100,81 @@ mod tests {
         let mut doc = Doc::parse(src);
         doc.update("0001", Some(Status::Completed), None);
         assert_eq!(doc.render(), "- [x] one `#0001`\r\n");
+    }
+
+    /// A move is a swap of blocks, and a swap is its own inverse. The fixture
+    /// carries the two things a naive implementation drags along: a blank
+    /// separator between the tasks, and a `## Notes` section after them.
+    #[test]
+    fn moving_a_task_down_and_back_up_reproduces_the_file() {
+        let src = "# Tasks\n\n- [ ] first `#0001`\n  a note on first\n\n- [~] second `#0002`\n  a note on second\n\n## Notes\n\nprose nobody owns\n";
+        let mut doc = Doc::parse(src);
+        assert!(doc.move_task("0001", false));
+        assert_ne!(doc.render(), src, "the move did nothing to reverse");
+        assert!(doc.move_task("0001", true));
+        assert_eq!(doc.render(), src);
+    }
+
+    /// The notes are the point: a move that reorders the checkbox lines alone
+    /// leaves every note attached to whichever task landed above it, which is
+    /// worse than not moving at all.
+    #[test]
+    fn a_moved_task_takes_its_notes_with_it() {
+        let src = "- [ ] first `#0001`\n  note of first\n- [ ] second `#0002`\n  note of second\n";
+        let mut doc = Doc::parse(src);
+        assert!(doc.move_task("0002", true));
+        assert_eq!(
+            doc.render(),
+            "- [ ] second `#0002`\n  note of second\n- [ ] first `#0001`\n  note of first\n"
+        );
+        let ids: Vec<String> = doc.tasks().into_iter().map(|t| t.id).collect();
+        assert_eq!(ids, vec!["0002".to_string(), "0001".to_string()]);
+        assert_eq!(
+            doc.get("0002").unwrap().notes,
+            vec!["note of second".to_string()]
+        );
+    }
+
+    /// At the end of the list there is no neighbour to swap with, and the
+    /// honest answer is false rather than a no-op that reports success. An
+    /// unknown id is the same answer for the same reason.
+    #[test]
+    fn moving_past_the_end_refuses_and_changes_nothing() {
+        let src = "- [ ] first `#0001`\n- [ ] second `#0002`\n\n## Notes\n";
+        let mut doc = Doc::parse(src);
+        assert!(!doc.move_task("0001", true));
+        assert!(!doc.move_task("0002", false));
+        assert!(!doc.move_task("dead", false));
+        assert_eq!(doc.render(), src);
+    }
+
+    /// Completed tasks and their notes go; the heading that happens to sit
+    /// above them, the blank lines and the preamble do not, because none of
+    /// those belongs to a task.
+    #[test]
+    fn removing_completed_tasks_leaves_everything_else_alone() {
+        let src = "# Tasks\n\n## Done\n\n- [x] shipped `#0001`\n  how it shipped\n- [ ] pending `#0002`\n  still open\n- [X] also shipped `#0003`\n\ntrailing prose\n";
+        let mut doc = Doc::parse(src);
+        assert_eq!(doc.remove_completed(), 2);
+        assert_eq!(
+            doc.render(),
+            "# Tasks\n\n## Done\n\n- [ ] pending `#0002`\n  still open\n\ntrailing prose\n"
+        );
+    }
+
+    /// Neither operation re-renders a line, so a CRLF file has to come back
+    /// CRLF on every line including the ones that moved.
+    #[test]
+    fn a_crlf_document_survives_a_move_and_a_removal() {
+        let src = "- [ ] first `#0001`\r\n  note of first\r\n- [x] done `#0002`\r\n- [ ] third `#0003`\r\n";
+        let mut doc = Doc::parse(src);
+        assert!(doc.move_task("0003", true));
+        assert_eq!(doc.remove_completed(), 1);
+        assert_eq!(
+            doc.render(),
+            "- [ ] first `#0001`\r\n  note of first\r\n- [ ] third `#0003`\r\n"
+        );
+        assert!(!doc.render().contains("\n\n"), "a bare LF crept in");
     }
 }
 

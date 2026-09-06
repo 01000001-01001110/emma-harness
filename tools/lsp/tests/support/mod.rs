@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use emma_tools_lsp::client::Client;
+use emma_tools_lsp::lang::{self, Language};
 use emma_tools_lsp::proto::{self, Frame};
 use emma_tools_lsp::server::{Server, Source};
 use serde_json::{json, Value};
@@ -62,8 +63,28 @@ pub enum Indexing {
     DiesAfterHandshake,
 }
 
+/// What the fake does about `textDocument/publishDiagnostics` when it is told
+/// about a file.
+///
+/// The three cases are the whole reason `Diagnostics` is safe to ship, and two
+/// of them look identical from anywhere except the client's `Option`:
+/// [`Publishes::Nothing`] and [`Publishes::Clean`] both produce a result with no
+/// diagnostics in it, and they mean opposite things.
+#[derive(Debug, Clone)]
+pub enum Publishes {
+    /// Say nothing on `didOpen`, like a server that is still thinking or that
+    /// has no diagnostics engine at all. Not the same as a clean file.
+    Nothing,
+    /// Publish an empty array: the server looked and found nothing.
+    Clean,
+    /// Publish these.
+    These(Vec<Value>),
+}
+
 pub struct Fake {
     indexing: Indexing,
+    publishes: Publishes,
+    respell_uris: bool,
     responses: HashMap<String, Value>,
     /// Everything the client sent, for the tests that care that a `didOpen`
     /// happened, or that it happened exactly once.
@@ -74,9 +95,69 @@ impl Fake {
     pub fn new(indexing: Indexing) -> Self {
         Self {
             indexing,
+            publishes: Publishes::Nothing,
+            respell_uris: false,
             responses: HashMap::new(),
             sent: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
+    }
+
+    pub fn publishing(mut self, publishes: Publishes) -> Self {
+        self.publishes = publishes;
+        self
+    }
+
+    /// Publish about a file using the URI spelling a real server uses, rather
+    /// than echoing back the one it was handed.
+    ///
+    /// **The one thing a fake gets wrong for free.** rust-analyzer lower-cases
+    /// the Windows drive letter in everything it sends, `file:///c:/…` for the
+    /// `file:///C:/…` it was given, and a fake that replies with the client's
+    /// own string makes the two spellings identical inside the suite. Measured
+    /// 2026-09-06: the real server published four times and the tool reported
+    /// silence, over a map lookup that every fake test agreed worked.
+    ///
+    /// **The respelling is the platform's own, and that is load-bearing.** This
+    /// helper lower-cased the whole URI until 2026-09-06, which is right on
+    /// Windows and wrong everywhere else: a unix path is case-sensitive, so a
+    /// lower-cased one names a different file and `published_key` is correct to
+    /// refuse it. On unix the respelling is percent-encoding instead, which is
+    /// the thing servers there actually vary: the escape is optional, the hex
+    /// case is unspecified, and a client that compares URI strings breaks on
+    /// both. Either way the test asks the same question, which is that the
+    /// comparison is not a string comparison.
+    pub fn spelling_uris_as_a_real_server_does(mut self) -> Self {
+        self.respell_uris = true;
+        self
+    }
+
+    /// The URI a real server would send back for `uri`, on this platform.
+    ///
+    /// **It must differ from what it was given, and that is asserted here.** A
+    /// respelling that happens to be a no-op — a path with no upper case on
+    /// Windows, none of the encoded characters on unix — turns this fake back
+    /// into the echo it exists to stop being, and every test driven by it then
+    /// passes over a lookup nobody exercised. Measured on macOS 2026-09-06: the
+    /// unix arm encoded `-`, the sandbox path had none, and removing the
+    /// production key's translation left the suite green.
+    fn respelled(uri: &str) -> String {
+        let out = if cfg!(windows) {
+            // The drive letter only. Lower-casing the rest would be a claim
+            // about the file system that Windows happens to forgive and that
+            // no server makes.
+            uri.to_lowercase()
+        } else {
+            // `.` and `-` written as their escapes, in lower-case hex.
+            // `doc::from_uri` decodes them; a lookup keyed on the raw string
+            // does not. Both are optional escapes of unreserved characters,
+            // which is exactly the freedom servers use differently.
+            uri.replace('.', "%2e").replace('-', "%2d")
+        };
+        assert_ne!(
+            out, uri,
+            "the fake could not respell this URI, so the lookup is untested",
+        );
+        out
     }
 
     pub fn answers(mut self, method: &str, result: Value) -> Self {
@@ -84,8 +165,14 @@ impl Fake {
         self
     }
 
-    /// Start the fake and hand back a connected, handshaken client.
+    /// Start the fake and hand back a connected, handshaken client, claiming to
+    /// be a rust server.
     pub async fn start(self, root: &Path) -> Arc<Client> {
+        self.start_as("rust", root).await
+    }
+
+    /// The same, wearing one language's identity.
+    pub async fn start_as(self, language: &str, root: &Path) -> Arc<Client> {
         // Two duplex pairs: one carrying client→server, one server→client.
         // `duplex` gives a single bidirectional pipe, so a pair of them is how
         // two independent directions are spelled.
@@ -95,6 +182,8 @@ impl Fake {
 
         let sent = self.sent.clone();
         let indexing = self.indexing;
+        let publishes = self.publishes;
+        let respell_uris = self.respell_uris;
         let responses = self.responses;
         tokio::spawn(async move {
             let mut reader = BufReader::new(server_read);
@@ -176,6 +265,38 @@ impl Fake {
                     }
                     continue;
                 }
+                // A real server publishes diagnostics in response to being told
+                // about a file, not in response to a request. The fake does the
+                // same, and `Publishes::Nothing` is the case that has to stay
+                // possible: it is what silence looks like.
+                if method == "textDocument/didOpen" || method == "textDocument/didChange" {
+                    let mut uri = message["params"]["textDocument"]["uri"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
+                    if respell_uris {
+                        uri = Self::respelled(&uri);
+                    }
+                    let items = match &publishes {
+                        Publishes::Nothing => None,
+                        Publishes::Clean => Some(Vec::new()),
+                        Publishes::These(items) => Some(items.clone()),
+                    };
+                    if let Some(items) = items {
+                        let note = json!({
+                            "jsonrpc": "2.0",
+                            "method": "textDocument/publishDiagnostics",
+                            "params": { "uri": uri, "diagnostics": items },
+                        });
+                        if proto::write_message(&mut server_write, &note)
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    continue;
+                }
                 // Notifications have no id and get no reply, exactly as the
                 // protocol requires — a fake that replied to `didOpen` would
                 // hide a real bug in the client's id handling.
@@ -191,7 +312,7 @@ impl Fake {
             }
         });
 
-        Client::connect(fake_server(), root, client_read, client_write)
+        Client::connect(fake_server_for(language), root, client_read, client_write)
             .await
             .expect("the fake completes a handshake")
     }
@@ -221,10 +342,24 @@ fn status(quiescent: bool, health: &str) -> Value {
 }
 
 pub fn fake_server() -> Server {
+    fake_server_for("rust")
+}
+
+/// The fake, wearing one language's identity.
+///
+/// Which language a fake claims to be matters now that the table decides the
+/// `languageId` on `didOpen`, the `initializationOptions` on the handshake and
+/// half the pool key. A test that wants to prove the bash path is not the rust
+/// path asks for `"bash"` here.
+pub fn fake_server_for(key: &str) -> Server {
+    let language: &'static Language = lang::by_key(key).expect("a language in the table");
     Server {
-        path: PathBuf::from("/fake/rust-analyzer"),
-        version: "rust-analyzer 0.0.0-fake".into(),
+        program: PathBuf::from("/fake/language-server"),
+        args: Vec::new(),
+        entry: PathBuf::from("/fake/language-server"),
+        version: "0.0.0-fake".into(),
         source: Source::Override,
+        language,
     }
 }
 

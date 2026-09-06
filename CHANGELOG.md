@@ -28,6 +28,107 @@ out for themselves.
 
 ## Unreleased
 
+- **The sidebar's SESSIONS list is a control, not a label.** Arrows walk it,
+  Enter resumes the highlighted session, and a click on a row does the same.
+  Both produce `/resume <id>`, a command you could have typed, rather than
+  reaching around the session machinery. The `[+]` starts a new session the
+  same way. While a goal is running both are refused with a notice saying so:
+  before this the `[+]` pushed its command into a channel nothing reads
+  mid-goal and printed a receipt saying it had worked.
+
+- **`Alt+q` is on the key panel**, because Emma already names that chord in
+  the line it prints when a goal is interrupted, and a key named in Emma's own
+  output that is missing from the list of keys is the same problem as a drawn
+  control that does nothing.
+
+- **The Settings screen's Provider row names the provider this run actually
+  booted with.** It resolved the name from `settings.json` before, so a run
+  started with `--provider` was described as bound to something it was not.
+
+- **The Code page has code intelligence.** Diagnostics appear in the gutter
+  beside the lines they belong to, `F5` asks for hover and `F6` for a
+  definition, and a definition in another file opens that file at the line. It
+  uses the same language servers the tools use, so one server per language
+  serves both you and the model, and what you type keeps the server's view
+  current for the model's next call. Nothing on the input path waits for a
+  server: a busy or dead one means no decorations, never a pause. A run
+  without the bridge says so rather than reporting that nothing was found.
+
+- **The Code page has a chat strip.** `Tab` reaches it, and a question typed
+  there goes down the same channel a typed line takes, so a running goal is
+  the steering queue's answer and not the page's. The question carries which
+  file it is about and which lines are on screen, and says so when the buffer
+  has unsaved edits or when the read had to replace bytes. A file that is not
+  open, or that could not be read, is refused in words.
+
+- **The Settings screen writes back, card by card.** Appearance, sampling,
+  the memory policy, the keybinding preset and every tool's rule now persist,
+  and the permissions card writes. Four keys are stored and read by nothing
+  yet, and each receipt says so rather than claiming an effect. Open
+  Keybindings writes a starter file and opens it in the editor the `Alt+c`
+  chord already resolves. An accent named `cube:N` is read, stored and drawn
+  but cannot yet be chosen from the screen, which its notice says while
+  naming the file where it can.
+
+- **The Harness page (`Alt+h`) is a process manager, not a history view.** It
+  starts a run, archives one, deletes one, signals one, reorders the task
+  queue, adds and sweeps tasks, and writes the next run's permission preset.
+  Archive, delete and clear-done ask twice. Where an operation has no Windows
+  equivalent the key answers with a sentence naming the platform and the
+  operation, the chip is drawn dim, and the subtitle row says so: pause,
+  resume and cancel are the three, because Windows has no equivalent of the
+  signals they send. Everything else on the page works on both platforms.
+  `[t]` reports what the permission file says today and writes nothing, and
+  says plainly when no preset describes the file. The gates card names plan
+  mode instead of drawing the gate it resolves to, which asks nothing.
+
+- **A new tool, `Screenshot`.** It captures the primary display, bounds the
+  image so a capture is not a megabyte of base64, and hands the bytes to the
+  model on the wire the running provider actually has: an image block inside
+  the tool result on Anthropic, and an attached image on a following message
+  on Ollama, OpenRouter and OpenAI. A provider with no image path, or a
+  platform with no capture backend, is told to you in words in the result
+  rather than dropping the picture silently. The session log records a
+  capture as its path and size, never its bytes; `--resume` reads the file
+  back, and says `[image not replayed: ...]` in the result when the file is
+  gone. Compaction, shedding and pruning drop a result's images with its
+  text, so a saving reported is a saving taken.
+
+- The Code page (`Alt+c`) can edit and save the file it is showing. `Enter`
+  on the body starts editing and the header says `EDIT`; `Ctrl+s` or `F2`
+  saves, keeping the file's own line endings and its trailing-newline habit;
+  `F4` copies the selection or the whole file; a paste lands in the editor;
+  the mouse selects text in the document and a release copies it; `Esc`
+  leaves the editor and a second `Esc` leaves the page, with one warning if
+  the buffer is unsaved. A file whose bytes the page cannot reproduce exactly
+  (a TAB or a control byte in the source, mixed line terminators, or a file
+  rewritten underneath the read) opens read-only and says why in its header.
+
+- Up and Down in the input box walk the lines this session submitted, newest
+  first, and Down past the newest brings back what was being typed. Blank
+  lines and an immediate repeat are not kept, the ring holds the last 200,
+  and the `/` menu still owns the arrows while it is open.
+
+- Typing while a goal runs now steers it. Ordinary words typed in the frame
+  with a goal up are queued, the transcript says so at once, and the loop
+  hands them to the model as your own mid-task instruction at its next turn.
+  `/theme`, `/mode` and `/compact` typed then run at that same boundary and
+  print their receipts; `/clear`, `/model`, `/resume`, `/copy`, `/export`,
+  `/config` and `/agents` go back into the input box with a line saying they
+  run between goals. `/exit` interrupts, as Alt+q does. Nothing is queued
+  while an approval question is on screen: what you type then is the answer.
+  Anything still queued when the goal ends opens the next goal instead of
+  being dropped.
+
+- A mouse selection in the chat pane now follows the text rather than the
+  screen. Holding the button at the top or bottom edge of the pane scrolls
+  the transcript and takes the rows it reveals into the selection; a pointer
+  well past the edge scrolls by the wheel's step; the anchor stays on the
+  row it was pressed on however far the view moves. Before this the
+  selection named screen rows, so a scroll under a held drag changed what
+  was selected and the copied text was whatever happened to be painted
+  there.
+
 - **BREAKING: `WebSearch` no longer needs a key, and the Brave Search key is
   gone.** The tool is a search engine's results page rendered in the same
   Chrome `WebFetch` uses, reduced to titles and URLs. It registers whenever a

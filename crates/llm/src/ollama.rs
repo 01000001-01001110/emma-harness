@@ -167,14 +167,55 @@ const DEFAULT_MODEL: &str = "llama3.1:8b";
 /// target machine.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3600);
 
-/// Context window, in tokens.
+/// The floor for `num_ctx`, in tokens.
 ///
 /// Ollama's own default is small enough that an agent conversation overruns it
 /// within a few turns, and the overrun is silent — the server drops the
 /// beginning of the prompt, so the model loses its instructions rather than
-/// returning an error anyone could act on. Raised explicitly for that reason,
-/// and overridable with `OLLAMA_NUM_CTX` for a model that will not fit.
+/// returning an error anyone could act on. A request never asks for less than
+/// this.
+///
+/// **It used to be the whole of the answer, and that was the same silent loss
+/// one level up.** Emma's default `max_context` is 120,000, so a request sized
+/// against that cap arrived here, went out under a 32,768 window, and was
+/// clipped at the front without a word — a flat constant chosen to be generous
+/// against Ollama's default is still a cap when the caller's budget is nearly
+/// four times larger. The Mac branch's measurement, which is what moved this:
+/// an audit of 117 logged calls found 28 over the window, 8 of them showing the
+/// plateau signature at ~32k. `num_ctx` is derived per request now and this
+/// constant is only the lower bound.
 const DEFAULT_NUM_CTX: u32 = 32_768;
+
+/// Rounding step for a derived `num_ctx`, in tokens.
+///
+/// A window that moves by a handful of tokens on every call makes Ollama
+/// re-allocate its KV cache for no benefit, so the derived value is rounded up
+/// to a multiple of this and small growth in the conversation reuses the window
+/// the previous turn already loaded.
+const NUM_CTX_STEP: u32 = 4_096;
+
+/// The ceiling on a derived `num_ctx`, in tokens.
+///
+/// A window is memory: Ollama allocates the KV cache for whatever is asked, so
+/// an unbounded derivation lets one runaway request exhaust the host. Past
+/// this, `OLLAMA_NUM_CTX` is the way to ask for more — deliberately, on a
+/// machine somebody has checked.
+const MAX_NUM_CTX: u32 = 262_144;
+
+/// Characters per token, the same conservative ratio the rest of the workspace
+/// estimates with ([`crate::anthropic`]'s packer, `agent.rs`'s weigh).
+///
+/// It under-counts what a tokeniser actually produces, which is the wrong
+/// direction for a window; [`NUM_CTX_HEADROOM_FACTOR`] is what covers that.
+const CHARS_PER_TOKEN: usize = 4;
+
+/// How much slack goes on the estimated prompt before the answer's own budget,
+/// as a divisor: a quarter again.
+///
+/// `chars / 4` under-counts, so the window has to be larger than the estimate
+/// rather than equal to it. A quarter is enough for the gap this estimator
+/// shows without doubling what the server allocates.
+const NUM_CTX_HEADROOM_FACTOR: usize = 4;
 
 /// How a host came to be the destination. Carried only so the disclosure line
 /// can tell the user *where to go and change it* — a note that names an address
@@ -387,13 +428,23 @@ impl OllamaProvider {
         format!("{}/api/chat", self.host)
     }
 
-    /// `num_ctx` from `OLLAMA_NUM_CTX`, or [`DEFAULT_NUM_CTX`].
+    /// The window this request will be sent under.
+    ///
+    /// `OLLAMA_NUM_CTX` wins outright when it names a usable value, because a
+    /// person who names a window has a reason the derivation cannot see — a
+    /// model that will not load at a larger one, or a host with less memory
+    /// than this assumes. Otherwise the window is derived from the request, so
+    /// a long conversation gets a window that holds it instead of being clipped
+    /// at a constant.
     ///
     /// Read per call rather than cached. The variable can change between calls
     /// in a long-lived process, and the read costs nothing beside an HTTP
     /// request to a model that is about to think for a minute.
-    fn num_ctx(&self) -> u32 {
-        parse_num_ctx(std::env::var("OLLAMA_NUM_CTX").ok().as_deref())
+    fn num_ctx(&self, request: &Request) -> u32 {
+        match parse_num_ctx(std::env::var("OLLAMA_NUM_CTX").ok().as_deref()) {
+            Some(asked) => asked,
+            None => derive_num_ctx(estimate_prompt_tokens(request), request.max_tokens),
+        }
     }
 }
 
@@ -404,10 +455,50 @@ impl OllamaProvider {
 /// Mac branch three tests mutating `OLLAMA_NUM_CTX` raced, and which one failed
 /// depended on thread interleaving. A pure function has no ordering to get
 /// wrong.
-fn parse_num_ctx(raw: Option<&str>) -> u32 {
-    raw.and_then(|v| v.parse().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(DEFAULT_NUM_CTX)
+///
+/// `None` means "nobody said", not "use the floor": an unusable value has to be
+/// indistinguishable from an absent one so that a typo falls through to the
+/// derivation rather than pinning the window at the constant the derivation
+/// exists to replace.
+fn parse_num_ctx(raw: Option<&str>) -> Option<u32> {
+    raw.and_then(|v| v.parse().ok()).filter(|n| *n > 0)
+}
+
+/// What one request weighs, in tokens, by `chars / CHARS_PER_TOKEN`.
+///
+/// Every part of the request that crosses the wire is counted, not just the
+/// conversation: the system prompt and the tool schemas are prompt tokens too,
+/// and a window sized against the messages alone clips on exactly the calls
+/// carrying the largest tool surface — the ones where the model most needs to
+/// see what it may call.
+fn estimate_prompt_tokens(request: &Request) -> usize {
+    let messages: usize = request
+        .history
+        .iter()
+        .chain(request.query.iter())
+        .map(|m| m.content.wire_len())
+        .sum();
+    let tools: usize = request.tools.iter().map(|t| t.to_string().len()).sum();
+    (request.instructions.len() + messages + tools) / CHARS_PER_TOKEN
+}
+
+/// The window that holds `prompt` tokens of input and `answer` tokens of output.
+///
+/// Both halves, because Ollama's `num_ctx` covers the prompt and the generation
+/// together: a window sized to the prompt alone truncates the front of the
+/// conversation as the answer is written, which is the same silent loss arriving
+/// a few hundred tokens later.
+fn derive_num_ctx(prompt: usize, answer: u32) -> u32 {
+    let want = prompt
+        .saturating_add(prompt / NUM_CTX_HEADROOM_FACTOR)
+        .saturating_add(answer as usize);
+    // A `usize` that does not fit a `u32` is already past the ceiling, so the
+    // saturating conversion and the clamp agree.
+    let want = u32::try_from(want).unwrap_or(MAX_NUM_CTX);
+    let stepped = want
+        .checked_next_multiple_of(NUM_CTX_STEP)
+        .unwrap_or(MAX_NUM_CTX);
+    stepped.clamp(DEFAULT_NUM_CTX, MAX_NUM_CTX)
 }
 
 // endregion: The provider
@@ -515,6 +606,34 @@ fn messages_to_ollama(messages: &[Message]) -> Vec<Value> {
                                 "content": r.content,
                                 "tool_name": tool_name,
                             }));
+                            // ⚠ AN IMAGE FOLLOWS ITS RESULT AS A SEPARATE
+                            // USER MESSAGE. Ollama puts pictures in an `images`
+                            // array of base64 strings hung off a message, not
+                            // in a content block, so there is no way to express
+                            // "this picture is part of that tool result" in its
+                            // shape. It is sent as a user turn because that is
+                            // the message role every vision chat template
+                            // actually renders images from; hung off the
+                            // `role: "tool"` message it is accepted by the API
+                            // and silently dropped by the template, which is the
+                            // worst of the three options because nothing reports
+                            // it. The one line of text names the call the
+                            // picture answers, so the pairing the shape cannot
+                            // carry is at least stated.
+                            let images: Vec<Value> = r
+                                .images
+                                .iter()
+                                .filter_map(|i| i.wire_data().map(|d| json!(d)))
+                                .collect();
+                            if !images.is_empty() {
+                                out.push(json!({
+                                    "role": "user",
+                                    "content": format!(
+                                        "The image above is the result of the {tool_name} call."
+                                    ),
+                                    "images": images,
+                                }));
+                            }
                         }
                         // Whatever this is, it is a shape this client could not
                         // model on the Anthropic wire, so it has no translation
@@ -702,6 +821,11 @@ fn turn_from_ollama(body: &Value) -> Result<AssistantTurn, LlmError> {
     };
 
     let usage = Usage {
+        // Left at zero here, and stamped by `send` with the window it asked
+        // for. The reply carries no `num_ctx` of its own — Ollama echoes
+        // nothing about the window — so a parser reading only the body has no
+        // honest number to put here, and a guess is worse than "not reported".
+        context_window: 0,
         input_tokens: body
             .get("prompt_eval_count")
             .and_then(Value::as_i64)
@@ -768,7 +892,12 @@ async fn classify(resp: reqwest::Response) -> LlmError {
         // Unauthenticated on loopback, but a reverse proxy in front of a shared
         // server is a real deployment, and its 401/403/429 mean here what they
         // mean anywhere.
-        401 => LlmError::Unauthorized { message },
+        401 => LlmError::Unauthorized {
+            fix: "Ollama itself asks for no key; whatever answered 401 sits in front of it. \
+                  Check OLLAMA_HOST and the proxy or gateway at that address."
+                .into(),
+            message,
+        },
         403 => LlmError::Forbidden { message },
         429 => LlmError::RateLimited {
             retry_after,
@@ -951,7 +1080,13 @@ impl Provider for OllamaProvider {
         mode: Mode,
         events: Option<mpsc::Sender<Event>>,
     ) -> Result<AssistantTurn, LlmError> {
-        let body = self.body(&request, mode);
+        // Derived once, outside the retry loop, so that every attempt and the
+        // number finally reported are the same window. What a call ran under is
+        // the difference between "the model ignored the top of the
+        // conversation" and "the model never saw it", and from a session log
+        // alone the two are indistinguishable until this is recorded.
+        let num_ctx = self.num_ctx(&request);
+        let body = self.body(&request, mode, num_ctx);
         let events = events.as_ref();
         let mut attempt: u32 = 1;
         loop {
@@ -969,10 +1104,17 @@ impl Provider for OllamaProvider {
                     // mid-stream failure is surfaced rather than retried — a
                     // retry would replay text the terminal has printed. Same
                     // rule as the Anthropic path.
+                    // Stamped here rather than in the parser: the reply carries
+                    // no window, so the only honest source is the number this
+                    // client asked for.
                     return match mode {
                         Mode::Batch => read_batch(resp).await,
                         Mode::Stream => read_stream(resp, events).await,
-                    };
+                    }
+                    .map(|mut turn| {
+                        turn.usage.context_window = i64::from(num_ctx);
+                        turn
+                    });
                 }
                 Ok(resp) => classify(resp).await,
                 Err(e) => LlmError::Transport(e.to_string()),
@@ -1008,7 +1150,11 @@ impl OllamaProvider {
     /// the instructions genuinely belong first, and because a reader comparing
     /// the two providers should not have to work out whether a difference is
     /// meaningful.
-    fn body(&self, request: &Request, mode: Mode) -> Value {
+    ///
+    /// `num_ctx` is passed in rather than computed here because the caller has
+    /// to report the same number on [`Usage::context_window`], and a body that
+    /// derived its own would let the two drift.
+    fn body(&self, request: &Request, mode: Mode, num_ctx: u32) -> Value {
         let mut messages = vec![json!({"role": "system", "content": request.instructions})];
         messages.extend(messages_to_ollama(&request.history));
         messages.extend(messages_to_ollama(&request.query));
@@ -1020,9 +1166,17 @@ impl OllamaProvider {
             "options": {
                 // Thinking and answer share this budget. See the module doc.
                 "num_predict": request.max_tokens,
-                "num_ctx": self.num_ctx(),
+                "num_ctx": num_ctx,
             },
         });
+        // Inside `options`, which is where Ollama takes every sampling knob,
+        // and only when the caller set one: an absent `temperature` leaves the
+        // Modelfile's own value in force, and that value differs per model, so
+        // there is no number Emma could substitute without overriding a choice
+        // somebody made when they pulled the model.
+        if let Some(temperature) = request.temperature {
+            body["options"]["temperature"] = json!(temperature);
+        }
         // Absent rather than empty: a server that sees `tools: []` may still
         // switch to its tool-calling template, and a model with no tools
         // offered should be answering prose.
@@ -1112,19 +1266,72 @@ impl ProviderKind for Ollama {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ToolResult;
+    use crate::{ToolImage, ToolResult};
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     // region: context size
 
+    /// `None` is the whole point of the signature: an absent or unusable
+    /// `OLLAMA_NUM_CTX` has to fall through to the derivation, not to the
+    /// floor. If this returned `DEFAULT_NUM_CTX` for `None` again, every
+    /// request would go out under the flat constant the derivation replaced,
+    /// and the clip would be back with the tests still green.
     #[test]
-    fn the_context_size_falls_back_rather_than_failing() {
-        assert_eq!(parse_num_ctx(None), DEFAULT_NUM_CTX);
-        assert_eq!(parse_num_ctx(Some("8192")), 8_192);
+    fn an_absent_or_unusable_num_ctx_leaves_the_derivation_to_decide() {
+        assert_eq!(parse_num_ctx(None), None);
+        assert_eq!(parse_num_ctx(Some("8192")), Some(8_192));
         // A typo, and a zero that would make the server drop the whole prompt.
-        assert_eq!(parse_num_ctx(Some("not-a-number")), DEFAULT_NUM_CTX);
-        assert_eq!(parse_num_ctx(Some("0")), DEFAULT_NUM_CTX);
+        assert_eq!(parse_num_ctx(Some("not-a-number")), None);
+        assert_eq!(parse_num_ctx(Some("0")), None);
+    }
+
+    /// A short conversation is not given a smaller window than Ollama's own
+    /// default beats: the floor is still a floor.
+    #[test]
+    fn a_small_request_still_gets_the_floor() {
+        assert_eq!(derive_num_ctx(10, 100), DEFAULT_NUM_CTX);
+    }
+
+    /// **The defect this derivation exists for.** Emma's default `max_context`
+    /// is 120,000; under the old flat constant a request that size went out
+    /// under a 32,768 window and Ollama dropped the front of it without a word.
+    /// Delete the derivation — send `DEFAULT_NUM_CTX` — and this goes red.
+    #[test]
+    fn a_request_larger_than_the_old_default_gets_a_window_that_holds_it() {
+        let window = derive_num_ctx(120_000, 32_000);
+        assert!(
+            window >= 120_000 + 32_000,
+            "a 120,000 token prompt with a 32,000 token answer got a {window} window"
+        );
+        assert_eq!(window % NUM_CTX_STEP, 0, "{window} is not on the step");
+    }
+
+    /// A window is memory Ollama allocates, so the derivation is bounded even
+    /// when the arithmetic is not.
+    #[test]
+    fn a_derived_window_is_capped_rather_than_unbounded() {
+        assert_eq!(derive_num_ctx(usize::MAX, 32_000), MAX_NUM_CTX);
+    }
+
+    /// Everything that crosses the wire is counted, not only the messages: a
+    /// window sized against the conversation alone clips on exactly the calls
+    /// carrying the largest tool surface.
+    #[test]
+    fn the_estimate_counts_the_instructions_and_the_tool_schemas() {
+        let bare = Request::new("x".repeat(4_000), Vec::new());
+        let mut loaded = Request::new("x".repeat(4_000), vec![json!({"name": "y".repeat(4_000)})]);
+        loaded.query = vec![Message::user("z".repeat(4_000))];
+        assert!(estimate_prompt_tokens(&bare) >= 1_000);
+        assert!(estimate_prompt_tokens(&loaded) >= estimate_prompt_tokens(&bare) + 2_000);
+    }
+
+    /// A window that moved by a few tokens per call would make Ollama
+    /// re-allocate its KV cache on every turn. Small growth lands on the window
+    /// the previous turn already loaded.
+    #[test]
+    fn small_growth_reuses_the_same_window() {
+        assert_eq!(derive_num_ctx(60_000, 4_000), derive_num_ctx(60_010, 4_000));
     }
 
     // endregion: context size
@@ -1366,6 +1573,7 @@ mod tests {
                     tool_use_id: "toolu_01deadbeef".into(),
                     content: "file contents here".into(),
                     is_error: false,
+                    images: Vec::new(),
                     extra: Map::new(),
                 }),
             ]),
@@ -1427,6 +1635,89 @@ mod tests {
         assert_eq!(calls[0]["id"], "call_AAA");
         assert_eq!(calls[1]["id"], "call_BBB");
         assert_ne!(calls[0], calls[1]);
+    }
+
+    #[test]
+    fn an_image_on_a_tool_result_becomes_a_following_user_message() {
+        // Ollama has no content block for a picture, so the pairing this shape
+        // cannot carry is stated in the text instead. What must not happen is
+        // the image being hung off the `role: "tool"` message, where the API
+        // accepts it and every chat template silently drops it.
+        let mut result = ToolResult::ok("call_001", "Captured display 1.");
+        result.images =
+            vec![ToolImage::base64("image/jpeg", "aGk=").at_path("C:/src/emma/shot.png")];
+        let msg = Message {
+            role: Role::Assistant,
+            content: Content::Blocks(vec![
+                ContentBlock::ToolUse(ToolCall {
+                    id: "call_001".into(),
+                    name: "Screenshot".into(),
+                    input: json!({}),
+                    extra: Map::new(),
+                }),
+                ContentBlock::ToolResult(result),
+            ]),
+        };
+        let wire = messages_to_ollama(&[msg]);
+
+        let tool_msg = wire.iter().find(|m| m["role"] == "tool").expect("a result");
+        assert_eq!(tool_msg["content"], "Captured display 1.");
+        assert!(tool_msg.get("images").is_none(), "not on the tool message");
+
+        let carrier = wire
+            .iter()
+            .find(|m| m.get("images").is_some())
+            .expect("a message carrying the picture");
+        assert_eq!(carrier["role"], "user");
+        assert_eq!(carrier["images"], json!(["aGk="]));
+        assert!(carrier["content"].as_str().unwrap().contains("Screenshot"));
+    }
+
+    #[test]
+    fn a_result_whose_image_has_no_bytes_sends_no_images_key() {
+        // The log form must never reach a provider. It has nothing to send, so
+        // the extra message is not emitted at all rather than emitted empty.
+        let mut result = ToolResult::ok("call_001", "Captured display 1.");
+        result.images = vec![ToolImage::base64("image/jpeg", "aGk=")
+            .at_path("C:/src/emma/shot.png")
+            .for_log()];
+        let msg = Message {
+            role: Role::Assistant,
+            content: Content::Blocks(vec![ContentBlock::ToolResult(result)]),
+        };
+        let wire = messages_to_ollama(&[msg]);
+        assert_eq!(wire.len(), 1, "{wire:?}");
+        assert!(wire[0].get("images").is_none());
+    }
+
+    /// The other half: every tool but one returns prose, and none of their
+    /// results may move a byte because a picture became expressible.
+    #[test]
+    fn a_result_with_no_images_is_the_message_it_always_was() {
+        let msg = Message {
+            role: Role::Assistant,
+            content: Content::Blocks(vec![
+                ContentBlock::ToolUse(ToolCall {
+                    id: "call_001".into(),
+                    name: "Read".into(),
+                    input: json!({}),
+                    extra: Map::new(),
+                }),
+                ContentBlock::ToolResult(ToolResult::ok("call_001", "file contents")),
+            ]),
+        };
+        let wire = messages_to_ollama(&[msg]);
+        let tool: Vec<&Value> = wire.iter().filter(|m| m["role"] == "tool").collect();
+        assert_eq!(tool.len(), 1);
+        assert_eq!(
+            *tool[0],
+            json!({
+                "role": "tool",
+                "content": "file contents",
+                "tool_name": "Read",
+            })
+        );
+        assert!(!wire.iter().any(|m| m.get("images").is_some()), "{wire:?}");
     }
 
     /// Thinking is not echoed back and a `Passthrough` is not forwarded, but
@@ -1850,6 +2141,35 @@ mod tests {
         .collect()
     }
 
+    #[tokio::test]
+    async fn a_set_temperature_travels_inside_options() {
+        let s = stub(vec![Reply::json(batch_body())]).await;
+        let req = request().with_temperature(Some(0.15));
+        provider(&s).send(req, Mode::Batch, None).await.unwrap();
+        let sent = s.last();
+        // Inside `options`, beside the two knobs that were already there, and
+        // not at the top level where Ollama would ignore it in silence.
+        assert_eq!(sent["options"]["temperature"], 0.15);
+        assert!(sent.get("temperature").is_none(), "{sent}");
+    }
+
+    #[tokio::test]
+    async fn an_unset_temperature_leaves_options_as_it_was() {
+        let s = stub(vec![Reply::json(batch_body())]).await;
+        provider(&s)
+            .send(request(), Mode::Batch, None)
+            .await
+            .unwrap();
+        let sent = s.last();
+        // An absent key leaves the Modelfile's own value in force; a sent
+        // `0.0` would silently overwrite it on every model.
+        assert!(sent["options"].get("temperature").is_none(), "{sent}");
+        assert_ne!(sent["options"]["temperature"], 0.0, "{sent}");
+        // `num_predict` has no absent case: the derived `num_ctx` is a
+        // function of it, so it goes out whether or not anybody set a cap.
+        assert_eq!(sent["options"]["num_predict"], json!(32_000));
+    }
+
     /// **If this breaks:** the model is asked to stream when the caller wanted
     /// one body, or the budget and context size never reach the server.
     #[tokio::test]
@@ -1862,6 +2182,8 @@ mod tests {
         assert_eq!(sent["model"], "test-model");
         assert_eq!(sent["stream"], false);
         assert_eq!(sent["options"]["num_predict"], json!(32_000));
+        // A three-line conversation derives below the floor, so the floor is
+        // what goes out. The sibling below is the one that moves.
         assert_eq!(sent["options"]["num_ctx"], json!(DEFAULT_NUM_CTX));
 
         let messages = sent["messages"].as_array().expect("messages");
@@ -1874,6 +2196,40 @@ mod tests {
         assert_eq!(sent["tools"][0]["type"], "function");
         assert_eq!(sent["tools"][0]["function"]["name"], "Read");
         assert!(sent["tools"][0].get("input_schema").is_none());
+    }
+
+    /// **If this breaks:** a long conversation is clipped on the server and
+    /// nothing in the session record says so. This is the end-to-end form of
+    /// the defect — the derivation reaching the wire, and the same number
+    /// coming back on [`Usage::context_window`] so a log can be audited for
+    /// the clip afterwards rather than guessed at.
+    ///
+    /// It asserts on the *relationship* between the two rather than a literal,
+    /// because pinning a magic number here would make the test a restatement of
+    /// the constants instead of a check that they are wired together.
+    #[tokio::test]
+    async fn a_long_conversation_widens_the_window_and_the_window_is_reported() {
+        let s = stub(vec![Reply::json(batch_body())]).await;
+        // 600,000 characters ≈ 150,000 tokens: past Emma's default
+        // `max_context` of 120,000, and well past the old flat 32,768.
+        let long = Request::new("you are emma", Vec::new())
+            .with_query(vec![Message::user("x".repeat(600_000))]);
+        let turn = provider(&s).send(long, Mode::Batch, None).await.unwrap();
+
+        let sent = s.last();
+        let asked = sent["options"]["num_ctx"].as_i64().expect("num_ctx");
+        assert!(
+            asked > i64::from(DEFAULT_NUM_CTX),
+            "a 150,000 token prompt went out under a {asked} window"
+        );
+        assert!(
+            asked >= 150_000,
+            "the window does not hold the prompt: {asked}"
+        );
+        assert_eq!(
+            turn.usage.context_window, asked,
+            "the reported window is not the one the wire carried"
+        );
     }
 
     #[tokio::test]
@@ -2005,6 +2361,185 @@ mod tests {
     }
 
     // endregion: the loopback stub
+
+    // region: certification against a real Ollama
+
+    /// **Not a unit test — the receipt.** `#[ignore]`d because it needs a real
+    /// Ollama on `127.0.0.1:11434` holding `gemma4:12b`, which no CI runner
+    /// has; run it with
+    /// `cargo test -p emma-llm --lib the_derived_window_reaches_a_real_ollama
+    /// -- --ignored --nocapture`.
+    ///
+    /// It exists because the stub proves the client's arithmetic and nothing
+    /// about the server's acceptance of it. A `num_ctx` Ollama refuses, or
+    /// silently floors, would pass every test above. This one puts a recording
+    /// proxy between the provider and the real server, so the number asserted
+    /// on is the number the socket carried, and it fails if the model does not
+    /// answer under that window.
+    #[tokio::test]
+    #[ignore = "needs a real Ollama at 127.0.0.1:11434 with gemma4:12b"]
+    async fn the_derived_window_reaches_a_real_ollama() {
+        // A forwarding proxy rather than a mock: the reply has to come from the
+        // model, or this proves only that a fake accepts the field.
+        let seen: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let captured = seen.clone();
+        tokio::spawn(async move {
+            let (mut client, _) = listener.accept().await.unwrap();
+            let mut upstream = tokio::net::TcpStream::connect("127.0.0.1:11434")
+                .await
+                .expect("a real Ollama is listening");
+            let mut raw: Vec<u8> = Vec::new();
+            let mut chunk = [0u8; 8192];
+            loop {
+                let n = client.read(&mut chunk).await.unwrap_or(0);
+                if n == 0 {
+                    return;
+                }
+                raw.extend_from_slice(&chunk[..n]);
+                upstream.write_all(&chunk[..n]).await.unwrap();
+                if let Some(h) = headers_end(&raw) {
+                    if raw.len() >= h + content_length(&raw[..h]) {
+                        let len = content_length(&raw[..h]);
+                        captured
+                            .lock()
+                            .unwrap()
+                            .push(serde_json::from_slice(&raw[h..h + len]).unwrap());
+                        break;
+                    }
+                }
+            }
+            let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+        });
+
+        // ~200,000 characters of filler: past the old flat 32,768 window by a
+        // wide margin, so a server that ignored `num_ctx` would drop the
+        // question at the front and answer something else.
+        let filler = "the quick brown fox jumps over the lazy dog. ".repeat(4_400);
+        let req = Request::new("You are Emma. Answer in one word.", Vec::new()).with_query(vec![
+            Message::user(format!(
+                "{filler}\n\nIgnore the text above. What colour is the sky?"
+            )),
+        ]);
+        let turn = OllamaProvider::new(Some("gemma4:12b".into()))
+            .with_host(format!("http://{addr}"))
+            .send(req, Mode::Batch, None)
+            .await
+            .expect("the real server answered");
+
+        let sent = seen.lock().unwrap()[0].clone();
+        let wire = sent["options"]["num_ctx"].as_i64().expect("num_ctx");
+        println!("wire num_ctx = {wire}");
+        println!("usage.context_window = {}", turn.usage.context_window);
+        println!("usage.input_tokens = {}", turn.usage.input_tokens);
+        assert!(wire > i64::from(DEFAULT_NUM_CTX), "wire window {wire}");
+        assert_eq!(turn.usage.context_window, wire);
+        // The server accepted the window rather than flooring it: the prompt it
+        // counted is larger than the old constant, so nothing was dropped to
+        // fit.
+        assert!(
+            turn.usage.input_tokens > i64::from(DEFAULT_NUM_CTX),
+            "the server counted only {} prompt tokens — it clipped",
+            turn.usage.input_tokens
+        );
+    }
+
+    /// A recording pass-through in front of the real Ollama, returning the
+    /// address to point a provider at and the handle the bodies land in.
+    ///
+    /// Split out rather than repeated because the second live test below needs
+    /// exactly the sibling's arrangement, and two copies of a proxy would be
+    /// two chances for one of them to record something the socket did not
+    /// carry.
+    fn recording_proxy() -> (String, Arc<Mutex<Vec<Value>>>) {
+        let seen: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured = seen.clone();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        tokio::spawn(async move {
+            let (mut client, _) = listener.accept().await.unwrap();
+            let mut upstream = tokio::net::TcpStream::connect("127.0.0.1:11434")
+                .await
+                .expect("a real Ollama is listening");
+            let mut raw: Vec<u8> = Vec::new();
+            let mut chunk = [0u8; 8192];
+            loop {
+                let n = client.read(&mut chunk).await.unwrap_or(0);
+                if n == 0 {
+                    return;
+                }
+                raw.extend_from_slice(&chunk[..n]);
+                upstream.write_all(&chunk[..n]).await.unwrap();
+                if let Some(h) = headers_end(&raw) {
+                    if raw.len() >= h + content_length(&raw[..h]) {
+                        let len = content_length(&raw[..h]);
+                        captured
+                            .lock()
+                            .unwrap()
+                            .push(serde_json::from_slice(&raw[h..h + len]).unwrap());
+                        break;
+                    }
+                }
+            }
+            let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    /// **Not a unit test — the receipt for the temperature port.** `#[ignore]`d
+    /// for the same reason as its sibling above; run it with
+    /// `cargo test -p emma-llm --lib a_set_temperature_reaches_a_real_ollama
+    /// -- --ignored --nocapture`.
+    ///
+    /// The stub tests prove the renderer puts the key inside `options`. They
+    /// cannot prove Ollama accepts it there: a server that rejected the field,
+    /// or took it only at the top level, would leave every one of them green.
+    /// This one reads the body off the socket and requires the real model to
+    /// answer under it.
+    #[tokio::test]
+    #[ignore = "needs a real Ollama at 127.0.0.1:11434 with gemma4:12b"]
+    async fn a_set_temperature_reaches_a_real_ollama_inside_options() {
+        let (host, seen) = recording_proxy();
+        let req = Request::new("You are Emma. Answer in one word.", Vec::new())
+            .with_query(vec![Message::user("What colour is the sky?")])
+            .with_temperature(Some(0.15));
+        let turn = OllamaProvider::new(Some("gemma4:12b".into()))
+            .with_host(host)
+            .send(req, Mode::Batch, None)
+            .await
+            .expect("the real server answered");
+
+        let sent = seen.lock().unwrap()[0].clone();
+        println!("wire body = {sent}");
+        println!("answer = {:?}", turn.text());
+        assert_eq!(sent["options"]["temperature"], 0.15, "{sent}");
+        assert!(sent.get("temperature").is_none(), "{sent}");
+    }
+
+    /// The other half of the same claim, and the one a renderer that defaulted
+    /// to `0.0` would fail: with nothing set, no `temperature` key reaches the
+    /// real server at all, so the Modelfile's own value stays in force.
+    #[tokio::test]
+    #[ignore = "needs a real Ollama at 127.0.0.1:11434 with gemma4:12b"]
+    async fn an_unset_temperature_reaches_a_real_ollama_as_no_key_at_all() {
+        let (host, seen) = recording_proxy();
+        let req = Request::new("You are Emma. Answer in one word.", Vec::new())
+            .with_query(vec![Message::user("What colour is the sky?")]);
+        OllamaProvider::new(Some("gemma4:12b".into()))
+            .with_host(host)
+            .send(req, Mode::Batch, None)
+            .await
+            .expect("the real server answered");
+
+        let sent = seen.lock().unwrap()[0].clone();
+        println!("wire body = {sent}");
+        assert!(sent["options"].get("temperature").is_none(), "{sent}");
+    }
+
+    // endregion: certification against a real Ollama
 }
 
 // endregion: Tests

@@ -311,17 +311,77 @@ const PLATFORM: &str = "Macintosh; Intel Mac OS X 10_15_7";
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 const PLATFORM: &str = "X11; Linux x86_64";
 
-/// `chrome --version` prints a line like `Google Chrome 140.0.7339.128`; the
-/// first dotted number's first component is the major. `None` when there is no
-/// Chrome, it will not run, or the line has no version in it.
+/// The major version of the installed Chrome, or `None` when there is no
+/// Chrome or it will not say.
+///
+/// **On Windows this never starts Chrome.** `chrome.exe --version` prints
+/// nothing there and, on a machine with no session to attach to, starts a
+/// browser that never exits: the CI runner sat inside this function for four
+/// hours across three runs before the log named the test. Chrome's Windows
+/// install keeps its binaries in a directory named by the full version beside
+/// the executable (`...\Application\140.0.7339.128\`), so the answer is a
+/// directory listing. Elsewhere `--version` prints the line and returns, and
+/// it is run under a deadline so a Chrome that misbehaves costs three seconds
+/// rather than a hang.
 fn installed_chrome_major() -> Option<u32> {
     let exe = chromiumoxide::detection::default_executable(Default::default()).ok()?;
-    let out = std::process::Command::new(exe)
+    if cfg!(windows) {
+        return version_dir_beside(&exe);
+    }
+    major_in(&version_line_with_deadline(&exe)?)
+}
+
+/// The major from a version-named directory beside `exe`, the shape Chrome's
+/// Windows installer lays down. The highest such directory wins when an update
+/// has left two.
+fn version_dir_beside(exe: &std::path::Path) -> Option<u32> {
+    let dir = exe.parent()?;
+    let mut best: Option<(Vec<u32>, u32)> = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let parts: Option<Vec<u32>> = name.split('.').map(|p| p.parse().ok()).collect();
+        let Some(parts) = parts else { continue };
+        if parts.len() < 3 || !entry.path().is_dir() {
+            continue;
+        }
+        let major = parts[0];
+        if best.as_ref().is_none_or(|(b, _)| parts > *b) {
+            best = Some((parts, major));
+        }
+    }
+    best.map(|(_, major)| major)
+}
+
+/// `chrome --version` with a three-second deadline: the child is spawned with
+/// its output piped, polled, and killed if it is still there when the time is
+/// up. `None` on any failure, which the caller reads as "use the fallback".
+fn version_line_with_deadline(exe: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    let mut child = std::process::Command::new(exe)
         .arg("--version")
-        .output()
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
         .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    major_in(&text)
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let mut text = String::new();
+    child.stdout.take()?.read_to_string(&mut text).ok()?;
+    Some(text)
 }
 
 fn major_in(text: &str) -> Option<u32> {
@@ -369,7 +429,7 @@ pub struct Hit {
 /// segment match, and the two lines after it are the title and snippet. When
 /// that fails the anchor text stands in for the title and the snippet is
 /// empty; a result with a URL and no title is still a place to look.
-pub fn hits(digest: &Value, engine_host: &str, count: usize) -> Vec<Hit> {
+pub fn hits(digest: &Value, engine_host: &str, count: usize) -> (Vec<Hit>, usize) {
     let engine = engine_host.to_ascii_lowercase();
     let links = digest
         .pointer("/digest/interactive/links")
@@ -384,6 +444,7 @@ pub fn hits(digest: &Value, engine_host: &str, count: usize) -> Vec<Hit> {
 
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
+    let mut arrived = 0usize;
     for link in links {
         let href = link
             .get("href")
@@ -406,16 +467,16 @@ pub fn hits(digest: &Value, engine_host: &str, count: usize) -> Vec<Hit> {
         if title.is_empty() {
             continue;
         }
-        out.push(Hit {
-            url: target,
-            title,
-            snippet,
-        });
-        if out.len() >= count {
-            break;
+        arrived += 1;
+        if out.len() < count {
+            out.push(Hit {
+                url: target,
+                title,
+                snippet,
+            });
         }
     }
-    out
+    (out, arrived)
 }
 
 /// Where a result anchor actually goes, or `None` for the engine's own
@@ -563,7 +624,7 @@ fn render(query: &str, count: usize, engine_host: &str, digest: &Value) -> ToolO
         return ToolOutcome::new(note).with_display(format!("{query} — blocked by {engine_host}"));
     }
 
-    let found = hits(digest, engine_host, count);
+    let (found, arrived) = hits(digest, engine_host, count);
     let mut out = format!("# Search: {query}\n\n");
     if found.is_empty() {
         out.push_str(
@@ -583,11 +644,20 @@ fn render(query: &str, count: usize, engine_host: &str, digest: &Value) -> ToolO
         }
         out.push('\n');
     }
-    ToolOutcome::new(out).with_display(format!(
+    let outcome = ToolOutcome::new(out).with_display(format!(
         "{query} — {} result{}",
         found.len(),
         if found.len() == 1 { "" } else { "s" }
-    ))
+    ));
+    if arrived > found.len() {
+        return outcome.truncated_because(format!(
+            "{} of {arrived} results shown, cut by count={}; re-search with count={arrived} \
+             for the rest — {arrived} is all this page held",
+            found.len(),
+            found.len()
+        ));
+    }
+    outcome
 }
 
 // endregion: A digest into places to look
@@ -705,7 +775,7 @@ mod tests {
             ],
             false,
         );
-        let got = hits(&d, "www.bing.com", 10);
+        let (got, _) = hits(&d, "www.bing.com", 10);
         assert_eq!(got.len(), 2, "{got:?}");
         assert_eq!(
             got[0].url,
@@ -731,7 +801,7 @@ mod tests {
         // the silent kind of loss.
         let other = "a1aHR0cHM6Ly9leGFtcGxlLm9yZy9wYWdl"; // https://example.org/page
         let d = bing_digest(vec![bing_link("example.org", other)], false);
-        let got = hits(&d, "www.bing.com", 10);
+        let (got, _) = hits(&d, "www.bing.com", 10);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].url, "https://example.org/page");
         assert_eq!(got[0].title, "example.org");
@@ -745,7 +815,31 @@ mod tests {
                 |i| json!({ "text": format!("r{i}"), "href": format!("https://site{i}.example/") }),
             )
             .collect();
-        assert_eq!(hits(&bing_digest(links, false), "www.bing.com", 3).len(), 3);
+        let (got, arrived) = hits(&bing_digest(links, false), "www.bing.com", 3);
+        assert_eq!(got.len(), 3);
+        assert_eq!(arrived, 30);
+    }
+
+    /// `count` smaller than what the page returned was a silent drop: ten
+    /// results arrived, three were shown, and nothing said the other seven
+    /// existed. The continuation here is cheap and exact — the results are
+    /// already on the wire, so the remedy is one number.
+    #[test]
+    fn a_count_below_what_arrived_names_the_cut() {
+        let links = (0..10)
+            .map(
+                |i| json!({ "text": format!("r{i}"), "href": format!("https://site{i}.example/") }),
+            )
+            .collect();
+        let d = bing_digest(links, false);
+        let out = render("q", 3, "www.bing.com", &d);
+        let reason = out.truncation.expect("a dropped result must be announced");
+        assert!(reason.contains("count=3"), "no limit named: {reason}");
+        assert!(reason.contains("count=10"), "no next call: {reason}");
+        assert!(reason.contains("3 of 10"), "no total: {reason}");
+
+        let whole = render("q", 10, "www.bing.com", &d);
+        assert!(!whole.truncated, "{:?}", whole.truncation);
     }
 
     /// **If this breaks:** a challenge page's links are being handed to the
@@ -826,6 +920,24 @@ mod tests {
         assert!(t
             .validate_args(&json!({ "query": "x", "count": 5 }))
             .is_ok());
+    }
+
+    /// The Windows install layout answers the version without starting
+    /// Chrome: a version-named directory beside the executable, highest wins.
+    #[test]
+    fn a_version_directory_beside_the_executable_names_the_major() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("chrome.exe");
+        std::fs::write(&exe, b"").unwrap();
+        std::fs::create_dir(dir.path().join("139.0.7258.66")).unwrap();
+        std::fs::create_dir(dir.path().join("140.0.7339.128")).unwrap();
+        std::fs::create_dir(dir.path().join("SetupMetrics")).unwrap();
+        std::fs::write(dir.path().join("141.0.0.0"), b"a file, not a directory").unwrap();
+        assert_eq!(version_dir_beside(&exe), Some(140));
+        let empty = tempfile::tempdir().unwrap();
+        let lone = empty.path().join("chrome.exe");
+        std::fs::write(&lone, b"").unwrap();
+        assert_eq!(version_dir_beside(&lone), None);
     }
 
     #[test]

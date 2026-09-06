@@ -627,6 +627,13 @@ fn apply(messages: &mut [Message], actions: &HashMap<Site, Action>) {
             match (actions.get(&(m, b)), block) {
                 (Some(Action::Stub(text)), ContentBlock::ToolResult(r)) => {
                     r.content = text.clone();
+                    // The pictures go with the prose. A stub exists to take a
+                    // superseded result's bytes out of the request, and a
+                    // screenshot result is almost entirely its image: leaving
+                    // `images` populated would replace a few hundred bytes of
+                    // text and still ship a few hundred kilobytes of base64,
+                    // which is the pruning reported and not the pruning done.
+                    r.images.clear();
                 }
                 (Some(Action::Fold(input)), ContentBlock::ToolUse(c)) => {
                     c.input = input.clone();

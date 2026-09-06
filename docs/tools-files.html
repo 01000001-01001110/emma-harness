@@ -80,6 +80,7 @@
   <a href="tools-tasks.html">tasks</a>
   <a href="tools-web.html">web</a>
   <a href="tools-lsp.html">LSP</a>
+  <a href="tools-screenshot.html">screenshot</a>
 </nav>
 
 <p class="lede">
@@ -506,7 +507,10 @@
   refused in <code>validate_args</code>, before anything is walked:
   <code>{pattern} is not a valid glob: {e}</code>. The compiler is shared with
   <code>Grep</code>'s <code>glob</code> filter, so the two cannot come to
-  disagree about what <code>**</code> means.
+  disagree about what <code>**</code> means. <code>include_ignored</code>
+  (boolean, default false) is the third argument: it turns the
+  <code>.gitignore</code> skip off for this call, and it is the remedy the
+  ignore note names.
 </p>
 
 <p>
@@ -557,26 +561,86 @@
   <code>Grep</code> finds a file <code>Glob</code> swears does not exist.
 </p>
 
-<pre><code><span class="c">/// Never descended into. Not a general ignore mechanism — the object store is</span>
-<span class="c">/// large, opaque and never what anyone meant, and anything more clever belongs</span>
-<span class="c">/// in a config file rather than compiled in.</span>
-<span class="c">///</span>
-<span class="c">/// Notably absent: `target`, `node_modules`, and anything else `.gitignore`</span>
-<span class="c">/// would list. Reading a build artefact is a legitimate thing for a coding</span>
-<span class="c">/// agent to want, and a hidden ignore list is a search that lies about what it</span>
-<span class="c">/// searched. The visit ceiling below is what keeps a large tree affordable,</span>
-<span class="c">/// and it says so when it fires.</span>
+<pre><code><span class="c">/// Never descended into, whatever the ignore setting. The object store is</span>
+<span class="c">/// large, opaque and never what anyone meant, and `Read` reaches a loose object</span>
+<span class="c">/// by name if somebody genuinely wants one.</span>
 <span class="k">const</span> SKIP_DIRS: &amp;[&amp;<span class="k">str</span>] = &amp;[<span class="s">".git"</span>];</code></pre>
 
 <p>
-  <code>MAX_VISITED</code> is 200,000 and counts entries the walker
+  That doc used to say more, and what it said was reversed on 2026-09-06. The
+  argument was that <code>target</code> and <code>node_modules</code> are
+  absent from the list, because reading a build artefact is a legitimate thing
+  for a coding agent to want and a hidden ignore list is a search that lies
+  about what it searched. <strong>The principle survives. The mechanism failed it.</strong>
+  In this repository <code>target/</code> holds essentially the whole tree: 351
+  files with the ignore rules honoured against 163,848 without them.
+  <code>Glob</code>'s result cap is 1,000 and it sorts newest first, so that cap
+  is spent entirely inside build output before any source is reached, whether or
+  not the visit ceiling fires on the day. The fork's measurement of the same
+  shape was <code>Glob **/*.md</code> returning 27 of 107 markdown files while
+  reporting <em>&ldquo;27 of 27 paths&rdquo;</em>: a ceiling notice saying the
+  counts are a floor is not what a reader takes from a confident total.
+</p>
+
+<p>
+  So the walk takes an <code>Ignores</code> setting with two values.
+  <code>Honour</code> is the default and reads the <code>.gitignore</code> files
+  it passes, which is what <code>ripgrep</code> does. <code>Walk</code> skips
+  nothing but <code>.git</code> and is what <code>include_ignored=true</code>
+  selects on both <code>Glob</code> and <code>Grep</code>. The second half of the
+  rule is the one that keeps the original principle: <strong>the ignore list is
+  declared rather than hidden.</strong> Every result that skipped anything
+  carries <code>{n} paths ignored by `.gitignore` were skipped (&hellip; and {m}
+  more), along with anything inside them; pass include_ignored=true to search
+  them</code>, naming the first six. A result that skipped nothing says nothing.
+</p>
+
+<p>
+  <span class="chip cert">certified</span> on this Windows checkout, 2026-09-06:
+  <code>cargo test -p emma-tools-fs --lib certify_gitignore -- --ignored
+  --nocapture</code> reported 351 files honouring against 163,848 including
+  ignored, nine ignored paths named <code>.env, blog, memory, notes, target,
+  verification</code>, 38 markdown files against 324, zero paths under
+  <code>target/</code> in the honouring walk, and <strong>6 ms against 460
+  ms</strong> in a debug build. The visit ceiling does not fire in either
+  direction here, which is the part worth noticing: the defect was never really
+  the ceiling, it was the ordering.
+</p>
+
+<p>
+  Three alternatives were rejected. A much larger ceiling raises the cost of
+  every wrong-shaped call and still leaves the useful files last. A per-directory
+  entry budget is cheaper and truncates by a rule the model can neither predict
+  nor name, which is the failure being fixed. Ordering source ahead of ignored
+  paths fixes <code>Glob</code>'s newest-first list and does nothing for
+  <code>Grep</code>, which reads every candidate.
+</p>
+
+<p>
+  <code>MAX_VISITED</code> is still 200,000 and still counts entries the walker
   <em>yielded</em>, directories and unreadable entries included, because the
   traversal is what costs. Counting only returned files would let a tree of a
   million empty directories run unbounded while the counter stayed at zero. An
   unreadable subdirectory is skipped rather than failing the call, so a single
   permission bit cannot hide a whole tree of results.
 </p>
-<span class="src">tools/fs/src/walk.rs — <code>SKIP_DIRS</code>, <code>files_within</code></span>
+<span class="src">tools/fs/src/walk.rs &mdash; <code>Ignores</code>, <code>SKIP_DIRS</code>, <code>ignored_notice</code>, <code>read_ignore_file</code>, <code>files_within</code></span>
+
+<p>
+  <span class="chip unv">unverified</span> Only <code>.gitignore</code> is read.
+  Not <code>.ignore</code>, not <code>.git/info/exclude</code>, not the global
+  <code>core.excludesFile</code>, all of which <code>ripgrep</code> honours and
+  which the &ldquo;what ripgrep does&rdquo; phrasing gestures at without claiming.
+  The gap is invisible until somebody's <code>.git/info/exclude</code> is not
+  honoured, which is what would settle whether it matters.
+  <span class="chip unv">unverified</span> on Windows:
+  <code>a_symlink_out_of_the_tree_is_never_followed</code> is
+  <code>#[cfg(unix)]</code> and did not run here, so the containment boundary
+  under <code>include_ignored: true</code> is unproven on this platform, and
+  <code>include_ignored</code> is a new argument that widens what the walk
+  reaches. Running the suite on macOS, or enabling Developer Mode here and
+  adding a <code>#[cfg(windows)]</code> twin, settles it.
+</p>
 
 <p>
   <span class="chip test">tested</span>
@@ -600,6 +664,7 @@
       <tr><td><code>case_insensitive</code></td><td>boolean</td><td>Default false.</td></tr>
       <tr><td><code>output_mode</code></td><td>enum</td><td><code>content</code> (default), <code>files_with_matches</code>, <code>count</code>. Anything else is <code>Grep.output_mode must be content, files_with_matches or count, got {other}</code>.</td></tr>
       <tr><td><code>head_limit</code></td><td>integer ≥ 1</td><td>Lowers the 500-line ceiling and cannot raise it.</td></tr>
+      <tr><td><code>include_ignored</code></td><td>boolean</td><td>Default false. Searches paths <code>.gitignore</code> would remove; the same argument <code>Glob</code> takes.</td></tr>
     </tbody>
   </table>
 </div>
@@ -633,6 +698,22 @@
     </tbody>
   </table>
 </div>
+
+<p>
+  The ignore skip is a sixth thing the result can say and it is
+  <strong>not</strong> a cut. Nothing was truncated: a set of paths was never
+  candidates, the caller can make them candidates with one argument, and filing
+  it under truncation would put a remedy that always works next to four that
+  sometimes do not. It rides as a note on the outcome rather than through
+  <code>truncated_because</code>, which is why an empty search now reads
+  <code>no matches (ignored paths not searched)</code> with the note attached
+  rather than a bare emptiness.
+  <span class="chip unv">unverified</span> at the model's end. Whether a model
+  reads that as &ldquo;search again with <code>include_ignored</code>&rdquo; or
+  as &ldquo;there is nothing there&rdquo; is a fact about models and not about
+  strings, and one live run against a real model, watching for the second call,
+  is what would settle it.
+</p>
 
 <p>
   <code>total_hits</code> and <code>files_with_hits</code> count every match in

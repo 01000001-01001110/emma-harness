@@ -95,6 +95,22 @@ use super::render::{rows_used, Skin};
 use super::spacing::Spacing;
 use super::view::{Mode, Prompt, View};
 
+/// The four keys the SESSIONS list answers while it has the arrows.
+///
+/// Named rather than a `KeyCode`, so this module states what the list *does*
+/// and `input.rs` states which key does it. That is the same split the `/`
+/// menu's [`super::menu::MenuKey`] already makes, and it is what lets the
+/// list's behaviour be tested without a keyboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionsKey {
+    Up,
+    Down,
+    /// Enter: resume the highlighted row.
+    Accept,
+    /// Esc: give the arrows back to the input box, resume nothing.
+    Cancel,
+}
+
 // region: Restoring
 // ---------------------------------------------------------------------------
 // Restoring
@@ -157,6 +173,23 @@ fn install_panic_hook() {
     });
 }
 
+/// Whether [`restore_terminal`] has nothing to undo.
+///
+/// **A function, and exhaustively tested, because the guard it replaces could
+/// not be tested at all.** It was four negations joined by `&&`, and the test
+/// over it read the source for the four latch names. Changing one `&&` to a
+/// `||` keeps all four names, keeps the test green, and makes the teardown
+/// return early whenever any single latch is off: a shell with no echo, on a
+/// screen that is not the user's, which `CLAUDE.md` names as the failure people
+/// uninstall over. A source-grep cannot see the difference between a
+/// conjunction and a disjunction; sixteen cases can.
+///
+/// Every latch alone is enough to make the teardown run, so this answers true
+/// for exactly one of the sixteen inputs.
+pub(crate) fn nothing_to_restore(frame: bool, raw: bool, alt: bool, mouse: bool) -> bool {
+    !frame && !raw && !alt && !mouse
+}
+
 pub fn restore_terminal() {
     // **Each latch answers for itself.** This used to return early unless
     // `FRAME_ON` was set — and `FRAME_ON` is set *last*, after raw mode, the
@@ -170,11 +203,12 @@ pub fn restore_terminal() {
     // it. Restored 2026-08-27: the TUI import brought back the single-latch
     // guard, and the hardening net caught it.
     let was_frame = FRAME_ON.swap(false, Ordering::SeqCst);
-    if !was_frame
-        && !RAW_ON.load(Ordering::SeqCst)
-        && !ALT_ON.load(Ordering::SeqCst)
-        && !MOUSE_ON.load(Ordering::SeqCst)
-    {
+    if nothing_to_restore(
+        was_frame,
+        RAW_ON.load(Ordering::SeqCst),
+        ALT_ON.load(Ordering::SeqCst),
+        MOUSE_ON.load(Ordering::SeqCst),
+    ) {
         return;
     }
     if RAW_ON.swap(false, Ordering::SeqCst) {
@@ -372,6 +406,20 @@ pub struct Frame {
     /// inside paths that already hold `inner`, and one mutex for two unrelated
     /// things is how a repaint ends up waiting on a subprocess.
     status_requests: Mutex<Option<super::statusline::Requests>>,
+    /// Whether the engine in force can be steered *during* a goal.
+    ///
+    /// True for Emma's own loop, which drains the steering queue at every turn
+    /// boundary. False for the claude engine, whose child is a `claude -p` run
+    /// with its stdin closed: there is no turn boundary Emma can reach, so a
+    /// steer typed during one waits for the goal to end and opens the next.
+    /// The flag exists so the queued row can promise the right moment. A
+    /// transcript that said "the next turn" on a claude goal would be Emma
+    /// making a promise the code does not keep.
+    ///
+    /// An atomic rather than a field in `inner`: it is read by the reader
+    /// thread on every submit, and taking the paint lock to answer a question
+    /// about which engine booted would be a lock held for no reason.
+    steerable: std::sync::atomic::AtomicBool,
 }
 
 /// Which of the two interactive frames this run is drawing.
@@ -587,6 +635,7 @@ impl Frame {
             }),
             skin,
             status_requests: Mutex::new(None),
+            steerable: std::sync::atomic::AtomicBool::new(true),
         });
         frame.draw();
         spawn_clock(Arc::downgrade(&frame));
@@ -754,6 +803,17 @@ impl Frame {
     pub fn set_menu(&self, menu: Option<super::menu::MenuView>) {
         let mut inner = self.lock();
         inner.view.menu = menu;
+    }
+    /// Whether a steer queued now lands at the next turn or after the goal.
+    /// See [`Frame::steerable`].
+    pub fn steers_at_the_next_turn(&self) -> bool {
+        self.steerable.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Said once, by `main`, when the engine in force is not Emma's own loop.
+    pub fn set_steerable(&self, steerable: bool) {
+        self.steerable
+            .store(steerable, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Whether a question is on screen. Asked by the reader before it lets `/`
@@ -1089,7 +1149,124 @@ impl Frame {
             Ui::Full(app) if app.new_session_clicked(col, row, pending) => {
                 Some(super::app::SidebarAction::NewSession)
             }
+            // Then the rows the paint reported. A TOOLS row is its chord; a
+            // SESSIONS row is the session it names, resolved to an id **here**
+            // rather than carried as an index, because `refresh_sessions`
+            // rebuilds the list at the end of every goal and an index outlives
+            // the row it meant.
+            Ui::Full(app) => match app.sidebar_row_click(col, row, pending) {
+                Some(super::sidebar::Hit::Tool(tool)) => {
+                    Some(super::app::SidebarAction::Tool(tool))
+                }
+                Some(super::sidebar::Hit::Session(i)) => {
+                    app.session_id_at(i).map(super::app::SidebarAction::Resume)
+                }
+                None => None,
+            },
             _ => None,
+        }
+    }
+
+    /// Give the SESSIONS list the arrows, for `/resume` with no argument.
+    ///
+    /// `false` when there is no list to give them to: an empty list, or the
+    /// plain path, which has no sidebar at all. The caller says so rather than
+    /// leaving the keys pointed at nothing.
+    pub fn focus_sessions(&self) -> bool {
+        let mut inner = self.lock();
+        let taken = match &mut inner.ui {
+            Ui::Full(app) => app.focus_sessions(),
+            _ => false,
+        };
+        if taken {
+            synchronized(|| inner.paint());
+        }
+        taken
+    }
+
+    /// Whether the SESSIONS list currently holds the arrows.
+    pub fn sessions_focused(&self) -> bool {
+        matches!(&self.lock().ui, Ui::Full(app) if app.sessions_focused())
+    }
+
+    /// One key, while the SESSIONS list has the arrows.
+    ///
+    /// Returns the session id when the key was Enter on a row. What happens to
+    /// it is the shell's, and it is the same thing a click on that row does —
+    /// see `super::input::resume_session`. One picked-row path, two ways of
+    /// picking.
+    ///
+    /// **A pending approval takes the keys back outright.** That is the rule
+    /// the pointer already follows, and it is the one that matters most here: a
+    /// question on screen must not be answerable by a stray Enter that resumes
+    /// a session instead of saying yes or no.
+    pub fn sessions_key(&self, key: SessionsKey) -> Option<String> {
+        let mut inner = self.lock();
+        let pending = inner.view.prompt.is_some();
+        let Ui::Full(app) = &mut inner.ui else {
+            return None;
+        };
+        if !app.sessions_focused() {
+            return None;
+        }
+        if pending {
+            app.blur_sessions();
+            synchronized(|| inner.paint());
+            return None;
+        }
+        let picked = match key {
+            SessionsKey::Up => {
+                app.move_session_selection(false);
+                None
+            }
+            SessionsKey::Down => {
+                app.move_session_selection(true);
+                None
+            }
+            SessionsKey::Cancel => {
+                app.blur_sessions();
+                None
+            }
+            SessionsKey::Accept => {
+                let id = app.selected_session();
+                app.blur_sessions();
+                id
+            }
+        };
+        synchronized(|| inner.paint());
+        picked
+    }
+
+    /// Tell the Settings screen which provider this session actually booted
+    /// with, closing the gap [`super::app::App::set_running_provider`]
+    /// documents: a run started with `--provider` is bound to something the
+    /// settings file does not name, and the screen cannot see the flag.
+    pub fn running_provider(&self, name: &str) {
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            app.set_running_provider(name.to_string());
+        }
+    }
+
+    /// Hand the resolved `ui.hints` preference in at startup.
+    ///
+    /// The plain path keeps the compiled default: it holds no `App`, so there
+    /// is nowhere for the flag to live, and the one line it governs today —
+    /// the `[+]` control's hint — belongs to a sidebar that path does not
+    /// draw. Said here rather than left as a silent no-op.
+    pub fn set_hints(&self, on: bool) {
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            app.set_hints(on);
+        }
+    }
+
+    /// Whether interface hints are on. The plain path answers with the
+    /// compiled default, for [`Self::set_hints`]'s reason.
+    pub fn hints(&self) -> bool {
+        match &self.lock().ui {
+            Ui::Full(app) => app.hints(),
+            _ => crate::settings::HINTS_DEFAULT,
         }
     }
 
@@ -1258,10 +1435,13 @@ impl Frame {
         }
     }
 
-    /// `,` on an empty input box: the Settings screen, on and off. Inline runs
-    /// get a no-op, like every pane key — there is no full-screen pane to own.
     /// Whether a goal is mid-flight — the one fact [`super::input::quit_route`]
     /// needs. An approval question counts: the goal that asked it is running.
+    ///
+    /// (The two sentences above this one used to describe `,` opening the
+    /// Settings screen, a method that is not here: another doc paragraph that
+    /// outlived its item in the TUI import, so rustdoc printed it as this
+    /// function's summary.)
     pub fn goal_active(&self) -> bool {
         self.lock().started.is_some()
     }
@@ -1293,12 +1473,16 @@ impl Frame {
         let Ui::Full(app) = &mut inner.ui else {
             return false;
         };
-        if app.settings_open() {
+        if app.help_open() {
+            app.toggle_help();
+        } else if app.settings_open() {
             app.toggle_settings();
         } else if app.memory_open() {
             app.toggle_memory(&cwd);
         } else if app.harness_open() {
             app.toggle_harness(&cwd);
+        } else if app.code_open() {
+            app.toggle_code(&cwd);
         } else {
             return false;
         }
@@ -1368,7 +1552,15 @@ impl Frame {
             // `DataExplorer` is superseded and its row reads `n/a`, and the
             // rest are real programs the launcher below spawns.
             Tool::Search | Tool::DataExplorer => {}
-            Tool::Shell | Tool::Code | Tool::FileBrowser => {}
+            // Owner ruling D1, 2026-09-06: `Alt+c` opens the page. The
+            // external editor is not lost; it is F7 and the [Editor] button
+            // inside the page, which is why `Tool::Code` stays out of
+            // `in_app()` and `plan_code` stays reachable.
+            Tool::Code => {
+                self.toggle_code();
+                return;
+            }
+            Tool::Shell | Tool::FileBrowser => {}
         }
         let frame = Arc::clone(self);
         std::thread::spawn(move || {
@@ -1402,6 +1594,270 @@ impl Frame {
             app.toggle_memory(&cwd);
             synchronized(|| inner.paint());
         }
+    }
+
+    /// Open or close the Help page, and say whether there was a page to open.
+    ///
+    /// `false` when the UI is not `Full`, the inline and plain paths, which
+    /// is what lets `/help` print instead of silently doing nothing.
+    pub fn toggle_help(&self) -> bool {
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            app.toggle_help();
+            synchronized(|| inner.paint());
+            return true;
+        }
+        false
+    }
+
+    /// The Help page's keys, the same seam as memory's and harness's: `false`
+    /// when the page is shut or the key is a chord or a release, so the global
+    /// layer keeps it and Ctrl+/ closes what it opened.
+    pub fn help_key(&self, key: ratatui::crossterm::event::KeyEvent) -> bool {
+        let mut inner = self.lock();
+        let handled = if let Ui::Full(app) = &mut inner.ui {
+            app.help_key(key)
+        } else {
+            false
+        };
+        if handled {
+            synchronized(|| inner.paint());
+        }
+        handled
+    }
+
+    /// `Alt+c`, and the sidebar's TOOLS Code row. Same shape as the Memory
+    /// and Harness toggles: the repo's cwd is the tree it browses.
+    pub fn toggle_code(&self) {
+        let mut inner = self.lock();
+        let cwd = inner.view.status.cwd.clone();
+        if let Ui::Full(app) = &mut inner.ui {
+            app.toggle_code(&cwd);
+            synchronized(|| inner.paint());
+        }
+    }
+
+    /// One key for the open Code page. `false` when the page is closed or the
+    /// key is a chord or a release; the caller's global layer keeps it, which
+    /// is what makes `Alt+c` still close the page it opened.
+    pub fn code_key(self: &Arc<Self>, key: ratatui::crossterm::event::KeyEvent) -> bool {
+        let (handled, job) = {
+            let mut inner = self.lock();
+            let out = if let Ui::Full(app) = &mut inner.ui {
+                app.code_key(key)
+            } else {
+                (false, None)
+            };
+            if out.0 {
+                synchronized(|| inner.paint());
+            }
+            out
+        };
+        if let Some(job) = job {
+            self.run_code_job(job);
+        }
+        handled
+    }
+
+    /// Bracketed-paste text offered to the open Code page. `false` when the
+    /// page is closed, so the input box keeps every paste it used to get.
+    pub fn code_paste(self: &Arc<Self>, text: &str) -> bool {
+        let (handled, job) = {
+            let mut inner = self.lock();
+            let out = if let Ui::Full(app) = &mut inner.ui {
+                app.code_paste(text)
+            } else {
+                (false, None)
+            };
+            if out.0 {
+                synchronized(|| inner.paint());
+            }
+            out
+        };
+        if let Some(job) = job {
+            self.run_code_job(job);
+        }
+        handled
+    }
+
+    /// A drag with the button down over the Code page's document.
+    pub fn code_drag(&self, col: u16, row: u16) -> bool {
+        let mut inner = self.lock();
+        let handled = match &mut inner.ui {
+            Ui::Full(app) => app.code_drag(col, row),
+            _ => false,
+        };
+        if handled {
+            synchronized(|| inner.paint());
+        }
+        handled
+    }
+
+    /// The button coming up over the Code page: the selection goes to the
+    /// clipboard. `false` when the page is closed or nothing was selected.
+    pub fn code_release(self: &Arc<Self>) -> bool {
+        let (handled, job) = {
+            let mut inner = self.lock();
+            let out = if let Ui::Full(app) = &mut inner.ui {
+                app.code_release()
+            } else {
+                (false, None)
+            };
+            if out.0 {
+                synchronized(|| inner.paint());
+            }
+            out
+        };
+        if let Some(job) = job {
+            self.run_code_job(job);
+        }
+        handled
+    }
+
+    /// Hand the Code page its language-server bridge, once `main` has a
+    /// runtime and a pool to give it.
+    pub fn set_code_lsp(&self, handle: super::code_lsp::Handle) {
+        let mut inner = self.lock();
+        if let Ui::Full(app) = &mut inner.ui {
+            app.set_code_lsp(handle);
+        }
+    }
+
+    /// One answer from the bridge, on its way to the screen.
+    ///
+    /// The established push shape, and the reason the feature cannot freeze the
+    /// terminal: this runs on a tokio task, takes the paint lock, writes view
+    /// state, drops the lock and repaints. Nothing on the input thread's side
+    /// of the channel ever waits for a language server.
+    pub fn code_lsp_update(&self, update: super::code::LspUpdate) {
+        let mut inner = self.lock();
+        let open = matches!(&inner.ui, Ui::Full(app) if app.code_open());
+        if !open {
+            return;
+        }
+        if let Ui::Full(app) = &mut inner.ui {
+            app.code_lsp_update(update);
+        }
+        synchronized(|| inner.paint());
+    }
+
+    /// The line the open Code page's chat strip composed, taken once.
+    ///
+    /// Not run from here, which is the whole point. Everything else the page
+    /// asks for is a [`CodeJob`] the frame runs; a question is the one thing
+    /// that has to go down the line channel, and only the reader thread holds
+    /// it.
+    pub fn take_code_line(&self) -> Option<String> {
+        let mut inner = self.lock();
+        match &mut inner.ui {
+            Ui::Full(app) => app.take_code_line(),
+            _ => None,
+        }
+    }
+
+    /// A left press while the Code page is open: the tabs and the [Editor]
+    /// button. Same one-dispatch rule as the keys.
+    pub fn code_click(self: &Arc<Self>, col: u16, row: u16) -> bool {
+        let (handled, job) = {
+            let mut inner = self.lock();
+            let out = if let Ui::Full(app) = &mut inner.ui {
+                app.code_click(col, row)
+            } else {
+                (false, None)
+            };
+            if out.0 {
+                synchronized(|| inner.paint());
+            }
+            out
+        };
+        if let Some(job) = job {
+            self.run_code_job(job);
+        }
+        handled
+    }
+
+    /// The wheel while the Code page is open.
+    pub fn code_scroll(self: &Arc<Self>, up: bool) -> bool {
+        let (handled, job) = {
+            let mut inner = self.lock();
+            let out = if let Ui::Full(app) = &mut inner.ui {
+                app.code_scroll(up)
+            } else {
+                (false, None)
+            };
+            if out.0 {
+                synchronized(|| inner.paint());
+            }
+            out
+        };
+        if let Some(job) = job {
+            self.run_code_job(job);
+        }
+        handled
+    }
+
+    /// The Code page's git work, off the input thread.
+    ///
+    /// Measured, not assumed: `git log --follow` and `git show` ran at 56 to
+    /// 475 ms on this repository's 289 commits (2026-09-06, Windows). Running
+    /// either under the frame lock is a terminal that stops answering keys for
+    /// half a second, which is why the page has sinks rather than return
+    /// values. The lock is taken only to deliver the answer.
+    fn run_code_job(self: &Arc<Self>, job: crate::term::app::CodeJob) {
+        use crate::term::app::CodeJob;
+        use crate::term::code_git;
+        let frame = Arc::clone(self);
+        std::thread::spawn(move || match job {
+            CodeJob::History { root, rel } => {
+                let commits = code_git::history(&root, &rel);
+                let next = {
+                    let mut inner = frame.lock();
+                    let n = if let Ui::Full(app) = &mut inner.ui {
+                        app.code_set_history(commits)
+                    } else {
+                        None
+                    };
+                    synchronized(|| inner.paint());
+                    n
+                };
+                if let Some(hash) = next {
+                    frame.run_code_job(CodeJob::Diff { root, rel, hash });
+                }
+            }
+            CodeJob::Diff { root, rel, hash } => {
+                let rows = code_git::diff_at(&root, &hash, &rel);
+                let mut inner = frame.lock();
+                if let Ui::Full(app) = &mut inner.ui {
+                    app.code_set_diff(&hash, rows);
+                }
+                synchronized(|| inner.paint());
+            }
+            // The second door of ruling D1. `Tool::Code` is deliberately still
+            // not `in_app()`, which is the whole reason this call still
+            // resolves `tools.editor`, `$VISUAL`, `$EDITOR` and the PATH probe.
+            CodeJob::Editor { root } => {
+                let lines = match crate::usertools::launch(crate::usertools::Tool::Code, &root) {
+                    Ok(msg) => frame.skin.note(&format!("Code: {msg}")),
+                    Err(err) => frame.skin.warn(&format!("Code: {err}")),
+                };
+                frame.write_lines(lines);
+            }
+            // The same `to_clipboard` the answer-copy key and a mouse
+            // selection use. One mechanism, three callers: a second escape
+            // sequence written from the Code page would be a second thing to
+            // get wrong on the terminals that already refuse this one. The
+            // page is told what was sent, never what arrived - nothing
+            // downstream of OSC 52 can know.
+            CodeJob::Copy(text) => {
+                let chars = text.chars().count();
+                to_clipboard(&text);
+                let mut inner = frame.lock();
+                if let Ui::Full(app) = &mut inner.ui {
+                    app.code_notice_sent(chars);
+                }
+                synchronized(|| inner.paint());
+            }
+        });
     }
 
     /// One key for the open Harness page. `false` when the page is closed or
@@ -1485,14 +1941,28 @@ impl Frame {
     /// screen is closed or the key is a chord/release, so the global layer
     /// keeps it.
     pub fn settings_key(&self, key: ratatui::crossterm::event::KeyEvent) -> bool {
-        let mut inner = self.lock();
-        let handled = if let Ui::Full(app) = &mut inner.ui {
-            app.settings_key(key)
-        } else {
-            false
+        let (handled, launch) = {
+            let mut inner = self.lock();
+            let out = if let Ui::Full(app) = &mut inner.ui {
+                (app.settings_key(key), app.take_settings_launch())
+            } else {
+                (false, None)
+            };
+            if out.0 {
+                synchronized(|| inner.paint());
+            }
+            out
         };
-        if handled {
-            synchronized(|| inner.paint());
+        // Outside the lock, deliberately: an editor can take a second to
+        // start, and a repaint must not wait on it. `App` spawns nothing for
+        // the same reason it holds no handles, which is that a key reaches it
+        // with the paint lock held.
+        if let Some(path) = launch {
+            let lines = match crate::usertools::open_file(&path) {
+                Ok(msg) => self.skin.note(&msg),
+                Err(err) => self.skin.warn(&err),
+            };
+            self.write_lines(lines);
         }
         handled
     }

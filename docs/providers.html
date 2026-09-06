@@ -93,8 +93,9 @@
 
   <p>
     Rust has no official Anthropic SDK, so I had this crate speak the Messages
-    API over raw HTTP, the documented path for unsupported languages. Two
-    providers exist now, Anthropic and Ollama. The seam I wanted is that a
+    API over raw HTTP, the documented path for unsupported languages. Four
+    providers exist now: Anthropic, Ollama, and OpenRouter and OpenAI over one
+    OpenAI-compatible wire, ported from the fork on 2026-09-06. The seam I wanted is that a
     second provider is a new file rather than a refactor of the loop: nothing
     outside <code>anthropic.rs</code> knows the wire shape, and
     <code>ollama.rs</code> is what proved it. That took deleting
@@ -174,6 +175,7 @@
     </li>
     <li>
       <a href="providers-credentials.html">Where the key comes from</a>
+      <a href="providers-claude.html">The claude engine: a goal handed to another program</a>
       <span>
         Environment, then <code>~/.emma/credentials.json</code>, never the
         project directory. The write that silently deleted a key belonging to

@@ -83,6 +83,7 @@
       <a href="terminal-dock.html">Dock</a>
       <a href="terminal-usertools.html">User tools</a>
       <a href="terminal-pages.html">Pages</a>
+      <a href="terminal-runctl.html">Run control</a>
       <a href="terminal-copying.html">Copying out</a>
     </nav>
 
@@ -189,6 +190,62 @@ fn compose(width: u16, bar: &amp;Bar, skin: &amp;Skin) -&gt; Line&lt;'static&gt;
     catch that drift.&rdquo;</em>
   </p>
 
+  <h2 id="scope">Which counter belongs to the goal and which to the session</h2>
+
+  <p>
+    <code>Status</code> holds five numbers and exactly <strong>one</strong> of
+    them is goal-scoped. <code>spend</code> is the running goal's weighted bill
+    against <code>Budgets::max_tokens</code>, the budget that ends the goal; it
+    only rises within a goal and starts empty at the next one, because a budget
+    nothing is measured against is not a budget. It is the pair the inline row
+    draws as <code>total used/cap</code>, and it is the same number
+    <code>agent.rs</code> tests the goal against, so widening it to the session
+    would mean moving that accounting too.
+  </p>
+
+  <p>
+    <code>up</code>, <code>down</code> and <code>session_tokens</code> are the
+    session's, and they survive <code>goal_started</code>. The first two are the
+    provider's raw <code>input_tokens</code> and <code>output_tokens</code>
+    summed across every call this <em>process</em> has made, which is why they
+    are bare <code>i64</code>: a session that has not called yet has measured
+    zero traffic, and zero is a fact rather than a guess about a cap. They are
+    uncached, so <code>up + down</code> is traffic charged at full price and is
+    not expected to equal <code>session_tokens</code>, which is weighted the way
+    <code>spend</code> is. <code>session_tokens</code> has no cap in its cell
+    because there is no session budget for it to be a proportion of, it never
+    falls, and no goal boundary clears it. <code>/clear</code> keeps it, along
+    with the session id and the transcript that command already says it keeps,
+    because clearing a conversation does not unspend what the conversation cost.
+    Only a fresh process starts it at zero.
+  </p>
+
+  <p>
+    Both scopes come out of one number. <code>Frame::spent</code> hands
+    <code>record_spend</code> the goal's running total, and
+    <code>goal_started</code> folds the goal that just ended into
+    <code>session_base</code> before dropping its meter, so the next goal counts
+    from there.
+  </p>
+
+  <p>
+    Zeroing the arrows and the session total on submit was the owner-visible bug
+    of 2026-08-26, and it was the <em>second</em> time this scoping had been
+    wrong: the bar was reading one goal while the owner read it as the session's
+    running story. The argument that put them there was right about the
+    <em>cell</em> &mdash; the split does sit beside the total &mdash; and wrong
+    about the scope, because that cell is the session's.
+    <span class="chip test">tested</span> &mdash;
+    <code>a_new_goal_never_clears_the_sessions_token_counts</code>,
+    <code>only_a_fresh_process_starts_the_session_counts_at_zero</code> and
+    <code>the_goal_meter_still_starts_each_goal_empty</code>, which together
+    hold both halves: the session's three survive a goal boundary and
+    <code>spend</code> clears. Making
+    <code>goal_started</code> zero the session input fails with
+    <code>session input survives a new goal, left: 0, right: 8128</code>.
+  </p>
+  <span class="src">crates/emma/src/term/render.rs &mdash; <code>Status</code>, <code>record_call</code>, <code>record_spend</code>, <code>goal_started</code>; crates/emma/src/term/frame.rs &mdash; <code>Frame::spent</code>, <code>Frame::goal_started</code></span>
+
   <h2 id="absence">Absence, encoded three ways</h2>
 
   <p>
@@ -217,6 +274,30 @@ fn compose(width: u16, bar: &amp;Bar, skin: &amp;Skin) -&gt; Line&lt;'static&gt;
     their labels regardless would be the bar pretending Emma has features it
     does not.&rdquo;</em>
   </p>
+
+  <p>
+    MODE stopped being placeholder content on 2026-09-06. An idle bar draws
+    <code>approval::current_mode_label()</code>, which is
+    <code>ASSIST</code>, <code>AUTO</code> or <code>PLAN</code>: the posture the
+    session is in, read at draw time rather than at startup, so
+    <code>/mode plan</code> changes the word without a redraw of anything else.
+    A running goal still says <code>WORKING</code>, because a working state is
+    what the cell says while there is one. The word is the posture's and not the
+    gate's, and after <code>/mode</code> the two say different things: a run
+    started with <code>--dangerously-skip-permissions</code> says
+    <code>AUTO</code>, and the same run put into plan says <code>PLAN</code>
+    while the gate it started with has not moved.
+    <span class="chip test">tested</span>:
+    <code>the_status_label_is_assist_until_a_run_says_otherwise</code> goes red
+    when the label is computed from the gate instead of the mode.
+    <span class="chip unv">unverified</span> Nobody has read the cell off a real
+    console since the word changed, and the widths moved:
+    <code>ASK</code> (3) became <code>ASSIST</code> (6), and
+    <code>UNATTENDED</code> (10) became <code>AUTO</code> (4). The longest label
+    got shorter, so an overrun is unlikely rather than ruled out. An 80-column
+    and a 60-column terminal with a goal running settles it.
+  </p>
+  <span class="src">crates/emma/src/term/layout.rs &mdash; <code>bar_for</code>; crates/emma/src/approval.rs &mdash; <code>current_mode_label</code>, <code>Mode::label</code></span>
 
   <div class="note warn">
     <span class="h">Defect: one element of the empty-value loop cannot fail</span>

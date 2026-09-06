@@ -115,9 +115,13 @@
     Four invariants hold across the chapter. A record goes down before the thing
     it describes happens. A turn and the results that answer it are kept
     together or dropped together, because the API rejects either half alone.
-    Compaction is deterministic and asks no model anything. A session is one
-    continuous conversation, so a finished goal stays in it whole until
-    compaction or <code>/clear</code> takes it out.
+    <strong>Compaction asks a model for a summary.</strong> This line read
+    &ldquo;compaction is deterministic and asks no model anything&rdquo; until
+    2026-09-06, and it was a chapter invariant, which is the worst place for a
+    claim to go stale: everything below it was written as though it held.
+    <code>Agent::model_summary</code> makes a call, with fallbacks for when it
+    does not answer. A session is one continuous conversation, so a finished
+    goal stays in it whole until compaction or <code>/clear</code> takes it out.
   </p>
   <span class="src">crates/emma/src/session.rs — module doc, <code>place_turn</code>; crates/emma/src/agent.rs — <code>compact_if_needed</code></span>
 
@@ -132,7 +136,7 @@
     </li>
     <li>
       <a href="session-records.html">Every record, field by field</a>
-      <span>All seventeen kinds with their fields and their writers, the
+      <span>All twenty-nine kinds with their fields and their writers, the
       <code>sub.</code> namespace a delegation writes under, and the two pairing
       rules a parser gets wrong.</span>
     </li>
@@ -145,8 +149,9 @@
     <li>
       <a href="session-resume.html">Resume, and what is not replayed</a>
       <span>Which file <code>--resume</code> means, the three counters and the
-      memo that come back with the messages, and the four things that do
-      not.</span>
+      memo that come back with the messages, the four things that do not, and
+      <code>/resume</code> in place: one process moving between two files, with
+      neither of them renamed.</span>
     </li>
     <li>
       <a href="session-continuity.html">Continuity, and the first run</a>
@@ -155,16 +160,20 @@
       welcome.</span>
     </li>
     <li>
-      <a href="session-compaction.html">Compaction without a model call</a>
-      <span>Whole goals oldest-first, what a folded goal loses, the guard for a
-      compaction that would not shrink anything, and the design note that
-      recommended a model-call summariser, which I overruled.</span>
+      <a href="session-compaction.html">Compaction, and the model call it now makes</a>
+      <span>Whole goals oldest-first, replaced by a summary a model writes with
+      the old collapse as the fallback; the four guardrails that answer the
+      objections to asking a model at all; shedding, for the single goal that is
+      too big on its own; and the reversal of a reversal, since the design note
+      recommended the model call, was overruled, and won.</span>
     </li>
     <li>
       <a href="session-corpus.html">The corpus, as it actually is</a>
       <span>103 files on my machine, 48 of them empty, zero
       <code>compacted</code> records and exactly one <code>delegation</code>,
-      counted at a stated minute with the script attached.</span>
+      counted at a stated minute with the script attached; and the training
+      exporter, which is the one thing that reads the store for a purpose other
+      than continuing a session.</span>
     </li>
   </ol>
 

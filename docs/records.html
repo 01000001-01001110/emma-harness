@@ -136,11 +136,27 @@
   <h3>A green suite is not evidence</h3>
 
   <p>
-    It has been wrong three times here. A language-server readiness check
+    It has been wrong four times here. A language-server readiness check
     declared ready at 0.36 seconds against a real server. A frontmatter parser
     silently dropped 86 of 90 real files because its fixtures used LF endings. A
     strict wire decoder passed 712 tests and then decoded no real tool call,
     because the API adds a key the model did not know about.
+  </p>
+
+  <p>
+    The fourth arrived on 2026-09-06 and is the sharpest statement of the rule
+    yet: <strong>a fake cannot disagree with its author about a string it echoes
+    back.</strong> The language-server client stored published diagnostics under
+    the URI Emma writes and looked them up under the same one; rust-analyzer
+    lowercases the Windows drive letter in everything it sends back, so the
+    lookup could never succeed. Inside the suite both spellings are one string,
+    because a fake echoes the URI it was handed, so every test passed. Against
+    the real server the diagnostics arrived, were filed under one spelling, were
+    read under another, and the tool returned its careful twenty-second timeout
+    sentence every time &mdash; the worst available shape, because it reads as
+    correct behaviour rather than as a bug. The fix ships with a fake that
+    respells URIs the way a real server does.
+    <a href="tools-lsp.html#cut">The LSP page</a> has the transcript.
   </p>
 
   <p>

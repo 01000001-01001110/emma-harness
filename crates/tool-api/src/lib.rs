@@ -151,11 +151,37 @@ pub struct ToolOutcome {
     /// Reading a field the tool set is not the same as re-parsing text the
     /// harness formatted. `None` means the tool ran no command.
     pub exit_code: Option<i64>,
+    /// Images the tool produced, for a provider that can read them.
+    ///
+    /// Empty for every tool that does not make pictures, which is all of them
+    /// until a screenshot tool lands. The loop moves whatever is here onto the
+    /// result block; a provider that cannot take images is told so in text
+    /// rather than sent bytes it will reject.
+    pub images: Vec<OutcomeImage>,
+}
+
+/// One image a tool produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutcomeImage {
+    /// `image/png`, `image/jpeg`.
+    pub media_type: String,
+    /// The bytes, base64.
+    pub data: String,
+    /// Where the full-resolution original is on disk, if the tool kept one.
+    /// A session log records this in place of the bytes, so a tool that
+    /// deletes its file makes its own results unreplayable.
+    pub path: Option<String>,
 }
 
 impl ToolOutcome {
+    pub fn with_image(mut self, image: OutcomeImage) -> Self {
+        self.images.push(image);
+        self
+    }
+
     pub fn new(content: impl Into<String>) -> Self {
         Self {
+            images: Vec::new(),
             content: content.into(),
             display: None,
             truncated: false,

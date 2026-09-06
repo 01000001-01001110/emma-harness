@@ -1295,6 +1295,151 @@ impl Rules {
 // document belongs to another program too.
 // ---------------------------------------------------------------------------
 
+/// The list a decision is written to in a settings file.
+fn list_key(d: Decision) -> &'static str {
+    match d {
+        Decision::Allow => "allow",
+        Decision::Ask => "ask",
+        Decision::Deny => "deny",
+    }
+}
+
+/// Every **bare tool name** rule in `file`, as tool to decision.
+///
+/// Bare names only, and specifier rules are deliberately invisible here: a
+/// `WebFetch(domain:docs.rs)` grant answers the egress question for one host
+/// and says nothing about whether the tool may run, so folding it into a
+/// three-state row would put a word on screen the file does not support.
+/// deny beats ask beats allow, the order [`Rules::decide`] reads them in.
+///
+/// Any problem reading the file answers "nothing said", because this is what a
+/// screen draws and [`set_bare_rule`] is where the refusals live.
+pub fn bare_rules(file: &Path) -> std::collections::BTreeMap<String, Decision> {
+    let Some(doc) = std::fs::read_to_string(file)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+    else {
+        return Default::default();
+    };
+    let mut out: std::collections::BTreeMap<String, Decision> = Default::default();
+    // Weakest first, so a stronger answer for the same tool overwrites it and
+    // the result reads the way the gate will.
+    for decision in [Decision::Allow, Decision::Ask, Decision::Deny] {
+        let Some(list) = doc["permissions"][list_key(decision)].as_array() else {
+            continue;
+        };
+        for entry in list.iter().filter_map(|v| v.as_str()) {
+            if let Ok(rule) = Rule::parse(entry) {
+                if rule.spec == Spec::All {
+                    out.insert(rule.tool, decision);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Put one tool's **bare-name** rule into `file`: `Some(decision)` writes it,
+/// `None` removes it, and the file keeps everything else it had.
+///
+/// The merge discipline is [`remember`]'s, for the same reason: a file that is
+/// not JSON, or not an object, or whose `permissions` is not an object, is
+/// **not written to at all** and the caller is told why. Losing a grant is an
+/// annoyance; losing somebody's `hooks` block is a defect they find weeks
+/// later.
+///
+/// **The coexistence rule, which is the whole reason this is not a rewrite.**
+/// Only entries that parse to `tool` with [`Spec::All`] are removed. A
+/// hand-written `Bash(cargo *)` or `WebFetch(domain:docs.rs)` is never touched
+/// by any state of this control, in any list. The two kinds of rule answer
+/// different questions, so they stack rather than replace each other, and
+/// where they meet [`Rules::decide`] settles it in one direction only: deny is
+/// read before ask, ask before allow. A bare `Deny` therefore outranks a
+/// narrower hand-written allow, which is what denying a tool has to mean; a
+/// bare `Allow` does **not** erase a hand-written `Bash(cargo *)`, it merely
+/// makes it redundant.
+///
+/// `None` is the absence, which is how a tool goes back to asking by the
+/// default path rather than by a rule. That is a real difference: a
+/// `Decision::Ask` rule forces a prompt even where a session grant already
+/// exists, and writing one for every tool somebody left alone would be a
+/// settings screen quietly changing what "default" means.
+pub fn set_bare_rule(file: &Path, tool: &str, decision: Option<Decision>) -> Result<()> {
+    let mut doc: serde_json::Value = match std::fs::read_to_string(file) {
+        Ok(raw) if raw.trim().is_empty() => serde_json::json!({}),
+        Ok(raw) => serde_json::from_str(&raw).with_context(|| {
+            format!(
+                "{} is not valid JSON. Nothing was written to it; fix the file by hand",
+                file.display()
+            )
+        })?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", file.display())),
+    };
+    let shape = kind_of(&doc);
+    let root = doc.as_object_mut().with_context(|| {
+        format!(
+            "{} holds a JSON {shape} rather than an object, so it is not a settings file. \
+             Nothing was written to it",
+            file.display(),
+        )
+    })?;
+    let permissions = root
+        .entry("permissions")
+        .or_insert_with(|| serde_json::json!({}));
+    let permissions = permissions.as_object_mut().with_context(|| {
+        format!(
+            "{}: `permissions` is not an object. Nothing was written to it",
+            file.display()
+        )
+    })?;
+
+    let is_ours = |v: &serde_json::Value| match v.as_str() {
+        Some(text) => matches!(Rule::parse(text), Ok(r) if r.tool == tool && r.spec == Spec::All),
+        None => false,
+    };
+    // Every list is swept before anything is added, so a tool cannot end up
+    // named in two of them and the row cannot show a state the gate disagrees
+    // with. A list that is not an array refuses the whole write rather than
+    // being replaced: it is somebody's, and this function did not put it there.
+    for key in ["allow", "ask", "deny"] {
+        let Some(slot) = permissions.get_mut(key) else {
+            continue;
+        };
+        let list = slot.as_array_mut().with_context(|| {
+            format!(
+                "{}: `permissions.{key}` is not an array. Nothing was written to it",
+                file.display()
+            )
+        })?;
+        list.retain(|v| !is_ours(v));
+    }
+    if let Some(decision) = decision {
+        let slot = permissions
+            .entry(list_key(decision))
+            .or_insert_with(|| serde_json::json!([]));
+        let list = slot.as_array_mut().with_context(|| {
+            format!(
+                "{}: `permissions.{}` is not an array. Nothing was written to it",
+                file.display(),
+                list_key(decision)
+            )
+        })?;
+        list.push(serde_json::Value::String(tool.to_string()));
+    }
+
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    // Temp-and-rename, as `remember` does: a crash mid-write must not leave a
+    // half-written settings file behind.
+    let body = format!("{}\n", serde_json::to_string_pretty(&doc)?);
+    let temp = file.with_extension("json.emma-tmp");
+    std::fs::write(&temp, body).with_context(|| format!("writing {}", temp.display()))?;
+    std::fs::rename(&temp, file).with_context(|| format!("writing {}", file.display()))?;
+    Ok(())
+}
+
 /// Append `rule` to `permissions.allow` in `file`, creating the file if it is
 /// not there. Returns `true` when something was written and `false` when the
 /// rule was already present.
@@ -2685,3 +2830,58 @@ mod tests {
 }
 
 // endregion: Tests
+
+#[cfg(test)]
+mod bare_rule_tests {
+    use super::*;
+
+    /// The three states round-trip through the parser the gate uses, and
+    /// clearing removes the rule rather than writing an `ask` entry.
+    #[test]
+    fn a_bare_rule_writes_reads_back_and_clears() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        set_bare_rule(&file, "WebSearch", Some(Decision::Deny)).unwrap();
+        assert_eq!(bare_rules(&file).get("WebSearch"), Some(&Decision::Deny));
+        set_bare_rule(&file, "WebSearch", Some(Decision::Allow)).unwrap();
+        assert_eq!(bare_rules(&file).get("WebSearch"), Some(&Decision::Allow));
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert!(doc["permissions"]["deny"].as_array().unwrap().is_empty());
+        set_bare_rule(&file, "WebSearch", None).unwrap();
+        assert!(!bare_rules(&file).contains_key("WebSearch"));
+    }
+
+    /// A hand-written specifier rule for the same tool is never touched, in
+    /// any list, by any state of the bare rule.
+    #[test]
+    fn a_specifier_rule_survives_every_state_of_the_bare_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        std::fs::write(
+            &file,
+            r#"{"hooks":{"h":1},"permissions":{"allow":["Bash(cargo *)"]}}"#,
+        )
+        .unwrap();
+        for state in [Some(Decision::Deny), Some(Decision::Allow), None] {
+            set_bare_rule(&file, "Bash", state).unwrap();
+            let doc: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+            assert_eq!(doc["permissions"]["allow"][0], "Bash(cargo *)", "{state:?}");
+            assert_eq!(doc["hooks"]["h"], 1, "{state:?}");
+        }
+        // And the specifier rule is invisible to the bare view.
+        assert!(!bare_rules(&file).contains_key("Bash"));
+    }
+
+    /// A file that is not a settings file is refused whole, and left alone.
+    #[test]
+    fn a_file_that_is_not_an_object_is_not_written_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        std::fs::write(&file, "[1,2,3]").unwrap();
+        let err = set_bare_rule(&file, "Bash", Some(Decision::Deny)).unwrap_err();
+        assert!(err.to_string().contains("Nothing was written"), "{err}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "[1,2,3]");
+    }
+}

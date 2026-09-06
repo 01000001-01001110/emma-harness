@@ -41,7 +41,7 @@ use crate::walk;
 // ---------------------------------------------------------------------------
 
 const NAME: &str = "Glob";
-const KEYS: &[&str] = &["pattern", "path"];
+const KEYS: &[&str] = &["pattern", "path", "include_ignored"];
 
 /// How many paths come back at most.
 ///
@@ -91,6 +91,10 @@ impl Tool for Glob {
                 "path": {
                     "type": "string",
                     "description": "Directory to search. Defaults to the working directory."
+                },
+                "include_ignored": {
+                    "type": "boolean",
+                    "description": "Search paths listed in .gitignore too, such as target/ and node_modules/. Off by default; every result that skipped an ignored path says so."
                 }
             },
             "required": ["pattern"],
@@ -110,6 +114,7 @@ impl Tool for Glob {
         args::deny_unknown(args_v, NAME, KEYS)?;
         let pattern = args::req_str(args_v, NAME, "pattern")?;
         args::opt_str(args_v, NAME, "path")?;
+        args::opt_bool(args_v, NAME, "include_ignored")?;
         // A malformed pattern is a fact about the call and needs no filesystem
         // to detect, so it is caught before anything is walked.
         compile(pattern)?;
@@ -207,7 +212,15 @@ impl Glob {
             }
         };
 
-        let walked = walk::files(&base);
+        let include_ignored = args::opt_bool(&args_v, NAME, "include_ignored")?.unwrap_or(false);
+        let walked = walk::files(
+            &base,
+            if include_ignored {
+                walk::Ignores::Walk
+            } else {
+                walk::Ignores::Honour
+            },
+        );
         let mut hits: Vec<_> = walked
             .files
             .into_iter()
@@ -252,16 +265,42 @@ impl Glob {
             cuts => Some(cuts.join("; also ")),
         };
 
+        // A skipped ignore path is a *note*, not a truncation, and the two are
+        // kept apart deliberately. A truncation says "this answer is short and
+        // I cannot give you the rest"; a note says "this is what I searched and
+        // here is the argument that searches the rest". Folding the ignore
+        // skip into `truncated` would flag almost every call in a repository as
+        // incomplete, and a flag that is always on is a flag nobody reads.
+        let note = if walked.ignored > 0 {
+            Some(walk::ignored_notice(walked.ignored, &walked.ignored_names))
+        } else {
+            None
+        };
+
         if hits.is_empty() {
             // Not an error. The tree was searched and held nothing matching,
-            // which is a result the model can act on.
-            return Ok(match reason {
-                None => {
-                    ToolOutcome::new(String::new()).with_display(format!("{pattern}: no matches"))
+            // which is a result the model can act on. But an empty result is
+            // where the ignore note matters most: "no `.rlib` files here" is a
+            // very different claim once `target` was not searched.
+            let mut content = String::new();
+            if let Some(reason) = &reason {
+                content.push_str(&format!("[truncated: {reason}]"));
+            }
+            if let Some(note) = &note {
+                if !content.is_empty() {
+                    content.push('\n');
                 }
-                Some(reason) => ToolOutcome::new(format!("[truncated: {reason}]"))
-                    .with_display(format!("{pattern}: no matches (search incomplete)"))
-                    .truncated_because(reason),
+                content.push_str(&format!("[note: {note}]"));
+            }
+            let display = match (&reason, &note) {
+                (Some(_), _) => format!("{pattern}: no matches (search incomplete)"),
+                (None, Some(_)) => format!("{pattern}: no matches (ignored paths not searched)"),
+                (None, None) => format!("{pattern}: no matches"),
+            };
+            let outcome = ToolOutcome::new(content).with_display(display);
+            return Ok(match reason {
+                None => outcome,
+                Some(reason) => outcome.truncated_because(reason),
             });
         }
 
@@ -269,6 +308,9 @@ impl Glob {
         let mut content = listing.join("\n");
         if let Some(reason) = &reason {
             content.push_str(&format!("\n[truncated: {reason}]"));
+        }
+        if let Some(note) = &note {
+            content.push_str(&format!("\n[note: {note}]"));
         }
 
         let outcome = ToolOutcome::new(content)

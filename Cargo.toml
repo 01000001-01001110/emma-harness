@@ -9,6 +9,7 @@ members = [
     "tools/lsp",
     "tools/web",
     "tools/tasks",
+    "tools/screenshot",
     "crates/docsgen",
 ]
 
@@ -21,6 +22,11 @@ license = "Apache-2.0"
 [workspace.dependencies]
 anyhow = "1"
 async-trait = "0.1"
+# A screen capture is bytes, and both provider wire formats want those bytes as
+# base64. Hand-rolling the alphabet and the padding is thirty lines nobody
+# should own. Already in the lock file, pulled in transitively by the HTTP
+# stack, so this adds no download.
+base64 = "0.22"
 # Chrome over the DevTools Protocol, for `tools/web`. The alternative to
 # driving a real browser is an HTTP client plus an HTML-to-markdown crate,
 # which returns an empty shell for every page built with JavaScript and a 406
@@ -30,6 +36,9 @@ chromiumoxide = "0.9"
 futures = "0.3"
 futures-util = "0.3"
 globset = "0.4"
+# ripgrep's gitignore engine, for its matcher only: tools/fs keeps its own
+# traversal so it can count and name what an ignore file removed.
+ignore = "0.4"
 # UTS-46, used in exactly one place: composing the boot warning that tells an
 # operator what their non-ASCII `domain:` rule would have to be spelled as.
 # **Not** in the matcher — see `permissions.rs`, which stays byte-for-byte
@@ -59,7 +68,6 @@ regex = "1"
 rpassword = "7"
 tempfile = "3"
 thiserror = "2"
-walkdir = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "fs"] }
 tracing = "0.1"
 url = "2"
@@ -82,3 +90,4 @@ emma-tools-fs = { path = "tools/fs" }
 emma-tools-lsp = { path = "tools/lsp" }
 emma-tools-web = { path = "tools/web" }
 emma-tools-tasks = { path = "tools/tasks" }
+emma-tools-screenshot = { path = "tools/screenshot" }

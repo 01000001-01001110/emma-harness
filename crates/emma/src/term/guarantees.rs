@@ -336,6 +336,43 @@ mod frame_rs {
     /// in one function with no runtime moment at which it can be observed:
     /// by the time a panic proves the hook was missing, the process is going
     /// down.
+    /// The Settings screen's Open Keybindings row writes a starter file and
+    /// leaves the path in a slot for the shell to act on. **`App` deliberately
+    /// spawns nothing**: a key reaches it with the paint lock held, and an
+    /// editor can take a second to start.
+    ///
+    /// So the drain is the whole feature, and nothing can observe it at
+    /// runtime: `Frame` needs a real terminal to exist, so the row's own tests
+    /// can only assert that the slot was filled. A slot filled and never
+    /// emptied is the shape that shipped once already in this crate, when every
+    /// page's keys were wired nowhere and each page's own tests passed.
+    ///
+    /// Source order again, and for the same reason as the hook above: the
+    /// property is which statements are in one function, and there is no moment
+    /// at which a test could watch the editor not open.
+    #[test]
+    fn the_settings_screen_drains_its_editor_launch_outside_the_paint_lock() {
+        let body = fn_body("    pub fn settings_key(");
+        let code = code_only(body);
+        let take = code
+            .find("take_settings_launch()")
+            .expect("settings_key no longer drains the launch slot; nothing opens");
+        let drop_lock = code
+            .find("};")
+            .expect("settings_key no longer scopes the lock; this assertion is now vacuous");
+        let open = code
+            .find("open_file(")
+            .expect("settings_key no longer opens the drained path");
+        assert!(
+            take < drop_lock,
+            "the launch is drained after the lock scope ends, so it is drained from nothing"
+        );
+        assert!(
+            drop_lock < open,
+            "the editor is spawned while the paint lock is held, freezing every repaint"
+        );
+    }
+
     #[test]
     fn the_panic_hook_goes_on_before_the_first_mode_it_undoes() {
         let body = body_between("pub fn install(", "FRAME_ON.store(true", "install");
@@ -405,38 +442,26 @@ mod frame_rs {
     }
 
     // -- F2, F3, F4: the teardown --------------------------------------------
-
-    /// **Any one of the four latches is enough to make the teardown run.**
-    /// (F2, F3)
+    /// **Every latch alone is enough to make the teardown run**, and this is
+    /// sixteen cases rather than a look at the source.
     ///
-    /// `FRAME_ON` is set *last*. The guard used to return early unless it was
-    /// set, so a panic anywhere in install left raw mode, the alternate screen
-    /// and mouse capture on with the only thing that turns them off refusing
-    /// to run — "a shell with no echo, on a screen that is not the user's".
-    /// The install-site comment claimed `ALT_ON` prevented it; it could not,
-    /// because nothing ever reached the code that read it.
-    ///
-    /// `MOUSE_ON` is called out on its own because deleting just that conjunct
-    /// left the whole lib suite green (`221a813`): the test that existed set
-    /// three latches, and the guard needs only one to carry on. Capture left
-    /// on means the inheriting shell has `?1000`/`?1006` enabled by a dead
-    /// process — every click and every wheel notch types an escape sequence at
-    /// the prompt, forever.
-    ///
-    /// The latches are private, so this reads the guard rather than driving
-    /// it: everything before the early return has to mention all four.
+    /// It used to read `restore_terminal`'s early return for the four latch
+    /// names. That could not fail: changing one `&&` to a `||` keeps all four
+    /// names and turns the guard into "return if any latch is off", which
+    /// strands the alternate screen on every path where one of them is. The
+    /// decision is `frame::nothing_to_restore` now, and this exercises the
+    /// whole truth table, so a conjunction that became a disjunction fails
+    /// fourteen of the sixteen.
     #[test]
     fn every_latch_alone_is_enough_to_make_the_teardown_run() {
-        let body = code_only(fn_body("pub fn restore_terminal("));
-        let guard_end = body
-            .find("return;")
-            .expect("restore_terminal has no early return; this assertion is now vacuous");
-        let guard = &body[..guard_end];
-        for latch in ["FRAME_ON", "RAW_ON", "ALT_ON", "MOUSE_ON"] {
-            assert!(
-                guard.contains(latch),
-                "restore_terminal's early return does not consult {latch}, so a frame that \
-                 got that far and no further is never torn down: {guard}"
+        for bits in 0u8..16 {
+            let (frame, raw, alt, mouse) =
+                (bits & 1 != 0, bits & 2 != 0, bits & 4 != 0, bits & 8 != 0);
+            let skip = crate::term::frame::nothing_to_restore(frame, raw, alt, mouse);
+            let any = frame || raw || alt || mouse;
+            assert_eq!(
+                skip, !any,
+                "frame={frame} raw={raw} alt={alt} mouse={mouse}: wrong teardown answer"
             );
         }
     }
@@ -927,6 +952,78 @@ mod frame_rs {
 // fires; a silent pass would be.
 // ---------------------------------------------------------------------------
 
+/// The two facts `main` has to hand the frame, which nothing else can.
+///
+/// **This module exists because "wired nowhere" is a defect this crate has
+/// shipped.** Every page's keys were once public, tested, and reachable from
+/// no running program, and each page's own tests passed throughout. These two
+/// calls have the same shape: `Term::set_running_provider` and
+/// `Term::set_hints` are one-line delegations that only a real terminal can
+/// observe, so the thing worth pinning is that `main` still makes them.
+#[cfg(test)]
+mod main_rs {
+    const SOURCE: &str = include_str!("../main.rs");
+
+    /// `main.rs` with its comments removed.
+    ///
+    /// **Without this the assertions below are satisfied by a comment**, which
+    /// is the shape a source-reading test fails in: `main.rs` argues about
+    /// these calls in prose right beside them, so a `contains` over the raw
+    /// file passes when somebody deletes the call and leaves the paragraph
+    /// explaining it. The sibling module reading `frame.rs` strips comments for
+    /// the same reason and said so; this one did not, for a day.
+    fn code() -> String {
+        SOURCE
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            )
+    }
+
+    /// The Provider row on the Settings screen names the provider this run is
+    /// bound to. Without this call it resolves the name from `settings.json`
+    /// instead, so a run started with `--provider` is described as bound to
+    /// something it is not, which is the one case the row exists for.
+    #[test]
+    fn main_tells_the_frame_which_provider_this_run_actually_booted_with() {
+        assert!(
+            code().contains("term.set_running_provider("),
+            "main no longer tells the frame its provider; the Settings row reads the file"
+        );
+    }
+
+    /// The Code page's language-server bridge is spawned by `main`, because
+    /// that is the only place a runtime and a frame both exist. Without the
+    /// spawn the page's `F5` and `F6` post into a channel nothing reads, and
+    /// the page shows no decorations while every one of its own tests passes:
+    /// the wired-nowhere shape again, and the reason this module exists.
+    #[test]
+    fn main_spawns_the_code_pages_language_server_bridge() {
+        assert!(
+            code().contains("code_lsp::run("),
+            "main no longer spawns the bridge; the Code page posts into nothing"
+        );
+        assert!(
+            code().contains("f.set_code_lsp("),
+            "main no longer hands the page a bridge handle"
+        );
+    }
+
+    /// The hints preference is read from `settings.json` by `main` and pushed
+    /// in, because the frame holds no `Settings` and the reader thread is what
+    /// consults the flag.
+    #[test]
+    fn main_pushes_the_hints_preference_into_the_frame() {
+        assert!(
+            code().contains("term.set_hints("),
+            "main no longer pushes the hints preference; the toggle writes and nothing reads"
+        );
+    }
+}
+
 #[cfg(test)]
 mod app_rs {
     use ratatui::buffer::Buffer;
@@ -1095,10 +1192,20 @@ mod app_rs {
         Settings,
         Memory,
         Harness,
+        Code,
     }
 
     /// Every screen in [`Screen`] — what the "each page" guarantees loop over.
-    const RENDERABLE: [Screen; 3] = [Screen::Settings, Screen::Memory, Screen::Harness];
+    const RENDERABLE: [Screen; 4] = [
+        Screen::Settings,
+        Screen::Memory,
+        Screen::Harness,
+        // Added 2026-09-06, and it is the largest page in the tree. Its absence
+        // was invisible: these guarantees sweep this list, so a page missing
+        // from it is a page nothing checks, and the Code page had no exit hint
+        // at all until the sweep reached it.
+        Screen::Code,
+    ];
 
     /// Put `app` on `screen`, through the real toggles. Called twice, it closes
     /// what it opened: these are toggles, not setters.
@@ -1114,6 +1221,7 @@ mod app_rs {
         match screen {
             Screen::Settings => app.toggle_settings(),
             Screen::Memory => app.toggle_memory(&store.to_string_lossy()),
+            Screen::Code => app.toggle_code(&store.to_string_lossy()),
             Screen::Harness => {
                 // Both halves matter: the session directory decides what the
                 // feed reads, and the cwd decides which runs are *this* repo's.
@@ -1138,6 +1246,7 @@ mod app_rs {
             Screen::Settings => super::super::settings::EXIT_HINT,
             Screen::Memory => super::super::memory::EXIT_HINT,
             Screen::Harness => super::super::harness::EXIT_HINT,
+            Screen::Code => super::super::code::EXIT_HINT,
         }
     }
 
@@ -1527,7 +1636,7 @@ mod app_rs {
     fn each_pages_disclosure_belongs_to_that_page_alone() {
         use super::super::harness::EMPTY_RUNS;
         use super::super::memory::{NOTICE_M2, NO_INDEX};
-        use super::super::settings::NOTICE_PROVIDER;
+        use super::super::settings::NOTICE_MODEL;
         use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
         let v = view();
@@ -1539,6 +1648,11 @@ mod app_rs {
         app.set_tools(one_tool());
         open(&mut app, Screen::Settings, store.path());
         app.settings_key(KeyEvent::from(KeyCode::Tab));
+        // Down once, to the Model row. Card 1's first row was a notice row
+        // until the settings write-back landed and made it the Provider
+        // cycler; Enter on it now writes settings.json rather than speaking,
+        // and this test needs a row whose whole answer is a sentence.
+        app.settings_key(KeyEvent::from(KeyCode::Down));
         app.settings_key(KeyEvent::from(KeyCode::Enter));
         let (rows, _) = cells(&mut app, &v, 120, 40);
         let settings = main_text(&rows, &layout_for(&v, 120, 40));
@@ -1554,8 +1668,8 @@ mod app_rs {
 
         // A prefix each, because the notice row is cut to the pane's width and
         // an assertion on the whole sentence is an assertion about the window.
-        let provider = NOTICE_PROVIDER
-            .split(':')
+        let provider: &str = NOTICE_MODEL
+            .split(';')
             .next()
             .expect("a notice with no text");
         for (name, screen, mine, theirs) in [

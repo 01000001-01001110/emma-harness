@@ -72,6 +72,9 @@ use ratatui::text::Line;
 pub mod app;
 pub mod bindings;
 pub mod chat;
+pub mod code;
+pub mod code_git;
+pub mod code_lsp;
 pub mod diff;
 pub mod frame;
 /// The net over `frame.rs` and `app.rs`. Green as of 2026-08-27, and it earned
@@ -88,8 +91,10 @@ pub mod frame;
 /// defends.
 pub mod guarantees;
 pub mod harness;
+pub mod help;
 pub mod input;
 pub mod inspect;
+pub mod keymap;
 pub mod layout;
 pub mod markdown;
 pub mod memory;
@@ -102,6 +107,7 @@ pub mod sidebar;
 pub mod spacing;
 pub mod statusbar;
 pub mod statusline;
+pub mod termfont;
 pub mod theme;
 pub mod transcript;
 pub mod view;
@@ -199,7 +205,7 @@ impl Term {
                 render::UNICODE
             }
         };
-        let palette = Palette::with_theme(Level::detect(color), theme);
+        let palette = Palette::live(Level::detect(color), theme);
         // Only a run that is about to draw asks for UTF-8; everything else
         // takes the console as it found it.
         let skin = Skin::new(
@@ -246,7 +252,7 @@ impl Term {
         let color = std::io::stderr().is_terminal();
         Self {
             skin: Skin::new(
-                Palette::with_theme(Level::detect(color), theme),
+                Palette::live(Level::detect(color), theme),
                 if prefers_ascii(
                     std::env::var_os("EMMA_ASCII_FRAME").is_some(),
                     console_is_utf8(),
@@ -459,6 +465,31 @@ impl Term {
     /// screen for the life of the process. Without one they are printed once as
     /// an ordinary line and scroll away, which is correct for a fact that never
     /// changes.
+    /// Tell the Settings screen which provider this session's client is
+    /// really bound to. Without this the screen resolves it from
+    /// `settings.json`, which is wrong for any run started with `--provider`:
+    /// the one case the Provider row exists to show.
+    pub fn set_running_provider(&self, name: &str) {
+        if let Some(frame) = &self.frame {
+            frame.running_provider(name);
+        }
+    }
+
+    /// The resolved `ui.hints` preference. Ignored without a viewport: the
+    /// plain path draws no sidebar, and the `[+]`'s hint is the only line the
+    /// flag governs today.
+    pub fn set_hints(&self, on: bool) {
+        if let Some(frame) = &self.frame {
+            frame.set_hints(on);
+        }
+    }
+
+    /// Give the sidebar's SESSIONS list the arrows. `false` when there is no
+    /// list to give them to: a plain run, or a list with no rows.
+    pub fn focus_sessions(&self) -> bool {
+        self.frame.as_ref().is_some_and(|f| f.focus_sessions())
+    }
+
     pub fn set_status(&self, model: &str, cwd: &Path, session: &std::path::Path) {
         let session_id = session
             .file_stem()
@@ -772,6 +803,26 @@ impl Term {
         // looks for, and it should not read as one more tool result.
         self.separate();
         self.side(self.skin.ending(message, ok, iterations, tokens));
+    }
+    /// A weak handle on the full-screen frame, for the background tasks that
+    /// must not keep it alive. `None` on the plain-output path, which is what
+    /// makes "there is no frame to flag without a viewport" structural rather
+    /// than a check.
+    pub fn frame_handle(&self) -> Option<std::sync::Weak<Frame>> {
+        self.frame.as_ref().map(std::sync::Arc::downgrade)
+    }
+
+    /// Open the Help page, and say whether there was one to open.
+    ///
+    /// `false` on every path with no viewport (a pipe, `-p`, `EMMA_NO_FRAME`)
+    /// and the caller then prints `cli::session_help()` instead. Both come
+    /// from `term::help::SECTIONS`, so the two answers to `/help` are the same
+    /// text in two shapes rather than two texts.
+    pub fn open_help(&self) -> bool {
+        match (&self.frame, self.enabled) {
+            (Some(frame), true) => frame.toggle_help(),
+            _ => false,
+        }
     }
 
     pub fn goal_started(&self, goal: &str) {

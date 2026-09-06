@@ -411,7 +411,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     fn records(log: &SessionLog) -> Vec<Value> {
-        SessionLog::read(log.path()).unwrap()
+        SessionLog::read(&log.path()).unwrap()
     }
 
     fn of_kind<'a>(records: &'a [Value], kind: &str) -> Vec<&'a Value> {

@@ -471,6 +471,27 @@ fn plan_shell(cwd: &Path, m: &dyn Machine) -> Result<Launch, String> {
     }
 }
 
+/// Open one file in the editor the Code chord already resolves.
+///
+/// **The same resolution, not a second one.** `plan_code` is the whole of how
+/// this project decides what an editor is (`tools.editor`, then `$VISUAL`, then
+/// `$EDITOR`, then a PATH probe), and a settings row that spawned its own would
+/// be the second answer to one question that this repository keeps paying for.
+///
+/// The one difference is what it hands over: the file as the argument, and the
+/// file's directory as the working directory. `plan_code` uses its path for
+/// both, which is right for a repository and wrong for a file: a process
+/// spawned with a file as its working directory does not start.
+pub fn open_file(path: &Path) -> Result<String, String> {
+    let m = RealMachine;
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let mut plan = plan_code(dir, &m)?;
+    plan.what = format!("{} at {}", stem(&plan.program), path.display());
+    plan.args = vec![path.as_os_str().to_os_string()];
+    adopt(spawn_detached(&plan)?);
+    Ok(format!("opened {}", plan.what))
+}
+
 fn plan_code(cwd: &Path, m: &dyn Machine) -> Result<Launch, String> {
     let (editor, source) = resolve_editor(m)?;
     let window = editor_window(&editor, &source, m.os())?;
@@ -677,7 +698,19 @@ fn in_app_detail(tool: Tool) -> String {
 fn catalogue_on(cwd: &Path, m: &dyn Machine) -> Vec<Entry> {
     ALL.iter()
         .map(|&tool| {
-            let (detail, available) = if tool.in_app() {
+            let (detail, available) = if tool == Tool::Code {
+                // Two doors since 2026-09-06: `Alt+c` opens the in-app Code
+                // page, which always works, and F7 there launches the editor
+                // below. The row is available because the chord is; the
+                // editor's own availability is the page's to report, and a
+                // row reading `n/a` beside a working chord is the availability
+                // contract broken in the direction nobody checks.
+                let detail = match plan(tool, cwd, m) {
+                    Ok(l) => format!("the Code page; F7 there opens {}", l.what),
+                    Err(e) => format!("the Code page; no external editor ({e})"),
+                };
+                (detail, true)
+            } else if tool.in_app() {
                 // Available only when something actually takes the key. An
                 // in-app tool with no route is listed, so the operator can see
                 // it is intended, and shows `n/a` rather than a chord that
@@ -1431,7 +1464,7 @@ mod tests {
             "no page takes Alt+d in this build, so the chord must not be advertised"
         );
         // And the ones that really do launch still say so honestly.
-        for tool in [Tool::Shell, Tool::Code, Tool::FileBrowser] {
+        for tool in [Tool::Shell, Tool::FileBrowser] {
             let e = cat.iter().find(|e| e.tool == tool).expect("in catalogue");
             assert!(
                 !e.available,
@@ -1439,6 +1472,19 @@ mod tests {
                 e.label
             );
         }
+        // Code is a page since 2026-09-06 (owner ruling D1): the chord always
+        // works, and the row says the external editor is absent rather than
+        // marking the chord dead.
+        let code = cat
+            .iter()
+            .find(|e| e.tool == Tool::Code)
+            .expect("in catalogue");
+        assert!(code.available, "Alt+c opens the Code page on any machine");
+        assert!(
+            code.detail.contains("no external editor"),
+            "the row must say the editor is missing: {}",
+            code.detail
+        );
     }
 
     #[test]

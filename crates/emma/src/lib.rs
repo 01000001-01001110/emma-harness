@@ -48,35 +48,41 @@
 //! everything the person at the keyboard sees. `main.rs` only wires them
 //! together.
 //!
-//! Two providers, Anthropic and Ollama, and the loop knows neither by name:
-//! `emma_llm::kind` is the list, and the wire shape lives inside each one.
-//! This sentence said "Anthropic is the only provider" until 2026-09-05, weeks
-//! after that stopped being true, which is why it now names the file that
-//! decides rather than restating the answer.
+//! Four provider names, and the loop knows only one of them by name:
+//! `emma_llm::kind` is the list, and the wire shape lives inside each one. The
+//! exception is `claude`, which is not a client at all: `main.rs` branches on
+//! it and hands the whole goal to `engine::claude`. This sentence said
+//! "Anthropic is the only provider" until 2026-09-05 and "two providers" until
+//! 2026-09-06, both times weeks after they stopped being true, which is why it
+//! now names the file that decides rather than restating the answer.
 
 pub mod agent;
 pub mod approval;
 pub mod cli;
 pub mod commands;
 pub mod delegate;
+pub mod engine;
+pub mod export;
 pub mod goal;
 pub mod harness_state;
 pub mod memory;
 pub mod permissions;
 pub mod platform;
 pub mod prune;
+pub mod runctl;
 pub mod runfacts;
 pub mod session;
 pub mod session_command;
 pub mod settings;
 pub mod skill;
 pub mod speech;
+pub mod steering;
 pub mod term;
 pub mod usertools;
 pub mod verify;
 
 pub use agent::{Agent, Budgets, Ending, Interrupt, Outcome, Resumed, Setup, Spend};
-pub use approval::{Answer, Approvals, Asker, Gate, Verdict};
+pub use approval::{Answer, Approvals, Asker, Gate, Mode, Verdict};
 pub use delegate::{Delegate, Nest};
 pub use goal::{Done, DoneCheck, Goal, MarkerClaim};
 pub use session::{Continuity, Restored, SessionLog};

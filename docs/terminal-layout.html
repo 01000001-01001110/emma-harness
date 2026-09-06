@@ -83,6 +83,7 @@
       <a href="terminal-dock.html">Dock</a>
       <a href="terminal-usertools.html">User tools</a>
       <a href="terminal-pages.html">Pages</a>
+      <a href="terminal-runctl.html">Run control</a>
       <a href="terminal-copying.html">Copying out</a>
     </nav>
 
@@ -182,21 +183,22 @@
     from the status bar, and everything floats one cell inside the window edge.
   </p>
 
-  <p class="faint">crates/emma/src/term/app.rs &middot; <code>PANE_GAP_COLS</code></p>
-  <pre><code><span class="c">/// Columns of ground between the sidebar's box and the main pane's. Measured</span>
-<span class="c">/// from the image: sidebar right edge ≈338px, main pane left edge ≈362px, at</span>
-<span class="c">/// ≈11.3px per cell — two columns, not shared borders. Zero when the sidebar</span>
-<span class="c">/// is collapsed: the gap is the sidebar's, and goes with it.</span>
-const PANE_GAP_COLS: u16 = 2;</code></pre>
-  <span class="src">crates/emma/src/term/app.rs — <code>PANE_GAP_COLS</code>; test <code>the_pane_gaps_measured_from_the_mockup_are_in_the_carve</code></span>
-
   <p>
-    The test that pins all three works at 128&times;41, which is the mockup's own
-    cell grid (1448&times;1086 pixels at roughly 11.3&times;26 per cell). It also
-    checks the collapsed case, where the pane gap goes with the sidebar
-    <em>&ldquo;rather than becoming a stray two-column stripe of
-    nothing.&rdquo;</em> <span class="chip test">tested</span>
+    <strong>This section quoted a constant and a test that do not exist, and
+    carried a <span class="chip test">tested</span> chip over them.</strong> It
+    showed <code>PANE_GAP_COLS</code> with its measurement comment and named
+    <code>the_pane_gaps_measured_from_the_mockup_are_in_the_carve</code> as the
+    test pinning it. Neither is in the tree, and a whole-tree search for either
+    name returns nothing. It is the false receipt this project calls worse than
+    no test: a green chip over a citation a reader cannot open, which reads as
+    evidence and is not.
+    <span class="chip unv">unverified</span> The three facts the paragraph above
+    states are still visible in the drawn layout, but nothing here asserts them.
+    Settled by finding what the carve actually does with the gap between the
+    panes, naming it, and pinning it at the mockup's own 128&times;41 grid
+    including the collapsed case.
   </p>
+
 
   <figure>
     <div class="figwrap">

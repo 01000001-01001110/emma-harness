@@ -547,9 +547,14 @@ pub struct Status {
     /// and the compaction cap it is measured against. It rises as a
     /// conversation grows and falls when the conversation is compacted.
     pub context: Option<(i64, i64)>,
-    /// **A running total.** Everything this goal has been billed for, weighted
+    /// **Goal-scoped.** Everything *this goal* has been billed for, weighted
     /// by price — cache writes at 1.25, cache reads at 0.1, plus output — and
-    /// the budget that ends the goal. It only ever rises.
+    /// [`crate::Budgets::max_tokens`], the budget that ends the goal. It only
+    /// ever rises within a goal and starts empty at the next one, because a
+    /// budget nothing is measured against is not a budget. This is the pair
+    /// the *inline* status row draws as `total used/cap`, and it is the same
+    /// number `agent.rs` tests the goal against — do not widen it to the
+    /// session without moving that accounting too.
     pub spend: Option<(i64, i64)>,
     /// How long the running goal has been running.
     pub elapsed: Option<std::time::Duration>,
@@ -572,7 +577,10 @@ pub struct Status {
     ///
     /// It never falls and no goal boundary clears it, which is the bug of
     /// 2026-08-26: the bar read one goal while the owner read it as the
-    /// session's running story. Only a fresh process starts it at zero.
+    /// session's running story. Only a fresh process starts it at zero —
+    /// `/clear` keeps it, along with the session id and the transcript that
+    /// command already says it keeps, because clearing a conversation does not
+    /// unspend what the conversation cost.
     pub session_tokens: i64,
     /// What `session_tokens` stood at when the running goal opened. `spend` is
     /// the goal's *running* total rather than a per-call delta, so this is how
@@ -606,7 +614,10 @@ impl Status {
     /// this goal's spend, and a budget meter left reading the last one is the
     /// stale readout the inline row exists to not have. Everything else here
     /// is the session's and survives: zeroing the ↑/↓ split and the session
-    /// total on submit was the owner-visible bug of 2026-08-26.
+    /// total on submit was the owner-visible bug of 2026-08-26, and it was the
+    /// second time this scoping had been wrong. The split does sit beside the
+    /// total in the same cell — that argument was right about the *cell* and
+    /// wrong about the *scope*, because that cell is the session's.
     pub fn goal_started(&mut self) {
         // Fold the goal that just ended into the session before its meter is
         // dropped: after this, `record_spend` counts the new goal from here.
@@ -1405,6 +1416,68 @@ mod tests {
                 cols(&cut)
             );
         }
+    }
+
+    /// The bar's `TOKENS` cell is the **session's** running story, which is
+    /// what the mock's `TOKENS 12,842 (↑ 8,128 ↓ 4,714)` shows and what the
+    /// owner reported missing on 2026-08-26: every submitted goal cleared it
+    /// back to zero. Nothing about a new goal is a reason to forget what the
+    /// session has already spent.
+    #[test]
+    fn a_new_goal_never_clears_the_sessions_token_counts() {
+        let mut s = Status::default();
+        s.record_call(8_128, 4_714);
+        s.record_spend(12_842, 500_000);
+
+        s.goal_started();
+        assert_eq!(s.up, 8_128, "session input survives a new goal");
+        assert_eq!(s.down, 4_714, "session output survives a new goal");
+        assert_eq!(s.session_tokens, 12_842, "the session's bill survives too");
+
+        // The second goal adds to all three rather than restarting them.
+        s.record_call(1_000, 200);
+        s.record_spend(1_200, 500_000);
+        assert_eq!(s.up, 9_128);
+        assert_eq!(s.down, 4_914);
+        assert_eq!(s.session_tokens, 14_042);
+    }
+
+    /// `/clear` keeps the session's token counts. It starts a fresh
+    /// conversation, not a fresh session, and says so itself: it keeps the
+    /// session id, the transcript and the grants. Tokens already spent stay
+    /// spent, so a bill that fell on `/clear` would be a lie about what the
+    /// run cost. Mechanically the clear path never touches `Status` — all it
+    /// does to this type is open the next goal — and that is what is pinned
+    /// here, so a future `/clear` that reaches in has a test to argue with.
+    #[test]
+    fn only_a_fresh_process_starts_the_session_counts_at_zero() {
+        let mut s = Status::default();
+        s.record_call(8_128, 4_714);
+        s.record_spend(12_842, 500_000);
+
+        s.goal_started();
+        assert_eq!((s.up, s.down, s.session_tokens), (8_128, 4_714, 12_842));
+
+        let fresh = Status::default();
+        assert_eq!((fresh.up, fresh.down, fresh.session_tokens), (0, 0, 0));
+    }
+
+    /// The other half of the same ruling: `spend` is the *goal's* weighted
+    /// bill measured against `max_tokens`, so it is right for it to start
+    /// empty — the inline row's `total used/cap` and `Budgets::max_tokens`
+    /// both read a goal, not a session.
+    #[test]
+    fn the_goal_meter_still_starts_each_goal_empty() {
+        let mut s = Status::default();
+        s.record_spend(12_842, 500_000);
+        s.goal_started();
+        assert_eq!(s.spend, None, "the goal meter is per goal");
+        s.record_spend(400, 500_000);
+        assert_eq!(
+            s.spend,
+            Some((400, 500_000)),
+            "and reads this goal's spend, not the session's"
+        );
     }
 
     /// The bridge the input box crosses: a character index becomes a column.

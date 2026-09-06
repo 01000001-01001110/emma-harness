@@ -158,6 +158,7 @@ impl Opts {
         DigestOptions {
             timeout_ms: self.timeout_ms,
             max_text_chars: self.max_text_chars,
+            text_offset: 0,
             user_agent: self.user_agent.clone(),
             allowlist: self.allowlist.as_ref().map(Into::into),
             allow_local: self.allow_local,
@@ -407,7 +408,8 @@ async fn main() {
                             die(e);
                         }
                     }
-                    let r = actions::session_digest(&c, o.max_text_chars).await;
+                    let r = actions::session_digest(&c, digest::TextWindow::head(o.max_text_chars))
+                        .await;
                     session::disconnect(c);
                     match r {
                         Ok(mut out) => {
@@ -425,7 +427,8 @@ async fn main() {
                     let c = session::connect(id, o.session_ttl)
                         .await
                         .unwrap_or_else(|e| die(e));
-                    let r = actions::session_digest(&c, o.max_text_chars).await;
+                    let r = actions::session_digest(&c, digest::TextWindow::head(o.max_text_chars))
+                        .await;
                     session::disconnect(c);
                     match r {
                         Ok(current) => {
@@ -473,8 +476,13 @@ async fn main() {
                     session::disconnect(c);
                     match probed {
                         Ok(p) => {
-                            let mut out =
-                                digest::assemble("verify", url, p, false, o.max_text_chars);
+                            let mut out = digest::assemble(
+                                "verify",
+                                url,
+                                p,
+                                false,
+                                digest::TextWindow::head(o.max_text_chars),
+                            );
                             actions::annotate_attached(&mut out, true);
                             emit(&out);
                         }

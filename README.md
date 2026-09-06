@@ -27,7 +27,8 @@ failed, so try another way; the tests are still red, so read the failure and fix
 it — until done is true or it runs out of room.
 
 <!-- diagram:readme-providers -->
-**Any model that can call tools.** Anthropic over the API, or Ollama on your own
+**Any model that can call tools.** Anthropic over the API, Openrouter over the
+API, Openai over the API, Ollama on your own machine, or Claude on your own
 machine.
 <!-- /diagram -->
 
@@ -158,12 +159,13 @@ running it yourself.
 <!-- diagram:readme-tools -->
 Tools available to the model on every run: `Read`, `Write`, `Edit`, `Glob`,
 `Grep`, `Bash`, `BashOutput`, `KillShell`, `TaskCreate`, `TaskGet`, `TaskList`,
-`TaskUpdate`, `FindReferences`, `GoToDefinition`, `Hover` and `DocumentSymbols`.
-Registered only when this machine can back them: `Skill`, when the configuration
-directory declares a skill; `Delegate`, when it declares an agent; `WebFetch`,
-`WebSearch` and the browser tools `BrowserOpen`, `BrowserRead`, `BrowserAct`,
-`BrowserFill` and `BrowserClose`, when a Chrome can be found. Search is a
-results page rendered in that Chrome, so it needs no key and no account.
+`TaskUpdate`, `Screenshot`, `FindReferences`, `GoToDefinition`, `Hover`,
+`DocumentSymbols` and `Diagnostics`. Registered only when this machine can back
+them: `Skill`, when the configuration directory declares a skill; `Delegate`,
+when it declares an agent; `WebFetch`, `WebSearch` and the browser tools
+`BrowserOpen`, `BrowserRead`, `BrowserAct`, `BrowserFill` and `BrowserClose`,
+when a Chrome can be found. Search is a results page rendered in that Chrome, so
+it needs no key and no account.
 <!-- /diagram -->
 
 `WebSearch` needs no key. It opens a search engine's results page in the same

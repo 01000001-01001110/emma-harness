@@ -98,7 +98,7 @@
     "digestPayload": {
       "type": "object",
       "description": "The content block. THIS is where text/interactive/structured live — nested, not top-level.",
-      "required": ["text", "text_chars_total", "text_truncated", "interactive"],
+      "required": ["text", "text_offset", "text_chars_total", "text_truncated", "interactive"],
       "properties": {
         "meta": {
           "type": "object",
@@ -111,13 +111,20 @@
         },
         "text": {
           "type": "string",
-          "description": "Main-content text, boilerplate stripped, truncated to --max-text-chars (default 8000)"
+          "description": "Main-content text, boilerplate stripped: the window [text_offset, text_offset + max-text-chars) of the whole document"
+        },
+        "text_offset": {
+          "type": "integer",
+          "description": "Characters skipped before this window; zero is the head of the page"
         },
         "text_chars_total": {
           "type": "integer",
-          "description": "Pre-truncation length; compare with text length to see what was cut"
+          "description": "Length of the whole document; with text_offset and text length it says exactly what is missing and where the next window starts"
         },
-        "text_truncated": { "type": "boolean" },
+        "text_truncated": {
+          "type": "boolean",
+          "description": "True when text remains after this window"
+        },
         "structured": {
           "type": "object",
           "properties": {
