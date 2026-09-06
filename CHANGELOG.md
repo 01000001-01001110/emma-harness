@@ -28,6 +28,15 @@ out for themselves.
 
 ## Unreleased
 
+- A mouse selection in the chat pane now follows the text rather than the
+  screen. Holding the button at the top or bottom edge of the pane scrolls
+  the transcript and takes the rows it reveals into the selection; a pointer
+  well past the edge scrolls by the wheel's step; the anchor stays on the
+  row it was pressed on however far the view moves. Before this the
+  selection named screen rows, so a scroll under a held drag changed what
+  was selected and the copied text was whatever happened to be painted
+  there.
+
 - **BREAKING: `WebSearch` no longer needs a key, and the Brave Search key is
   gone.** The tool is a search engine's results page rendered in the same
   Chrome `WebFetch` uses, reduced to titles and URLs. It registers whenever a

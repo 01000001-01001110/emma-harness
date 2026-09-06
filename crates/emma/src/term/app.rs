@@ -172,6 +172,10 @@ pub struct App {
     /// `chat.rs` refuses for the label column, arriving here from the
     /// clipboard's direction.
     chat_cells: Vec<Vec<String>>,
+    /// The content row `chat_cells[0]` was painted from. A selection
+    /// names content rows, so reading it back out of the snapshot needs
+    /// the snapshot's own origin; see [`Self::record_cells`].
+    chat_cells_start: usize,
     /// The wiki root the open page reads from — the cwd `toggle_memory` was
     /// handed, kept so every action can re-open the same store.
     memory_cwd: String,
@@ -275,6 +279,7 @@ impl App {
             notice: None,
             selection: None,
             chat_cells: Vec::new(),
+            chat_cells_start: 0,
             memory_cwd: String::new(),
             harness_cwd: String::new(),
             harness_hits: super::harness::Hits::default(),
@@ -1306,6 +1311,7 @@ impl App {
             self.notice = None;
             self.selection = None;
             self.chat_cells.clear();
+            self.chat_cells_start = 0;
         }
         // Stale control rects must not keep catching clicks after the page
         // closes or a sub-page takes over; the pages' paints refill them.
@@ -1465,7 +1471,8 @@ impl App {
             );
         }
         self.highlight(pane, buf);
-        self.chat_cells = snapshot(pane, buf);
+        let start = self.transcript.window_start(pane.height);
+        self.record_cells(start, snapshot(pane, buf));
 
         let cursor = match &view.prompt {
             Some(prompt) => view.render_prompt(prompt, r.dock, buf),
@@ -1610,6 +1617,10 @@ impl App {
     /// The pointer moved with the button down. Clamped into the pane rather
     /// than dropped: a drag that runs off the edge is a normal drag, and
     /// losing it there would leave a selection that stops mid-word.
+    ///
+    /// A pointer *on* the edge row scrolls the view instead of stopping
+    /// there, which is what every editor does and what makes a selection
+    /// longer than the pane possible at all. See [`Self::selection_scroll`].
     pub fn selection_extend(&mut self, col: u16, row: u16) {
         let Some((anchor, _)) = self.selection else {
             return;
@@ -1618,9 +1629,84 @@ impl App {
         if pane.width == 0 || pane.height == 0 {
             return;
         }
+        // Scroll first, then read the head: the row the pointer is on now
+        // holds different text than it did a moment ago, and the head belongs
+        // to the text rather than to the cell.
+        self.selection_scroll(pane, row);
         let x = col.clamp(pane.x, pane.right() - 1) - pane.x;
         let y = row.clamp(pane.y, pane.bottom() - 1) - pane.y;
-        self.selection = Some((anchor, (y, x)));
+        let start = self.transcript.window_start(pane.height);
+        self.selection = Some((anchor, (start + usize::from(y), x)));
+    }
+
+    /// One step of drag auto-scroll, or nothing when the pointer is inside
+    /// the pane.
+    ///
+    /// ⚠ A STEP PER EVENT, AND NO TIMER. A terminal mouse only reports on
+    /// movement, so holding still at the edge reports nothing and this
+    /// repeats only while the pointer keeps moving. That is the honest thing
+    /// a cell grid can do without a repaint loop running off a clock, which
+    /// is the same argument the copy notice's ⚠ makes about chrome that
+    /// changes with no event behind it.
+    ///
+    /// The far step is the wheel's, not a new number: a pointer well past the
+    /// edge is asking for distance, and the reader already knows what three
+    /// rows feels like.
+    fn selection_scroll(&mut self, pane: Rect, row: u16) {
+        let last = pane.bottom() - 1;
+        let (up, past) = if row <= pane.y {
+            (true, pane.y - row)
+        } else if row >= last {
+            (false, row - last)
+        } else {
+            return;
+        };
+        let step = if past > 1 { DRAG_FAR_ROWS } else { 1 };
+        if up {
+            self.transcript.scroll_up(step);
+            // The bar's clamp, for the bar's reason: offset past `max_offset`
+            // is travel the view cannot show, and a drag held at the top edge
+            // would bank a row of it per event and then spend the way back
+            // down undoing it.
+            let top = transcript::max_offset(self.transcript.total_rows(), pane.height);
+            if self.transcript.scroll_offset() > top {
+                self.transcript.scroll_to(top);
+            }
+        } else {
+            self.transcript.scroll_down(step);
+        }
+    }
+
+    /// Keep the painted rows a selection may still need.
+    ///
+    /// While nothing is selected this is the old behaviour exactly: the
+    /// snapshot is the pane. While a drag is live it extends at whichever end
+    /// the scroll revealed, because those rows are inside the selection and
+    /// the pane no longer holds them. A window that has jumped clear of what
+    /// is kept starts over, since nothing between the two was ever painted.
+    fn record_cells(&mut self, start: usize, rows: Vec<Vec<String>>) {
+        let have_end = self.chat_cells_start + self.chat_cells.len();
+        let end = start + rows.len();
+        if self.selection.is_none()
+            || self.chat_cells.is_empty()
+            || start > have_end
+            || end < self.chat_cells_start
+        {
+            self.chat_cells = rows;
+            self.chat_cells_start = start;
+            return;
+        }
+        if start < self.chat_cells_start {
+            let take = self.chat_cells_start - start;
+            let mut head = rows[..take].to_vec();
+            head.append(&mut self.chat_cells);
+            self.chat_cells = head;
+            self.chat_cells_start = start;
+        }
+        if end > have_end {
+            let from = have_end - start;
+            self.chat_cells.extend_from_slice(&rows[from..]);
+        }
     }
 
     /// What a mouse selection just sent to the clipboard, for the indicator
@@ -1651,16 +1737,24 @@ impl App {
     /// included, styling gone. Empty when nothing is selected.
     pub fn selection_text(&self) -> String {
         match self.selection {
-            Some((a, b)) => selected_text(&self.chat_cells, a, b),
+            Some((a, b)) => {
+                let start = self.chat_cells_start;
+                let rebase = |c: Cell| (c.0.saturating_sub(start), c.1);
+                selected_text(&self.chat_cells, rebase(a), rebase(b))
+            }
             None => String::new(),
         }
     }
 
-    /// A buffer cell inside the chat pane, in pane coordinates.
+    /// A buffer cell inside the chat pane, in content coordinates: the row is
+    /// the transcript row under the pointer, not the screen row it happens to
+    /// be sitting on right now.
     fn cell_at(&self, col: u16, row: u16) -> Option<Cell> {
         let pane = self.chat_rect;
-        pane.contains(Position::new(col, row))
-            .then(|| (row - pane.y, col - pane.x))
+        pane.contains(Position::new(col, row)).then(|| {
+            let start = self.transcript.window_start(pane.height);
+            (start + usize::from(row - pane.y), col - pane.x)
+        })
     }
 
     /// Reverse the cells under the selection.
@@ -1674,12 +1768,19 @@ impl App {
             return;
         };
         let (first, last) = order(a, b);
-        for y in first.0..=last.0 {
+        // The window the pane is showing, so a selection that runs off either
+        // end of it highlights the part that is on screen and no more.
+        let start = self.transcript.window_start(pane.height);
+        for cy in first.0..=last.0 {
+            let Some(y) = cy.checked_sub(start) else {
+                continue;
+            };
+            let Ok(y) = u16::try_from(y) else { break };
             if y >= pane.height {
                 break;
             }
-            let from = if y == first.0 { first.1 } else { 0 };
-            let to = if y == last.0 { last.1 } else { pane.width - 1 };
+            let from = if cy == first.0 { first.1 } else { 0 };
+            let to = if cy == last.0 { last.1 } else { pane.width - 1 };
             for x in from..=to.min(pane.width - 1) {
                 buf[(pane.x + x, pane.y + y)].modifier |= Modifier::REVERSED;
             }
@@ -1755,8 +1856,16 @@ impl App {
 // not by a terminal, a mouse and a person watching.
 // ---------------------------------------------------------------------------
 
-/// A cell of the chat pane: `(row, column)`, pane-relative.
-pub type Cell = (u16, u16);
+/// A cell as the selection names one: a row and a column. The row is a
+/// content row in [`App::selection`] and an index into a painted snapshot in
+/// [`selected_text`], which is why the conversion between them is spelled out
+/// at the one call site that crosses it.
+pub type Cell = (usize, u16);
+
+/// How far a pointer well past the pane's edge scrolls per event: the
+/// wheel's step, because an overshoot is asking for distance and the reader
+/// already knows what three rows feels like.
+const DRAG_FAR_ROWS: usize = super::input::WHEEL_ROWS;
 
 /// The anchor and head in reading order.
 fn order(a: Cell, b: Cell) -> (Cell, Cell) {
@@ -1783,7 +1892,7 @@ pub fn selected_text(cells: &[Vec<String>], a: Cell, b: Cell) -> String {
     let (first, last) = order(a, b);
     let mut out: Vec<String> = Vec::new();
     for y in first.0..=last.0 {
-        let Some(row) = cells.get(usize::from(y)) else {
+        let Some(row) = cells.get(y) else {
             break;
         };
         let from = usize::from(if y == first.0 { first.1 } else { 0 });
@@ -5489,6 +5598,293 @@ mod tests {
         assert!(
             !skey(&mut app, KeyCode::Esc),
             "a closed screen consumes nothing"
+        );
+    }
+
+    /// A stationary pointer changes nothing, and the drag stays the bar's.
+    ///
+    /// ⚠ THE RETURN VALUE IS A REPAINT, NOT A CLAIM ON THE GESTURE. The two
+    /// were one answer once, and the cost was that every drag cell which
+    /// happened to land on the same offset fell through to `select_extend`:
+    /// a scroll drag flickering into a text selection, which is the fidget
+    /// the reader sees. [`super::frame::Frame::bar_drag`] asks
+    /// [`Self::bar_dragging`] first for exactly that reason.
+    #[test]
+    fn a_stationary_pointer_neither_moves_the_view_nor_drops_the_drag() {
+        let mut app = App::new((120, 40));
+        let v = view();
+        fill(&mut app, 400);
+        let _ = painted(&mut app, &v, 120, 40);
+        let x = app.scrollbar.unwrap();
+        let pane = app.chat_rect;
+
+        app.transcript.scroll_to(app.transcript.total_rows() / 2);
+        let (top, _) = transcript::thumb(
+            app.transcript.total_rows(),
+            pane.height,
+            app.transcript.scroll_offset(),
+        )
+        .unwrap();
+        assert!(app.bar_press(x, pane.y + top));
+        let parked = app.transcript.scroll_offset();
+
+        for _ in 0..4 {
+            assert!(
+                !app.bar_drag(pane.y + top),
+                "a motionless pointer moved the view"
+            );
+            assert!(app.bar_dragging(), "the drag was dropped mid-gesture");
+            assert_eq!(app.transcript.scroll_offset(), parked);
+            assert!(!app.has_selection(), "the drag became a selection");
+        }
+    }
+
+    /// Paging the track cannot walk the view above its own top.
+    ///
+    /// The offset's bound is `total - 1` while the view's is `total - height`,
+    /// so up to a pane-height of offset buys no movement at all. Paged into,
+    /// that reads as a scrollbar that stops responding at the top and then
+    /// needs two clicks to come back. That is the dead zone, and it is the bar that
+    /// has to refuse it because the bar is what has a height to hand.
+    #[test]
+    fn paging_the_track_never_parks_the_view_above_its_top() {
+        let mut app = App::new((120, 40));
+        let v = view();
+        fill(&mut app, 400);
+        let _ = painted(&mut app, &v, 120, 40);
+        let x = app.scrollbar.unwrap();
+        let pane = app.chat_rect;
+        let top_of_buffer = app.transcript.total_rows() - usize::from(pane.height);
+
+        // Page up off the top of the track, well past the buffer's own top.
+        app.transcript.to_top();
+        for _ in 0..4 {
+            app.bar_press(x, pane.y);
+            app.bar_release();
+        }
+        assert_eq!(
+            app.transcript.scroll_offset(),
+            top_of_buffer,
+            "the bar parked the offset in the dead zone above the top"
+        );
+
+        // So the very next page back down moves the view, rather than
+        // spending itself on offset the reader could never see.
+        let before = app.transcript.scroll_offset();
+        app.bar_press(x, pane.bottom() - 1);
+        assert!(
+            app.transcript.scroll_offset() < before,
+            "the first page back down moved nothing"
+        );
+        assert_eq!(app.transcript.scroll_offset(), before - app.page());
+    }
+
+    // -- the drag that scrolls -------------------------------------------
+
+    /// A scrolled pane with room to move in both directions, and the pane it
+    /// painted into. Two hundred blocks is well past any pane this suite
+    /// draws, so both edges have somewhere to go.
+    fn scrolled_rig(back: usize) -> (App, View, Rect) {
+        let mut app = App::new((120, 40));
+        let v = view();
+        fill(&mut app, 200);
+        let _ = painted(&mut app, &v, 120, 40);
+        app.transcript.scroll_up(back);
+        let _ = painted(&mut app, &v, 120, 40);
+        let pane = app.chat_rect;
+        (app, v, pane)
+    }
+
+    /// The whole point: a drag that reaches the bottom row moves the view
+    /// under it, and the row that comes up is inside the selection. Without
+    /// this a selection can never be longer than the pane.
+    #[test]
+    fn a_drag_held_at_the_bottom_edge_scrolls_and_takes_the_revealed_row() {
+        let (mut app, _v, pane) = scrolled_rig(20);
+        let before = app.transcript.scroll_offset();
+        assert!(app.selection_begin(pane.x + 1, pane.y + 2));
+        let head_before = app.selection.expect("selected").1 .0;
+
+        app.selection_extend(pane.x + 1, pane.bottom() - 1);
+
+        assert_eq!(
+            app.transcript.scroll_offset(),
+            before - 1,
+            "the bottom edge did not scroll one row towards the tail"
+        );
+        let (anchor, head) = app.selection.expect("selected");
+        assert_eq!(
+            head.0,
+            app.transcript.window_start(pane.height) + usize::from(pane.height) - 1,
+            "the head is not on the row the scroll revealed"
+        );
+        assert!(head.0 > head_before, "the head did not reach new rows");
+        assert!(head.0 > anchor.0);
+    }
+
+    /// The anchor is content, not screen: scrolling during the drag must
+    /// leave it on the row the button came down on, however far the view
+    /// travels afterwards.
+    #[test]
+    fn the_anchor_stays_on_its_row_while_the_drag_scrolls() {
+        let (mut app, v, pane) = scrolled_rig(20);
+        assert!(app.selection_begin(pane.x + 1, pane.y + 2));
+        let anchor = app.selection.expect("selected").0;
+
+        for _ in 0..5 {
+            app.selection_extend(pane.x + 1, pane.bottom() - 1);
+            let _ = painted(&mut app, &v, 120, 40);
+        }
+
+        assert_eq!(
+            app.selection.expect("selected").0,
+            anchor,
+            "the anchor moved with the view"
+        );
+    }
+
+    /// The top edge scrolls back, and what it reveals is text the reader can
+    /// copy: the rows a drag passed over are kept even after they leave the
+    /// pane, which is the other half of a selection longer than the window.
+    #[test]
+    fn a_drag_at_the_top_edge_reveals_rows_and_copies_them() {
+        let (mut app, v, pane) = scrolled_rig(20);
+        let before = app.transcript.scroll_offset();
+        assert!(app.selection_begin(pane.x + 1, pane.y + 2));
+
+        app.selection_extend(pane.x + 1, pane.y);
+        assert_eq!(
+            app.transcript.scroll_offset(),
+            before + 1,
+            "the top edge did not scroll one row back"
+        );
+        let buf = painted(&mut app, &v, 120, 40);
+        let top: String = (pane.x..pane.right())
+            .map(|x| buf[(x, pane.y)].symbol().to_string())
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        assert!(!top.is_empty(), "the revealed row painted nothing");
+        // The press was a column into the pane, so the first copied line
+        // starts a column into that row; the row is what is being asserted,
+        // not the indent.
+        let text = app.selection_text();
+        assert_eq!(
+            text.lines().next().map(str::trim),
+            Some(top.trim()),
+            "the revealed row is not in the copy: {text:?}"
+        );
+        assert!(
+            text.lines().count() >= 3,
+            "the selection did not cover the rows it was dragged over: {text:?}"
+        );
+    }
+
+    /// The dead zone the scrollbar work closed stays closed: an edge drag
+    /// held at the top banks no offset the view cannot show.
+    #[test]
+    fn the_top_edge_drag_stops_at_the_last_row_the_view_can_show() {
+        let (mut app, v, pane) = scrolled_rig(20);
+        assert!(app.selection_begin(pane.x + 1, pane.y + 2));
+        let top = transcript::max_offset(app.transcript.total_rows(), pane.height);
+
+        for _ in 0..(app.transcript.total_rows() + 10) {
+            app.selection_extend(pane.x + 1, pane.y);
+        }
+
+        assert_eq!(
+            app.transcript.scroll_offset(),
+            top,
+            "the drag parked offset above what the pane can show"
+        );
+        let _ = painted(&mut app, &v, 120, 40);
+    }
+
+    /// And the other end: the tail is the tail, and a drag that keeps asking
+    /// for more gets no travel and no negative arithmetic.
+    #[test]
+    fn the_bottom_edge_drag_stops_at_the_tail() {
+        let (mut app, _v, pane) = scrolled_rig(20);
+        assert!(app.selection_begin(pane.x + 1, pane.y + 2));
+
+        for _ in 0..50 {
+            app.selection_extend(pane.x + 1, pane.bottom() - 1);
+        }
+
+        assert_eq!(
+            app.transcript.scroll_offset(),
+            0,
+            "the drag ran past the tail"
+        );
+        assert!(app.transcript.is_following());
+    }
+
+    /// Overshoot asks for distance, and gets the wheel's step rather than a
+    /// number invented here.
+    #[test]
+    fn a_pointer_well_past_the_pane_scrolls_by_the_wheels_step() {
+        let (mut app, _v, pane) = scrolled_rig(20);
+        assert!(app.selection_begin(pane.x + 1, pane.y + 2));
+        let before = app.transcript.scroll_offset();
+
+        // One row past the bottom is still one row a step; two is the far
+        // step, which is what an overshoot means.
+        app.selection_extend(pane.x + 1, pane.bottom());
+        assert_eq!(app.transcript.scroll_offset(), before - 1);
+        app.selection_extend(pane.x + 1, pane.bottom() + 1);
+        assert_eq!(
+            app.transcript.scroll_offset(),
+            before - 1 - DRAG_FAR_ROWS,
+            "a pointer past the pane did not take the far step"
+        );
+    }
+
+    /// A pointer inside the pane moves nothing. The auto-scroll is an edge
+    /// behaviour, and a drag across the middle of the transcript must not
+    /// creep.
+    #[test]
+    fn a_drag_inside_the_pane_scrolls_nothing() {
+        let (mut app, _v, pane) = scrolled_rig(20);
+        assert!(app.selection_begin(pane.x + 1, pane.y + 2));
+        let before = app.transcript.scroll_offset();
+        app.selection_extend(pane.x + 9, pane.y + 3);
+        app.selection_extend(pane.x + 2, pane.bottom() - 2);
+        assert_eq!(app.transcript.scroll_offset(), before);
+    }
+
+    /// The latch still tells the two gestures apart: a press on the bar's
+    /// column is the bar, and it never becomes a selection that could then
+    /// auto-scroll on top of the drag the bar is already doing.
+    #[test]
+    fn the_bar_and_the_text_drag_stay_distinct_under_auto_scroll() {
+        let (mut app, _v, pane) = scrolled_rig(20);
+        let x = app.scrollbar.expect("a 200 block transcript drew no bar");
+        // On the thumb, so the press is a grab and not a page: a page moves
+        // the view and lets go, and the latch is what is under test.
+        let (top, _) = transcript::thumb(
+            app.transcript.total_rows(),
+            pane.height,
+            app.transcript.scroll_offset(),
+        )
+        .expect("no thumb");
+        assert!(
+            app.bar_press(x, pane.y + top),
+            "the bar refused its own column"
+        );
+        assert!(app.bar_dragging());
+        assert!(
+            !app.has_selection(),
+            "a press on the bar started a selection"
+        );
+
+        // The bar's own drag at the bottom edge row is the bar's, and the
+        // selection path is not even reachable while it is live.
+        app.bar_drag(pane.bottom() - 1);
+        assert!(!app.has_selection());
+        assert!(app.bar_release());
+        assert!(
+            app.selection_begin(pane.x + 1, pane.y + 2),
+            "text no longer selects"
         );
     }
 }
