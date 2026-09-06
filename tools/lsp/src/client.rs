@@ -623,6 +623,41 @@ impl Client {
                         "dynamicRegistration": false,
                         "hierarchicalDocumentSymbolSupport": true,
                     },
+                    // **What is claimed here changes what comes back**, which
+                    // makes this block a behaviour rather than a formality.
+                    // `snippetSupport: false` is the load-bearing line: with it
+                    // true, rust-analyzer sends `push(${1:value})` and a client
+                    // that cannot expand a placeholder inserts those braces
+                    // into somebody's source. Emma carries the snippet flag
+                    // through so a consumer can refuse one, and says here that
+                    // it would rather have plain text.
+                    //
+                    // `insertReplaceSupport` is true because the two ranges
+                    // answer different questions and Emma uses the replacing
+                    // one: a completion accepted in the middle of a word should
+                    // overwrite the word, not leave its tail behind.
+                    "completion": {
+                        "dynamicRegistration": false,
+                        "contextSupport": true,
+                        "completionItem": {
+                            "snippetSupport": false,
+                            "insertReplaceSupport": true,
+                            "documentationFormat": ["markdown", "plaintext"],
+                            "labelDetailsSupport": true,
+                        },
+                    },
+                    // The other half of typing help. `activeParameterSupport`
+                    // is what lets the caller mark which argument the cursor is
+                    // in; without it a signature is a line of text with no
+                    // indication of where you are in it.
+                    "signatureHelp": {
+                        "dynamicRegistration": false,
+                        "signatureInformation": {
+                            "documentationFormat": ["markdown", "plaintext"],
+                            "parameterInformation": { "labelOffsetSupport": true },
+                            "activeParameterSupport": true,
+                        },
+                    },
                 },
                 "workspace": {
                     "workspaceFolders": true,

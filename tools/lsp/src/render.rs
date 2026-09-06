@@ -31,6 +31,7 @@ use serde_json::Value;
 
 use crate::client::Readiness;
 use crate::doc;
+use crate::doc::Position;
 use crate::server::Server;
 
 // region: Caps
@@ -790,6 +791,178 @@ mod tests {
         );
         assert!(clipped.ends_with("[line clipped]"));
     }
+
+    // -- completion ---------------------------------------------------------
+
+    /// **The four fields that can decide what gets inserted, and their
+    /// precedence.** Getting this wrong is not a rendering mistake: it puts the
+    /// wrong characters into somebody's source file.
+    #[test]
+    fn a_text_edit_beats_insert_text_beats_the_label() {
+        let (items, _) = parse_completions(&json!([
+            // All three present. The edit wins, and its `replace` range is
+            // taken over its `insert` range: a completion accepted mid-word
+            // should overwrite the word, not leave the tail behind.
+            {
+                "label": "push(…)",
+                "insertText": "push",
+                "textEdit": {
+                    "newText": "push",
+                    "insert": { "start": {"line": 3, "character": 4}, "end": {"line": 3, "character": 6} },
+                    "replace": { "start": {"line": 3, "character": 4}, "end": {"line": 3, "character": 9} },
+                },
+                "sortText": "a",
+            },
+            // No edit: `insertText` wins over the decorated label.
+            { "label": "len(…)", "insertText": "len", "sortText": "b" },
+            // Neither: the label is all there is.
+            { "label": "capacity", "sortText": "c" },
+        ]));
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].insert, "push");
+        assert_eq!(
+            items[0].replace,
+            Some((
+                Position {
+                    line: 3,
+                    character: 4
+                },
+                Position {
+                    line: 3,
+                    character: 9
+                }
+            )),
+            "the replacing range must win over the inserting one"
+        );
+        assert_eq!(items[1].insert, "len");
+        assert_eq!(items[1].replace, None);
+        assert_eq!(items[2].insert, "capacity");
+    }
+
+    /// **What typing is matched against is `filterText`, not the label.**
+    /// rust-analyzer labels a method `push(…)` and filters it as `push`; a
+    /// client matching the label stops finding anything after the bracket.
+    #[test]
+    fn typing_is_matched_against_filter_text_and_ranked_by_sort_text() {
+        let (items, incomplete) = parse_completions(&json!({
+            "isIncomplete": true,
+            "items": [
+                // Deliberately out of order, and alphabetically the reverse of
+                // the ranking the server asked for.
+                { "label": "zzz_unlikely", "sortText": "zzzz" },
+                { "label": "push(…)", "filterText": "push", "sortText": "aaaa" },
+            ],
+        }));
+        assert_eq!(
+            items[0].label, "push(…)",
+            "the server's ranking was ignored"
+        );
+        assert_eq!(items[0].filter, "push");
+        assert_eq!(
+            items[1].filter, "zzz_unlikely",
+            "an absent filterText falls back to the label"
+        );
+        assert!(
+            incomplete,
+            "isIncomplete was dropped: a client that treats a truncated list as \
+             the whole answer appears to run out of suggestions as you type"
+        );
+    }
+
+    /// A snippet is carried, never silently inserted. With `snippetSupport`
+    /// declared false the server should not send one, and a server that does
+    /// anyway must not put `${1:value}` into a file.
+    #[test]
+    fn a_snippet_is_flagged_rather_than_inserted_blind() {
+        let (items, _) = parse_completions(&json!([
+            { "label": "push", "insertText": "push(${1:value})", "insertTextFormat": 2 },
+            { "label": "len", "insertText": "len()", "insertTextFormat": 1 },
+        ]));
+        assert!(items.iter().any(|i| i.snippet && i.insert.contains("${1:")));
+        assert!(items.iter().any(|i| !i.snippet));
+    }
+
+    /// The kind is a bare integer on the wire, and an unknown one is not
+    /// "text": a client that names every unknown kind is telling the reader
+    /// something it does not know.
+    #[test]
+    fn an_unknown_completion_kind_is_left_unnamed() {
+        let (items, _) = parse_completions(&json!([
+            { "label": "a", "kind": 2, "sortText": "1" },
+            { "label": "b", "kind": 999, "sortText": "2" },
+            { "label": "c", "sortText": "3" },
+        ]));
+        assert_eq!(items[0].kind, "method");
+        assert_eq!(items[1].kind, "", "an unknown kind was named anyway");
+        assert_eq!(items[2].kind, "");
+    }
+
+    /// Both wire shapes: a bare array is a complete list, an object carries
+    /// `isIncomplete`. Neither may be read as the other.
+    #[test]
+    fn both_completion_shapes_parse_and_only_one_can_be_incomplete() {
+        let (from_array, incomplete) = parse_completions(&json!([{ "label": "x" }]));
+        assert_eq!(from_array.len(), 1);
+        assert!(!incomplete, "a bare array is a complete list by definition");
+        let (empty, _) = parse_completions(&json!({ "items": [], "isIncomplete": false }));
+        assert!(empty.is_empty());
+        let (nothing, _) = parse_completions(&json!(null));
+        assert!(nothing.is_empty(), "a null answer is no completions");
+    }
+
+    // -- signature help -----------------------------------------------------
+
+    /// **A per-signature `activeParameter` beats the top-level one**, which is
+    /// why the protocol added it: a server offering overloads has to say which
+    /// argument is active in each, and a client reading only the outer field
+    /// marks the wrong one on every overload but the first.
+    #[test]
+    fn the_inner_active_parameter_wins_over_the_outer_one() {
+        let (sigs, active) = parse_signatures(&json!({
+            "activeSignature": 1,
+            "activeParameter": 0,
+            "signatures": [
+                { "label": "fn a(x: u8)", "parameters": [{ "label": "x: u8" }] },
+                {
+                    "label": "fn a(x: u8, y: u8)",
+                    "parameters": [{ "label": "x: u8" }, { "label": "y: u8" }],
+                    "activeParameter": 1,
+                },
+            ],
+        }))
+        .expect("signatures were offered");
+        assert_eq!(active, 1);
+        assert_eq!(sigs[0].active_parameter, Some(0), "the outer field applies");
+        assert_eq!(sigs[1].active_parameter, Some(1), "the inner field wins");
+    }
+
+    /// A parameter label can be a pair of offsets into the signature, and those
+    /// offsets are UTF-16 like every other column on this wire. Slicing by byte
+    /// puts the marker on the wrong argument the moment a signature contains a
+    /// character outside the basic plane.
+    #[test]
+    fn parameter_offsets_are_utf16_and_go_through_the_one_converter() {
+        let label = "fn f(π: u8, y: u8)";
+        // `π` is two bytes and one UTF-16 unit, so byte and UTF-16 offsets
+        // disagree from here on: the second parameter is UTF-16 12..17 and
+        // bytes 13..18. Slicing by byte would return `: u8)`.
+        let (sigs, _) = parse_signatures(&json!({
+            "signatures": [{
+                "label": label,
+                "parameters": [{ "label": [5, 10] }, { "label": [12, 17] }],
+            }],
+        }))
+        .expect("signatures were offered");
+        assert_eq!(sigs[0].parameters, vec!["π: u8", "y: u8"]);
+    }
+
+    /// An answer with no signatures is `None`, not an empty list: "the server
+    /// said nothing" and "there are no signatures" must not render alike.
+    #[test]
+    fn an_empty_signature_answer_is_absent_rather_than_empty() {
+        assert!(parse_signatures(&json!({ "signatures": [] })).is_none());
+        assert!(parse_signatures(&json!(null)).is_none());
+    }
 }
 
 // endregion: Tests
@@ -900,3 +1073,310 @@ mod truncation_honesty {
         );
     }
 }
+
+// region: Completion
+// ---------------------------------------------------------------------------
+// Completion
+//
+// The defining feature of what people call intellisense, and the one shape in
+// this file where the wire is genuinely more complicated than it looks. Four
+// separate fields can decide what text a chosen item inserts, they disagree
+// with each other on purpose, and picking the wrong one is not a rendering
+// mistake: it puts the wrong characters into somebody's source file.
+//
+// The precedence, which is the protocol's and not a preference:
+//
+//   1. `textEdit` (or `insertReplaceEdit`) wins outright. It carries its own
+//      range, so the server is saying *replace exactly this*, which is how
+//      `.` completions replace a partial word rather than doubling it.
+//   2. `insertText` next: the same idea without a range, replacing whatever
+//      the client decides the current word is.
+//   3. `label` last, and only because something must be.
+//
+// `filterText` is what the *client* matches typing against, and it is not the
+// label: rust-analyzer sends labels like `push(…)` while the thing a person is
+// typing against is `push`. Matching the label is why some clients feel like
+// they stop finding anything after the second character.
+// ---------------------------------------------------------------------------
+
+/// What a completion item inserts, and what it is matched against.
+///
+/// Deliberately not the whole `CompletionItem`: this crate keeps what a person
+/// or a model can act on and drops the rest, so a field here is one somebody
+/// reads. `snippet` is carried rather than expanded, because expanding one
+/// needs a cursor the crate does not own; the consumer decides.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Completion {
+    /// What the list shows.
+    pub label: String,
+    /// What typing is matched against. `filterText` when the server sent one,
+    /// otherwise the label, per the protocol.
+    pub filter: String,
+    /// The text to put in the document.
+    pub insert: String,
+    /// The range `insert` replaces, when the server named one. `None` means the
+    /// consumer decides, which for a text editor is the word before the cursor.
+    pub replace: Option<(Position, Position)>,
+    /// The protocol's `CompletionItemKind`, as a word. Empty when absent rather
+    /// than guessed: an item of unknown kind is not a "Text" item.
+    pub kind: &'static str,
+    /// The one-line hint beside the label: a type, a signature, a module path.
+    pub detail: Option<String>,
+    /// The long form, if the server sent one without being asked.
+    pub documentation: Option<String>,
+    /// The server's own ordering key. Servers rank far better than an
+    /// alphabetical sort does, and rust-analyzer in particular encodes
+    /// relevance here, so this is sorted on and the label is not.
+    pub sort: String,
+    /// Whether the text is a snippet with placeholders (`${1:x}`) rather than
+    /// literal characters. Carried so a consumer that cannot expand one can say
+    /// so rather than inserting the braces.
+    pub snippet: bool,
+}
+
+/// `CompletionItemKind`, which is a bare integer on the wire.
+///
+/// The empty string for an unknown number rather than a guess: a client that
+/// renders every unknown kind as "Text" is telling the reader something it does
+/// not know.
+fn completion_kind(n: u64) -> &'static str {
+    match n {
+        1 => "text",
+        2 => "method",
+        3 => "function",
+        4 => "constructor",
+        5 => "field",
+        6 => "variable",
+        7 => "class",
+        8 => "interface",
+        9 => "module",
+        10 => "property",
+        11 => "unit",
+        12 => "value",
+        13 => "enum",
+        14 => "keyword",
+        15 => "snippet",
+        16 => "color",
+        17 => "file",
+        18 => "reference",
+        19 => "folder",
+        20 => "enum member",
+        21 => "constant",
+        22 => "struct",
+        23 => "event",
+        24 => "operator",
+        25 => "type parameter",
+        _ => "",
+    }
+}
+
+/// One `CompletionItem`, or `None` when it carries nothing to insert.
+fn parse_completion(v: &Value) -> Option<Completion> {
+    let label = v.get("label").and_then(Value::as_str)?.to_string();
+    // `insertTextFormat`: 2 is a snippet, 1 or absent is plain text.
+    let snippet = v
+        .get("insertTextFormat")
+        .and_then(Value::as_u64)
+        .is_some_and(|f| f == 2);
+
+    // The precedence in the region header, in order.
+    let edit = v.get("textEdit");
+    let (insert, replace) = match edit {
+        Some(e) => {
+            let text = e
+                .get("newText")
+                .and_then(Value::as_str)
+                .unwrap_or(&label)
+                .to_string();
+            // An `InsertReplaceEdit` carries two ranges. `replace` is the one
+            // that overwrites what is already there, which is what a completion
+            // accepted mid-word should do; `insert` would leave the tail.
+            let range = e
+                .get("replace")
+                .or_else(|| e.get("insert"))
+                .or_else(|| e.get("range"));
+            (text, range.and_then(parse_range))
+        }
+        None => (
+            v.get("insertText")
+                .and_then(Value::as_str)
+                .unwrap_or(&label)
+                .to_string(),
+            None,
+        ),
+    };
+
+    Some(Completion {
+        filter: v
+            .get("filterText")
+            .and_then(Value::as_str)
+            .unwrap_or(&label)
+            .to_string(),
+        sort: v
+            .get("sortText")
+            .and_then(Value::as_str)
+            .unwrap_or(&label)
+            .to_string(),
+        kind: v
+            .get("kind")
+            .and_then(Value::as_u64)
+            .map(completion_kind)
+            .unwrap_or(""),
+        detail: v
+            .get("detail")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .filter(|d| !d.trim().is_empty()),
+        documentation: v.get("documentation").and_then(documentation_text),
+        label,
+        insert,
+        replace,
+        snippet,
+    })
+}
+
+/// A range's two ends, as positions.
+fn parse_range(r: &Value) -> Option<(Position, Position)> {
+    let one = |k: &str| -> Option<Position> {
+        let p = r.get(k)?;
+        Some(Position {
+            line: p.get("line")?.as_u64()? as u32,
+            character: p.get("character")?.as_u64()? as u32,
+        })
+    };
+    Some((one("start")?, one("end")?))
+}
+
+/// `Documentation` is a string or a `MarkupContent`, like hover's `contents`.
+fn documentation_text(v: &Value) -> Option<String> {
+    let text = match v {
+        Value::String(s) => s.clone(),
+        Value::Object(o) => o.get("value").and_then(Value::as_str)?.to_string(),
+        _ => return None,
+    };
+    Some(text).filter(|t| !t.trim().is_empty())
+}
+
+/// Every completion the server offered, best first, and whether the list is
+/// partial.
+///
+/// **`isIncomplete` is carried rather than hidden**, and it is the one thing a
+/// consumer must not ignore: a `true` means the server truncated its own answer
+/// for speed and expects to be asked again as the person types. A client that
+/// treats an incomplete list as the whole answer filters a shrinking set and
+/// appears to run out of suggestions.
+///
+/// Sorted by `sortText`, then by label to break ties deterministically. The
+/// server's ranking is far better than alphabetical, and this is where that is
+/// respected rather than in the consumer.
+pub fn parse_completions(value: &Value) -> (Vec<Completion>, bool) {
+    let (items, incomplete) = match value {
+        Value::Array(items) => (items.clone(), false),
+        Value::Object(o) => (
+            o.get("items")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+            o.get("isIncomplete")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        ),
+        _ => (Vec::new(), false),
+    };
+    let mut out: Vec<Completion> = items.iter().filter_map(parse_completion).collect();
+    out.sort_by(|a, b| a.sort.cmp(&b.sort).then_with(|| a.label.cmp(&b.label)));
+    (out, incomplete)
+}
+
+// endregion: Completion
+
+// region: Signature help
+// ---------------------------------------------------------------------------
+// Signature help
+//
+// The other half of typing help, and much simpler than completion with one
+// exception: `activeParameter` can arrive in two places and the inner one wins.
+// The protocol added a per-signature `activeParameter` after the top-level one,
+// precisely because a server offering several overloads needs to say which
+// argument is active *in each*. A client reading only the outer field marks the
+// wrong argument on every overload but the first.
+// ---------------------------------------------------------------------------
+
+/// One callable's signature, with the argument the cursor is in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signature {
+    /// The whole signature as the server writes it.
+    pub label: String,
+    /// Each parameter's label, in order.
+    pub parameters: Vec<String>,
+    /// Which parameter the cursor is in, when the server said. `None` rather
+    /// than zero, because zero is a real answer meaning the first argument.
+    pub active_parameter: Option<usize>,
+    pub documentation: Option<String>,
+}
+
+/// Every signature offered, and which of them is the active one.
+///
+/// Returns `None` for the empty answer rather than an empty list, so a caller
+/// cannot render "no signatures" and a server that said nothing the same way.
+pub fn parse_signatures(value: &Value) -> Option<(Vec<Signature>, usize)> {
+    let sigs = value.get("signatures")?.as_array()?;
+    if sigs.is_empty() {
+        return None;
+    }
+    let outer = value.get("activeParameter").and_then(Value::as_u64);
+    let active = value
+        .get("activeSignature")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as usize;
+    let out: Vec<Signature> = sigs
+        .iter()
+        .map(|sig| {
+            let parameters = sig
+                .get("parameters")
+                .and_then(Value::as_array)
+                .map(|ps| {
+                    ps.iter()
+                        .filter_map(|p| match p.get("label") {
+                            // A parameter label is a string, or a pair of
+                            // offsets into the signature label. The offsets are
+                            // in UTF-16 units like every other column on this
+                            // wire, so they go through `doc` rather than being
+                            // sliced by byte.
+                            Some(Value::String(s)) => Some(s.clone()),
+                            Some(Value::Array(pair)) => {
+                                let label = sig.get("label")?.as_str()?;
+                                let a = pair.first()?.as_u64()? as u32;
+                                let b = pair.get(1)?.as_u64()? as u32;
+                                let (from, to) = (
+                                    crate::doc::byte_offset(label, a),
+                                    crate::doc::byte_offset(label, b),
+                                );
+                                label.get(from..to).map(str::to_string)
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Signature {
+                label: sig
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                parameters,
+                // The inner field wins where it exists; see the region header.
+                active_parameter: sig
+                    .get("activeParameter")
+                    .and_then(Value::as_u64)
+                    .or(outer)
+                    .map(|n| n as usize),
+                documentation: sig.get("documentation").and_then(documentation_text),
+            }
+        })
+        .collect();
+    Some((out, active.min(sigs.len().saturating_sub(1))))
+}
+
+// endregion: Signature help

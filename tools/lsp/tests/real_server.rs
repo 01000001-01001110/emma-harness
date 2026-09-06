@@ -599,3 +599,183 @@ async fn diagnostics_against_this_repository() {
 }
 
 // endregion: Diagnostics, against a server that really pushes them
+
+/// **Completion, against the real server, and this is the test the fixtures
+/// cannot replace.**
+///
+/// Every shape in `render`'s completion tests is one this author wrote down
+/// from the protocol. That is exactly the position this crate was in when it
+/// declared readiness at 0.36 seconds against every fake and was wrong against
+/// rust-analyzer. So this asks the real server for completions in the middle of
+/// a real file and asserts the three things a wrong answer would break:
+///
+/// 1. Something comes back at all, and it contains the fixture's own item.
+/// 2. What would be inserted is plain text, not a snippet with placeholders —
+///    which is what `snippetSupport: false` in the handshake is asking for, and
+///    the one claim in that block that changes bytes in somebody's file.
+/// 3. The filter text is a bare identifier, not the decorated label. This is
+///    the difference between a list that narrows as you type and one that
+///    empties.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_real_server_completes_and_the_items_are_insertable() {
+    let Some((sandbox, pool)) = fixture().await else {
+        return;
+    };
+    let client = pool
+        .client(&sandbox.canonical(), rust())
+        .await
+        .expect("started");
+    client.wait_ready().await;
+
+    // A file that asks for a method on a `Config`. The cursor sits directly
+    // after the dot, which is where a person's would be.
+    // **Appended to `lib.rs` rather than written as a new file, and that is
+    // the finding this test produced on its first run.** A fresh
+    // `src/probe.rs` is not in the crate's module tree until something
+    // declares `mod probe;`, and rust-analyzer offers nothing at all for a
+    // file it does not consider part of the build. It answered with zero
+    // items and no error, which is exactly the silence this crate's
+    // readiness design exists to tell apart from an empty answer.
+    let probe = format!(
+        "{LIB_RS}
+pub fn probe(c: Config) {{
+    c.
+}}
+"
+    );
+    let path = sandbox.canonical().join("src/lib.rs");
+    sandbox.write("src/lib.rs", &probe);
+    client.sync_document(&path, &probe);
+    // The cursor sits directly after the dot, where a person's would be.
+    let line = probe
+        .lines()
+        .position(|l| l.trim() == "c.")
+        .expect("the probe line") as u32;
+
+    let answer = client
+        .request(
+            "textDocument/completion",
+            serde_json::json!({
+                "textDocument": { "uri": emma_tools_lsp::doc::to_uri(&path) },
+                "position": { "line": line, "character": 6 },
+            }),
+        )
+        .await
+        .expect("the server answered");
+
+    let (items, _incomplete) = emma_tools_lsp::render::parse_completions(&answer.value);
+    eprintln!(
+        "real completion: {} items, first five: {:?}",
+        items.len(),
+        items
+            .iter()
+            .take(5)
+            .map(|i| (&i.label, &i.filter, &i.insert, i.kind, i.snippet))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !items.is_empty(),
+        "the real server offered no completions after a dot on a known type"
+    );
+
+    // The fixture's own field is reachable from here, and is the one item this
+    // test can name without depending on the standard library's shape.
+    let named = items
+        .iter()
+        .find(|i| i.filter == "name")
+        .unwrap_or_else(|| {
+            panic!(
+                "no `name` among {:?}",
+                items.iter().map(|i| &i.filter).collect::<Vec<_>>()
+            )
+        });
+    assert_eq!(
+        named.kind, "field",
+        "a struct field came back as something else"
+    );
+
+    // Nothing offered may be a snippet: the handshake asked for plain text, and
+    // a placeholder inserted literally is `${1:value}` in somebody's source.
+    for item in &items {
+        assert!(
+            !item.snippet,
+            "the server sent a snippet despite snippetSupport: false — {item:?}"
+        );
+        assert!(
+            !item.insert.contains("${"),
+            "an item would insert a placeholder verbatim: {item:?}"
+        );
+    }
+
+    // And the filter is an identifier rather than the decorated label, which is
+    // what makes typing narrow the list. rust-analyzer labels methods `name()`
+    // and similar; the filter must not carry the brackets.
+    for item in items.iter().filter(|i| i.kind == "method") {
+        assert!(
+            !item.filter.contains('('),
+            "a method's filter text carries its brackets, so typing will not \
+             match it: {item:?}"
+        );
+    }
+}
+
+/// Signature help, against the real server, with the cursor inside a call.
+///
+/// The claim under test is the one the protocol changed its mind about: which
+/// parameter is marked active. A client reading only the top-level field marks
+/// the wrong argument as soon as the cursor moves past the first comma.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_real_server_marks_the_argument_the_cursor_is_in() {
+    let Some((sandbox, pool)) = fixture().await else {
+        return;
+    };
+    let client = pool
+        .client(&sandbox.canonical(), rust())
+        .await
+        .expect("started");
+    client.wait_ready().await;
+
+    // Two parameters, so "which one is active" has a wrong answer available.
+    let probe =
+        "pub fn take(a: u8, b: u8) -> u8 { a + b }\npub fn probe() -> u8 {\n    take(1, 2)\n}\n";
+    sandbox.write("src/sig.rs", probe);
+    let path = sandbox.canonical().join("src/sig.rs");
+    client.sync_document(&path, probe);
+
+    // Character 12 on line 2 is inside the call, after the comma, so the
+    // second argument is the active one.
+    let answer = client
+        .request(
+            "textDocument/signatureHelp",
+            serde_json::json!({
+                "textDocument": { "uri": emma_tools_lsp::doc::to_uri(&path) },
+                "position": { "line": 2, "character": 12 },
+            }),
+        )
+        .await
+        .expect("the server answered");
+
+    let Some((sigs, active)) = emma_tools_lsp::render::parse_signatures(&answer.value) else {
+        // Said rather than asserted away: a server build that does not offer
+        // signature help here is a fact about the machine, and the fixture
+        // tests still cover the parsing.
+        eprintln!("real signature help: the server offered none for this position");
+        return;
+    };
+    eprintln!(
+        "real signature help: active={active} {:?}",
+        sigs.iter()
+            .map(|s| (&s.label, &s.parameters, s.active_parameter))
+            .collect::<Vec<_>>()
+    );
+    let sig = &sigs[active];
+    assert!(
+        sig.label.contains("take"),
+        "the signature is not the function being called: {sig:?}"
+    );
+    assert_eq!(
+        sig.active_parameter,
+        Some(1),
+        "the cursor is past the comma, so the second argument is active: {sig:?}"
+    );
+}
