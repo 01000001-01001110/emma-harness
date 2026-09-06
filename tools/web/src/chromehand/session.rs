@@ -432,6 +432,16 @@ fn reap_when_it_exits(mut child: std::process::Child) {
 // `managed: false`, which is a standing instruction never to.
 // ---------------------------------------------------------------------------
 
+/// How long a freshly started Chrome gets to open its DevTools port.
+///
+/// A poll, so a fast machine pays only what Chrome takes. Twenty seconds was
+/// enough on the owner's desktop and not on the GitHub Windows runner, where a
+/// Chrome started right after the previous test's Chrome was killed took
+/// longer than that to come up, once, with four sibling tests passing. A
+/// working browser on a slow machine is worth the wait; a Chrome that never
+/// comes up costs a minute once and is then reported as exactly that.
+const DEVTOOLS_WAIT: Duration = Duration::from_secs(60);
+
 /// `session open [--headful]` — spawn detached Chrome, record the session.
 /// chromiumoxide's Browser::launch kills its child on drop (kill_on_drop), so
 /// the daemon Chrome is spawned MANUALLY and only ever connected to.
@@ -472,7 +482,7 @@ pub async fn open(headful: bool) -> Result<serde_json::Value, String> {
     // Discover the CDP endpoint by polling /json/version on OUR port
     // (Browser::connect resolves an http URL to the ws endpoint itself).
     let http_url = format!("http://127.0.0.1:{}", port);
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let deadline = std::time::Instant::now() + DEVTOOLS_WAIT;
     let connected = loop {
         match Browser::connect(&http_url).await {
             Ok(v) => break Some(v),
@@ -486,8 +496,9 @@ pub async fn open(headful: bool) -> Result<serde_json::Value, String> {
         kill_pid(pid);
         let _ = remove_profile(pid, &session_profile_dir(&id));
         return Err(format!(
-            "Chrome did not open a DevTools endpoint on port {} within 20s",
-            port
+            "Chrome did not open a DevTools endpoint on port {} within {}s",
+            port,
+            DEVTOOLS_WAIT.as_secs()
         ));
     };
     let ws_url = browser.websocket_address().to_string();
