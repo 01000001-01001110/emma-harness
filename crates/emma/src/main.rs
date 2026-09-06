@@ -713,7 +713,7 @@ async fn run(cli: cli::Cli) -> Result<()> {
             Mode::Stream
         },
         web_search,
-        sampling: sampling,
+        sampling,
     });
 
     // The restored conversation and counters go in here, and the loop below is
