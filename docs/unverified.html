@@ -439,6 +439,8 @@
           <td>An 80-column and a 60-column terminal with a goal running.</td></tr>
       <tr><td>The reader thread's steering seam on a console: the box emptying, the queued row appearing, and the answer changing. <code>submit_line</code> runs on the thread where every scrollback defect this crate has shipped was.</td>
           <td>Type during a real goal on both terminals.</td></tr>
+      <tr><td>Everything the frame draws, on both platforms. The port was certified end to end in <code>-p</code> mode, which never opens the alternate screen: a goal, a real tool call and a real answer on Windows and macOS, against local Ollama and a free hosted model. Nothing interactive was driven.</td>
+          <td>An interactive session on each box, with the pages opened and the keys pressed.</td></tr>
       <tr><td>Whether a task has ever been moved or a completed one swept through a running Emma. <code>Doc::move_task</code> and <code>Doc::remove_completed</code> have no caller.</td>
           <td>The Harness page package, and one press.</td></tr>
       <tr><td>The Settings screen's Font Family and Font Size rows, which still say Emma cannot set a font and still store nothing. A font can only be set by hand in <code>settings.json</code>.</td>
