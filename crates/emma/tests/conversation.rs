@@ -70,6 +70,7 @@ async fn drive_goals(
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
     let mut out = Vec::new();
     for goal in goals {

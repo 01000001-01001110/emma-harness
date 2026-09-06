@@ -104,6 +104,7 @@ async fn drive_goals(
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
     let mut out = Vec::new();
     for goal in goals {
@@ -357,6 +358,7 @@ async fn a_turn_cut_off_at_the_output_limit_is_reported() {
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
     agent.run_goal(&goal()).await;
 
@@ -419,6 +421,7 @@ async fn an_interrupt_reaches_a_tool_that_is_already_running() {
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
 
     let started = std::time::Instant::now();
@@ -1487,6 +1490,7 @@ async fn a_ctrl_c_during_a_model_call_ends_the_goal_rather_than_hanging() {
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
 
     let out = tokio::time::timeout(Duration::from_secs(5), agent.run_goal(&goal()))
@@ -1539,6 +1543,7 @@ async fn a_ctrl_c_during_a_model_call_ends_the_goal_rather_than_hanging() {
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
     assert!(
         tokio::time::timeout(Duration::from_millis(400), agent.run_goal(&goal()))
@@ -1608,6 +1613,7 @@ async fn a_cancelled_tool_is_recorded_as_cancelled_and_a_finished_one_is_not() {
             caching: Caching::On,
             mode: Mode::Batch,
             web_search: false,
+            sampling: Default::default(),
         });
         let out = agent.run_goal(&goal()).await;
         let kinds = SessionLog::read(log.path())
@@ -1894,6 +1900,7 @@ async fn compaction_fires_on_the_measured_request_rather_than_the_estimate() {
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
     agent.run_goal(&Goal::new("first goal")).await;
     // Nothing has been compacted yet: within the first goal there is no
@@ -1972,6 +1979,7 @@ async fn a_context_cap_of_zero_is_off_rather_than_a_cap_of_zero() {
             caching: Caching::On,
             mode: Mode::Batch,
             web_search: false,
+            sampling: Default::default(),
         });
         agent.run_goal(&Goal::new("first goal")).await;
         agent.run_goal(&Goal::new("second goal")).await;

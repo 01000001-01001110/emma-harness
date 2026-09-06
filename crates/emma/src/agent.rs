@@ -655,6 +655,14 @@ pub struct Setup<'a> {
     /// model. Resolved once from settings and the provider's own answer, so the
     /// loop never asks a provider that cannot. See `Request::web_search`.
     pub web_search: bool,
+    /// The sampling knobs in force, already resolved against the provider's
+    /// defaults before they got here.
+    ///
+    /// Resolved rather than resolvable on purpose: the loop must not branch on
+    /// which provider is running, so the provenance and the per-provider table
+    /// are settled where the provider is built and this field carries only the
+    /// answer.
+    pub sampling: crate::settings::ResolvedSampling,
 }
 
 pub struct Agent<'a> {
@@ -1007,6 +1015,12 @@ impl<'a> Agent<'a> {
                 "tool_schema_hash": self.s.tools.schema_hash(),
                 "model": self.s.provider.model_id(),
                 "done_check": self.s.done.name(),
+                // The knobs this goal ran under, and where each one came from.
+                // Beside `model` because they are the same kind of fact: two
+                // runs of the same model at different temperatures are not the
+                // same run, and until this was recorded the difference was
+                // invisible from disk. Additive; no stored run has to re-run.
+                "sampling": self.s.sampling.to_json(),
             }),
         );
         self.s.term.goal_started(&goal.text);
@@ -1113,7 +1127,6 @@ impl<'a> Agent<'a> {
             let turn_id = format!("turn-{}", self.turn_seq);
 
             let request = Request {
-                temperature: None,
                 // The harness prompt, then the framing that is true of every
                 // goal. It goes here rather than into the opening message
                 // because a preamble on the user's words is an instruction
@@ -1127,10 +1140,11 @@ impl<'a> Agent<'a> {
                 tools: tool_defs.clone(),
                 history: self.conversation(),
                 query: query.clone(),
-                max_tokens: 32_000,
+                max_tokens: self.s.sampling.max_output_tokens,
                 effort: emma_llm::Effort::XHigh,
                 caching: self.s.caching,
                 web_search: self.s.web_search,
+                temperature: self.s.sampling.temperature,
             };
 
             let turn = match self.call_model(request).await {

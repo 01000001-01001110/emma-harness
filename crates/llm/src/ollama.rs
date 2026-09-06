@@ -1141,6 +1141,14 @@ impl OllamaProvider {
                 "num_ctx": num_ctx,
             },
         });
+        // Inside `options`, which is where Ollama takes every sampling knob,
+        // and only when the caller set one: an absent `temperature` leaves the
+        // Modelfile's own value in force, and that value differs per model, so
+        // there is no number Emma could substitute without overriding a choice
+        // somebody made when they pulled the model.
+        if let Some(temperature) = request.temperature {
+            body["options"]["temperature"] = json!(temperature);
+        }
         // Absent rather than empty: a server that sees `tools: []` may still
         // switch to its tool-calling template, and a model with no tools
         // offered should be answering prose.
@@ -2021,6 +2029,35 @@ mod tests {
         .collect()
     }
 
+    #[tokio::test]
+    async fn a_set_temperature_travels_inside_options() {
+        let s = stub(vec![Reply::json(batch_body())]).await;
+        let req = request().with_temperature(Some(0.15));
+        provider(&s).send(req, Mode::Batch, None).await.unwrap();
+        let sent = s.last();
+        // Inside `options`, beside the two knobs that were already there, and
+        // not at the top level where Ollama would ignore it in silence.
+        assert_eq!(sent["options"]["temperature"], 0.15);
+        assert!(sent.get("temperature").is_none(), "{sent}");
+    }
+
+    #[tokio::test]
+    async fn an_unset_temperature_leaves_options_as_it_was() {
+        let s = stub(vec![Reply::json(batch_body())]).await;
+        provider(&s)
+            .send(request(), Mode::Batch, None)
+            .await
+            .unwrap();
+        let sent = s.last();
+        // An absent key leaves the Modelfile's own value in force; a sent
+        // `0.0` would silently overwrite it on every model.
+        assert!(sent["options"].get("temperature").is_none(), "{sent}");
+        assert_ne!(sent["options"]["temperature"], 0.0, "{sent}");
+        // `num_predict` has no absent case: the derived `num_ctx` is a
+        // function of it, so it goes out whether or not anybody set a cap.
+        assert_eq!(sent["options"]["num_predict"], json!(32_000));
+    }
+
     /// **If this breaks:** the model is asked to stream when the caller wanted
     /// one body, or the budget and context size never reach the server.
     #[tokio::test]
@@ -2294,6 +2331,100 @@ mod tests {
             "the server counted only {} prompt tokens — it clipped",
             turn.usage.input_tokens
         );
+    }
+
+    /// A recording pass-through in front of the real Ollama, returning the
+    /// address to point a provider at and the handle the bodies land in.
+    ///
+    /// Split out rather than repeated because the second live test below needs
+    /// exactly the sibling's arrangement, and two copies of a proxy would be
+    /// two chances for one of them to record something the socket did not
+    /// carry.
+    fn recording_proxy() -> (String, Arc<Mutex<Vec<Value>>>) {
+        let seen: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured = seen.clone();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        tokio::spawn(async move {
+            let (mut client, _) = listener.accept().await.unwrap();
+            let mut upstream = tokio::net::TcpStream::connect("127.0.0.1:11434")
+                .await
+                .expect("a real Ollama is listening");
+            let mut raw: Vec<u8> = Vec::new();
+            let mut chunk = [0u8; 8192];
+            loop {
+                let n = client.read(&mut chunk).await.unwrap_or(0);
+                if n == 0 {
+                    return;
+                }
+                raw.extend_from_slice(&chunk[..n]);
+                upstream.write_all(&chunk[..n]).await.unwrap();
+                if let Some(h) = headers_end(&raw) {
+                    if raw.len() >= h + content_length(&raw[..h]) {
+                        let len = content_length(&raw[..h]);
+                        captured
+                            .lock()
+                            .unwrap()
+                            .push(serde_json::from_slice(&raw[h..h + len]).unwrap());
+                        break;
+                    }
+                }
+            }
+            let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    /// **Not a unit test — the receipt for the temperature port.** `#[ignore]`d
+    /// for the same reason as its sibling above; run it with
+    /// `cargo test -p emma-llm --lib a_set_temperature_reaches_a_real_ollama
+    /// -- --ignored --nocapture`.
+    ///
+    /// The stub tests prove the renderer puts the key inside `options`. They
+    /// cannot prove Ollama accepts it there: a server that rejected the field,
+    /// or took it only at the top level, would leave every one of them green.
+    /// This one reads the body off the socket and requires the real model to
+    /// answer under it.
+    #[tokio::test]
+    #[ignore = "needs a real Ollama at 127.0.0.1:11434 with gemma4:12b"]
+    async fn a_set_temperature_reaches_a_real_ollama_inside_options() {
+        let (host, seen) = recording_proxy();
+        let req = Request::new("You are Emma. Answer in one word.", Vec::new())
+            .with_query(vec![Message::user("What colour is the sky?")])
+            .with_temperature(Some(0.15));
+        let turn = OllamaProvider::new(Some("gemma4:12b".into()))
+            .with_host(host)
+            .send(req, Mode::Batch, None)
+            .await
+            .expect("the real server answered");
+
+        let sent = seen.lock().unwrap()[0].clone();
+        println!("wire body = {sent}");
+        println!("answer = {:?}", turn.text());
+        assert_eq!(sent["options"]["temperature"], 0.15, "{sent}");
+        assert!(sent.get("temperature").is_none(), "{sent}");
+    }
+
+    /// The other half of the same claim, and the one a renderer that defaulted
+    /// to `0.0` would fail: with nothing set, no `temperature` key reaches the
+    /// real server at all, so the Modelfile's own value stays in force.
+    #[tokio::test]
+    #[ignore = "needs a real Ollama at 127.0.0.1:11434 with gemma4:12b"]
+    async fn an_unset_temperature_reaches_a_real_ollama_as_no_key_at_all() {
+        let (host, seen) = recording_proxy();
+        let req = Request::new("You are Emma. Answer in one word.", Vec::new())
+            .with_query(vec![Message::user("What colour is the sky?")]);
+        OllamaProvider::new(Some("gemma4:12b".into()))
+            .with_host(host)
+            .send(req, Mode::Batch, None)
+            .await
+            .expect("the real server answered");
+
+        let sent = seen.lock().unwrap()[0].clone();
+        println!("wire body = {sent}");
+        assert!(sent["options"].get("temperature").is_none(), "{sent}");
     }
 
     // endregion: certification against a real Ollama

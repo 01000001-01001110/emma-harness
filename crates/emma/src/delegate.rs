@@ -180,6 +180,9 @@ pub struct Nest {
     /// Whether the parent's requests ask the provider to search. A subagent
     /// inherits it unchanged; see the `Setup` it builds.
     pub web_search: bool,
+    /// The parent's resolved sampling, inherited by every nested run: a
+    /// subagent on the same provider samples the way its parent does.
+    pub sampling: crate::settings::ResolvedSampling,
     /// The *parent's* budgets, which is what a sub-budget is derived from.
     pub budgets: Budgets,
     /// The provider in force right now, for an agent type that named no model
@@ -716,6 +719,7 @@ impl Tool for Delegate {
                 // a subagent can look something up exactly when its parent
                 // could have. Charged to the same meter either way.
                 web_search: self.nest.web_search,
+                sampling: self.nest.sampling,
             });
             sub.run_goal(&Goal::new(brief)).await
         };

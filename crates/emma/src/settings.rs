@@ -143,7 +143,8 @@ pub struct Settings {
     /// provider -> the sampling knobs set by hand for it. The `models` map's
     /// shape, for its reason: these are per-provider answers and one global
     /// value would be wrong for whichever provider it was not set on. See
-    /// [`SamplingSettings`]; the resolver arrives with the temperature port.
+    /// [`SamplingSettings`] for the file shape and
+    /// [`Settings::resolved_sampling`] for what an absent field means.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sampling: BTreeMap<String, SamplingSettings>,
 
@@ -317,6 +318,215 @@ pub struct SamplingSettings {
 impl SamplingSettings {
     pub fn is_empty(&self) -> bool {
         self.temperature.is_none() && self.max_output_tokens.is_none() && self.stream.is_none()
+    }
+}
+
+/// The output cap Emma asks for when nobody has said otherwise.
+///
+/// Named here rather than left as the literal it was in three places, because
+/// it is the value the resolver reports as [`Provenance::EmmaDefault`], and a
+/// number a screen row shows has to be the number the wire carries.
+pub const EMMA_MAX_OUTPUT_TOKENS: u32 = 32_000;
+
+/// Where a resolved sampling value came from.
+///
+/// The reason [`SamplingSettings`] fields are `Option` rather than defaulted
+/// at load: a row showing `0.7` should be able to say whether a person chose
+/// it or whether it is what happens when nobody does, and those are different
+/// facts about the same number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provenance {
+    /// Nothing is sent, so the host applies its own value. Emma does not know
+    /// what that value is, and says so rather than guessing.
+    HostDefault,
+    /// Emma sends a value nobody chose, because the field is not optional on
+    /// the wire for this provider.
+    EmmaDefault,
+    /// A value from `settings.json`.
+    Manual,
+}
+
+impl Provenance {
+    /// The words a row shows. Lower case because they sit inside a sentence on
+    /// the model card rather than starting one.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::HostDefault => "host default",
+            Self::EmmaDefault => "emma default",
+            Self::Manual => "manual",
+        }
+    }
+}
+
+/// What one provider does when a field is absent.
+///
+/// A table rather than constants beside each renderer, so "what is the
+/// default" is one lookup and not four files. `temperature: None` is the
+/// honest entry wherever the host accepts an absent field, which today is all
+/// four of them; a `Some` here would mean Emma had picked a number.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SamplingDefaults {
+    /// `None` means the field never reaches the wire.
+    pub temperature: Option<f64>,
+    /// Always a number: every host here is sent a cap.
+    pub max_output_tokens: u32,
+    /// Whether an interactive turn streams by default.
+    pub stream: bool,
+}
+
+/// The default that stands for a provider this build does not know.
+///
+/// Reached only through a settings file naming a provider that was removed,
+/// because `llm::kind` rejects an unknown name before anything is built.
+const GENERIC_DEFAULTS: SamplingDefaults = SamplingDefaults {
+    temperature: None,
+    max_output_tokens: EMMA_MAX_OUTPUT_TOKENS,
+    stream: true,
+};
+
+/// The per-provider defaults table.
+///
+/// All four rows leave `temperature` unset, and that is a finding rather than
+/// an oversight: Anthropic, Ollama, OpenRouter and OpenAI each apply their own
+/// default when the field is missing, the four do not agree on it, and the
+/// OpenAI reasoning models refuse any value but their own — which is why
+/// `llm::openai_compat`'s wire for them carries `temperature_field: None`.
+/// `max_output_tokens` is a number everywhere for the opposite reason: the
+/// Messages API requires `max_tokens` and the other renderers have always sent
+/// their cap unconditionally, so there is no absent case to be honest about.
+pub fn sampling_defaults(provider: &str) -> SamplingDefaults {
+    match provider {
+        // `max_tokens` is required by the Messages API: there is no request
+        // without it, so the value in force is an Emma default and never a
+        // host one.
+        "anthropic" => SamplingDefaults {
+            temperature: None,
+            max_output_tokens: EMMA_MAX_OUTPUT_TOKENS,
+            stream: true,
+        },
+        // `options.temperature` absent leaves the Modelfile's value, which is
+        // per model and not Emma's to guess. `num_predict` is always sent
+        // because the derived `num_ctx` is a function of it.
+        "ollama" => SamplingDefaults {
+            temperature: None,
+            max_output_tokens: EMMA_MAX_OUTPUT_TOKENS,
+            stream: true,
+        },
+        "openrouter" | "openai" => SamplingDefaults {
+            temperature: None,
+            max_output_tokens: EMMA_MAX_OUTPUT_TOKENS,
+            stream: true,
+        },
+        _ => GENERIC_DEFAULTS,
+    }
+}
+
+/// The three values in force for one provider, each with where it came from.
+///
+/// `temperature` stays an `Option` all the way to the wire: `None` here is the
+/// instruction to omit the field, not a number the renderer has to invent.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResolvedSampling {
+    /// `None` means no `temperature` key reaches the provider.
+    pub temperature: Option<f64>,
+    /// Where `temperature` came from.
+    pub temperature_source: Provenance,
+    /// The cap that goes out, always a number.
+    pub max_output_tokens: u32,
+    /// Where `max_output_tokens` came from.
+    pub max_output_tokens_source: Provenance,
+    /// Whether an interactive turn streams.
+    pub stream: bool,
+    /// Where `stream` came from.
+    pub stream_source: Provenance,
+}
+
+impl Default for ResolvedSampling {
+    /// What a caller with no settings file gets, which is what the generic
+    /// defaults row says.
+    fn default() -> Self {
+        resolve_sampling(None, GENERIC_DEFAULTS)
+    }
+}
+
+impl ResolvedSampling {
+    /// The block the session log carries, so a run's knobs and their
+    /// provenance are reconstructable from disk.
+    pub fn to_json(self) -> serde_json::Value {
+        serde_json::json!({
+            "temperature": self.temperature,
+            "temperature_source": self.temperature_source.as_str(),
+            "max_output_tokens": self.max_output_tokens,
+            "max_output_tokens_source": self.max_output_tokens_source.as_str(),
+            "stream": self.stream,
+            "stream_source": self.stream_source.as_str(),
+        })
+    }
+}
+
+/// The absent-means rules, in the one place they are applied.
+fn resolve_sampling(
+    set: Option<&SamplingSettings>,
+    defaults: SamplingDefaults,
+) -> ResolvedSampling {
+    let set = set.cloned().unwrap_or_default();
+    let (temperature, temperature_source) = match set.temperature {
+        Some(t) => (Some(t), Provenance::Manual),
+        // Not `EmmaDefault` even when the table names a number: the two are
+        // told apart by whether anything reaches the wire, and only a `Some`
+        // in the table would put something there.
+        None => (
+            defaults.temperature,
+            match defaults.temperature {
+                Some(_) => Provenance::EmmaDefault,
+                None => Provenance::HostDefault,
+            },
+        ),
+    };
+    let (max_output_tokens, max_output_tokens_source) = match set.max_output_tokens {
+        Some(n) => (n, Provenance::Manual),
+        None => (defaults.max_output_tokens, Provenance::EmmaDefault),
+    };
+    let (stream, stream_source) = match set.stream {
+        Some(b) => (b, Provenance::Manual),
+        None => (defaults.stream, Provenance::EmmaDefault),
+    };
+    ResolvedSampling {
+        temperature,
+        temperature_source,
+        max_output_tokens,
+        max_output_tokens_source,
+        stream,
+        stream_source,
+    }
+}
+
+impl Settings {
+    /// The sampling in force for one provider, defaults resolved and each
+    /// answer labelled.
+    ///
+    /// The one place the absent-means rules are applied, so no caller can
+    /// spell them differently. Keyed by the provider's canonical name, the way
+    /// `models` is.
+    pub fn resolved_sampling(&self, provider: &str) -> ResolvedSampling {
+        resolve_sampling(self.sampling.get(provider), sampling_defaults(provider))
+    }
+
+    /// Store one provider's sampling entry, dropping it when nothing is set.
+    ///
+    /// The additive discipline every other key on the Settings screen keeps: a
+    /// file never grows a key restating what this build already does. It
+    /// matters more here than elsewhere because absence is a real answer and
+    /// not a synonym for a number. `temperature: None` means the field never
+    /// reaches the wire and the host decides; `temperature: Some(0.0)` means
+    /// zero goes out. An entry holding three `None`s would say neither, so it
+    /// is removed.
+    pub fn set_sampling(&mut self, provider: &str, set: SamplingSettings) {
+        if set.is_empty() {
+            self.sampling.remove(provider);
+        } else {
+            self.sampling.insert(provider.to_string(), set);
+        }
     }
 }
 
@@ -817,4 +1027,213 @@ mod atomic_save_tests {
         assert_eq!(load(home.path()).theme.as_deref(), Some("third"));
         assert!(!temp.exists());
     }
+}
+
+/// The sampling resolver, in its own module for the reason the block in
+/// the body is: this file is merged into by several ports at once, and a
+/// test module that ends where another begins is where a hunk lands in the
+/// wrong place without the compiler noticing.
+#[cfg(test)]
+mod sampling_tests {
+    use super::*;
+
+    // region: sampling
+
+    fn with_sampling(provider: &str, set: SamplingSettings) -> Settings {
+        let mut s = Settings::default();
+        s.sampling.insert(provider.to_string(), set);
+        s
+    }
+
+    /// The claim the whole block rests on: Emma names no temperature anywhere,
+    /// so an unset field means nothing reaches the wire and the row says so
+    /// rather than showing a number Emma picked.
+    #[test]
+    fn an_absent_temperature_resolves_to_the_host_default_on_every_provider() {
+        for provider in ["anthropic", "ollama", "openai", "openrouter"] {
+            let r = Settings::default().resolved_sampling(provider);
+            assert_eq!(r.temperature, None, "{provider}");
+            assert_eq!(r.temperature_source, Provenance::HostDefault, "{provider}");
+        }
+    }
+
+    /// The opposite case, and the reason the enum has two absent states: every
+    /// host here is sent a cap whether or not one was chosen, so "nobody set
+    /// this" is still a number Emma is answerable for.
+    #[test]
+    fn an_absent_output_cap_resolves_to_the_emma_default_because_it_is_always_sent() {
+        for provider in ["anthropic", "ollama", "openai", "openrouter"] {
+            let r = Settings::default().resolved_sampling(provider);
+            assert_eq!(r.max_output_tokens, EMMA_MAX_OUTPUT_TOKENS, "{provider}");
+            assert_eq!(
+                r.max_output_tokens_source,
+                Provenance::EmmaDefault,
+                "{provider}"
+            );
+            assert!(r.stream, "{provider}");
+            assert_eq!(r.stream_source, Provenance::EmmaDefault, "{provider}");
+        }
+    }
+
+    #[test]
+    fn a_set_field_resolves_to_manual_and_leaves_its_neighbours_alone() {
+        let s = with_sampling(
+            "anthropic",
+            SamplingSettings {
+                temperature: Some(0.2),
+                ..Default::default()
+            },
+        );
+        let r = s.resolved_sampling("anthropic");
+        assert_eq!(r.temperature, Some(0.2));
+        assert_eq!(r.temperature_source, Provenance::Manual);
+        // Untouched by the neighbour that was set: one manual field does not
+        // promote the other two out of their defaults.
+        assert_eq!(r.max_output_tokens_source, Provenance::EmmaDefault);
+        assert_eq!(r.stream_source, Provenance::EmmaDefault);
+    }
+
+    #[test]
+    fn all_three_manual_values_are_reported_as_manual() {
+        let s = with_sampling(
+            "ollama",
+            SamplingSettings {
+                temperature: Some(0.0),
+                max_output_tokens: Some(4_096),
+                stream: Some(false),
+            },
+        );
+        let r = s.resolved_sampling("ollama");
+        // A manual zero is a choice, not an absence. This is the assertion
+        // that would fail if the resolver ever used `unwrap_or_default`.
+        assert_eq!(r.temperature, Some(0.0));
+        assert_eq!(r.temperature_source, Provenance::Manual);
+        assert_eq!(r.max_output_tokens, 4_096);
+        assert_eq!(r.max_output_tokens_source, Provenance::Manual);
+        assert!(!r.stream);
+        assert_eq!(r.stream_source, Provenance::Manual);
+    }
+
+    /// The write helper keeps absence meaning absence: an entry with nothing
+    /// set is removed rather than left behind as three nulls, and a manual
+    /// `0.0` survives as a value.
+    #[test]
+    fn set_sampling_drops_an_empty_entry_and_keeps_a_manual_zero() {
+        let mut s = Settings::default();
+        s.set_sampling(
+            "ollama",
+            SamplingSettings {
+                temperature: Some(0.0),
+                ..Default::default()
+            },
+        );
+        assert_eq!(s.sampling.get("ollama").unwrap().temperature, Some(0.0));
+        assert_eq!(
+            s.resolved_sampling("ollama").temperature_source,
+            Provenance::Manual,
+            "a chosen zero is manual, not the host's default"
+        );
+        s.set_sampling("ollama", SamplingSettings::default());
+        assert!(
+            !s.sampling.contains_key("ollama"),
+            "an entry with nothing set must not survive the write"
+        );
+        assert_eq!(
+            s.resolved_sampling("ollama").temperature_source,
+            Provenance::HostDefault
+        );
+    }
+
+    #[test]
+    fn sampling_is_per_provider_and_one_entry_does_not_answer_for_another() {
+        let s = with_sampling(
+            "anthropic",
+            SamplingSettings {
+                temperature: Some(0.2),
+                ..Default::default()
+            },
+        );
+        assert_eq!(s.resolved_sampling("ollama").temperature, None);
+        assert_eq!(
+            s.resolved_sampling("ollama").temperature_source,
+            Provenance::HostDefault
+        );
+    }
+
+    #[test]
+    fn the_sampling_block_round_trips_through_the_file_shape() {
+        let s = with_sampling(
+            "openrouter",
+            SamplingSettings {
+                temperature: Some(0.7),
+                max_output_tokens: Some(8_000),
+                stream: Some(false),
+            },
+        );
+        let raw = serde_json::to_string(&s).unwrap();
+        // The number the user typed, not a widened one — the reason
+        // `Request::temperature` is `f64` and not `f32`.
+        assert!(raw.contains("\"temperature\":0.7"), "{raw}");
+        let back: Settings = serde_json::from_str(&raw).unwrap();
+        assert_eq!(back.sampling["openrouter"], s.sampling["openrouter"]);
+    }
+
+    /// Three nulls a reader would have to wonder about, avoided the way every
+    /// other optional block in this file avoids them.
+    #[test]
+    fn an_empty_sampling_block_is_not_written_at_all() {
+        let raw = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(!raw.contains("sampling"), "{raw}");
+    }
+
+    /// Reachable only through a settings file naming a provider this build
+    /// dropped, because `llm::kind` refuses one before anything is built.
+    #[test]
+    fn an_unknown_provider_still_resolves_rather_than_panicking() {
+        let r = Settings::default().resolved_sampling("nosuchprovider");
+        assert_eq!(r.temperature, None);
+        assert_eq!(r.max_output_tokens, EMMA_MAX_OUTPUT_TOKENS);
+        assert_eq!(r.temperature_source, Provenance::HostDefault);
+    }
+
+    #[test]
+    fn the_log_block_names_every_value_and_its_source() {
+        let r = with_sampling(
+            "anthropic",
+            SamplingSettings {
+                temperature: Some(0.3),
+                ..Default::default()
+            },
+        )
+        .resolved_sampling("anthropic");
+        let v = r.to_json();
+        assert_eq!(v["temperature"], 0.3);
+        assert_eq!(v["temperature_source"], "manual");
+        assert_eq!(v["max_output_tokens"], 32_000);
+        assert_eq!(v["max_output_tokens_source"], "emma default");
+        assert_eq!(v["stream"], true);
+        assert_eq!(v["stream_source"], "emma default");
+    }
+
+    #[test]
+    fn an_unsent_temperature_is_null_in_the_log_and_labelled_as_the_hosts() {
+        let v = Settings::default().resolved_sampling("anthropic").to_json();
+        // Null here means "nothing was sent", which the source field spells
+        // out so a reader never has to guess whether the run had a value.
+        assert!(v["temperature"].is_null(), "{v}");
+        assert_eq!(v["temperature_source"], "host default");
+    }
+
+    /// The value a row shows has to be the value the wire carries. This is the
+    /// one assertion that fails if `EMMA_MAX_OUTPUT_TOKENS` and the number
+    /// `Request::new` asks for ever drift apart.
+    #[test]
+    fn the_named_output_cap_is_the_one_a_request_is_built_with() {
+        assert_eq!(
+            u64::from(EMMA_MAX_OUTPUT_TOKENS),
+            emma_llm::Request::new("", Vec::new()).max_tokens as u64
+        );
+    }
+
+    // endregion: sampling
 }

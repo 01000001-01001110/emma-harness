@@ -111,6 +111,7 @@ async fn delegating(
             session_id: "sess-test".into(),
             caching: Caching::On,
             web_search: false,
+            sampling: Default::default(),
             budgets,
             running: Running::new(base.clone()),
         },
@@ -143,6 +144,7 @@ async fn delegating(
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
     let outcome = agent
         .run_goal(&Goal::new("find out where the retry policy lives"))
@@ -609,6 +611,7 @@ async fn two_delegations_never_overlap() {
             session_id: "sess-test".into(),
             caching: Caching::On,
             web_search: false,
+            sampling: Default::default(),
             budgets: budgets(),
             running: Running::new(base.clone()),
         },
@@ -678,6 +681,7 @@ async fn constructing_an_agent_never_moves_the_status_meters() {
         caching: Caching::On,
         mode: Mode::Batch,
         web_search: false,
+        sampling: Default::default(),
     });
     assert!(
         term.recorded().is_empty(),
@@ -1126,6 +1130,7 @@ fn an_agent_type_cannot_reach_a_tool_the_persona_excluded() {
                 session_id: "sess-test".into(),
                 caching: Caching::On,
                 web_search: false,
+                sampling: Default::default(),
                 budgets: budgets(),
                 running: Running::new(base),
             },
@@ -1187,6 +1192,7 @@ fn an_unknown_agent_name_is_refused_by_the_argument_check_and_not_only_by_the_sc
             session_id: "sess-test".into(),
             caching: Caching::On,
             web_search: false,
+            sampling: Default::default(),
             budgets: budgets(),
             running: Running::new(base),
         },
@@ -1553,6 +1559,7 @@ async fn a_subagent_inherits_the_projects_instructions_and_is_told_who_it_works_
             session_id: "sess-test".into(),
             caching: Caching::On,
             web_search: false,
+            sampling: Default::default(),
             budgets: budgets(),
             running: Running::new(base),
         },

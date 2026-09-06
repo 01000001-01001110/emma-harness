@@ -1227,6 +1227,26 @@ fn configured(
         ],
     };
 
+    // One line, because the three knobs are one answer: what went out on the
+    // wire. Each carries where it came from, so "temperature host default"
+    // reads as "nothing was sent" rather than as a number Emma picked. Set
+    // them under `sampling.<provider>` in settings.json.
+    let sampling = home
+        .map(settings::load)
+        .unwrap_or_default()
+        .resolved_sampling(kind.name());
+    lines.push(format!(
+        "sampling       temperature {}  max_output_tokens {} ({})  stream {} ({})",
+        match sampling.temperature {
+            Some(t) => format!("{t} ({})", sampling.temperature_source.as_str()),
+            None => format!("unset ({})", sampling.temperature_source.as_str()),
+        },
+        sampling.max_output_tokens,
+        sampling.max_output_tokens_source.as_str(),
+        sampling.stream,
+        sampling.stream_source.as_str(),
+    ));
+
     // Reported, never printed. Whether a key resolves is the question; which
     // key it is, is not.
     //

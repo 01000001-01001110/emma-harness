@@ -114,6 +114,7 @@ impl Fixture {
             caching: Caching::On,
             mode: Mode::Batch,
             web_search: false,
+            sampling: Default::default(),
         })
     }
 

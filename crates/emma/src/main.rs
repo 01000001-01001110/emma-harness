@@ -356,6 +356,15 @@ async fn run(cli: cli::Cli) -> Result<()> {
         emma_llm::ApiKey::none()
     };
     let provider: Arc<dyn Provider> = kind.build(key.clone(), Some(resolved.model.clone()));
+    // The one place sampling is resolved, next to the one place a provider is
+    // chosen, because the defaults are per provider and the loop is not allowed
+    // to know which provider it is on. Everything downstream carries the answer
+    // and its provenance, never the table.
+    let sampling = home
+        .as_deref()
+        .map(emma::settings::load)
+        .unwrap_or_default()
+        .resolved_sampling(kind.name());
     // The status bar's MODE cell reads the posture from here, because the frame
     // builds its bar from the view and the view has no route to `Approvals`.
     // The cell and not the value: a copy taken at startup would leave the bar
@@ -523,6 +532,7 @@ async fn run(cli: cli::Cli) -> Result<()> {
             budgets,
             running: running.clone(),
             web_search,
+            sampling,
         },
         harness.agent_types(),
         &available,
@@ -703,6 +713,7 @@ async fn run(cli: cli::Cli) -> Result<()> {
             Mode::Stream
         },
         web_search,
+        sampling: sampling,
     });
 
     // The restored conversation and counters go in here, and the loop below is
@@ -1075,6 +1086,7 @@ async fn run_verification(
             mode: Mode::Batch,
             // A review reads the repository and never the web.
             web_search: false,
+            sampling: Default::default(),
         });
         let outcome = agent.run_goal(&Goal::new(emma::verify::brief(row))).await;
         let report = outcome.text.clone();
